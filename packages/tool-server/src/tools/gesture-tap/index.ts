@@ -17,7 +17,7 @@ import {
   toDevicePoint,
 } from "../../utils/harmony-uitest";
 import { ensureDep } from "../../utils/check-deps";
-import { sendCommand } from "../../utils/simulator-client";
+import { createTouchSender } from "../../utils/gesture-utils";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -218,27 +218,14 @@ Before tapping, determine the correct coordinates by using discovery tools. Pick
       return { tapped: true, timestampMs };
     }
     const api = services.simulatorServer as SimulatorServerApi;
+    const sendTouch = await createTouchSender(api, resolveDevice(params.udid));
     let warning: string | undefined;
     for (let i = 1; i <= clickCount; i++) {
       if (i > 1) await sleep(MULTI_TAP_GAP_MS);
-      const down = await sendCommand(api, {
-        cmd: "touch",
-        type: "Down",
-        x: params.x,
-        y: params.y,
-        second_x: null,
-        second_y: null,
-      });
+      const down = await sendTouch("Down", params.x, params.y);
       warning ??= down.warning;
       await sleep(TAP_HOLD_MS);
-      await sendCommand(api, {
-        cmd: "touch",
-        type: "Up",
-        x: params.x,
-        y: params.y,
-        second_x: null,
-        second_y: null,
-      });
+      await sendTouch("Up", params.x, params.y);
     }
     return { tapped: true, timestampMs, ...(warning !== undefined ? { warning } : {}) };
   },

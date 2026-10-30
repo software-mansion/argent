@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { adbShell } from "./adb";
+import { adbArgv, adbShell } from "./adb";
 import { adbServerShell } from "./adb-server";
 
 /**
@@ -72,11 +72,9 @@ const ROTATION_PROBES: { cmd: string; pattern: RegExp }[] = [
 /**
  * Read the device's current surface rotation.
  *
- * Returns `null` — never throws — when the rotation cannot be established. A
- * failed query must degrade to "unknown", which callers treat as "behave
- * exactly as before". It must never fall back to a guess: a wrong orientation
- * produces a confidently wrong image, which is worse than the sideways one this
- * is fixing.
+ * Returns `null` when the device probes cannot establish the rotation. Provider
+ * capability checks still throw before any adb access. Never guess: a wrong
+ * rotation produces incorrect screenshots and touch coordinates.
  *
  * Three sources, cheapest first, all reporting the same platform value
  * (`Surface.ROTATION_*`), so which one answered changes the latency and
@@ -103,10 +101,12 @@ export async function readAndroidSurfaceRotation(
     }
   }
 
+  // The socket path must use the same provider grants and serial as the client.
+  const [adbSerial] = adbArgv([serial]);
   for (const shell of [adbServerShell, adbShell]) {
     for (const { cmd, pattern } of ROTATION_PROBES) {
       try {
-        const out = await shell(serial, cmd, { timeoutMs: 5_000 });
+        const out = await shell(adbSerial, cmd, { timeoutMs: 5_000 });
         const value = Number(pattern.exec(out)?.[1]);
         if (Number.isInteger(value) && isSurfaceRotation(value)) return value;
       } catch {

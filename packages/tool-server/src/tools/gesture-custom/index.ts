@@ -11,8 +11,7 @@ import {
 } from "../../utils/ios-device/runner-commands";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { InvalidToolInputError } from "../../utils/capability";
-import { sendCommand } from "../../utils/simulator-client";
-import { interpolateEvents } from "../../utils/gesture-utils";
+import { createTouchSender, interpolateEvents } from "../../utils/gesture-utils";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -226,6 +225,7 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
       );
     }
     const api = services.simulatorServer as SimulatorServerApi;
+    const sendTouch = await createTouchSender(api, resolveDevice(params.udid));
     const events =
       params.interpolate && params.interpolate > 0
         ? interpolateEvents(params.events, params.interpolate)
@@ -234,14 +234,7 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
     let warning: string | undefined;
     for (const event of events) {
       await sleep(event.delayMs ?? 16);
-      const sent = await sendCommand(api, {
-        cmd: "touch",
-        type: event.type,
-        x: event.x,
-        y: event.y,
-        second_x: event.x2 ?? null,
-        second_y: event.y2 ?? null,
-      });
+      const sent = await sendTouch(event.type, event.x, event.y, event.x2, event.y2);
       warning ??= sent.warning;
     }
     return { events: events.length, ...(warning !== undefined ? { warning } : {}) };

@@ -1,5 +1,7 @@
+import { FAILURE_CODES, FailureError, type DeviceInfo } from "@argent/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { sendCommand, type SendCommandOutcome } from "./simulator-client";
+import { readAndroidSurfaceRotation } from "./device-orientation";
 
 interface TouchPoint {
   x: number;
@@ -61,20 +63,61 @@ export function interpolateEvents(events: TouchEvent[], steps: number): TouchEve
   return result;
 }
 
-export function sendTouchEvent(
-  api: SimulatorServerApi,
+type TouchSender = (
   type: "Down" | "Move" | "Up",
   x: number,
   y: number,
   x2?: number,
   y2?: number
-): Promise<SendCommandOutcome> {
-  return sendCommand(api, {
-    cmd: "touch",
-    type,
-    x,
-    y,
-    second_x: x2 ?? null,
-    second_y: y2 ?? null,
-  });
+) => Promise<SendCommandOutcome>;
+
+/** Read once per gesture so every frame and both fingers use the same orientation. */
+export async function createTouchSender(
+  api: SimulatorServerApi,
+  device: DeviceInfo
+): Promise<TouchSender> {
+  const rotation =
+    device.platform === "android" && device.kind === "device"
+      ? await readAndroidSurfaceRotation(device.id)
+      : 0;
+  if (rotation === null) {
+    throw new FailureError(
+      `Cannot read screen rotation for Android device ${device.id}. ` +
+        "No touch was sent. Check the ADB connection and retry.",
+      {
+        error_code: FAILURE_CODES.ANDROID_TOUCH_ROTATION_UNAVAILABLE,
+        failure_stage: "android_touch_rotation",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      }
+    );
+  }
+
+  // The screen-sharing agent expects natural-display coordinates and rotates
+  // them itself (JetBrains android/streaming: AdjustedDisplayCoordinates).
+  const toNatural = (x: number, y: number): [number, number] => {
+    switch (rotation) {
+      case 1:
+        return [1 - y, x];
+      case 2:
+        return [1 - x, 1 - y];
+      case 3:
+        return [y, 1 - x];
+      default:
+        return [x, y];
+    }
+  };
+
+  return (type, x, y, x2, y2) => {
+    const [naturalX, naturalY] = toNatural(x, y);
+    const second = x2 != null && y2 != null ? toNatural(x2, y2) : null;
+    return sendCommand(api, {
+      cmd: "touch",
+      type,
+      x: naturalX,
+      y: naturalY,
+      second_x: second?.[0] ?? null,
+      second_y: second?.[1] ?? null,
+    });
+  };
 }

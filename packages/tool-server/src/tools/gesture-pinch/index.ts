@@ -3,7 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { harmonyConnectKey, resolveDevice } from "../../utils/device-info";
 import { ensureDep } from "../../utils/check-deps";
-import { sendTouchEvent } from "../../utils/gesture-utils";
+import { createTouchSender } from "../../utils/gesture-utils";
 import {
   HARMONY_INTERACTION_TIMEOUT_MS,
   assertHarmonyDisplayReady,
@@ -180,6 +180,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       return { pinched: true, timestampMs };
     }
     const api = services.simulatorServer as SimulatorServerApi;
+    const sendTouch = await createTouchSender(api, resolveDevice(params.udid));
     const steps = Math.max(1, Math.round(duration / 16));
 
     let timestampMs = 0;
@@ -192,7 +193,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      const sent = await sendTouchEvent(api, type, first.x, first.y, second.x, second.y);
+      const sent = await sendTouch(type, first.x, first.y, second.x, second.y);
       // Only the Down resolves the panel; the rest of the sequence keeps it.
       if (type === "Down") warning = sent.warning;
       if (i < steps) await sleep(16);

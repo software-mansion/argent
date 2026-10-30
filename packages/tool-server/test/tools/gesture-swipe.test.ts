@@ -14,6 +14,9 @@ const sent: TouchCmd[] = [];
 // Runs after each dispatch is recorded, so the abort tests below can cancel on
 // an exact event index rather than racing the 16ms frame timer.
 let afterSend: ((count: number) => void) | undefined;
+vi.mock("../../src/utils/device-orientation", () => ({
+  readAndroidSurfaceRotation: vi.fn(async () => 0),
+}));
 vi.mock("../../src/utils/simulator-client", () => ({
   sendCommand: async (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);

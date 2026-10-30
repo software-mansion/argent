@@ -76,6 +76,12 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 ## Interacting
 
+On physical Android devices, touch coordinates use the current screen orientation.
+Run `describe` again after a rotation to get updated element coordinates.
+On physical Android devices, each gesture reads the screen rotation before it sends touch events.
+The gesture fails if Argent cannot read that rotation.
+An external provider must grant `adb` access for gestures on physical Android devices.
+
 | Tool                     | Description                                                     |
 | ------------------------ | --------------------------------------------------------------- |
 | `gesture-tap`            | Tap at normalized coordinates                                   |
