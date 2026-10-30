@@ -71,6 +71,7 @@ const TEMP_RUNNER_BINS: Array<[string, string]> = [
 const GLOBAL_BINS: Array<[string, string]> = [
   ["npm", "/usr/local/bin/argent"],
   ["npm prefix in a dir named dlx", "/home/u/dlx/npm-global/bin/argent"],
+  ["npm prefix in a dir named dlx-tools", "/opt/dlx-tools/bin/argent"],
   ["pnpm", "/home/u/.local/share/pnpm/argent"],
   ["yarn classic", "/home/u/.yarn/bin/argent"],
   ["bun", "/home/u/.bun/bin/argent"],
