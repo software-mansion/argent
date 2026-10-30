@@ -96,6 +96,25 @@ describe("macOS describe adapter: projection of the probe app", () => {
     expect(t.children[0]!.focused).toBeUndefined();
   });
 
+  it("takes the value description as the value, and the checked state from the value", async () => {
+    const tree = probeTree();
+    (windowRoot(tree).children as unknown[]).push(
+      axNode("AXUnknown", rect(0.1, 0.9, 0.2, 0.04), {
+        identifier: "rating",
+        description: "Rating",
+        valueDescription: "2 of 5",
+      }),
+      axNode("AXCheckBox", rect(0.4, 0.9, 0.1, 0.04), {
+        identifier: "toggle",
+        value: "1",
+        valueDescription: "on",
+      })
+    );
+    const { data } = await describeFixture([tree]);
+    expect(byId(data.tree, "rating")).toMatchObject({ label: "Rating", value: "2 of 5" });
+    expect(byId(data.tree, "toggle")).toMatchObject({ value: "on", checked: true });
+  });
+
   it("merges the web view's items under its node, in the AX role vocabulary", async () => {
     const { data, lib } = await describeFixture();
     expect(lib.calls.filter((c) => c.method === "Web.tree")).toEqual([

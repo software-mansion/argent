@@ -467,7 +467,8 @@ function axNode(
       role,
       label: cap(str(r.title) ?? str(r.description) ?? str(r.placeholder)),
       identifier: appIdentifier(r.identifier),
-      value: secure ? undefined : cap(str(r.value)),
+      // The value description is what VoiceOver reads: "50 percent" for 50, "2 of 5" for a rating.
+      value: secure ? undefined : cap(str(r.valueDescription) ?? str(r.value)),
       password: secure,
       clickable: MACOS_CLICKABLE_ROLES.has(role),
       scrollable: role === "AXScrollArea",

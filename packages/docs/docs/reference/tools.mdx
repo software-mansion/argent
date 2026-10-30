@@ -278,6 +278,7 @@ Use `gesture-drag` to drag and `gesture-scroll` to scroll.
 - The tree does not show the menu bar of the app. Use [`menu-bar`](#menu-bar).
 - A password field has the `password` flag and no value.
 - A text field without a label has its placeholder as its label.
+- When the app gives a description of the value of an element, the tree shows the description as the value. Examples are a SwiftUI `.accessibilityValue` (`2 of 5`) and the bars of a Swift Charts chart.
 - The hint also says when one of these conditions occurs:
   - The tree comes from a fallback walk, for example while the Mac is locked. This tree can miss elements, and a `hidden` check does not pass on it.
   - The tree reached the limit of 3000 elements or a depth of 40.
