@@ -8,7 +8,7 @@ import {
   type TextAnalysis,
 } from "./text-diff";
 import { formatScreenshotDiffSummary } from "./screenshot-diff-summary";
-import { normalizeToCommonSize, resizeDecodedPng } from "./resize";
+import { resizeDecodedPng } from "./resize";
 
 export interface Size {
   width: number;
@@ -54,16 +54,6 @@ export interface PngDiffResult {
   dimensionMismatch?: {
     expected: Size;
     actual: Size;
-  };
-  /**
-   * Present only when the inputs were resampled to a common size to compare, so
-   * its presence is the signal that a green result means "equal after
-   * rescaling", not "equal".
-   */
-  sizeNormalization?: {
-    baseline: Size;
-    current: Size;
-    comparedAt: Size;
   };
   regions: DiffRegion[];
   textAnalysis?: TextAnalysis;
@@ -132,52 +122,20 @@ export interface DiffPngFilesOptions {
   currentPath: string;
   outputDir: string;
   topMask?: TopMaskPolicy;
-  /**
-   * Default true: same-aspect images at different resolutions are resampled to
-   * a common size before comparing. Set false when dimensions carry meaning
-   * (e.g. element crops) — any dimension difference is then a hard mismatch.
-   */
-  normalizeSizes?: boolean;
 }
 
 export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDiffResult> {
   const settings = resolveDiffSettings(options.topMask ?? "status-bar");
 
-  const [decodedBaseline, decodedCurrent] = await Promise.all([
+  const [baseline, current] = await Promise.all([
     decodePngFile(options.baselinePath),
     decodePngFile(options.currentPath),
   ]);
 
-  // Same-aspect screenshots saved at different scales are uniform scalings of
-  // one framebuffer, so resample them to a common size instead of failing on
-  // the resolution mismatch. Different aspect ratios still hard-fail below —
-  // and with normalizeSizes: false, so does ANY dimension difference.
-  const normalized =
-    options.normalizeSizes === false
-      ? sameDimensionsOrNull(decodedBaseline, decodedCurrent)
-      : normalizeToCommonSize(decodedBaseline, decodedCurrent);
-  if (!normalized) {
-    return summarizeResult(
-      buildDimensionMismatchResult({
-        baseline: decodedBaseline,
-        current: decodedCurrent,
-      })
-    );
+  // Resampling produces artifacts that read as changes, so sizes must match.
+  if (baseline.width !== current.width || baseline.height !== current.height) {
+    return summarizeResult(buildDimensionMismatchResult({ baseline, current }));
   }
-  const baseline = normalized.baseline;
-  const current = normalized.current;
-
-  // Reported from here because normalizeToCommonSize does not return the
-  // original sizes.
-  const sizeNormalization =
-    decodedBaseline.width === decodedCurrent.width &&
-    decodedBaseline.height === decodedCurrent.height
-      ? undefined
-      : {
-          baseline: { width: decodedBaseline.width, height: decodedBaseline.height },
-          current: { width: decodedCurrent.width, height: decodedCurrent.height },
-          comparedAt: { width: baseline.width, height: baseline.height },
-        };
 
   const totalPixels = baseline.width * baseline.height;
   const pixelDiff = markChangedPixels({
@@ -206,17 +164,12 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
   const mismatchPercentage =
     totalPixels === 0 ? 0 : (pixelDiff.differentPixels / totalPixels) * 100;
 
-  // OCR re-reads the two files from disk, so its bounds come back in each
-  // image's own coordinate space; the scales rebase them onto the normalized
-  // space the pixel diff and summary use (1/1 when the sizes already matched).
   const textAnalysis = await analyzeScreenshotTextChangesSafely({
     baselinePath: options.baselinePath,
     currentPath: options.currentPath,
     hasPixelDiff: pixelDiff.differentPixels > 0,
     baselineImage: baseline,
     currentImage: current,
-    baselineRegionScale: regionScaleBetween(decodedBaseline, baseline),
-    currentRegionScale: regionScaleBetween(decodedCurrent, current),
     ignoreTopPixels: ignoredTopRowsFor(baseline.height, settings.ignoreTopNormalizedY),
     textChangeMinConfidence: DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE,
   });
@@ -230,7 +183,6 @@ export async function diffPngFiles(options: DiffPngFilesOptions): Promise<PngDif
     contextDiffPath: artifactPaths.contextDiffPath,
     regions,
     textAnalysis,
-    ...(sizeNormalization && { sizeNormalization }),
   });
 }
 
@@ -245,15 +197,6 @@ function resolveDiffSettings(topMask: TopMaskPolicy): DiffSettings {
 
 function summarizeResult(result: Omit<PngDiffResult, "summary">): PngDiffResult {
   return { ...result, summary: formatScreenshotDiffSummary(result) };
-}
-
-function sameDimensionsOrNull(
-  baseline: DecodedPng,
-  current: DecodedPng
-): { baseline: DecodedPng; current: DecodedPng } | null {
-  return baseline.width === current.width && baseline.height === current.height
-    ? { baseline, current }
-    : null;
 }
 
 function buildDimensionMismatchResult(params: {
@@ -310,14 +253,6 @@ function markChangedPixels(params: {
 
 function ignoredTopRowsFor(height: number, ignoreTopNormalizedY: number): number {
   return Math.min(height, Math.ceil(height * ignoreTopNormalizedY));
-}
-
-// Factors that map a bound from `from`'s pixel space into `to`'s pixel space.
-function regionScaleBetween(from: Size, to: Size): { x: number; y: number } {
-  return {
-    x: from.width === 0 ? 1 : to.width / from.width,
-    y: from.height === 0 ? 1 : to.height / from.height,
-  };
 }
 
 function getChangedRegions(params: {
