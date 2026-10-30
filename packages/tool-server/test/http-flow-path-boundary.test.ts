@@ -568,6 +568,23 @@ describe("flow-execute e2e_test_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("does not point an upload at flow_path when no client would send what it lacks", async () => {
+    const res = await supertest(handle.app)
+      .post("/tools/flow-execute")
+      .send({
+        project_root: projectRoot,
+        device: DEVICE,
+        e2e_test_path: uploadedWrapper(
+          "/client/.argent/flows/scripted.yaml",
+          "steps:\n  - script: { path: seed.mjs }\n"
+        ),
+      });
+
+    expect(res.body.error).toContain("  - step 1: script: { path: seed.mjs }");
+    expect(res.body.error).not.toContain("flow_path");
+    expect(steps.invokeTool).not.toHaveBeenCalled();
+  });
+
   it.skipIf(process.platform === "win32")(
     "names a Windows client path instead of calling it relative",
     async () => {
