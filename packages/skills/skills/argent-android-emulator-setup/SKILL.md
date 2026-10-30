@@ -5,7 +5,7 @@ description: Set up and connect to an Android emulator using argent MCP tools. U
 
 ## 1. Prerequisites
 
-The Android SDK (platform tools and emulator) and an AVD, created in Android Studio or with `avdmanager create avd`. If `list-devices` returns no Android devices and no `avds`, either no AVD exists or Argent can't find the SDK: set `ANDROID_HOME`, or run `argent config set android.sdkRoot <sdk-path>`.
+The Android SDK (platform tools and emulator) and an AVD, created in Android Studio or with `avdmanager create avd`. If `list-devices` returns no Android devices and no `avds`, either no AVD exists or Argent can't find the SDK. Then run `argent config set android.sdkRoot <sdk-path>` and call `list-devices` again after a minute: a failed SDK lookup is cached that long. Exporting `ANDROID_HOME` in your shell doesn't reach the tool-server that is already running.
 
 ## 2. Setup
 
