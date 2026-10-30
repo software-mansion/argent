@@ -234,7 +234,7 @@ The result of a run over a link that wrote baselines has a `baselineWrites` list
 }
 ```
 
-The client writes a directive with `encoding: "base64"` only when `path` ends in `.png`, has no `..`, and is directly in the baseline directory of a call with `updateBaselines: true`. The client replaces the file in one rename. The client refuses a link to nothing, a link out of the directory, a `.png` name that links to a file that is not a PNG file, and a file that is not a regular file. The client replaces each directive with the path that it wrote, or with `{ "path": "<path>", "error": "<reason>" }`. The client prints the reason of each baseline that it did not write. `argent e2e run` then exits with code 1. The MCP server adds the line `✗ baseline not written: <path>: <reason>` to the report.
+The client writes a directive with `encoding: "base64"` only when `path` ends in `.png`, has no `..`, and is directly in the baseline directory of a call with `updateBaselines: true`. The client replaces the file in one rename. The client refuses a link to nothing, a link out of the directory, a `.png` name that links to a file that is not a PNG file, and a file that is not a regular file. The client replaces each directive with the path that it wrote, or with `{ "path": "<path>", "error": "<reason>" }`. The client prints the reason of each baseline that it did not write. `argent e2e run` then exits with code 1. The MCP server adds the line `✗ baseline not written: <path>: <reason>` to the report, and the report ends with `FAIL`.
 
 The client writes the baselines only when the result arrives. When the connection closes before the result, the client writes no baseline of that call.
 

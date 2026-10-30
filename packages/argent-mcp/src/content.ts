@@ -340,23 +340,26 @@ export async function flowRunToMcpContent(
   }
 
   // A baseline the run reports written but this client could not store:
-  // the step passed, the file is not there.
+  // the step passed, the file is not there, and the run fails.
+  let unwritten = false;
   for (const write of result.baselineWrites ?? []) {
     const { path, error } = (isRecord(write) ? write : {}) as { path?: unknown; error?: unknown };
     if (typeof path === "string" && typeof error === "string") {
+      unwritten = true;
       blocks.push({ type: "text", text: `✗ baseline not written: ${path}: ${error}` });
     }
   }
 
   if (result.ok !== undefined) {
+    const ok = result.ok && !unwritten;
     // Echo steps are narration and go uncounted, so an all-echo flow counts
     // nothing — say so rather than reporting four zeros on a passing run.
     const counted =
       (result.passed ?? 0) + (result.failed ?? 0) + (result.errored ?? 0) + (result.skipped ?? 0);
-    const note = result.ok && counted === 0 ? " (no test steps)" : "";
+    const note = ok && counted === 0 ? " (no test steps)" : "";
     blocks.push({
       type: "text",
-      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}${durationSuffix(result.durationMs)}`,
+      text: `${ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}${durationSuffix(result.durationMs)}`,
     });
   } else {
     blocks.push({ type: "text", text: `E2E test "${result.flow}" complete.` });

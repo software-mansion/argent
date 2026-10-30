@@ -1518,7 +1518,7 @@ describe("argent e2e run", () => {
     expect(out).toContain("FAIL — 1 passed, 1 failed, 0 errored, 1 skipped");
   });
 
-  it("exits 1 on a passing run over a link whose baselines were not all written, naming each", async () => {
+  it("fails a passing run over a link whose baselines were not all written, naming each", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({
         baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
@@ -1526,10 +1526,52 @@ describe("argent e2e run", () => {
     });
 
     await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
-    expect(logs.join("\n")).toContain(
-      "✗ baseline not written: /p/b.png: EACCES: permission denied"
-    );
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(-4)).toEqual([
+      "  ✗ baselines not written",
+      "    /p/b.png: EACCES: permission denied",
+      "",
+      "FAIL — 1 passed, 0 failed, 0 errored, 0 skipped",
+    ]);
   });
+
+  it("names an unwritten baseline under the failing step of a run that also failed a step", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        ok: false,
+        passed: 0,
+        failed: 1,
+        steps: [{ index: 0, kind: "tap", status: "fail", reason: "no element" }],
+        baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }],
+      }),
+    });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(-5)).toEqual([
+      "  ✗ step 1 tap",
+      "    no element",
+      "    baseline not written: /p/b.png: EACCES: permission denied",
+      "",
+      "FAIL — 0 passed, 1 failed, 0 errored, 0 skipped",
+    ]);
+  });
+
+  it.each(["--json", "--json-stream"])(
+    "reports ok: false with %s when a baseline was not written",
+    async (flag) => {
+      toolsClientMock.callTool.mockResolvedValue({
+        data: report({
+          baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }],
+        }),
+      });
+
+      await expect(flow(["run", checkoutPath, flag], opts)).rejects.toThrow("process.exit:1");
+      expect(logs).toHaveLength(1);
+      const record = JSON.parse(logs[0]!);
+      expect((flag === "--json" ? record : record.data).ok).toBe(false);
+    }
+  );
 
   it("renders legacy warnings with the ⚠ glyph and counts them in the summary", async () => {
     toolsClientMock.callTool.mockResolvedValue({
@@ -2662,6 +2704,37 @@ describe("argent e2e run <dir>", () => {
       error_code: signal.errorCode,
       error_kind: signal.errorKind,
     });
+  });
+
+  it("fails a flow whose baselines were not written on its own line and in the recap", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }] }),
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+    const lines = logs.join("\n").split("\n");
+    expect(
+      lines.slice(lines.indexOf("[1/2] a-login.yaml"), lines.indexOf("[2/2] b-checkout.yaml"))
+    ).toEqual([
+      "[1/2] a-login.yaml",
+      "  FAIL (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped",
+    ]);
+    const recap = lines.indexOf("Failed e2e tests (1)");
+    expect(lines.slice(recap + 2, recap + 4)).toEqual([
+      "  ✗ a-login.yaml › baselines not written",
+      "    /p/b.png: EACCES: permission denied",
+    ]);
+  });
+
+  it("fails the report of a flow whose baselines were not written in the --json aggregate", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }] }),
+    });
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+    const { flows } = JSON.parse(logs[0]!);
+    expect(flows[0]).toMatchObject({ path: "a-login.yaml", status: "fail", report: { ok: false } });
+    expect(flows[1]).toMatchObject({ status: "pass", report: { ok: true } });
   });
 
   // Every verdict is stdout prose, so --json must emit the aggregate alone —

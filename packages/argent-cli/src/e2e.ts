@@ -427,20 +427,25 @@ interface FailedFlow {
 
 /**
  * Why a report failed: its first failing step, numbered as renderFailedSteps
- * numbers it so the recap, the per-flow block, and a single rerun agree. The
- * reason is wire data, so it is stringified the way renderStepLine's template
- * does rather than trusted to be a string.
+ * numbers it so the recap, the per-flow block, and a single rerun agree, else
+ * the baselines this client could not write. A failing step's detail names
+ * those baselines too. The reason is wire data, so it is stringified the way
+ * renderStepLine's template does rather than trusted to be a string.
  */
 export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline" | "detail"> {
+  const unwritten = unwrittenBaselines(report);
   let n = 0;
   for (const s of report.steps) {
     if (s.kind === "echo") continue;
     n++;
     if (s.status === "fail" || s.status === "error") {
-      const detail = s.reason ? String(s.reason) : undefined;
+      const lines = s.reason ? [String(s.reason)] : [];
+      for (const line of unwritten) lines.push(`baseline not written: ${line}`);
+      const detail = lines.length ? lines.join("\n") : undefined;
       return { headline: `step ${n} ${stepLabel(s, report.flow)}`, detail };
     }
   }
+  if (unwritten.length) return { headline: "baselines not written", detail: unwritten.join("\n") };
   return { headline: "failed with no failing step" };
 }
 
@@ -1452,17 +1457,9 @@ async function runFlowDirectory(
       flowPath,
       baseUrl
     );
-    const unwritten = unwrittenBaselines(report);
-    results.push({ path: rel, status: report.ok && !unwritten.length ? "pass" : "fail", report });
+    if (unwrittenBaselines(report).length) report.ok = false;
+    results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
     if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
-    else if (unwritten.length) {
-      failures.push({
-        path: rel,
-        headline: "baselines not written",
-        detail: unwritten.join("\n"),
-        rerun,
-      });
-    }
     if (!args.json) {
       for (const line of renderFailedSteps(report)) console.log(line);
       console.log(`  ${renderSummary(report, { withDevice: true })}`);
@@ -1891,6 +1888,7 @@ export async function e2e(argv: string[], options: FlowCommandOptions): Promise<
     return fail(err instanceof Error ? err.message : String(err), 2, err);
   }
 
+  if (unwrittenBaselines(report).length) report.ok = false;
   if (args.jsonStream) {
     writeJsonStreamRecord({ event: "result", data: report });
   } else if (args.json) {
@@ -1905,11 +1903,5 @@ export async function e2e(argv: string[], options: FlowCommandOptions): Promise<
   } else {
     console.log(renderReport(report));
   }
-
-  const unwritten = unwrittenBaselines(report);
-  if (!args.json && !args.jsonStream) {
-    for (const line of unwritten)
-      console.log(`  ${STATUS_GLYPH.error} baseline not written: ${line}`);
-  }
-  return exitAfterFlush(report.ok && unwritten.length === 0 ? 0 : 1);
+  return exitAfterFlush(report.ok ? 0 : 1);
 }
