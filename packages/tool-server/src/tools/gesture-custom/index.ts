@@ -103,8 +103,9 @@ function samePoint(a: GestureEvent, b: GestureEvent): boolean {
  * time, which is how a list item is picked up with a long press and dragged.
  *
  * Every other train, a second finger or Move waypoints, plays as timed finger
- * paths through the runner's touch synthesizer. Only a train that is not a
- * Down, Moves, then an Up is refused.
+ * paths through the runner's touch synthesizer. A train that is not a Down,
+ * Moves, then an Up is refused, and so is a second finger that is not on the
+ * Down: XCTest taps a late finger's join point once before it touches down.
  */
 function planIosDeviceGesture(events: Params["events"]): IosDeviceGesturePlan {
   const down = events[0];
@@ -125,6 +126,15 @@ function planIosDeviceGesture(events: Params["events"]): IosDeviceGesturePlan {
     };
   }
   const twoFingers = events.some((e) => e.x2 !== undefined || e.y2 !== undefined);
+  if (twoFingers && (down.x2 === undefined || down.y2 === undefined)) {
+    return {
+      kind: "unsupported",
+      reason:
+        "gesture-custom on a physical iOS device needs the second finger down from the start: " +
+        "give the Down event both x2 and y2. A finger that joins later would tap its join point " +
+        "an extra time.",
+    };
+  }
   const hold = events.length === 3 ? events[1] : undefined;
   const pickup = hold !== undefined && hold.type === "Move" && samePoint(down, hold);
   if (twoFingers || !(events.length === 2 || (events.length === 3 && pickup))) {
@@ -202,7 +212,7 @@ For simple taps use the gesture-tap tool. For straight-line scrolling use the ge
 For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
 All x/y values are normalized 0.0–1.0 (screen fractions, not pixels). delayMs controls the delay before each event (default 16ms ≈ 60fps).
 Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
-Physical iOS: a Down, any Moves, then an Up, with an optional second finger as x2/y2. Paths need the app drawn in portrait. A plain Down then Up keeps its hold semantics: same point = press-hold, other point = drag (Up delayMs = rest before the move), and one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Anything else (more Moves, a second finger) plays as timed paths, each event waiting its delayMs after the one before. The second finger touches down at the first event with x2/y2 and lifts after the last.
+Physical iOS: a Down, any Moves, then an Up, with an optional second finger as x2/y2. Paths need the app drawn in portrait. A plain Down then Up keeps its hold semantics: same point = press-hold, other point = drag (Up delayMs = rest before the move), and one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Anything else (more Moves, a second finger) plays as timed paths, each event waiting its delayMs after the one before. The second finger must start on the Down (give it x2/y2) and lifts after the last event with x2/y2.
 Returns { events: number } with the total count of events dispatched. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the target device is not booted or an event type is invalid.
 
 Example long-press at center:

@@ -203,7 +203,8 @@ export interface RunnerTouchFinger {
  * rotations and any path with waypoints, which XCUICoordinate cannot draw.
  * The runner answers once the last finger has lifted.
  *
- * @param fingers 1 to 5 paths. Times within a path must not decrease.
+ * @param fingers 1 to 5 paths. Each starts at tMs 0, and times within a path
+ *   must not decrease.
  */
 export async function touchPaths(
   api: IosDeviceRunnerApi,
