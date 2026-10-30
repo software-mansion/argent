@@ -200,6 +200,7 @@ back/menu/home), then read where focus landed from the tree in its result, or ca
     alwaysLoad: true,
     searchHint:
       "accessibility element tree ui hierarchy tap coordinates ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>dom tv tvos apple tv android tv fire tv focus focusable remote dpad",
+    readOnly: true,
     zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {

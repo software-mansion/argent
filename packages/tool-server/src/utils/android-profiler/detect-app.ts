@@ -1,5 +1,6 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { adbShell, shellQuote } from "../adb";
+import { adbCommandPrefix } from "../adb-server";
 
 const DETECT_TIMEOUT_MS = 10_000;
 
@@ -47,7 +48,8 @@ export async function validateAndroidAppProcess(serial: string, appProcess: stri
 
   throw new FailureError(
     `app_process \`${appProcess}\` was not found on ${serial}: no installed package and no running ` +
-      `process matches that name. Pass an installed package (see \`adb shell pm list packages\`), ` +
+      `process matches that name. Pass an installed package (see ` +
+      `\`${adbCommandPrefix(process.env)}adb shell pm list packages\`), ` +
       `or omit app_process to auto-detect the foreground app.`,
     {
       error_code: FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_NOT_FOUND,

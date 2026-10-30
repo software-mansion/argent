@@ -153,6 +153,7 @@ panel settles instantly on its last frame, and taps land nowhere until it is wok
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
     longRunning: true,
+    readOnly: true,
     zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {

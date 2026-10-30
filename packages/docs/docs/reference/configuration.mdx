@@ -33,16 +33,17 @@ argent config get ios.additionalDeviceSets
 
 ### Available keys
 
-| Key                        | Scopes          | Merge            | Description                                                                                                                                                            |
-| -------------------------- | --------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `telemetry.enabled`        | project, global | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` (with `--scope project` for the project file)                                |
-| `allowlist.enabled`        | project, global | restrictive wins | Set to `false` to keep `argent update` from re-applying editor auto-approve allowlist rules. Unset keeps the refresh                                                   |
-| `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                                                         |
-| `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths                                  |
-| `android.sdkRoot`          | project, global | project wins     | The Android SDK root that Argent uses instead of `ANDROID_HOME`, in the tool-server and in the simulator-server. Absolute or `~/`-prefixed. `adb` on `PATH` still wins |
-| `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                                                      |
-| `scripts.maxTimeoutMs`     | global          | global wins      | The largest time limit, in milliseconds, that an e2e `script` step can ask for. Default `300000`, which is five minutes. Argent refuses a value below `100`            |
-| `scripts.heapLimitMb`      | global          | global wins      | The heap limit, in MiB, that Argent gives to each e2e `script` process. Default `512`. Argent refuses a value below `32`                                               |
+| Key                        | Scopes          | Merge            | Description                                                                                                                                                                                                                                          |
+| -------------------------- | --------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `telemetry.enabled`        | project, global | restrictive wins | Whether anonymous telemetry is on. Default `true`. Read-only here: use `argent telemetry` (with `--scope project` for the project file)                                                                                                              |
+| `allowlist.enabled`        | project, global | restrictive wins | Set to `false` to keep `argent update` from re-applying editor auto-approve allowlist rules. Unset keeps the refresh                                                                                                                                 |
+| `lens.agent`               | project, global | project wins     | The coding agent that `argent lens` starts without the picker, for example `claude` or `codex`                                                                                                                                                       |
+| `ios.additionalDeviceSets` | project, global | union            | Additional CoreSimulator device-set directories. Argent lists the simulators in these sets next to the default set. An array of paths                                                                                                                |
+| `android.sdkRoot`          | project, global | project wins     | The Android SDK root that Argent uses instead of `ANDROID_HOME`, in the tool-server and in the simulator-server. Absolute or `~/`-prefixed. `adb` on `PATH` still wins                                                                               |
+| `android.adbServerPort`    | project, global | project wins     | The adb server port that Argent uses instead of `5037`, from 1 to 65535. The tool-server reads it only when it starts. Restart the tool-server with `argent server stop` after a change. `ANDROID_ADB_SERVER_PORT` or `ADB_SERVER_SOCKET` still wins |
+| `recordings.directory`     | project, global | project wins     | The directory where Argent saves a finished screen recording. Default `.argent/recordings` under the project root                                                                                                                                    |
+| `scripts.maxTimeoutMs`     | global          | global wins      | The largest time limit, in milliseconds, that an e2e `script` step can ask for. Default `300000`, which is five minutes. Argent refuses a value below `100`                                                                                          |
+| `scripts.heapLimitMb`      | global          | global wins      | The heap limit, in MiB, that Argent gives to each e2e `script` process. Default `512`. Argent refuses a value below `32`                                                                                                                             |
 
 Argent reads `scripts.maxTimeoutMs` and `scripts.heapLimitMb` from the global file only. A project file cannot raise the limits that one script step runs under.
 
@@ -51,6 +52,8 @@ A path value is absolute, starts with `~`, or is relative. For `ios.additionalDe
 `allowlist.enabled` only affects `argent update`. When it is `false`, an update leaves editor auto-approve allowlists entirely alone — rules already written stay, and `argent init` still asks its auto-approve question as before. When the key is unset (the default), nothing changes: update keeps refreshing the rules for editors that already have Argent configured. `false` in either scope wins, so a committed project file opts out a whole team.
 
 Argent resolves `recordings.directory` on the client host, the machine that receives the mp4. A relative value always resolves against the project root, or the home directory when there is no project, regardless of which file set the value.
+
+`android.adbServerPort` does not change the adb server of the agent's own shell. When Argent uses an adb server other than the default, the result of `list-devices` shows the agent how to reach that server. The agent puts the environment variables from that result before each `adb` command that it runs itself.
 
 ### Storage
 
@@ -63,7 +66,7 @@ Argent stores the keys as JSON in two files:
 
 The two files share the shape of the key. `ios.additionalDeviceSets` lives at `{ "ios": { "additionalDeviceSets": [...] } }`.
 
-Argent reads both files at each request. Thus a change takes effect immediately. The merge column above decides the effective value when both files set the same key:
+Argent reads both files at each request. Thus a change takes effect immediately. `android.adbServerPort` is the exception: the tool-server reads that key only when it starts. The merge column above decides the effective value when both files set the same key:
 
 | Merge            | Result                                                                      |
 | ---------------- | --------------------------------------------------------------------------- |
@@ -106,6 +109,7 @@ argent enable argent-lens --scope project    # this project only
 | `boot-sound`              | Off     | Default the `sound` argument of `boot-device` to true, so Android emulators boot with audio output instead of muted           |
 | `microinteractions`       | Off     | Animate the host window to match device actions. Cosmetic only, macOS only                                                    |
 | `harmonyos`               | Off     | Enable HarmonyOS support: list, boot and drive HarmonyOS phones and DevEco Studio emulators over `hdc`                        |
+| `forward-secrets`         | Off     | Send the secrets of the client to a linked tool-server. See [Secrets over a link](#secrets-over-a-link)                       |
 | `video-watermark`         | On      | Put the Argent watermark in the corner of a recorded screen video                                                             |
 
 The tool-server writes the event log to `~/.argent/tool-server-events.jsonl`. Set the `ARGENT_EVENT_LOG` environment variable to select a different path.
@@ -164,6 +168,34 @@ A change in a secrets file applies to the next tool call. An environment variabl
 
 A name that no source defines fails the step at run time. Argent redacts each resolved value in the reports and logs. Thus do not use a placeholder for content that a report must show.
 
+### Secrets over a link
+
+With `argent link` or `ARGENT_TOOLS_URL`, the tool-server can run on a different computer, for example a hosted Mac. By default, that computer must define each secret. Enable the `forward-secrets` flag to use the secrets of the client instead:
+
+```bash
+argent enable forward-secrets
+```
+
+With the flag on, the client does these steps for each call to a linked tool-server:
+
+1. The client finds each `{{secret:NAME}}` placeholder in the call. This includes the e2e test file, its `run:` fragments and its nested e2e tests.
+2. The client resolves each name with the sources in the table above, on the client computer. The client finds the project root from its own working directory.
+3. The client sends each value that it finds with the call, in the `x-argent-client-secrets` request header.
+
+The tool-server uses these values before its own sources. The tool-server resolves a name that the client does not define with its own sources. When neither the client nor the tool-server defines a name, the error says that the client did not provide the secret. Define the secret on the client computer. The tool-server does not store the values. A value that `paste` pastes stays on the clipboard of the device, as for a secret of the tool-server.
+
+The client sends a value only for a name that the call contains. The client reads the flag on the client computer. A tool-server that is older than this feature ignores the values and uses only its own sources.
+
+The flag gives the linked tool-server each secret that a call names. A call of any tool can name any secret of the client, so enable the flag only for a tool-server that you trust with all of these secrets.
+
+The header contains the values as plain text. Thus the client sends the values only to an `https://` URL or to a loopback address, for example an SSH tunnel to `127.0.0.1`. The client does not send a call that names a secret of the client over plain HTTP to a different computer, and the call fails. When `NODE_TLS_REJECT_UNAUTHORIZED` is `0` on the client, the client does not check the certificate of an `https://` URL. Thus the client also does not send these values over `https://`, and the call fails. To trust a self-signed certificate, set `NODE_EXTRA_CA_CERTS` instead. When a link is set, `argent enable forward-secrets` and `argent secrets` tell you whether the client can send values to it.
+
+A tunnel or a proxy can store the request headers. For example, the local web inspector of ngrok records each request with its headers. Turn off this recording for a link that forwards secrets.
+
+The tool-server accepts 16 KiB of request headers in total. Thus one call can send approximately 11 KiB of secret values. The client does not send a call whose request headers would be more than 16 KiB, and the call fails. A proxy can have a lower limit. For example, nginx accepts 8 KiB for one header by default. When a proxy or the tool-server refuses the header as too large, the call fails. Define a secret of this size on the computer of the tool-server.
+
+The client does not follow a redirect for a call that sends secret values, and the call fails.
+
 ### Commands
 
 | Command                 | Description                                                      |
@@ -197,13 +229,14 @@ An environment variable changes the behavior of the process that reads it. Expor
 
 ### Devices
 
-| Variable                                               | Default                                 | Description                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ARGENT_SIMULATOR_NO_WINDOW`                           | unset                                   | Set `1`, `true` or `yes` to boot an iOS simulator without the Simulator window                                                                                                                                                                                                                                 |
-| `ARGENT_EMULATOR_NO_WINDOW`                            | unset                                   | Set `1` to boot an Android emulator without a window, for CI, containers or Wayland-only sessions                                                                                                                                                                                                              |
-| `ARGENT_EMULATOR_GPU_MODE`                             | `auto` on macOS, `swiftshader` on Linux | The value of the emulator `-gpu` option, for example `host`                                                                                                                                                                                                                                                    |
-| `ARGENT_IOS_TEAM_ID`                                   | unset                                   | The Apple Developer Team ID that signs the runner for [physical iOS devices](/docs/features/physical-ios-devices). Unset, Argent detects the team from the keychain of the Mac. The variable must be in the environment of the tool-server; a value in the shell of the client does not reach a running server |
-| `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME` | SDK defaults                            | The standard Android SDK locations. Argent reads them to find `adb`, the emulator and the AVDs                                                                                                                                                                                                                 |
+| Variable                                               | Default                                 | Description                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGENT_SIMULATOR_NO_WINDOW`                           | unset                                   | Set `1`, `true` or `yes` to boot an iOS simulator without the Simulator window                                                                                                                                                                                                                                                               |
+| `ARGENT_EMULATOR_NO_WINDOW`                            | unset                                   | Set `1` to boot an Android emulator without a window, for CI, containers or Wayland-only sessions                                                                                                                                                                                                                                            |
+| `ARGENT_EMULATOR_GPU_MODE`                             | `auto` on macOS, `swiftshader` on Linux | The value of the emulator `-gpu` option, for example `host`                                                                                                                                                                                                                                                                                  |
+| `ARGENT_EMULATOR_GUEST_VULKAN`                         | unset                                   | Set `1`, `true` or `yes` to boot Android emulators on macOS with guest Vulkan when the `guestVulkan` argument of `boot-device` is not set. By default, Argent boots them with `-feature -Vulkan`, because guest Vulkan crashes the GPU process of Chrome. Without guest Vulkan, apps find no Vulkan device, and WebGPU content does not show |
+| `ARGENT_IOS_TEAM_ID`                                   | unset                                   | The Apple Developer Team ID that signs the runner for [physical iOS devices](/docs/features/physical-ios-devices). Unset, Argent detects the team from the keychain of the Mac. The variable must be in the environment of the tool-server; a value in the shell of the client does not reach a running server                               |
+| `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `ANDROID_AVD_HOME` | SDK defaults                            | The standard Android SDK locations. Argent reads them to find `adb`, the emulator and the AVDs                                                                                                                                                                                                                                               |
 
 ### MCP server
 

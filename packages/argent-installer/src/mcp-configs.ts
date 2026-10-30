@@ -7,6 +7,7 @@ import {
   MCP_BINARY_NAME,
   PACKAGE_NAME,
   PERMISSION_RULE,
+  DEVIN_PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
 import {
@@ -69,6 +70,9 @@ interface ShadowingConfigFinding {
 
 export interface McpConfigAdapter {
   name: string;
+  // Telemetry slug kept stable across a product rename; defaults to the
+  // sanitized `name`.
+  telemetryName?: string;
   detect(): boolean;
   projectPath(root: string): string | null;
   globalPath(): string | null;
@@ -993,8 +997,21 @@ function vscodeUserDirs(): string[] {
 
 // MARK: Windsurf
 
+// Windsurf was renamed Devin Desktop. Its bundled Devin agent still loads MCP
+// servers from ~/.codeium/windsurf/mcp_config.json, but ignores alwaysAllow
+// there: tool approvals come only from permissions.allow in its own user config.
+function devinUserConfigPath(): string {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(homedir(), "AppData", "Roaming");
+    return path.join(appData, "devin", "config.json");
+  }
+  const xdg = process.env.XDG_CONFIG_HOME;
+  return path.join(xdg || path.join(homedir(), ".config"), "devin", "config.json");
+}
+
 const windsurfAdapter: McpConfigAdapter = {
-  name: "Windsurf",
+  name: "Devin Desktop",
+  telemetryName: "windsurf",
 
   detect(): boolean {
     return dirHasEditorEvidence(
@@ -1041,19 +1058,22 @@ const windsurfAdapter: McpConfigAdapter = {
   },
 
   // Targets just the argent entry's alwaysAllow key, so comments and foreign
-  // servers survive.
+  // servers survive. alwaysAllow serves the legacy Cascade agent; the Devin
+  // agent needs its own permission rule.
   addAllowlist(): void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return;
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], ["*"]);
+    addAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
   },
 
   removeAllowlist(_root: string, scope: "local" | "global"): void {
     // Global-only client: a scope-"local" cleanup must not touch the
     // machine-global config a retained global install depends on.
     if (scope !== "global") return;
+    removeAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     if (!fs.existsSync(configPath)) return;
     const config = readJsonc(configPath);
@@ -1620,39 +1640,45 @@ export function findConfiguredAdapterScopes(
   return results;
 }
 
-export function addClaudePermission(root: string, scope: "local" | "global"): void {
-  const settingsPath =
-    scope === "global"
-      ? path.join(homedir(), ".claude", "settings.json")
-      : path.join(root, ".claude", "settings.json");
-
+// Shared by Claude Code and Devin, whose settings both keep tool approvals in
+// a `permissions.allow` string array.
+function addAllowRule(settingsPath: string, rule: string): void {
   // Route through readJsonc / editJsoncFile so a hand-added comment can't make
   // readJson's `catch { return {} }` drop the user's other permissions on write.
   // editJsoncFile creates the permissions.allow path if absent.
   const config = readJsonc(settingsPath);
   const permissions = (config.permissions ?? {}) as Record<string, unknown>;
   const allow = Array.isArray(permissions.allow) ? (permissions.allow as string[]) : [];
-  if (allow.includes(PERMISSION_RULE)) return;
-  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, PERMISSION_RULE]);
+  if (allow.includes(rule)) return;
+  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, rule]);
 }
 
-export function removeClaudePermission(root: string, scope: "local" | "global"): void {
-  const settingsPath =
-    scope === "global"
-      ? path.join(homedir(), ".claude", "settings.json")
-      : path.join(root, ".claude", "settings.json");
-
+function removeAllowRule(settingsPath: string, rule: string): void {
   if (!fs.existsSync(settingsPath)) return;
   const config = readJsonc(settingsPath);
   const permissions = config?.permissions as Record<string, unknown> | undefined;
   const allow = permissions?.allow;
   if (!permissions || !Array.isArray(allow)) return;
-  if (!allow.includes(PERMISSION_RULE)) return;
-  const next = (allow as string[]).filter((rule) => rule !== PERMISSION_RULE);
+  if (!allow.includes(rule)) return;
+  const next = (allow as string[]).filter((r) => r !== rule);
   // undefined deletes the emptied `allow`; editJsoncFile then prunes an emptied
   // `permissions` and removes the file if the document collapses to {}, while a
   // comment or foreign permission keeps the file and survives byte-intact.
   editJsoncFile(settingsPath, ["permissions", "allow"], next.length > 0 ? next : undefined);
+}
+
+function claudeSettingsPath(root: string, scope: "local" | "global"): string {
+  return scope === "global"
+    ? path.join(homedir(), ".claude", "settings.json")
+    : path.join(root, ".claude", "settings.json");
+}
+
+export function addClaudePermission(root: string, scope: "local" | "global"): void {
+  addAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
+}
+
+export function removeClaudePermission(root: string, scope: "local" | "global"): void {
+  removeAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
 }
 
 type ManagedContentScope = "local" | "global";
