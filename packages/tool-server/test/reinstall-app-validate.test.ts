@@ -27,7 +27,11 @@ vi.mock("../src/utils/ios-device-sets", () => ({
   simctlTargetForUdid: async (udid: string) => ({ nativeId: udid, prefix: ["simctl"] }),
 }));
 const runAdb = vi.fn();
-vi.mock("../src/utils/adb", () => ({ runAdb: (...a: unknown[]) => runAdb(...a) }));
+vi.mock("../src/utils/adb", () => ({
+  runAdb: (...a: unknown[]) => runAdb(...a),
+  adbShell: async () => "",
+  shellQuote: (value: string) => value,
+}));
 
 import { getFailureSignal, FAILURE_CODES, type DeviceInfo } from "@argent/registry";
 import { parseManifestPackage, readApkPackageName } from "../src/utils/apk-package";
