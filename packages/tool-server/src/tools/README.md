@@ -31,3 +31,14 @@ default. Run it after you change a description, a schema or the server instructi
 
 - To render with a flag on: `npm run render:agent-context -- --out <dir> --enable <flag>`.
 - To review a change: render `main` and your branch into two folders with `--out`, and diff them.
+
+The render covers tool definitions only. To see what a tool call returns to the agent, call it
+through the real MCP server of your checkout:
+
+```bash
+npm run capture:tool-output -- --call 'describe {"udid":"<device id>"}'
+```
+
+It saves every content block of each result, as the MCP client receives it: the result text,
+the screenshot and element tree appended after interaction tools, and any notes. The calls act
+on real devices. Run `npm run capture:tool-output -- --help` for step files and options.
