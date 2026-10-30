@@ -16,6 +16,7 @@ import { isAndroidTv } from "../src/utils/adb";
 import { sendCommand } from "../src/utils/simulator-client";
 
 const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0000";
+const REMOTE_IOS_UDID = `remote:${IOS_UDID}`;
 const ANDROID_SERIAL = "emulator-5554";
 
 beforeEach(() => {
@@ -39,6 +40,7 @@ describe("rotate tool", () => {
     await expect(run).rejects.toThrow(
       "Tool 'rotate' is not supported on android emulator (Android TV has a fixed orientation)."
     );
+    expect(isAndroidTv).toHaveBeenCalledWith(ANDROID_SERIAL);
     expect(sendCommand).not.toHaveBeenCalled();
   });
 
@@ -82,9 +84,9 @@ describe("rotate tool", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("rotates an iOS simulator without probing adb", async () => {
+  it.each([IOS_UDID, REMOTE_IOS_UDID])("rotates %s without probing adb", async (udid) => {
     await expect(
-      rotateTool.execute({ simulatorServer: {} }, { udid: IOS_UDID, orientation: "Portrait" })
+      rotateTool.execute({ simulatorServer: {} }, { udid, orientation: "Portrait" })
     ).resolves.toEqual({ orientation: "Portrait" });
     expect(isAndroidTv).not.toHaveBeenCalled();
     expect(sendCommand).toHaveBeenCalledTimes(1);
