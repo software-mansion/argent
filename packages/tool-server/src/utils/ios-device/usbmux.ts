@@ -17,6 +17,28 @@ export { IosDeviceTransportError } from "./usbmux-protocol";
  */
 
 const USBMUXD_SOCKET_PATH = "/var/run/usbmuxd";
+
+/** Standard libimobiledevice override; resolve per call so availability and commands agree. */
+function usbmuxAddress(): string {
+  return process.env.USBMUXD_SOCKET_ADDRESS?.trim() || USBMUXD_SOCKET_PATH;
+}
+
+/** Parse a Unix path or HOST:PORT without treating a TCP endpoint as a Unix filename. */
+export function parseUsbmuxAddress(address: string): net.NetConnectOpts {
+  const unix = /^unix:(.*)$/i.exec(address);
+  const socketPath = unix?.[1] ?? address;
+  if (socketPath.startsWith("/")) return { path: socketPath };
+
+  const tcp = /^(?:\[([^\]]+)\]|([a-zA-Z0-9._-]+)):(\d+)$/.exec(address);
+  const port = tcp ? Number(tcp[3]) : 0;
+  if (tcp && port > 0 && port <= 65_535 && (!tcp[1] || net.isIP(tcp[1]) === 6)) {
+    return { host: tcp[1] ?? tcp[2]!, port };
+  }
+  throw new IosDeviceTransportError("protocol", "Invalid USBMUXD_SOCKET_ADDRESS", {
+    retryable: false,
+    hint: "Use an absolute Unix socket path, UNIX:/path, or HOST:PORT (IPv6: [ADDRESS]:PORT).",
+  });
+}
 const USBMUX_DEFAULT_TIMEOUT_MS = 5_000;
 
 /**
@@ -52,7 +74,7 @@ interface OpenUsbmuxRunnerSocketOptions {
 export async function openUsbmuxRunnerSocket(
   options: OpenUsbmuxRunnerSocketOptions
 ): Promise<net.Socket> {
-  const socketPath = options.socketPath ?? USBMUXD_SOCKET_PATH;
+  const socketPath = options.socketPath ?? usbmuxAddress();
   const deadline = createDeadline(options.timeoutMs ?? USBMUX_DEFAULT_TIMEOUT_MS);
 
   // ListDevices on a throwaway socket resolves the mux DeviceID.
@@ -65,11 +87,7 @@ export async function openUsbmuxRunnerSocket(
 /** Check for a live USB transport, including forwarded USB, rather than Wi-Fi pairing. */
 export async function isUsbmuxDeviceAvailable(udid: string): Promise<boolean> {
   try {
-    await resolveUsbmuxDeviceId(
-      USBMUXD_SOCKET_PATH,
-      udid,
-      createDeadline(USBMUX_DEFAULT_TIMEOUT_MS)
-    );
+    await resolveUsbmuxDeviceId(usbmuxAddress(), udid, createDeadline(USBMUX_DEFAULT_TIMEOUT_MS));
     return true;
   } catch {
     return false;
@@ -174,7 +192,7 @@ async function connectToDevicePort(
   }
 }
 
-/** Open a unix socket to the usbmuxd daemon within the remaining deadline. */
+/** Open the configured Unix or TCP usbmuxd endpoint within the remaining deadline. */
 async function connectToUsbmuxd(socketPath: string, deadline: Deadline): Promise<net.Socket> {
   const timeoutMs = deadline.remainingMs();
 
@@ -183,7 +201,7 @@ async function connectToUsbmuxd(socketPath: string, deadline: Deadline): Promise
   // `once` attaches its `connect` and `error` listeners synchronously, before
   // the first await, so an early socket error settles the wait rather than
   // surfacing as an unhandled `error` event.
-  const socket = net.createConnection(socketPath);
+  const socket = net.createConnection(parseUsbmuxAddress(socketPath));
   const abort = new AbortController();
   const timer = setTimeout(() => {
     abort.abort(

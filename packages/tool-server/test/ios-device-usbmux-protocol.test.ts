@@ -27,11 +27,43 @@ import {
   createDeadline,
   isUsbmuxDeviceAvailable,
   openUsbmuxRunnerSocket,
+  parseUsbmuxAddress,
   writePacket,
 } from "../src/utils/ios-device/usbmux";
 
 const DEVICE_UDID = "00008110-000978540290401E";
 const RUNNER_PORT = 51_234;
+
+describe("usbmux endpoint parsing", () => {
+  it.each([
+    ["/var/run/usbmuxd", { path: "/var/run/usbmuxd" }],
+    ["UNIX:/tmp/private.sock", { path: "/tmp/private.sock" }],
+    ["unix:/tmp/private.sock", { path: "/tmp/private.sock" }],
+    ["127.0.0.1:15038", { host: "127.0.0.1", port: 15038 }],
+    ["localhost:1", { host: "localhost", port: 1 }],
+    ["[::1]:65535", { host: "::1", port: 65535 }],
+  ])("parses %s", (value, expected) => {
+    expect(parseUsbmuxAddress(value as string)).toEqual(expected);
+  });
+
+  it.each([
+    "",
+    "relative.sock",
+    "UNIX:",
+    "host",
+    "host:0",
+    "host:65536",
+    "host:1.5",
+    "host:-1",
+    "::1:15038",
+    "[not-ipv6]:15038",
+    "http://host:15038",
+    "user@host:15038",
+    "user:password@host:15038",
+  ])("rejects malformed endpoint %s before dialing", (value) => {
+    expect(() => parseUsbmuxAddress(value)).toThrow("Invalid USBMUXD_SOCKET_ADDRESS");
+  });
+});
 
 describe("usbmux packet framing", () => {
   it("round-trips header fields and payload through encode/decode", () => {
@@ -323,6 +355,7 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await Promise.all(
       openServers
         .splice(0)
@@ -357,11 +390,11 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
     });
 
   const startFakeUsbmuxd = async (
-    socketPath: string,
+    socketPath: string | { host: string; port: number },
     devices: Array<{ id: number; serial: string; connection?: string }>,
     connectResult: number,
     options: { listDevicesDelayMs?: number } = {}
-  ): Promise<{ connectRequests: string[] }> => {
+  ): Promise<{ connectRequests: string[]; address: string }> => {
     const connectRequests: string[] = [];
     let connectionIndex = 0;
     const server = net.createServer((socket) => {
@@ -402,7 +435,9 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
       server.listen(socketPath, resolve);
     });
     openServers.push(server);
-    return { connectRequests };
+    const bound = server.address();
+    const address = typeof bound === "string" ? bound : `${bound!.address}:${bound!.port}`;
+    return { connectRequests, address };
   };
 
   it.each([
@@ -421,6 +456,24 @@ describe("openUsbmuxRunnerSocket against a fake usbmuxd", () => {
       expect(fake.connectRequests).toEqual([]);
     }
   );
+
+  it.each(["unix", "tcp"])("uses the environment %s endpoint for availability", async (kind) => {
+    const endpoint = kind === "unix" ? await createSocketPath() : { host: "127.0.0.1", port: 0 };
+    const fake = await startFakeUsbmuxd(endpoint, [{ id: 42, serial: DEVICE_UDID }], 0);
+    vi.stubEnv("USBMUXD_SOCKET_ADDRESS", kind === "unix" ? `UNIX:${fake.address}` : fake.address);
+    await expect(isUsbmuxDeviceAvailable(DEVICE_UDID)).resolves.toBe(true);
+    expect(fake.connectRequests).toEqual([]);
+  });
+
+  it.each(["unix", "tcp"])("uses the environment %s endpoint for the runner pipe", async (kind) => {
+    const endpoint = kind === "unix" ? await createSocketPath() : { host: "127.0.0.1", port: 0 };
+    const fake = await startFakeUsbmuxd(endpoint, [{ id: 42, serial: DEVICE_UDID }], 0);
+    vi.stubEnv("USBMUXD_SOCKET_ADDRESS", fake.address);
+    const socket = await openUsbmuxRunnerSocket({ udid: DEVICE_UDID, port: RUNNER_PORT });
+    socket.destroy();
+    expect(fake.connectRequests).toHaveLength(1);
+    expect(fake.connectRequests[0]).toContain("<key>DeviceID</key><integer>42</integer>");
+  });
 
   it("reports unavailable when usbmuxd cannot be reached", async () => {
     const socketPath = await createSocketPath();

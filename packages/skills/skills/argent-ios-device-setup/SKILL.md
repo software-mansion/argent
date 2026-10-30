@@ -13,6 +13,15 @@ Read this only for a physical iPhone. Simulators use `argent-ios-simulator-setup
 2. `launch-app` only registers the app. The first `describe`, gesture or `screenshot` builds, signs and starts the on-device runner: minutes cold, tens of seconds from cache or after a tool-server restart. Build cap 15 min, runner ready 120 s.
 3. On the first install the phone asks to trust the developer (Settings > General > VPN & Device Management), and an **Argent Runner** app appears on the home screen. Tell the user it is argent's automation runner and must stay installed.
 
+## Forwarded usbmux endpoint
+
+If a USB forwarder exposes a private endpoint, set `USBMUXD_SOCKET_ADDRESS` in the
+Argent tool-server's environment when starting it, for example `127.0.0.1:15038`.
+Both device discovery and runner commands use that endpoint. An absolute Unix
+socket path or `UNIX:/path` also works; an unset value uses `/var/run/usbmuxd`.
+Keep the forwarder running while using the phone. A shell export after the
+server has started does not change its environment.
+
 ## Signing and failures
 
 Signing needs no configuration. The first phone call of a tool-server process carries a note naming the team picked and the `ARGENT_IOS_TEAM_ID` override (tool-server environment; a change forces a cold rebuild). Connection, lock, trust, expired-profile and missing-certificate errors name their fix: apply it, retry the same call. Also: `errSecInternalComponent`: run `security set-key-partition-list -S apple-tool:,apple:,codesign: -s ~/Library/Keychains/login.keychain-db` (asks the user's login password), retry. `team has no devices`: keep the phone connected, retry. Bundle id registration failed: free-team app-id cap, wait days or sign under a paid team. Any other xcodebuild failure prints raw `error:` lines: read `~/.argent/ios-device-runner/logs/runner-<udid8>.log`. `RUNNER_WEDGED`: `stop-simulator-server` for the udid, retry.
