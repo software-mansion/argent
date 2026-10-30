@@ -18,10 +18,10 @@ npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest ini
 ## Argent 能做什么？
 
 - **交互操作（Interact）** - 点按、滑动、手势操作、文字输入、硬件按键；电视上支持方向键（D-pad），桌面端支持鼠标和键盘。
-- **端到端测试(E2E)** -将操作路径录制一次并保存为端到端测试，之后可确定性重放，用于复现问题或执行冒烟测试。
-- **视觉回归（Visual Regression)** - 将基准截图与实时截图进行对比，支持 OCR 并感知字体差异。
-- **性能分析(Profiling)** - Hermes、React DevTools、Xcode Instruments、Perfetto：分析渲染、CPU 热点和卡顿。
-- **调试(Debugging)** - 日志、网络请求（`XMLHttpRequest`，含 axios；`fetch`，含 Expo 的实现；以及原生请求）、JS 执行、原生和 React 组件树。
+- **端到端测试（E2E）** - 将操作路径录制一次并保存为端到端测试，之后可确定性重放，用于复现问题或执行冒烟测试。
+- **视觉回归（Visual Regression）** - 将基准截图与实时截图进行对比，支持 OCR 并感知字体差异。
+- **性能分析（Profiling）** - Hermes、React DevTools、Xcode Instruments、Perfetto：分析渲染、CPU 热点和卡顿。
+- **调试（Debugging）** - 日志、网络请求（`XMLHttpRequest`，含 axios；`fetch`，含 Expo 的实现；以及原生请求）、JS 执行、原生和 React 组件树。
 - **React Native** - 构建、启动、迭代，无需额外配置。
 
 问问你的 AI 助手 _“Argent 能做什么？”_，即可列出全部工具。
