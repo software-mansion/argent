@@ -174,6 +174,14 @@ npm run test:watch -w @argent/registry
 npm run test:watch -w @argent/tool-server
 ```
 
+### Checking what coding agents see
+
+`npm run harness-check` runs real coding-agent CLIs (Codex, opencode, Gemini CLI, and
+optionally Claude Code and Kiro CLI) against your build. It reports which values from
+Argent's tool schemas reach each one's model. Run it by hand when you change tool schemas,
+tool descriptions or the MCP server's instructions. See
+[scripts/harness-check/README.md](scripts/harness-check/README.md).
+
 ### Seeing what Argent sends to agents
 
 `npm run render:agent-context` renders what the MCP server sends for your checkout: each
