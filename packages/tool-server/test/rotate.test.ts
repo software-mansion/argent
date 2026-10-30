@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRotateTool } from "../src/tools/rotate";
-import { ANDROID_TV_PROBE_BUDGET_MS } from "../src/tools/screenshot";
 import { UnsupportedOperationError } from "../src/utils/capability";
 
 vi.mock("../src/utils/adb", async (importOriginal) => ({
@@ -12,7 +11,7 @@ vi.mock("../src/utils/simulator-client", async (importOriginal) => ({
   sendCommand: vi.fn(async () => ({})),
 }));
 
-import { isAndroidTv } from "../src/utils/adb";
+import { ADB_DEVICES_TIMEOUT_MS, isAndroidTv } from "../src/utils/adb";
 import { sendCommand } from "../src/utils/simulator-client";
 
 const IOS_UDID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0000";
@@ -42,7 +41,9 @@ describe("rotate tool", () => {
     await expect(run).rejects.toThrow(
       "Tool 'rotate' is not supported on android emulator (Android TV has a fixed orientation)."
     );
-    expect(isAndroidTv).toHaveBeenCalledWith(ANDROID_SERIAL);
+    expect(isAndroidTv).toHaveBeenCalledWith(ANDROID_SERIAL, {
+      devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS,
+    });
     expect(sendCommand).not.toHaveBeenCalled();
     expect(resolveService).not.toHaveBeenCalled();
     expect(rotateTool.services({ udid: ANDROID_SERIAL, orientation: "LandscapeLeft" })).toEqual({});
@@ -57,27 +58,25 @@ describe("rotate tool", () => {
     expect(sendCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("rotates once the TV probe overruns its budget", async () => {
+  it("refuses an Android TV whose probe answers only after 10 s", async () => {
     vi.useFakeTimers();
-    vi.mocked(isAndroidTv).mockReturnValueOnce(new Promise(() => {}));
+    vi.mocked(isAndroidTv).mockReturnValueOnce(
+      new Promise((resolve) => setTimeout(() => resolve(true), 10_000))
+    );
 
     const run = rotateTool.execute({}, { udid: ANDROID_SERIAL, orientation: "LandscapeLeft" });
-    await vi.advanceTimersByTimeAsync(ANDROID_TV_PROBE_BUDGET_MS - 1);
+    const settled = expect(run).rejects.toBeInstanceOf(UnsupportedOperationError);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settled;
     expect(sendCommand).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(run).resolves.toEqual({ orientation: "LandscapeLeft" });
-    expect(sendCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("rotates an Android phone and leaves no probe timer behind", async () => {
-    vi.useFakeTimers();
-
+  it("rotates an Android phone", async () => {
     await expect(
       rotateTool.execute({}, { udid: ANDROID_SERIAL, orientation: "LandscapeLeft" })
     ).resolves.toEqual({ orientation: "LandscapeLeft" });
     expect(resolveService).toHaveBeenCalledTimes(1);
     expect(sendCommand).toHaveBeenCalledWith(api, { cmd: "rotate", direction: "LandscapeLeft" });
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each([IOS_UDID, REMOTE_IOS_UDID])("rotates %s without probing adb", async (udid) => {

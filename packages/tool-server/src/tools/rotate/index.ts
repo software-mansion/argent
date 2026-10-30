@@ -3,9 +3,8 @@ import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry"
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
-import { isAndroidTv } from "../../utils/adb";
+import { ADB_DEVICES_TIMEOUT_MS, isAndroidTv } from "../../utils/adb";
 import { UnsupportedOperationError } from "../../utils/capability";
-import { ANDROID_TV_PROBE_BUDGET_MS } from "../screenshot";
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -27,20 +26,12 @@ const capability: ToolCapability = {
 };
 
 /**
- * Rotating needs no adb, so a wedged adb must not hold a phone's rotate for the
- * 30 s `adb devices` timeout and then fail it. A probe that errors or overruns
- * counts as not a TV.
+ * A wedged adb server must not hold a phone's rotate for the 30 s `adb devices`
+ * default, so that listing is capped and a failed probe counts as not a TV. The
+ * device-side probe is not capped: cutting it short would rotate a slow TV.
  */
-async function isAndroidTvWithinBudget(serial: string): Promise<boolean> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const budget = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), ANDROID_TV_PROBE_BUDGET_MS);
-  });
-  try {
-    return await Promise.race([isAndroidTv(serial).catch(() => false), budget]);
-  } finally {
-    clearTimeout(timer);
-  }
+async function isAndroidTvForRotate(serial: string): Promise<boolean> {
+  return isAndroidTv(serial, { devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(() => false);
 }
 
 export function createRotateTool(registry: Registry): ToolDefinition<Params, Result> {
@@ -62,7 +53,7 @@ Returns { orientation }. Fails on a TV target, or if the target device is not bo
     services: () => ({}),
     async execute(_services, params) {
       const device = resolveDevice(params.udid);
-      if (device.platform === "android" && (await isAndroidTvWithinBudget(device.id)))
+      if (device.platform === "android" && (await isAndroidTvForRotate(device.id)))
         throw new UnsupportedOperationError("rotate", device, "Android TV has a fixed orientation");
       const ref = simulatorServerRef(device);
       const api = await registry.resolveService<SimulatorServerApi>(ref.urn, ref.options);

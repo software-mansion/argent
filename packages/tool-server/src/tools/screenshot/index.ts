@@ -197,9 +197,8 @@ export async function tvTargetLongSide(file: string, scale: number | undefined):
     : Math.round(longSide * scale);
 }
 
-// The probes' own adb timeouts sum to ~45 s (`adb devices` alone may wait 30 s).
-// A capture and a rotate need no probe for their own work, so both cap it here
-// and treat an overrun as not a TV: lowering it lets a slow cold probe rotate a TV.
+// The probes' own adb timeouts sum to ~45 s (`adb devices` alone may wait 30 s),
+// so uncapped, a wedged adb would stall a capture that needs no probe.
 export const ANDROID_TV_PROBE_BUDGET_MS = 2_000;
 
 /**
