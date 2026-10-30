@@ -51,7 +51,7 @@ export function createDebuggerLogRegistryTool(
     },
     description: `Get a summary of all console logs captured from the app's JS runtime.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
-Use when investigating warnings, errors, or unexpected output. Call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when the stats are empty BECAUSE the previous debugger session ended: torn down (e.g. by stop-all-simulator-servers) with its log file deleted, or cut off by the app crashing with its log file kept at the path the note names. Absent that note, empty really does mean the app has logged nothing.
+Use when investigating warnings, errors, or unexpected output. Call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when the previous debugger session ended: torn down (e.g. by stop-all-simulator-servers) with its log file deleted, or cut off by the app crashing with its log file kept at the path the note names. Absent that note, empty really does mean the app has logged nothing.
 When the debugger cannot be reached, this tool does not fail: it returns { status: "not_connected", reason, detail, guidance } with NO log file. Follow the guidance (do not retry in a loop). Read a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died. Use debugger-status, not this tool, to judge debugger health.`,
     readOnly: true,
     zodSchema,
@@ -77,22 +77,16 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
           logicalDeviceId: api.logicalDeviceId,
         };
 
-        // Resolving above silently reconnects after a teardown, so only an
-        // EMPTY registry is ambiguous; one with entries is this session's own
-        // capture, and consuming a breadcrumb there would attach a stale
-        // explanation to a healthy result.
-        if (stats.totalEntries === 0) {
-          // Every id this device answers to: the disposer files the breadcrumb
-          // under the connect id and the `logicalDeviceId` Metro echoed, and
-          // `forgetDeviceAlias` ran in that same dispose, so only the freshly
-          // resolved api still knows the logical id.
-          const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
-            canonicalDeviceId(params.device_id),
-            params.device_id,
-            api.logicalDeviceId,
-          ]);
-          if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
-        }
+        // Every id this device answers to: the disposer files the breadcrumb
+        // under the connect id and the `logicalDeviceId` Metro echoed, and
+        // `forgetDeviceAlias` ran in that same dispose, so only the freshly
+        // resolved api still knows the logical id.
+        const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
+          canonicalDeviceId(params.device_id),
+          params.device_id,
+          api.logicalDeviceId,
+        ]);
+        if (reaped) response.note = describeReapedSession(reaped, "JS-runtime debugger session");
         return response;
       } catch (err) {
         const reason = classifyNotConnected(err);
