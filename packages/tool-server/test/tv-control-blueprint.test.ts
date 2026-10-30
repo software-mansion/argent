@@ -309,6 +309,22 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     await instance.dispose();
   });
 
+  it("reads a reader that dies mid-request with no recycle pending as an empty focus view", async () => {
+    const instance = await buildService();
+
+    // describeTv retries and recycles on an empty view; an error would skip that.
+    h.state.axWriteHook = () => {
+      h.readers[h.readers.length - 1]!.alive = false;
+    };
+
+    await expect(instance.api.describe()).resolves.toEqual({
+      bundleId: undefined,
+      focused: null,
+      focusable: [],
+    });
+    await instance.dispose();
+  });
+
   it("reaps daemons a dead tool-server with the same pid left on its socket paths", async () => {
     // A SIGKILLed tool-server never disposes, so its daemons keep these paths
     // until their idle exit unlinks them.

@@ -41,7 +41,7 @@ export function tvControlRef(device: DeviceInfo): {
 }
 
 // Per tool-server process, so neither a reap nor a dispose touches another
-// server's daemon, and a daemon left by an earlier process can't unlink ours.
+// server's daemon.
 function axSocketPath(udid: string): string {
   return `/tmp/argent-tv-ax-${udid.slice(0, 8)}-${process.pid}.sock`;
 }
@@ -362,7 +362,8 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         // The socket never came up (a bind that timed out, not a clean exit —
         // `onAxExit` only fires for the latter). Mark the daemon dead so the
         // next `ensureAxAlive` respawns instead of connecting to a socket that
-        // was unlinked and never rebound, and reap the half-spawned process.
+        // was unlinked and never rebound. Its reader is reaped by the next
+        // respawn or by dispose.
         axExited = true;
         if (!axProc.killed) {
           axProc.removeListener("exit", onAxExit);
@@ -371,9 +372,8 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         }
         throw err;
       }
-      // dispose() may have run while we awaited the new socket: it kills only
-      // the axProc current at *its* moment and doesn't wait for an in-flight
-      // respawn, so reap what we spawned or it outlives teardown.
+      // dispose() may have run while we awaited the new socket. It reaps the
+      // reader once this respawn settles; drop the spawn process and socket.
       if (disposed) {
         if (!axProc.killed) {
           axProc.removeListener("exit", onAxExit);

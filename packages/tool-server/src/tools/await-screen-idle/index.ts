@@ -86,7 +86,7 @@ const capability: ToolCapability = {
 
 // Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
 // while still catching real motion (a slide/fade animation). Focus and
-// selection count too: a TV remote press may move only the cursor.
+// selection count too: a Vega remote press may move only the cursor.
 function treeSignature(root: DescribeNode): string {
   const round = (n: number) => Math.round(n * 100) / 100;
   const parts: string[] = [];
