@@ -32,6 +32,7 @@ import {
   pickE2eFile,
   collectFlowRequests,
   flowMemberKey,
+  flowYamlSource,
   hasToolFileExtension,
   isClientFileArgument,
   nestedFlowTarget,
@@ -524,7 +525,7 @@ function memberCollector(roots: string[], opts: PrepareFileInputsOptions) {
         let doc: unknown;
         try {
           // The runner's parse; its warnings belong to the run, not to this terminal.
-          doc = parseYaml(file.text.trim(), { logLevel: "error" });
+          doc = parseYaml(flowYamlSource(file.text), { logLevel: "error" });
         } catch {
           continue;
         }
