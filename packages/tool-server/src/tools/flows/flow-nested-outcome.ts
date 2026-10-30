@@ -1,4 +1,5 @@
 import { canonicalToolId } from "@argent/registry";
+import type { StepDetails } from "./flow-actions";
 import type { StepStatus } from "./flow-run";
 
 /**
@@ -24,30 +25,71 @@ import type { StepStatus } from "./flow-run";
 const FLOW_EXECUTE_TOOL_ID = "e2e-execute";
 const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 
-interface NestedOutcome {
+/**
+ * Beside the status and reason: the detail fields of the inner step that
+ * failed, carried onto the outer step. A failed check keeps the text it found
+ * beside its reason rather than inside it, so an outer step built from the
+ * inner `reason` alone would say "did not equal" with no found text. The
+ * outer step also keeps the whole inner report as its `result`, which
+ * `flowRunToMcpContent` prints as JSON under the step and `--json` and
+ * `--json-stream` carry, so those outputs hold the inner values twice. The
+ * CLI text output prints no inner step, so there these fields are the only
+ * place the inner values print. The inner hint is one of them only when the
+ * inner check did not run; otherwise it stays in the reason (see
+ * `firstFailingStep`).
+ */
+interface NestedOutcome extends StepDetails {
   status: StepStatus;
   reason: string;
+  indeterminate?: true;
 }
+
+type NestedDetails = Omit<NestedOutcome, "status" | "reason">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function firstFailingStep(steps: unknown): string | undefined {
+/** A string field of a report that crossed the registry boundary as `unknown`. */
+function str(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function firstFailingStep(steps: unknown): ({ label: string } & NestedDetails) | undefined {
   if (!Array.isArray(steps)) return undefined;
   for (const entry of steps) {
     if (!isRecord(entry)) continue;
     if (entry.status !== "fail" && entry.status !== "error") continue;
     // Typed checks rather than coercion: this report crossed the registry
     // boundary as `unknown`, and an object here would render "[object Object]".
-    const what =
-      typeof entry.tool === "string"
-        ? entry.tool
-        : typeof entry.kind === "string"
-          ? entry.kind
-          : "step";
-    const why = typeof entry.reason === "string" ? entry.reason : "no reason given";
-    return `${what}: ${why}`;
+    const what = str(entry.tool) ?? str(entry.kind) ?? "step";
+    const why = str(entry.reason) ?? "no reason given";
+    const hint = str(entry.hint);
+    const indeterminate = entry.indeterminate === true;
+    // The inner hint advises on the inner step: a tap's "add a scroll-to step
+    // before this one" names a place in the composed e2e test. As the outer
+    // step's own `hint:` line it would advise on the outer step, so it stays
+    // in the label, after the inner reason. An inner step that could not read
+    // the tree is the exception: its hint is the reader's repair or the
+    // runner's advice to check the app, the device and the tree source, and
+    // that holds for the outer step too.
+    const ownHint = indeterminate ? hint : undefined;
+    const labelHint = hint !== undefined && !indeterminate ? `; hint: ${hint}` : "";
+    // A snapshot's values are a tolerance and a measured diff, or two image
+    // sizes. The renderers print them unquoted only on a `snapshot` step, so
+    // on this `tool` step they would read as quoted device text. The label
+    // below already holds both values, in the inner reason.
+    const snapshot = entry.kind === "snapshot";
+    const expected = snapshot ? undefined : str(entry.expected);
+    const actual = snapshot ? undefined : str(entry.actual);
+    return {
+      label: `${what}: ${why}${labelHint}`,
+      ...(ownHint !== undefined && { hint: ownHint }),
+      ...(expected !== undefined && { expected }),
+      ...(entry.expectedKind === "pattern" && { expectedKind: "pattern" as const }),
+      ...(actual !== undefined && { actual }),
+      ...(indeterminate && { indeterminate: true as const }),
+    };
   }
   return undefined;
 }
@@ -84,11 +126,13 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
 
   if (result.ok === false) {
     const detail = firstFailingStep(result.steps);
+    const { label, ...details } = detail ?? {};
     return {
       status: "fail",
       reason:
         `e2e test "${flow}" failed: ${count(result.passed)} passed, ${count(result.failed)} failed, ` +
-        `${count(result.errored)} errored${detail ? ` (${detail})` : ""}`,
+        `${count(result.errored)} errored${label ? ` (${label})` : ""}`,
+      ...details,
     };
   }
 

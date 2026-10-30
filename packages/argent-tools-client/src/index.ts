@@ -68,6 +68,8 @@ export {
   type MaterializedImage,
 } from "./artifacts.js";
 
+export { renderFlowStepDetails, type FlowStepDetails } from "./flow-step-details.js";
+
 export {
   prepareFileInputs,
   applyClientFileDirectives,

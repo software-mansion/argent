@@ -114,9 +114,10 @@ describe("run cancellation mid-directive", () => {
     const result = await run("cancelled-tap", mockRegistry(calls), controller.signal);
 
     // A skip with the uniform abort reason — NOT a fail with the misleading
-    // "no visible element matched … add a scroll-to step" hint.
+    // "no element matched …" reason and its scroll-to hint.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.steps[0].hint).toBeUndefined();
     expect(result.steps[0].durationMs).toBeUndefined();
     expect(result.ok).toBe(false);
     expect(calls).not.toContain("gesture-tap");
