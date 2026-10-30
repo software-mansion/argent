@@ -51,6 +51,7 @@ function defineNative(proto: object, prop: string, field: string): void {
   });
 }
 defineNative(MockNode.prototype, "childNodes", "__childNodes");
+defineNative(MockNode.prototype, "parentNode", "__parentNode");
 // nodeType too, so a test can clobber an element's public nodeType. The fixtures' text,
 // CDATA and comment nodes are plain objects, which keep their own nodeType field.
 Object.defineProperty(MockNode.prototype, "nodeType", {
@@ -210,7 +211,11 @@ function run(
   g.window = {
     innerWidth: W,
     innerHeight: H,
-    getComputedStyle: (e: Record<string, unknown>) => e.__style,
+    // Like Chrome's, it rejects a non-element (a document, text or comment node).
+    getComputedStyle: (e: Record<string, unknown>) => {
+      if (!(e instanceof MockElement)) throw new TypeError("parameter 1 is not of type 'Element'");
+      return e.__style;
+    },
   };
   g.document = {
     documentElement: root,
@@ -542,6 +547,32 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(result!.tree, "labelled")!.label).toBe("Real Label");
   });
 
+  it("reads a form aria-labelledby target whose control clobbers parentNode", () => {
+    // A direct read would reach the control (an <input type=hidden>, display:none) and treat
+    // the rendered form as hidden, reading the <br> under its display:none span as a space.
+    const control = el({ tag: "input", attrs: { name: "parentNode" }, style: { display: "none" } });
+    const gone = el({ tag: "span", rect: ZERO, style: { display: "none" } }) as MockElement &
+      Record<string, unknown>;
+    gone.childNodes = [Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 })];
+    const form = el({ tag: "form", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    form.childNodes = [
+      { nodeType: 3, nodeValue: "Save" },
+      Object.assign(gone, { nodeType: 1 }),
+      { nodeType: 3, nodeValue: "draft" },
+      Object.assign(control, { nodeType: 1 }),
+    ];
+    Object.assign(form, { nodeType: 1, parentNode: { nodeType: 9 } });
+    Object.defineProperty(form, "parentNode", { value: control, configurable: true });
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, form]);
+    expect(findById(tree, "btn")!.label).toBe("Savedraft");
+  });
+
   it("reads a deeply nested aria-labelledby target without overflowing the stack", () => {
     let inner = el({ tag: "span", text: "deep", rect: BOX }) as MockElement &
       Record<string, unknown>;
@@ -628,6 +659,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     };
     const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
       Record<string, unknown>;
+    // The script checks the target's ancestors up to the document.
+    Object.assign(label, { nodeType: 1, parentNode: { nodeType: 9 } });
     label.childNodes = [
       { nodeType: 3, nodeValue: "Save" },
       nested("none"),
@@ -644,26 +677,61 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "btn")!.label).toBe("Savemy draft");
   });
 
-  it("reads a <br> in a display:none aria-labelledby target as a space", () => {
-    const label = el({
-      tag: "span",
-      rect: ZERO,
-      style: { display: "none" },
-      attrs: { id: "lbl" },
-    }) as MockElement & Record<string, unknown>;
-    const br = Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 });
-    label.childNodes = [
-      { nodeType: 3, nodeValue: "Save" },
-      br,
-      { nodeType: 3, nodeValue: "draft" },
+  it("reads every <br> in a display:none aria-labelledby target as a space", () => {
+    // Nothing in the target renders, so a <br> under a further display:none element counts
+    // too. The target is display:none itself, or sits under a display:none ancestor.
+    const br = () => Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 });
+    const label = (style: Record<string, string>) => {
+      const node = el({ tag: "span", rect: ZERO, style, attrs: { id: "lbl" } }) as MockElement &
+        Record<string, unknown>;
+      const gone = el({ tag: "span", rect: ZERO, style: { display: "none" } }) as MockElement &
+        Record<string, unknown>;
+      gone.childNodes = [br()];
+      node.childNodes = [
+        { nodeType: 3, nodeValue: "Save" },
+        br(),
+        { nodeType: 3, nodeValue: "my" },
+        Object.assign(gone, { nodeType: 1 }),
+        { nodeType: 3, nodeValue: "draft" },
+      ];
+      return Object.assign(node, { nodeType: 1 });
+    };
+    const button = () =>
+      el({ tag: "button", rect: BOX, attrs: { "id": "btn", "aria-labelledby": "lbl" } });
+
+    const own = run([button(), label({ display: "none" })]);
+    expect(findById(own.tree, "btn")!.label).toBe("Save my draft");
+
+    const inner = label({});
+    const host = el({ rect: ZERO, style: { display: "none" }, children: [inner] });
+    inner.parentNode = Object.assign(host, { nodeType: 1, parentNode: { nodeType: 9 } });
+    const viaAncestor = run([button(), host]);
+    expect(findById(viaAncestor.tree, "btn")!.label).toBe("Save my draft");
+  });
+
+  it("reads a visibility:hidden <br> as a space, since it still breaks the line", () => {
+    const br = () =>
+      Object.assign(el({ tag: "br", rect: ZERO, style: { visibility: "hidden" } }), {
+        nodeType: 1,
+      });
+    const text = () => [
+      { nodeType: 3, nodeValue: "alpha" },
+      br(),
+      { nodeType: 3, nodeValue: "beta" },
     ];
+    const div = el({ rect: BOX, attrs: { id: "own" } }) as MockElement & Record<string, unknown>;
+    div.childNodes = text();
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    label.childNodes = text();
     const button = el({
       tag: "button",
       rect: BOX,
       attrs: { "id": "btn", "aria-labelledby": "lbl" },
     });
-    const { tree } = run([button, label]);
-    expect(findById(tree, "btn")!.label).toBe("Save draft");
+    const { tree } = run([div, button, label]);
+    expect(findById(tree, "own")!.value).toBe("alpha beta");
+    expect(findById(tree, "btn")!.label).toBe("alpha beta");
   });
 
   it("keeps a U+FEFF, and folds other whitespace to a space, in own and aria-labelledby text", () => {
@@ -1044,10 +1112,12 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   });
 
   it("reads a non-HTML br element as nothing, since it renders inline", () => {
-    // An SVG-namespace <br>, or createElementNS(XHTML, "BR") (localName "BR"), is not a
-    // line break even though its tagName lowercases to "br".
+    // An SVG, MathML or null-namespace <br>, or createElementNS(XHTML, "BR") (localName
+    // "BR"), is not a line break even though its tagName lowercases to "br".
     for (const [localName, namespaceURI] of [
       ["br", "http://www.w3.org/2000/svg"],
+      ["br", "http://www.w3.org/1998/Math/MathML"],
+      ["br", null],
       ["BR", "http://www.w3.org/1999/xhtml"],
     ]) {
       const div = el({ rect: BOX, attrs: { id: "nl" } }) as MockElement & Record<string, unknown>;

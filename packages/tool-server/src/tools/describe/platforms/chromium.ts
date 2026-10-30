@@ -61,6 +61,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getChildNodes = protoGetter(Node.prototype, "childNodes");
   const getNodeType = protoGetter(Node.prototype, "nodeType");
   const getNodeValue = protoGetter(Node.prototype, "nodeValue");
+  const getParentNode = protoGetter(Node.prototype, "parentNode");
   const getTagName = protoGetter(Element.prototype, "tagName");
   const getLocalName = protoGetter(Element.prototype, "localName");
   const getNamespaceURI = protoGetter(Element.prototype, "namespaceURI");
@@ -160,11 +161,18 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // An aria-labelledby target's textContent (text and CDATA), read like ownText: a
   // rendered <br> is a space and whitespace collapses. A <br> under a display:none
-  // element inside the target is not rendered (its own display does not inherit that);
-  // in a wholly hidden target it still is a space, as in Chrome's accessible name.
-  // Iterative: the target's depth has no MAX_DEPTH bound, so recursion could overflow
-  // the stack.
+  // element inside a rendered target is not rendered (its own display does not inherit
+  // that). In a target that is itself display:none, or under such an ancestor, every
+  // <br> is a space, as in Chrome's accessible name. Iterative: the target's depth has
+  // no MAX_DEPTH bound, so recursion could overflow the stack.
   function labelText(root) {
+    let shown = true;
+    for (let n = root; n && getNodeType.call(n) === 1; n = getParentNode.call(n)) {
+      if (window.getComputedStyle(n).display === "none") {
+        shown = false;
+        break;
+      }
+    }
     let s = "";
     // Flat [node, underNone] pairs.
     const stack = [];
@@ -180,7 +188,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (type === 3 || type === 4) s += getNodeValue.call(node);
       else if (!underNone && isRenderedBr(node)) s += " ";
       else if (type === 1) {
-        pushChildren(node, underNone || window.getComputedStyle(node).display === "none");
+        pushChildren(
+          node,
+          underNone || (shown && window.getComputedStyle(node).display === "none")
+        );
       }
     }
     return s.replace(WHITESPACE, " ");
