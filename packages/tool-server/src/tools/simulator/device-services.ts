@@ -180,8 +180,8 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
  * whatever ids it was given.
  *
  * On a Metro serving two or more devices, `selectTarget` refuses to guess which
- * target a udid or serial means and makes the caller re-target with the
- * `logicalDeviceId` Metro echoed — an opaque per-connection handle
+ * target a serial (or a simulator with two apps on that Metro) means and makes
+ * the caller re-target with the `logicalDeviceId` Metro echoed — an opaque per-connection handle
  * `list-devices` never mints, which the debugger URN then embeds. A teardown
  * scoped to real device ids leaves that session holding its CDP socket, a bound
  * loopback server and a log file handle, while the caller's serial still

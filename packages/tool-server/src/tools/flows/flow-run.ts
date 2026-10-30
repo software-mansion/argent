@@ -3001,10 +3001,9 @@ async function execLeafStep(
         }
         if (isDebuggerNotConnectedResult(step.name, result)) {
           // Keep `detail` in the report: it is the only place the underlying
-          // error text lives (device_mismatch's guidance points the agent at
-          // the logicalDeviceId "listed in the detail message", and the
-          // metro_not_running `got:` fragment names what actually answered the
-          // port).
+          // error text lives (device_mismatch's guidance tells the agent to do
+          // what the detail message says, and the metro_not_running `got:`
+          // fragment names what actually answered the port).
           return {
             ...base,
             status: "fail",

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
@@ -6,6 +6,11 @@ import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debu
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { scopeTempHome } from "../helpers/temp-home";
+
+// A UUID-shaped device_id would otherwise run the host's `xcrun simctl`.
+vi.mock("../../src/utils/debugger/metro-device-name", () => ({
+  metroDeviceNamesFor: async () => undefined,
+}));
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the

@@ -15,6 +15,11 @@ import {
 
 // Capture telemetry without touching the transport: keep every real export and
 // spy only `track` (same pattern as preview-opened-telemetry.test.ts).
+// A UUID-shaped device_id would otherwise run the host's `xcrun simctl`.
+vi.mock("../../src/utils/debugger/metro-device-name", () => ({
+  metroDeviceNamesFor: async () => undefined,
+}));
+
 vi.mock("@argent/telemetry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/telemetry")>();
   return { ...actual, track: vi.fn() };
