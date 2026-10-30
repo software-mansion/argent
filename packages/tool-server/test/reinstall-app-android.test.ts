@@ -19,6 +19,8 @@ const device = {
   legacy: false,
   // `pm list packages` fails, e.g. the package manager is restarting.
   pmFails: false,
+  // adb cannot be resolved, so no adb command runs.
+  noAdb: false,
   apkPackage: "",
   calls: [] as string[][],
 };
@@ -94,7 +96,7 @@ vi.mock("../src/utils/apk-package", () => ({
 }));
 
 vi.mock("../src/utils/android-binary", () => ({
-  resolveAndroidBinary: vi.fn(async (name: "adb" | "emulator") => name),
+  resolveAndroidBinary: vi.fn(async (name: "adb" | "emulator") => (device.noAdb ? null : name)),
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
@@ -144,6 +146,7 @@ beforeEach(() => {
   device.hidden = new Set();
   device.legacy = false;
   device.pmFails = false;
+  device.noAdb = false;
   device.calls = [];
 });
 
@@ -227,6 +230,17 @@ describe("reinstall-app on Android", () => {
     });
     expect((err as Error).message).toContain("the app may be gone");
     expect(ran("install")).toEqual([]);
+  });
+
+  it("passes the error through when adb never ran", async () => {
+    device.installed.add("com.example.app");
+    device.noAdb = true;
+
+    const err = await rejection(reinstall("com.example.app"));
+
+    expect(getFailureSignal(err)).toMatchObject({ error_code: "ANDROID_ADB_NOT_FOUND" });
+    expect((err as Error).message).not.toContain("the app may be gone");
+    expect(device.calls).toEqual([]);
   });
 
   it("does not mistake a package whose name contains bundleId for bundleId", async () => {

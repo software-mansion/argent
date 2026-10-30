@@ -37,12 +37,16 @@ export const androidImpl: PlatformImpl<
       (err: unknown) => (err instanceof Error ? err.message : String(err))
     );
     const stillInstalled = await isInstalled(udid, bundleId).catch((err: unknown) => {
+      const signal = getFailureSignal(err);
+      // adb never ran (e.g. the device's provider did not grant it), so neither
+      // did the uninstall.
+      if (signal && signal.error_code !== FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED) throw err;
       throw new FailureError(
         `Could not check whether \`adb uninstall\` removed ${bundleId}, so nothing was installed and the app may be gone. ` +
           `adb uninstall said: ${uninstall}. The check failed: ${err instanceof Error ? err.message : String(err)}`,
         {
           error_kind: "subprocess",
-          ...getFailureSignal(err),
+          ...signal,
           error_code: FAILURE_CODES.ANDROID_REINSTALL_UNINSTALL_FAILED,
           failure_stage: "android_reinstall_check_uninstall",
           failure_area: "tool_server",
