@@ -121,6 +121,7 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
     return {
       description: `${ANDROID_FOCUS_EMPTY_HINT}\n\n${formatDescribeTree(data.tree, {
         source: data.source,
+        touchScreen: false,
       })}`,
       source: data.source,
       hint: ANDROID_FOCUS_EMPTY_HINT,

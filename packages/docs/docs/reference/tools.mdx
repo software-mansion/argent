@@ -74,6 +74,14 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
 
+In an Expo development build, a floating Tools button can cover app controls near a side edge of the screen. Its touch area is larger than its icon. On iOS and Android phones and tablets, `describe` adds a note to each element under that area, because a tap there can open the Expo developer menu. On TV, `describe` adds no note. `describe` also adds no note when the app runs in a window smaller than the screen:
+
+- an iPhone-only app on an iPad
+- iPad Split View, Slide Over or Stage Manager
+- Android split screen
+
+`debugger-component-tree` does not show the button, so check `describe` when a tap there opens the menu or does nothing. To remove the button, turn off **Tools button** in that menu. The app keeps this setting after it restarts. Turn on **Tools button** again when the agent finishes.
+
 ## Interacting
 
 | Tool                     | Description                                                     |

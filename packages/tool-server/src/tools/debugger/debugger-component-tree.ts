@@ -793,6 +793,9 @@ Workflow:
   3. Use the (tap: x,y) coordinates directly with the tap tool.
 
 Call again after navigation or state changes since positions may shift.
+In an Expo development build, a floating native Tools button can cover controls near a side edge,
+and this tree does not show it. If a tap near a side edge opens the Expo dev menu or does nothing,
+call describe, which marks the elements under the button, or switch off "Tools button" in that menu.
 Set includeSkipped=true to see a summary of all filtered components.
 Use when you need tap coordinates for a React Native UI element. Returns a compact text tree with (tap: x,y) coords. Fails if Metro debugger is not connected.`,
     alwaysLoad: true,

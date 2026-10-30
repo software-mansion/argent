@@ -145,4 +145,32 @@ describe("describe (TV) — Android skips the focus-engine retries", () => {
     expect(describeAndroidMock).toHaveBeenCalledTimes(1);
     expect(res.hint).toMatch(/Android TV focus engine/i);
   });
+
+  it("does not mark tiles under an Expo Tools button, which takes no D-pad input", async () => {
+    // A 960 x 540 dp screen with the 26 dp icon centred 42 dp from the right edge.
+    const node = (x: number, y: number, w: number, h: number, extra: object) => ({
+      frame: { x, y, width: w, height: h },
+      children: [],
+      ...extra,
+    });
+    describeAndroidMock.mockResolvedValue({
+      tree: {
+        role: "Screen",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          node(0.9427, 0.0963, 0.0271, 0.0481, { role: "View", label: "Tools" }),
+          node(0.92, 0.08, 0.06, 0.08, { role: "Button", label: "Tile", clickable: true }),
+        ],
+      },
+      source: "uiautomator",
+    });
+
+    const res = await describeTv(
+      makeRegistry(makeApi(vi.fn().mockResolvedValue(empty))),
+      ANDROID_TV_DEVICE
+    );
+
+    expect(res.description).toContain('"Tile"');
+    expect(res.description).not.toContain("Expo");
+  });
 });
