@@ -264,20 +264,22 @@ function adoptDevice(
   }
 
   /**
-   * A provider may not offer a physical iPhone yet. Argent routes a hardware
-   * UDID to its own `devicectl` / usbmux backend, which talks to the device
-   * directly, past the provider's simulator-server and past the grants in
-   * this descriptor. Adopting one would hand out an ownership bypass, so it is
-   * refused here rather than half-honoured.
+   * A physical iPhone is adopted only with a `usbmuxd` endpoint. Without one
+   * Argent would route the hardware UDID to its own `devicectl` / usbmux
+   * backend, which talks to the device directly, past the provider's
+   * simulator-server and past the grants in this descriptor; adopting that
+   * would hand out an ownership bypass, so it is refused rather than
+   * half-honoured. With the endpoint, every byte goes through the provider's
+   * usbmuxd (the `usbmuxd` capability gates it), which is the contract.
    *
    * The shape cannot collide with a simulator UDID (8-4-4-4-12 hex against
    * 8-16), so no simulator a provider offers is caught by this.
    */
-  if (device.platform === "ios" && isIosPhysicalUdid(device.nativeId)) {
+  if (device.platform === "ios" && isIosPhysicalUdid(device.nativeId) && !device.usbmuxd) {
     warnOnce(
       `${record.id}:ios-physical:${device.nativeId}`,
-      `${record.name}: ignoring device '${device.nativeId}': argent cannot yet attach to a ` +
-        `physical iPhone offered by a provider`
+      `${record.name}: ignoring device '${device.nativeId}': a physical iPhone offered by a ` +
+        `provider needs a 'usbmuxd' endpoint and the 'usbmuxd' capability`
     );
 
     return undefined;
@@ -304,6 +306,7 @@ function adoptDevice(
     },
     ...(device.simulatorServer ? { simulatorServer: device.simulatorServer } : {}),
     state: device.state,
+    ...(device.usbmuxd ? { usbmuxd: device.usbmuxd } : {}),
   };
 }
 
