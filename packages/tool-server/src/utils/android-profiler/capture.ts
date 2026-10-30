@@ -1,11 +1,17 @@
 import { spawn, type ChildProcess } from "child_process";
+import { randomBytes } from "crypto";
 import { promises as fs } from "fs";
+import { tmpdir } from "os";
+import * as path from "path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { traceConfigPath } from "@argent/native-devtools-android";
 import { resolveAndroidBinary } from "../android-binary";
 import { runAdb, adbArgv, adbShell } from "../adb";
 
 const ON_DEVICE_TRACE_DIR = "/data/misc/perfetto-traces";
+// The one directory both `shell` can write and perfetto can read (Android 12+);
+// perfetto cannot read /data/local/tmp.
+const ON_DEVICE_CONFIG_DIR = "/data/misc/perfetto-configs";
 const START_TIMEOUT_MS = 15_000;
 const STOP_POLL_INTERVAL_MS = 200;
 const STOP_TOTAL_TIMEOUT_MS = 30_000;
@@ -51,12 +57,39 @@ interface StartPerfettoResult {
 }
 
 /**
+ * Push the config to {@link ON_DEVICE_CONFIG_DIR} so perfetto can read it with
+ * `-c <path>`. Returns the push error instead of throwing, because the caller
+ * falls back to stdin on devices whose shell user cannot write there.
+ */
+async function pushTraceConfig(
+  serial: string,
+  cfgText: string,
+  onDevicePath: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const hostDir = await fs.mkdtemp(path.join(tmpdir(), "argent-perfetto-config-"));
+  try {
+    const hostPath = path.join(hostDir, path.posix.basename(onDevicePath));
+    await fs.writeFile(hostPath, cfgText, "utf8");
+    await runAdb(["-s", serial, "push", hostPath, onDevicePath]);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    await fs.rm(hostDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/**
  * Start a perfetto recording on the target device.
  *
- * SELinux denies `shell:s0` writes to /data/misc/perfetto-traces/, so the
- * config is piped on stdin (`--txt -c -`) rather than pushed as a file;
- * `--background-wait` then prints the daemon PID on stdout once the data
- * sources are running.
+ * The config is pushed to /data/misc/perfetto-configs/ and passed as
+ * `-c <path>`, then removed once perfetto has read it. Piping it on stdin
+ * (`-c -`) needs adb to deliver end of input, which only the shell v2 protocol
+ * can do: over a transport without `shell_v2`
+ * perfetto waits for more config forever. stdin stays the fallback when the
+ * push fails, as on Android 11 and older, where shell cannot write that
+ * directory. `--background-wait` then prints the daemon PID on stdout once the
+ * data sources are running.
  * @see ANDROID_PROFILER_REFERENCE.md "2. Capture"
  */
 export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPerfettoResult> {
@@ -77,6 +110,14 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
 
   const cfgText = await buildTraceConfig(opts.appPackage);
   const onDeviceTracePath = `${ON_DEVICE_TRACE_DIR}/argent-${opts.timestamp}.pftrace`;
+  // Unique per attempt, so concurrent starts on one device never share a file.
+  const onDeviceConfigPath = `${ON_DEVICE_CONFIG_DIR}/argent-${opts.timestamp}-${randomBytes(4).toString("hex")}.pbtxt`;
+
+  const pushed = await pushTraceConfig(opts.serial, cfgText, onDeviceConfigPath);
+  const configViaStdin = !pushed.ok;
+  const stdinNote = pushed.ok
+    ? ""
+    : ` (config piped on stdin because pushing it to ${ON_DEVICE_CONFIG_DIR} failed: ${clip(pushed.error)})`;
 
   const args = [
     "-s",
@@ -85,15 +126,45 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     "perfetto",
     "--txt",
     "-c",
-    "-",
+    configViaStdin ? "-" : onDeviceConfigPath,
     "--background-wait",
     "-o",
     onDeviceTracePath,
   ];
 
+  try {
+    const { pid, child } = await spawnPerfetto(
+      adbPath,
+      args,
+      configViaStdin ? cfgText : null,
+      stdinNote
+    );
+    return { pid, onDeviceTracePath, child };
+  } finally {
+    // perfetto parses the config before it forks the daemon, so the file is
+    // no longer needed once the PID is out, or once the start has failed.
+    if (pushed.ok) {
+      await adbShell(opts.serial, `rm -f ${onDeviceConfigPath}`, {
+        timeoutMs: STOP_PROBE_TIMEOUT_MS,
+      }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Run `adb shell perfetto ...` and resolve with the PID it prints. `stdinText`
+ * is written to perfetto's stdin when the config goes in that way; otherwise
+ * stdin is closed right away.
+ */
+async function spawnPerfetto(
+  adbPath: string,
+  args: string[],
+  stdinText: string | null,
+  stdinNote: string
+): Promise<{ pid: number; child: ChildProcess }> {
   /**
-   * Spawned rather than routed through `runAdb`, because the config goes in on
-   * stdin and the PID comes back on stdout, so the argv substitution `runAdb`
+   * Spawned rather than routed through `runAdb`, because the PID comes back on
+   * stdout while the daemon keeps running, so the argv substitution `runAdb`
    * would have applied has to be applied here.
    */
   const child = spawn(adbPath, adbArgv(args), { stdio: ["pipe", "pipe", "pipe"] });
@@ -113,7 +184,7 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     const timer = setTimeout(() => {
       fail(
         new FailureError(
-          `perfetto did not return a PID within ${START_TIMEOUT_MS} ms. ` +
+          `perfetto did not return a PID within ${START_TIMEOUT_MS} ms${stdinNote}. ` +
             `stdout: ${clip(stdout)} | stderr: ${clip(stderr)}`,
           {
             error_code: FAILURE_CODES.NATIVE_PROFILER_PERFETTO_READY_TIMEOUT,
@@ -239,7 +310,7 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     // Inside the executor so a synchronous throw rejects the promise rather
     // than escaping.
     try {
-      child.stdin.write(cfgText);
+      if (stdinText !== null) child.stdin.write(stdinText);
       child.stdin.end();
     } catch (err) {
       fail(
@@ -260,7 +331,7 @@ export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPe
     }
   });
 
-  return { pid, onDeviceTracePath, child };
+  return { pid, child };
 }
 
 interface StopPerfettoOptions {

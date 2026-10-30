@@ -23,13 +23,15 @@ Mirrors `utils/ios-profiler/IOS_PROFILER_REFERENCE.md` for the iOS branch.
 ```
 ADB shell                                 device
    │                                        │
-   │ spawn `perfetto --txt -c -                       (stdin: TraceConfig textproto)
+   │ adb push <cfg> /data/misc/perfetto-configs/argent-<ts>-<rand>.pbtxt
+   │ spawn `perfetto --txt -c <that path>             (or `-c -` + stdin, see below)
    │        --background-wait                         (wait for data sources to start)
    │        -o /data/misc/perfetto-traces/argent-<ts>.pftrace`
    │                                        │
    │ <───  PID prints on stdout once data sources are running
    │                                        │
-   │ adb shell exits (stdin closed)         │  traced keeps recording
+   │ adb shell exits                        │  traced keeps recording
+   │ adb shell `rm -f <cfg path>`           │
    │                                        │
    │ (user interaction)                     │
    │                                        │
@@ -41,7 +43,8 @@ ADB shell                                 device
 
 Two live constraints to remember:
 
-- `/data/misc/perfetto-traces/` is `drwxrwx-wx` but SELinux denies `shell:s0` writes. The config CANNOT be staged via `cat > <path>` — it has to be piped to `perfetto` on stdin (`-c -`). `traced` writes the output as a privileged daemon, so the `.pftrace` lands fine.
+- The config is staged in `/data/misc/perfetto-configs/`, the only directory that `shell:s0` can write and perfetto can read (Android 12+). SELinux denies `shell:s0` writes to `/data/misc/perfetto-traces/`, and perfetto cannot read `/data/local/tmp` (errno 13). `traced` writes the output as a privileged daemon, so the `.pftrace` lands fine.
+- Piping the config on stdin (`-c -`) is only the fallback for when the push fails (Android 11 and older). It needs adb to deliver end of input, which takes the `shell_v2` protocol: over a transport that does not advertise it (`adb -s <serial> features` does not list `shell_v2`) perfetto waits for more config forever and never prints a PID.
 - `--background-wait` prints the PID on stdout once all data sources are running. Tolerate warnings preceding the PID by taking the _last_ non-empty stdout line.
 
 ---

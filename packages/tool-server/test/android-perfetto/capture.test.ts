@@ -78,7 +78,12 @@ vi.mock("../../src/utils/adb", async () => ({
   adbShell: vi.fn(async () => ""),
 }));
 
+import { readFileSync } from "fs";
+import { runAdb, adbShell } from "../../src/utils/adb";
 import { startPerfetto, buildTraceConfig } from "../../src/utils/android-profiler/capture";
+
+const runAdbMock = vi.mocked(runAdb);
+const adbShellMock = vi.mocked(adbShell);
 
 // Poll on a wall-clock deadline rather than a fixed tick budget: startPerfetto
 // does real async work (resolveAndroidBinary + buildTraceConfig's fs.readFile)
@@ -112,12 +117,83 @@ describe("buildTraceConfig", () => {
   });
 });
 
+/** The `adb push` calls, with the host file's content read while it still exists. */
+function recordPushes(): { args: string[]; content: string }[] {
+  const pushes: { args: string[]; content: string }[] = [];
+  runAdbMock.mockImplementation(async (args: string[]) => {
+    if (args.includes("push")) {
+      pushes.push({ args, content: readFileSync(args[args.indexOf("push") + 1], "utf8") });
+    }
+    return { stdout: "", stderr: "" };
+  });
+  return pushes;
+}
+
+const CONFIG_PATH = /^\/data\/misc\/perfetto-configs\/argent-20260101-000000-[0-9a-f]{8}\.pbtxt$/;
+
 describe("startPerfetto", () => {
   beforeEach(() => {
     captureState.lastSpawn = null;
+    runAdbMock.mockReset();
+    runAdbMock.mockResolvedValue({ stdout: "", stderr: "" });
+    adbShellMock.mockReset();
+    adbShellMock.mockResolvedValue("");
   });
 
-  it("invokes adb with --background-wait and -c - (stdin config)", async () => {
+  it("pushes the config to /data/misc/perfetto-configs and passes that path to -c", async () => {
+    const pushes = recordPushes();
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.stdout.emit("data", Buffer.from("12345\n"));
+    const result = await promise;
+
+    expect(result.pid).toBe(12345);
+    expect(pushes).toHaveLength(1);
+    const pushArgs = pushes[0].args;
+    expect(pushArgs.slice(0, 3)).toEqual(["-s", "emulator-5554", "push"]);
+    const onDeviceConfigPath = pushArgs[4];
+    expect(onDeviceConfigPath).toMatch(CONFIG_PATH);
+    expect(pushes[0].content).toContain("data_sources");
+    expect(pushes[0].content).toContain("com.example.app");
+
+    const args = lastSpawnRef()!.args;
+    expect(args).toContain("--background-wait");
+    expect(args[args.indexOf("-c") + 1]).toBe(onDeviceConfigPath);
+    const oIdx = args.indexOf("-o");
+    expect(args[oIdx + 1]).toMatch(/^\/data\/misc\/perfetto-traces\/argent-.*\.pftrace$/);
+    // Nothing on stdin: a transport without shell_v2 never delivers its end.
+    expect((lastSpawnRef()!.child as { stdinWritten: string }).stdinWritten).toBe("");
+    // The pushed config is removed once perfetto has read it.
+    expect(adbShellMock).toHaveBeenCalledWith(
+      "emulator-5554",
+      `rm -f ${onDeviceConfigPath}`,
+      expect.anything()
+    );
+  });
+
+  it("removes the pushed config when perfetto fails to start", async () => {
+    const pushes = recordPushes();
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.emit("exit", 1, null);
+    await expect(promise).rejects.toThrow(/perfetto exited/);
+    expect(adbShellMock).toHaveBeenCalledWith(
+      "emulator-5554",
+      `rm -f ${pushes[0].args[4]}`,
+      expect.anything()
+    );
+  });
+
+  it("falls back to piping the config on stdin (-c -) when the push fails", async () => {
+    runAdbMock.mockRejectedValue(new Error("remote couldn't create file: Permission denied"));
     const promise = startPerfetto({
       serial: "emulator-5554",
       appPackage: "com.example.app",
@@ -129,15 +205,12 @@ describe("startPerfetto", () => {
 
     expect(result.pid).toBe(12345);
     const args = lastSpawnRef()!.args;
-    expect(args).toContain("--background-wait");
-    expect(args).toContain("-c");
-    const cIdx = args.indexOf("-c");
-    expect(args[cIdx + 1]).toBe("-");
-    const oIdx = args.indexOf("-o");
-    expect(args[oIdx + 1]).toMatch(/^\/data\/misc\/perfetto-traces\/argent-.*\.pftrace$/);
+    expect(args[args.indexOf("-c") + 1]).toBe("-");
     const stdinText = (lastSpawnRef()!.child as { stdinWritten: string }).stdinWritten;
     expect(stdinText).toContain("data_sources");
     expect(stdinText).toContain("com.example.app");
+    // Nothing was pushed, so there is nothing to remove.
+    expect(adbShellMock).not.toHaveBeenCalled();
   });
 
   it("tolerates warning text preceding the PID — parses the last non-empty stdout line", async () => {
