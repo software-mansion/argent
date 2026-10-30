@@ -31,13 +31,19 @@ function nestedFlowRef(args: Record<string, unknown>): string {
   return "";
 }
 
-/** The file inputs a `tool:` step's args fill in for the tool it names ({@link toolStepFiles}). */
+/**
+ * The file inputs a `tool:` step's args fill in for the tool it names
+ * ({@link toolStepFiles}). A `project_root` probe is not one: the e2e tools
+ * that declare it read the project through their other inputs.
+ */
 function toolStepFilePaths(
   registry: Registry,
   tool: string,
   args: Record<string, unknown>
 ): ToolStepFile[] {
-  return toolStepFiles(registry.getTool(tool)?.fileInputs, args);
+  return toolStepFiles(registry.getTool(tool)?.fileInputs, args).filter(
+    ({ spec }) => spec.kind !== "probe" || spec.target !== "project_root"
+  );
 }
 
 /**
