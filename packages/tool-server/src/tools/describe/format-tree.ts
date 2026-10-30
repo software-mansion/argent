@@ -188,16 +188,12 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
         'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
     );
   } else {
-    // Physical iOS has no two-finger gestures. Do not recommend gesture-pinch for this source.
     // A Mac app has no touch gestures at all.
     header.push(
       isMacos
         ? "Pass them straight to gesture-tap / gesture-drag / gesture-scroll, which expect this same space. " +
             "A Mac app takes mouse input, not touch gestures. Its menu bar is not in this tree: use menu-bar."
-        : opts.source === "xcuitest-runner"
-          ? "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
-            "No two-finger gestures on physical iOS."
-          : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+        : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
     header.push(
       "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."

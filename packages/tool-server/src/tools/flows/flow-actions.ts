@@ -26,7 +26,7 @@ import {
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
+import { isIosSimulator } from "../../utils/device-info";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
@@ -964,16 +964,6 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
           `${env.device.platform} takes none. On a touch screen, open a context menu with long-press`,
         isFlagEnabled
       ),
-    };
-  }
-  // Physical iOS: XCTest has no two-finger coordinate API. Fail here before the auto-wait.
-  if ((step.kind === "pinch" || step.kind === "rotate") && isIosPhysicalDevice(env.device)) {
-    return {
-      ok: false,
-      reason:
-        step.kind === "pinch"
-          ? "pinch is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this e2e test on a simulator or drive the app's zoom UI with tap steps instead"
-          : "rotate is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this e2e test on a simulator or drive the app's rotate controls with tap steps instead",
     };
   }
   // Without a flow tree source, idle can never be judged.

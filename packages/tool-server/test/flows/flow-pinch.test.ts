@@ -442,29 +442,17 @@ describe("pinch: gating", () => {
     expect(result.calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
   });
 
-  it("rejects pinch on a physical iOS device without paying the settle or the selector auto-wait", async () => {
-    // Selector against an empty tree: without the upfront guard this step
-    // would burn waitForFrame's full auto-wait before failing. Counting tree
-    // reads proves neither that wait nor a gesture settle ran.
-    let reads = 0;
-    currentTree = () => {
-      reads += 1;
-      return screen([]);
-    };
+  it("dispatches pinch on a physical iOS device — the runner plays both fingers as one event stream", async () => {
     await writeFlow("pinch-ios-device", {
       executionPrerequisite: "",
-      steps: [{ kind: "pinch", selector: { text: "Map", loose: true }, scale: 2 }],
+      steps: [{ kind: "pinch", scale: 2 }],
     });
 
     const result = await run("pinch-ios-device", "00008110-000978540290401E");
 
-    expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "fail" });
-    expect(result.steps[0].reason).toMatch(/pinch is unsupported on a physical iOS device/);
-    expect(result.steps[0].reason).toMatch(/no two-finger coordinate API on hardware/);
-    expect(result.steps[0].reason).toMatch(/run this e2e test on a simulator/);
-    expect(result.steps[0].reason).not.toMatch(/simulator-server/);
-    expect(result.calls).toHaveLength(0);
-    expect(reads).toBe(0);
+    expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "pass" });
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-pinch"]);
+    expect(result.calls[0].args).toMatchObject({ udid: "00008110-000978540290401E" });
   });
 
   it("leaves tap on a physical iOS device untouched", async () => {
