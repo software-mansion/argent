@@ -41,6 +41,7 @@ import {
 } from "@argent/registry";
 
 import {
+  callerPath,
   readFileInputWire,
   uploadFile,
   type FileInputSpec,
@@ -814,7 +815,8 @@ export async function stepForOlderServer(
  * when the test it runs hides a legacy test of the same name
  * ({@link e2eShadowWarning}). A tool-server that reads the test in place
  * returns it; over a link, or to a tool-server that predates `.argent/e2e/`,
- * the client picks the file and owes it instead.
+ * the client picks the file and owes it instead. A relative `project_root` is
+ * resolved as the file input sends it ({@link callerPath}).
  */
 export async function e2eShadowWarningFor(
   tool: string,
@@ -822,7 +824,10 @@ export async function e2eShadowWarningFor(
 ): Promise<string | undefined> {
   const id = canonicalToolId(tool);
   if (id !== "e2e-execute" && id !== "e2e-read-prerequisite") return undefined;
-  const target = nestedFlowTarget(args);
+  const root = (args as { project_root?: unknown } | null)?.project_root;
+  const target = nestedFlowTarget(
+    typeof root === "string" ? { ...(args as object), project_root: callerPath(root) } : args
+  );
   if (target?.kind !== "name") return undefined;
   const picked = await pickE2eFile(target.paths);
   return picked.shadowed === undefined ? undefined : e2eShadowWarning(picked.path, picked.shadowed);

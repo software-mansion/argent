@@ -185,7 +185,7 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
  * collapsing `..` ignores symlinks, so it can name another file than the kernel
  * opens. A Windows path on another OS is left for the tool-server to refuse.
  */
-function callerPath(p: string): string {
+export function callerPath(p: string): string {
   if (path.isAbsolute(p) || path.win32.isAbsolute(p)) return p;
   const { root } = path.parse(p);
   const rest = p.slice(root.length);

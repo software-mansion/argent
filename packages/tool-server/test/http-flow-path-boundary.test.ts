@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
-import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
+import { ArtifactStore, e2eShadowWarning, type Registry, type ToolContext } from "@argent/registry";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 import { createRunFlowTool, type FlowRunResult } from "../src/tools/flows/flow-run";
@@ -1228,13 +1228,14 @@ describe("flow-execute over a link, from the real argent client", () => {
   );
 
   it.each([false, true])(
-    "replays a saved test by name with a relative project_root (remote: %s)",
+    "replays a saved test by name with a relative project_root, warning of the legacy test it hides (remote: %s)",
     async (remote) => {
       await write(
         ".argent/e2e/rel.yaml",
         "executionPrerequisite: none\nsteps:\n  - echo: start\n  - run: frag.yaml\n"
       );
       await write(".argent/e2e/frag.yaml", "steps:\n  - echo: fragment\n");
+      await write(".argent/flows/rel.yaml", "steps:\n  - echo: legacy\n");
       const client = await toolsClient(remote, "flow-execute");
       const originalCwd = process.cwd();
       process.chdir(projectRoot);
@@ -1256,6 +1257,12 @@ describe("flow-execute over a link, from the real argent client", () => {
           "pass frag",
         ]);
         expect((read as { executionPrerequisite: string }).executionPrerequisite).toBe("none");
+        const warning = e2eShadowWarning(
+          path.join(process.cwd(), ".argent/e2e/rel.yaml"),
+          path.join(process.cwd(), ".argent/flows/rel.yaml")
+        );
+        expect((run as { warning?: string }).warning).toBe(warning);
+        expect((read as { warning?: string }).warning).toBe(warning);
       } finally {
         process.chdir(originalCwd);
       }
