@@ -173,10 +173,12 @@ export async function screenshotDiffToMcpContent(
 
   // The context diff's bytes come back in `images` whether the file was already
   // on this machine or had to be downloaded from a remote tool-server.
+  let diffPath = result.diffPath;
   let contextDiffPath = result.contextDiffPath;
   let materializedImages: { localPath: string; data: Buffer; mimeType: string }[] = [];
   if (ctx) {
     const { result: rewritten, images } = await materializeArtifacts(result, ctx);
+    diffPath = (rewritten as ScreenshotDiffResult).diffPath;
     contextDiffPath = (rewritten as ScreenshotDiffResult).contextDiffPath;
     materializedImages = images;
   }
@@ -206,6 +208,11 @@ export async function screenshotDiffToMcpContent(
   }
 
   blocks.push({ type: "text" as const, text: result.summary });
+  // The summary points at these by name ("see diffPath … in this result").
+  const paths = Object.entries({ diffPath, contextDiffPath })
+    .filter(([, p]) => typeof p === "string")
+    .map(([k, p]) => `${k}: ${p as string}`);
+  if (paths.length > 0) blocks.push({ type: "text" as const, text: paths.join("\n") });
   return blocks;
 }
 

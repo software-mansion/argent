@@ -182,7 +182,7 @@ describe("screenshotDiffToMcpContent", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("returns a context image followed by the summary text", async () => {
+  it("returns a context image, the summary text, then the diff paths it refers to", async () => {
     const contextDiffPath = path.join(dir, "context.diff.png");
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     await fs.writeFile(contextDiffPath, pngBytes);
@@ -208,6 +208,10 @@ describe("screenshotDiffToMcpContent", () => {
         mimeType: "image/png",
       },
       { type: "text", text: summary },
+      {
+        type: "text",
+        text: `diffPath: ${path.join(dir, "full.diff.png")}\ncontextDiffPath: ${contextDiffPath}`,
+      },
     ]);
   });
 
