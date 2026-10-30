@@ -22,7 +22,7 @@ export async function telemetry(args: string[]): Promise<void> {
   const sub = args[0];
   let scope: FlagScope = "global";
   // Help is accepted in any position, including after a subcommand; the option
-  // parser below knows only `--scope` and would reject it as an unknown flag.
+  // parser below would reject it as an unknown flag.
   const wantsHelp = args.includes("--help") || args.includes("-h");
   if (!wantsHelp) {
     if (sub !== undefined && !SUBCOMMANDS.includes(sub)) {
