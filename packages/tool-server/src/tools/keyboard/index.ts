@@ -13,6 +13,7 @@ import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeIosDeviceImpl } from "./platforms/ios-device";
 import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
+import { makeMacosImpl } from "./platforms/macos";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
 
@@ -27,7 +28,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
     ),
   text: z
     .string()
@@ -50,7 +51,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text` in one call: one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. Not supported on TV targets; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos>"
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text` in one call: one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. Not supported on TV targets; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a or shift+tab.</flag:macos-apps>"
     ),
   delayMs: z
     .number()
@@ -69,6 +70,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 // TV is a `runtimeKind`, not a `platform` — a tvOS sim dispatches as "ios" and
@@ -99,6 +101,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     chromium: makeChromiumImpl(registry),
     vega: vegaImpl,
     harmony: harmonyImpl,
+    macos: makeMacosImpl(registry),
   });
   return {
     id: "keyboard",
@@ -118,10 +121,10 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
-    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
+    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, <flag:macos-apps>Mac app, </flag:macos-apps>Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
-A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
+A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front).<flag:macos-apps> A Mac app types any character: one with no US key (an accent, an emoji) is inserted at the focused field in order.</flag:macos-apps> A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
 - text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\`, resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`; over a link with \`forward-secrets\` on, the client's own sources first), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\`: that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1-f12). NOT supported on TV targets; move focus with \`tv-remote\` instead. <flag:harmonyos>HarmonyOS presses enter (or \`return\`), backspace (or \`delete\`), space and the horizontal arrows; any other key name is rejected. </flag:harmonyos>Physical iOS: only \`enter\` and \`backspace\`.
 On a TV target (runtimeKind 'tv') only \`text\` applies. Focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).

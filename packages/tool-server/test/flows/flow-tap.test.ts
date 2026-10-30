@@ -55,11 +55,12 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
 }
 
 async function run(
-  name: string
+  name: string,
+  device = DEVICE
 ): Promise<FlowRunResult & { calls: Array<{ tool: string; args: Record<string, unknown> }> }> {
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
   const tool = createRunFlowTool(mockRegistry(calls));
-  const result = asRun(await tool.execute({}, { name, project_root: tmpDir, device: DEVICE }));
+  const result = asRun(await tool.execute({}, { name, project_root: tmpDir, device }));
   return Object.assign(result, { calls });
 }
 
@@ -152,7 +153,7 @@ describe("tap times: parse/serialize", () => {
   it("rejects malformed options forms", () => {
     expect(() => parseFlow("steps:\n  - tap: { times: 2 }\n")).toThrow(/needs a target/i);
     expect(() => parseFlow("steps:\n  - tap: { on: A, foo: 1 }\n")).toThrow(
-      /accepts only \{ on, times \}/i
+      /accepts only \{ on, times, button \}/i
     );
     // Coordinates never sit next to option keys — the old mixed spelling and
     // stray x/y both get the nested-point hint.
@@ -171,6 +172,60 @@ describe("tap times: parse/serialize", () => {
     }
     expect(() => parseFlow("steps:\n  - tap: { on: { x: 0.5, y: 0.5 }, times: 0 }\n")).toThrow(
       /times must be an integer between 1 and 10/i
+    );
+  });
+});
+
+describe("tap button: parse/serialize", () => {
+  it("round-trips a right tap on a selector and on a point, alone and with times", () => {
+    const flow = {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tap" as const, selector: { identifier: "box.context" }, button: "right" as const },
+        { kind: "tap" as const, x: 0.3, y: 0.4, button: "right" as const },
+        {
+          kind: "tap" as const,
+          selector: { text: "Row", loose: true },
+          times: 2,
+          button: "right" as const,
+        },
+      ],
+    };
+    const yaml = serializeFlow(flow);
+    expect(yaml).toContain("button: right");
+    expect(parseFlow(yaml).steps).toEqual(flow.steps);
+  });
+
+  it("parses the options form with a button, and normalizes button: left to absent", () => {
+    const steps = parseFlow(
+      "steps:\n" +
+        "  - tap: { on: { id: box.context }, button: right }\n" +
+        "  - tap: { on: { x: 0.5, y: 0.5 }, button: right, times: 2 }\n" +
+        '  - tap: { on: "Photo", button: left }\n'
+    ).steps;
+    expect(steps).toEqual([
+      { kind: "tap", selector: { identifier: "box.context" }, button: "right" },
+      { kind: "tap", x: 0.5, y: 0.5, times: 2, button: "right" },
+      { kind: "tap", selector: { text: "Photo", loose: true } },
+    ]);
+    expect(serializeFlow({ executionPrerequisite: "", steps: [steps[2]!] })).toContain(
+      "- tap: Photo"
+    );
+  });
+
+  it("rejects an unknown button, a button with no target, and a button beside selector fields", () => {
+    for (const bad of ["middle", "Right", "2", "true"]) {
+      expect(() => parseFlow(`steps:\n  - tap: { on: A, button: ${bad} }\n`)).toThrow(
+        /tap\.button must be left or right/i
+      );
+    }
+    expect(() => parseFlow("steps:\n  - tap: { button: right }\n")).toThrow(/needs a target/i);
+    // zod would silently STRIP the button from a selector map, replaying a left click.
+    expect(() => parseFlow("steps:\n  - tap: { id: box.context, button: right }\n")).toThrow(
+      /options form takes a nested selector/i
+    );
+    expect(() => parseFlow("steps:\n  - tap: { x: 0.5, y: 0.5, button: right }\n")).toThrow(
+      /options form takes a nested point/i
     );
   });
 });
@@ -248,6 +303,29 @@ describe("tap times: execution", () => {
 
     expect(result.ok).toBe(true);
     expect(result.calls[0]!.args).not.toHaveProperty("clickCount");
+  });
+
+  it.each([
+    ["a touch device", undefined],
+    ["a Chromium app", "chromium-cdp-9222"],
+  ])("fails a right tap on %s before it reads the tree or taps", async (_name, device) => {
+    let reads = 0;
+    currentTree = () => {
+      reads++;
+      return screen([n({ label: "Photo", frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.2 } })]);
+    };
+    await writeFlow("right-click", {
+      executionPrerequisite: "",
+      steps: [{ kind: "tap", selector: { text: "Photo", loose: true }, button: "right" }],
+    });
+
+    const result = await run("right-click", device);
+
+    expect(result.ok).toBe(false);
+    expect(result.steps[0]!.reason).toMatch(/is a mouse right-click.*takes none/);
+    // Only the screenshot every failed step attaches; no tap went out.
+    expect(result.calls.map((c) => c.tool)).toEqual(["screenshot"]);
+    expect(reads).toBe(0);
   });
 
   it("dispatches clickCount on a coordinate multi-tap", async () => {

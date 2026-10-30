@@ -6,16 +6,18 @@
  *   "(iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)"
  *
  * A schema property that exists only behind a flag carries
- * `.meta({ [FLAG_META_KEY]: "<flag>" })`.
+ * `.meta({ [FLAG_META_KEY]: "<flag>" })`, and an enum whose values exist only
+ * behind a flag `.meta({ [FLAG_ENUM_META_KEY]: { <value>: "<flag>" } })`.
  */
 export const FLAG_META_KEY = "x-argent-flag";
+export const FLAG_ENUM_META_KEY = "x-argent-flag-enum";
 
 const FLAG_SPAN = /<flag:([a-z0-9-]+)>([\s\S]*?)<\/flag:\1>/g;
 
 /**
  * Renders flag spans and flag-gated properties against `isFlagEnabled`: an
  * enabled span keeps its text without the tags, a disabled one disappears, and
- * so does a disabled property (with its `required` entry). Walks strings,
+ * so does a disabled property (with its `required` entry) or enum value. Walks strings,
  * arrays and plain objects; returns a copy.
  */
 export function renderFlagGated<T>(value: T, isFlagEnabled: (flag: string) => boolean): T {
@@ -32,10 +34,15 @@ function render(value: unknown, isFlagEnabled: (flag: string) => boolean): unkno
   if (value === null || typeof value !== "object") return value;
 
   const source = value as Record<string, unknown>;
+  const enumFlags = (source[FLAG_ENUM_META_KEY] ?? {}) as Record<string, string>;
   const out: Record<string, unknown> = {};
   const dropped = new Set<string>();
   for (const [key, child] of Object.entries(source)) {
-    if (key === FLAG_META_KEY) continue;
+    if (key === FLAG_META_KEY || key === FLAG_ENUM_META_KEY) continue;
+    if (key === "enum" && Array.isArray(child)) {
+      out[key] = child.filter((v) => !Object.hasOwn(enumFlags, v) || isFlagEnabled(enumFlags[v]!));
+      continue;
+    }
     if (key === "properties" && child !== null && typeof child === "object") {
       const props: Record<string, unknown> = {};
       for (const [name, prop] of Object.entries(child as Record<string, unknown>)) {

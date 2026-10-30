@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
+import { macosAppRef } from "../../blueprints/macos-app";
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
@@ -18,6 +19,7 @@ import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
+import { macosImpl } from "./platforms/macos";
 
 // The bundleId alphabet plus `/` as the package/activity separator, with `.`
 // allowed as the head so `.MainActivity` works. Leading `-` is excluded for the
@@ -61,6 +63,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 // native-devtools is resolved through `registry` inside the iOS handler rather
@@ -97,6 +100,7 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       const device = resolveDevice(params.udid);
       if (device.platform === "ios-remote") return { nativeDevtools: nativeDevtoolsRef(device) };
       if (device.platform === "chromium") return { chromium: chromiumCdpRef(device) };
+      if (device.platform === "macos") return { macosApp: macosAppRef(device) };
       return {};
     },
     execute: dispatchByPlatform<
@@ -118,6 +122,7 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       chromium: chromiumImpl,
       vega: vegaImpl,
       harmony: harmonyImpl,
+      macos: macosImpl,
     }),
   };
 }

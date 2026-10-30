@@ -7,6 +7,7 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { isAndroidTv } from "../../utils/adb";
 import { isIosPhysicalDevice } from "../../utils/device-info";
+import { macosScreenshotPng, resolveMacosApp } from "../../utils/macos-input";
 import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-commands";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
@@ -48,6 +49,11 @@ type PixelChange = "still" | "localized" | "moving";
 // decodes it a second time — a full-resolution decode per poll whatever this is
 // set to, on the shared tool-server's event loop.
 const CAPTURE_SCALE = 0.25;
+
+// A Mac capture's scale is in pixels per POINT. A Retina window is 2 px/pt, so
+// twice CAPTURE_SCALE is the same quarter of the backing pixels the Chromium
+// route captures at dpr 2; on a 1x display it is half the linear size.
+const MACOS_CAPTURE_SCALE = CAPTURE_SCALE * 2;
 
 // Per-pixel RGB tolerance, owned by this comparison and deliberately NOT
 // screenshot-diff's 0.1: the two have different noise floors. That one holds a
@@ -212,7 +218,9 @@ export function pixelCaptureTimeoutMs(device: ActionEnv["device"], firstCapture:
   if (device.platform === "ios-remote" && !firstCapture) {
     return REMOTE_PIXEL_CAPTURE_TIMEOUT_MS;
   }
-  const warmFromTheStart = device.platform === "chromium" || device.platform === "vega";
+  // A Mac app captures on request, so it has no stream to warm up either.
+  const warmFromTheStart =
+    device.platform === "chromium" || device.platform === "vega" || device.platform === "macos";
   return firstCapture && !warmFromTheStart
     ? FIRST_PIXEL_CAPTURE_TIMEOUT_MS
     : PIXEL_CAPTURE_TIMEOUT_MS;
@@ -300,9 +308,10 @@ async function chromiumScrollOffset(api: ChromiumCdpApi): Promise<{ x: number; y
  * Capture one downscaled screenshot to a temp file, routed exactly as the
  * `screenshot` tool routes it: tvOS and Vega through their own shells (neither
  * has a simulator-server backend), everything else through the simulator-server
- * both iOS and Android share. Chromium does not appear here — it answers with
- * bytes, never a file (see captureChromiumPng). Nor does HarmonyOS, which a
- * `snapshot` step captures through the `screenshot` tool (flow-visual.ts).
+ * both iOS and Android share. Chromium and macOS do not appear here - they
+ * answer with bytes, never a file (see captureChromiumPng, capturePng). Nor
+ * does HarmonyOS, which a `snapshot` step captures through the `screenshot` tool
+ * (flow-visual.ts).
  *
  * The `screenshot` tool itself is deliberately not reused: it registers every
  * capture as an artifact, and a settle takes tens of them per step.
@@ -365,15 +374,23 @@ async function captureIosDeviceFile(env: ActionEnv, budgetMs: number): Promise<s
 }
 
 /**
- * One capture as PNG bytes. Every route but Chromium's writes a temp file, which
- * is scratch and never an artifact — it is removed as soon as it has been read,
- * whether or not the read worked.
+ * One capture as PNG bytes. Every route but Chromium's and macOS's writes a temp
+ * file, which is scratch and never an artifact — it is removed as soon as it has
+ * been read, whether or not the read worked.
  */
 async function capturePng(
   env: ActionEnv,
   budgetMs: number
 ): Promise<{ png: Buffer; warning?: string }> {
   if (env.device.platform === "chromium") return { png: await captureChromiumPng(env) };
+  if (env.device.platform === "macos") {
+    // The app window, which has no status bar to mask. A refusal (the flag is
+    // off) throws, which the soft capture turns into "no pixels".
+    const app = await resolveMacosApp(env.registry, env.device, "flow-execute");
+    return {
+      png: await macosScreenshotPng(app, { scale: MACOS_CAPTURE_SCALE, timeoutMs: budgetMs }),
+    };
+  }
   const { path: file, warning } = await captureFile(env, budgetMs);
   try {
     return { png: await fs.readFile(file), ...(warning !== undefined ? { warning } : {}) };

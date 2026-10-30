@@ -1,3 +1,4 @@
+import { isFlagEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   withFailureSignal,
@@ -109,8 +110,36 @@ function platformMatrix(
       return capability.vega;
     case "harmony":
       return capability.harmony;
+    case "macos":
+      return capability.macos;
   }
 }
+
+/** The flag that gates the `macos` platform, and the refusal every Mac branch gives without it. */
+export const MACOS_APPS_FLAG = "macos-apps";
+export const MACOS_APPS_FLAG_OFF_REASON =
+  "the macos-apps flag is off. Run: argent enable macos-apps";
+
+const MACOS_POINTER_ONLY =
+  "a Mac app takes mouse input: use gesture-drag to drag and gesture-scroll to scroll";
+const MACOS_NO_TRACKPAD_GESTURES =
+  "a Mac app has no trackpad gesture input: use the app's own zoom or rotate controls with " +
+  "gesture-tap or keyboard";
+
+/**
+ * Why a tool without a `macos` block refuses a Mac app, where the stock "no
+ * macos support declared" would leave the agent without a next step.
+ */
+const MACOS_REFUSAL_REASONS: Readonly<Record<string, string>> = {
+  "gesture-swipe": MACOS_POINTER_ONLY,
+  "gesture-custom": MACOS_POINTER_ONLY,
+  "gesture-pinch": MACOS_NO_TRACKPAD_GESTURES,
+  "gesture-rotate": MACOS_NO_TRACKPAD_GESTURES,
+  "button": "a Mac app has no hardware buttons: use keyboard for key presses",
+  "reinstall-app":
+    "argent does not install Mac apps, it starts the .app where it was built. Rebuild the app, " +
+    "then run restart-app (or boot-device with macosAppPath for a .app at another path)",
+};
 
 /**
  * Throws if the tool's `capability` declaration doesn't include the given
@@ -126,9 +155,16 @@ export function assertSupported(
   if (device.platform === "harmony" && !isHarmonyEnabled()) {
     throw new UnsupportedOperationError(toolId, device, HARMONY_DISABLED_REASON);
   }
+  // Before the matrix, so every tool names the flag; read per call, so enabling needs no restart.
+  if (device.platform === "macos" && !isFlagEnabled(MACOS_APPS_FLAG)) {
+    throw new UnsupportedOperationError(toolId, device, MACOS_APPS_FLAG_OFF_REASON);
+  }
   const matrix = platformMatrix(device.platform, capability);
   if (!matrix) {
-    throw new UnsupportedOperationError(toolId, device, `no ${device.platform} support declared`);
+    const reason =
+      (device.platform === "macos" ? MACOS_REFUSAL_REASONS[toolId] : undefined) ??
+      `no ${device.platform} support declared`;
+    throw new UnsupportedOperationError(toolId, device, reason);
   }
   const supported = matrix[device.kind] === true;
   if (!supported) {

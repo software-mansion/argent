@@ -12,6 +12,7 @@ import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profi
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
+import { MACOS_APP_NAMESPACE } from "../../blueprints/macos-app";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
 
 /**
@@ -85,6 +86,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   AX_SERVICE_NAMESPACE,
   SCREEN_RECORDING_SESSION_NAMESPACE,
   NATIVE_PROFILER_SESSION_NAMESPACE,
+  MACOS_APP_NAMESPACE,
   ...PORT_KEYED_NAMESPACES,
 ];
 
@@ -107,6 +109,7 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
  */
 export function transportNamespacesForPlatform(platform: string): readonly string[] {
   if (platform === "chromium") return [CHROMIUM_CDP_NAMESPACE];
+  if (platform === "macos") return [MACOS_APP_NAMESPACE];
   if (platform === "android") return [SIMULATOR_SERVER_NAMESPACE, ANDROID_TV_CONTROL_NAMESPACE];
   // Shape cannot tell tvOS from iOS or a simulator from a physical device here. Cover all three namespaces.
   return [SIMULATOR_SERVER_NAMESPACE, IOS_DEVICE_RUNNER_NAMESPACE, TV_CONTROL_NAMESPACE];

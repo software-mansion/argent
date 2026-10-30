@@ -1,17 +1,10 @@
 import { z } from "zod";
-import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import {
-  nativeDevtoolsRef,
-  precheckNativeDevtools,
-  type NativeDevtoolsApi,
-  type NativeDevtoolsPrecheckBlock,
-} from "../../blueprints/native-devtools";
-import { resolveDevice } from "../../utils/device-info";
-import { ensureDeps } from "../../utils/check-deps";
+import { FAILURE_CODES, type ToolDefinition } from "@argent/registry";
+import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
+import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("Bundle ID of the app"),
+  ...nativeAppTarget,
   className: z.string().optional().describe("UIView class name to match (exact, e.g. UIButton)"),
   identifier: z.string().optional().describe("Accessibility identifier to match (exact)"),
   label: z.string().optional().describe("Accessibility label to match (exact)"),
@@ -50,52 +43,31 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to search native views in ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
+  capability: {
+    apple: { simulator: true },
+    appleRemote: { simulator: true },
+    macos: { app: true },
+  },
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, label, tag, or React Native nativeID.
 Use when you need to locate a specific view by its properties without dumping the entire hierarchy.
 Returns { status: "ok", matches } with matching views including their frames, properties, optional ancestors, and optional children. Much more targeted than native-full-hierarchy.
 At least one of className, identifier, label, tag, or nativeID must be provided.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
+<flag:macos-apps>On a Mac app it searches the AppKit views of every visible window (className is the NSView class, identifier matches the view's accessibility identifier or identifier), with the same result shape; the statuses below are iOS only, and on a Mac app that is not running the call fails.
+</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
 A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), and the hierarchy query itself can error or time out.`,
   readOnly: true,
   zodSchema,
-  services: (params) => ({
-    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params) {
-    const device = resolveDevice(params.udid);
-    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
-
-    const api = services.nativeDevtools as NativeDevtoolsApi;
-
-    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
-    if (blocked) return blocked;
-
-    const rpcParams: Record<string, unknown> = {};
-    if (params.className !== undefined) rpcParams.className = params.className;
-    if (params.identifier !== undefined) rpcParams.identifier = params.identifier;
-    if (params.label !== undefined) rpcParams.label = params.label;
-    if (params.tag !== undefined) rpcParams.tag = params.tag;
-    if (params.nativeID !== undefined) rpcParams.nativeID = params.nativeID;
-    if (params.includeAncestors !== undefined) rpcParams.includeAncestors = params.includeAncestors;
-    if (params.includeChildren !== undefined) rpcParams.includeChildren = params.includeChildren;
-    if (params.fields !== undefined) rpcParams.fields = params.fields;
-
-    const result = (await api.queryViewHierarchy(
-      params.bundleId,
+  services: nativeAppServices,
+  execute: (services, params) =>
+    queryViewHierarchyFor(
+      services,
+      params,
+      "native-find-views",
       "ViewHierarchy.findViews",
-      rpcParams
-    )) as { matches?: unknown[]; error?: string };
-
-    if (result.error) {
-      throw new FailureError(result.error, {
-        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_FIND_VIEWS_ERROR,
-        failure_stage: "native_devtools_find_views",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
-    }
-
-    return { status: "ok", matches: result.matches ?? [] };
-  },
+      FAILURE_CODES.NATIVE_DEVTOOLS_FIND_VIEWS_ERROR,
+      (result: { matches?: unknown[] }) => ({
+        status: "ok" as const,
+        matches: result.matches ?? [],
+      })
+    ),
 };

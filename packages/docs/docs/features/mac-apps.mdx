@@ -1,0 +1,161 @@
+---
+sidebar_position: 10
+sidebar_label: Mac apps
+title: Mac apps
+sidebar_custom_props:
+  icon: monitor
+---
+
+Argent drives a native Mac app that you build: an AppKit, SwiftUI or react-native-macos app. The agent starts the app, reads the screen, clicks, drags, scrolls, types and takes screenshots. The app stays in the background, and Argent does not move the pointer. Thus you continue to use the Mac while the agent works. Argent needs no Accessibility permission and no Screen Recording permission.
+
+This feature is behind the `macos-apps` flag. The flag is off by default.
+
+## Requirements
+
+- macOS 14.4 or later.
+- The `macos-apps` flag on.
+- The built `.app` bundle of your app on disk, for example a Debug build from Xcode.
+- A build that allows the Argent library. See [The hardened runtime](#the-hardened-runtime).
+
+Argent drives sandboxed builds and builds without the App Sandbox.
+
+## How it works
+
+Argent starts the app with the Argent library inside the app process. Thus Argent drives only an app that Argent started. The pointer does not move, and the app stays in the background. For the app, the window that the agent works in is the key window, as after your click. Thus menu commands, keyboard shortcuts and the code of the app act on that window. A screenshot shows the app window, also when other windows cover it. Web content in the app runs as in a visible window, also when other windows cover it. The agent can drive the app while its window is on another Space. When you hide the app, the next action of the agent shows it again without bringing it to the front.
+
+Argent starts the app in the folder `/`. The app gets only the basic variables of a login session, for example `HOME`, `USER`, `PATH` and `LANG`. The app does not get the other environment variables of the Argent tool-server.
+
+When the tool-server disconnects from the app, for example when the tool-server stops, the app works as without Argent. The app can come to the front again. Argent releases a mouse button that the agent held, removes a prepared answer for the next file panel, and stops the network capture of `native-network-logs`.
+
+## The first run
+
+1. Run `argent enable macos-apps`. The change takes effect immediately. Start a new agent session to give the agent the `file-panel` and `menu-bar` tools, because an editor reads the tool list when the session starts.
+2. Build the app. Use a build command that does not start the app, for example `xcodebuild build`. Xcode Run and `react-native run-macos` start a copy without the Argent library.
+3. Ask the agent to open the app, and give the path of the `.app` bundle. The agent starts the app with `boot-device`.
+4. The agent reads the screen with `describe`, then clicks and types.
+
+## One app is one device
+
+- The device id is `macos-app-` followed by the bundle id, for example `macos-app-com.example.notes`. `list-devices` shows the apps that Argent started and that still run.
+- Argent runs one copy of an app at a time. Argent does not attach to a copy that runs without the Argent library, for example a copy that Xcode Run started. A restart quits such a copy of the same build, and the unsaved changes of that copy are lost.
+- Argent does not install a Mac app. After a change in the code, build the app again and ask the agent to restart the app.
+- At the end of a session, the agent closes the connection to the app. The app continues to run.
+
+## Several agents and git worktrees
+
+Several agents can drive several Mac apps at the same time. All builds of one project have the same bundle id, so the builds of separate git worktrees are one device. To let agents in separate worktrees test their own builds at the same time, give each build a bundle id of its own:
+
+1. In the app target, set `PRODUCT_BUNDLE_IDENTIFIER` to the bundle id followed by `$(ARGENT_ID_SUFFIX)`, for example `com.example.notes$(ARGENT_ID_SUFFIX)`. A build without the variable keeps the bundle id.
+2. Build each worktree with a different suffix, into a folder of the worktree. For example: `xcodebuild ... -derivedDataPath <worktree>/build ARGENT_ID_SUFFIX=.login`.
+3. Tell each agent the bundle id of its build, for example: "Build the app with `ARGENT_ID_SUFFIX=.login`, start that build, and use `com.example.notes.login` in e2e tests."
+
+Do not set `PRODUCT_BUNDLE_IDENTIFIER` itself on the `xcodebuild` command line. That setting also changes the bundle ids of the CocoaPods bundles in the app.
+
+If you cannot change the project, tell the agent to duplicate the `.app` bundle with a new bundle id. The agent changes the bundle id in the `Info.plist` of the duplicate and signs the duplicate again. An app with entitlements that need its team, for example iCloud, keychain sharing or app groups, does not start as a duplicate.
+
+An e2e test names one bundle id in its `launch` step. To test the build of a worktree, the agent uses a duplicate of the e2e test with the bundle id of that build. When a `launch` step starts the build of another worktree, the step shows a warning. Argent gives this warning for a build inside a worktree and for a build of a worktree in the DerivedData folder of Xcode. Argent does not give this warning when the e2e test runs over a link (`argent link` or `ARGENT_TOOLS_URL`).
+
+## What works
+
+The agent uses the interaction tools of the other platforms, and records and replays [e2e tests](/docs/features/e2e). The agent also chooses commands in the menu bar and answers file panels.
+
+### Text
+
+The agent types each character, also accented letters and emoji. Automatic text correction is off in the copy of the app that Argent starts. Thus the app receives the text exactly as the agent typed it.
+
+### Identifiers
+
+The tree shows the identifier of each element that has one. Give each element that a test uses a stable identifier. The [tools reference](/docs/reference/tools#describe-on-a-mac-app) shows the source of the identifier in AppKit, SwiftUI, web content and react-native-macos.
+
+### Menu bar
+
+The menu bar of a background app is not on the screen, so the agent does not click it. The agent reads the menus of the app and chooses a command by its titles, for example File, then Export.
+
+### File panels
+
+A system service draws the file list of an open panel or a save panel, so the agent cannot read or click this list. The agent answers the panel with a path, and the app reads or writes the file as after a choice of the user. When the app asks whether to keep an edited new document, the agent can delete the document instead.
+
+### React Native
+
+A Debug build of a react-native-macos app loads its JavaScript from Metro. Start Metro before the agent starts the app.
+
+## E2E tests on a Mac
+
+An e2e test for a Mac app starts with a `launch` step that names the bundle id. The launch step quits the app and starts it again with the Argent library. The launch step starts the build that Argent started last for this bundle id. The app gets the arguments of the launch step, and no arguments when the launch step has none. An e2e test run selects a Mac app only for `--platform macos`, for the device id of the app, or for a `launch` step with only the `macos` key. If Argent did not start the app before, the launch step starts the newest build that Spotlight finds. Thus on a new Mac, ask the agent to start your build once before the first e2e test. The `macos-apps` flag must be on for an e2e test run too. The [E2E YAML reference](/docs/reference/e2e-yaml) contains the launch, selector and snapshot rules for a Mac app.
+
+## The hardened runtime
+
+macOS loads the Argent library only into a build that allows it:
+
+| Build   | Hardened runtime off | Hardened runtime on                                         |
+| ------- | -------------------- | ----------------------------------------------------------- |
+| Debug   | Works                | Works after one step                                        |
+| Release | Works                | Never, also for notarized apps and apps of other developers |
+
+The App Sandbox does not change this table. The macOS app templates of Xcode and of react-native-macos do not turn on the hardened runtime.
+
+With the hardened runtime, macOS loads the Argent library only into a build that allows debugging. Xcode adds this permission only to a Debug build. With the hardened runtime, macOS also loads only a library that the team of the app signed, unless the build turns off library validation. Thus a Release build with the hardened runtime cannot work.
+
+For a Debug build with the hardened runtime, do one of these steps:
+
+- Set `ENABLE_HARDENED_RUNTIME = NO` in the Debug configuration. The Release configuration keeps the hardened runtime, so notarization is not affected.
+- Sign the Argent library with your own Apple Development identity of the team of the app. This step needs a Debug build that your team signs. An ad hoc signed build cannot use it. See the steps below.
+- Add the entitlement `com.apple.security.cs.disable-library-validation` to the Debug entitlements.
+
+To sign the Argent library:
+
+1. Ask the agent to start the app. `boot-device` refuses the first start and names a folder `~/.argent/macos/lib/<library id>-<TEAMID>/`, for example `~/.argent/macos/lib/3f2a9c0d1e4b5a6c-ABCDE12345/`. The folder holds `libArgentInjectionBootstrap.dylib` and `libNativeDevtoolsMacos.dylib`. The error also contains the full `codesign` command.
+2. Find your Apple Development identity with `security find-identity -v -p codesigning`.
+3. Sign the two files yourself: `codesign --force --sign "<identity>" ~/.argent/macos/lib/<library id>-<TEAMID>/*.dylib`. macOS asks for access to the keychain. Do not let the agent do this step.
+4. Ask the agent to start the app again.
+
+Do the signing steps again after an Argent update that changes the Argent library, because the folder name then changes. Argent removes the folder of an older library when no app uses it and no start used it for a day.
+
+Argent does not start an Electron app or a Chromium browser as a Mac app. Argent drives their web content through the [Chromium support](/docs/fundamentals/supported-platforms#desktop-and-web-targets).
+
+## Troubleshooting
+
+| Symptom                                                                          | Action                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A tool says that the `macos-apps` flag is off                                    | Run `argent enable macos-apps`.                                                                                                                                                                |
+| The start result says that the app showed no window                              | Open a window in the app. Taps and screenshots need a window. Read the app log if the app shows no window on its own.                                                                          |
+| A tool says that the app has no open window                                      | Ask the agent to open a window with a command of the app, for example File > New. A restart loses the state of the app.                                                                        |
+| The app is missing from the device list                                          | The list shows only the apps that Argent started. Ask the agent to start the app.                                                                                                              |
+| The app runs already without the Argent library                                  | Ask the agent to restart the app, or quit the app yourself. A restart loses the unsaved changes in that copy. Xcode Run and `react-native run-macos` start the app without the Argent library. |
+| The start fails because of the hardened runtime                                  | For a Debug build, do one of the steps in [The hardened runtime](#the-hardened-runtime). A Release build cannot work.                                                                          |
+| The start fails because a different build runs                                   | Quit that copy if it is yours. To run both builds, give this build a bundle id of its own. See [Several agents and git worktrees](#several-agents-and-git-worktrees).                          |
+| A call fails because another tool-server drives the app                          | Stop the other Argent tool-server, or give this build a bundle id of its own.                                                                                                                  |
+| An e2e test launch warns that it started another worktree's build                | Ask the agent to start the build of this worktree first. Then run the e2e test again.                                                                                                          |
+| A call says that Argent reaches the app only through the connection of its start | Quit the app, or ask the agent to start the app again with `force`. To prevent this, give the build a shorter bundle id. See [Limits](#limits).                                                |
+| The app starts, but the Argent library does not connect                          | Read the app log in `~/.argent/macos/logs/`. The executable of the bundle must be the app, not a launcher script. Make sure that nothing blocks the main thread of the app while it launches.  |
+| A restart fails because the app shows a prompt                                   | The app asks a question before it quits, for example whether to save changes. Ask the agent to answer the prompt, then to restart the app.                                                     |
+| Argent cannot find the files of the Argent library                               | Update Argent.                                                                                                                                                                                 |
+| The tree says that the Mac is locked                                             | Unlock the Mac.                                                                                                                                                                                |
+| An element is not in the tree                                                    | Give the element an accessibility identifier, or make a custom view an accessibility element.                                                                                                  |
+| A call times out while the app is paused in the debugger                         | Continue the app, then ask the agent to do the step again. The input of the call that timed out does not reach the app later.                                                                  |
+| A click or typed text has no effect                                              | Make sure that the window is not minimized. A minimized window does not receive input.                                                                                                         |
+| A paste fails because the element does not accept text                           | Ask the agent to click the text field first.                                                                                                                                                   |
+
+## Limits
+
+Each tool that does not support a Mac app fails with a `not supported on macos app` message. The limits on a Mac app:
+
+- Argent does not drive Apple apps, and does not drive Mac Catalyst apps. Test a Mac Catalyst app on an iOS simulator.
+- Argent cannot reconnect to a sandboxed app with a long bundle id. Argent then reaches the app only through the connection of its start. When this connection closes, for example at the end of a session or after a restart of the tool-server, quit the app, or start it again with `force`.
+- Only one menu can be open on a Mac at a time. A click somewhere else, by you or by another agent, can close a menu that the agent opened before the agent chooses an item.
+- The document menu in the title bar of a window stays disabled while the app is in the background.
+- The app window can come in front of your windows while a menu that the agent opened is open. Examples are a context menu and the menu of a pop-up button. When the menu closes, the window goes back behind your windows.
+- Hover is not available. Mouse moves do not show tooltips or hover states.
+- A drag and drop works only inside the app. The agent cannot drag to another app, such as Finder, or drop from one.
+- Trackpad gestures are not available. The agent uses the zoom and rotate controls of the app instead of pinch and rotate.
+- On macOS 14, the agent cannot select the file format of a save panel. The app saves in the format that the panel selects when it opens.
+- Key events use the key codes of the US keyboard layout. An app that reads key codes sees the US key, also when the Mac uses a different layout.
+- The agent cannot reach a dialog that a different process draws. Examples are the permission prompts of macOS, the content of the share sheet, and the file list of an open or save panel.
+- The tree, the screenshot and the coordinates cover the area of the app window with its sheets, popovers, alerts and open menus. The screenshot does not show the other windows of the app.
+- Argent cannot capture a window that the app protects from screen capture (`sharingType` none). A screenshot, a screenshot diff and an e2e snapshot of it fail. The tree, clicks and typing still work.
+- Argent drives an app through a standard window. The start fails for a menu bar app that shows no standard window, and for an app that shows only panels or borderless windows.
+- The tree does not show web content in a closed shadow root or in an iframe from a different origin.
+- While the Mac is locked, the tree does not show an open context menu, a `hidden` check does not pass, and a screenshot of a window that is partly off the screen can fail. Clicks, typing and other screenshots still work.
+- Screen recording, profiling, the JavaScript debugger tools, hardware buttons, rotate, shake, `reinstall-app` and `settings-permissions` are not available.
+
+The [tools reference](/docs/reference/tools#mac-apps) contains the tools and their behavior on a Mac app.

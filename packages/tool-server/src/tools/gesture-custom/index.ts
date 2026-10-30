@@ -182,7 +182,7 @@ export const gestureCustomTool: ToolDefinition<Params, Result> = {
   },
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
-For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
+For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.<flag:macos-apps> Not supported on a Mac app: use gesture-tap, gesture-drag and gesture-scroll there.</flag:macos-apps>
 For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
 All x/y values are normalized 0.0–1.0 (screen fractions, not pixels). delayMs controls the delay before each event (default 16ms ≈ 60fps).
 Set interpolate to auto-generate smooth intermediate Move events between your keyframes.

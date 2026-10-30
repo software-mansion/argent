@@ -3,6 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
+import { macosAppRef } from "../../blueprints/macos-app";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
 import { iosImpl } from "./platforms/ios";
@@ -11,6 +12,7 @@ import { androidImpl } from "./platforms/android";
 import { harmonyImpl } from "./platforms/harmony";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { chromiumImpl, type OpenUrlChromiumServices } from "./platforms/chromium";
+import { macosImpl } from "./platforms/macos";
 
 const zodSchema = z.object({
   udid: z
@@ -53,6 +55,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
@@ -76,6 +79,7 @@ Returns { opened, url, note? }. note carries the deep-linking caveat when a web 
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    if (device.platform === "macos") return { macosApp: macosAppRef(device) };
     return {};
   },
   execute: dispatchByPlatform<
@@ -96,5 +100,6 @@ Returns { opened, url, note? }. note carries the deep-linking caveat when a web 
     harmony: harmonyImpl,
     iosRemote: iosRemoteImpl,
     chromium: chromiumImpl,
+    macos: macosImpl,
   }),
 };

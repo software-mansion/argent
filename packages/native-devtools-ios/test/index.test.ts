@@ -385,3 +385,33 @@ describe("ARGENT_NATIVE_DEVTOOLS_DIR override", () => {
     expect(r.nativeDevtoolsDylibPath()).toBe(dylib);
   });
 });
+
+describe("macosArtifacts", () => {
+  afterEach(() => {
+    if (originalDevtoolsDir === undefined) delete process.env.ARGENT_NATIVE_DEVTOOLS_DIR;
+    else process.env.ARGENT_NATIVE_DEVTOOLS_DIR = originalDevtoolsDir;
+    if (originalSimulatorDir === undefined) delete process.env.ARGENT_SIMULATOR_SERVER_DIR;
+    else process.env.ARGENT_SIMULATOR_SERVER_DIR = originalSimulatorDir;
+  });
+
+  it("resolves dylibs/macos/ and bin/darwin/, and names every missing file", async () => {
+    const root = fs.mkdtempSync(path.join(tmpRoot, "macos-"));
+    const expected = {
+      bootstrap: path.join(root, "dylibs", "macos", "libArgentInjectionBootstrap.dylib"),
+      library: path.join(root, "dylibs", "macos", "libNativeDevtoolsMacos.dylib"),
+      helper: path.join(root, "bin", "darwin", "argent-macos-helper"),
+    };
+    process.env.ARGENT_NATIVE_DEVTOOLS_DIR = path.join(root, "dylibs");
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = path.join(root, "bin");
+    const r = await loadResolver();
+    expect(() => r.macosArtifacts()).toThrow(
+      `macOS app artifact not found: ${Object.values(expected).join(", ")}.`
+    );
+
+    for (const file of Object.values(expected)) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "");
+    }
+    expect(r.macosArtifacts()).toEqual(expected);
+  });
+});

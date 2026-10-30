@@ -154,6 +154,7 @@ interface FormatDescribeOptions {
 }
 
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
+  const isMacos = opts.source === "macos-devtools" || opts.source === "macos-fallback";
   // The iOS providers emit a flat list of leaves under a synthetic root; the
   // sources below return a real parent/child tree, whose descendants beyond
   // depth 1 are only visible in nested mode.
@@ -164,7 +165,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     opts.source === "vega-automation" ||
     opts.source === "harmony-uitest" ||
     // Physical iOS: the runner reports a parent/child tree. Nested mode keeps that structure.
-    opts.source === "xcuitest-runner"
+    opts.source === "xcuitest-runner" ||
+    // A Mac app: the library's accessibility tree, with web content under its web view.
+    isMacos
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";
@@ -172,7 +175,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
   header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
   header.push(
-    "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels."
+    isMacos
+      ? "Coordinates are normalized [0,1] fractions of the app window, title bar included, grown to hold sheets, alerts and menus past it (x, y, width, height), not pixels."
+      : "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels."
   );
   if (isVega) {
     header.push(
@@ -184,11 +189,15 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     );
   } else {
     // Physical iOS has no two-finger gestures. Do not recommend gesture-pinch for this source.
+    // A Mac app has no touch gestures at all.
     header.push(
-      opts.source === "xcuitest-runner"
-        ? "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
+      isMacos
+        ? "Pass them straight to gesture-tap / gesture-drag / gesture-scroll, which expect this same space. " +
+            "A Mac app takes mouse input, not touch gestures. Its menu bar is not in this tree: use menu-bar."
+        : opts.source === "xcuitest-runner"
+          ? "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
             "No two-finger gestures on physical iOS."
-        : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+          : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
     header.push(
       "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."

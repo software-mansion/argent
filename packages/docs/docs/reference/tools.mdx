@@ -12,26 +12,26 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Devices and apps
 
-| Tool                         | Description                                                                                                                   |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators |
-| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, or spawn an Electron app                              |
-| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                      |
-| `restart-app`                | Terminate then relaunch an app                                                                                                |
-| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                                                            |
-| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                        |
-| `open-url`                   | Open a URL or URL scheme on the device                                                                                        |
-| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                 |
-| `rotate`                     | Set the device orientation to portrait or either landscape                                                                    |
-| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                     |
-| `shake`                      | Shake the device                                                                                                              |
-| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                 |
-| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                            |
-| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                              |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons                                              |
-| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                              |
+| Tool                         | Description                                                                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Mac apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators |
+| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, spawn an Electron app, or start a Mac app                       |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                                |
+| `restart-app`                | Terminate then relaunch an app                                                                                                          |
+| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                                                                      |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                                  |
+| `open-url`                   | Open a URL or URL scheme on the device                                                                                                  |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                           |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                                                              |
+| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                               |
+| `shake`                      | Shake the device                                                                                                                        |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                           |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                      |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                        |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons                                                        |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                        |
 
-`launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
+`launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply. On a Mac app, only `restart-app` takes `launchArgs`. See [Mac apps](#mac-apps).
 
 `reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
 
@@ -62,6 +62,8 @@ On an Android emulator:
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
+With the `macos-apps` flag on, `list-devices` shows each native Mac app that Argent started and that still runs, as a `macos` entry with kind `app`. See [Mac apps](#mac-apps).
+
 ## Inspecting the screen
 
 | Tool                        | Description                                                                      |
@@ -76,21 +78,21 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 ## Interacting
 
-| Tool                     | Description                                                     |
-| ------------------------ | --------------------------------------------------------------- |
-| `gesture-tap`            | Tap at normalized coordinates                                   |
-| `gesture-swipe`          | Smooth swipe or drag between two points                         |
-| `gesture-scroll`         | Scroll a Chromium app by dispatching mouse-wheel events         |
-| `gesture-drag`           | Press, move, and release the mouse in a Chromium app            |
-| `gesture-pinch`          | Pinch to zoom around a center point                             |
-| `gesture-rotate`         | Two-finger circular arc that rotates on-screen content          |
-| `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures |
-| `keyboard`               | Type text or press special keys                                 |
-| `paste`                  | Put text on the device clipboard and paste it (sim/emu only)    |
-| `fill` (SDK only)        | Set the text of the focused text field                          |
-| `run-sequence`           | Execute several interaction steps in a single call              |
-| `screen-recording-start` | Start recording the screen to an h264 mp4                       |
-| `screen-recording-stop`  | Stop the recording and retrieve the video                       |
+| Tool                     | Description                                                                        |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| `gesture-tap`            | Tap at normalized coordinates. Mac apps also take a right-click                    |
+| `gesture-swipe`          | Smooth swipe or drag between two points                                            |
+| `gesture-scroll`         | Scroll a Chromium app (mouse wheel) or the scroll view under a point in a Mac app  |
+| `gesture-drag`           | Press, move, and release the mouse in a Chromium app or a Mac app                  |
+| `gesture-pinch`          | Pinch to zoom around a center point                                                |
+| `gesture-rotate`         | Two-finger circular arc that rotates on-screen content                             |
+| `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures                    |
+| `keyboard`               | Type text or press special keys                                                    |
+| `paste`                  | Put text on the device clipboard and paste it (sim/emu), or insert it in a Mac app |
+| `fill` (SDK only)        | Set the text of the focused text field                                             |
+| `run-sequence`           | Execute several interaction steps in a single call                                 |
+| `screen-recording-start` | Start recording the screen to an h264 mp4                                          |
+| `screen-recording-stop`  | Stop the recording and retrieve the video                                          |
 
 `gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
@@ -117,6 +119,14 @@ Call `screenshot` or `describe` to read the screen again.
 
 ## Native devtools
 
+On a Mac app, these tools read the app through the Argent library:
+
+- `native-describe-screen` reads the accessibility tree of the app, plus the views with an identifier that the tree does not contain. It does not take `skipClasses` or `skipClassPrefixes`.
+- `native-full-hierarchy`, `native-find-views`, `native-view-at-point` and `native-user-interactable-view-at-point` read the AppKit views of the app.
+- `native-network-logs` reads the requests that the app sends through `NSURLSession`.
+
+The [Mac apps](#mac-apps) section contains the details.
+
 | Tool                                     | Description                                                           |
 | ---------------------------------------- | --------------------------------------------------------------------- |
 | `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared |
@@ -134,6 +144,241 @@ Call `screenshot` or `describe` to read the screen again.
 | `chromium-tabs`    | List, switch, open, and close tabs or `BrowserWindow`s                |
 | `chromium-cookies` | Read and write cookies, including `HttpOnly` ones                     |
 | `chromium-storage` | Read and write `localStorage` and `sessionStorage` of the active page |
+
+## Mac apps
+
+A native Mac app (AppKit, SwiftUI, react-native-macos) is a device of its own. These tools and rules apply while the `macos-apps` flag is on. When the flag is off:
+
+- `list-devices` shows no Mac app.
+- `argent tools` omits `file-panel` and `menu-bar`. A call of one of these two tools fails with a `not found` error.
+- Every other tool refuses a Mac app id with a message that names the flag.
+
+See [Mac apps](/docs/features/mac-apps) for the requirements and the limits.
+
+| Tool         | Description                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| `file-panel` | List, answer, cancel or discard the file panels of a Mac app, or answer the next panel before it opens |
+| `menu-bar`   | List the menu bar of a Mac app, and choose a command in it                                             |
+
+### The device
+
+The device id is `macos-app-<bundle id>`. Argent accepts a bundle id that has only letters, digits, `.` and `-`, and that starts with a letter or a digit. Each `list-devices` entry of a Mac app has `platform: "macos"`, `kind: "app"`, `state: "Running"`, the `id`, the `name`, `bundleId` and `appPath` of the app, and its `pid`. The entry has a `note` when the app has no listening socket. See the end of this section.
+
+`boot-device` starts a Mac app with these parameters:
+
+| Parameter      | Description                                                                                                                                                    |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `macosAppPath` | The path of the `.app` bundle. Argent starts the app in the background with the Argent library                                                                 |
+| `macosAppArgs` | Extra arguments for the executable of the app. Without this parameter, the app starts with no arguments, also after an earlier start with arguments            |
+| `udid`         | A Mac app id instead of `macosAppPath`. Argent starts the app from the path of the last start, or from the newest app with this bundle id that Spotlight finds |
+| `force`        | Quit the running app and start it again. Also quit a copy of the same build that runs without the Argent library                                               |
+
+The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPath, args, booted }`:
+
+- `args` are the arguments the app runs with.
+- `logPath` is the file that receives the output of the app.
+- When the app runs already with the Argent library, `boot-device` starts nothing and adds `alreadyRunning: true`.
+
+After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 seconds until the app shows a window. A dialog that the app shows while it launches also counts as a window, for example a license prompt. The agent answers this dialog with the other tools. When no window appears, the result has a `note`, because taps and screenshots need a window. The result also has a `note` in these cases:
+
+- The app runs already with other arguments than `macosAppArgs`. Argent does not start the app again. Use `force` to start the app with the new arguments.
+- The app has no listening socket.
+
+`boot-device` fails in these cases:
+
+- The Mac runs a macOS older than 14.4.
+- The bundle is an Electron app or a Chromium browser. Use `electronAppPath` for an Electron app.
+- The bundle is a Mac Catalyst app.
+- The bundle has the hardened runtime, and macOS does not load the Argent library into it. For a Debug build, the error names the steps of [The hardened runtime](/docs/features/mac-apps#the-hardened-runtime). For a Release build, the error says that Argent cannot drive the app.
+- The bundle id starts with `com.apple.`.
+- A copy of the app runs already without the Argent library, and `force` is not `true`. The error names `force: true`.
+- With `force`, a copy of the app without the Argent library does not quit, for example a process of a different user. Argent does not start the app.
+- A copy of a different build of the app runs without the Argent library, for example the build of another git worktree. This also fails with `force`. The error names the bundle path and the process id of the copy.
+- The app runs already with the Argent library from a different bundle path, and `force` is not `true`. Argent does not return that copy and does not replace it, because the copy can belong to another agent.
+- The Argent library does not connect within 20 seconds, for example because something blocks the main thread of the app while it launches. Argent stops the app again, and the error shows the last lines of the app log.
+- The app shows no window that Argent can drive: a menu bar app without a standard window, or an app that shows only panels or borderless windows. Argent stops the app again.
+
+`force` quits a copy of the same build that runs without the Argent library, for example a copy that Xcode Run started. The unsaved changes of that copy are lost. When a forced start fails because of the bundle or because a different build runs, the app that Argent runs continues to run.
+
+These calls fail when the app that Argent runs answers the quit with a prompt, for example to save changes:
+
+- `boot-device` with `force`
+- `restart-app`
+- a `launch` step of an e2e test
+
+The app continues to run. The agent answers the prompt, then tries again. For the panel that asks to keep a new document, the agent uses `file-panel`, for example with `discard`. Argent force-quits an app that does not answer the quit. A dialog that was open before the quit does not stop the force-quit.
+
+The other app tools on a Mac app:
+
+| Tool                                                  | Behavior                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `launch-app`                                          | Starts the app when it does not run, with the arguments of its last start. Leaves a running app as it is. If no window is open, the `note` tells how to open one. `bundleId` must be the bundle id of the device. Fails while a copy of the app runs without the Argent library, and names `boot-device` with `force: true`  |
+| `restart-app`                                         | Quits the app and starts the same bundle again, with `launchArgs`, or else with the arguments of its last start. `bundleId` must be the bundle id of the device. Also quits a copy of the same build without the Argent library, as `force` does. Fails while a copy of a different build runs, and the app continues to run |
+| `open-url`                                            | Gives the URL to the running app of the device, and fails when the app does not run. The app stays in the background. The schemes `http`, `https` and `file` need no declaration. Each other scheme must be in `CFBundleURLTypes` of the app. A web URL goes to the app, not to the browser                                  |
+| `reinstall-app`                                       | Refused. Argent starts a Mac app from the location of the build. Build the app again, then use `restart-app`                                                                                                                                                                                                                 |
+| `stop-simulator-server`, `stop-all-simulator-servers` | Close the connection to the Argent library. The app continues to run                                                                                                                                                                                                                                                         |
+
+One tool-server at a time drives a Mac app. While one tool-server is connected, each call of a second tool-server fails with `MACOS_APP_IN_USE`. This also applies to `boot-device` with `force`, to `restart-app`, to `open-url` and to a `launch` step of an e2e test. The second tool-server does not quit the app. When the first tool-server stops, the next tool-server connects.
+
+A sandboxed app has no listening socket when its bundle id and the path of your home folder together have more than 59 characters. For example, with the home folder `/Users/anna`, the limit is 48 characters. Argent then reaches the app only through the connection of its start. Another tool-server cannot reach the app. When the connection closes, for example after `stop-simulator-server`, `stop-all-simulator-servers` or a restart of the tool-server, no tool-server can reach the app. Then:
+
+- `launch-app`, and `boot-device` without `force`, fail with `MACOS_APP_ALREADY_RUNNING`.
+- Each other call fails with `MACOS_APP_NOT_CONNECTED`, also `restart-app` and a `launch` step. The app continues to run.
+- `boot-device` with `force` quits the app and starts it again.
+
+### Inspection and input
+
+Coordinates are fractions of the app window, title bar included, with the origin at the top-left corner. When a sheet, a popover, an alert or an open menu reaches past the window, the space grows to hold it. `describe` gives the frames in this space, and the input tools take the same space.
+
+| Tool                                    | Behavior on a Mac app                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `describe`                              | The accessibility tree of the app. See [`describe` on a Mac app](#describe-on-a-mac-app)                                                                                                                                                                                                                                                                                                   |
+| `await-ui-element`, `await-screen-idle` | Read the tree of `describe`, plus the text of each container's children for a `text` check on the container. When several elements match a `text` check, `await-ui-element` reads one of them. A match in an open menu comes first. A match in an alert, a sheet or a popover comes next, the upper one first. A match in the window comes last                                            |
+| `screenshot`                            | Captures the space of the coordinates: the app window with its sheets, popovers, alerts and open menus. Without `scale`, a window larger than 768 points on its long side is downscaled to 768 pixels, but to no less than 0.6 pixels per point. A smaller window is one pixel per point. `ARGENT_SCREENSHOT_SCALE` does not apply. The lowest `scale` is `0.1`. `rotation` does not apply |
+| `screenshot-diff`                       | A live capture is the app window at scale `1.0`. Save the baseline with `screenshot` at scale `1.0`. Argent masks no top band, because the top of a window is its title bar                                                                                                                                                                                                                |
+| `gesture-tap`                           | A left click. `button: "right"` is a right-click, which opens a context menu. The tree then shows the items of the menu. `clickCount: 2` is a double-click. The tool waits 150 ms after the click                                                                                                                                                                                          |
+| `gesture-drag`                          | A drag with the left button. The same start and end point is a long press. The `durationMs` default is 300 ms for a drag and 800 ms for a long press                                                                                                                                                                                                                                       |
+| `gesture-scroll`                        | Scrolls the full delta in one step, as a wheel does: the nearest scroll view or web element under the point that can move that way, or a view or web element that scrolls itself, such as a map. `durationMs` has no effect. Fails when nothing there scrolls                                                                                                                              |
+| `keyboard`                              | `text` types each character. `key` also takes `delete`, `home`, `end`, `page-up`, `page-down`, and a key or one character after modifiers joined with `+`: `command`, `shift`, `option`, `control`. Examples: `command+a`, `shift+tab`                                                                                                                                                     |
+| `paste`                                 | Inserts the text at the focused element as typed text: the paste handling of the app does not run, and the clipboard does not change. Fails when the focused element does not accept text, for example read-only text or a page with no field focused                                                                                                                                      |
+| `run-sequence`                          | Runs `gesture-tap`, `gesture-scroll`, `gesture-drag`, `keyboard`, `paste` and `await-ui-element` steps                                                                                                                                                                                                                                                                                     |
+| `native-*` view tools                   | `bundleId` must be the bundle id of the device. `x` and `y` are points from the top-left corner of the coordinate space                                                                                                                                                                                                                                                                    |
+| `native-network-logs`                   | The requests that the app sends through `NSURLSession`. The first call starts the capture, which stays on when the app restarts. Each start of the app begins a new record. The capture stops when the tool-server disconnects from the app, and the next call starts it again. `bundleId` must be the bundle id of the device                                                             |
+
+These tools do not support a Mac app and fail with a `not supported on macos app` message:
+
+- `gesture-swipe`, `gesture-custom`, `gesture-pinch` and `gesture-rotate`
+- `button`, `rotate`, `shake`, `fold` and `tv-remote`
+- `settings-permissions`
+- The screen recording tools
+- The JavaScript debugger tools, `view-network-logs` and `view-network-request-details`
+- The profiler tools
+- `native-devtools-status`
+- The Chromium tools
+
+Use `gesture-drag` to drag and `gesture-scroll` to scroll.
+
+### `describe` on a Mac app
+
+`describe` returns the accessibility tree of the app, nested under an `AXApplication` root.
+
+- Roles are the AppKit accessibility roles as macOS reports them, for example `AXButton`, `AXTextField`, `AXStaticText`, `AXCheckBox` and `AXScrollArea`. `[clickable]` marks the roles that a click acts on.
+- Web content appears under its web view with AX roles, so one `role` selector matches native and web elements. The id of a web element is its `data-testid` attribute, else its `id` attribute. The web content includes open shadow roots and same-origin iframes.
+- While a page shows a JavaScript `alert`, `confirm` or `prompt`, the tree shows the dialog and leaves out the content of the page.
+- A React Native `Text` or `View` that has a `testID` but is not an accessibility element appears as `AXStaticText`. Its identifier is the `testID`, and its label is its text.
+- A scroll area or a web view clips its content, and so does each element of a web page with an `overflow` other than `visible`. The tree leaves out each element that it has scrolled out of view, and the scroll area or the web view shows the count of these elements as `scrollHidden=<n>`. Use `gesture-scroll` to bring them into view.
+- The tree leaves out each element outside the app window and its sheets, popovers, alerts and menus, and the hint gives the count.
+- The tree leaves out each element that does not show:
+  - An element that another window of the app covers.
+  - The content of a window tab that is not the selected tab.
+  - A view with an opacity of 0, or a view that a transform moves out of the window.
+  - A hidden web view, or a web view behind a different web view at the same place.
+  - A panel that hides while the app is in the background.
+- The value of a date picker is its date in ISO 8601 format, in the time zone of the Mac.
+- The tree does not show the menu bar of the app. Use [`menu-bar`](#menu-bar).
+- A password field has the `password` flag and no value.
+- A text field without a label has its placeholder as its label.
+- The hint also says when one of these conditions occurs:
+  - The tree comes from a fallback walk, for example while the Mac is locked. This tree can miss elements, and a `hidden` check does not pass on it.
+  - The tree reached the limit of 3000 elements or a depth of 40.
+  - A web view reached the limit of 3000 items.
+  - Elements did not answer during the read.
+  - Argent could not read the web content.
+
+The identifier of an element comes from the source of the element:
+
+| Source             | Identifier                                                                      |
+| ------------------ | ------------------------------------------------------------------------------- |
+| AppKit             | The accessibility identifier of the control                                     |
+| SwiftUI            | The value of `.accessibilityIdentifier()`                                       |
+| Web content        | The `data-testid` attribute, or the `id` attribute when `data-testid` is absent |
+| react-native-macos | The `testID` prop, also on a plain `View` or `Text`                             |
+
+The tree does not show the identifiers that AppKit and SwiftUI set themselves, for example `ListRow` on each row of a SwiftUI list.
+
+### `file-panel`
+
+A system service draws the file list of a file panel. Thus `describe` cannot read the list, and `gesture-tap` cannot select a file in it. `file-panel` completes the panel from inside the app, as the choice of the user does.
+
+| Parameter   | Description                                                                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`      | The Mac app id                                                                                                                                                                      |
+| `action`    | `list`, `choose`, `cancel`, `discard` or `stub`                                                                                                                                     |
+| `path`      | For `choose` and `stub`: an absolute path, or a path that starts with `~/`. An existing file or folder for an open panel. The file to write for a save panel, in an existing folder |
+| `paths`     | For `choose` and `stub`: several paths, for an open panel that accepts more than one item. Give `path` or `paths`, not both                                                         |
+| `panel`     | For `choose`, `cancel` and `discard`: the number of the panel from `list`. Argent needs it only when more than one panel is open                                                    |
+| `stubMode`  | For `stub`: `answer` (the default) answers the next panel with the path, `cancel` cancels the next panel, `off` removes an answer that is still prepared                            |
+| `panelKind` | For `stub` with `stubMode` `answer`: `open` or `save`, the kind of the next panel. When it is absent, see the rules below                                                           |
+| `timeoutMs` | For `choose`, `cancel` and `discard`: how long to wait for the panel after the click that opens it. Default `5000`, maximum `30000`                                                 |
+
+| Action    | Result                                                                                                                                                                                          |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`    | `{ panels }`. Each panel has its `number`, its `kind` (`open` or `save`), its title, its folder and its options. `discardButton` is the title of its Delete or Don't Save button, if it has one |
+| `choose`  | `{ chosen, panel, kind, paths }`. The panel closes, and the app receives the paths                                                                                                              |
+| `cancel`  | `{ cancelled, panel }`                                                                                                                                                                          |
+| `discard` | `{ discarded, panel }`. The app closes the new document without saving it                                                                                                                       |
+| `stub`    | `{ armed, mode, panelKind }`, without `panelKind` for `stubMode` `cancel` and `off`. The next panel that the app opens gets the prepared answer and does not appear                             |
+
+A prepared answer stays until the next panel opens, until a `stub` with `stubMode` `off`, or until the tool-server disconnects from the app.
+
+For `stub` without `panelKind`, Argent finds the kind of the next panel from the paths:
+
+- All paths exist: an open panel.
+- One path that does not exist yet: a save panel.
+
+Argent gives a sandboxed app access to each chosen path, and only when a panel takes the answer, as a panel does. For a save panel, this is the file, not its folder.
+
+A prepared answer that the next panel cannot take does not answer it, and the panel opens as usual. Examples:
+
+- Several paths for a panel with a single selection.
+- A folder for a panel that takes only files, or for a save panel.
+- A path with an extension that matches none of the formats of a save panel.
+
+A save panel can offer more than one file format (`allowedContentTypes` in the result of `list`). Then the extension of the path must match one of the formats. On macOS 15 and later, the extension also selects the format. On macOS 14, Argent does not select the format, and the app saves in the format that the panel selects when it opens.
+
+Argent does not check a path for an open panel against the file types that the panel allows.
+
+`file-panel` fails in these conditions:
+
+- No panel appears within `timeoutMs`.
+- More than one panel is open and `panel` is absent.
+- A path is relative.
+- A path for an open panel does not exist.
+- The folder for a save panel does not exist.
+- The path for a save panel is an existing folder. Argent accepts an existing document package, such as `Notes.rtfd`, when the panel saves its type.
+- With `discard`, the panel has no Delete or Don't Save button.
+- More than one path for a save panel, or, with `choose`, for an open panel that takes one item.
+- With `choose`, the panel cannot take the path:
+  - A folder for a panel that takes only files. A document package counts as a file.
+  - A file for a panel that takes only folders.
+  - A path with an extension that matches none of the formats of a save panel.
+
+### `menu-bar`
+
+The menu bar is outside the app window, so `describe` does not show it and `gesture-tap` cannot click it. `menu-bar` reads the main menu of the app and chooses a command from inside the app. The app stays in the background, and the pointer does not move.
+
+| Parameter    | Description                                                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `udid`       | The Mac app id                                                                                                     |
+| `action`     | `list` or `choose`                                                                                                 |
+| `path`       | For `choose`: the titles from the menu bar down to the command, for example `["File", "Export..."]`. 1 to 9 titles |
+| `identifier` | For `choose`: the identifier of the command, from the `id="..."` of `list`. Give `path` or `identifier`, not both  |
+
+| Action   | Result                                                                                                                         |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `list`   | `{ menuBar, items }`. `menuBar` has one line for each item. `items` is the number of items                                     |
+| `choose` | `{ chosen }`, the titles of the command as the app shows them. When you choose by identifier, the result also has `identifier` |
+
+The list stops at 2000 items and at 8 levels of submenus. The result then has `truncated: true` and a `hint`. `list` and `choose` use the titles that the menu shows at that time, for example `Undo Delete Task` or `Hide Sidebar`. `choose` compares each title without case, and `...` is equal to the `…` character. A command that opens an alert or a panel does not block the next tool call.
+
+`menu-bar` fails in these conditions:
+
+- No item has the title. The error names the titles at that level.
+- No command has the identifier, or two or more commands have it. The error names the identifiers or the paths.
+- The item is disabled. The error gives the reason.
+- The item is a menu. The error names its items.
+- A menu of the app is open, for example the menu of a pop-up button. Close it with `keyboard` and the key `escape`.
+- The app has no main menu.
 
 ## Profiling
 
@@ -205,6 +450,6 @@ Argent marks the tools that only read state with the MCP `readOnlyHint` annotati
 
 `terminate-app`, `ui-tree`, `foreground-app` and `fill` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
-`terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
+`terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones and Mac apps are not supported yet.
 
 In `ui-tree`, fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset. `foreground-app` returns the same `foregroundApp` and `alertVisible` without reading the tree, plus the app's `name` on iOS.

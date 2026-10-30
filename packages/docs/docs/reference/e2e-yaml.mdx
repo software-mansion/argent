@@ -112,16 +112,26 @@ A selector can scope its matches by the frames of other elements:
 
 The runner resolves a selector against a different tree than the `describe` tool:
 
-| Platform        | Runner tree                                   | `describe` tree            |
-| --------------- | --------------------------------------------- | -------------------------- |
-| iOS simulator   | Native UIView hierarchy                       | Accessibility tree         |
-| Physical iPhone | Accessibility snapshot of `describe`          | Same snapshot              |
-| Android         | Full accessibility hierarchy                  | Trimmed interactable nodes |
-| Chromium        | DOM nodes with an id, label, value or handler | Full DOM                   |
-| Vega            | Toolkit page source                           | Same source                |
-| HarmonyOS       | None                                          | `uitest` layout dump       |
+| Platform        | Runner tree                                                                               | `describe` tree            |
+| --------------- | ----------------------------------------------------------------------------------------- | -------------------------- |
+| iOS simulator   | Native UIView hierarchy                                                                   | Accessibility tree         |
+| Physical iPhone | Accessibility snapshot of `describe`                                                      | Same snapshot              |
+| Android         | Full accessibility hierarchy                                                              | Trimmed interactable nodes |
+| Chromium        | DOM nodes with an id, label, value or handler                                             | Full DOM                   |
+| Vega            | Toolkit page source                                                                       | Same source                |
+| Mac app         | The elements of the app tree that have an id, a label, a value, a clickable role or focus | The full app tree, nested  |
+| HarmonyOS       | None                                                                                      | `uitest` layout dump       |
 
 On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
+
+On a Mac app:
+
+- The runner and `describe` read the same app tree. Copy ids and roles from `describe`.
+- The runner reads up to 12000 elements, and `describe` reads up to 3000.
+- The runner reads the tree again when elements did not answer or Argent could not read the web content.
+- The runner calls a password field `[password]`, so only an `id` or `role` selector matches it.
+- When several elements match, an action and a `text` condition choose one of them. A match in an open menu comes first. A match in an alert, a sheet or a popover comes next, the upper one first when one lies over another. A match in a window comes last.
+- A recorded click that is not at the center of an element can keep its coordinates. This applies to a slider, a stepper and a text area. It also applies to an element that is not clickable and is not text. Examples are a click on a canvas, a chart, a map, a seek bar or the empty space of a container. A replay of a selector clicks the center, and there the click does something else. A click on text keeps its coordinates only when another element is at the center of the text.
 
 ## Directives
 
@@ -129,8 +139,8 @@ Each step contains one directive. A failed directive stops the e2e test.
 
 | Directive    | Shape                                                              | Description                                                                                       |
 | ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `launch`     | `<app id>` or `{ native, ios, android, vega, chromium }`           | Terminate and start the app, then wait until the app is ready                                     |
-| `tap`        | `<selector>`, `{ on: <selector>, times }` or `{ x, y }`            | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                       |
+| `launch`     | `<app id>` or `{ native, ios, android, vega, chromium, macos }`    | Terminate and start the app, then wait until the app is ready                                     |
+| `tap`        | `<selector>`, `{ on: <selector>, times, button }` or `{ x, y }`    | Tap an element. `times: 2` double-taps. `x`, `y` are normalized coordinates                       |
 | `long-press` | `<selector>` or `{ on: <selector>, duration }`                     | Press and hold. `duration` in milliseconds                                                        |
 | `swipe`      | `<direction>` or `{ from, direction, to, by, momentum, duration }` | Move one finger across the screen. `direction` is the travel of the finger. See [Swipe](#swipe)   |
 | `type`       | `{ into: <selector>, text, submit }`                               | Focus the element and type. Presses Enter unless `submit: false`                                  |
@@ -150,6 +160,8 @@ Each step contains one directive. A failed directive stops the e2e test.
 
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
 
+The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a right-click, for example to open a context menu. Only a Mac app accepts it. On other platforms, the step fails before the runner reads the tree. To open a context menu on a touch screen, use `long-press`. A recorded `gesture-tap` with `button: "right"` becomes a `tap` with `button: right`.
+
 A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
 
 A `type` step can contain a `{{secret:NAME}}` placeholder. The tool-server fills the value at run time and redacts the value in the report. See [Secrets](/docs/reference/configuration#secrets).
@@ -166,11 +178,30 @@ Use the map form for an e2e test that runs on more than one platform:
 - launch: { ios: { app: com.acme.app, args: [-FeatureFlag, YES] }, android: com.acme.app }
 ```
 
-`native` is one id for iOS, Android and Vega. A per-platform key replaces it for that platform. `chromium` accepts a relative or absolute app path, or `{ path, args }`. `ios` accepts a bundle id, or `{ app, args }`. On an iOS simulator or a physical iPhone, Argent passes `args` to the app process at launch. Each arg must be a string, so quote a number or boolean: `"5"`, not `5`. A launch that has no id for the platform of the run is an error.
+`native` is one id for iOS, Android, Vega and macOS. A per-platform key replaces it for that platform. `macos` takes the bundle id of a [Mac app](/docs/features/mac-apps). `chromium` accepts a relative or absolute app path, or `{ path, args }`. `ios` and `macos` accept a bundle id, or `{ app, args }`. On an iOS simulator, a physical iPhone or a Mac app, Argent passes `args` to the app process at launch. A Mac app gets no arguments when the launch step has no `args`. Each arg must be a string, so quote a number or boolean: `"5"`, not `5`. A launch that has no id for the platform of the run is an error.
 
 A run on a remote simulator uses the `ios` entry. If the map has no `ios` entry, the run uses the `native` entry.
 
-When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry.
+When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry. On a Mac app, Argent saves a `macos: { app, args }` entry when the restarted app got arguments. Otherwise Argent saves `launch: <bundle id>`. A run then selects the Mac app only with `--platform macos` or `--device`.
+
+A Mac app is the device, and the device id is `macos-app-<bundle id>`. The `macos-apps` flag must be on. The runner selects the Mac app in this order:
+
+| Run                                                                                       | Device                                                                                                             |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `--device macos-app-<bundle id>`                                                          | That app                                                                                                           |
+| No `--device`, and a leading launch with the `macos` key alone or with `--platform macos` | The app that the launch step names. The runner starts the app, so the app does not have to run before the e2e test |
+| No `--device`, `--platform macos`, no launch step                                         | The one running Mac app. When two or more Mac apps run, the run fails and lists them. Pass `--device`              |
+| No `--device`, no `--platform`, and no `macos`-only launch                                | The one running device of the other platforms. The runner does not select a running Mac app                        |
+
+The launch step restarts the app as [`restart-app`](/docs/reference/tools#the-device) does, and fails in the same cases. When the build is in another git worktree of the project, or in the DerivedData folder of Xcode for such a worktree, the step reports a warning. The runner gives this warning only when the e2e test does not run [over a link](#e2e-tests-over-a-link). A `tool:` step calls `file-panel` or `menu-bar`:
+
+```yaml
+steps:
+  - launch: { macos: com.example.notes }
+  - tap: { id: open-document }
+  - tool: file-panel
+    args: { action: choose, path: ~/Documents/note.txt }
+```
 
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the e2e test as a fragment.
 
@@ -196,7 +227,7 @@ A swipe moves one finger across the screen. `direction` is the travel of the fin
 
 A step takes exactly one of `direction`, `to` and `by`. Each travel must cover at least 0.03 of the screen. Parsing rejects a shorter `by`. A shorter `to` fails the step during the run.
 
-On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like the other touch directives.
+On Chromium and on a Mac app, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like the other touch directives.
 
 ### Foldable devices
 
@@ -241,7 +272,7 @@ The `text` comparators:
 | `equals`   | Case-insensitive full match     |
 | `matches`  | Case-sensitive JavaScript regex |
 
-`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: on a simulator Argent can't read its typed text, so `matches` never reads an iOS text field as empty.
+`matches` reads an element with no text as an empty string. Use `'^$'` to check that a field is empty, or `'^(?!.*@)'` to check that it doesn't contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. An iOS text field is the exception: on a simulator Argent can't read its typed text, so `matches` never reads an iOS text field as empty. A text field of a Mac app without typed text reads as empty, also when its placeholder is its label.
 
 A negative condition passes before the element appears, for a typo, and on the wrong screen. First prove the screen and the same selector with `visible`. Then perform the action and check `hidden`.
 
@@ -281,7 +312,7 @@ On HarmonyOS, the runner has no UI tree, so `idle` cannot run. The step errors i
     - tap: { text: Got it }
 ```
 
-The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
+The guard accepts one `exists`, `visible`, `hidden` or `text` condition, or `{ platform: ios | android | chromium | vega | macos }`. A run on a remote simulator matches `ios`. A UI guard uses the assert grace and rejects `timeout`. There is no `else`. A skipped block reports as skipped. A failure inside an entered block is a real failure. Do not put a required check inside `when:`.
 
 ## Composition
 
@@ -295,6 +326,7 @@ A `run:` path resolves against the directory of the e2e test file that contains 
 | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | iOS, Android | A nested fragment or standalone e2e test runs inline. A nested launch restarts the app                                                                                                                                                                                                                                                                                                                                              |
 | Chromium     | Each `launch` step boots one instance. A later launch boots a fresh instance and stops the previous one of that app. Argent runs `swipe` as a mouse drag. `pinch` and `rotate` are rejected                                                                                                                                                                                                                                         |
+| macOS        | A nested launch restarts the app. Argent runs `swipe` as a mouse drag and `long-press` as a press and hold. `pinch` and `rotate` are rejected                                                                                                                                                                                                                                                                                       |
 | Vega         | Use `tool: tv-remote` and `tool: keyboard`. The touch directives are unsupported                                                                                                                                                                                                                                                                                                                                                    |
 | HarmonyOS    | Pass the device with `--device harmony-<connectKey>`. Argent never detects a HarmonyOS device, and `--platform` and `when: { platform }` do not accept `harmony`. The runner has no UI tree, so each step with a selector fails. A coordinate `tap`, a `swipe` or `pinch` without a selector, `launch` with an app id or `native`, `snapshot` without `cropOn`, `wait` and `tool` steps run. `long-press` and `rotate` are rejected |
 
@@ -312,6 +344,8 @@ A `tool: e2e-execute` step runs a different e2e test as a nested run. `run:` ste
 A snapshot compares the current screen, or the frame of `cropOn`, with a stored baseline. A missing baseline fails the step. A mismatch above `maxMismatch` percent fails the step. The default `maxMismatch` is 0.5. A `cropOn` element whose size changed fails the step.
 
 Baselines live in `__baselines__/<test>/` beside the e2e test file, for example `.argent/e2e/__baselines__/checkout/`. Argent keys a baseline by platform and capture geometry, plus the selector for `cropOn`. A run on a remote simulator uses `ios` in the key. It uses the same baseline as a local iOS run with the same capture geometry. Run `argent e2e run <name> --update-baselines` to write the baselines from a known-good state. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses. The step reason then says that a remote simulator wrote the baseline. Review each baseline before you commit it.
+
+On a Mac app, the capture is the app window at one pixel per point, plus a sheet, a popover, an alert or a menu that reaches past the window. The baseline key holds `macos` and the size of the capture in points, for example `summary__macos-900x640.png`. A different size looks for a different baseline. Write the baseline again after a change of the window size.
 
 An e2e test that a `tool: e2e-execute` step runs uses its own baselines, in `__baselines__/<test>/` beside the real file of that e2e test. A run with `--update-baselines` also writes the baselines of each e2e test that a `tool: e2e-execute` step runs. When the step sets `updateBaselines`, Argent uses the value of the step.
 
@@ -372,7 +406,7 @@ Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node proce
 
 `scripts.maxTimeoutMs` caps the `timeout` of each step, and `scripts.heapLimitMb` sets the heap of the process. Argent reads both keys from the global configuration file of the tool-server's own home directory. See [Available keys](/docs/reference/configuration#available-keys).
 
-On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app.
+On iOS, Android, Vega and macOS, a `script` step above the `launch` step runs before Argent restarts the app.
 
 On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform`.
 
@@ -392,7 +426,7 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `--device <id>`      | The device to run on. Argent detects the device when you omit the option. A physical iPhone is never detected; name it here                                                   |
-| `--platform <p>`     | `ios`, `android`, `chromium`, `vega` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either             |
+| `--platform <p>`     | `ios`, `android`, `chromium`, `vega`, `macos` or `ios-remote`. Narrows the detection. `ios` still never picks a physical iPhone, and never picks a remote simulator either    |
 | `--update-baselines` | Write the snapshot baselines instead of comparing them. Also writes the baselines of the e2e tests that `tool: e2e-execute` steps run, unless the step sets `updateBaselines` |
 | `--output <dir>`     | Write the failed baseline, current and diff images and the screenshots of failed steps to `<dir>/<test>/`, for a CI artifact upload                                           |
 | `-r, --recursive`    | With a directory, also run the e2e tests in subdirectories. Dot-directories and `node_modules` are skipped                                                                    |
@@ -470,7 +504,7 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
-Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
+Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. On a Mac app, pass `--platform macos` and omit `--device`. Then the runner starts the app that the launch step names.
 
 <a id="flows-over-a-link" />
 

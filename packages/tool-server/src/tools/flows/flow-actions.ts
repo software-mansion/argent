@@ -1,4 +1,5 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
+import { isFlagEnabled } from "@argent/configuration-core";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
@@ -26,6 +27,7 @@ import {
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
+import { renderFlagGated } from "../../utils/flag-gated-text";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
@@ -247,11 +249,26 @@ const TYPE_FOCUS_TIMEOUT_MS = 3000;
 // - Vega's toolkit page source never reports `focused`; polling would burn
 //   the whole timeout on every type step.
 // - "xcuitest-runner" emits focused, but first-responder handoff on hardware is unverified. Keep the fixed settle.
+//
+// Both macOS sources poll: on a Mac app the focused field was in the tree for
+// 24 of 24 `type` steps, with the screen locked and unlocked.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
   "native-devtools",
   "android-devtools",
   "cdp-dom",
+  "macos-devtools",
+  "macos-fallback",
 ]);
+
+/**
+ * A device driven with a mouse and wheel rather than touch: a Chromium app or a
+ * native Mac app. Neither takes `gesture-swipe` or `gesture-custom`, so the
+ * directives below send these devices `gesture-scroll` (scroll-to) and
+ * `gesture-drag` (swipe, long-press), and refuse the two-finger gestures.
+ */
+function isPointerDesktop(device: DeviceInfo): boolean {
+  return device.platform === "chromium" || device.platform === "macos";
+}
 
 // Re-read the tree until two consecutive reads match, so a tap never lands
 // mid-fling and a resolved frame can't go stale before we act.
@@ -712,6 +729,9 @@ interface ScrollResolve {
   warning?: string;
 }
 
+// gesture-scroll's refusal on a Mac app at a point where nothing scrolls.
+const NO_SCROLLABLE_VIEW = /No scrollable view at the point/;
+
 /**
  * Dispatch one momentum-free scroll increment anchored at the center of
  * `region`. The anchor (the touch-down / wheel point) is what selects the scroll
@@ -721,8 +741,9 @@ interface ScrollResolve {
  * point is clamped, so the down stays at the anchor and keeps latching to the
  * right container), sized to the clip window rather than the screen so
  * consecutive views of a small container's content still overlap. Touch
- * platforms use a `momentum: false` swipe (no fling); Chromium uses wheel
- * events.
+ * platforms use a `momentum: false` swipe (no fling); the pointer desktops
+ * (Chromium, macOS) use `gesture-scroll`, whose deltas are the same fractions
+ * of the window.
  */
 async function scrollIncrement(
   env: ActionEnv,
@@ -734,7 +755,7 @@ async function scrollIncrement(
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
   const dist = Math.min(SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
-  if (env.device.platform === "chromium") {
+  if (isPointerDesktop(env.device)) {
     // Positive deltaY/deltaX reveals content below / to the right (see gesture-scroll).
     const delta =
       direction === "down"
@@ -857,7 +878,19 @@ async function scrollToVisible(
     }
     prevFp = fp;
 
-    warning ??= await scrollIncrement(env, axisDirection, region);
+    try {
+      warning ??= await scrollIncrement(env, axisDirection, region);
+    } catch (err) {
+      if (!(err instanceof Error && NO_SCROLLABLE_VIEW.test(err.message))) throw err;
+      if (frame) return { frame, ...warnedBy(warning) };
+      return {
+        reason:
+          `nothing scrolls at the centre of ${within ? describeSelector(within) : "the screen"}, ` +
+          `so ${describeSelector(target)} cannot be scrolled into view; name its scroll ` +
+          "container in within:",
+        ...warnedBy(warning),
+      };
+    }
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
@@ -896,16 +929,18 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
       reason: `${step.kind} is a touch directive and Vega is remote-driven — move focus with \`tool: tv-remote\` steps (and type via \`tool: keyboard\`) instead`,
     };
   }
-  // Chromium: not "no backend" — CDP can dispatch two-finger touch, but a
-  // mouse-driven desktop app has no uniform pinch-zoom mapping (and no
+  // The pointer desktops refuse both two-finger gestures, before the auto-wait
+  // and before any input. Not "no backend" - CDP can dispatch two-finger touch,
+  // but a mouse-driven desktop app has no uniform pinch-zoom mapping (and no
   // rotate-gesture idiom at all) for it to hit.
-  if ((step.kind === "pinch" || step.kind === "rotate") && env.device.platform === "chromium") {
+  if ((step.kind === "pinch" || step.kind === "rotate") && isPointerDesktop(env.device)) {
+    const platform = env.device.platform;
     return {
       ok: false,
       reason:
         step.kind === "pinch"
-          ? "pinch is unsupported on chromium — desktop apps have no uniform pinch-zoom mapping (they zoom via ctrl+wheel or their own controls); drive the app's zoom UI with tap/keyboard instead"
-          : "rotate is unsupported on chromium — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead",
+          ? `pinch is unsupported on ${platform} — desktop apps have no uniform pinch-zoom mapping (they zoom via ctrl+wheel, a shortcut or their own controls); drive the app's zoom UI with tap/keyboard instead`
+          : `rotate is unsupported on ${platform} — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead`,
     };
   }
   // HarmonyOS has no hold or arc backend; flow steps skip the capability gate,
@@ -917,6 +952,18 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
         step.kind === "long-press"
           ? "long-press is unsupported on HarmonyOS — `uitest uiInput` has a `longClick` verb, but it takes no hold duration and argent drives holds through `gesture-custom`, which has no HarmonyOS backend; use `tap`"
           : "rotate is unsupported on HarmonyOS — `uinput -T -m` is the platform's only multi-contact injection and it moves each finger along ONE straight line per call, with no way to chain segments into an arc; drive the app's own rotate control with `tap`, or `pinch`, which is a straight-line gesture and does run here",
+    };
+  }
+  // Only a Mac app takes a right-click; the others refuse it before the auto-wait too,
+  // rather than after it with gesture-tap's own error.
+  if (step.kind === "tap" && step.button === "right" && env.device.platform !== "macos") {
+    return {
+      ok: false,
+      reason: renderFlagGated(
+        `tap with button: right is a mouse right-click<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>; ` +
+          `${env.device.platform} takes none. On a touch screen, open a context menu with long-press`,
+        isFlagEnabled
+      ),
     };
   }
   // Physical iOS: XCTest has no two-finger coordinate API. Fail here before the auto-wait.
@@ -1110,17 +1157,19 @@ function targetPointFromFrame(
 /**
  * Tap a resolved target point. `times` rides the gesture-tap tool's
  * `clickCount`: one dispatched multi-tap gesture, never N separate calls, whose
- * RPC gaps could fall outside the OS double-tap window.
+ * RPC gaps could fall outside the OS double-tap window. `button` rides the
+ * tool's `button` unchanged.
  */
 async function runTap(
   env: ActionEnv,
-  target: { selector?: FlowSelector; x?: number; y?: number; times?: number }
+  target: Extract<DirectiveStep, { kind: "tap" }>
 ): Promise<DirectiveOutcome> {
   const resolved = await resolveTargetPoint(env, target);
   if ("fail" in resolved) return resolved.fail;
   const sent = await invokeOnDevice(env, "gesture-tap", {
     ...resolved.point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
+    ...(target.button !== undefined ? { button: target.button } : {}),
   });
   return { ok: true, ...warnedBy(resolved.warning, toolWarning(sent)) };
 }
@@ -1136,11 +1185,11 @@ const DEFAULT_LONG_PRESS_MS = 800;
  * Press-and-hold on a target (same resolution as tap) for `duration` ms. Touch
  * platforms dispatch ONE `gesture-custom` train (Down, then Up delayed by the
  * duration) so the hold length is exact. On a physical iOS device the train
- * maps to the runner longPress. Chromium has no touch, so the closest
- * honest mapping is a mouse press-hold-release (`gesture-drag` with from == to)
- * — apps implementing pointer-based long-press respond, anything else sees a
- * slow click. A desktop context menu is a *right*-click, deliberately not
- * aliased here.
+ * maps to the runner longPress. The pointer desktops (Chromium, macOS) have no
+ * touch, so the closest honest mapping is a mouse press-hold-release
+ * (`gesture-drag` with from == to) - apps implementing pointer-based long-press
+ * respond, anything else sees a slow click. A desktop context menu is a
+ * *right*-click, deliberately not aliased here.
  */
 async function runLongPress(
   env: ActionEnv,
@@ -1151,7 +1200,7 @@ async function runLongPress(
   const point = resolved.point;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
   let sent: unknown;
-  if (env.device.platform === "chromium") {
+  if (isPointerDesktop(env.device)) {
     try {
       await invokeOnDevice(env, "gesture-drag", {
         fromX: point.x,
@@ -1389,10 +1438,10 @@ const SWIPE_GEOMETRY: Record<
  * ({@link SWIPE_GEOMETRY}, clamped short at the screen edge), `by` (signed
  * relative delta delivered exactly: an unanchored start slides on-screen to fit
  * it, an authored anchor fails instead), or `to`. Touch dispatches one
- * `gesture-swipe`; Chromium has no touch, so a swipe is a mouse drag
- * (`gesture-drag`), where a `from` on a draggable node hands the gesture to the
- * browser's own drag-and-drop exactly as a real mouse would. `momentum` rides
- * both dispatches.
+ * `gesture-swipe`; the pointer desktops (Chromium, macOS) have no touch, so a
+ * swipe is a mouse drag (`gesture-drag`), where a `from` on a draggable node
+ * hands the gesture to the app's own drag-and-drop exactly as a real mouse
+ * would. `momentum` rides both dispatches.
  */
 async function runSwipe(
   env: ActionEnv,
@@ -1590,7 +1639,7 @@ async function runSwipe(
   try {
     sent = await invokeOnDevice(
       env,
-      env.device.platform === "chromium" ? "gesture-drag" : "gesture-swipe",
+      isPointerDesktop(env.device) ? "gesture-drag" : "gesture-swipe",
       travel
     );
   } catch (err) {
@@ -1711,7 +1760,7 @@ async function waitForCondition(
       lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
-      const blind = isBlindRead(data, everMatched);
+      const blind = isBlindRead(data, everMatched, step.condition);
       if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
       if (
@@ -1721,7 +1770,8 @@ async function waitForCondition(
           step.expectedText,
           lastMatches,
           step.textMatch,
-          data.uiOrientation
+          data.uiOrientation,
+          env.device.platform === "macos"
         )
       ) {
         return { ok: true };

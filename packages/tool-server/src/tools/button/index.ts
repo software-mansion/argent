@@ -55,6 +55,8 @@ export const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>
   // Verified on a device; `uitest` answers `No Error` to any keyID, so
   // unverified mappings are left out.
   "harmony": new Set(["home", "back", "power"]),
+  // A Mac app has no hardware buttons; the capability omits `macos` as well.
+  "macos": new Set([]),
 };
 
 const capability: ToolCapability = {

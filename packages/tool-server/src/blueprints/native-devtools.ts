@@ -419,6 +419,9 @@ export interface NetworkEvent {
   timestamp: number;
 }
 
+/** How many network events a log keeps, per app; the oldest go first. A Mac app's log uses the same limit. */
+export const NATIVE_NETWORK_LOG_LIMIT = 1000;
+
 type ViewInspectorMethod =
   | "ViewHierarchy.getFullHierarchy"
   | "ViewHierarchy.findViews"
@@ -644,7 +647,6 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // listen block below, before ensureEnvReady and dispose read it.
     const endpoint: IosEndpoint =
       transport === "tcp" ? { transport: "tcp" } : { transport: "unix", socketPath };
-    const MAX_LOG_ENTRIES = 1000;
     const connections = new Map<string, AppConnection>();
     const pendingRpc = new Map<
       number,
@@ -827,7 +829,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             if (p.method && p.id === undefined) {
               const conn = connections.get(bundleId);
               if (conn) {
-                if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
+                if (conn.networkLog.length >= NATIVE_NETWORK_LOG_LIMIT) {
                   conn.networkLog.shift();
                 }
                 conn.networkLog.push({

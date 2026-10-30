@@ -16,7 +16,11 @@ import {
   remainingBudget,
   toDevicePoint,
 } from "../../utils/harmony-uitest";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { ensureDep } from "../../utils/check-deps";
+import { InvalidToolInputError, MACOS_APPS_FLAG } from "../../utils/capability";
+import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
+import { macosAppServices, macosClick, requireMacosApp } from "../../utils/macos-input";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -25,7 +29,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
     ),
   x: z
     .number()
@@ -50,6 +54,14 @@ const zodSchema = z.object({
         "higher counts land as separate taps. <flag:harmonyos>On HarmonyOS only 2 is one gesture; 3 or more are " +
         "separate injections a device round trip apart, which the OS reads as single taps. </flag:harmonyos>Default 1."
     ),
+  button: z
+    .enum(["left", "right"])
+    .optional()
+    .describe(
+      'Mouse button, Mac app only. "right" is a right-click (secondary click), for example to ' +
+        'open a context menu; any other device refuses it. Combines with clickCount. Default "left".'
+    )
+    .meta({ [FLAG_META_KEY]: MACOS_APPS_FLAG }),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -83,7 +95,8 @@ function tapDescription(params: Params, tense: "present" | "past"): string {
           : "Double-tapped"
         : `${tense === "present" ? "Tapping" : "Tapped"} ${count} times`;
 
-  return `${action} at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%)`;
+  const button = params.button === "right" ? " with the right button" : "";
+  return `${action} at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%)${button}`;
 }
 
 const capability: ToolCapability = {
@@ -92,6 +105,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 // Timings keep a multi-tap inside the OS double-tap window, which separate
@@ -165,19 +179,26 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to tap at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%): ${failureSignal.error_code}`,
   },
-  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
-Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
+  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
+Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.<flag:macos-apps> On a Mac app it is a click; x and y are fractions of the area describe reports: the app window, grown to hold sheets, alerts and menus past it.</flag:macos-apps>
 Set clickCount: 2 for a double-tap / double-click: the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
-Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend / Chromium CDP <flag:harmonyos>/ \`hdc\` </flag:harmonyos>is not reachable for the given device.
+<flag:macos-apps>Set button: "right" for a right-click on a Mac app, for example to open a context menu: its items then appear in the returned tree, and a plain tap on an item chooses it. Any other device refuses it with an invalid-input error; on iOS and Android press and hold with gesture-custom instead.
+</flag:macos-apps>Use when you need to tap a button, link, or any tappable element on the screen.
+Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend / Chromium CDP <flag:harmonyos>/ \`hdc\` </flag:harmonyos><flag:macos-apps>/ Mac app library </flag:macos-apps>is not reachable for the given device.
 On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-only.
-Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker)<flag:harmonyos> and HarmonyOS uses \`describe\` (the \`uitest\` layout dump)</flag:harmonyos>, since the native and RN-specific discovery tools don't apply<flag:harmonyos> to either</flag:harmonyos>. More information in \`argent-device-interact\` skill`,
+Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker)<flag:harmonyos> and HarmonyOS uses \`describe\` (the \`uitest\` layout dump)</flag:harmonyos>, since the native and RN-specific discovery tools don't apply<flag:harmonyos> to either</flag:harmonyos><flag:macos-apps>; a Mac app uses \`describe\`</flag:macos-apps>. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
-  searchHint: "tap press button element device simulator emulator chromium touch down up click",
+  searchHint:
+    "tap press button element device simulator emulator chromium<flag:macos-apps> mac</flag:macos-apps> touch down up click<flag:macos-apps> right-click context menu</flag:macos-apps>",
   zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
+    if (device.platform === "macos") {
+      return macosAppServices(device);
+    }
+    // Refused in `execute`, without starting a backend for a tap that never runs.
+    if (params.button === "right") return {};
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
@@ -192,6 +213,27 @@ Before tapping, determine the correct coordinates by using discovery tools. Pick
     const device = resolveDevice(params.udid);
     const timestampMs = Date.now();
     const clickCount = params.clickCount ?? 1;
+    if (device.platform === "macos") {
+      const app = requireMacosApp(services, "gesture-tap", device);
+      await macosClick(app, params.x, params.y, { clickCount, button: params.button });
+      return { tapped: true, timestampMs };
+    }
+    // The other backends would land a right-click as a plain tap.
+    if (params.button === "right") {
+      // gesture-custom has a backend on iOS and Android only.
+      const holdHint =
+        device.platform === "harmony" || device.platform === "chromium"
+          ? ""
+          : ` To open a context menu on a touch screen, press and hold: gesture-custom with a ` +
+            `Down, then an Up after 800 ms.`;
+      throw new InvalidToolInputError(
+        renderFlagGated(
+          `gesture-tap button "right" is a mouse right-click<flag:macos-apps>, which only a Mac ` +
+            `app takes</flag:macos-apps>: ${device.platform} ${device.kind} takes no right-click.${holdHint}`,
+          isFlagEnabled
+        )
+      );
+    }
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       // Mouse dispatch stalls at ~5s per event on a hidden window.

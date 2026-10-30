@@ -1,11 +1,11 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions. Not for TV targets. For a Mac app also read argent-macos-app-interact.
 ---
 
 ## Unified tool surface
 
-All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, anything else → Android adb serial). You use the same tool names on every platform.
+All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, `chromium-cdp-<port>` → Chromium (CDP) app, `macos-app-<bundle id>` → Mac app, anything else → Android adb serial). You use the same tool names on every platform.
 
 **Chromium (CDP) app** = an Electron app or a Chromium-family browser (Chrome/Brave/Edge) exposing a Chrome DevTools Protocol endpoint. The same describe/tap/keyboard/screenshot surface drives it, but scrolling, tabs, cookies and storage differ: **read `references/chromium.md` before driving a `chromium` target.**
 
@@ -395,6 +395,10 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 ### Chromium
 
 See `references/chromium.md` (tabs, cookies/storage).
+
+### Mac apps
+
+A `platform: "macos"` device is a native Mac app: read `argent-macos-app-interact` before driving it (start, mouse-only input, file panels).
 
 ### iOS
 

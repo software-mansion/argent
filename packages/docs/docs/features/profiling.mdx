@@ -79,7 +79,7 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 
 ## Limits
 
-- The React profiler is available in React Native apps with Hermes only. Argent does not profile Chromium and Electron apps.
+- The React profiler is available in React Native apps with Hermes only. Argent does not profile Chromium, Electron and Mac apps.
 - Argent records the data from the start of the session only. Start the session before you do the interaction.
 - One session at a time can own the React profiler of an app. If another agent owns the session, Argent tells the agent who the owner is. The agent must ask you before it takes over the session.
 - A component that unmounts before the session stops can lose its name in the report. The report shows the duration of this work under "unattributed".

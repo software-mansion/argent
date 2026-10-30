@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
+import { macosAppRef } from "../../blueprints/macos-app";
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
@@ -16,6 +17,7 @@ import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
+import { macosImpl } from "./platforms/macos";
 
 // Same alphabet as launch-app's ACTIVITY_PATTERN: leading `.` for shorthand
 // activities like `.MainActivity`, no leading `-` (flag injection).
@@ -46,7 +48,7 @@ const zodSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. Ignored on other targets.'
+      'Apple simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. Ignored on other targets.<flag:macos-apps> Omitted on a Mac app, the app gets the arguments of its last start.</flag:macos-apps>'
     ),
 });
 
@@ -58,6 +60,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 // Local iOS resolves native-devtools inside the handler rather than via
@@ -85,6 +88,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
       if (device.platform === "ios-remote") return { nativeDevtools: nativeDevtoolsRef(device) };
+      if (device.platform === "macos") return { macosApp: macosAppRef(device) };
       return {};
     },
     execute: dispatchByPlatform<
@@ -106,6 +110,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       android: androidImpl,
       vega: vegaImpl,
       harmony: harmonyImpl,
+      macos: macosImpl,
     }),
   };
 }

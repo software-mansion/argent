@@ -13,7 +13,15 @@ export interface RestartAppParams {
 }
 
 export type RestartAppResult =
-  { restarted: boolean; bundleId: string } | NativeDevtoolsInitFailedResult;
+  | {
+      restarted: boolean;
+      bundleId: string;
+      /** Mac apps: the arguments the new process was started with. */
+      args?: string[];
+      /** Mac apps: argent quit a copy that ran without its library, or the new process showed no window in time. */
+      note?: string;
+    }
+  | NativeDevtoolsInitFailedResult;
 
 export interface RestartAppIosServices {
   nativeDevtools: NativeDevtoolsApi;

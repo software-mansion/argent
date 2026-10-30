@@ -284,9 +284,11 @@ const POINT_GESTURE_STEP: FlowStepDefinition<Extract<FlowStep, { kind: "tap" | "
     // stray in-memory `times: 1` would describe a file that can't exist.
     const times =
       step.kind === "tap" && step.times !== undefined && step.times > 1 ? ` ×${step.times}` : "";
+    // A right-click replays as a different gesture, so it renders like `times`.
+    const button = step.kind === "tap" && step.button === "right" ? " (right button)" : "";
     const held =
       step.kind === "long-press" && step.duration !== undefined ? ` for ${step.duration}ms` : "";
-    return `${target}${times}${held}`;
+    return `${target}${times}${button}${held}`;
   },
   target: (step) => {
     if (step.selector) return selectorLabel(step.selector);

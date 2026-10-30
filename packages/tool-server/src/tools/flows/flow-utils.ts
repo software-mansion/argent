@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
+import { MIN_SCRIPT_TIMEOUT_MS, isFlagEnabled } from "@argent/configuration-core";
 import {
   E2E_DIRS,
   FAILURE_CODES,
@@ -35,6 +35,7 @@ import {
 // match engine defines it.
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
+import { MACOS_APPS_FLAG } from "../../utils/capability";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
@@ -621,27 +622,29 @@ export function __flowFileLockCountForTesting(): number {
 type ChromiumLaunch = string | { path: string; args?: string[] };
 
 /**
- * An ios `launch` target: a bundle id (bare string) or a bundle id plus the
- * arguments passed to the app process at launch, on a simulator or a physical
- * iPhone.
+ * An ios or macos `launch` target: a bundle id (bare string) or a bundle id
+ * plus the arguments passed to the app process at launch, on a simulator, a
+ * physical iPhone or a Mac.
  */
-type IosLaunch = string | { app: string; args?: string[] };
+type AppLaunch = string | { app: string; args?: string[] };
 
 /**
  * The app a `launch` step starts from scratch. A bare string applies to every
  * platform; the map targets a specific id per platform (chromium takes a path —
- * see {@link ChromiumLaunch}), and `ios` may carry launch args ({@link IosLaunch}).
- * `native` is a shared id for the installed-app platforms (ios/android/vega),
- * overridden by a specific `ios`/`android`/`vega` key. A flow that BEGINS with a `launch` step is standalone; one that doesn't
- * is a fragment.
+ * see {@link ChromiumLaunch}), and `ios` and `macos` may carry launch args
+ * ({@link AppLaunch}).
+ * `native` is a shared id for the installed-app platforms (ios/android/vega/macos),
+ * overridden by a specific `ios`/`android`/`vega`/`macos` key. A flow that BEGINS
+ * with a `launch` step is standalone; one that doesn't is a fragment.
  */
 export type Launch =
   | string
   | {
       native?: string;
-      ios?: IosLaunch;
+      ios?: AppLaunch;
       android?: string;
       vega?: string;
+      macos?: AppLaunch;
       chromium?: ChromiumLaunch;
     };
 
@@ -742,7 +745,16 @@ export type FlowStep =
   // `flow` is the as-written YAML path, resolved against the containing file's directory.
   | { kind: "run"; flow: string }
   | { kind: "when"; condition: WhenCondition; steps: FlowStep[] }
-  | { kind: "tap"; selector?: FlowSelector; x?: number; y?: number; times?: number }
+  | {
+      kind: "tap";
+      selector?: FlowSelector;
+      x?: number;
+      y?: number;
+      times?: number;
+      // Only the non-default right button is ever stored: absent is the left
+      // one, so parse/serialize stay exact inverses (as `times: 1` is absent).
+      button?: "right";
+    }
   | { kind: "long-press"; selector?: FlowSelector; x?: number; y?: number; duration?: number }
   | {
       kind: "swipe";
@@ -882,7 +894,7 @@ function isE2eFlow(flow: FlowFile): boolean {
 
 /**
  * Resolve the launch app id for a platform, or null when none is declared. For
- * ios/android/vega a specific key wins, else the shared `native` id. For
+ * ios/android/vega/macos a specific key wins, else the shared `native` id. For
  * chromium this returns the app *path* (never `native`) — chromium booters want
  * {@link chromiumLaunchSpec}, which also carries the CLI args.
  *
@@ -898,9 +910,9 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
     return typeof c === "string" ? c : c.path;
   }
   const key = authoringPlatform(platform);
-  if (key === "ios") {
-    const i = launch.ios;
-    if (i !== undefined) return typeof i === "string" ? i : i.app;
+  if (key === "ios" || key === "macos") {
+    const entry = launch[key];
+    if (entry !== undefined) return typeof entry === "string" ? entry : entry.app;
     return launch.native ?? null;
   }
   const v = (launch as Record<string, string | undefined>)[key];
@@ -908,13 +920,16 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
 }
 
 /**
- * The launch args an ios `{ app, args }` entry declares, or undefined when it
- * declares none (a bare-string launch, a bare ios id, or no ios key at all).
+ * The launch args an ios or macos `{ app, args }` entry declares, or undefined
+ * when it declares none (a bare-string launch, a bare id, or no such key).
  */
-export function iosLaunchArgs(launch: Launch | undefined): string[] | undefined {
+export function appLaunchArgs(
+  launch: Launch | undefined,
+  key: "ios" | "macos"
+): string[] | undefined {
   if (launch === undefined || typeof launch === "string") return undefined;
-  const i = launch.ios;
-  return i !== undefined && typeof i !== "string" ? i.args : undefined;
+  const entry = launch[key];
+  return entry !== undefined && typeof entry !== "string" ? entry.args : undefined;
 }
 
 /**
@@ -982,9 +997,10 @@ type YamlTarget = YamlSelector | { x: number; y: number };
 /**
  * A tap targets an element or a raw point. The options form nests the target
  * under `on` so option keys never mix with target fields:
- * `{ on: <target>, times: 2 }` is a double-tap.
+ * `{ on: <target>, times: 2 }` is a double-tap, `{ on: <target>, button: right }`
+ * a right-click.
  */
-type TapBody = YamlTarget | { on: YamlTarget; times?: number };
+type TapBody = YamlTarget | { on: YamlTarget; times?: number; button?: "right" };
 
 /**
  * A `swipe` body: a bare direction (`swipe: left`) or the options form. The
@@ -1561,10 +1577,17 @@ function toYamlStep(step: FlowStep): YamlStep {
     }
     case "tap": {
       // The options form appears only when an option is present (`times` is
-      // never stored as 1 — see parseTapTimes), so a plain tap round-trips to
-      // the plain selector/point body.
+      // never stored as 1, `button` never as left - see parseTapTimes and
+      // parseTapButton), so a plain tap round-trips to the plain selector/point body.
       const target = targetToYaml(step);
-      return { tap: step.times !== undefined ? { on: target, times: step.times } : target };
+      if (step.times === undefined && step.button === undefined) return { tap: target };
+      return {
+        tap: {
+          on: target,
+          ...(step.times !== undefined ? { times: step.times } : {}),
+          ...(step.button !== undefined ? { button: step.button } : {}),
+        },
+      };
     }
     case "long-press": {
       const target = targetToYaml(step);
@@ -2309,7 +2332,12 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
  * The platforms an AUTHOR can name in a flow file: launch-map keys and
  * `when: { platform }` guards ({@link WhenPlatform}).
  */
-const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega", "macos"] as const;
+
+/** {@link LAUNCH_PLATFORMS} as an error names them: `macos` only with its flag on. */
+function namedLaunchPlatforms(): string[] {
+  return LAUNCH_PLATFORMS.filter((p) => p !== "macos" || isFlagEnabled(MACOS_APPS_FLAG));
+}
 
 /**
  * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
@@ -2374,18 +2402,18 @@ function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
 }
 
 /**
- * Parse an ios launch value: a bundle id (bare string) or `{ app, args? }`.
+ * Parse an ios or macos launch value: a bundle id (bare string) or `{ app, args? }`.
  * Returns null when the shape is invalid (caller reports the launch error).
  */
-function parseIosLaunch(raw: unknown): IosLaunch | null {
+function parseAppLaunch(raw: unknown, key: "ios" | "macos"): AppLaunch | null {
   if (typeof raw === "string" && raw.length > 0) return raw;
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const b = raw as Record<string, unknown>;
-    rejectUnknownKeys({ launch: { ios: raw } }, b, ["app", "args"], "launch.ios");
+    rejectUnknownKeys({ launch: { [key]: raw } }, b, ["app", "args"], `launch.${key}`);
     if (typeof b.app !== "string" || b.app.length === 0) return null;
     if (b.args === undefined) return { app: b.app };
     if (Array.isArray(b.args))
-      rejectUnquotedLaunchArg({ launch: { ios: raw } }, b.args, "launch.ios");
+      rejectUnquotedLaunchArg({ launch: { [key]: raw } }, b.args, `launch.${key}`);
     if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
     return { app: b.app, args: b.args as string[] };
   }
@@ -2404,9 +2432,10 @@ function parseLaunch(raw: unknown): Launch {
     if (keys.length > 0) {
       const out: {
         native?: string;
-        ios?: IosLaunch;
+        ios?: AppLaunch;
         android?: string;
         vega?: string;
+        macos?: AppLaunch;
         chromium?: ChromiumLaunch;
       } = {};
       let valid = true;
@@ -2418,13 +2447,13 @@ function parseLaunch(raw: unknown): Launch {
             break;
           }
           out.chromium = c;
-        } else if (k === "ios") {
-          const i = parseIosLaunch(b[k]);
-          if (i === null) {
+        } else if (k === "ios" || k === "macos") {
+          const entry = parseAppLaunch(b[k], k);
+          if (entry === null) {
             valid = false;
             break;
           }
-          out.ios = i;
+          out[k] = entry;
         } else if (typeof b[k] === "string" && (b[k] as string).length > 0) {
           (out as Record<string, string>)[k] = b[k] as string;
         } else {
@@ -2438,7 +2467,9 @@ function parseLaunch(raw: unknown): Launch {
   return badEntry(
     { launch: raw },
     `launch needs an app id (bare string) or a per-platform map ` +
-      `({ native | ${LAUNCH_PLATFORMS.filter((p) => p !== "chromium").join(" | ")}: <app id>, ` +
+      `({ native | ${namedLaunchPlatforms()
+        .filter((p) => p !== "chromium")
+        .join(" | ")}: <app id>, ` +
       `ios: { app, args }, chromium: <app path> | { path, args } })`
   );
 }
@@ -2545,6 +2576,17 @@ function parseTapTimes(raw: unknown, entry: unknown): number | undefined {
 }
 
 /**
+ * Parse `button` on a tap body: `right` is a right-click, which the runner sends
+ * only to a Mac app. `left` is the default and normalizes to
+ * absent, keeping parse/serialize exact inverses.
+ */
+function parseTapButton(raw: unknown, entry: unknown): "right" | undefined {
+  if (raw === undefined || raw === "left") return undefined;
+  if (raw !== "right") badEntry(entry, "tap.button must be left or right");
+  return "right";
+}
+
+/**
  * Does this map carry any selector key (the `any` marker and the relational
  * scopes included)? Tells a selector map apart from the point/option forms in
  * the gesture-body checks below, so a scoped selector mixed with coordinates or
@@ -2606,7 +2648,7 @@ function parseTarget(raw: unknown, where: string): GestureTarget {
 function parseTap(body: unknown, entry: unknown): FlowStep {
   const obj = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
-  if (obj.on !== undefined || obj.times !== undefined) {
+  if (obj.on !== undefined || obj.times !== undefined || obj.button !== undefined) {
     if (hasSelectorField(obj)) {
       badEntry(
         entry,
@@ -2619,15 +2661,20 @@ function parseTap(body: unknown, entry: unknown): FlowStep {
         "the tap options form takes a nested point — e.g. tap: { on: { x: 0.5, y: 0.5 }, times: 2 }"
       );
     }
-    if (!Object.keys(obj).every((k) => k === "on" || k === "times")) {
-      badEntry(entry, "the tap options form accepts only { on, times }");
+    if (!Object.keys(obj).every((k) => k === "on" || k === "times" || k === "button")) {
+      badEntry(entry, "the tap options form accepts only { on, times, button }");
     }
     if (obj.on === undefined) {
-      badEntry(entry, 'tap with times needs a target — e.g. tap: { on: "Photo", times: 2 }');
+      badEntry(
+        entry,
+        'tap with times or button needs a target - e.g. tap: { on: "Photo", times: 2 }'
+      );
     }
     const step: FlowStep = { kind: "tap", ...parseTarget(obj.on, "tap.on") };
     const times = parseTapTimes(obj.times, entry);
     if (times !== undefined) step.times = times;
+    const button = parseTapButton(obj.button, entry);
+    if (button !== undefined) step.button = button;
     return step;
   }
 
@@ -2852,7 +2899,7 @@ function parseWhenCondition(raw: unknown): WhenCondition {
     }
     const p = b.platform;
     if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
-      badEntry({ when: raw }, `when.platform must be one of ${LAUNCH_PLATFORMS.join(", ")}`);
+      badEntry({ when: raw }, `when.platform must be one of ${namedLaunchPlatforms().join(", ")}`);
     }
     return { kind: "platform", platform: p as WhenPlatform };
   }
@@ -3211,14 +3258,15 @@ function* argFields(
  * and `long-press` take both, and the parsed step keeps no record of which was
  * written — `duration` is optional in long-press's options form and `times: 1`
  * normalizes to `undefined`, so a step carrying neither could have been spelled
- * either way. Naming one spelling there would name a path that is not in the
- * author's file, so `alt` carries the other and the refusal offers both.
+ * either way (`button: left` normalizes away too). Naming one spelling there
+ * would name a path that is not in the author's file, so `alt` carries the
+ * other and the refusal offers both.
  */
 function gestureTargetPath(
   step: Extract<FlowStep, { kind: "tap" | "long-press" | "pinch" | "rotate" }>
 ): { path: string; alt?: string } {
   if (step.kind === "pinch" || step.kind === "rotate") return { path: `${step.kind}.on` };
-  const option = step.kind === "tap" ? step.times : step.duration;
+  const option = step.kind === "tap" ? (step.times ?? step.button) : step.duration;
   if (option !== undefined) return { path: `${step.kind}.on` };
   return { path: step.kind, alt: `${step.kind}.on` };
 }

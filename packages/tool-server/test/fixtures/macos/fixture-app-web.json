@@ -1,0 +1,148 @@
+{
+  "scrollX": 0,
+  "webView": 0,
+  "scrollY": 0,
+  "items": [
+    {
+      "id": "b",
+      "label": "",
+      "focused": false,
+      "frame": {
+        "y": 292,
+        "x": 730,
+        "width": 200,
+        "height": 40
+      },
+      "testid": "web-button",
+      "disabled": false,
+      "type": "submit",
+      "value": "",
+      "tag": "button",
+      "text": "Web button",
+      "normalizedFrame": {
+        "y": 0.0981012658227848,
+        "x": 0.6777777777777778,
+        "width": 0.2222222222222222,
+        "height": 0.06329113924050633
+      },
+      "role": "",
+      "checked": false,
+      "ownText": "Web button",
+      "placeholder": "",
+      "fullText": "Web button"
+    },
+    {
+      "id": "i",
+      "label": "Web input",
+      "focused": false,
+      "frame": {
+        "y": 352,
+        "x": 730,
+        "width": 200,
+        "height": 30
+      },
+      "testid": "web-input",
+      "disabled": false,
+      "type": "text",
+      "value": "",
+      "tag": "input",
+      "text": "",
+      "normalizedFrame": {
+        "y": 0.1930379746835443,
+        "x": 0.6777777777777778,
+        "width": 0.2222222222222222,
+        "height": 0.04746835443037975
+      },
+      "role": "",
+      "checked": false,
+      "ownText": "",
+      "placeholder": "",
+      "fullText": ""
+    },
+    {
+      "id": "lnk",
+      "label": "",
+      "focused": false,
+      "frame": {
+        "y": 402,
+        "x": 730,
+        "width": 54.96875,
+        "height": 17
+      },
+      "testid": "web-link",
+      "disabled": false,
+      "type": "",
+      "value": null,
+      "tag": "a",
+      "text": "Web link",
+      "normalizedFrame": {
+        "y": 0.2721518987341772,
+        "x": 0.6777777777777778,
+        "width": 0.06107638888888889,
+        "height": 0.02689873417721519
+      },
+      "role": "",
+      "checked": false,
+      "ownText": "Web link",
+      "placeholder": "",
+      "fullText": "Web link"
+    },
+    {
+      "id": "sel",
+      "label": "",
+      "focused": false,
+      "frame": {
+        "y": 442,
+        "x": 730,
+        "width": 40,
+        "height": 20
+      },
+      "testid": "web-select",
+      "disabled": false,
+      "type": "select-one",
+      "value": "a",
+      "tag": "select",
+      "text": "a\nb",
+      "normalizedFrame": {
+        "y": 0.33544303797468356,
+        "x": 0.6777777777777778,
+        "width": 0.044444444444444446,
+        "height": 0.03164556962025317
+      },
+      "role": "",
+      "checked": false,
+      "ownText": "",
+      "placeholder": "",
+      "fullText": ""
+    },
+    {
+      "id": "",
+      "label": "",
+      "focused": false,
+      "frame": {
+        "y": 482,
+        "x": 730,
+        "width": 200,
+        "height": 2000
+      },
+      "testid": "web-tall",
+      "disabled": false,
+      "type": "",
+      "value": null,
+      "tag": "div",
+      "text": "tall",
+      "normalizedFrame": {
+        "y": 0.3987341772151899,
+        "x": 0.6777777777777778,
+        "width": 0.2222222222222222,
+        "height": 3.1645569620253164
+      },
+      "role": "",
+      "checked": false,
+      "ownText": "tall",
+      "placeholder": "",
+      "fullText": "tall"
+    }
+  ],
+  "truncated": false
+}

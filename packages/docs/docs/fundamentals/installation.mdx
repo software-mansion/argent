@@ -15,6 +15,7 @@ sidebar_custom_props:
 - **Fire TV (Vega)**: the **Vega SDK** (`vega` CLI) on `PATH`, plus **Android SDK Platform Tools** (`adb`) on `PATH`. Most Vega tools, including UI inspection and screenshots, run over `adb`.
 - **HarmonyOS**: **DevEco Studio**, which ships `hdc` (the device connector) and the `Emulator` manager. Argent looks for both in `$DEVECO_STUDIO_HOME` first, then in `/Applications/DevEco-Studio.app` on macOS. Argent also finds `hdc` on `PATH`, for hosts that installed the OpenHarmony command-line tools without the IDE. A phone needs only `hdc`. Run `argent enable harmonyos` to turn on HarmonyOS support.
 - **Electron / Chromium**: nothing extra to control an already running app. Launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you.
+- **Mac apps**: macOS 14.4 or later, a build of your app, and the `macos-apps` flag (`argent enable macos-apps`). See [Mac apps](/docs/features/mac-apps).
 
 ## Run `init` in your project
 

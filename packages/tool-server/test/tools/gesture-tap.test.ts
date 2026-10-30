@@ -16,6 +16,7 @@ vi.mock("../../src/utils/simulator-client", () => ({
   },
 }));
 
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { gestureTapTool } from "../../src/tools/gesture-tap";
 import { setCurrentIosDeviceApp } from "../../src/utils/ios-device/app-session";
 
@@ -125,5 +126,49 @@ describe("gesture-tap", () => {
       "mousePressed:2",
       "mouseReleased:2",
     ]);
+  });
+});
+
+describe("gesture-tap button", () => {
+  it("takes left and right, and rejects any other button at the schema", () => {
+    const schema = gestureTapTool.zodSchema!;
+    for (const button of ["left", "right", undefined]) {
+      expect(schema.safeParse({ udid: "X", x: 0.5, y: 0.5, button }).success).toBe(true);
+    }
+    for (const button of ["middle", "Right", 2]) {
+      expect(schema.safeParse({ udid: "X", x: 0.5, y: 0.5, button }).success).toBe(false);
+    }
+  });
+
+  it.each([
+    ["an iOS simulator", "00000000-0000-0000-0000-0000000000AB", "ios simulator", true],
+    ["an Android emulator", "emulator-5554", "android emulator", true],
+    ["a physical iPhone", DEVICE_UDID, "ios device", true],
+    ["a Chromium app", "chromium-cdp-9222", "chromium app", false],
+  ])("refuses a right-click on %s and starts no backend", async (_name, udid, named, hold) => {
+    expect(gestureTapTool.services!({ udid, x: 0.5, y: 0.5, button: "right" })).toEqual({});
+    const { run } = runnerRig();
+    const err = await gestureTapTool
+      .execute({ simulatorServer: {}, iosDeviceRunner: { udid, run } } as never, {
+        udid,
+        x: 0.5,
+        y: 0.5,
+        button: "right",
+      })
+      .then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+    expect(err?.message).toContain(`${named} takes no right-click`);
+    expect(err?.message.includes("gesture-custom")).toBe(hold);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
+    // Nothing reached a device: no touch, no runner command.
+    expect(sent).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("sends a touch down and up on a touch device when the button is left", async () => {
+    await gestureTapTool.execute(touchServices, { udid: "X", x: 0.5, y: 0.5, button: "left" });
+    expect(sent.map((e) => e.type)).toEqual(["Down", "Up"]);
   });
 });

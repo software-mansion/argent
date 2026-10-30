@@ -14,6 +14,7 @@ Argent drives a growing set of targets through a single toolkit, each with the r
 | **Android**       | Emulators (AVDs) and physical devices over adb                          | Touch / gesture  |
 | **TV**            | Apple TV (tvOS), Android TV / Google TV, Amazon Fire TV (Vega)          | D-pad / remote   |
 | **Desktop & web** | Electron and Chromium apps (incl. React Native Web / Expo web) over CDP | Mouse / keyboard |
+| **Mac apps**      | Native Mac apps (AppKit, SwiftUI, react-native-macos) that you build    | Mouse / keyboard |
 | **HarmonyOS**     | Phones over `hdc`, and DevEco Studio emulator instances                 | Touch / gesture  |
 
 <Video
@@ -83,6 +84,10 @@ Electron apps and Chromium browsers exposing the Chrome DevTools Protocol are dr
   height={900}
   caption="Testing an issue-creation flow in an Electron app over CDP"
 />
+
+### Mac apps
+
+Argent also drives a native Mac app that you build: an AppKit, SwiftUI or react-native-macos app. The agent clicks, drags, scrolls and types inside the app while the app stays in the background. Argent needs no system permission for this. This feature is behind the `macos-apps` flag. See [Mac apps](/docs/features/mac-apps).
 
 ## React Native
 

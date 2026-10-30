@@ -31,6 +31,7 @@ import type {
 } from "@argent/registry";
 import {
   appIdForPlatform,
+  appLaunchArgs,
   authoringPlatform,
   assertSafeFlowName,
   assertValidProjectRoot,
@@ -38,7 +39,6 @@ import {
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
   flowNameCasingError,
-  iosLaunchArgs,
   isBlockStep,
   parseFlow,
   precedesLeadingLaunch,
@@ -77,6 +77,7 @@ import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
+  deviceResolutionError,
   resolveFlowDevice,
   bindDeviceArgs,
   flowRequiresDevice,
@@ -111,7 +112,16 @@ import {
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import {
+  isIosPhysicalDevice,
+  isMacosBundleId,
+  macosAppIdFromBundleId,
+  parseChromiumCdpPort,
+  resolveDevice,
+} from "../../utils/device-info";
+import { assertSupported, MACOS_APPS_FLAG } from "../../utils/capability";
+import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
+import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
@@ -147,14 +157,15 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform`); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
+        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id<flag:macos-apps>, Mac app id</flag:macos-apps>), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform`); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
       ),
     platform: z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for a standalone e2e test - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or a standalone e2e test's launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
-      ),
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for a standalone e2e test - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or a standalone e2e test's launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first.<flag:macos-apps> `macos` with no `device` runs a standalone e2e test on the Mac app its `launch` names (`macos-app-<bundle id>`), which need not be running (a single-key `launch: { macos: … }` map selects it on its own). Without `macos`, auto-detection never picks a Mac app.</flag:macos-apps>"
+      )
+      .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
     updateBaselines: z
       .boolean()
       .optional()
@@ -668,6 +679,7 @@ async function treeSourceGate(
       );
     }
   }
+  // A Mac app needs no gate: restart-app returns once its library has connected.
   return null;
 }
 
@@ -705,8 +717,15 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
-  // An ios `{ app, args }` entry's args reach only an iOS device.
-  const launchArgs = authoringPlatform(device.platform) === "ios" ? iosLaunchArgs(app) : undefined;
+  // An `{ app, args }` entry's args reach only its own platform. A Mac app
+  // declared without args gets none, not the arguments of its last start.
+  const key = authoringPlatform(device.platform);
+  const launchArgs =
+    key === "ios"
+      ? appLaunchArgs(app, "ios")
+      : key === "macos"
+        ? (appLaunchArgs(app, "macos") ?? [])
+        : undefined;
   let restart: unknown;
   try {
     restart = await invokeOnDevice(env, "restart-app", {
@@ -735,7 +754,27 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
-  return { ok: true };
+  // A Mac app's note: argent quit a copy without its library, or the new
+  // process showed no window in time. The launch worked either way.
+  const warnings = [(restart as { note?: string } | null)?.note];
+  // Host mode only: in client mode `projectRoot` is a path on the client, which
+  // git on this host cannot compare with the build's worktree.
+  if (device.platform === "macos" && state.project.mode === "host") {
+    // restart-app starts the build argent recorded last for the bundle id,
+    // whoever booted it: in one worktree that can be another worktree's build.
+    const appPath = getTrackedMacosApp(bundleId)?.appPath;
+    const other = appPath ? await otherWorktreeOfBuild(appPath, state.projectRoot) : null;
+    if (other) {
+      warnings.push(
+        `launch started ${bundleId} from ${appPath}, a build of another worktree (${other}), ` +
+          `so this e2e test may run that worktree's code. Boot this worktree's build first ` +
+          `(boot-device with macosAppPath and force: true), or give each worktree's build a ` +
+          `bundle id of its own when several run at once.`
+      );
+    }
+  }
+  const warning = warnings.filter(Boolean).join(" ");
+  return warning ? { ok: true, warning } : { ok: true };
 }
 
 /**
@@ -1787,7 +1826,9 @@ Returns a per-step report: the first failure stops the run and the rest report a
  * `device` is given, this boots a fresh Electron instance from the launch's
  * app path and returns it for teardown — a fragment whose leading `run:` chain
  * reaches a chromium standalone flow boots just the same ({@link leadingLaunch}).
- * Otherwise it attaches to an already-booted device. An explicit `device`
+ * When that launch is unambiguously macOS, the run device is the Mac app it
+ * names ({@link macosLaunchDeviceId}), running or not: its launch step starts
+ * it. Otherwise it attaches to an already-booted device. An explicit `device`
  * never boots here — only a launch step beyond the first moves off it onto an
  * instance the runner owns ({@link bootChromiumForLaunch}). `flowDir` is the
  * root flow file's canonical directory — the base for a relative chromium app
@@ -1820,6 +1861,16 @@ async function resolveRunDevice(
         throw hoistedBootFailure(err);
       }
       return { device: resolveDevice(booted.deviceId), booted };
+    }
+    // A Mac app is the device, and its id is built from the bundle id, so a
+    // flow led by a macOS launch needs nothing running: the launch starts the
+    // app. Resolved as an explicit id, so the flag refusal applies.
+    const macosDevice = leading && macosLaunchDeviceId(leading.app, params.platform);
+    if (macosDevice) {
+      return {
+        device: await resolveFlowDevice(registry, ctx, { device: macosDevice }),
+        booted: null,
+      };
     }
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
@@ -2032,6 +2083,26 @@ function chromiumBootSpec(
 ): { path: string; args?: string[] } | null {
   if (launchTargetPlatform(app, platform) !== "chromium") return null;
   return chromiumLaunchSpec(app);
+}
+
+/**
+ * The Mac app device id (`macos-app-<bundle id>`) for a run whose leading
+ * launch is unambiguously a macOS one - `--platform macos`, or a single-key
+ * `{ macos: ... }` map - or null. The bundle id is read as the launch step
+ * reads it ({@link appIdForPlatform}: the `macos` key, else `native`, else the
+ * bare string). A launch that declares no macOS app is left to the device
+ * list, and the launch step then reports the missing entry.
+ */
+function macosLaunchDeviceId(app: Launch, platform: string | undefined): string | null {
+  if (launchTargetPlatform(app, platform) !== "macos") return null;
+  const bundleId = appIdForPlatform(app, "macos");
+  if (bundleId === null) return null;
+  if (!isMacosBundleId(bundleId)) {
+    throw deviceResolutionError(
+      `launch names "${bundleId}" for macos, which is not a bundle id: use letters, digits, "." and "-", starting with a letter or digit.`
+    );
+  }
+  return macosAppIdFromBundleId(bundleId);
 }
 
 /**
@@ -2808,7 +2879,12 @@ async function execLeafStep(
       // A run cancelled mid-launch is a skip (matching the pre-step guard and
       // the directives), never a step failure — the app did nothing wrong.
       if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-      return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "error",
+        reason: r.reason,
+        ...(r.warning !== undefined ? { warning: r.warning } : {}),
+      };
     }
 
     case "tap":
@@ -2961,6 +3037,13 @@ async function execLeafStep(
       // sent with the call for its own steps.
       let prepared: PreparedToolStep | undefined;
       try {
+        // `Registry.invokeTool` does not assert capabilities (only the HTTP edge
+        // does), and most tools pick their backend by elimination: on a Mac app
+        // a raw `tool: gesture-pinch` would reach the simulator-server. Refuse it
+        // here with the tool's own capability message instead.
+        if (device?.platform === "macos") {
+          assertSupported(step.name, registry.getTool(step.name)?.capability, device);
+        }
         prepared = await prepareToolStepInputs(
           registry,
           state.project,

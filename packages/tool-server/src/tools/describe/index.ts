@@ -15,6 +15,7 @@ import { describeChromium } from "./platforms/chromium";
 import { describeTv } from "./platforms/tv";
 import { describeVega, vegaRequires } from "./platforms/vega";
 import { describeHarmony, harmonyRequires } from "./platforms/harmony";
+import { describeMacos } from "./platforms/macos";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
@@ -38,7 +39,7 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
     ),
   bundleId: z
     .string()
@@ -60,6 +61,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 interface ChromiumServices {
@@ -145,6 +147,12 @@ function makeDescribeExecute(
       handler: async (_services, _params, device) =>
         withDescription(await describeHarmony(harmonyConnectKey(device.id))),
     },
+    // The in-app library's connection resolves through the closed-over
+    // registry, after the macos-apps flag check, as the iOS services do.
+    macos: {
+      handler: async (_services, _params, device) =>
+        withDescription(await describeMacos(registry, device)),
+    },
   });
 }
 
@@ -172,7 +180,10 @@ full-screen node match a text search for the app's own name), so an app plus the
 two windows. A suspended display still dumps its last-composited windows, indistinguishable in the
 tree from a live screen, so the result carries a \`hint\` saying the panel is off; taps land nowhere
 until you wake it with \`button\` (power). An empty dump is hinted the same way, as an app that may
-still be starting.</flag:harmonyos>
+still be starting.</flag:harmonyos><flag:macos-apps>
+On a Mac app, reads the app's accessibility tree, with web view content and React Native testIDs
+merged in; the tree is nested, roles are AppKit accessibility roles, and frames are fractions of the
+app window, grown to hold sheets, alerts and menus past it.</flag:macos-apps>
 
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
@@ -199,7 +210,7 @@ since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\` (up/
 back/menu/home), then call describe again to confirm where focus landed.`,
     alwaysLoad: true,
     searchHint:
-      "accessibility element tree ui hierarchy tap coordinates ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>dom tv tvos apple tv android tv fire tv focus focusable remote dpad",
+      "accessibility element tree ui hierarchy tap coordinates ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos><flag:macos-apps>macos mac app </flag:macos-apps>dom tv tvos apple tv android tv fire tv focus focusable remote dpad",
     readOnly: true,
     zodSchema,
     capability,

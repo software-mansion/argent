@@ -20,6 +20,7 @@ import {
   type ToolsClient,
   type ToolsServerPaths,
 } from "@argent/tools-client";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { FlagParseException } from "./flag-parser.js";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 
@@ -174,7 +175,7 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega | ios-remote — narrow
+  --platform <p>         ios | android | chromium | vega |${isFlagEnabled("macos-apps") ? " macos |" : ""} ios-remote — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,

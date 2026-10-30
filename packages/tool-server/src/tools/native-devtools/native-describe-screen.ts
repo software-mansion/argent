@@ -1,21 +1,14 @@
 import { z } from "zod";
-import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import {
-  nativeDevtoolsRef,
-  precheckNativeDevtools,
-  type NativeDevtoolsApi,
-  type NativeDevtoolsPrecheckBlock,
-} from "../../blueprints/native-devtools";
-import { resolveDevice } from "../../utils/device-info";
-import { ensureDeps } from "../../utils/check-deps";
+import { FAILURE_CODES, type ToolDefinition } from "@argent/registry";
+import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
+import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 import {
   parseNativeDescribeScreenResult,
   type NativeDescribeScreenResult,
 } from "./native-describe-contract";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("Bundle ID of the app"),
+  ...nativeAppTarget,
   skipClasses: z
     .array(z.string())
     .optional()
@@ -44,7 +37,11 @@ export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read native screen for ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
+  capability: {
+    apple: { simulator: true },
+    appleRemote: { simulator: true },
+    macos: { app: true },
+  },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:
@@ -61,43 +58,24 @@ Use when you are evaluating or debugging the lower-level native data behind the 
 describe tool, or when you need its raw point-space geometry rather than describe's
 normalized contract.
 
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
+<flag:macos-apps>On a Mac app it reads the app's own accessibility tree, plus the views with an
+identifier that the tree does not contain: the same result shape, with frames in points from the
+top-left of the area describe reports (the app window, grown to hold sheets, alerts and menus past
+it), screenFrame that area, and normalized values as fractions of it, the space gesture-tap uses
+there. skipClasses and skipClassPrefixes are refused there. The statuses below are iOS only; on a Mac app that is not running the call fails.
+
+</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
 A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), and the screen query itself can error or time out.`,
   readOnly: true,
   zodSchema,
-  services: (params) => ({
-    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params) {
-    const device = resolveDevice(params.udid);
-    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
-
-    const api = services.nativeDevtools as NativeDevtoolsApi;
-
-    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
-    if (blocked) return blocked;
-
-    const rpcParams: Record<string, unknown> = {};
-    if (params.skipClasses !== undefined) rpcParams.skipClasses = params.skipClasses;
-    if (params.skipClassPrefixes !== undefined)
-      rpcParams.skipClassPrefixes = params.skipClassPrefixes;
-
-    const result = (await api.queryViewHierarchy(
-      params.bundleId,
+  services: nativeAppServices,
+  execute: (services, params) =>
+    queryViewHierarchyFor(
+      services,
+      params,
+      "native-describe-screen",
       "ViewHierarchy.describeScreen",
-      rpcParams
-    )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
-
-    if (result.error) {
-      throw new FailureError(result.error, {
-        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_DESCRIBE_ERROR,
-        failure_stage: "native_devtools_describe_screen",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
-    }
-
-    const parsed = parseNativeDescribeScreenResult(result);
-    return { status: "ok", ...parsed };
-  },
+      FAILURE_CODES.NATIVE_DEVTOOLS_DESCRIBE_ERROR,
+      (result) => ({ status: "ok" as const, ...parseNativeDescribeScreenResult(result) })
+    ),
 };

@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, physical iPhone, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint: an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit, driven by tv-remote (D-pad) and tagged `platform: "vega"`. Physical iPhones (iPads are not supported) appear in `list-devices` as iOS entries with kind `"device"`; they are driven over USB cable only, and the on-device runner's signing is auto-detected from the Mac's keychain (`ARGENT_IOS_TEAM_ID` overrides). Automation there is app-scoped: `launch-app` registers the target app before anything else can act. Read `argent-ios-device-setup` to get one connected and `argent-ios-device-interact` before interacting.
+If argent is installed and configured in this environment, its MCP tools are the preferred form of interaction with the application for iOS simulator, physical iPhone, Android emulator, Chromium (CDP) app, Mac app, and Vega (Amazon Fire TV) device control; otherwise see `<availability_check>` below before attempting any argent workflow. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint: an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit, driven by tv-remote (D-pad) and tagged `platform: "vega"`. Physical iPhones (iPads are not supported) appear in `list-devices` as iOS entries with kind `"device"`; they are driven over USB cable only, and the on-device runner's signing is auto-detected from the Mac's keychain (`ARGENT_IOS_TEAM_ID` overrides). Automation there is app-scoped: `launch-app` registers the target app before anything else can act. Read `argent-ios-device-setup` to get one connected and `argent-ios-device-interact` before interacting. A native Mac app (AppKit, SwiftUI, react-native-macos) appears in `list-devices` as `platform: "macos"`, kind `"app"`, id `macos-app-<bundle id>`, behind the `macos-apps` flag. Read `argent-macos-app-interact` before interacting.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -17,6 +17,7 @@ Use cases:
 - Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
 - Running, debugging, or testing a React Native app (iOS, Android or Vega)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
+- Running, debugging, or testing a native Mac app (AppKit, SwiftUI, react-native-macos)
 - Running, debugging, or testing a Chromium (CDP) app: an Electron app (boot with `boot-device` + `electronAppPath`) or a Chromium browser exposing CDP (auto-discovered on port `9222` / `ARGENT_CHROMIUM_PORTS`); on Chromium scroll with `gesture-scroll` and drag with `gesture-drag`; `gesture-swipe` is touch-only
   </description>
 
@@ -41,7 +42,7 @@ Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch
 
 Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load without `await-ui-element`, or when the last tree did not list your target. Preferred tools are, in order:
 
-- `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
+- `describe` - native app-level components and safely targetable foreground apps (iOS, Android and Mac apps).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
 - `debugger-component-tree` - react-native specific components
 
@@ -60,7 +61,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A cabled physical iPhone (`platform: "ios"`, `kind: "device"`, `state: "connected"`) is listed first too, but it is not a running simulator: never pick it because it is there. Use it only when the user names the phone, a physical or real device, or hardware testing. With nothing else booted, boot a simulator or ask which target the user means.
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A cabled physical iPhone (`platform: "ios"`, `kind: "device"`, `state: "connected"`) is listed first too, but it is not a running simulator: never pick it because it is there. Use it only when the user names the phone, a physical or real device, or hardware testing. With nothing else booted, boot a simulator or ask which target the user means. Mac apps appear as `platform: "macos"`, `state: "Running"`, and only once argent started them: for a Mac app the user names, start it with `boot-device` + `macosAppPath`.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 
@@ -104,7 +105,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target; do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`
+If the user did not specify a platform, call `list-devices` first and pick the booted target; do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`. Mac apps appear as `platform:"macos"`, when present load `argent-macos-app-interact`
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
@@ -119,9 +120,14 @@ Skills: `argent-ios-device-setup` (cable, trust, signing), then `argent-ios-devi
 When: The user names a physical iPhone, a real device, or hardware, or the target `list-devices` iOS entry has kind `"device"`. Never for a simulator, and never because a cabled phone is listed first. On hardware every interaction starts with `launch-app`; `paste`, `settings-permissions`, two-finger gestures, `rotate`, `shake`, screen recording, `debugger-*`, `react-profiler-*`, `native-profiler-*` and `native-*` do not exist there.
 Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
+MAC APPS (APPKIT, SWIFTUI, REACT-NATIVE-MACOS)
+Skill: `argent-macos-app-interact`
+When: The target `list-devices` entry has platform `"macos"`, or the user names a Mac app, a macOS app or a native desktop app. Never for an Electron app, which is `chromium`, and never for an iOS simulator. (Needs the `macos-apps` flag, off by default: ask the user to run `argent enable macos-apps`.)
+Prompt keywords: Mac app, macOS app, desktop app, AppKit, SwiftUI, react-native-macos
+
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Covers phone/tablet iOS and Android simulators and emulators plus Chromium (CDP) apps: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Covers phone/tablet iOS and Android simulators and emulators plus Chromium (CDP) apps: for any TV target use the TV skill below, and for a physical iPhone or a Mac app use the matching entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`

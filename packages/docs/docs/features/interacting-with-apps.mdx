@@ -17,25 +17,25 @@ Argent gives the agent control of the device. The agent taps, swipes, pinches an
 
 ## One tool set for all platforms
 
-The agent uses the same tools on iOS, Android, TV and Chromium. Argent reads the device id and sends each action to the correct platform. Coordinates are fractions of the screen, from `0.0` to `1.0`. Thus the same instruction works on screens of different sizes.
+The agent uses the same tools on iOS, Android, TV, Chromium and Mac apps. Argent reads the device id and sends each action to the correct platform. Coordinates are fractions of the screen, from `0.0` to `1.0`. Thus the same instruction works on screens of different sizes. On a Mac app, coordinates are fractions of the app window with its sheets, alerts and open menus.
 
 ## Discovery before interaction
 
 The agent does not read coordinates from a screenshot. Before a tap, the agent has the elements on the screen with their roles, labels and positions. Each interaction tool returns these elements together with the screenshot. The agent reads the screen separately only before the first action on a new screen. The source depends on the app:
 
-- the accessibility tree on iOS, Android and TV,
+- the accessibility tree on iOS, Android, TV and Mac apps,
 - the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
-After a screen change, the action returns the new screen: a screenshot and the element tree. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
+After a screen change, the action returns the new screen: a screenshot and the element tree. The element tree also contains the hint of `describe`, for example when the tree is not complete. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
 
 ## Launching apps
 
-The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data. On an Apple simulator or a physical iPhone, the agent can also give launch arguments to the app, for example to turn on a feature flag.
+The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data. On an Apple simulator, a physical iPhone or a Mac app, the agent can also give launch arguments to the app, for example to turn on a feature flag.
 
 ## Gestures and text
 
-The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step.
+The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. On a Mac app, the agent drags, and scrolls the content under a point. The pointer of the Mac does not move. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step. On a Mac app, Argent inserts the text without the clipboard of the Mac.
 
 To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent. When Device Hub has opened a simulator, Argent types a secret instead of pasting it. The secret does not go to the Mac clipboard.
 
@@ -78,8 +78,8 @@ If the agent knows several actions before the start, and there is nothing to exa
 ## Limits
 
 - TV targets are focus-driven. The agent does not use touch gestures on them.
-- Swipe is for touch targets. On Chromium, the agent scrolls and drags with the mouse.
-- Shake and paste work on simulators and emulators only.
+- Swipe is for touch targets. On Chromium and on [Mac apps](/docs/features/mac-apps), the agent scrolls and drags with the mouse.
+- Shake works on simulators and emulators only. Paste works on simulators, emulators and Mac apps.
 - On Chromium, each action goes to the active tab.
 
 The [tools reference](/docs/reference/tools) contains all tools, including the ones in the **Interacting** and **Devices and apps** groups.

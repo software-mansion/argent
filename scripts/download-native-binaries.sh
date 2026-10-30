@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Downloads signed native binaries from argent-private-releases: the iOS, tvOS
-# and TCP dylibs, the ax-service daemons, and the Android helper APK consumed by
-# packages/native-devtools-android.
+# and TCP dylibs, the ax-service daemons, the macOS app library and helper, and
+# the Android helper APK consumed by packages/native-devtools-android.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
@@ -99,6 +99,33 @@ if gh release download "${TAG}" \
 else
   echo "  Skipping tvos-hid-daemon: not present on '${TAG}' (pre-Apple-TV-support release)." >&2
 fi
+
+# Native Mac apps: the library, its bootstrap (which shares its basename with
+# the iOS one) and argent-macos-helper ship as one tarball, extracted into
+# dylibs/macos/; the helper then moves to bin/darwin/ with the other host
+# binaries. Tags from before Mac app support carry no such asset, so a missing
+# one is skipped with a warning; any other gh failure stops the script.
+MACOS_DYLIBS_DIR="${DYLIBS_DIR}/macos"
+mkdir -p "${MACOS_DYLIBS_DIR}"
+
+echo "  Downloading macOS artifacts..."
+TMP_MACOS_TARBALL="$(mktemp -t native-devtools-macos.XXXXXX.tar.gz)"
+if MACOS_GH_ERR="$(gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "native-devtools-macos.tar.gz" \
+  --output "${TMP_MACOS_TARBALL}" \
+  --clobber 2>&1)"; then
+  tar -xzf "${TMP_MACOS_TARBALL}" -C "${MACOS_DYLIBS_DIR}"
+  mv -f "${MACOS_DYLIBS_DIR}/argent-macos-helper" "${IOS_BIN_DIR}/argent-macos-helper"
+  chmod +x "${IOS_BIN_DIR}/argent-macos-helper"
+elif [[ "${MACOS_GH_ERR}" == *"no assets match"* ]]; then
+  echo "  Skipping macOS artifacts: not present on '${TAG}' (pre-Mac-app-support release)." >&2
+else
+  echo "Error: could not download the macOS artifacts from '${TAG}': ${MACOS_GH_ERR}" >&2
+  rm -f "${TMP_MACOS_TARBALL}"
+  exit 1
+fi
+rm -f "${TMP_MACOS_TARBALL}"
 
 # The ios-remote path talks to ax-service and the injected dylibs over AF_INET
 # instead of the AF_UNIX sockets the local path uses, so it needs separate
@@ -224,7 +251,7 @@ if command -v vtool &>/dev/null; then
   dylib_verify_failed=0
   assert_dylib_platform() {
     local f="$1" want="$2" arch got
-    [ -f "$f" ] || return 0  # tvOS/TCP dylibs are absent on older tags
+    [ -f "$f" ] || return 0  # tvOS/TCP/macOS files are absent on older tags
     for arch in arm64 x86_64; do
       got="$(vtool -arch "$arch" -show-build "$f" 2>/dev/null | awk '/platform/{print $2}')"
       if [ "$got" != "$want" ]; then
@@ -240,13 +267,18 @@ if command -v vtool &>/dev/null; then
     # dylibs/tcp/ is the same dyld-silent-skip failure.
     assert_dylib_platform "${TCP_DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
   done
+  # The macOS artifacts load into, or run as, host processes: a simulator slice
+  # here is the same silent skip. vtool reads the helper executable the same way.
+  assert_dylib_platform "${MACOS_DYLIBS_DIR}/libNativeDevtoolsMacos.dylib" MACOS
+  assert_dylib_platform "${MACOS_DYLIBS_DIR}/libArgentInjectionBootstrap.dylib" MACOS
+  assert_dylib_platform "${IOS_BIN_DIR}/argent-macos-helper" MACOS
   if [ "${dylib_verify_failed}" -ne 0 ]; then
     echo "Dylib platform verification failed for release '${TAG}'. The release" >&2
     echo "shipped a mis-platformed dylib (see above) — refusing to use it. Fix" >&2
     echo "the build-native-binaries workflow / re-publish the release, then retry." >&2
     exit 1
   fi
-  echo "Dylib platforms OK (iOS/TCP=IOSSIMULATOR, tvOS=TVOSSIMULATOR where present)."
+  echo "Dylib platforms OK (iOS/TCP=IOSSIMULATOR, tvOS=TVOSSIMULATOR, macOS=MACOS where present)."
 fi
 
 if command -v codesign &>/dev/null; then
@@ -254,9 +286,11 @@ if command -v codesign &>/dev/null; then
     "${DYLIBS_DIR}"/*.dylib \
     "${TVOS_DYLIBS_DIR}"/*.dylib \
     "${TCP_DYLIBS_DIR}"/*.dylib \
+    "${MACOS_DYLIBS_DIR}"/*.dylib \
     "${IOS_BIN_DIR}/ax-service" \
     "${IOS_BIN_DIR}/tvos-ax-service" \
     "${IOS_BIN_DIR}/tvos-hid-daemon" \
+    "${IOS_BIN_DIR}/argent-macos-helper" \
     "${TCP_BIN_DIR}/ax-service"; do
     [ -f "$f" ] || continue
     codesign -dvv "$f" 2>&1 || echo "Warning: signature verification failed for $f"
