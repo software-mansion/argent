@@ -10,6 +10,7 @@ import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb"
 import { adbCommandPrefix } from "../utils/adb-server";
 import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
 import { UnsupportedOperationError } from "../utils/capability";
+import { withUiautomatorLock } from "../utils/uiautomator-lock";
 import {
   parseUiAutomatorXml,
   attrIsTrue,
@@ -238,10 +239,12 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       const suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
       const dumpPath = `/data/local/tmp/argent-tv-dump-${suffix}.xml`;
       const raw = (
-        await adbExecOutBinary(
-          serial,
-          `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-          { timeoutMs: 20_000 }
+        await withUiautomatorLock(serial, () =>
+          adbExecOutBinary(
+            serial,
+            `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
+            { timeoutMs: 20_000 }
+          )
         )
       ).toString("utf-8");
       if (!raw.includes("<hierarchy")) {

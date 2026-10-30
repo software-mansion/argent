@@ -19,6 +19,7 @@ import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
+import { describeVega, vegaRequires } from "../describe/platforms/vega";
 import { pollHarmonyTree, harmonyRequires } from "../describe/platforms/harmony";
 
 const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
@@ -33,7 +34,7 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
       ),
     timeoutMs: z
       .number()
@@ -79,18 +80,20 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
   harmony: { device: true },
 };
 
 // Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
-// while still catching real motion (a slide/fade animation).
+// while still catching real motion (a slide/fade animation). Focus and
+// selection count too: a Vega remote press may move only the cursor.
 function treeSignature(root: DescribeNode): string {
   const round = (n: number) => Math.round(n * 100) / 100;
   const parts: string[] = [];
   const walk = (node: DescribeNode): void => {
     const f = node.frame;
     parts.push(
-      `${node.role}|${node.label ?? ""}|${node.value ?? ""}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}`
+      `${node.role}|${node.label ?? ""}|${node.value ?? ""}|${round(f.x)},${round(f.y)},${round(f.width)},${round(f.height)}|${node.focused ? "F" : ""}${node.selected ? "S" : ""}`
     );
     for (const child of node.children) walk(child);
   };
@@ -120,6 +123,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     }
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
+    }
+    if (device.platform === "vega") {
+      return describeVega(device.id);
     }
     if (device.platform === "harmony") {
       return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
@@ -163,6 +169,7 @@ panel settles instantly on its last frame, and taps land nowhere until it is wok
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
+      else if (device.platform === "vega") await ensureDeps(vegaRequires);
       else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
 
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
