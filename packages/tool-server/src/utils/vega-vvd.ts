@@ -8,7 +8,6 @@ import { listRunningVvdConsolePorts, listRunningVvdPids } from "./vega-process";
  * discovery lives in `vega-process.ts`. All device I/O goes through `adb`, never QMP.
  */
 
-/** Typed so callers that otherwise swallow discovery failures (e.g. `describe`) re-throw it. */
 export class MultipleVegaDevicesError extends FailureError {
   constructor(consolePorts: number[]) {
     super(
