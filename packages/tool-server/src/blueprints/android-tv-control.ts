@@ -10,6 +10,7 @@ import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb"
 import { adbCommandPrefix } from "../utils/adb-server";
 import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
 import { UnsupportedOperationError } from "../utils/capability";
+import { queueUiautomatorDump } from "../utils/uiautomator-dump-queue";
 import {
   parseUiAutomatorXml,
   attrIsTrue,
@@ -232,18 +233,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
     const events = new TypedEventEmitter<ServiceEvents>();
 
     async function dumpHierarchy(): Promise<string> {
-      // Per-call dump path so concurrent calls on the same serial don't race on
-      // a shared /sdcard file. `uiautomator` rejects unwritable paths, hence
-      // /data/local/tmp; trailing `; rm -f` so cleanup fires even when it fails.
-      const suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
-      const dumpPath = `/data/local/tmp/argent-tv-dump-${suffix}.xml`;
-      const raw = (
-        await adbExecOutBinary(
-          serial,
-          `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
-          { timeoutMs: 20_000 }
-        )
-      ).toString("utf-8");
+      const raw = await queueUiautomatorDump(serial, runDumpHierarchy);
       if (!raw.includes("<hierarchy")) {
         const output = raw.trim().slice(0, 200);
         // `uiautomator` can't register its UiAutomation connection while another
@@ -263,6 +253,21 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
         );
       }
       return raw;
+    }
+
+    async function runDumpHierarchy(): Promise<string> {
+      // Per-call dump path so concurrent calls on the same serial don't race on
+      // a shared /sdcard file. `uiautomator` rejects unwritable paths, hence
+      // /data/local/tmp; trailing `; rm -f` so cleanup fires even when it fails.
+      const suffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
+      const dumpPath = `/data/local/tmp/argent-tv-dump-${suffix}.xml`;
+      return (
+        await adbExecOutBinary(
+          serial,
+          `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
+          { timeoutMs: 20_000 }
+        )
+      ).toString("utf-8");
     }
 
     // The helper first, `uiautomator dump` on any error. They can't both run:
