@@ -301,6 +301,35 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     __resetProfilingDevicesForTesting();
   });
 
+  it("captures on demand for the whole life of a physical Android device's server", async () => {
+    // The phone's screen-sharing agent would otherwise encode the screen as
+    // video nonstop. An emulator (the test above) gets the mode only while a
+    // profiler records.
+    const fakeProc = makeFakeProc();
+    spawnMock.mockReturnValue(fakeProc);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const { trackProfilingRun, isProfiling, __resetProfilingDevicesForTesting } =
+      await import("../src/utils/profiling-devices");
+
+    const serial = "HT82A0203045";
+    const device: DeviceInfo = { id: serial, platform: "android", kind: "device" };
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+    signalReady(fakeProc, 55560);
+    const instance = await factoryPromise;
+
+    const run = { profilingActive: true };
+    trackProfilingRun(serial, run);
+    run.profilingActive = false;
+    isProfiling(serial);
+    await instance.dispose();
+
+    expect(sendCommandMock.mock.calls).toEqual([
+      [instance.api, { cmd: "capture_on_demand", enabled: true }],
+      [instance.api, { cmd: "capture_on_demand", enabled: false }],
+    ]);
+    __resetProfilingDevicesForTesting();
+  });
+
   it("rejects when the caller forgets to pass DeviceInfo via options", async () => {
     // Defensive: without a device, the factory has no way to decide ios vs
     // android (and that's intentional — the SOT now lives upstream). Surface a
