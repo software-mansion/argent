@@ -435,12 +435,24 @@ describe("macOS describe and flow trees of one read", () => {
   });
 
   it("adds the identified views on screen, and drops what lies outside the window", async () => {
-    const { described, describe, flow } = await bothTrees();
+    const views = probeTree();
+    // A canvas or a chart: a view with no text, which the recorder must not take for text.
+    (views.extraViews as Json[]).push({
+      identifier: "lab.canvas",
+      text: "",
+      visibleNormalizedFrame: rect(0.4, 0.886, 0.1, 0.063),
+    });
+    const { described, describe, flow } = await bothTrees({ trees: [views] });
     for (const tree of [describe, flow]) {
       expect(findAll(tree, { identifier: "rn.text" })).toEqual([
         expect.objectContaining({ role: "AXStaticText", label: "Static text" }),
       ]);
-      expect(findAll(tree, { identifier: "rn.box" })).toHaveLength(1);
+      expect(findAll(tree, { identifier: "rn.box" })).toEqual([
+        expect.objectContaining({ role: "AXStaticText" }),
+      ]);
+      expect(findAll(tree, { identifier: "lab.canvas" })).toEqual([
+        expect.objectContaining({ role: "AXGroup" }),
+      ]);
       for (const id of ["rn.far", "appkit.offscreen"]) {
         expect(findAll(tree, { identifier: id }), id).toEqual([]);
       }

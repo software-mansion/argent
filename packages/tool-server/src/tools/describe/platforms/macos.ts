@@ -513,7 +513,10 @@ function axNode(
   return node;
 }
 
-/** Identified views that accessibility does not expose, read as the static text they mostly are. */
+/**
+ * Identified views that accessibility does not expose, read as the static text
+ * they mostly are, or as a group when they show no text (a canvas, a chart).
+ */
 function extraViewNode(v: Record<string, unknown>): MacosNode | null {
   const identifier = appIdentifier(v.identifier);
   // The part of the view its superviews and scroll views leave visible; the
@@ -522,16 +525,18 @@ function extraViewNode(v: Record<string, unknown>): MacosNode | null {
   if (!identifier || !visible) return null;
   const secure = isSecure(v);
   // A secure field's text is its value, the secret.
+  const label = secure ? undefined : cap(str(v.text));
+  const subtreeText = secure ? undefined : capText(str(v.subtreeText));
   const node = newNode(
     {
-      role: secure ? "AXTextField" : "AXStaticText",
+      role: secure ? "AXTextField" : label || subtreeText ? "AXStaticText" : "AXGroup",
       identifier,
       password: secure,
-      label: secure ? undefined : cap(str(v.text)),
+      label,
     },
     visible
   );
-  if (!secure) node.subtreeText = capText(str(v.subtreeText));
+  node.subtreeText = subtreeText;
   return node;
 }
 
