@@ -7,6 +7,7 @@ import * as p from "@clack/prompts";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
 import {
+  detectProjectPackageManager,
   getLatestVersion,
   isGloballyInstalled,
   isLocallyInstalled,
@@ -244,7 +245,7 @@ describe("installLocally failure handling", () => {
   );
 });
 
-describe("global install under Yarn 2+", () => {
+describe("install under Yarn 2+", () => {
   const savedAgent = process.env.npm_config_user_agent;
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
@@ -328,5 +329,20 @@ describe("global install under Yarn 2+", () => {
       bin: "npm",
       args: ["install", "-g", "@swmansion/argent@99.0.0"],
     });
+  });
+
+  it("adds a local devDependency with the project's yarn", async () => {
+    vi.mocked(detectProjectPackageManager).mockReturnValueOnce("yarn");
+    vi.mocked(isLocallyInstalled).mockReturnValue(false);
+    vi.mocked(runShellCommand).mockImplementationOnce(async () => {
+      vi.mocked(isLocallyInstalled).mockReturnValue(true);
+    });
+
+    await localInstall(makeTel());
+
+    expect(runShellCommand).toHaveBeenCalledWith(
+      { bin: "yarn", args: ["add", "--dev", "@swmansion/argent"] },
+      { cwd: "/fake/project" }
+    );
   });
 });
