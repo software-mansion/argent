@@ -73,7 +73,7 @@ async function runGated(
       {
         name,
         project_root: PROJECT_ROOT,
-        flow_file: flowFile,
+        e2e_test_file: flowFile,
         device: "00000000-0000-0000-0000-0000000000ab",
       }
     )

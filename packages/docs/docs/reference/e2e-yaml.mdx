@@ -19,15 +19,25 @@ An e2e test is a YAML file in `.argent/e2e/<name>.yaml`. The agent records the f
 
 Earlier versions of Argent called this feature Argent flows. The old names still work:
 
-| Old name                   | New name                 |
-| -------------------------- | ------------------------ |
-| `flow-*` tools             | `e2e-*` tools            |
-| `tool: flow-execute` step  | `tool: e2e-execute` step |
-| `argent flow` command      | `argent e2e` command     |
-| `.argent/flows/` directory | `.argent/e2e/` directory |
-| `ARGENT_FLOW_FILES_LOG`    | `ARGENT_E2E_FILES_LOG`   |
+| Old name                   | New name                     |
+| -------------------------- | ---------------------------- |
+| `flow-*` tools             | `e2e-*` tools                |
+| `tool: flow-execute` step  | `tool: e2e-execute` step     |
+| `argent flow` command      | `argent e2e` command         |
+| `.argent/flows/` directory | `.argent/e2e/` directory     |
+| `ARGENT_FLOW_FILES_LOG`    | `ARGENT_E2E_FILES_LOG`       |
+| `flow_path` param          | `e2e_test_path` param        |
+| `flow_file` param          | `e2e_test_file` param        |
+| `flow` result field        | `e2eTest` result field       |
+| `flowFile` result field    | `e2eTestFile` result field   |
+| `flows` array of `--json`  | `e2eTests` array of `--json` |
+| `.argent-flow-source` file | `.argent-e2e-source` file    |
 
 Argent reads an e2e test from `.argent/e2e/` first, then from `.argent/flows/`. When both directories hold an e2e test with the same name, Argent runs the file in `.argent/e2e/` and prints a warning that names the other file. Argent writes a new e2e test to `.argent/e2e/`. Argent does not move the existing files. When you move an e2e test by hand, also move its `__baselines__/<test>/` directory.
+
+The results of the e2e tools and the `--json` document of `argent e2e run` hold each old field beside the new field, with the same value. An older tool-server sends only the old field.
+
+`argent e2e run --output` marks each test directory that it writes with a `.argent-e2e-source` file. The file names the e2e test that wrote the directory. The CLI also reads the `.argent-flow-source` file that an older CLI wrote.
 
 :::
 
@@ -459,9 +469,9 @@ When a single e2e test run fails its steps, Argent prints the first step that fa
 
 `--json` and `--json-stream` print no header, no outcome line, no `Failed e2e tests` section and no summary.
 
-A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and a `flows` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each e2e test. Each entry holds the `path` and the `status`. An entry holds `report` when the e2e test produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report: a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. An entry with the status `skip` holds neither, because Argent made no call for that e2e test. `--json-stream` puts the same two fields on its `error` record.
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and an `e2eTests` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each e2e test. Each entry holds the `path` and the `status`. An entry holds `report` when the e2e test produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report: a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. An entry with the status `skip` holds neither, because Argent made no call for that e2e test. `--json-stream` puts the same two fields on its `error` record.
 
-A single e2e test run with `--json` writes the report of that e2e test. The report holds `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step that ran holds its own `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent writes one JSON object on stderr instead. The object holds `event` and `error`. It also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` writes the same object on stdout.
+A single e2e test run with `--json` writes the report of that e2e test. The report holds `e2eTest`, the name of the e2e test, and `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step holds `e2eTest`, the e2e test or fragment that the step belongs to. Each step that ran holds its own `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent writes one JSON object on stderr instead. The object holds `event` and `error`. It also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` writes the same object on stdout.
 
 With `--json`, Argent writes these objects on stderr, one on each line. Argent writes one object for each of these errors:
 
@@ -496,7 +506,7 @@ A file argument is an argument that a `tool:` step reads as one file, named by a
 | A `tool:` step that takes a directory, an app or an output directory, for example `gather-workspace-data`, `reinstall-app` or `screenshot-diff` with `outputDir` | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
 | A `tool:` step that builds a file path from two or more arguments, for example `e2e-read-prerequisite` with `name`                                               | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
 | `tool: e2e-execute` with `name` and an absolute `project_root` without a `..` segment                                                                            | Runs. The CLI also uploads the e2e test that the step names, with its own files. The same rules apply to that e2e test. When the CLI or the tool-server is an older version, the tool-server rejects the e2e test before the first step |
-| `tool: e2e-execute` with `flow_path`, or with `name` and a `project_root` that is relative or has a `..` segment                                                 | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
+| `tool: e2e-execute` with `e2e_test_path`, or with `name` and a `project_root` that is relative or has a `..` segment                                             | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
 | A `tool:` step that records an e2e test, for example `e2e-add-step`                                                                                              | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
 | A relative `launch: { chromium: <path> }`                                                                                                                        | The launch fails. Use an absolute path on the tool-server                                                                                                                                                                               |
 
@@ -550,11 +560,11 @@ The CLI puts fragments, nested e2e tests, baselines and file arguments in the ca
 
 When the proxy refuses a file with the status 413, the e2e test does not run. The error gives the body size that the proxy must accept on `POST /upload`. When the proxy refuses the call with the status 413, the error gives only the status. The [Tool-server API reference](/docs/reference/tool-server-api) documents the upload.
 
-Set `ARGENT_E2E_FILES_LOG=1` to see what the CLI does with each fragment, nested e2e test, baseline and file argument. The CLI then prints one `[flow-files]` line on stderr for each file before the call, and one line for each baseline that it writes. With `--json`, each line is a warning object: `{ "event": "warning", "warning": <text> }`.
+Set `ARGENT_E2E_FILES_LOG=1` to see what the CLI does with each fragment, nested e2e test, baseline and file argument. The CLI then prints one `[e2e-files]` line on stderr for each file before the call, and one line for each baseline that it writes. With `--json`, each line is a warning object: `{ "event": "warning", "warning": <text> }`.
 
 The tool-server runs the uploaded copy even when it has a file at the same path. This is also true over a link to `127.0.0.1`. Only the copy from the client is certain to be the latest. Without a link, the tool-server reads the file in place, and all step kinds run.
 
-A rejected e2e test gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected e2e test on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next e2e test and keeps the rejected e2e test in its `flows` array.
+A rejected e2e test gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected e2e test on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next e2e test and keeps the rejected e2e test in its `e2eTests` array.
 
 When the upload of a fragment to `POST /upload` fails, the e2e test does not run. The CLI prints the reason. The exit code is 1. The JSON object holds `"error_code": "FILE_INPUT_UPLOAD_FAILED"` and `"error_kind": "validation"`. A directory run continues with the next e2e test.
 
@@ -562,7 +572,7 @@ When the CLI cannot connect to the tool-server that a link names, the e2e test d
 
 ## Remote runs
 
-The `e2e-execute` tool takes one e2e test source: `name` for a saved e2e test, or `flow_path` for any file. Without a link, the tool-server reads the file in place, and all step kinds run.
+The `e2e-execute` tool takes one e2e test source: `name` for a saved e2e test, or `e2e_test_path` for any file. Without a link, the tool-server reads the file in place, and all step kinds run.
 
 Over a link, both sources send these files with the call, and the tool-server runs those copies:
 

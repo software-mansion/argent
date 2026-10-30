@@ -293,7 +293,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         canonicalToolId(params.name) === "e2e-execute" &&
         result &&
         typeof result === "object" &&
-        "flow" in result &&
+        ("e2eTest" in result || "flow" in result) &&
         "steps" in result
       ) {
         content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);

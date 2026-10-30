@@ -4,7 +4,7 @@
  * `node dist/sdk-tool-args.js <output .ts file>`.
  */
 import { writeFileSync } from "node:fs";
-import { zodObjectToJsonSchema } from "@argent/registry";
+import { toolParamAliases, zodObjectToJsonSchema } from "@argent/registry";
 import { createRegistry, listToolDefinitions } from "./utils/setup-registry";
 import { renderFlagGated } from "./utils/flag-gated-text";
 
@@ -60,13 +60,33 @@ export function toType(schema: Schema, indent = ""): string {
   throw new Error(`No TypeScript mapping for schema ${JSON.stringify(schema)}`);
 }
 
+/** A former param name stays accepted, so it keeps the type of the param it names. */
+function withFormerParams(id: string, schema: Schema): Schema {
+  const properties: Record<string, Schema> | undefined = schema.properties;
+  const former = Object.entries(toolParamAliases(id)).filter(
+    ([, current]) => properties?.[current]
+  );
+  if (!properties || former.length === 0) return schema;
+  const withFormer = { ...properties };
+  for (const [name, current] of former) {
+    withFormer[name] = {
+      ...properties[current],
+      description: `@deprecated Renamed to \`${current}\`.`,
+    };
+  }
+  return { ...schema, properties: withFormer };
+}
+
 export function renderSdkToolArgs(): string {
   const definitions = [...listToolDefinitions(createRegistry())];
   const entries = definitions
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([id, { inputSchema, zodSchema }]) => {
       // Rendered as if every flag were on: the SDK is typed once, at build time.
-      const schema = renderFlagGated(inputSchema ?? zodObjectToJsonSchema(zodSchema!), () => true);
+      const schema = withFormerParams(
+        id,
+        renderFlagGated(inputSchema ?? zodObjectToJsonSchema(zodSchema!), () => true)
+      );
       return `  ${key(id)}: ${toType(schema, "  ")};`;
     });
   // A former id stays callable, so it keeps its type: the args of the tool it names.

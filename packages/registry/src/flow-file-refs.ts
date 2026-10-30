@@ -10,7 +10,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { FLOW_FILE_NAME_PATTERN, FLOW_NAME_PATTERN } from "./file-inputs";
 import { e2eFileCandidates } from "./e2e-dirs";
-import { canonicalToolId } from "./tool-ids";
+import { canonicalToolArgs, canonicalToolId } from "./tool-ids";
 
 /**
  * The input must arrive with any `..` segments intact (no path.resolve/join
@@ -206,7 +206,7 @@ export type OnDiskSpelling =
  * comparison lie.
  *
  * What an `absent` verdict means is the caller's to decide, and they differ:
- * `flow_path` arrives with the boundary's stat already vouching for the file,
+ * `e2e_test_path` arrives with the boundary's stat already vouching for the file,
  * so a listing that lacks it is itself the phantom-spelling bug, while a `name`
  * may simply not name a saved flow — an ordinary missing-flow error the later
  * read reports far better than a casing complaint could.
@@ -254,7 +254,7 @@ export interface ResolvedFlowRelativeFile {
  *
  * There is deliberately NO path fence here on the tool-server. A target is
  * reachable exactly when the tool-server user can read it, which is the reach
- * the front door already grants: an operator can point `flow_path` at any YAML
+ * the front door already grants: an operator can point `e2e_test_path` at any YAML
  * on the host. The one route that carries untrusted content, an uploaded flow,
  * never resolves a target of its own on the host: the runner either refuses
  * the step kind before any step runs, or looks the reference up in the files
@@ -282,21 +282,28 @@ export async function resolveFlowRelativeFile(
 /**
  * The flow a nested `tool: flow-execute` step names, in a form both sides of a
  * link accept, or undefined. `name`: a flow name with an absolute
- * `project_root` that has no `..` segment, and no `flow_path`; `paths` are the
- * places the saved test can be, in lookup order ({@link e2eFileCandidates}),
- * and `path` is the first of them. `flow_path`: an
+ * `project_root` that has no `..` segment, and no `e2e_test_path`; `paths` are
+ * the places the saved test can be, in lookup order ({@link e2eFileCandidates}),
+ * and `path` is the first of them. `e2e_test_path`: an
  * absolute path with no `..` segment to a `<flow-name>.yaml` file, and no
  * `name`. The argent client sends the flow of a `name` step with the call,
  * and the tool-server runs a nested step over a link only in that form, so the
- * two decide with this one function.
+ * two decide with this one function: on the args as written in YAML (the
+ * client) and as parsed (the runner), which may differ in param names.
  */
 export type NestedFlowTarget =
   | { kind: "name"; projectRoot: string; name: string; path: string; paths: string[] }
-  | { kind: "flow_path"; path: string };
+  | { kind: "e2e_test_path"; path: string };
 
 export function nestedFlowTarget(args: unknown): NestedFlowTarget | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
-  const { name, project_root: projectRoot, flow_path: flowPath } = args as Record<string, unknown>;
+  let canonical: Record<string, unknown>;
+  try {
+    canonical = canonicalToolArgs("e2e-execute", args as Record<string, unknown>);
+  } catch {
+    return undefined;
+  }
+  const { name, project_root: projectRoot, e2e_test_path: flowPath } = canonical;
   if (flowPath === undefined) {
     if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return undefined;
     if (!isResolvedAbsolute(projectRoot)) return undefined;
@@ -305,7 +312,7 @@ export function nestedFlowTarget(args: unknown): NestedFlowTarget | undefined {
   }
   if (name !== undefined || !isResolvedAbsolute(flowPath)) return undefined;
   if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flowPath))) return undefined;
-  return { kind: "flow_path", path: flowPath };
+  return { kind: "e2e_test_path", path: flowPath };
 }
 
 function isResolvedAbsolute(value: unknown): value is string {

@@ -373,6 +373,23 @@ describe("flowRunToMcpContent", () => {
     });
   });
 
+  it("names the e2e test from e2eTest, falling back to the flow an older tool-server sends", async () => {
+    const texts = async (input: FlowExecuteResult) =>
+      (await flowRunToMcpContent(input)).map((b) => (b.type === "text" ? b.text : ""));
+    expect(await texts({ e2eTest: "new", flow: "old", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ e2eTest: "new", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ flow: "old", steps: [] })).toEqual([
+      'Running e2e test "old" (0 steps)',
+      'E2E test "old" complete.',
+    ]);
+  });
+
   it("produces header and footer text blocks", async () => {
     const input: FlowExecuteResult = { flow: "test", steps: [] };
     const blocks = await flowRunToMcpContent(input);

@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import {
+  canonicalToolArgs,
   E2E_DIRS,
   FAILURE_CODES,
   FailureError,
@@ -257,7 +258,7 @@ export function flowNameCasingError(
 ): FailureError {
   // Hand back a name only when one can reach the file: an on-disk .YAML is
   // addressable by no name at all (the name route always builds
-  // "<name>.yaml"), it is omitted from `argent flow list`, and flow_path
+  // "<name>.yaml"), it is omitted from `argent flow list`, and e2e_test_path
   // refuses it too.
   const recovery = spelling.addressable
     ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
@@ -3726,7 +3727,13 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("tool" in raw) {
     const r = raw as { tool: string; args?: Record<string, unknown>; delayMs?: number };
-    const step: FlowStep = { kind: "tool", name: r.tool, args: r.args ?? {} };
+    let args = r.args ?? {};
+    try {
+      args = canonicalToolArgs(r.tool, args);
+    } catch (err) {
+      badEntry(raw, err instanceof Error ? err.message : String(err));
+    }
+    const step: FlowStep = { kind: "tool", name: r.tool, args };
     if (r.delayMs !== undefined) step.delayMs = r.delayMs;
     return step;
   }

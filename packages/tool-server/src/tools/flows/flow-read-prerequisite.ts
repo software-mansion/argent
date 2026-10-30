@@ -15,20 +15,20 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        'Name of a saved e2e test to inspect from `.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore"). Omit when flow_path is set.'
+        'Name of a saved e2e test to inspect from `.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore"). Omit when e2e_test_path is set.'
       ),
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root: the cwd it is working in. With name, the saved e2e test is read from `.argent/e2e/<name>.yaml`, else `.argent/flows/<name>.yaml`, under this root; with flow_path, the prerequisite is read from that YAML instead, so pass the agent's cwd."
+        "Absolute path to the calling agent's project root: the cwd it is working in. With name, the saved e2e test is read from `.argent/e2e/<name>.yaml`, else `.argent/flows/<name>.yaml`, under this root; with e2e_test_path, the prerequisite is read from that YAML instead, so pass the agent's cwd."
       ),
-    flow_file: z
+    e2e_test_file: z
       .string()
       .optional()
       .describe(
         "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
       ),
-    flow_path: z
+    e2e_test_path: z
       .string()
       .optional()
       .describe(
@@ -36,13 +36,13 @@ const zodSchema = z
       ),
   })
   .superRefine((params, ctx) => {
-    if ((params.name === undefined) === (params.flow_path === undefined)) {
+    if ((params.name === undefined) === (params.e2e_test_path === undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
           params.name !== undefined
-            ? "Pass exactly one e2e test source: name or flow_path."
-            : "Pass exactly one e2e test source: name or flow_path. e2e-read-prerequisite needs " +
+            ? "Pass exactly one e2e test source: name or e2e_test_path."
+            : "Pass exactly one e2e test source: name or e2e_test_path. e2e-read-prerequisite needs " +
               "the e2e test's name in `name` — it resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.",
         // The ROOT, matching flow-execute: the rule spans both source fields,
         // so it must not be anchored on one of them.
@@ -52,29 +52,35 @@ const zodSchema = z
   });
 
 // Must stay field-for-field identical to flow-execute's specs, or the same
-// params resolve to different files here and there — e.g. dropping flow_path
+// params resolve to different files here and there — e.g. dropping e2e_test_path
 // would answer for the saved flow of the same stem. flow-run.ts explains the
 // unwrapWhenSet/skipWhenSet choices.
 const fileInputs: FileInputSpec[] = [
   {
-    target: "flow_path",
-    path: "${flow_path}",
+    target: "e2e_test_path",
+    path: "${e2e_test_path}",
     kind: "file",
     optional: true,
     unwrapWhenSet: "name",
   },
   {
-    target: "flow_file",
+    target: "e2e_test_file",
     path: "${project_root}/.argent/flows/${name}.yaml",
     paths: E2E_FILE_TEMPLATES,
     kind: "file",
-    skipWhenSet: "flow_path",
+    skipWhenSet: "e2e_test_path",
   },
 ];
 
 export const flowReadPrerequisiteTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { flow: string; executionPrerequisite: string; warning?: string }
+  {
+    e2eTest: string;
+    /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
+    flow: string;
+    executionPrerequisite: string;
+    warning?: string;
+  }
 > = {
   id: "e2e-read-prerequisite",
   aliases: ["flow-read-prerequisite"],
@@ -84,8 +90,8 @@ export const flowReadPrerequisiteTool: ToolDefinition<
     failedMsg: ({ failureSignal }) =>
       `Failed to read e2e test prerequisite: ${failureSignal.error_code}`,
   },
-  description: `Read the execution prerequisite of an e2e test without running it: a saved e2e test from the .argent/e2e/ directory (or the older .argent/flows/), or an explicit boundary-managed flow_path.
-Returns { flow, executionPrerequisite, warning? }: the logical name, plus the precondition its author recorded
+  description: `Read the execution prerequisite of an e2e test without running it: a saved e2e test from the .argent/e2e/ directory (or the older .argent/flows/), or an explicit boundary-managed e2e_test_path.
+Returns { e2eTest, executionPrerequisite, warning? }: the logical name, plus the precondition its author recorded
 verbatim. Empty when none was declared, which is always so for a self-contained scenario: one opening
 on a launch may declare no prerequisite, because it builds its own start state.
 Use when deciding whether the device already sits where a fragment expects it (correct app foregrounded,
@@ -93,7 +99,7 @@ correct account, correct screen) before committing to a run, or when relaying th
 Touches no device: nothing is launched, tapped, dispatched or torn down, and no simulator or emulator
 needs booting, so calling this costs nothing but a file read.
 Fails if the e2e test file does not exist.
-Address the e2e test exactly as you will address it in e2e-execute: name or flow_path, one and only one; supplying both or neither is rejected. The name goes in \`name\`, which resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.`,
+Address the e2e test exactly as you will address it in e2e-execute: name or e2e_test_path, one and only one; supplying both or neither is rejected. The name goes in \`name\`, which resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.`,
   readOnly: true,
   zodSchema,
   fileInputs,
@@ -104,12 +110,13 @@ Address the e2e test exactly as you will address it in e2e-execute: name or flow
     // these params.
     const { filePath, flowName, shadowed } = await resolveFlowSource(
       params,
-      ctx?.fileInputs?.flow_file,
-      ctx?.fileInputs?.flow_path
+      ctx?.fileInputs?.e2e_test_file,
+      ctx?.fileInputs?.e2e_test_path
     );
     const flow = parseFlow(await fs.readFile(filePath, "utf8"));
 
     return {
+      e2eTest: flowName,
       flow: flowName,
       executionPrerequisite: flow.executionPrerequisite,
       ...(shadowed ? { warning: e2eShadowWarning(filePath, shadowed) } : {}),

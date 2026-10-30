@@ -69,7 +69,7 @@ interface ResolveFileInputsResult {
   /** Per-target outcomes, forwarded via `InvokeToolOptions.fileInputs`. */
   fileInputs: Record<string, ResolvedFileInput> | undefined;
   /**
-   * Targets the client built out of other params (`flow_file`) rather than the
+   * Targets the client built out of other params (`e2e_test_file`) rather than the
    * caller naming them, so an error message can leave them out of the keys it
    * reads back.
    */

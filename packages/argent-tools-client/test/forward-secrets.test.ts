@@ -61,7 +61,7 @@ beforeEach(async () => {
             description: "",
             inputSchema: {},
             fileInputs: [
-              { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+              { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
             ],
           },
         ],
@@ -385,7 +385,7 @@ describe("forward-secrets", () => {
       'steps:\n  - type: { into: { id: pw }, text: "{{secret:APP_PASSWORD}}" }\n  - run: big\n'
     );
 
-    await client().callTool("run-flow", { flow_path: flowPath, project_root: project });
+    await client().callTool("run-flow", { e2e_test_path: flowPath, project_root: project });
 
     expect(lastSecrets()).toEqual({ APP_PASSWORD: "hunter2", PIN: "4321" });
   });
