@@ -133,7 +133,14 @@ describe("argent telemetry — scopes", () => {
 
   it("rejects an unknown subcommand with exit 2", async () => {
     await expect(telemetry(["off"])).rejects.toThrow("process.exit(2)");
-    expect(errSpy.mock.calls.join(" ")).toContain("Unknown subcommand: telemetry off");
+    expect(errSpy.mock.calls.join(" ")).toContain("Error: Unknown subcommand: telemetry off");
+    expect(logSpy.mock.calls.join(" ")).toContain("Usage:");
+  });
+
+  it("names the misspelled subcommand rather than its argument", async () => {
+    await expect(telemetry(["disabel", "project"])).rejects.toThrow("process.exit(2)");
+    expect(errSpy.mock.calls.join(" ")).toContain("Unknown subcommand: telemetry disabel");
+    expect(projectConfig()).toBeNull();
   });
 
   // `argent <command> --help` is what the top-level help tells the user to run,

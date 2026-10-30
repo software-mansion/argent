@@ -516,14 +516,8 @@ function parseSubcommandArgs(
   }
 }
 
-export async function server(
-  argv: string[],
-  options?: { paths?: ToolsServerPaths }
-): Promise<void> {
-  const [sub, ...rest] = argv;
-
-  if (!sub || sub === "--help" || sub === "-h") {
-    console.log(`Usage:
+function printServerHelp(): void {
+  console.log(`Usage:
   argent server start [flags]     Spawn a long-lived tool-server
   argent server status [--json]   Show tool-server pid, port, and health
   argent server stop              Terminate the running tool-server
@@ -531,6 +525,16 @@ export async function server(
 
 Run \`argent server <subcommand> --help\` for its flags.
 `);
+}
+
+export async function server(
+  argv: string[],
+  options?: { paths?: ToolsServerPaths }
+): Promise<void> {
+  const [sub, ...rest] = argv;
+
+  if (!sub || sub === "--help" || sub === "-h") {
+    printServerHelp();
     return;
   }
 
@@ -552,7 +556,8 @@ Run \`argent server <subcommand> --help\` for its flags.
       return;
     }
     default:
-      console.error(`Unknown subcommand: server ${sub}`);
+      console.error(`Error: Unknown subcommand: server ${sub}\n`);
+      printServerHelp();
       process.exit(2);
   }
 }

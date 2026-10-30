@@ -53,6 +53,7 @@ describe("argent tools --help", () => {
     [["describe", "--help"]],
     [["--jsno", "--help"]],
     [["--help", "describe", "gesture-tap"]],
+    [["describe", "--help", "gesture-tap"]],
   ])("prints usage for %j without contacting the tool-server", async (argv) => {
     await invoke(argv);
 
@@ -100,6 +101,8 @@ describe("argent tools --help", () => {
   it.each([
     [["describe", "gesture-tap", "--json"]],
     [["describe", "gesture-tap", "--json", "--help"]],
+    [["--json", "describe", "gesture-tap", "--help"]],
+    [["describe", "--json", "gesture-tap", "--help"]],
   ])("prints a described tool as JSON for %j", async (argv) => {
     await invoke(argv);
     expect(JSON.parse(output())).toMatchObject({ name: "gesture-tap" });
@@ -117,6 +120,7 @@ describe("argent tools --help", () => {
     [["describe", "gesture-tap", "-h"]],
     [["describe", "gesture-tap", "extra", "--help"]],
     [["describe", "gesture-tap", "--bogus", "--help"]],
+    [["describe", "--", "gesture-tap", "--help"]],
   ])("prints the described tool's flags for %j", async (argv) => {
     await invoke(argv);
 

@@ -577,7 +577,8 @@ Options:
                            later prune can remove this descriptor if that
                            process dies. Overrides any pid in the document.
   --dry-run                prune: report what would be removed, remove nothing.
-  --schema-version <n>     Contract version to validate against (default ${PROVIDER_SCHEMA_VERSION}).
+  --schema-version <n>     check, publish: the contract version to validate
+                           against (default ${PROVIDER_SCHEMA_VERSION}).
   --json                   Emit a machine-readable report on stdout.
   --help, -h               Show this message.
 

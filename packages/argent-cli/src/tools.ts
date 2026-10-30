@@ -70,10 +70,12 @@ Listing tools contacts the argent tool-server, starting one if none is running.
 `);
   }
 
-  if (argv.includes("--help") || argv.includes("-h")) {
-    // `tools describe <name> --help` asks for that tool's flags.
-    const [first, second] = argv;
-    if (first === "describe" && second !== undefined && !second.startsWith("-")) {
+  const isHelpFlag = (a: string) => a === "--help" || a === "-h";
+  if (argv.some(isHelpFlag)) {
+    // `tools describe <name> --help` asks for that tool's flags; a help flag
+    // before the name asks for this usage.
+    const [first, second] = argv.filter((a) => !a.startsWith("-") || isHelpFlag(a));
+    if (first === "describe" && second !== undefined && !isHelpFlag(second)) {
       await describeTool(second, argv.includes("--json"));
       return;
     }

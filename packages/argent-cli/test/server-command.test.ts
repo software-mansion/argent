@@ -120,7 +120,8 @@ describe("argent server status / stop / logs", () => {
   it("rejects an unknown subcommand with exit 2", async () => {
     await expect(server(["restart"])).rejects.toThrow("process.exit:2");
 
-    expect(errors()).toContain("Unknown subcommand: server restart");
+    expect(errors()).toContain("Error: Unknown subcommand: server restart");
+    expect(output()).toContain("Run `argent server <subcommand> --help` for its flags.");
     expectNoAction();
   });
 

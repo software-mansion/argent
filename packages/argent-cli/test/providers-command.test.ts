@@ -392,6 +392,15 @@ describe("argent providers dispatch", () => {
     expect(fs.existsSync(providersDir)).toBe(false);
   });
 
+  it.each([["check"], ["publish", "--stdin"]])(
+    "accepts --schema-version on %j",
+    async (...argv) => {
+      withStdin(JSON.stringify(descriptor()));
+
+      expect(await runProviders(...argv, "--schema-version", "1")).toBe(0);
+    }
+  );
+
   it("exits 2 on a stray operand for a subcommand that takes none", async () => {
     expect(await runProviders("list", "acme")).toBe(2);
   });
@@ -411,6 +420,8 @@ describe("argent providers dispatch", () => {
     [["check", "--stdin"], "--stdin"],
     [["prune", "--file=d.json"], "--file"],
     [["withdraw", "acme", "--schema-version", "1"], "--schema-version"],
+    [["withdraw", "acme", "--file", "d.json"], "--file"],
+    [["list", "--file", "d.json"], "--file"],
   ])("exits 2 on %j, naming the flag it does not read", async (argv, flag) => {
     withStdin(JSON.stringify(descriptor()));
 
