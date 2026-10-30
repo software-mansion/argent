@@ -8,9 +8,12 @@ export const SIMCTL_SPAWN_TIMEOUT_MS = 10_000;
  *
  * `execFile`'s `timeout` sends its `killSignal` (default `SIGTERM`) once and
  * never escalates; a `simctl` blocked on a wedged CoreSimulatorService ignores
- * `SIGTERM`, so the promise never settles and the timeout never fires.
+ * `SIGTERM`, so the promise never settles and the timeout never fires. Mirrors
+ * `ADB_KILL_SIGNAL` in `adb.ts`.
  *
- * Killing the direct child suffices: `simctl` is a single-process XPC client
- * whose real work runs under the simulator's `launchd_sim`, which reaps the
- * orphan. Mirrors `ADB_KILL_SIGNAL` in `adb.ts`. */
+ * Killing the direct child suffices while `simctl` is a single-process XPC
+ * client whose real work runs under the simulator's `launchd_sim`. Since Xcode
+ * 27.1 it is a bash wrapper that can hang in a child `xcodebuild
+ * -runFirstLaunch`, which a direct-child kill orphans; `execSimctl` in
+ * `simctl-exec.ts` kills the whole process group instead. */
 export const SIMCTL_KILL_SIGNAL = "SIGKILL" as const;

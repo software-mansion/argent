@@ -1,6 +1,4 @@
 import * as fs from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { Registry } from "@argent/registry";
 import {
   NATIVE_DEVTOOLS_NAMESPACE,
@@ -14,18 +12,19 @@ import {
   simctlPrefix,
   type DeviceSetPath,
 } from "./ios-device-sets";
-
-const execFileAsync = promisify(execFile);
+import { execSimctl, SimctlTimeoutError } from "./simctl-exec";
 
 const POLL_INTERVAL_MS = 10_000;
+/** Ceiling, in ticks, on the polls skipped while `simctl` keeps timing out (5 min). */
+const MAX_BACKOFF_TICKS = 29;
 
-async function getBootedUdidsInSet(deviceSet: DeviceSetPath): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", [
-    ...simctlPrefix(deviceSet),
-    "list",
-    "devices",
-    "--json",
-  ]);
+async function getBootedUdidsInSet(
+  deviceSet: DeviceSetPath,
+  signal: AbortSignal
+): Promise<Set<string>> {
+  const stdout = await execSimctl([...simctlPrefix(deviceSet), "list", "devices", "--json"], {
+    signal,
+  });
   const data = JSON.parse(stdout) as {
     devices: Record<string, Array<{ udid: string; state: string }>>;
   };
@@ -47,15 +46,21 @@ async function getBootedUdidsInSet(deviceSet: DeviceSetPath): Promise<Set<string
  * Booted simulators across the default set and every configured additional set.
  * Throws if any set fails, so the caller skips the tick instead of reading a
  * transient error as "everything shut down". A configured set whose directory is
- * missing is not queried — querying would make simctl materialize it.
+ * missing is not queried — querying would make simctl materialize it. Every
+ * set's call settles before this does, so a tick never leaves one running, and
+ * a timeout wins over other failures so the caller backs off.
  */
-async function getBootedUdids(): Promise<Set<string>> {
+async function getBootedUdids(signal: AbortSignal): Promise<Set<string>> {
   const sets: DeviceSetPath[] = [
     null,
     ...configuredAdditionalDeviceSets().filter((p) => fs.existsSync(p)),
   ];
-  const perSet = await Promise.all(sets.map(getBootedUdidsInSet));
-  return new Set(perSet.flatMap((s) => [...s]));
+  const perSet = await Promise.allSettled(sets.map((set) => getBootedUdidsInSet(set, signal)));
+  const failures = perSet.flatMap((r) => (r.status === "rejected" ? [r.reason] : []));
+  if (failures.length) {
+    throw failures.find((err) => err instanceof SimctlTimeoutError) ?? failures[0];
+  }
+  return new Set(perSet.flatMap((r) => (r.status === "fulfilled" ? [...r.value] : [])));
 }
 
 async function initUdid(
@@ -84,6 +89,16 @@ export function startSimulatorWatcher(registry: Registry): {
    * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
    */
   const reportedSkips = new Set<string>();
+  /** Kills any `simctl` still running when the watcher stops. */
+  const stopController = new AbortController();
+  /**
+   * Polls in a row whose `simctl` timed out. Each one doubles the ticks skipped
+   * before the next attempt, since every attempt restarts the hung `xcodebuild
+   * -runFirstLaunch`; the first also logs the hint, once per outage. Counted in
+   * ticks rather than wall-clock time, so a clock change cannot stretch it.
+   */
+  let consecutiveTimeouts = 0;
+  let ticksToSkip = 0;
 
   /**
    * Split the booted set into the simulators the watcher may drive and the ones
@@ -186,11 +201,24 @@ export function startSimulatorWatcher(registry: Registry): {
     let booted: Set<string>;
     let claimed: Set<string>;
     try {
-      ({ ours: booted, claimed } = withoutForeignSimulators(await getBootedUdids()));
-    } catch {
+      ({ ours: booted, claimed } = withoutForeignSimulators(
+        await getBootedUdids(stopController.signal)
+      ));
+    } catch (err) {
+      if (err instanceof SimctlTimeoutError) {
+        consecutiveTimeouts += 1;
+        ticksToSkip = Math.min(2 ** consecutiveTimeouts - 1, MAX_BACKOFF_TICKS);
+        if (consecutiveTimeouts === 1) {
+          process.stderr.write(
+            `[simulator-watcher] ${err.message}; retrying with backoff until it does. ` +
+              `If Xcode was just updated, open Xcode once or run \`sudo xcodebuild -runFirstLaunch\`.\n`
+          );
+        }
+      }
       // xcrun unavailable or transient error — skip this tick
       return;
     }
+    consecutiveTimeouts = 0;
 
     /**
      * Before the init pass, so a granted claim re-resolves into attach mode on
@@ -228,9 +256,29 @@ export function startSimulatorWatcher(registry: Registry): {
 
   // Awaited: the server does not bind until ensureEnv has been attempted for
   // every booted simulator, so launch-app cannot race it.
+  // The simctl call is bounded, so this resolves even when simctl hangs.
   const ready = poll(true);
 
-  const interval = setInterval(() => poll(false).catch(() => {}), POLL_INTERVAL_MS);
+  // A tick that lands while the previous poll is still running, or inside the
+  // backoff after a timeout, is skipped, so a slow simctl never has more than one
+  // call in flight. Every await in a poll is bounded, so neither holds forever.
+  let inFlight: Promise<void> | null = ready.catch(() => {}).finally(() => (inFlight = null));
+  const interval = setInterval(() => {
+    if (inFlight) return;
+    if (ticksToSkip > 0) {
+      ticksToSkip -= 1;
+      return;
+    }
+    inFlight = poll(false)
+      .catch(() => {})
+      .finally(() => (inFlight = null));
+  }, POLL_INTERVAL_MS);
 
-  return { stop: () => clearInterval(interval), ready };
+  return {
+    stop: () => {
+      clearInterval(interval);
+      stopController.abort();
+    },
+    ready,
+  };
 }
