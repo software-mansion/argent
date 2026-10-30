@@ -13,13 +13,7 @@ export type TouchType = "Down" | "Up" | "Move";
 export type KeyDirection = "Down" | "Up";
 
 export type ButtonType =
-  | "Home"
-  | "Back"
-  | "Power"
-  | "VolumeUp"
-  | "VolumeDown"
-  | "AppSwitch"
-  | "ActionButton";
+  "Home" | "Back" | "Power" | "VolumeUp" | "VolumeDown" | "AppSwitch" | "ActionButton";
 
 export type Rotation = "Portrait" | "PortraitUpsideDown" | "LandscapeLeft" | "LandscapeRight";
 
@@ -106,7 +100,7 @@ export interface ScreencastSession {
   stop(): Promise<void>;
 }
 
-export interface FpsReport {
+interface FpsReport {
   /** Frames received in the last window. */
   fps: number;
   windowMs: number;

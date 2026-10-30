@@ -173,6 +173,23 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     example: "~/Library/Android/sdk",
   },
   {
+    key: "android.adbServerPort",
+    description:
+      "Port of the adb server argent uses, for hosts that run Android devices on a server other " +
+      "than the default 5037 (a device pool with its own server, for example). Applies when the " +
+      "tool-server starts, to the tool-server and every adb and simulator-server it runs. " +
+      "`ANDROID_ADB_SERVER_PORT` or `ADB_SERVER_SOCKET` in the tool-server's environment still " +
+      "wins, as it does for adb itself.",
+    scopes: ["project", "global"],
+    parse: (raw) => {
+      const value = asPositiveInteger(raw);
+      return value !== undefined && value < 65536 ? value : undefined;
+    },
+    expected: "a TCP port, 1-65535",
+    merge: "prioritize-local",
+    example: "5038",
+  },
+  {
     key: "recordings.directory",
     description:
       "Directory where finished screen recordings (mp4) are saved on the client host. " +
@@ -191,7 +208,7 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "scripts.maxTimeoutMs",
     description:
-      "Upper bound, in milliseconds, on the time limit a flow `script` step may ask for " +
+      "Upper bound, in milliseconds, on the time limit an e2e test `script` step may ask for " +
       "(default 300000 — five minutes). Bounds how long one script can occupy the host. " +
       `Values below ${MIN_SCRIPT_TIMEOUT_MS} ms are refused: the step starts a Node process ` +
       "before the script runs, so a smaller ceiling ends a script that did nothing wrong.",
@@ -208,7 +225,7 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
   {
     key: "scripts.heapLimitMb",
     description:
-      "Old-space heap limit, in MiB, given to each flow `script` process (default 512). " +
+      "Old-space heap limit, in MiB, given to each e2e test `script` process (default 512). " +
       `Values below ${MIN_SCRIPT_HEAP_LIMIT_MB} MiB are refused: that is already below what ` +
       "importing a real npm dependency needs, and under about 5 MiB the process dies inside " +
       "V8's own startup before any script runs.",

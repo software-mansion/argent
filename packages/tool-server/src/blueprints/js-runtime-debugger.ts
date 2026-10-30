@@ -272,8 +272,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      * exception breakpoints a user set, from a tool they did not run. The client
      * that owns the session owns its global state.
      *
-     * The rest are unconditional. Enables are idempotent, and a binding only
-     * adds one. Other clients can ignore it by name.
+     * The remaining setup only affects Argent's client. Enables are idempotent,
+     * and a binding only adds one. Other clients can ignore it by name.
      */
     if (!proxied) {
       await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
@@ -281,11 +281,21 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
     await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
     await cdp.send("Runtime.enable");
-    await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
+    // Metro can inline a full source map on Debugger.enable. Only skip it for
+    // targets advertising the modern inspector: legacy Hermes (RN <= 0.72,
+    // including Vega) requires it for evaluation. A reactNative block alone
+    // does not prove the runtime uses the modern inspector.
+    const enableDebugger =
+      !!proxied || selected.target.reactNative?.capabilities?.prefersFuseboxFrontend !== true;
+    if (enableDebugger) {
+      await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
+    }
 
     if (!proxied) {
-      await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
-      await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+      if (enableDebugger) {
+        await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
+        await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+      }
       await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
     }
 

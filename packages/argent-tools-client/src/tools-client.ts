@@ -1,6 +1,23 @@
+import { readFile } from "node:fs/promises";
+import { maxHeaderSize } from "node:http";
 import * as path from "node:path";
+import { parse as parseYaml } from "yaml";
 
-import { LINKED_CALL_HEADER, describeParamIssues } from "@argent/registry";
+import {
+  encodeClientSecrets,
+  isFeatureEnabled,
+  lookupPlaceholderSecret,
+  placeholderNames,
+  secretSources,
+} from "@argent/configuration-core";
+import {
+  CLIENT_SECRETS_HEADER,
+  E2E_DIR_CLIENT_HEADER,
+  LEGACY_E2E_DIRS,
+  LINKED_CALL_HEADER,
+  canonicalToolId,
+  describeParamIssues,
+} from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
@@ -10,7 +27,14 @@ import {
   type FileInputSpec,
   type FileInputWire,
 } from "./file-inputs.js";
-import { collectFlowMembers, collectStepMembers } from "./flow-files.js";
+import {
+  collectFlowMembers,
+  collectStepMembers,
+  e2eShadowWarningFor,
+  filesLogEnabled,
+  nameToE2ePathForOlderServer,
+  stepForOlderServer,
+} from "./flow-files.js";
 import { ToolInvocationError } from "./errors.js";
 
 export interface ToolMeta {
@@ -25,11 +49,16 @@ export interface ToolMeta {
   longRunning?: boolean;
   /** Listed for programmatic callers only; the MCP adapter skips it. */
   hideFromMcp?: boolean;
+  readOnly?: boolean;
+  /** Set on a former id of a tool: the tool's current id. */
+  aliasOf?: string;
 }
 
 export interface ToolInvocationResult {
   data: unknown;
   note?: string;
+  /** Set when a profiler was recording on the call's device as the call completed. */
+  profiling?: boolean;
   /** The `outputHint` of the tool's listing entry, when it has one. */
   outputHint?: string;
 }
@@ -82,12 +111,18 @@ export interface CreateToolsClientOptions {
   ) => Promise<Response>;
   /**
    * Receives each diagnostic line of the client, without a trailing newline:
-   * the `[flow-files]` lines that `ARGENT_FLOW_FILES_LOG=1` turns on, and each
+   * the `[flow-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on, and each
    * snapshot baseline a run returned that could not be written here.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
    */
   onDiagnostic?: (message: string) => void;
+  /**
+   * Headers added to GET /tools and POST /tools/:name. Set here rather than in
+   * `fetchImpl`, so they count toward the header limit a call that forwards
+   * secrets is checked against.
+   */
+  headers?: () => Record<string, string>;
 }
 
 function authHeaders(token: string | undefined): Record<string, string> {
@@ -125,7 +160,7 @@ async function consumeToolStream(
   onProgress: (event: unknown) => void,
   signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
-  let final: { data?: unknown; note?: string } | undefined;
+  let final: { data?: unknown; note?: string; profiling?: boolean } | undefined;
   let progress = 0;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
@@ -134,6 +169,7 @@ async function consumeToolStream(
       event?: string;
       data?: unknown;
       note?: string;
+      profiling?: boolean;
       error?: string;
       error_code?: string;
       error_kind?: string;
@@ -141,8 +177,13 @@ async function consumeToolStream(
     if (msg.event === "progress") {
       progress++;
       onProgress(msg.data);
-    } else if (msg.event === "result") final = { data: msg.data, note: msg.note };
-    else if (msg.event === "error") {
+    } else if (msg.event === "result") {
+      final = {
+        data: msg.data,
+        note: msg.note,
+        ...(msg.profiling === true ? { profiling: true } : {}),
+      };
+    } else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
         errorCode: msg.error_code,
         errorKind: msg.error_kind,
@@ -198,7 +239,11 @@ async function consumeToolStream(
   if (!final) {
     throw brokenStream(name, "the stream ended without a result", progress);
   }
-  return { data: final.data, note: final.note };
+  return {
+    data: final.data,
+    note: final.note,
+    ...(final.profiling ? { profiling: true } : {}),
+  };
 }
 
 /**
@@ -213,6 +258,18 @@ export function errorBodyMessage(body: {
 }): string | undefined {
   if (Array.isArray(body.issues) && typeof body.message === "string") return body.message;
   return body.error ?? body.message;
+}
+
+/**
+ * The tool `name` names: the one listed under it, else the one listed under
+ * its current or former id, so an `e2e-*` call reaches an older tool-server
+ * that lists only `flow-*`.
+ */
+function findTool(tools: readonly ToolMeta[], name: string): ToolMeta | null {
+  const id = canonicalToolId(name);
+  return (
+    tools.find((t) => t.name === name) ?? tools.find((t) => canonicalToolId(t.name) === id) ?? null
+  );
 }
 
 /**
@@ -285,6 +342,98 @@ function carriesUpload(args: unknown): boolean {
   return carriesMembers(args) || wiresOf(args).some((wire) => typeof wire.uploadId === "string");
 }
 
+/**
+ * With `forward-secrets` on, the value on this machine of each secret a
+ * placeholder in `args` names, the e2e tests a call sends included; undefined
+ * when the call names none. A name this machine lacks is left to the
+ * tool-server, so the map can be empty.
+ */
+async function forwardedSecrets(args: unknown): Promise<Map<string, string> | undefined> {
+  if (!isFeatureEnabled("forward-secrets")) return undefined;
+  const names = new Set<string>();
+  const scan = (text: string): void => {
+    for (const name of placeholderNames(text)) names.add(name);
+  };
+  // A YAML alias can refer back to its own anchor, which parses to a cycle.
+  const seen = new WeakSet<object>();
+  const visit = async (value: unknown): Promise<void> => {
+    if (typeof value === "string") return scan(value);
+    if (typeof value !== "object" || value === null || seen.has(value)) return;
+    seen.add(value);
+    const wire = value as Partial<FileInputWire>;
+    if (wire[FILE_INPUT_MARKER] !== true) {
+      for (const nested of Object.values(value)) await visit(nested);
+      return;
+    }
+    // Only a call that runs the file sends its closure as `members`; a tool
+    // that merely reads a test types none of its placeholders.
+    if (!Array.isArray(wire.members)) return;
+    const yaml = [
+      ...(/\.ya?ml$/i.test(wire.path ?? "") ? [wire] : []),
+      ...wire.members.filter((member) => member.role === "flow"),
+    ];
+    for (const file of yaml) {
+      let text: string | undefined;
+      if (typeof file.content === "string") {
+        text = Buffer.from(file.content, "base64").toString("utf8");
+      } else if (file.uploadId !== undefined && file.canonical !== undefined) {
+        // Sent through `POST /upload`, so read where it was sent from. Gone
+        // since then, it leaves its names to the tool-server.
+        text = await readFile(file.canonical, "utf8").catch(() => undefined);
+      }
+      // The parsed values, as the runner parses them: a long string can fold
+      // inside a placeholder, and a comment is never typed. A file that does
+      // not parse fails on the tool-server too, and its warnings belong to the
+      // run, not to this terminal.
+      let parsed: unknown;
+      try {
+        parsed = text === undefined ? undefined : parseYaml(text.trim(), { logLevel: "error" });
+      } catch {
+        continue;
+      }
+      await visit(parsed);
+    }
+  };
+  await visit(args);
+  if (names.size === 0) return undefined;
+  const sources = secretSources();
+  const values = new Map<string, string>();
+  for (const rawName of names) {
+    const { name, value } = lookupPlaceholderSecret(rawName, sources);
+    if (value !== undefined) values.set(name, value);
+  }
+  return values;
+}
+
+/**
+ * Why `forward-secrets` may not send values to `url`, and how to fix it; else
+ * undefined. The values cross the wire as plain header text, so only over
+ * verified TLS or to this machine.
+ */
+export function secretsTransportRefusal(url: string): string | undefined {
+  if (!URL.canParse(url)) return `${url} is not a URL`;
+  const { protocol, hostname } = new URL(url);
+  const host = hostname.replace(/^\[|\]$/g, "");
+  if (["127.0.0.1", "localhost", "::1"].includes(host)) return undefined;
+  if (protocol !== "https:") {
+    return (
+      `${url} is reached neither over https:// nor at a loopback address. Link the tool-server ` +
+      `through an https:// URL, or through an SSH tunnel to a 127.0.0.1 port`
+    );
+  }
+  // The one value Node reads as "skip certificate checks", fetch included.
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    return (
+      `NODE_TLS_REJECT_UNAUTHORIZED=0 turns off the certificate check of ${url}. Unset it, and ` +
+      `trust a self-signed certificate through NODE_EXTRA_CA_CERTS instead`
+    );
+  }
+  return undefined;
+}
+
+/** Upper bound of the head bytes fetch adds to a call's own headers and URL. */
+const FETCH_HEAD_BYTES = 256;
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -323,7 +472,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     const { url, token } = await baseUrl();
     const res = await doFetch(
       `${url}/tools`,
-      { headers: authHeaders(token), signal: opts?.signal },
+      { headers: { ...options.headers?.(), ...authHeaders(token) }, signal: opts?.signal },
       { longRunning: false, carriesUpload: false }
     );
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
@@ -335,8 +484,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     name: string,
     opts?: { signal?: AbortSignal }
   ): Promise<ToolMeta | null> {
-    const tools = await fetchTools(opts);
-    return tools.find((t) => t.name === name) ?? null;
+    return findTool(await fetchTools(opts), name);
   }
 
   async function callTool(
@@ -352,32 +500,47 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // server can read them in place (local) or from inlined content (routed).
     let finalArgs = args;
     const tools = await fetchTools({ signal: opts?.signal });
-    const meta = tools.find((t) => t.name === name) ?? null;
+    const meta = findTool(tools, name);
+    // An older tool-server reads saved tests only from `.argent/flows/`, and
+    // lists its tools by their `flow-*` ids only.
+    const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));
+    if (meta) {
+      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, args);
+    }
+    if (olderServer && canonicalToolId(meta.name) === "e2e-add-step") {
+      finalArgs = await stepForOlderServer(finalArgs, (tool) => findTool(tools, tool)?.name);
+    }
+    // Picked here when the tool-server does not read the test in place.
+    const shadowWarning = await e2eShadowWarningFor(name, args);
     // Where a baseline the result returns may be written (see file-inputs.ts).
     const baselineDirs: string[] = [];
     if (meta?.fileInputs?.length) {
-      if (remote) assertRequiredPresent(meta, args);
-      finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
+      if (remote) assertRequiredPresent(meta, finalArgs);
+      finalArgs = await prepareFileInputs(meta.fileInputs, finalArgs ?? {}, {
         includeContent: remote,
         uploadEndpoint: remote ? { url, token } : undefined,
         log: diagnose,
         baselineDirs,
         collectMembers: collectFlowMembers,
-        collectStepMembers,
-        toolFileInputs: (tool) => tools.find((t) => t.name === tool)?.fileInputs,
+        collectStepMembers: olderServer
+          ? (record, o) =>
+              collectStepMembers(record, o, (root) => path.join(root, LEGACY_E2E_DIRS[0]!))
+          : collectStepMembers,
+        toolFileInputs: (tool) => findTool(tools, tool)?.fileInputs,
         signal: opts?.signal,
       });
     }
     // File boundary, inbound: persist client-write directives (recorded flow
     // YAMLs, a run's new baselines) and rewrite them to the written paths. A
     // baseline that could not be written is said here, and stays in the
-    // result as `{ path, error }`.
+    // result as `{ path, error }`. A shadowed legacy test the tool-server did
+    // not see is said in the result's `warning`, as it says one it sees.
     const settle = async (data: unknown): Promise<unknown> => {
       const applied = await applyClientFileDirectives(data, { allowedDirs: baselineDirs });
       for (const { path: file, error } of applied.failed) {
         diagnose(`The baseline ${file} was not written on this client: ${error}`);
       }
-      if (process.env.ARGENT_FLOW_FILES_LOG === "1") {
+      if (filesLogEnabled()) {
         // A recorded flow YAML is written here too; only baselines are logged.
         for (const file of applied.written) {
           if (baselineDirs.includes(path.dirname(file))) {
@@ -385,29 +548,81 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
           }
         }
       }
-      return applied.result;
+      const result = applied.result;
+      if (
+        shadowWarning === undefined ||
+        typeof result !== "object" ||
+        result === null ||
+        Array.isArray(result) ||
+        typeof (result as { warning?: unknown }).warning === "string"
+      ) {
+        return result;
+      }
+      return { ...result, warning: shadowWarning };
     };
 
     // A call that sends a flow's closure runs that flow over a link, and its
     // progress lines keep the connection busy through a proxy's idle timeout.
     const stream = opts?.onProgress !== undefined || carriesMembers(finalArgs);
     const sentOnce = carriesUpload(finalArgs);
+    const forwarded = remote ? await forwardedSecrets(finalArgs) : undefined;
+    // Sent even when empty: an unknown-secret error can then say the client
+    // was asked and had no value.
+    const encodedSecrets = forwarded ? encodeClientSecrets(forwarded) : undefined;
+    const clientSecrets = forwarded?.size ? forwarded : undefined;
+    const refusal = clientSecrets ? secretsTransportRefusal(url) : undefined;
+    if (refusal !== undefined) {
+      throw new Error(
+        `forward-secrets sends secret values only over https:// with the certificate checked, or to ` +
+          `a loopback address, so the call was not sent (it names ` +
+          `${[...clientSecrets!.keys()].join(", ")}): ${refusal}.`
+      );
+    }
+    const toolUrl = `${url}/tools/${encodeURIComponent(meta?.name ?? name)}`;
+    const headers: Record<string, string> = {
+      ...options.headers?.(),
+      "Content-Type": "application/json",
+      // Tells the tool-server the call came over a link, a link to
+      // 127.0.0.1 included, which nothing else in the request shows.
+      ...(remote ? { [LINKED_CALL_HEADER]: "1" } : {}),
+      // Tells the tool-server this client writes recordings under
+      // `.argent/e2e/`; an older client writes only `.argent/flows/`.
+      [E2E_DIR_CLIENT_HEADER]: "1",
+      ...(encodedSecrets ? { [CLIENT_SECRETS_HEADER]: encodedSecrets } : {}),
+      // A proxy that compresses the stream holds each line until its buffer
+      // fills. `identity` keeps the stream uncompressed end to end.
+      ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),
+      ...authHeaders(token),
+    };
+    if (clientSecrets !== undefined && encodedSecrets !== undefined) {
+      // Node's limit counts the whole head, fetch's own headers included. Past
+      // it the tool-server refuses the call, and with a large body the socket
+      // closes mid-send instead of answering 431.
+      const headBytes =
+        toolUrl.length +
+        FETCH_HEAD_BYTES +
+        Object.entries(headers).reduce(
+          (sum, [key, value]) => sum + key.length + value.length + 4,
+          0
+        );
+      if (headBytes > maxHeaderSize) {
+        throw new Error(
+          `forward-secrets would send ${[...clientSecrets!.keys()].join(", ")} in an ` +
+            `${CLIENT_SECRETS_HEADER} header of ${encodedSecrets.length} bytes, which takes the request ` +
+            `headers past the ${maxHeaderSize} bytes a tool-server accepts, so the call was not sent. ` +
+            `Define a secret this large on the machine running the tool-server instead.`
+        );
+      }
+    }
     const res = await doFetch(
-      `${url}/tools/${encodeURIComponent(name)}`,
+      toolUrl,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          // Tells the tool-server the call came over a link, a link to
-          // 127.0.0.1 included, which nothing else in the request shows.
-          ...(remote ? { [LINKED_CALL_HEADER]: "1" } : {}),
-          // A proxy that compresses the stream holds each line until its buffer
-          // fills. `identity` keeps the stream uncompressed end to end.
-          ...(stream ? { "Accept": "application/x-ndjson", "Accept-Encoding": "identity" } : {}),
-          ...authHeaders(token),
-        },
+        headers,
         body: JSON.stringify(finalArgs ?? {}),
         signal: opts?.signal,
+        // A followed redirect would re-send the values to wherever it points.
+        ...(clientSecrets ? { redirect: "manual" as const } : {}),
       },
       { longRunning: meta?.longRunning === true, carriesUpload: sentOnce }
     ).catch((err: unknown) => {
@@ -433,6 +648,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         data: await settle(streamed.data),
         note: streamed.note,
         outputHint: meta?.outputHint,
+        ...(streamed.profiling ? { profiling: true } : {}),
       };
     }
     let json: {
@@ -440,6 +656,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       error?: string;
       message?: string;
       note?: string;
+      profiling?: boolean;
       error_code?: string;
       error_kind?: string;
       issues?: unknown;
@@ -462,6 +679,23 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       }
       json = {};
     }
+    if (clientSecrets && res.status >= 300 && res.status < 400) {
+      throw new ToolInvocationError(
+        `The tool-server answered ${res.status} ${res.statusText} to ${name}. forward-secrets does not ` +
+          `follow a redirect, so the call was not sent on; link the URL it points to instead.`
+      );
+    }
+    // nginx answers an oversized header with a 400 page, which carries no error body.
+    const headersRefused =
+      res.status === 431 || (res.status === 400 && errorBodyMessage(json) === undefined);
+    if (clientSecrets && headersRefused) {
+      throw new ToolInvocationError(
+        `The tool-server, or a proxy in front of it, refused the request headers (${res.status}), ` +
+          `as it does when they are too large. The ${CLIENT_SECRETS_HEADER} header carried ` +
+          `${[...clientSecrets.keys()].join(", ")}; define a secret this large on the machine ` +
+          `running the tool-server instead.`
+      );
+    }
     if (!res.ok) {
       throw new ToolInvocationError(errorBodyMessage(json) ?? `${res.status} ${res.statusText}`, {
         errorCode: json.error_code,
@@ -470,7 +704,12 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       });
     }
     opts?.signal?.throwIfAborted();
-    return { data: await settle(json.data), note: json.note, outputHint: meta?.outputHint };
+    return {
+      data: await settle(json.data),
+      note: json.note,
+      outputHint: meta?.outputHint,
+      ...(json.profiling === true ? { profiling: true } : {}),
+    };
   }
 
   return { fetchTools, fetchTool, callTool, baseUrl };

@@ -28,7 +28,7 @@ The first interaction with a device takes longer than the later ones:
 
 1. Argent builds the runner. A first build takes minutes. Later builds reuse a cache and take seconds.
 2. iOS asks you to trust the developer on the device: Settings > General > VPN & Device Management.
-3. An app named **ArgentRunner** appears on the home screen of the device. This app is the automation runner. Keep it installed.
+3. An app named **Argent Runner** appears on the home screen of the device. This app is the automation runner. Keep it installed.
 
 On a free Personal Team, the signature of the runner expires after about 7 days. The next interaction rebuilds and re-signs the runner.
 
@@ -40,7 +40,7 @@ Reading the screen does not change the screen. When the target app is in the bac
 
 ## What works
 
-The agent launches, restarts and reinstalls apps, passes launch arguments to an app, opens URLs, reads the accessibility tree, takes screenshots, compares screenshots for visual regressions, taps and double-taps, swipes, long-presses and drags, presses the home and volume buttons, and the action button on models that have one, types text, waits for elements, and records and replays [flows](/docs/features/flows). A flow replay never picks the phone automatically, even when no simulator is booted. Name the device in the instruction.
+The agent launches, restarts and reinstalls apps, passes launch arguments to an app, opens URLs, reads the accessibility tree, takes screenshots, compares screenshots for visual regressions, taps and double-taps, swipes, long-presses and drags, presses the home and volume buttons, and the action button on models that have one, types text, waits for elements, and records and replays [e2e tests](/docs/features/e2e). An e2e test replay never picks the phone automatically, even when no simulator is booted. Name the device in the instruction.
 
 A web URL opens in Safari, not in the app that owns the link. The agent names the app to hand it the URL. For any other URL scheme, the agent names the app that receives the URL.
 

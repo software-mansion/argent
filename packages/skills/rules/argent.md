@@ -37,9 +37,9 @@ If argent is ABSENT, treat it as an expected state, not an error to retry. Do no
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from screenshot pixels</important>
-Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree: the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
+Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, `await-ui-element`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree: the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
 
-Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load, or when the last tree did not list your target. Preferred tools are, in order:
+Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load without `await-ui-element`, or when the last tree did not list your target. Preferred tools are, in order:
 
 - `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
@@ -76,13 +76,15 @@ Decision order:
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot and the element tree automatically.
   Call `screenshot` or `describe` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url`; never tap home screen icons.
-- If a task can require a saved flow, choose `argent-create-flow` or `argent-qa-flows` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
+- If a task can require a saved e2e test, choose `argent-create-e2e` or `argent-qa-e2e` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
-- When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
-  naming the devices this session actually used. One tool-server is shared by every other agent using this
-  argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
-  machine-wide cleanup.
-  If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
+- Do not stop simulator servers when a task finishes: the next task reuses them, and stopping them makes its
+  first device action start cold again. Call `stop-all-simulator-servers` when the user asks to clean up or
+  ends the session, or when a skill tells you to recycle a device's services (e.g. before a QA proof pass).
+  Always pass `devices: [...]` naming the devices this session used. One tool-server is shared by every other
+  agent using this argent install, so an unscoped call tears down their devices too; reserve that form for a
+  deliberate machine-wide cleanup.
+  Never stop a Metro the user started unless they ask (`stop-metro`, specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc. Not on a physical iPhone.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>
@@ -119,7 +121,7 @@ Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android simulators and emulators only: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating or folding the device, taking standalone screenshots, or verifying a visible UI code change. Covers phone/tablet iOS and Android simulators and emulators plus Chromium (CDP) apps: for any TV target use the TV skill below, and for a physical iPhone use the entry above.
 
 APP PERMISSIONS (GRANT / DENY / RESET WITHOUT THE SETTINGS UI)
 Skill: `argent-settings-permissions`
@@ -130,7 +132,7 @@ TV INTERACTION (APPLE TV / ANDROID TV / FIRE TV)
 Skill: `argent-tv-interact`
 When: Any TV target: a `list-devices` entry with `runtimeKind: "tv"` (Apple TV simulator or Android TV emulator) or `platform:"vega"` / `kind:"vvd"` (Amazon Fire TV / VVD), or the user mentions Apple TV / tvOS / Android TV / leanback / Vega / Fire TV. A TV UI is focus-driven, not touch-driven: drive it with `describe` (read focus) + `tv-remote` (D-pad presses) + `keyboard` (type); `gesture-*` tools do NOT apply. Covers booting the target, app lifecycle, focus navigation, typing, screenshots, and (Vega) VVD lifecycle + Fast Refresh + JS-runtime debugging (evaluate, console logs, network inspector).
 Prompt keywords: apple tv, tvos, android tv, leanback, vega, fire tv, vvd, d-pad
-Saved artifacts: on Vega, a replayable path is `argent-create-flow` and an acceptance-criteria regression test is `argent-qa-flows`; both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no saved-flow support; report that limitation.
+Saved artifacts: on Vega, a replayable path is `argent-create-e2e` and an acceptance-criteria regression test is `argent-qa-e2e`; both record D-pad navigation as `tool: tv-remote` steps. Apple TV and Android TV have no e2e support; report that limitation.
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
@@ -138,7 +140,7 @@ When: Explicit visual regression, screenshot diff, compare screenshots, before/a
 
 SCREEN RECORDING (VIDEO CAPTURE)
 Skill: `argent-screen-recording`
-When: The user wants an mp4 of an interaction, animation, or bug reproduction. Use `argent-create-flow` instead for a replayable sequence.
+When: The user wants an mp4 of an interaction, animation, or bug reproduction. Use `argent-create-e2e` instead for a replayable sequence.
 Prompt keywords: record, recording, screen recording, video, capture video, clip, mp4
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
@@ -165,16 +167,16 @@ INTERACTIVE UI TESTING (ONE-OFF, NOT SAVED)
 Skill: `argent-test-ui-flow`
 When: Running a one-off interact → screenshot → verify check with no saved regression artifact.
 
-RECORDING & REPLAYING FLOWS
-Use skill: `argent-create-flow`
-When: Saving or replaying a repeatable path for profiling, A/B comparison, retry, or reuse. For acceptance-driven regression tests, use `argent-qa-flows`.
-Prompt keywords: flow, repeat, test X times
+RECORDING & REPLAYING E2E TESTS
+Use skill: `argent-create-e2e`
+When: Saving or replaying a repeatable path for profiling, A/B comparison, retry, or reuse. For acceptance-driven regression tests, use `argent-qa-e2e`.
+Prompt keywords: record e2e, replay e2e, run e2e, flow, repeat, test X times
 
 GENERATED QA REGRESSION TESTS
-Use skill: `argent-qa-flows`
+Use skill: `argent-qa-e2e`
 When: Saving a test case, ticket, or acceptance criteria as a repeatable regression test. Requires stable evidence and two unchanged full passes. iOS, Android, Chromium, and Vega (D-pad navigation records as `tool: tv-remote` steps); not Apple TV or Android TV.
-Prompt keywords: QA test, regression test, test case, automate this test, automate an e2e test, keep this e2e test, generate a test
-Routing: one-off check → `argent-test-ui-flow`; saved path → `argent-create-flow`; saved acceptance test → `argent-qa-flows`.
+Prompt keywords: QA test, regression test, test case, automate an e2e test, write an e2e test, generate a test
+Routing: one-off check → `argent-test-ui-flow`; saved path → `argent-create-e2e`; saved acceptance test → `argent-qa-e2e`.
 
 PROPOSING DESIGN VARIANTS FOR HUMAN SELECTION
 Use skill: `argent-lens`

@@ -45,6 +45,16 @@ describe("toMcpTool — MCP _meta forwarding", () => {
     expect(result).not.toHaveProperty("_meta");
   });
 
+  it("forwards readOnly as annotations.readOnlyHint", () => {
+    const result = toMcpTool({ ...base, readOnly: true });
+    expect(result.annotations).toEqual({ readOnlyHint: true });
+  });
+
+  it("omits annotations when readOnly is unset or false", () => {
+    expect(toMcpTool(base)).not.toHaveProperty("annotations");
+    expect(toMcpTool({ ...base, readOnly: false })).not.toHaveProperty("annotations");
+  });
+
   it("leaves retired params (untyped `not: {}`) out of the advertised schema", () => {
     const result = toMcpTool({
       ...base,
