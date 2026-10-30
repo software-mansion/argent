@@ -21,8 +21,8 @@ const { stateFileForBundle } = await import("@argent/tools-client");
 
 const stateDir = path.join(home, ".argent");
 
-// The run of the current test, so a child that outlives it (timeout, regression)
-// is reaped before its exit can land in the next test's process.exit mock.
+// Reaped in afterEach: a child outliving its test would exit into the next
+// test's process.exit mock.
 let live: { pid: number; exited: Promise<unknown>; done: boolean } | null = null;
 
 afterEach(async () => {
