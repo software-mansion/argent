@@ -101,6 +101,8 @@ Through the MCP server, an interaction tool and `await-ui-element` return a scre
 
 Call `screenshot` or `describe` to read the screen again.
 
+On Android, `keyboard` and `button` take an optional `displayId` to send their input to a secondary display, such as a scrcpy virtual display. List the ids with `adb shell dumpsys display`. Argent passes the id as `adb shell input -d <id>`. Without it, Android sends key events to the focused display. Taps, swipes, screenshots, and `describe` still use the default display. `keyboard` on Android TV and other platforms ignore `displayId`.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |
