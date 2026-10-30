@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 
 type ExecFileCallback = (error: Error | null, stdout?: string, stderr?: string) => void;
 
@@ -60,6 +60,7 @@ vi.mock("../src/blueprints/ax-service", () => ({
 }));
 
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
+import { InvalidToolInputError } from "../src/utils/capability";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
 describe("boot-device — iOS path", () => {
@@ -699,6 +700,55 @@ describe("boot-device — input validation (exclusive udid/avdName)", () => {
   it("rejects when neither udid nor avdName is provided — no target", async () => {
     const tool = createBootDeviceTool({ resolveService: async () => {} } as unknown as Registry);
     await expect(tool.execute!({}, {})).rejects.toThrow(/exactly one of `udid`/);
+  });
+
+  it.each([
+    "remote:",
+    "remote:chromium-cdp-9222",
+    "remote:emulator-5554",
+    "remote:remote:x",
+    "remote:00008110-000978540290401E",
+    "remote:ext:prov:11111111-1111-1111-1111-111111111111",
+  ])("refuses %s before it reaches sim-remote", async (udid) => {
+    mockExecFile.mockClear();
+    const tool = createBootDeviceTool({
+      resolveService: async () => ({}),
+    } as unknown as Registry);
+    const error = await tool.execute!({}, { udid }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(InvalidToolInputError);
+    expect((error as Error).message).toBe(`'${udid}' is not \`remote:<simulator udid>\`.`);
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+      failure_stage: "boot_device_target_selection",
+    });
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it("boots remote:<simulator udid> through sim-remote and returns the prefixed id", async () => {
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["sim-remote"]);
+    mockExecFile.mockReset().mockImplementation((...args: unknown[]) => {
+      // sim-remote.ts promisifies execFile, so the result arrives as one value.
+      (getCallback(args) as (e: null, r: unknown) => void)(null, {
+        stdout: JSON.stringify({ devices: {} }),
+        stderr: "",
+      });
+      return {} as never;
+    });
+    const tool = createBootDeviceTool({
+      resolveService: async () => ({ getInitFailure: () => null }),
+    } as unknown as Registry);
+    const udid = "remote:11111111-1111-1111-1111-111111111111";
+    await expect(tool.execute!({}, { udid })).resolves.toEqual({
+      platform: "ios-remote",
+      udid,
+      booted: true,
+    });
+    expect(mockExecFile.mock.calls.map((c) => [c[0], ...(c[1] as string[])].join(" "))).toEqual([
+      "sim-remote simctl list devices --json",
+      "sim-remote simctl boot 11111111-1111-1111-1111-111111111111",
+      "sim-remote simctl bootstatus 11111111-1111-1111-1111-111111111111 -b",
+    ]);
   });
 
   it("bounds bootTimeoutMs to [30s, 15min]", () => {
