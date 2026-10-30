@@ -274,9 +274,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     }
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
+  server.setRequestHandler(ListToolsRequestSchema, async (_request, { signal }) => {
     try {
-      const tools = toMcpToolList(await fetchTools());
+      const tools = toMcpToolList(await fetchTools({ signal }));
       await spyLog({
         ts: new Date().toISOString(),
         event: "list_tools",

@@ -251,6 +251,18 @@ describe("startMcpServer tool calls", () => {
     ]);
   });
 
+  it("ends the tool-server request of a listing the client cancels", async () => {
+    stub.hanging.add("/tools");
+    const controller = new AbortController();
+
+    const pending = client.listTools(undefined, { signal: controller.signal });
+    await vi.waitFor(() => expect(requests.filter((r) => r.url === "/tools")).toHaveLength(1));
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/tools"]));
+  });
+
   it("renders a run report the same whether called as flow-execute or e2e-execute", async () => {
     const byAlias = await client.callTool({ name: "flow-execute", arguments: {} });
     const byId = await client.callTool({ name: "e2e-execute", arguments: {} });

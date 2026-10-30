@@ -102,7 +102,7 @@ interface ToolCallerDeps {
 }
 
 interface ToolCaller {
-  fetchTools(): Promise<ToolMeta[]>;
+  fetchTools(opts?: { signal?: AbortSignal }): Promise<ToolMeta[]>;
   /**
    * `opts.signal` bounds the whole call, the listing it reads first included,
    * and is never retried once it fires.
