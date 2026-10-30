@@ -74,7 +74,13 @@ const fileInputs: FileInputSpec[] = [
 
 export const flowReadPrerequisiteTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { flow: string; executionPrerequisite: string; warning?: string }
+  {
+    e2eTest: string;
+    /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
+    flow: string;
+    executionPrerequisite: string;
+    warning?: string;
+  }
 > = {
   id: "e2e-read-prerequisite",
   aliases: ["flow-read-prerequisite"],
@@ -85,7 +91,7 @@ export const flowReadPrerequisiteTool: ToolDefinition<
       `Failed to read e2e test prerequisite: ${failureSignal.error_code}`,
   },
   description: `Read the execution prerequisite of an e2e test without running it: a saved e2e test from the .argent/e2e/ directory (or the older .argent/flows/), or an explicit boundary-managed e2e_test_path.
-Returns { flow, executionPrerequisite, warning? }: the logical name, plus the precondition its author recorded
+Returns { e2eTest, executionPrerequisite, warning? }: the logical name, plus the precondition its author recorded
 verbatim. Empty when none was declared, which is always so for a self-contained scenario: one opening
 on a launch may declare no prerequisite, because it builds its own start state.
 Use when deciding whether the device already sits where a fragment expects it (correct app foregrounded,
@@ -110,6 +116,7 @@ Address the e2e test exactly as you will address it in e2e-execute: name or e2e_
     const flow = parseFlow(await fs.readFile(filePath, "utf8"));
 
     return {
+      e2eTest: flowName,
       flow: flowName,
       executionPrerequisite: flow.executionPrerequisite,
       ...(shadowed ? { warning: e2eShadowWarning(filePath, shadowed) } : {}),

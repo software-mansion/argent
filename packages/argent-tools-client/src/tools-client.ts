@@ -113,7 +113,7 @@ export interface CreateToolsClientOptions {
   ) => Promise<Response>;
   /**
    * Receives each diagnostic line of the client, without a trailing newline:
-   * the `[flow-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on, and each
+   * the `[e2e-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on, and each
    * snapshot baseline a run returned that could not be written here.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
@@ -547,7 +547,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         // A recorded flow YAML is written here too; only baselines are logged.
         for (const file of applied.written) {
           if (baselineDirs.includes(path.dirname(file))) {
-            diagnose(`[flow-files] baseline ${file}: written`);
+            diagnose(`[e2e-files] baseline ${file}: written`);
           }
         }
       }

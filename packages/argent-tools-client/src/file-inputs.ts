@@ -120,7 +120,7 @@ export interface PrepareFileInputsOptions {
    */
   uploadEndpoint?: { url: string; token: string };
   /**
-   * Receives the `[flow-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on,
+   * Receives the `[e2e-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on,
    * one for each member a `collect` spec sends. Defaults to stderr.
    */
   log?: (line: string) => void;

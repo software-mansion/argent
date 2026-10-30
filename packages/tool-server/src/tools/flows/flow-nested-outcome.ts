@@ -58,7 +58,8 @@ function count(value: unknown): number {
 
 /** A nested `flow-execute` result: a run report, or a prerequisite notice. */
 function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | undefined {
-  const flow = typeof result.flow === "string" ? result.flow : "the composed e2e test";
+  const name = result.e2eTest ?? result.flow;
+  const flow = typeof name === "string" ? name : "the composed e2e test";
 
   // A notice means the sub-flow ran NOTHING: nothing was asserted, so this is
   // the runner's error class — never runnable as written, like an unreadable

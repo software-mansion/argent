@@ -57,7 +57,7 @@ import {
  */
 const INLINE_MEMBERS_BYTES = 256 * 1024;
 
-/** `ARGENT_E2E_FILES_LOG=1` turns the `[flow-files]` lines on; `ARGENT_FLOW_FILES_LOG` is its old name. */
+/** `ARGENT_E2E_FILES_LOG=1` turns the `[e2e-files]` lines on; `ARGENT_FLOW_FILES_LOG` is its old name. */
 export function filesLogEnabled(): boolean {
   return (process.env.ARGENT_E2E_FILES_LOG ?? process.env.ARGENT_FLOW_FILES_LOG) === "1";
 }
@@ -405,8 +405,9 @@ function memberCollector(roots: string[], opts: PrepareFileInputsOptions) {
   const log = opts.log ?? ((line: string) => void process.stderr.write(`${line}\n`));
   const emit = (member: FileInputMember, sent: string): void => {
     members.push(member);
-    const subject = member.role === "flow" ? member.canonical : member.key;
-    if (logging) log(printable(`[flow-files] ${member.role} ${subject}: ${sent}`));
+    const [label, subject] =
+      member.role === "flow" ? ["e2e test", member.canonical] : [member.role, member.key];
+    if (logging) log(printable(`[e2e-files] ${label} ${subject}: ${sent}`));
   };
 
   /**

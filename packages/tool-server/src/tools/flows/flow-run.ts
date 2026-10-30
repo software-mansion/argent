@@ -248,13 +248,16 @@ export interface StepReport {
   /** Echo message. */
   message?: string;
   /**
-   * The fragment a step belongs to (set on `run` and the steps it expands) —
-   * the target's basename stem; when that stem collides with the top-level
-   * flow's name, the as-written path minus `.yaml` (`./<stem>` for a bare
-   * spelling). Renderers distinguish fragment steps by this differing from the
-   * report's `flow`, which the collision fallback guarantees: both
-   * disambiguated shapes contain a `/`, which FLOW_NAME_PATTERN forbids.
+   * The e2e test a step belongs to: the run's own name, or for a fragment (a
+   * `run` step and the steps it expands) the target's basename stem; when that
+   * stem collides with the top-level test's name, the as-written path minus
+   * `.yaml` (`./<stem>` for a bare spelling). Renderers distinguish fragment
+   * steps by this differing from the report's `e2eTest`, which the collision
+   * fallback guarantees: both disambiguated shapes contain a `/`, which
+   * FLOW_NAME_PATTERN forbids.
    */
+  e2eTest?: string;
+  /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
   flow?: string;
   /**
    * Human-readable "what this step acts on" — the selector for directive
@@ -299,6 +302,9 @@ export interface StepReport {
 }
 
 export interface FlowRunResult {
+  /** The e2e test's name. */
+  e2eTest: string;
+  /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
   flow: string;
   device: string;
   executionPrerequisite: string;
@@ -326,6 +332,9 @@ export interface FlowRunResult {
 }
 
 export interface FlowPrerequisiteNotice {
+  /** The e2e test's name. */
+  e2eTest: string;
+  /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
   flow: string;
   notice: string;
   executionPrerequisite: string;
@@ -1642,6 +1651,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // takes the ordinary notice/acknowledge path.
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
         return {
+          e2eTest: flowName,
           flow: flowName,
           notice:
             "This e2e test has an execution prerequisite that must be fulfilled before it can run. " +
@@ -2161,6 +2171,7 @@ function summarize(
     else errored++;
   }
   return {
+    e2eTest: flowName,
     flow: flowName,
     device: deviceId,
     executionPrerequisite,
@@ -2182,9 +2193,11 @@ function summarize(
 /**
  * Append a report to the run and hand it to any live progress consumer. The
  * single choke point for every report — a push site that bypasses it would
- * silently drop steps from the progress stream.
+ * silently drop steps from the progress stream, and the deprecated `flow`
+ * copy of `e2eTest` that older clients read.
  */
 function pushReport(state: ExecState, report: StepReport): void {
+  if (report.e2eTest !== undefined) report.flow = report.e2eTest;
   state.reports.push(report);
   state.onStepReport?.(report);
 }
@@ -2212,7 +2225,7 @@ interface StepScope {
   depth: number;
 }
 
-/** The flow name steps in this scope are attributed to (StepReport.flow). */
+/** The e2e test steps in this scope are attributed to (StepReport.e2eTest). */
 function scopeFlow(scope: StepScope): string {
   return scope.runStack[scope.runStack.length - 1]!.display;
 }
@@ -2224,7 +2237,7 @@ function scopeFlow(scope: StepScope): string {
  * when the spelling is bare (stripping would reproduce the stem). Two
  * different files may legitimately share a stem (root `login.yaml` composing
  * `helpers/login.yaml`), and a bare-stem attribution there would make
- * `StepReport.flow` equal the report's top-level `flow`, so renderers that mark
+ * `StepReport.e2eTest` equal the report's top-level `e2eTest`, so renderers that mark
  * fragment steps by that inequality would read the fragment's failures as the
  * root flow's. A bare spelling has no directory component to keep, yet still
  * names a genuinely different file when written in a nested fragment
@@ -2306,7 +2319,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         index,
         kind: step.kind,
         status: "skip",
-        flow: stepFlow(step, scope),
+        e2eTest: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
         ...(stopReason ? { reason: stopReason } : {}),
@@ -2332,7 +2345,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         index,
         kind: step.kind,
         status: "error",
-        flow: scopeFlow(scope),
+        e2eTest: scopeFlow(scope),
         target: stepTarget(step),
         ...depthOf(scope),
         reason: `step needs a device but the e2e test was resolved as device-free — pass an explicit device`,
@@ -2348,7 +2361,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         kind: step.kind,
         status: "skip",
         reason: "run aborted",
-        flow: stepFlow(step, scope),
+        e2eTest: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
         ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -2427,7 +2440,7 @@ function reportBlockSkipped(
       kind: step.kind,
       status: "skip",
       reason,
-      flow: stepFlow(step, scope),
+      e2eTest: stepFlow(step, scope),
       target: stepTarget(step),
       ...depthOf(scope),
       ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -2478,7 +2491,7 @@ async function execWhenStep(
   const marker = {
     index,
     kind: "when",
-    flow: scopeFlow(scope),
+    e2eTest: scopeFlow(scope),
     target,
     ...depthOf(scope),
   } as const;
@@ -2555,7 +2568,7 @@ async function execRunStep(
       index,
       kind: "run",
       status: "error",
-      flow: display,
+      e2eTest: display,
       target,
       reason,
       ...depthOf(scope),
@@ -2664,7 +2677,7 @@ async function execRunStep(
     index,
     kind: "run",
     status: "pass",
-    flow: display,
+    e2eTest: display,
     target,
     ...depthOf(scope),
     durationMs: Date.now() - startedAt,
@@ -2793,7 +2806,7 @@ async function execLeafStep(
   const base = {
     index,
     kind: step.kind,
-    flow: scopeFlow(scope),
+    e2eTest: scopeFlow(scope),
     target: stepTarget(step),
     ...depthOf(scope),
   } as const;
