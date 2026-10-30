@@ -569,11 +569,9 @@ async function waitForVegaAutomation(
       if (!data.hint) return { ready: true };
       reason = undefined;
     } catch (err) {
+      // Discovery fails transiently too (a VVD still registering with adb, a `ps`
+      // probe timing out), so keep polling and report what still fails at the deadline.
       reason = err instanceof Error ? err.message : String(err);
-      // Of the VVD discovery failures, only a VVD still registering with adb clears up.
-      if (getFailureSignal(err)?.error_code !== FAILURE_CODES.VEGA_DEVICE_NOT_REGISTERED) {
-        return { ready: false, reason };
-      }
     }
     if (Date.now() >= deadline) return { ready: false, reason };
     if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return { ready: false };
@@ -671,7 +669,7 @@ async function treeSourceGate(
   if (device.platform === "vega" && !signal?.aborted) {
     const { ready, reason } = await waitForVegaAutomation(device, signal);
     if (!ready && !signal?.aborted) {
-      if (reason) return `the Vega Virtual Device could not be reached: ${reason}`;
+      if (reason) return `Vega device discovery failed: ${reason}`;
       return (
         `the Vega automation toolkit never served a page source for ${bundleId} (the runner tree source). ` +
         `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`

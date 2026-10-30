@@ -79,8 +79,8 @@ async function runMain(): Promise<FlowRunResult> {
 }
 
 describe("flow launch gate on Vega", () => {
-  it("errors the launch step at once with a VVD discovery failure that will not clear", async () => {
-    describeVega.mockRejectedValue(
+  it("errors the launch step with the discovery failure still standing at the deadline", async () => {
+    describeVega.mockRejectedValueOnce(notRegistered()).mockRejectedValue(
       new FailureError("No running Vega Virtual Device found.", {
         error_code: FAILURE_CODES.VEGA_DEVICE_NOT_FOUND,
         failure_stage: "vega_discover_console_port",
@@ -91,19 +91,8 @@ describe("flow launch gate on Vega", () => {
     const result = await runMain();
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
     expect(result.steps[0].reason).toContain(
-      "the Vega Virtual Device could not be reached: No running Vega Virtual Device found."
+      "Vega device discovery failed: No running Vega Virtual Device found."
     );
-    expect(describeVega).toHaveBeenCalledTimes(1);
-  });
-
-  it("polls through a VVD still registering with adb and reports it at the deadline", async () => {
-    describeVega.mockRejectedValue(notRegistered());
-    const result = await runMain();
-    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
-    expect(result.steps[0].reason).toContain(
-      "the Vega Virtual Device could not be reached: VVD not registered with adb yet."
-    );
-    expect(describeVega.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("keeps the relaunch advice when the toolkit answered but never served a tree", async () => {
