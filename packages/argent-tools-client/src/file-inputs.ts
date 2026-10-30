@@ -31,7 +31,12 @@ import {
 import { constants, tmpdir } from "node:os";
 import * as path from "node:path";
 
-import { createTarGzFile } from "@argent/archive";
+import {
+  ARCHIVE_CONTENT_TYPES,
+  createArchiveFile,
+  pickArchiveFormat,
+  type ArchiveFormat,
+} from "@argent/archive";
 import {
   FAILURE_CODES,
   FLOW_FILE_NAME_PATTERN,
@@ -115,10 +120,11 @@ export interface PrepareFileInputsOptions {
   includeContent: boolean;
   /**
    * Set only when routed to a remote tool-server: `kind: "tar-upload"` inputs
-   * are tarballed and streamed to `POST <url>/upload` before the tool call.
-   * Absent for co-located sessions (the server reads the path in place).
+   * are archived and streamed to `POST <url>/upload` before the tool call, in
+   * the best of `formats` (the server's `GET /tools` `uploadFormats`). Absent
+   * for co-located sessions (the server reads the path in place).
    */
-  uploadEndpoint?: { url: string; token: string };
+  uploadEndpoint?: { url: string; token: string; formats?: readonly string[] };
   /**
    * Receives the `[flow-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on,
    * one for each member a `collect` spec sends. Defaults to stderr.
@@ -298,6 +304,7 @@ function uploadFailure(
 
 async function uploadTar(
   tarPath: string,
+  format: ArchiveFormat,
   endpoint: { url: string; token: string },
   signal?: AbortSignal
 ): Promise<string> {
@@ -307,7 +314,7 @@ async function uploadTar(
   const init: RequestInit & { duplex: "half" } = {
     method: "POST",
     headers: {
-      "content-type": "application/gzip",
+      "content-type": ARCHIVE_CONTENT_TYPES[format],
       ...(endpoint.token ? { Authorization: `Bearer ${endpoint.token}` } : {}),
     },
     body: createReadStream(tarPath) as unknown as BodyInit,
@@ -331,15 +338,16 @@ async function uploadTar(
 /** Tar `sourcePath`, stream it to `POST /upload`, and return what the wire names it by. */
 export async function uploadFile(
   sourcePath: string,
-  endpoint: { url: string; token: string },
+  endpoint: { url: string; token: string; formats?: readonly string[] },
   signal?: AbortSignal
 ): Promise<{ uploadId: string; contentHash: string }> {
+  const format = pickArchiveFormat(endpoint.formats);
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
   trackArchive(tarPath);
   try {
-    await createTarGzFile(await realpath(sourcePath), tarPath);
+    await createArchiveFile(await realpath(sourcePath), tarPath, format);
     const contentHash = await sha256File(tarPath);
-    return { uploadId: await uploadTar(tarPath, endpoint, signal), contentHash };
+    return { uploadId: await uploadTar(tarPath, format, endpoint, signal), contentHash };
   } finally {
     untrackArchive(tarPath);
     await rm(tarPath, { force: true }).catch(() => {});

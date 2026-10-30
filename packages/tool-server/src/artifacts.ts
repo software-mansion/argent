@@ -1,6 +1,6 @@
 /**
  * Artifact HTTP transport: streams a registered file — or, for a directory
- * bundle, a gzipped tar on demand — to a remote client over `GET /artifacts/:id`.
+ * bundle, a compressed tar on demand — to a remote client over `GET /artifacts/:id`.
  * A co-located client never hits this route; it reads the file in place via the
  * handle's `hostPath`.
  *
@@ -12,7 +12,14 @@
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { createTarGzArgs } from "@argent/archive";
+import {
+  ARCHIVE_CONTENT_TYPES,
+  archiveFormatsFromAccept,
+  createCompressor,
+  createTarArgs,
+  pickArchiveFormat,
+  trackTarEnd,
+} from "@argent/archive";
 import type { Request, Response } from "express";
 import type {
   Registry,
@@ -64,7 +71,7 @@ export function makeArtifactRoute(registry: Registry) {
     // download pays for zipping, since local clients use the directory in place
     // via the gate.
     if (entry.isDirectory) {
-      streamDirectoryAsTarGz(id, entry, res);
+      streamDirectoryAsArchive(id, entry, req, res);
       return;
     }
 
@@ -90,19 +97,26 @@ export function makeArtifactListRoute(registry: Registry) {
 }
 
 /**
- * Stream a directory as a gzipped tar via the system `tar`. `-C <parent> <base>`
- * keeps the bundle's own directory as the single top-level entry, so the client
- * unpacks it back to `<dir>/<base>`.
+ * Stream a directory as a compressed tar: zstd when the request's `Accept` lists
+ * `application/zstd`, else gzip. `-C <parent> <base>` keeps the bundle's own
+ * directory as the single top-level entry, so the client unpacks it back to
+ * `<dir>/<base>`.
  */
-function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response): void {
-  res.setHeader("Content-Type", "application/gzip");
-  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.tar.gz"`);
+function streamDirectoryAsArchive(
+  id: string,
+  entry: ArtifactEntry,
+  req: Request,
+  res: Response
+): void {
+  const format = pickArchiveFormat(archiveFormatsFromAccept(req.headers.accept));
+  const ext = format === "zstd" ? "tar.zst" : "tar.gz";
+  res.setHeader("Content-Type", ARCHIVE_CONTENT_TYPES[format]);
+  res.setHeader("Vary", "Accept");
+  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.${ext}"`);
 
   // stderr is ignored, not piped: an unread pipe can fill its buffer (e.g.
   // tar's "file changed as we read it" on a live trace) and deadlock the child.
-  // A truncated archive from a non-zero exit is caught client-side, where
-  // extraction fails and the artifact resolves to null.
-  const child = spawn("tar", createTarGzArgs(entry.path, "-"), {
+  const child = spawn("tar", createTarArgs(entry.path), {
     stdio: ["ignore", "pipe", "ignore"],
   });
   child.on("error", (err) => {
@@ -112,12 +126,28 @@ function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response)
       res.destroy();
     }
   });
-  // Don't leave tar running if the client aborts mid-stream; `writableFinished`
-  // tells an abort apart from a clean end.
+  const compressor = createCompressor(format);
+  // On a client abort, stop tar and the compressor, which would otherwise stay
+  // alive undrained with its buffers; `writableFinished` tells an abort apart
+  // from a clean end.
   res.on("close", () => {
-    if (!res.writableFinished && child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-    }
+    if (res.writableFinished) return;
+    compressor.destroy();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   });
-  child.stdout.pipe(res);
+  // tar can exit non-zero after a whole archive (that live-trace warning), but an
+  // abandoned one lacks the end-of-archive marker. The compressor closes a valid
+  // frame either way, so destroy the response for the latter: the client's
+  // download then fails instead of extracting a partial bundle.
+  const tarEnd = trackTarEnd();
+  child.stdout.on("data", (chunk: Buffer) => tarEnd.push(chunk));
+  const tarClosed = new Promise<number | null>((resolve) => child.on("close", resolve));
+  compressor.on("error", () => res.destroy());
+  compressor.on("end", () => {
+    void tarClosed.then((code) => {
+      if (code === 0 || tarEnd.ended()) res.end();
+      else res.destroy();
+    });
+  });
+  child.stdout.pipe(compressor).pipe(res, { end: false });
 }
