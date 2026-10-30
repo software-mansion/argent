@@ -94,6 +94,7 @@ Touches no device: nothing is launched, tapped, dispatched or torn down, and no 
 needs booting, so calling this costs nothing but a file read.
 Fails if the e2e test file does not exist.
 Address the e2e test exactly as you will address it in e2e-execute: name or flow_path, one and only one; supplying both or neither is rejected. The name goes in \`name\`, which resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.`,
+  readOnly: true,
   zodSchema,
   fileInputs,
   services: () => ({}),

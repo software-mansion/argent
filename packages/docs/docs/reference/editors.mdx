@@ -8,18 +8,20 @@ sidebar_custom_props:
 
 `argent init` auto-detects and configures MCP for:
 
-| Editor      | Config location                                                             |
-| ----------- | --------------------------------------------------------------------------- |
-| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                          |
-| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)               |
-| VS Code     | `.vscode/mcp.json`                                                          |
-| Windsurf    | `~/.codeium/windsurf/mcp_config.json` (global)                              |
-| Zed         | `.zed/settings.json` (project) or `~/.config/zed/settings.json` (global)    |
-| Gemini CLI  | `.gemini/settings.json` (project) or `~/.gemini/settings.json` (global)     |
-| Codex CLI   | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)           |
-| Hermes      | `~/.hermes/config.yaml` (global)                                            |
-| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global)    |
-| Kiro        | `.kiro/settings/mcp.json` (project) or `~/.kiro/settings/mcp.json` (global) |
+| Editor        | Config location                                                             |
+| ------------- | --------------------------------------------------------------------------- |
+| Claude Code   | `.mcp.json` (project) or `~/.claude.json` (global)                          |
+| Cursor        | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)               |
+| VS Code       | `.vscode/mcp.json`                                                          |
+| Devin Desktop | `~/.codeium/windsurf/mcp_config.json` (global)                              |
+| Zed           | `.zed/settings.json` (project) or `~/.config/zed/settings.json` (global)    |
+| Gemini CLI    | `.gemini/settings.json` (project) or `~/.gemini/settings.json` (global)     |
+| Codex CLI     | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)           |
+| Hermes        | `~/.hermes/config.yaml` (global)                                            |
+| opencode      | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global)    |
+| Kiro          | `.kiro/settings/mcp.json` (project) or `~/.kiro/settings/mcp.json` (global) |
+
+Devin Desktop reads the tool approvals from `~/.config/devin/config.json`. When you add the Argent tools to the auto-approve lists in `argent init`, Argent adds `mcp__argent__*` to `permissions.allow` in that file.
 
 <Video
   src="/video/opencode.mp4"
