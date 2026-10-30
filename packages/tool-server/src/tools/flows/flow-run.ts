@@ -124,20 +124,20 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        'Name of a saved e2e test to run from `.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore"). Omit when flow_path is set.'
+        'Name of a saved e2e test to run from `.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore"). Omit when e2e_test_path is set.'
       ),
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root: the cwd it is working in. With name, the saved e2e test is read from `.argent/e2e/<name>.yaml`, else `.argent/flows/<name>.yaml`, under this root; with flow_path, the e2e test, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
+        "Absolute path to the calling agent's project root: the cwd it is working in. With name, the saved e2e test is read from `.argent/e2e/<name>.yaml`, else `.argent/flows/<name>.yaml`, under this root; with e2e_test_path, the e2e test, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
       ),
-    flow_file: z
+    e2e_test_file: z
       .string()
       .optional()
       .describe(
         "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
       ),
-    flow_path: z
+    e2e_test_path: z
       .string()
       .optional()
       .describe(
@@ -169,16 +169,16 @@ const zodSchema = z
       ),
   })
   .superRefine((params, ctx) => {
-    if ((params.name === undefined) === (params.flow_path === undefined)) {
+    if ((params.name === undefined) === (params.e2e_test_path === undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
           params.name !== undefined
-            ? "Pass exactly one e2e test source: name or flow_path."
-            : "Pass exactly one e2e test source: name or flow_path. e2e-execute needs the e2e test's " +
+            ? "Pass exactly one e2e test source: name or e2e_test_path."
+            : "Pass exactly one e2e test source: name or e2e_test_path. e2e-execute needs the e2e test's " +
               "name in `name` — it resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.",
-        // The ROOT, not `flow_path`: the rule spans both source fields, and a
-        // path would prefix the message with "`flow_path`:".
+        // The ROOT, not `e2e_test_path`: the rule spans both source fields, and a
+        // path would prefix the message with "`e2e_test_path`:".
         path: [],
       });
     }
@@ -186,28 +186,28 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-// A dual-source call (name + flow_path) must be diagnosed by the schema's
+// A dual-source call (name + e2e_test_path) must be diagnosed by the schema's
 // exactly-one rule, not by whether either unused file happens to exist:
-// - unwrapWhenSet: flow_path is caller-authored, so alongside name zod still
+// - unwrapWhenSet: e2e_test_path is caller-authored, so alongside name zod still
 //   sees it — dropping it would silently run the saved flow instead.
-// - skipWhenSet: flow_file is client-derived, so alongside flow_path it is
+// - skipWhenSet: e2e_test_file is client-derived, so alongside e2e_test_path it is
 //   dropped; the caller never authored it.
 const fileInputs: FileInputSpec[] = [
   {
-    target: "flow_path",
-    path: "${flow_path}",
+    target: "e2e_test_path",
+    path: "${e2e_test_path}",
     kind: "file",
     optional: true,
     unwrapWhenSet: "name",
     collect: "flow",
   },
   {
-    target: "flow_file",
+    target: "e2e_test_file",
     // A client that predates `paths` reads the legacy dir only.
     path: "${project_root}/.argent/flows/${name}.yaml",
     paths: E2E_FILE_TEMPLATES,
     kind: "file",
-    skipWhenSet: "flow_path",
+    skipWhenSet: "e2e_test_path",
     collect: "flow",
   },
 ];
@@ -1132,16 +1132,16 @@ interface BootedChromium {
 
 /**
  * Flow name for interaction messages: the display half of resolveFlowSource
- * (basename stem on the flow_path branch) without its validation — these
+ * (basename stem on the e2e_test_path branch) without its validation — these
  * messages render before validation and must still say something on a call
  * validation is about to reject. path.basename keeps a bare ".yaml" filename
  * intact, and the fallbacks keep a pathological source from rendering as "" or
  * "undefined".
  */
-function displayFlowName(params: { name?: string; flow_path?: string }): string {
+function displayFlowName(params: { name?: string; e2e_test_path?: string }): string {
   const stem =
-    params.flow_path === undefined ? undefined : path.basename(params.flow_path, ".yaml");
-  return params.name || stem || params.flow_path || "(unspecified)";
+    params.e2e_test_path === undefined ? undefined : path.basename(params.e2e_test_path, ".yaml");
+  return params.name || stem || params.e2e_test_path || "(unspecified)";
 }
 
 /**
@@ -1378,7 +1378,7 @@ function assertUploadSelfContained(
   const offending: { kind: keyof typeof UPLOAD_STAGE_BY_KIND; line: string }[] = [];
   const toolFileFixes = new Set<ToolFileFix>();
   // A nested step that names its flow with `name` runs for a client that
-  // sends the flow with the call; an update does not help a `flow_path` one.
+  // sends the flow with the call; an update does not help an `e2e_test_path` one.
   let namedNestedFlow = false;
   const queue = [{ flow, canonical: closure?.rootCanonical ?? "", within: "", hop: 0 }];
   const seen = new Set<string>();
@@ -1501,7 +1501,7 @@ export function createRunFlowTool(
     description: `Run a saved YAML e2e test end to end. Use when
 asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
 one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
-exactly one e2e test source: name (under project_root) or flow_path.
+exactly one e2e test source: name (under project_root) or e2e_test_path.
 Returns a per-step report: the first failure stops the run and the rest report as skipped.`,
     longRunning: true,
     zodSchema,
@@ -1512,8 +1512,8 @@ Returns a per-step report: the first failure stops the run and the rest report a
       const signal = ctx?.signal;
       const { filePath, flowName, viaUpload, shadowed } = await resolveFlowSource(
         params,
-        ctx?.fileInputs?.flow_file,
-        ctx?.fileInputs?.flow_path
+        ctx?.fileInputs?.e2e_test_file,
+        ctx?.fileInputs?.e2e_test_path
       );
       const warning = shadowed ? { warning: e2eShadowWarning(filePath, shadowed) } : {};
       // Where the run's file references resolve: on this host, unless the
@@ -1523,7 +1523,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // file in place (viaUpload false) and stays on the host, so a run without
       // a link never changes behavior.
       const rootInput = viaUpload
-        ? (ctx?.fileInputs?.flow_path ?? ctx?.fileInputs?.flow_file)
+        ? (ctx?.fileInputs?.e2e_test_path ?? ctx?.fileInputs?.e2e_test_file)
         : undefined;
       const clientProject = rootInput?.members
         ? new ClientProjectAccess(rootInput.members)
@@ -1921,7 +1921,7 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
  * The spelling says how the client's listing spells the root's basename. A
  * case-folded match is refused with the error a co-located run gives for the
  * same call ({@link resolveFlowSource}), chosen by the argument the caller
- * named the flow with (`name`, else `flow_path`): the spelling keys the report
+ * named the flow with (`name`, else `e2e_test_path`): the spelling keys the report
  * and `__baselines__/`, and no directory entry carries it.
  */
 function clientRootCanonical(
@@ -2621,7 +2621,7 @@ async function execRunStep(
 
   // There is deliberately NO path fence on the host read. A `run:` target is
   // reachable exactly when the tool-server user can read it, the same reach the
-  // front door already grants: an operator can point flow_path at any YAML on
+  // front door already grants: an operator can point e2e_test_path at any YAML on
   // the host, so restricting composition below that only breaks documented
   // layouts — a fragment shared sideways (`../shared/login.yaml`), and a flows
   // dir symlinked to a tree kept outside the project. The one route that
@@ -3089,7 +3089,7 @@ function errMsg(err: unknown): string {
 }
 
 /**
- * The two rules on the shape of a flow_path string itself, apart from how it
+ * The two rules on the shape of an e2e_test_path string itself, apart from how it
  * reached us, so they are reported apart from the boundary gate — a caller
  * that did use the boundary must not be told to use the boundary. A host path
  * is checked as the string execute() will open; an upload's client spelling is
@@ -3102,7 +3102,7 @@ function assertFlowPathShape(flowPath: string): void {
   // against the tool server's working directory, which is not the caller's.
   // `argent flow list` prints relative paths, so this is the spelling an agent
   // is most likely to pass back.
-  const windows = windowsPathRefusal("flow_path", flowPath);
+  const windows = windowsPathRefusal("e2e_test_path", flowPath);
   if (windows) {
     throw new FailureError(windows, {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -3113,7 +3113,7 @@ function assertFlowPathShape(flowPath: string): void {
   }
   if (!path.isAbsolute(flowPath)) {
     throw new FailureError(
-      `Invalid flow_path "${flowPath}": e2e test paths must be absolute — a relative path ` +
+      `Invalid e2e_test_path "${flowPath}": e2e test paths must be absolute — a relative path ` +
         `is resolved against the tool server's working directory, not the caller's. Pass the ` +
         `absolute path to the e2e test's YAML.`,
       {
@@ -3133,12 +3133,12 @@ function assertFlowPathShape(flowPath: string): void {
   // different files — or, when the directory chain is broken, slip through
   // canonicalFlowPath's verbatim fallback to fail later as a raw readFile
   // ENOENT on the unresolved spelling. Rejecting up front means every admitted
-  // flow_path has exactly one reading. The argent client rejects ".." segments
+  // e2e_test_path has exactly one reading. The argent client rejects ".." segments
   // before sending; only a direct MCP/HTTP caller can pass an unresolved
-  // flow_path.
+  // e2e_test_path.
   if (flowPath.split(/[\\/]+/).includes("..")) {
     throw new FailureError(
-      `Invalid flow_path "${flowPath}": e2e test paths must not contain ".." segments — ` +
+      `Invalid e2e_test_path "${flowPath}": e2e test paths must not contain ".." segments — ` +
         `a ".." after a symlinked directory can name a different file than the spelling ` +
         `suggests, and the argent client always sends fully resolved paths. Pass the fully ` +
         `resolved absolute path to the e2e test's YAML.`,
@@ -3153,7 +3153,7 @@ function assertFlowPathShape(flowPath: string): void {
 }
 
 /**
- * The flow name a flow_path carries — the basename minus `.yaml`, held to the
+ * The flow name an e2e_test_path carries — the basename minus `.yaml`, held to the
  * charset of a saved flow's name, since it keys the report, __baselines__/ and
  * --output. Judged on the client's spelling: over HTTP a host path and its
  * client spelling are one string, and for an upload the client's is the only
@@ -3173,7 +3173,7 @@ function flowNameOf(clientPath: string): string {
       clientExt.toLowerCase() === ".yaml"
         ? `e2e test files must use the lowercase .yaml extension, not "${clientExt}".`
         : `e2e test files must use the .yaml extension.`;
-    throw new FailureError(`Invalid flow_path "${clientPath}": ${detail}`, {
+    throw new FailureError(`Invalid e2e_test_path "${clientPath}": ${detail}`, {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_path_extension",
       failure_area: "tool_server",
@@ -3189,7 +3189,7 @@ function flowNameOf(clientPath: string): string {
 }
 
 /**
- * The refusal of a `flow_path` whose basename is not in its directory's listing
+ * The refusal of an `e2e_test_path` whose basename is not in its directory's listing
  * as spelled. Thrown for the listing on this host ({@link resolveFlowSource})
  * and for the one on the client, which a linked run that composes reads from
  * the root's wire ({@link clientRootCanonical}), so one call fails alike on
@@ -3207,10 +3207,10 @@ function flowPathCasingError(
     spelling.state === "absent"
       ? `Pass the basename exactly as it appears on disk.`
       : spelling.addressable
-        ? `Pass flow_path with the on-disk basename "${spelling.actual}".`
+        ? `Pass e2e_test_path with the on-disk basename "${spelling.actual}".`
         : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — e2e test files must be lowercase .yaml.`;
   return new FailureError(
-    `Invalid flow_path "${clientPath}": the file must be named as it appears on disk — this ` +
+    `Invalid e2e_test_path "${clientPath}": the file must be named as it appears on disk — this ` +
       `filesystem matched "${suppliedBase}" case-insensitively` +
       (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
       `, so the e2e test name (which keys the report and __baselines__/) would be one no ` +
@@ -3225,7 +3225,7 @@ function flowPathCasingError(
 }
 
 /**
- * Resolve the flow YAML source a tool reads. An explicit `flow_path` is accepted
+ * Resolve the flow YAML source a tool reads. An explicit `e2e_test_path` is accepted
  * in two shapes. An upload (`viaUpload`) is a temp file this process wrote from
  * the client's content; it runs under the client's spelling, and execute()
  * refuses it when its steps need the files beside it, which the upload does not
@@ -3234,15 +3234,15 @@ function flowPathCasingError(
  * matched the client-recorded stat (`statVerified`) — presence alone is
  * satisfiable by a hand-crafted stat-less wrapper, so it is not containment.
  *
- * With no `flow_path` or `flow_file`, derive the saved-flow path from
- * project_root + name. When `flow_file` is set it must be one of the two shapes
+ * With no `e2e_test_path` or `e2e_test_file`, derive the saved-flow path from
+ * project_root + name. When `e2e_test_file` is set it must be one of the two shapes
  * its file-input boundary legitimately produces: the exact
  * `${project_root}/.argent/flows/${name}.yaml` path (an unlinked client), or a
  * temp file THIS server materialized from uploaded content
  * (`fileInput.viaUpload` — a linked client). Anything else is rejected: the schema
- * marks `flow_file` internal, and honoring an arbitrary path would let a caller
+ * marks `e2e_test_file` internal, and honoring an arbitrary path would let a caller
  * execute (and, under --update-baselines, write PNGs next to) any YAML on the
- * host through a parameter no caller is supposed to set — `flow_path`, gated on
+ * host through a parameter no caller is supposed to set — `e2e_test_path`, gated on
  * the boundary above, is the one legitimate spelling for a file outside the
  * flows dir. Either source's flow name must then appear in that flow's own
  * directory listing byte-for-byte — a case-insensitive filesystem opens files
@@ -3260,8 +3260,8 @@ export async function resolveFlowSource(
   params: {
     name?: string;
     project_root: string;
-    flow_file?: string;
-    flow_path?: string;
+    e2e_test_file?: string;
+    e2e_test_path?: string;
   },
   fileInput?: ResolvedFileInput,
   flowPathInput?: ResolvedFileInput
@@ -3269,8 +3269,8 @@ export async function resolveFlowSource(
   // The schemas' superRefine already enforces this for flow-execute and
   // flow-read-prerequisite; this copy covers direct execute() callers (tests,
   // in-process invocations) and keeps the params.name! below sound.
-  if ((params.name === undefined) === (params.flow_path === undefined)) {
-    throw new FailureError("Pass exactly one e2e test source: name or flow_path.", {
+  if ((params.name === undefined) === (params.e2e_test_path === undefined)) {
+    throw new FailureError("Pass exactly one e2e test source: name or e2e_test_path.", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_source",
       failure_area: "tool_server",
@@ -3281,14 +3281,14 @@ export async function resolveFlowSource(
   // Before either branch, so both are covered. `getFlowPath` validates the root
   // on the `name` branch only, and deleting `setActiveProjectRoot` — which ran
   // here, unconditionally, and whose body is today's assertValidProjectRoot —
-  // removed the check on the `flow_path` branch entirely, letting relative and
+  // removed the check on the `e2e_test_path` branch entirely, letting relative and
   // ".."-bearing roots through. That branch is no longer free of reads either:
   // ExecState.projectRoot carries it to a script: step as the child's
   // working directory, so this guard is what keeps a relative or
   // ".."-bearing root from becoming a script's cwd.
   assertValidProjectRoot(params.project_root);
 
-  if (params.flow_path !== undefined) {
+  if (params.e2e_test_path !== undefined) {
     // An upload is the client's own file, materialized by this process into a
     // temp directory it created (see file-inputs.ts): no host file is opened
     // on the caller's say-so, so the boundary gate below has nothing to
@@ -3304,7 +3304,7 @@ export async function resolveFlowSource(
     if (flowPathInput?.viaUpload) {
       const clientPath = flowPathInput.clientPath;
       assertFlowPathShape(clientPath);
-      return { filePath: params.flow_path, flowName: flowNameOf(clientPath), viaUpload: true };
+      return { filePath: params.e2e_test_path, flowName: flowNameOf(clientPath), viaUpload: true };
     }
 
     // The last conjunct is not containment — over HTTP both sides come from the
@@ -3314,12 +3314,12 @@ export async function resolveFlowSource(
     const isVerifiedHostPath =
       flowPathInput?.presentOnHost === true &&
       flowPathInput.statVerified === true &&
-      path.resolve(params.flow_path) === path.resolve(flowPathInput.clientPath);
+      path.resolve(params.e2e_test_path) === path.resolve(flowPathInput.clientPath);
 
     if (!isVerifiedHostPath) {
       throw new FailureError(
-        `Invalid flow_path "${params.flow_path}": explicit e2e test paths must be supplied through ` +
-          `the flow_path file-input boundary. Pass the client-local path and let the argent ` +
+        `Invalid e2e_test_path "${params.e2e_test_path}": explicit e2e test paths must be supplied through ` +
+          `the e2e_test_path file-input boundary. Pass the client-local path and let the argent ` +
           `client resolve it.`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -3330,7 +3330,7 @@ export async function resolveFlowSource(
       );
     }
 
-    assertFlowPathShape(params.flow_path);
+    assertFlowPathShape(params.e2e_test_path);
     const clientPath = flowPathInput!.clientPath;
     const flowName = flowNameOf(clientPath);
 
@@ -3345,12 +3345,12 @@ export async function resolveFlowSource(
     // with the boundary's stat vouching for the file, so a listing that lacks it
     // entirely is the same phantom spelling.
     const spelling = await classifyOnDiskSpelling(
-      path.dirname(params.flow_path),
+      path.dirname(params.e2e_test_path),
       path.basename(clientPath)
     );
     if (spelling.state !== "listed") throw flowPathCasingError(clientPath, spelling);
 
-    return { filePath: params.flow_path, flowName, viaUpload: false };
+    return { filePath: params.e2e_test_path, flowName, viaUpload: false };
   }
 
   const flowName = params.name!;
@@ -3366,21 +3366,21 @@ export async function resolveFlowSource(
   // flow that composes reports on in the root's wire (clientRootCanonical).
   // That temp dir is also what a run takes flowsDir
   // from, where `run:` targets and `__baselines__/` are not — the same contract
-  // as an uploaded flow_path above: a self-contained flow runs; execute()
+  // as an uploaded e2e_test_path above: a self-contained flow runs; execute()
   // refuses one whose steps use files on the client before any step, naming
   // those steps rather than a missing fragment or baseline, and runs one that
   // composes from the fragments the client sent with it.
-  if (params.flow_file && fileInput?.viaUpload)
-    return { filePath: params.flow_file, flowName, viaUpload: true };
+  if (params.e2e_test_file && fileInput?.viaUpload)
+    return { filePath: params.e2e_test_file, flowName, viaUpload: true };
   if (
-    params.flow_file &&
-    (!path.isAbsolute(params.flow_file) ||
-      params.flow_file.split(/[\\/]+/).includes("..") ||
-      !candidates.some((candidate) => path.resolve(candidate) === path.resolve(params.flow_file!)))
+    params.e2e_test_file &&
+    (!path.isAbsolute(params.e2e_test_file) ||
+      params.e2e_test_file.split(/[\\/]+/).includes("..") ||
+      !candidates.some((candidate) => path.resolve(candidate) === path.resolve(params.e2e_test_file!)))
   ) {
     throw new FailureError(
-      `Invalid flow_file "${params.flow_file}": it must resolve to the e2e test's path under the ` +
-        `project root ("${candidates.join('" or "')}"). flow_file is internal — leave it unset ` +
+      `Invalid e2e_test_file "${params.e2e_test_file}": it must resolve to the e2e test's path under the ` +
+        `project root ("${candidates.join('" or "')}"). e2e_test_file is internal — leave it unset ` +
         `and pass project_root + name.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -3391,7 +3391,7 @@ export async function resolveFlowSource(
     );
   }
 
-  // Same invariant as the flow_path branch, on the route every remote/MCP
+  // Same invariant as the e2e_test_path branch, on the route every remote/MCP
   // caller takes: nothing above consulted the directory, so on a
   // case-insensitive filesystem `name: "Snap"` opens a file really named
   // snap.yaml and then keys the report and __baselines__/ under "Snap" — a
@@ -3404,12 +3404,12 @@ export async function resolveFlowSource(
   // so it is one of the candidates, the one the client found first) or the
   // first candidate that exists here, `.argent/e2e` before `.argent/flows`.
   const picked = await pickE2eFile(candidates);
-  const filePath = params.flow_file || picked.path;
+  const filePath = params.e2e_test_file || picked.path;
   // When no candidate exists byte-for-byte (always the case on a case-sensitive
   // filesystem for a mis-cased name), list every candidate directory, or a
   // case-folded entry in `.argent/flows` would go unseen.
   const spellingDirs =
-    params.flow_file || picked.exists
+    params.e2e_test_file || picked.exists
       ? [path.dirname(filePath)]
       : candidates.map((candidate) => path.dirname(candidate));
   for (const dir of spellingDirs) {

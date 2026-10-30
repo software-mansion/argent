@@ -1103,7 +1103,7 @@ function buildRunPayload(
   args: ReturnType<typeof parseRunArgs>
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = {
-    flow_path: flowPath,
+    e2e_test_path: flowPath,
     project_root: projectRoot,
     // Headless runs never block on the LLM prerequisite handshake.
     prerequisiteAcknowledged: true,

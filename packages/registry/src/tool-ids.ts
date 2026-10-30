@@ -1,3 +1,5 @@
+import type { FileInputSpec } from "./file-inputs";
+
 /**
  * Former tool ids, each mapped to the id the tool has now. The tools declare
  * the same names in `ToolDefinition.aliases`, which is what the registry
@@ -65,4 +67,22 @@ export function canonicalToolArgs<T>(tool: string, args: T): T {
     delete out[former];
   }
   return (out ?? args) as T;
+}
+
+/**
+ * `specs` plus a copy of each caller-authored spec whose target has a former
+ * name, under that name: a client older than the rename wraps a file argument
+ * only under the name its caller wrote. A client-derived target gets no copy,
+ * or an older client would derive both names.
+ */
+export function withFormerParamSpecs(tool: string, specs: FileInputSpec[]): FileInputSpec[] {
+  const former = Object.entries(toolParamAliases(tool));
+  const copies = specs.flatMap((spec) =>
+    spec.path === `\${${spec.target}}`
+      ? former
+          .filter(([, current]) => current === spec.target)
+          .map(([name]) => ({ ...spec, target: name, path: `\${${name}}` }))
+      : []
+  );
+  return copies.length > 0 ? [...specs, ...copies] : specs;
 }

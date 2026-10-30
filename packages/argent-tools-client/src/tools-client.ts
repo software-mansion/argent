@@ -15,6 +15,7 @@ import {
   E2E_DIR_CLIENT_HEADER,
   LEGACY_E2E_DIRS,
   LINKED_CALL_HEADER,
+  canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
 } from "@argent/registry";
@@ -32,6 +33,7 @@ import {
   collectStepMembers,
   e2eShadowWarningFor,
   filesLogEnabled,
+  formerParamsForOlderServer,
   nameToE2ePathForOlderServer,
   stepForOlderServer,
 } from "./flow-files.js";
@@ -498,14 +500,15 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
-    let finalArgs = args;
+    let finalArgs = canonicalToolArgs(name, args);
     const tools = await fetchTools({ signal: opts?.signal });
     const meta = findTool(tools, name);
     // An older tool-server reads saved tests only from `.argent/flows/`, and
     // lists its tools by their `flow-*` ids only.
     const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));
     if (meta) {
-      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, args);
+      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, finalArgs);
+      finalArgs = formerParamsForOlderServer(meta, finalArgs);
     }
     if (olderServer && canonicalToolId(meta.name) === "e2e-add-step") {
       finalArgs = await stepForOlderServer(finalArgs, (tool) => findTool(tools, tool)?.name);

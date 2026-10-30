@@ -22,6 +22,7 @@ import {
   TOOL_FILE_EXTENSIONS,
   baselineKeyFor,
   canonicalFlowPath,
+  canonicalToolArgs,
   canonicalToolId,
   classifyOnDiskSpelling,
   e2eDirFor,
@@ -35,6 +36,7 @@ import {
   hasToolFileExtension,
   isClientFileArgument,
   nestedFlowTarget,
+  toolParamAliases,
   toolStepFiles,
   type FileInputMember,
   type NestedFlowTarget,
@@ -89,12 +91,18 @@ function isResolvedAbsolute(value: unknown): value is string {
  * reach past the project, so such a call sends none of the flow's files.
  */
 function namesValidFlow(args: Record<string, unknown>): boolean {
-  const { project_root, flow_path, name } = args;
+  let canonical: Record<string, unknown>;
+  try {
+    canonical = canonicalToolArgs("e2e-execute", args);
+  } catch {
+    return false;
+  }
+  const { project_root, e2e_test_path: testPath, name } = canonical;
   if (!isResolvedAbsolute(project_root)) return false;
   if (name === undefined) {
-    return isResolvedAbsolute(flow_path) && FLOW_FILE_NAME_PATTERN.test(path.basename(flow_path));
+    return isResolvedAbsolute(testPath) && FLOW_FILE_NAME_PATTERN.test(path.basename(testPath));
   }
-  return flow_path === undefined && typeof name === "string" && FLOW_NAME_PATTERN.test(name);
+  return testPath === undefined && typeof name === "string" && FLOW_NAME_PATTERN.test(name);
 }
 
 /**
@@ -670,7 +678,7 @@ function recordedStep(
   if (typeof text !== "string") return undefined;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = canonicalToolArgs(command, JSON.parse(text));
   } catch {
     return undefined;
   }
@@ -721,7 +729,7 @@ export async function collectStepMembers(
     const self = await collector.flow(path.dirname(recording), path.basename(recording));
     let runArgs = step.args;
     const named = nestedFlowTarget(runArgs);
-    if (named?.kind === "flow_path") {
+    if (named?.kind === "e2e_test_path") {
       const stem = path.basename(named.path, ".yaml");
       const base = path.basename(named.path);
       const dir = path.resolve(path.dirname(named.path));
@@ -732,7 +740,7 @@ export async function collectStepMembers(
       if (dirs.some((d) => path.resolve(d) === dir)) {
         await collector.flow(path.dirname(named.path), base);
         runArgs = { ...runArgs, name: stem };
-        delete runArgs.flow_path;
+        delete runArgs.e2e_test_path;
       }
     }
     const target = nestedFlowTarget(runArgs);
@@ -755,8 +763,8 @@ export async function collectStepMembers(
  * The args of an `e2e-execute` or `e2e-read-prerequisite` call by `name` for a
  * tool-server that predates `.argent/e2e/`: its `flow_file` spec has no
  * `paths`, so it reads only `.argent/flows/`. When the test is in
- * `.argent/e2e/`, the call names it by `flow_path` instead, as `argent e2e run`
- * does. Any other call is returned unchanged.
+ * `.argent/e2e/`, the call names it by `e2e_test_path` instead, as `argent e2e
+ * run` does. Any other call is returned unchanged.
  */
 export async function nameToE2ePathForOlderServer(
   tool: string,
@@ -772,7 +780,30 @@ export async function nameToE2ePathForOlderServer(
   const picked = await pickE2eFile(target.paths);
   if (!picked.exists || picked.legacy) return args;
   const { name: _name, ...rest } = args as Record<string, unknown>;
-  return { ...rest, flow_path: picked.path };
+  return { ...rest, e2e_test_path: picked.path };
+}
+
+/**
+ * `args` for a tool-server that predates a param rename, which lists the tool
+ * (`meta`) with the param under its former name only: that param under the
+ * former name. Any other call is returned unchanged.
+ */
+export function formerParamsForOlderServer(
+  meta: { name: string; inputSchema: Record<string, unknown> },
+  args: unknown
+): unknown {
+  const listed = meta.inputSchema.properties;
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return args;
+  if (typeof listed !== "object" || listed === null) return args;
+  const record = args as Record<string, unknown>;
+  let out: Record<string, unknown> | undefined;
+  for (const [former, current] of Object.entries(toolParamAliases(meta.name))) {
+    if (record[current] === undefined || current in listed || !(former in listed)) continue;
+    out ??= { ...record };
+    out[former] = out[current];
+    delete out[current];
+  }
+  return out ?? args;
 }
 
 /**

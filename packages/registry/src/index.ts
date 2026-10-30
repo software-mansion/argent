@@ -90,6 +90,7 @@ export {
   canonicalToolArgs,
   canonicalToolId,
   toolParamAliases,
+  withFormerParamSpecs,
 } from "./tool-ids";
 export {
   ServiceNotFoundError,

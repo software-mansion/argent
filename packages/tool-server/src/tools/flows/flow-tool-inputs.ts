@@ -27,7 +27,7 @@ export const UPLOAD_STAGE_BY_KIND = {
 /** The flow a nested `tool: flow-execute` step names, quoted in the refusal's step list. */
 function nestedFlowRef(args: Record<string, unknown>): string {
   if (typeof args.name === "string") return ` (name: ${args.name})`;
-  if (typeof args.flow_path === "string") return ` (flow_path: ${args.flow_path})`;
+  if (typeof args.e2e_test_path === "string") return ` (e2e_test_path: ${args.e2e_test_path})`;
   return "";
 }
 
@@ -42,7 +42,7 @@ function toolStepFilePaths(
 
 /**
  * A `file` input whose path is one argument of the step, as written (not a
- * path the tool builds out of several, such as `flow_file`).
+ * path the tool builds out of several, such as `e2e_test_file`).
  */
 function isFileArgument({ spec }: ToolStepFile): boolean {
   return spec.kind === "file" && spec.path === `\${${spec.target}}`;
@@ -218,7 +218,7 @@ export async function prepareToolStepInputs(
 /**
  * A nested `flow-execute` whose flow is on the client: the flow its `name`
  * names under its `project_root` is looked up in the files the client sent
- * with the call, and goes to the nested run as the `flow_file` upload of a
+ * with the call, and goes to the nested run as the `e2e_test_file` upload of a
  * linked call, so the nested run reads the client copy, also when this host
  * has a file at the same path. The nested run gets the same files with it
  * (`members`), so it finds its own `run:` fragments, nested flows,
@@ -254,9 +254,9 @@ async function prepareNestedFlow(
   };
   const resolved = await resolveFileInputs(
     { fileInputs: registry.getTool(toolId)?.fileInputs },
-    { ...args, flow_file: wire }
+    { ...args, e2e_test_file: wire }
   );
-  const input = resolved.fileInputs?.flow_file;
+  const input = resolved.fileInputs?.e2e_test_file;
   if (input) {
     input.canonical = hop.canonical;
     input.spelling = hop.spelling;
