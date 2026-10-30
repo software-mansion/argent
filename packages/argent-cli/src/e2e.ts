@@ -7,6 +7,7 @@ import {
   E2E_DIRS,
   FAILURE_CODES,
   FLOW_NAME_PATTERN,
+  SELECTABLE_PLATFORMS,
   e2eShadowWarning,
   resolveE2eFile,
 } from "@argent/registry";
@@ -174,7 +175,7 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ios | android | chromium | vega | ios-remote — narrow
+  --platform <p>         ${SELECTABLE_PLATFORMS.join(" | ")} — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
@@ -211,7 +212,9 @@ const RUN_OPTIONS = {
   "json-stream": { kind: "boolean" },
   "recursive": { kind: "boolean", alias: "r" },
   "device": { kind: "value" },
-  "platform": { kind: "value" },
+  // The tool-server's schema rejection carries no error_kind, so in a directory
+  // run it would stop the whole batch.
+  "platform": { kind: "value", choices: SELECTABLE_PLATFORMS },
   "output": { kind: "value" },
 } as const satisfies OptionSpecs;
 
@@ -255,7 +258,7 @@ export function parseRunArgs(argv: string[]): {
     jsonStream: options["json-stream"] === true,
   };
   // Their reads are truthy-guarded, so "" would be silently dropped.
-  for (const name of ["device", "platform", "output"] as const) {
+  for (const name of ["device", "output"] as const) {
     if (options[name] === "") throw new FlagParseException(`--${name} requires a value`);
   }
   if (positionals[0] !== undefined) out.flowRef = positionals[0];
