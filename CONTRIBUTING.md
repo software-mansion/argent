@@ -174,6 +174,14 @@ npm run test:watch -w @argent/registry
 npm run test:watch -w @argent/tool-server
 ```
 
+### Seeing what Argent sends to agents
+
+`npm run render:agent-context` renders what the MCP server sends for your checkout: each
+tool's `tools/list` entry and the server instructions, as markdown in
+`packages/tool-server/agent-context/` (not committed). Run it when you change tool
+descriptions, tool schemas or the server instructions. See
+[packages/tool-server/src/tools/README.md](packages/tool-server/src/tools/README.md).
+
 ---
 
 ## Code style
