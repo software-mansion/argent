@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { withDeadline, BRANCH_DEADLINE_MS } from "../src/tools/devices/list-devices";
+import {
+  withDeadline,
+  BRANCH_DEADLINE_MS,
+  EXTERNAL_FOLDABLE_BUDGET_MS,
+} from "../src/tools/devices/list-devices";
+import { EXTERNAL_PROBE_TIMEOUT_MS } from "../src/utils/external-devices";
 import {
   VEGA_DISCOVERY_LIST_TIMEOUT_MS,
   VEGA_DISCOVERY_INFO_TIMEOUT_MS,
@@ -46,6 +51,16 @@ describe("discovery timeout vs backstop invariant", () => {
     const harmonyWorstCase = Math.max(HARMONY_LIST_TIMEOUT_MS, HDC_LIST_TIMEOUT_MS);
     expect(harmonyWorstCase).toBeLessThan(BRANCH_DEADLINE_MS);
     expect(BRANCH_DEADLINE_MS - harmonyWorstCase).toBeGreaterThanOrEqual(MIN_MARGIN_MS);
+  });
+
+  it("the external branch's full worst case stays comfortably under the branch deadline", () => {
+    // The liveness probes run in parallel, then the foldable check of the lent
+    // simulators, which is capped by its own budget whatever its `simctl` calls
+    // do. A breach here would drop every lent device, not only the foldable
+    // flag.
+    const externalWorstCase = EXTERNAL_PROBE_TIMEOUT_MS + EXTERNAL_FOLDABLE_BUDGET_MS;
+    expect(externalWorstCase).toBeLessThan(BRANCH_DEADLINE_MS);
+    expect(BRANCH_DEADLINE_MS - externalWorstCase).toBeGreaterThanOrEqual(MIN_MARGIN_MS);
   });
 });
 

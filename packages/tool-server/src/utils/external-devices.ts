@@ -228,9 +228,10 @@ export async function disposeExternalDeviceServices(
 /**
  * How long to wait for a device's simulator-server to answer the liveness
  * probe. Local loopback, so this is generous. It only has to beat a wedged
- * process.
+ * process. The probes of all devices run in parallel, so this is also the
+ * worst case of the whole probe step.
  */
-const PROBE_TIMEOUT_MS = 800;
+export const EXTERNAL_PROBE_TIMEOUT_MS = 800;
 
 /** Test seam: forget the remembered capability sets used for revocation. */
 export function __resetExternalDeviceCacheForTesting(): void {
@@ -275,7 +276,7 @@ async function probeAlive(device: ExternalDevice): Promise<boolean> {
   if (!device.simulatorServer) return true;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), EXTERNAL_PROBE_TIMEOUT_MS);
 
   try {
     /**

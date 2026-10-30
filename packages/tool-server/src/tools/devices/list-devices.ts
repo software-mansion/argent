@@ -9,7 +9,7 @@ import {
 } from "../../utils/adb";
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
-import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import { isFoldableSimulator, listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
@@ -94,6 +94,11 @@ type HarmonyDevice = {
 type ExternalListedDevice = {
   capabilities: string[];
   external: true;
+  /**
+   * Present and true for a foldable simulator (the iPhone Duo), as on a plain
+   * iOS row.
+   */
+  foldable?: true;
   id: string;
   kind: "device" | "emulator" | "simulator";
   name: string;
@@ -245,7 +250,8 @@ async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
 // and truncates branches that would have completed, dropping real devices. The long
 // pole is Vega at ~20s (6s `device list` + two serial 5s `ps` probes + 4s `device
 // info` on the recovery path); Android is ~11s; the two HarmonyOS branches run
-// concurrently and top out at the 8s `hdc list targets`; iOS / AVD-list / Chromium
+// concurrently and top out at the 8s `hdc list targets`; the external branch is
+// ~6s (0.8s liveness probe + the 5s foldable budget); iOS / AVD-list / Chromium
 // are far below. list-devices-deadline.test.ts asserts the margin from the same
 // exported constants, so a future timeout bump fails loudly instead of silently
 // breaching it.
@@ -274,10 +280,11 @@ export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string)
   }
 }
 
-function toListedExternal(device: ExternalDevice): ExternalListedDevice {
+function toListedExternal(device: ExternalDevice, foldable: boolean): ExternalListedDevice {
   return {
     capabilities: Array.from(device.capabilities).sort(),
     external: true,
+    ...(foldable ? { foldable: true as const } : {}),
     id: device.id,
     kind: device.kind,
     name: device.name,
@@ -291,6 +298,56 @@ function toListedExternal(device: ExternalDevice): ExternalListedDevice {
     /** Mirror the id into the key the agent associates with the platform. */
     ...(device.platform === "ios" ? { udid: device.id } : { serial: device.id }),
   };
+}
+
+type ExternalEntry = { device: ExternalDevice; foldable: boolean };
+
+/**
+ * How long the external branch waits for the foldable check of its lent
+ * simulators. The check reads the provider's device set and (the first time a
+ * device type is seen) the device-type list and profile. Each of those `simctl`
+ * and `plutil` calls has its own timeout and in series they can outlast
+ * `BRANCH_DEADLINE_MS`, which would drop every lent device, Android ones
+ * included. Past this budget a lent simulator is listed without the flag. The
+ * check keeps running and caches what it finds, so a later call gets the flag.
+ */
+export const EXTERNAL_FOLDABLE_BUDGET_MS = 5_000;
+
+/**
+ * Pair each external device with whether it is a foldable simulator (the iPhone
+ * Duo), read from the provider's device set. An agent needs the flag to know
+ * `fold` applies, whoever drives the device. This runs inside the external
+ * discovery branch, after the liveness probe, so it overlaps the other
+ * branches. The branch's worst case is the probe plus
+ * {@link EXTERNAL_FOLDABLE_BUDGET_MS}, under `BRANCH_DEADLINE_MS`.
+ * `isFoldableSimulator` memoizes every verdict the device set answers, so a
+ * simulator the set lists costs one `simctl` call per tool-server run.
+ */
+async function withFoldableFlags(external: readonly ExternalDevice[]): Promise<ExternalEntry[]> {
+  const simulators = external.filter(
+    (device) => device.platform === "ios" && device.kind === "simulator"
+  );
+
+  if (simulators.length === 0) return external.map((device) => ({ device, foldable: false }));
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const budget = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), EXTERNAL_FOLDABLE_BUDGET_MS);
+  });
+
+  try {
+    return await Promise.all(
+      external.map(async (device) => ({
+        device,
+        foldable:
+          simulators.includes(device) &&
+          (await Promise.race([isFoldableSimulator(device.id).catch(() => false), budget])),
+      }))
+    );
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -400,16 +457,19 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
         : [],
       /**
        * One directory stat when no provider is registered (the common case)
-       * and a short HTTP probe per provider otherwise.
+       * and a short HTTP probe per provider otherwise, then the foldable
+       * check of each lent simulator.
        */
       withDeadline(
-        listExternalDevices().catch(() => []),
+        listExternalDevices()
+          .catch(() => [])
+          .then(withFoldableFlags),
         [],
         "external"
       ),
     ]);
 
-    const externalShadows = externalShadowIds(external);
+    const externalShadows = externalShadowIds(external.map(({ device }) => device));
 
     const iosTagged: IosDevice[] = ios
       .filter((simulator) => !externalShadows.has(simulator.udid))
@@ -489,7 +549,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       ...chromium,
       ...vega,
       ...harmonyTagged,
-      ...external.map(toListedExternal),
+      ...external.map(({ device, foldable }) => toListedExternal(device, foldable)),
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
