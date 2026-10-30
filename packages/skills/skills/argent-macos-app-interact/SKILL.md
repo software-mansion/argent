@@ -40,7 +40,7 @@ A click that opens an open or save panel shows a file list that `describe` canno
 
 1. After the click: `file-panel {action: "choose", path: "/abs/path"}`. It waits up to `timeoutMs` (default 5000) for the panel. A save panel takes the file to write, in an existing folder; on macOS 15 and later, its extension picks the file format.
 2. To close it instead: `file-panel {action: "cancel"}`; nothing is opened or saved. To close an edited new document without saving: `discard` (the panel's Delete or Don't Save button, `discardButton` in `list`).
-3. To skip the panel: `file-panel {action: "stub", path: "/abs/path"}` before the click; the next panel is answered without appearing.
+3. To skip the panel: `file-panel {action: "stub", path: "/abs/path"}` before the click; the next panel of its kind (`panelKind`; default: open for an existing path, save for a new one) is answered without appearing. A panel of the other kind opens as usual.
 4. With more than one panel open, `file-panel {action: "list"}`, then pass `panel`.
 
 ## Tree

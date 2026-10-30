@@ -352,6 +352,7 @@ describe("file-panel", () => {
         method: "Panel.stub",
         params: {
           mode: "answer",
+          kind: "open",
           paths: [fileA, fileB],
           tokens: [`token-for:${fileA}`, `token-for:${fileB}`],
         },
@@ -372,7 +373,7 @@ describe("file-panel", () => {
     expect(calls).toEqual([
       {
         method: "Panel.stub",
-        params: { mode: "answer", path: newFile, tokens: [`token-for:${newFile}`] },
+        params: { mode: "answer", kind: "save", path: newFile, tokens: [`token-for:${newFile}`] },
       },
     ]);
   });
@@ -432,6 +433,7 @@ describe("file-panel", () => {
       mode: "answer",
       panelKind: "save",
     });
+    expect(calls.at(-1)?.params).toMatchObject({ kind: "save", path: pkg });
     expect(granted()).toEqual([pkg]);
   });
 

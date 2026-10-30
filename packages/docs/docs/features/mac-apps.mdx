@@ -75,6 +75,8 @@ The menu bar of a background app is not on the screen, so the agent does not cli
 
 A system service draws the file list of an open panel or a save panel, so the agent cannot read or click this list. The agent answers the panel with a path, and the app reads or writes the file as after a choice of the user. When the app asks whether to keep an edited new document, the agent can delete the document instead.
 
+The agent can prepare an answer before it opens a panel. Only a panel of the kind that the agent prepared the answer for receives it. Thus a save panel that comes first, for example after "Do you want to save the changes?", does not write over the file that the agent wants to open.
+
 ### React Native
 
 A Debug build of a react-native-macos app loads its JavaScript from Metro. Start Metro before the agent starts the app.

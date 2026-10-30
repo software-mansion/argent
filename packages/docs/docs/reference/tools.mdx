@@ -308,7 +308,7 @@ A system service draws the file list of a file panel. Thus `describe` cannot rea
 | `paths`     | For `choose` and `stub`: several paths, for an open panel that accepts more than one item. Give `path` or `paths`, not both                                                         |
 | `panel`     | For `choose`, `cancel` and `discard`: the number of the panel from `list`. Argent needs it only when more than one panel is open                                                    |
 | `stubMode`  | For `stub`: `answer` (the default) answers the next panel with the path, `cancel` cancels the next panel, `off` removes an answer that is still prepared                            |
-| `panelKind` | For `stub` with `stubMode` `answer`: `open` or `save`, the kind of the next panel. When it is absent, see the rules below                                                           |
+| `panelKind` | For `stub` with `stubMode` `answer`: `open` or `save`, the kind of panel that receives the answer. When it is absent, see the rules below                                           |
 | `timeoutMs` | For `choose`, `cancel` and `discard`: how long to wait for the panel after the click that opens it. Default `5000`, maximum `30000`                                                 |
 
 | Action    | Result                                                                                                                                                                                          |
@@ -317,18 +317,18 @@ A system service draws the file list of a file panel. Thus `describe` cannot rea
 | `choose`  | `{ chosen, panel, kind, paths }`. The panel closes, and the app receives the paths                                                                                                              |
 | `cancel`  | `{ cancelled, panel }`                                                                                                                                                                          |
 | `discard` | `{ discarded, panel }`. The app closes the new document without saving it                                                                                                                       |
-| `stub`    | `{ armed, mode, panelKind }`, without `panelKind` for `stubMode` `cancel` and `off`. The next panel that the app opens gets the prepared answer and does not appear                             |
+| `stub`    | `{ armed, mode, panelKind }`, without `panelKind` for `stubMode` `cancel` and `off`. The next panel of that kind that the app opens gets the prepared answer and does not appear                |
 
-A prepared answer stays until the next panel opens, until a `stub` with `stubMode` `off`, or until the tool-server disconnects from the app.
+A prepared answer stays until the next panel of its kind opens, until a `stub` with `stubMode` `off`, or until the tool-server disconnects from the app. A panel of the other kind opens as usual. For example, an app can ask to save the changes before it opens a file. Then the save panel opens, and the open panel after it receives the prepared answer. A prepared cancel (`stubMode` `cancel`) goes to the next panel of either kind.
 
-For `stub` without `panelKind`, Argent finds the kind of the next panel from the paths:
+For `stub` without `panelKind`, Argent finds the kind of panel for the answer from the paths:
 
 - All paths exist: an open panel.
 - One path that does not exist yet: a save panel.
 
 Argent gives a sandboxed app access to each chosen path, and only when a panel takes the answer, as a panel does. For a save panel, this is the file, not its folder.
 
-A prepared answer that the next panel cannot take does not answer it, and the panel opens as usual. Examples:
+A prepared answer that the next panel of its kind cannot take does not answer it, and the panel opens as usual. Examples:
 
 - Several paths for a panel with a single selection.
 - A folder for a panel that takes only files, or for a save panel.
