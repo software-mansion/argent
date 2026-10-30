@@ -85,9 +85,9 @@ launch, and launching is launch-app's job, never a command side effect):
   XCUICoordinate (public API; orientation-safe). `tap` runs `numberOfTaps`
   1 (default) as a tap and 2 as the native `doubleTap()`. Higher counts loop
   single taps on the device, and that loop is not one gesture: XCUICoordinate
-  has no N-tap API, each tap is its own synthesized event behind XCTest's
-  idle wait and an XPC round trip, hundreds of milliseconds apart, so the
-  taps land separately and do not trigger a multi-tap recognizer.
+  has no N-tap API, each tap is its own synthesized event and XPC round trip,
+  about 300 ms apart on a simulator, which a double-tap recognizer can still
+  pair.
   `drag` presses for `holdMs` at the start, moves at the velocity
   `durationMs` implies, and rests `settle`-long before lifting; a long-press
   pickup of a draggable item needs a `holdMs` of about 500 ms or more, since
@@ -214,6 +214,16 @@ Every command runs under a runner-side main-thread watchdog budget
 under a larger transport window (default `RUNNER_COMMAND_TIMEOUT_MS`,
 runner-client.ts; overrides in runner-commands.ts: `GESTURE_TIMEOUT_MS` and
 the `type`/`snapshot` call sites).
+
+XCTest waits up to 60s before and after every synthesized event for the app
+to report idle, and a screen that never does (a paused
+`UIViewPropertyAnimator`, as expo-blur keeps) would stall each gesture for two
+minutes. Gestures and the three typing commands skip those waits and instead
+wait at most 2s (`preEventSettleTimeout`,
+ArgentRunnerSession+Quiescence.swift) for the app to go idle before the event,
+so a command sent right after a navigation lands on the new screen. The skip
+is XCTest SPI; where it is missing, XCTest's own waits apply, which is what the
+gesture budget below is sized for.
 
 | Command class              | Runner budget | Client window |
 | -------------------------- | ------------- | ------------- |

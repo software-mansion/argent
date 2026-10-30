@@ -69,8 +69,9 @@ extension CommandKind {
         switch self {
         // XCTest types long strings in real time, so typing needs extra room.
         case .type: return 55
-        // Gestures must outlast XCTest's ~60s pre-event idle wait. A screen that
-        // never reports quiescent stalls the wait until XCTest gives up and
+        // Gestures must outlast XCTest's ~60s pre-event idle wait where the
+        // runner cannot skip it (ArgentRunnerSession+Quiescence.swift). A screen
+        // that never reports quiescent stalls the wait until XCTest gives up and
         // synthesizes the event anyway, and a shorter budget would abandon a
         // command that still completes.
         case .tap, .longPress, .drag: return 75

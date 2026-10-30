@@ -21,10 +21,10 @@ extension ArgentRunnerSession {
 
     /// Taps at the wire coordinates: one tap, the native double-tap when
     /// `numberOfTaps` is 2, or a loop of single taps above that. XCUICoordinate
-    /// has no N-tap API, and the loop is not one gesture on hardware: each tap
-    /// is its own synthesized event behind XCTest's idle wait and an XPC round
-    /// trip, hundreds of milliseconds apart, so the taps land separately and do
-    /// not trigger a multi-tap recognizer. That is documented, not refused.
+    /// has no N-tap API, and the loop is not one gesture: each tap is its own
+    /// synthesized event and XPC round trip, about 300 ms apart on a
+    /// simulator, which a double-tap recognizer can still pair. That is
+    /// documented, not refused.
     func performTap(_ request: CommandRequest, on app: XCUIApplication)
         -> Envelope
     {
@@ -39,15 +39,17 @@ extension ArgentRunnerSession {
 
         let coordinate = point(app, x, y, relativeTo: app.frame.origin)
 
-        switch taps {
-        case 1:
-            coordinate.tap()
-        case 2:
-            coordinate.doubleTap()
-        default:
-            // Separate taps, not one gesture (see the doc comment above).
-            for _ in 0..<taps {
+        skippingQuiescence(of: app) {
+            switch taps {
+            case 1:
                 coordinate.tap()
+            case 2:
+                coordinate.doubleTap()
+            default:
+                // Separate taps, not one gesture (see the doc comment above).
+                for _ in 0..<taps {
+                    coordinate.tap()
+                }
             }
         }
 
@@ -63,7 +65,11 @@ extension ArgentRunnerSession {
         }
 
         let seconds = max(0.05, (request.durationMs ?? 800) / 1000)
-        point(app, x, y, relativeTo: app.frame.origin).press(forDuration: seconds)
+        let coordinate = point(app, x, y, relativeTo: app.frame.origin)
+
+        skippingQuiescence(of: app) {
+            coordinate.press(forDuration: seconds)
+        }
 
         return .success(MessagePayload(message: "long-pressed"))
     }
@@ -112,12 +118,14 @@ extension ArgentRunnerSession {
             velocity = .default
         }
 
-        start.press(
-            forDuration: startHold,
-            thenDragTo: end,
-            withVelocity: velocity,
-            thenHoldForDuration: endHold
-        )
+        skippingQuiescence(of: app) {
+            start.press(
+                forDuration: startHold,
+                thenDragTo: end,
+                withVelocity: velocity,
+                thenHoldForDuration: endHold
+            )
+        }
 
         return .success(MessagePayload(message: "dragged"))
     }
