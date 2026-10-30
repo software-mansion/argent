@@ -717,9 +717,10 @@ describe("boot-device — input validation (exclusive udid/avdName)", () => {
     const error = await tool.execute!({}, { udid }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(InvalidToolInputError);
     expect((error as Error).message).toBe(`'${udid}' is not \`remote:<simulator udid>\`.`);
-    expect(getFailureSignal(error)?.error_code).toBe(
-      FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID
-    );
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+      failure_stage: "boot_device_target_selection",
+    });
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 
