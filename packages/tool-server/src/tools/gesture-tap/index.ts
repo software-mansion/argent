@@ -173,6 +173,9 @@ Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app 
 On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-only.
 Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker)<flag:harmonyos> and HarmonyOS uses \`describe\` (the \`uitest\` layout dump)</flag:harmonyos>, since the native and RN-specific discovery tools don't apply<flag:harmonyos> to either</flag:harmonyos>. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
+  // On a physical iPhone the first call can wait minutes for the runner to build and start, and
+  // the MCP fetch timeout's abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
   zodSchema,
   capability,

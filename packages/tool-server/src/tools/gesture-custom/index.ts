@@ -206,6 +206,9 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
   interpolate: 10`,
   zodSchema,
   capability,
+  // On a physical iPhone the first call can wait minutes for the runner to build and start, and
+  // the MCP fetch timeout's abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   // Declare the runner only for a train execute can replay. A rejected train must not pay a runner cold start.
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
