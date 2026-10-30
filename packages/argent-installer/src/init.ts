@@ -265,7 +265,7 @@ export async function init(args: string[]): Promise<void> {
       customRoot,
     });
 
-    p.log.step(pc.bold("Step 3: Rules & Agents"));
+    p.log.step(pc.bold("Step 3: Rules"));
 
     const copyResults = copyRulesAndAgents(
       writtenAdapters,
@@ -276,9 +276,9 @@ export async function init(args: string[]): Promise<void> {
     );
 
     if (copyResults.length > 0) {
-      p.note(copyResults.join("\n"), "Rules & Agents");
+      p.note(copyResults.join("\n"), "Rules");
     } else {
-      p.log.info(pc.dim("No rules or agents to copy for selected editors."));
+      p.log.info(pc.dim("No rules to copy for selected editors."));
     }
 
     printSummary({
@@ -362,7 +362,7 @@ function printSummary({
       : `${pc.yellow("MCP server")} NOT configured — no editor config was written`,
     `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
     `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
-    `${pc.green("Rules & agents")} ${copiedRules ? "copied" : "n/a"}`,
+    `${pc.green("Rules")} ${copiedRules ? "copied" : "n/a"}`,
   ];
 
   p.note(summaryLines.join("\n"), "Summary");
@@ -375,7 +375,7 @@ function printSummary({
         `${pc.bold("Commit")} so your team shares the same setup:`,
         `  ${pc.cyan("package.json")} + your lockfile`,
         `  the written MCP config (.mcp.json, .cursor/mcp.json, …)`,
-        `  ${pc.cyan(".argent/install.json")}${wroteProjectTelemetryOptOut ? ` + ${pc.cyan(".argent/config.json")}` : ""}, and the skills/rules/agents files`,
+        `  ${pc.cyan(".argent/install.json")}${wroteProjectTelemetryOptOut ? ` + ${pc.cyan(".argent/config.json")}` : ""}, and the skills and rules files`,
         "",
         `Teammates then get argent on ${pc.cyan("npm install")} — no global install, no ${pc.cyan("argent init")}.`,
         pc.dim(

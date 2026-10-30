@@ -96,92 +96,6 @@ import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 
 const execFileAsync = promisify(execFile);
 
-// The exactly-one check over `udid`/`avdName`/`vvdImage`/`harmonyInstance`/`electronAppPath`
-// lives in `execute`, so each field's `.describe()` restates the constraint for MCP clients.
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .optional()
-    .describe(
-      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
-    ),
-  avdName: z
-    .string()
-    .optional()
-    .describe(
-      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
-    ),
-  vvdImage: z
-    .string()
-    .optional()
-    .describe(
-      "Vega (Fire TV): VVD image to boot: the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`). Starts the single SDK-managed Vega Virtual Device. Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
-    ),
-  harmonyInstance: z
-    .string()
-    .optional()
-    .describe(
-      'HarmonyOS: emulator instance to start: the `name` of a `kind: "emulator"` device from `list-devices` (e.g. `Phone_1`); the `harmony-emulator-<name>` id that entry reports as its `udid` is accepted too. Provide exactly one of `udid`, `avdName`, `vvdImage`, `harmonyInstance`, or `electronAppPath`.'
-    )
-    .meta({ [FLAG_META_KEY]: HARMONY_FLAG }),
-  bootTimeoutMs: z
-    .number()
-    .int()
-    .min(30_000)
-    .max(900_000)
-    .optional()
-    .describe(
-      "Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega<flag:harmonyos>, 180000 (3 min) on HarmonyOS, where with `force` it spans the shutdown as well as the boot</flag:harmonyos>. Clamped to [30s, 15min]. Ignored on iOS."
-    ),
-  force: z
-    .boolean()
-    .optional()
-    .describe(
-      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to the `hdc` connect key it registered under, since the emulator manager never reports one: without it the instance is left alone and the payload names the instance rather than a key (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos> Ignored for Electron, which always spawns a fresh process."
-    ),
-  sound: z
-    .boolean()
-    .optional()
-    .describe(
-      "Android only: boot the emulator with audio output enabled. Defaults to false: argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which argent never mutes."
-    ),
-  guestVulkan: z
-    .boolean()
-    .optional()
-    .describe(
-      "Android on a macOS host only: boot the emulator with guest Vulkan. Defaults to false: guest Vulkan crashes Chrome's GPU process, which breaks Chrome and Custom Tab sign-in flows. Without it apps find no Vulkan device, although the guest still lists the Vulkan features, so a Vulkan-only renderer such as WebGPU (react-native-wgpu) draws nothing; pass `true` to test one. Takes effect at boot: an emulator already running in the other mode is reused with a `note`, and `force: true` reboots it. A boot snapshot saved in the other mode can't be reused, so the first boot after toggling is a slower cold boot. The `ARGENT_EMULATOR_GUEST_VULKAN` env var flips this default to true. Ignored on other hosts and platforms."
-    ),
-  headless: z
-    .boolean()
-    .optional()
-    .describe(
-      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which have no equivalent GUI step."
-    ),
-  electronAppPath: z
-    .string()
-    .optional()
-    .describe(
-      "Electron: path to the Electron app to launch. Either a packaged .app bundle / executable, or a project directory whose package.json points the Electron binary at the entry script. Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
-    ),
-  electronPort: z
-    .number()
-    .int()
-    .min(1024)
-    .max(65535)
-    .optional()
-    .describe(
-      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `chromium-cdp-<port>`."
-    ),
-  electronArgs: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Electron-only: extra CLI arguments forwarded to the Electron binary after the app path."
-    ),
-});
-
-type BootDeviceParams = z.infer<typeof zodSchema>;
-
 type AndroidBootResult = {
   platform: "android";
   serial: string;
@@ -2199,27 +2113,108 @@ const capability: ToolCapability = {
   harmony: { emulator: true },
 };
 
+// The exactly-one check over `udid`/`avdName`/`vvdImage`/`harmonyInstance`/`electronAppPath`
+// lives in `execute`; the tool description states the constraint for MCP clients.
+const zodSchema = z.object({
+  udid: z.string().optional().describe("iOS: simulator UDID to boot (from `list-devices`)."),
+  avdName: z
+    .string()
+    .optional()
+    .describe(
+      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`)."
+    ),
+  vvdImage: z
+    .string()
+    .optional()
+    .describe(
+      "Vega (Fire TV): VVD image to boot: the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`)."
+    ),
+  harmonyInstance: z
+    .string()
+    .optional()
+    .describe(
+      'HarmonyOS: emulator instance to start: the `name` of a `kind: "emulator"` device from `list-devices` (e.g. `Phone_1`); the `harmony-emulator-<name>` id that entry reports as its `udid` is accepted too.'
+    )
+    .meta({ [FLAG_META_KEY]: HARMONY_FLAG }),
+  bootTimeoutMs: z
+    .number()
+    .int()
+    .min(30_000)
+    .max(900_000)
+    .optional()
+    .describe(
+      "Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega<flag:harmonyos>, 180000 (3 min) on HarmonyOS, where with `force` it spans the shutdown as well as the boot</flag:harmonyos>."
+    ),
+  force: z
+    .boolean()
+    .optional()
+    .describe(
+      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to its `hdc` connect key: without it the instance is left alone and its key stays unresolved (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos> Ignored for Electron, which always spawns a fresh process."
+    ),
+  sound: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android only (argent never mutes other platforms): boot the emulator with audio output enabled. Defaults to false, so several agent-driven emulators don't all play sound on the host; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true`. The first boot after toggling is a slower cold boot (the snapshot was saved in the other audio mode). The `boot-sound` argent flag flips this default to true."
+    ),
+  guestVulkan: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android on a macOS host only: boot the emulator with guest Vulkan. Defaults to false: guest Vulkan crashes Chrome's GPU process, which breaks Chrome and Custom Tab sign-in flows. Without it apps find no Vulkan device, although the guest still lists the Vulkan features, so a Vulkan-only renderer such as WebGPU (react-native-wgpu) draws nothing; pass `true` to test one. Takes effect at boot: an emulator already running in the other mode is reused with a `note`, and `force: true` reboots it. A boot snapshot saved in the other mode can't be reused, so the first boot after toggling is a slower cold boot. The `ARGENT_EMULATOR_GUEST_VULKAN` env var flips this default to true. Ignored on other hosts and platforms."
+    ),
+  headless: z
+    .boolean()
+    .optional()
+    .describe(
+      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server. The `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) forces this host-wide."
+    ),
+  electronAppPath: z
+    .string()
+    .optional()
+    .describe(
+      "Electron: path to the Electron app to launch. Either a packaged .app bundle / executable, or a project directory whose package.json points the Electron binary at the entry script."
+    ),
+  electronPort: z
+    .number()
+    .int()
+    .min(1024)
+    .max(65535)
+    .optional()
+    .describe(
+      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `chromium-cdp-<port>`."
+    ),
+  electronArgs: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Electron-only: extra CLI arguments forwarded to the Electron binary after the app path."
+    ),
+});
+
+type BootDeviceParams = z.infer<typeof zodSchema>;
+
 export function createBootDeviceTool(
   registry: Registry
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
+    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, <flag:harmonyos>start a HarmonyOS emulator, </flag:harmonyos>or spawn an Electron app and wait until it is ready to accept interactions.
+Pass exactly one of 'udid', 'avdName', 'vvdImage', <flag:harmonyos>'harmonyInstance', </flag:harmonyos>or 'electronAppPath'; it picks the platform.
+Use when starting a session, once you have picked a target.
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, note? } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
+On Android the tool hot-boots from the AVD's default_boot snapshot when usable and falls back to a slower cold boot otherwise. Vega starts the single SDK-managed VVD (~10s). If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.<flag:harmonyos>
+HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for it to register with 'hdc' and returns its connect key as 'udid', the id the interaction tools drive. The manager reports no readiness signal and never names a port. When the key could not be resolved, the payload names the instance instead, and a 'note' is present whenever the boot left something unproven: no key and why, or a key that is not yet answering or could not be checked against the instance. Huawei serves the emulator images only within mainland China, so a host outside it usually has no instance to start; one that already has an image is started like any other.</flag:harmonyos>`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot",
     interaction: {
       startedMsg: ({ params }) => `Starting ${bootTarget(params)}`,
       completedMsg: ({ params }) => `Started ${bootTarget(params)}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to start ${bootTarget(params)}: ${failureSignal.error_code}`,
     },
-    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, <flag:harmonyos>start a HarmonyOS emulator, </flag:harmonyos>or spawn an Electron app and wait until it is ready to accept interactions.
-Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), <flag:harmonyos>'harmonyInstance' for a HarmonyOS emulator instance (the 'name' of a harmony device from list-devices), </flag:harmonyos>or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
-Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, note? } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
-Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.<flag:harmonyos>
-HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for it to register with 'hdc' and returns its connect key as 'udid', the id the interaction tools drive. The manager itself reports no readiness signal and never names a port, so an instance that is already running is left alone unless you pass 'force: true'; when the key could not be resolved the payload names the instance instead, and a 'note' is present whenever the boot left something unproven: no key and why, or a key that is not yet answering or could not be checked against the instance. Huawei serves the emulator images only within mainland China, so a host outside it usually has no instance to start; one that already has an image is started like any other.</flag:harmonyos>`,
-    alwaysLoad: true,
-    searchHint:
-      "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot",
-    zodSchema,
     capability,
     services: () => ({}),
     async execute(_services, params) {

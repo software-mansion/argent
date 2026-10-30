@@ -67,27 +67,6 @@ const UNKNOWN_DEVICE_NOTE =
   "So taps and swipes on that device still return a screenshot and an element tree, and the " +
   "capture loads the app while the profiler records. To avoid this, run the app on its own Metro port.";
 
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: z
-    .string()
-    .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
-    ),
-  sample_interval_us: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(100)
-    .describe("CPU sampling interval in microseconds (default 100)"),
-  force: z
-    .boolean()
-    .default(false)
-    .describe(
-      "Take over an active profiling session even when it is owned by another tool-server and still fresh. Set to true only when you know the prior owner is gone."
-    ),
-});
-
 type ReadStateResult =
   | { hookExists: false }
   | { hookExists: true; rendererInterfaceFound: false }
@@ -107,11 +86,39 @@ function safeGetState(registry: Registry, urn: string): ServiceState | null {
   }
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: z
+    .string()
+    .describe(
+      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+    ),
+  sample_interval_us: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(100)
+    .describe("CPU sampling interval in microseconds"),
+  force: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Take over an active profiling session even when it is owned by another tool-server and still fresh. Set to true only when you know the prior owner is gone."
+    ),
+});
+
 export function createReactProfilerStartTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-start",
+    description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
+Use when you need to profile a user interaction.
+On an iOS simulator or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
+After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } instead, without clobbering their data. BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains.
+Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
+    zodSchema,
     interaction: {
       startedMsg: () => "Starting React profiler",
       completedMsg: ({ result }) =>
@@ -119,14 +126,6 @@ export function createReactProfilerStartTool(
       failedMsg: ({ failureSignal }) =>
         `Failed to start React profiler: ${failureSignal.error_code}`,
     },
-    description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
-Delegates React commit capture to the in-app React DevTools backend (ri.startProfiling).
-If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session, but BEFORE OVERTAKING - ask the user for approval first, see relevant skill for guidance.
-Before calling this, ask the user if they also want native profiling (native-profiler-start), and recommend running both in parallel for a complete picture.
-After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above.
-Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
-    zodSchema,
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
@@ -299,7 +298,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
             age_seconds: staleness.ageSeconds,
             stale: staleness.stale,
             how_to_reclaim:
-              "Another profiling session is already active — see the `owner` field. Ask the user before taking over and explain that the prior session's data will be discarded; to take over, call react-profiler-start again with { force: true }. If `stale` is true, the prior owner is likely gone and you may take over without prompting the user.",
+              "Another profiling session is already active — see the `owner` field. Ask the user before taking over and explain that the prior session's data will be discarded; to take over, call react-profiler-start again with { force: true }.",
           };
         }
 

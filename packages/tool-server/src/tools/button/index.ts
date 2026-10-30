@@ -20,19 +20,6 @@ import { ensureDep } from "../../utils/check-deps";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
-    ),
-  button: z
-    .enum(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"])
-    .describe("Hardware button to press"),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 interface Result {
   pressed: string;
 }
@@ -86,20 +73,33 @@ function isPhysicalIosButton(button: Params["button"]): button is RunnerButton {
   return PHYSICAL_IOS_BUTTONS.has(button);
 }
 
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe(
+      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+    ),
+  button: z
+    .enum(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"])
+    .describe("Hardware button to press"),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const buttonTool: ToolDefinition<Params, Result> = {
   id: "button",
+  description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device<flag:harmonyos>, HarmonyOS device</flag:harmonyos>).
+Supported buttons depend on the platform: buttons not present on the target (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone<flag:harmonyos>, anything beyond home/back/power on HarmonyOS</flag:harmonyos>) are rejected with a clear error.
+Use when you need to trigger hardware button events.
+Returns { pressed: buttonName }.
+Fails if the device backend is not reachable: the simulator-server for iOS, <flag:harmonyos>\`hdc\` for HarmonyOS, </flag:harmonyos>or \`adb\` for Android.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Pressing ${params.button} button`,
     completedMsg: ({ params }) => `Pressed ${params.button} button`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to press ${params.button} button: ${failureSignal.error_code}`,
   },
-  description: `Press a device hardware button (iOS simulator or physical device, Android emulator or device<flag:harmonyos>, HarmonyOS device</flag:harmonyos>). iOS simulators send a Down then Up event automatically; Android injects a single \`adb\` key event<flag:harmonyos>; HarmonyOS injects one \`uitest uiInput keyEvent\`</flag:harmonyos>.
-Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton; buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android, 'power' or 'appSwitch' on a physical iPhone<flag:harmonyos>, anything beyond home/back/power on HarmonyOS</flag:harmonyos>) are rejected with a clear error.
-Use when you need to trigger hardware button events.
-Returns { pressed: buttonName }.
-Fails if the device backend is not reachable: the simulator-server for iOS, <flag:harmonyos>\`hdc\` for HarmonyOS, </flag:harmonyos>or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
-  zodSchema,
   capability,
   // Declare only the service the resolved path actually consumes. The Android
   // path uses `adb`, so a sim-server here would spawn a service the tool never

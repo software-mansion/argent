@@ -24,6 +24,15 @@ import { harmonyImpl } from "./platforms/harmony";
 // same flag-injection reason as bundleId, as are shell metacharacters like `$`.
 const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
+  vega: { vvd: true },
+  harmony: { device: true },
+};
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -35,33 +44,24 @@ const zodSchema = z.object({
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name from build.gradle `applicationId` (e.g. com.android.settings). <flag:harmonyos>HarmonyOS: bundle name as listed by `bm dump -a` (e.g. com.huawei.hmos.calculator). </flag:harmonyos>Chromium: any tag matching the same alphabet (letters, digits, '.', '_' and '-'); the call is a no-op since the renderer is already running."
+      "App identifier. iOS: bundle id. Android: package name from build.gradle `applicationId`. Vega (Fire TV): the interactive component app id from manifest.toml (e.g. com.example.app.main). <flag:harmonyos>HarmonyOS: bundle name as listed by `bm dump -a` (e.g. com.huawei.hmos.calculator). </flag:harmonyos>Chromium: any tag matching the pattern."
     ),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
     .describe(
-      "Android-only: fully-qualified Activity name (e.g. `.MainActivity` or `com.example/com.example.MainActivity`). If omitted on Android, the app's default launcher activity is used. Ignored on iOS / Chromium<flag:harmonyos> / HarmonyOS (a HarmonyOS ability is resolved from the bundle's own `abilityInfos`)</flag:harmonyos>."
+      "Android-only: fully-qualified Activity name (e.g. `.MainActivity` or `com.example/com.example.MainActivity`). If omitted, the app's default launcher activity is used."
     ),
   launchArgs: z
     .array(z.string())
     .optional()
     .describe(
-      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them. Ignored on other targets.'
+      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them.'
     ),
 });
 
 type Params = z.infer<typeof zodSchema>;
-
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  chromium: { app: true },
-  vega: { vvd: true },
-  harmony: { device: true },
-};
 
 // native-devtools is resolved through `registry` inside the iOS handler rather
 // than declared in `services()` — the same pattern as `describe` / `screenshot`.
@@ -72,24 +72,23 @@ const capability: ToolCapability = {
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
+    description: `Open an installed app, or confirm the running renderer (Chromium).
+Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (iOS and Apple TV).
+Returns { launched, bundleId, note? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready.
+For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
+
+Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.mobileslideshow (Photos), com.apple.MobileAddressBook
+Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps, com.google.android.gm, com.android.vending, com.google.android.dialer, com.google.android.apps.messaging`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "open start app bundle id package simulator emulator chromium vega launch tvos apple tv fire tv",
     interaction: {
       startedMsg: ({ params }) => `Launching ${params.bundleId}`,
       completedMsg: ({ params }) => `Launched ${params.bundleId}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to launch ${params.bundleId}: ${failureSignal.error_code}`,
     },
-    description: `Open an app by its bundle id (iOS<flag:harmonyos>, HarmonyOS</flag:harmonyos>) or package name (Android), or confirm the running renderer (Chromium).
-Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven; use the tv-* tools rather than coordinate taps.
-Returns { launched, bundleId, note? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready.
-For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
-On Vega (Fire TV), pass the interactive component app id from manifest.toml (e.g. com.example.app.main) as bundleId.
-
-Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.mobileslideshow (Photos), com.apple.MobileAddressBook
-Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps, com.google.android.gm, com.android.vending, com.google.android.dialer, com.google.android.apps.messaging`,
-    alwaysLoad: true,
-    searchHint:
-      "open start app bundle id package simulator emulator chromium vega launch tvos apple tv fire tv",
-    zodSchema,
     capability,
     // ios-remote's handler reads `services.nativeDevtools`; local iOS resolves
     // it lazily instead (see header comment).

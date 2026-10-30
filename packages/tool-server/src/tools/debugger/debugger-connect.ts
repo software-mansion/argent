@@ -28,6 +28,11 @@ export const debuggerConnectTool: ToolDefinition<
   }
 > = {
   id: "debugger-connect",
+  description: `Connect to a JS runtime CDP debugger.
+iOS / Android / Vega: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device.
+Returns connection info including port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId, and isNewDebugger, plus a note naming the kept log file when the previous session ended because the app crashed. If already connected, returns the existing connection.
+Use when starting a debug session or before calling other debugger-* tools. Fails if the runtime is unreachable (Metro down, or Chromium CDP terminated).`,
+  zodSchema,
   interaction: {
     startedMsg: () => "Connecting JavaScript debugger",
     completedMsg: ({ result }) =>
@@ -35,11 +40,6 @@ export const debuggerConnectTool: ToolDefinition<
     failedMsg: ({ failureSignal }) =>
       `Failed to connect JavaScript debugger: ${failureSignal.error_code}`,
   },
-  description: `Connect to a JS runtime CDP debugger.
-iOS / Android / Vega: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device; port is ignored.
-Returns connection info including port, projectRoot (empty on Chromium and on legacy Metro, e.g. Vega), deviceName, appName, logicalDeviceId (absent on Vega), and isNewDebugger, plus a note naming the kept log file when the previous session ended because the app crashed. If already connected, returns the existing connection.
-Use when starting a debug session or before calling other debugger-* tools. Fails if the runtime is unreachable (Metro down, or Chromium CDP terminated).`,
-  zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: debuggerServiceRef(params),

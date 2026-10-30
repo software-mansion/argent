@@ -108,7 +108,7 @@ Call `screenshot` or `describe` to read the screen again.
 | `debugger-connect`             | Connect to the JS runtime CDP debugger                                    |
 | `debugger-status`              | Report connection status and diagnostics                                  |
 | `debugger-evaluate`            | Execute JavaScript in the app's runtime: Hermes on device, V8 on Chromium |
-| `debugger-component-tree`      | Fetch the current screen as a compact React component text tree           |
+| `debugger-component-tree`      | List the React component names and testIDs on the current screen          |
 | `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate              |
 | `debugger-log-registry`        | Summarize console logs captured from the app                              |
 | `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process            |
@@ -143,7 +143,7 @@ Call `screenshot` or `describe` to read the screen again.
 | `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                   |
 | `react-profiler-status`           | Check the profiler session state without side effects                        |
 | `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-renders`          | Collect component render counts and durations from the live fiber tree       |
+| `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree             |
 | `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
 | `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                              |
 | `react-profiler-component-source` | Find a component's source file, line, and memoization status                 |
@@ -193,17 +193,17 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 ## Workspace and maintenance
 
-| Tool                    | Description                                                |
-| ----------------------- | ---------------------------------------------------------- |
-| `gather-workspace-data` | Fetch a structured snapshot of the app project's workspace |
-| `update-argent`         | Apply a pending Argent update                              |
-| `dismiss-update`        | Silence update reminders for a number of hours             |
+| Tool                               | Description                                                |
+| ---------------------------------- | ---------------------------------------------------------- |
+| `gather-workspace-data` (SDK only) | Fetch a structured snapshot of the app project's workspace |
+| `update-argent`                    | Apply a pending Argent update                              |
+| `dismiss-update`                   | Silence update reminders for a number of hours             |
 
 ## Footnotes
 
 Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
 
-`terminate-app`, `ui-tree`, `foreground-app` and `fill` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
+`terminate-app`, `ui-tree`, `foreground-app`, `fill` and `gather-workspace-data` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
 

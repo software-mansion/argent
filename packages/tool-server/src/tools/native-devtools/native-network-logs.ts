@@ -10,6 +10,8 @@ import {
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 
+type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; count: number; events: NetworkEvent[] };
+
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   bundleId: z.string().describe("Bundle ID of the app"),
@@ -22,10 +24,16 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; count: number; events: NetworkEvent[] };
 
 export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
   id: "native-network-logs",
+  description: `Retrieve network requests captured at the native NSURLProtocol level.
+Unlike view-network-logs, it also sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing. Capture starts at the first call, so the first call is usually empty: repeat the action, then call again.
+Use when inspecting native-level HTTP traffic that view-network-logs cannot see.
+Returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
+If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Reading native network activity for ${params.bundleId}`,
     completedMsg: ({ params }) => `Read native network activity for ${params.bundleId}`,
@@ -33,13 +41,6 @@ export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
       `Failed to read native network activity for ${params.bundleId}: ${failureSignal.error_code}`,
   },
   capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
-  description: `Retrieve network requests captured at the native NSURLProtocol level. 
-Unlike view-network-logs, it also sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing. Capture starts at the first call, so the first call is usually empty: repeat the action, then call again. 
-Use when you need to inspect native-level HTTP traffic that is invisible to the JS-level capture. 
-Returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
-A not-running app comes back as one of those statuses rather than a failure. An app that is not connected does too, except on a device whose devtools agent argent attached to rather than armed itself: there it fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\`, since no restart of ours can complete a handshake we do not own. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), while a missing host dependency or a udid that is not an Apple device is not.`,
-  zodSchema,
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),

@@ -18,6 +18,14 @@ import { summarizeHangBlocking } from "../profiler-shared/native-frame-class";
 const MAX_INLINE_HOTSPOTS = 5;
 const MAX_INLINE_HANGS = 3;
 
+/**
+ * Said wherever an iOS capture with no Leaks table would otherwise read as "0 leaks":
+ * the analyze report, leak_stacks, the combined report and profiler-load. It states
+ * the outcome, not the cause (a template without the Leaks instrument, or a failed
+ * leaks export), so it stays true whichever capture produced the trace.
+ */
+export const LEAKS_NOT_RECORDED = "No leak data was recorded, so memory leaks were not checked.";
+
 interface RenderInput {
   payload: ProfilerPayload;
   traceFile: string | null;
@@ -38,6 +46,11 @@ interface RenderInput {
    * count.
    */
   mallocStackLogging?: boolean | null;
+  /**
+   * iOS: false when the trace had no leaks export, so the report must not read as
+   * leak-free. Undefined (Android) leaves the report unchanged.
+   */
+  leaksRecorded?: boolean;
 }
 
 interface InlineCap {
@@ -53,7 +66,8 @@ interface InlineCap {
 export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
-  const { payload, traceFile, freshnessNote, cpuDiagnostic, mallocStackLogging } = input;
+  const { payload, traceFile, freshnessNote, cpuDiagnostic, mallocStackLogging, leaksRecorded } =
+    input;
   const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
   const status: "ok" | "analysis_failed" =
@@ -64,7 +78,7 @@ export async function renderNativeProfilerReport(
 
   const fullReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic)
+      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic, leaksRecorded)
       : renderFullReport(
           payload,
           exportErrors,
@@ -74,7 +88,8 @@ export async function renderNativeProfilerReport(
           },
           freshnessNote,
           mallocStackLogging,
-          cpuDiagnostic
+          cpuDiagnostic,
+          leaksRecorded
         );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
@@ -82,7 +97,7 @@ export async function renderNativeProfilerReport(
 
   const inlineReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic)
+      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic, leaksRecorded)
       : renderFullReport(
           payload,
           exportErrors,
@@ -92,7 +107,8 @@ export async function renderNativeProfilerReport(
           },
           freshnessNote,
           mallocStackLogging,
-          cpuDiagnostic
+          cpuDiagnostic,
+          leaksRecorded
         );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
@@ -173,7 +189,8 @@ function renderAllClear(
   payload: ProfilerPayload,
   exportErrors?: Record<string, string>,
   freshnessNote?: string,
-  cpuDiagnostic?: string
+  cpuDiagnostic?: string,
+  leaksRecorded?: boolean
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -187,6 +204,7 @@ function renderAllClear(
 
   if (freshnessNote) lines.push(freshnessNote, ``);
   if (cpuDiagnostic) lines.push(`> ⚠️ **CPU sampling:** ${cpuDiagnostic}`, ``);
+  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(), ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -206,7 +224,9 @@ function renderAllClear(
     );
   } else {
     lines.push(
-      `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
+      leaksRecorded === false
+        ? `No CPU hotspots or UI hangs detected. Memory leaks were not checked (see above).`
+        : `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
       ``,
       `Consider re-profiling under heavier load or longer duration to catch issues that don't appear in short sessions.`
     );
@@ -220,7 +240,8 @@ function renderFullReport(
   cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity },
   freshnessNote?: string,
   mallocStackLogging?: boolean | null,
-  cpuDiagnostic?: string
+  cpuDiagnostic?: string,
+  leaksRecorded?: boolean
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -242,6 +263,7 @@ function renderFullReport(
 
   if (freshnessNote) lines.push(freshnessNote, ``);
   if (cpuDiagnostic) lines.push(`> ⚠️ **CPU sampling:** ${cpuDiagnostic}`, ``);
+  if (leaksRecorded === false) lines.push(renderLeaksNotRecordedNote(), ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -258,6 +280,8 @@ function renderFullReport(
   }
   if (memoryLeaks.length > 0) {
     lines.push(`| Memory Leaks | ${memoryLeaks.length} | ${severitySummary(memoryLeaks)} |`);
+  } else if (leaksRecorded === false) {
+    lines.push(`| Memory Leaks | not recorded | — |`);
   }
   if (rssGrowths.length > 0) {
     lines.push(
@@ -533,6 +557,10 @@ function renderFullReport(
   lines.push(`3. **Done for now** — save the report for reference.`);
 
   return lines.join("\n");
+}
+
+function renderLeaksNotRecordedNote(): string {
+  return `> ⚠️ **Memory leaks:** ${LEAKS_NOT_RECORDED} Do not report the app as leak-free.`;
 }
 
 /**

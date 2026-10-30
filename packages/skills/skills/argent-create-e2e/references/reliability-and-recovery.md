@@ -24,10 +24,10 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 
 ### Run the gate when capture warns
 
-Work this gate as soon as capture warns that it kept a raw point, and equally when it silently recorded a role-only selector, which warns about nothing. Keep the source screen available and do these checks:
+Work this gate as soon as capture warns that it kept a raw point or recorded a role-only selector. Keep the source screen available and do these checks:
 
 1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no YAML selector exists.
-2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
+2. **Other platforms:** use `describe`; for React Native on Android, also `debugger-component-tree`, for testIDs `describe` omits. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
 3. Test each candidate in a scratch fragment with `assert: { visible: <candidate> }` on the valid screen. Inspect every failure before trying a better id, label, app, or container.
 4. If source is available, inspect its `testID`, `accessibilityIdentifier`, or `resource-id`. If none exists, report the missing stable id as the real fix.
 
@@ -39,12 +39,12 @@ QA e2e tests are stricter. They can keep a coordinate only for a genuinely unlab
 
 ## iOS selector recovery
 
-The full iOS runner tree exists only for an app launched by Argent with instrumentation.
+On an iOS simulator, the full runner tree exists only for an app launched by Argent with instrumentation.
 
 1. If Metro, Expo, Xcode, an icon, or a prior process launched the app, call `restart-app`. Restore the source screen and retry capture. `launch-app` can only foreground the existing process.
 2. Tap capture does **not** wait for that connection. It makes one tree read and turns any failure straight into the kept-coordinates warning. A recording-time `restart-app` returns before the devtools connection opens, so the first tap after a restart can warn transiently. Re-record that tap once before escalating; only a warning that survives the retry is evidence of a real fault.
-3. If the warning survives, call `native-devtools-status` with the same UDID and bundle id and follow its `message`, which names the one action that helps and says when to stop. `requiresRestart` covers only the states a fresh process fixes: an `unregistered` or `connecting` app reports it false, because it already launched under the terms a restart would recreate.
-4. If an injectable app remains disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. One tool-server serves every agent on this Argent install, so an unscoped call tears down their devices too. This does not change app or account data. Then restart and check status again.
+3. If the warning survives, call `native-devtools-status` with the same UDID and bundle id and follow its `message`, which names the one action that helps and says when to stop.
+4. If an injectable app remains disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. This does not change app or account data. Then restart and check status again.
 5. If it still fails, report an instrumentation blocker. Do not replace selectors with coordinates in a QA e2e test.
 
 Use the same explicit UDID throughout. Multiple booted simulators are not an injection fault. Pass `--device <udid>` when CLI device selection is ambiguous.
@@ -60,9 +60,9 @@ Give the test a `launch:` step as usual. On iOS the launch waits the full devtoo
 - Raw `tool: await-ui-element` accessibility checks.
 - Point taps or long-presses derived from `describe`, each named by an echo.
 - A point focus tap plus a raw text-only `keyboard` with `delayMs: 500`, and a second raw `keyboard` with `key: "enter"` to submit.
-- Raw swipes with `momentum: false` because `scroll-to` needs the missing runner tree. Momentum-free scrolling keeps later coordinate taps valid. `momentum: false` needs `durationMs` of at least 150 and is rejected below it, so keep the 300 default or raise it.
+- Raw swipes with `momentum: false` because `scroll-to` needs the missing runner tree. Momentum-free scrolling keeps later coordinate taps valid.
 
-Every point tap, long-press or coordinate swipe in such a test passes **carrying a warning** for as long as the app serves no tree: each [selector-less gesture](e2e-yaml.md#directives) dispatches unsettled. Nothing here repairs it. Accept the warnings, read each green as "the gesture was sent, not that it landed", and put an explicit `wait:` or a raw `tool: await-ui-element` before a gesture that follows a transition. Raw `tool:` steps take no settle, so they never carry that warning.
+Every point tap, long-press or coordinate swipe in such a test passes **carrying the [selector-less gesture](e2e-yaml.md#directives) warning** for as long as the app serves no tree. Nothing here repairs it. Accept the warnings and put an explicit `wait:` or a raw `tool: await-ui-element` before a gesture that follows a transition. Raw `tool:` steps take no settle, so they never carry that warning.
 
 A recorded wait carries a different warning: it adds about one second and reports that the runner tree is unavailable. That warning is expected too. Keep the wait as a raw `tool:` step.
 
@@ -120,7 +120,7 @@ Classify before editing:
 Then:
 
 1. Record the first failure or divergence index and message.
-2. Capture `screenshot` and `describe`. Use native or React Native discovery when needed.
+2. Look at the failed step's `screen` capture, then `describe` the current screen. Use native or React Native discovery when needed. After a `{{secret:…}}` step there is no capture: move off the field that holds the secret before you `describe` or take a `screenshot`.
 3. Compare actual state with the preceding echo and expected destination.
 4. Classify the cause: selector, screen, missing element, readiness, stale data, optional interstitial, or product behavior.
 5. State the diagnosis in one sentence before correcting it.

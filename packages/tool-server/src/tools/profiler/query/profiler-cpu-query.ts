@@ -24,49 +24,6 @@ import { promises as fs } from "fs";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
-const timeWindowSchema = z.object({
-  start: z.coerce
-    .number()
-    .describe(
-      "Start of window in ms since profiling started, the same clock profiler-commit-query prints"
-    ),
-  end: z.coerce
-    .number()
-    .describe(
-      "End of window in ms since profiling started, the same clock profiler-commit-query prints"
-    ),
-});
-
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: metroDeviceIdParam(
-    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-  ),
-  mode: z
-    .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
-    .describe(
-      "Query mode: top_functions (global hotspots), time_window (CPU in a time range), " +
-        "call_tree (callers/callees of a function), component_cpu (CPU during a component's commits)"
-    ),
-  time_window_ms: timeWindowSchema
-    .optional()
-    .describe(
-      "Time window filter for time_window mode (ms since profiling started, the same clock profiler-commit-query prints)"
-    ),
-  component_name: z.string().optional().describe("Component name for component_cpu mode"),
-  function_name: z.string().optional().describe("Function name for call_tree mode"),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(15)
-    .describe("Number of results to return (default 15)"),
-  include_callers: z
-    .boolean()
-    .default(false)
-    .describe("For call_tree mode: also show callers of the function"),
-});
-
 async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
   index: CpuSampleIndex;
   commitTree: {
@@ -428,29 +385,51 @@ function shortenUrl(url: string): string {
   return parts.slice(-2).join("/");
 }
 
+const timeWindowSchema = z.object({
+  start: z.coerce.number().describe("Start of window in ms"),
+  end: z.coerce.number().describe("End of window in ms"),
+});
+
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: metroDeviceIdParam(
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+  ),
+  mode: z
+    .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
+    .describe("Query mode; see Modes in the tool description."),
+  time_window_ms: timeWindowSchema
+    .optional()
+    .describe(
+      "Time window in ms since profiling started, the same clock profiler-commit-query prints"
+    ),
+  component_name: z.string().optional().describe("Component name"),
+  function_name: z.string().optional().describe("Function name"),
+  top_n: z.coerce.number().int().positive().default(15).describe("Number of results to return"),
+  include_callers: z.boolean().default(false).describe("Also show callers of the function"),
+});
+
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",
+  description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
+Modes:
+- top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
+- time_window: CPU breakdown for time_window_ms (e.g. during a slow commit or hang).
+- call_tree: For a given function_name, show its callees, and its callers with include_callers.
+- component_cpu: For a given component_name, aggregate CPU activity across all its commits.
+In top_functions and time_window, self-times are the summed sampling intervals of the samples that
+landed in the window, so they measure sampled coverage rather than the window's width and do not
+change if you widen the query. Their tables state how many samples they cover and how much was idle.
+Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
+Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
+Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-profiler-analyze) first.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Querying CPU profile by ${params.mode.replaceAll("_", " ")}`,
     completedMsg: ({ params }) => `Queried CPU profile by ${params.mode.replaceAll("_", " ")}`,
     failedMsg: ({ failureSignal }) => `Failed to query CPU profile: ${failureSignal.error_code}`,
   },
-  description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
-Requires react-profiler-stop (and ideally react-profiler-analyze) to have been called first.
-Modes:
-- top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
-- time_window: CPU breakdown for a specific time range (e.g. during a slow commit or hang).
-
-Self-times are the summed sampling intervals of the samples that landed in the window, so they
-measure sampled coverage rather than the window's width and do not change if you widen the query.
-Every table states how many samples it covers and how much of that was idle.
-- call_tree: For a given function_name, show its callees and optionally callers.
-- component_cpu: For a given component_name, aggregate CPU activity across all its commits.
-Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
-Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
-Fails if no CPU profile is stored; run react-profiler-stop first.`,
-  readOnly: true,
-  zodSchema,
   // RN-only: reads Hermes-format CPU profiles; Chromium's V8 sample format differs.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),

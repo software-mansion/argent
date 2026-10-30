@@ -9,6 +9,8 @@ import {
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 
+type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; matches: unknown[] };
+
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   bundleId: z.string().describe("Bundle ID of the app"),
@@ -37,10 +39,16 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; matches: unknown[] };
 
 export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   id: "native-find-views",
+  description: `Search for specific UIViews in the running app by class name, accessibility identifier, accessibility label, tag or React Native nativeID; at least one of these params is required.
+Use when you need to locate a specific view by its properties without dumping the entire native-full-hierarchy.
+Returns { status: "ok", matches }: the matching views with their frames, properties, optional ancestors and optional children.
+If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+An Apple system app is rejected outright (terminal: never retry it).`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Searching native views in ${params.bundleId}`,
     completedMsg: ({ params, result }) => {
@@ -51,14 +59,6 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
       `Failed to search native views in ${params.bundleId}: ${failureSignal.error_code}`,
   },
   capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
-  description: `Search for specific UIViews in the running app by class name, accessibility identifier, label, tag, or React Native nativeID.
-Use when you need to locate a specific view by its properties without dumping the entire hierarchy.
-Returns { status: "ok", matches } with matching views including their frames, properties, optional ancestors, and optional children. Much more targeted than native-full-hierarchy.
-At least one of className, identifier, label, tag, or nativeID must be provided.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
-A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), and the hierarchy query itself can error or time out.`,
-  readOnly: true,
-  zodSchema,
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),

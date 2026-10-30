@@ -43,9 +43,16 @@ describe("zodObjectToJsonSchema", () => {
       type: "integer",
       default: 100,
       exclusiveMinimum: 0,
-      maximum: 9007199254740991,
     });
     expect(schema.required).toBeUndefined();
+  });
+
+  it("drops the safe-integer range .int() adds, but keeps bounds the schema sets", () => {
+    const schema = zodObjectToJsonSchema(
+      z.object({ any: z.number().int(), ranged: z.number().int().min(1).max(10) })
+    );
+    expect((schema.properties as any).any).toEqual({ type: "integer" });
+    expect((schema.properties as any).ranged).toEqual({ type: "integer", minimum: 1, maximum: 10 });
   });
 
   it("preserves .describe() text (the hand-rolled converter dropped it)", () => {

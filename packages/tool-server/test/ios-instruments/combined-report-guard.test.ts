@@ -47,6 +47,7 @@ function frozenParsedData(): NativeProfilerParsedData {
     ],
     cpuHotspots: [],
     memoryLeaks: [],
+    leaksRecorded: true,
     mallocStackLogging: true,
     wallClockStartMs: 1_000_000,
   };

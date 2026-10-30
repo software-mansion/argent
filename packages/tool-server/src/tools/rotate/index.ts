@@ -4,15 +4,6 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
-const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-  orientation: z
-    .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
-    .describe("Target orientation"),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 interface Result {
   orientation: string;
 }
@@ -23,18 +14,27 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
 };
 
+const zodSchema = z.object({
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  orientation: z
+    .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
+    .describe("Target orientation"),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const rotateTool: ToolDefinition<Params, Result> = {
   id: "rotate",
+  description: `Set the device orientation.
+Use when testing layout in a different orientation. Re-run \`describe\` afterwards: frame coordinates change with the orientation.
+On an unfolded foldable iOS simulator (the iPhone Duo), the value sets the orientation of the device, not of the UI: \`Portrait\` gives a landscape UI and \`LandscapeLeft\` gives a portrait UI. To fold or unfold the device, use \`fold\`.
+Returns { orientation }. Fails if the target device is not booted.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Rotating device to ${params.orientation}`,
     completedMsg: ({ params }) => `Rotated device to ${params.orientation}`,
     failedMsg: ({ failureSignal }) => `Failed to rotate device: ${failureSignal.error_code}`,
   },
-  description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown.
-Use to test layout in a different orientation. Re-run \`describe\` afterwards: frame coordinates change with the orientation.
-On an unfolded foldable iOS simulator (the iPhone Duo), the value sets the orientation of the device, not of the UI: \`Portrait\` gives a landscape UI and \`LandscapeLeft\` gives a portrait UI. To fold or unfold the device, use \`fold\`.
-Returns { orientation }. Fails if the target device is not booted.`,
-  zodSchema,
   capability,
   services: (params) => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),

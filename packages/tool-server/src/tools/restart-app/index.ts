@@ -21,6 +21,14 @@ import { harmonyImpl } from "./platforms/harmony";
 // activities like `.MainActivity`, no leading `-` (flag injection).
 const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  vega: { vvd: true },
+  harmony: { device: true },
+};
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -33,32 +41,24 @@ const zodSchema = z.object({
     .min(1)
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id. Android: package name.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos>"
+      "App identifier. iOS: bundle id. Android: package name. Vega: interactive component app id.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos>"
     ),
   activity: z
     .string()
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
     .describe(
-      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS<flag:harmonyos> / HarmonyOS</flag:harmonyos>."
+      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used."
     ),
   launchArgs: z
     .array(z.string())
     .optional()
     .describe(
-      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. Ignored on other targets.'
+      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults.'
     ),
 });
 
 type Params = z.infer<typeof zodSchema>;
-
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  vega: { vvd: true },
-  harmony: { device: true },
-};
 
 // Local iOS resolves native-devtools inside the handler rather than via
 // `services()`. A tvOS sim classifies as platform "ios", and native-devtools
@@ -66,19 +66,19 @@ const capability: ToolCapability = {
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
   return {
     id: "restart-app",
+    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>or Vega.
+Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).
+Returns { restarted, bundleId }. Fails if the app is not installed.`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
     interaction: {
       startedMsg: ({ params }) => `Restarting ${params.bundleId}`,
       completedMsg: ({ params }) => `Restarted ${params.bundleId}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to restart ${params.bundleId}: ${failureSignal.error_code}`,
     },
-    description: `Terminate then relaunch an app by its bundle id (iOS, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega) or package name (Android).
-Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven; use the tv-* tools rather than coordinate taps.
-Returns { restarted, bundleId }. Fails if the app is not installed.`,
-    alwaysLoad: true,
-    searchHint:
-      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv<flag:harmonyos> harmony harmonyos</flag:harmonyos>",
-    zodSchema,
     capability,
     // Only ios-remote's handler reads `services.nativeDevtools`, so only it
     // needs an eager declaration.

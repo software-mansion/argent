@@ -15,6 +15,6 @@ Read this only for a physical iPhone. Simulators use `argent-ios-simulator-setup
 
 ## Signing and failures
 
-Signing needs no configuration. The first phone call of a tool-server process carries a note naming the team picked and the `ARGENT_IOS_TEAM_ID` override (tool-server environment; a change forces a cold rebuild). Cable, lock, trust, expired-profile and missing-certificate errors name their fix: apply it, retry the same call. Also: `errSecInternalComponent`: run `security set-key-partition-list -S apple-tool:,apple:,codesign: -s ~/Library/Keychains/login.keychain-db` (asks the user's login password), retry. `team has no devices`: keep the phone cabled, retry. Bundle id registration failed: free-team app-id cap, wait days or sign under a paid team. Any other xcodebuild failure prints raw `error:` lines: read `~/.argent/ios-device-runner/logs/runner-<udid8>.log`. `RUNNER_WEDGED`: `stop-simulator-server` for the udid, retry.
+Signing needs no configuration: the first phone call names the team it picked and how to override it. Errors name their fix (cable, lock, trust, signing, a stuck runner): apply it and retry the same call. A failed build quotes xcodebuild's own `error:` lines.
 
 Then read `argent-ios-device-interact`.

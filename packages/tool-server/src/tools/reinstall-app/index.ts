@@ -10,6 +10,14 @@ import { iosRemoteImpl } from "./platforms/ios-remote";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
 
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+  vega: { vvd: true },
+  harmony: { device: true },
+};
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -21,7 +29,7 @@ const zodSchema = z.object({
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier that matches the bundle at `appPath`. iOS: bundle id (used to uninstall first). Android: package name (used to uninstall first; the install itself identifies the app from the APK). Vega: interactive component app id (e.g. com.example.app.main), used to uninstall first.<flag:harmonyos> HarmonyOS: bundle name, which must match `app.bundleName` in the `.hap`.</flag:harmonyos>"
+      "App identifier, used to uninstall the previous installation. iOS: bundle id. Android: package name. Vega: interactive component app id (e.g. com.example.app.main).<flag:harmonyos> HarmonyOS: bundle name (`app.bundleName` in the `.hap`).</flag:harmonyos>"
     ),
   appPath: z
     .string()
@@ -32,26 +40,18 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-const capability: ToolCapability = {
-  apple: { simulator: true, device: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-  vega: { vvd: true },
-  harmony: { device: true },
-};
-
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
+  description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
+Use for a full reinstall after rebuilding, or to start from a clean app state.
+Returns { reinstalled, bundleId }. Fails if \`appPath\` does not exist or is not the platform's package, or \`bundleId\` does not match it (not checked on Vega or a remote simulator); these checks run before anything is uninstalled.`,
+  zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Reinstalling ${params.bundleId}`,
     completedMsg: ({ params }) => `Reinstalled ${params.bundleId}`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to reinstall ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
-Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails before uninstalling anything if the app path does not exist, is not the platform's package (.app for iOS, .apk for Android, .vpkg for Vega<flag:harmonyos>, .hap for HarmonyOS</flag:harmonyos>), or bundleId does not match it.`,
-  zodSchema,
   capability,
   fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
   services: () => ({}),

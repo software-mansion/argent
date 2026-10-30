@@ -16,50 +16,6 @@ import {
 } from "../../../utils/react-profiler/component-names";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
-const timeRangeSchema = z.object({
-  start: z.coerce
-    .number()
-    .describe(
-      "Start of range in ms since profiling started, the same clock profiler-commit-query prints"
-    ),
-  end: z.coerce
-    .number()
-    .describe(
-      "End of range in ms since profiling started, the same clock profiler-commit-query prints"
-    ),
-});
-
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: metroDeviceIdParam(
-    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-  ),
-  mode: z
-    .enum(["by_component", "by_time_range", "by_index", "cascade_tree"])
-    .describe(
-      "Query mode: by_component (commits for a component), by_time_range (commits in a window), " +
-        "by_index (full detail for one commit), cascade_tree (parent-child cascade for a commit)"
-    ),
-  component_name: z.string().optional().describe("Component name for by_component mode"),
-  time_range_ms: timeRangeSchema.optional().describe("Time range filter for by_time_range mode"),
-  commit_index: z.coerce
-    .number()
-    .int()
-    .optional()
-    .describe("Commit index for by_index and cascade_tree modes"),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe(
-      "Max results to return. Defaults to 20 for by_component / by_time_range, which count " +
-        "commits. by_index counts individual fibers and returns all of them unless this is set, " +
-        "because one commit's fibers collapse to far fewer distinct components, and a small cap there " +
-        "can show less than the analyze report it is meant to expand on."
-    ),
-});
-
 async function getCommitTree(port: number, deviceId: string): Promise<DevToolsCommitTree> {
   const sessionPaths = getCachedProfilerPaths(port, deviceId);
   if (!sessionPaths?.commitsPath) {
@@ -375,8 +331,49 @@ function getTopComponents(
     }));
 }
 
+const timeRangeSchema = z.object({
+  start: z.coerce.number().describe("Start of range in ms"),
+  end: z.coerce.number().describe("End of range in ms"),
+});
+
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: metroDeviceIdParam(
+    "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+  ),
+  mode: z
+    .enum(["by_component", "by_time_range", "by_index", "cascade_tree"])
+    .describe("Query mode; see Modes in the tool description."),
+  component_name: z.string().optional().describe("Component name"),
+  time_range_ms: timeRangeSchema
+    .optional()
+    .describe("Time range in ms since profiling started, the clock this tool prints"),
+  commit_index: z.coerce.number().int().optional().describe("Commit index"),
+  top_n: z.coerce
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "Max results to return. Defaults to 20 for by_component / by_time_range, which count " +
+        "commits. by_index counts individual fibers and returns all of them unless this is set; " +
+        "a small cap there can show less than the analyze report it is meant to expand on."
+    ),
+});
+
 export const profilerCommitQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-commit-query",
+  description: `Query React commit data for iterative investigation of render performance.
+Modes:
+- by_component: All commits where component_name rendered, with causes and durations.
+- by_time_range: What happened in time_range_ms.
+- by_index: Full detail dump of the commit at commit_index (all components, props changed, parent cascade).
+- cascade_tree: Parent-child cascade tree for the commit at commit_index, showing who triggered whom.
+Use when drilling into specific components or time windows after react-profiler-analyze.
+Returns a markdown table or tree of commit data matching the requested mode.
+Fails if react-profiler-stop has not been called or no commit data is stored.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) =>
       `Querying React commits ${params.mode.replace(/^by_/, "by ").replaceAll("_", " ")}`,
@@ -384,18 +381,6 @@ export const profilerCommitQueryTool: ToolDefinition<z.infer<typeof zodSchema>, 
       `Queried React commits ${params.mode.replace(/^by_/, "by ").replaceAll("_", " ")}`,
     failedMsg: ({ failureSignal }) => `Failed to query React commits: ${failureSignal.error_code}`,
   },
-  description: `Query React commit data for iterative investigation of render performance.
-Requires react-profiler-stop to have been called first.
-Modes:
-- by_component: All commits where a specific component rendered, with causes and durations.
-- by_time_range: What happened in a specific time window.
-- by_index: Full detail dump of a single commit (all components, props changed, parent cascade).
-- cascade_tree: Parent-child cascade tree for a commit showing who triggered whom.
-Use when drilling into specific components or time windows after react-profiler-analyze.
-Returns a markdown table or tree of commit data matching the requested mode.
-Fails if react-profiler-stop has not been called or no commit data is stored.`,
-  readOnly: true,
-  zodSchema,
   // Reads React commit data captured via the React DevTools backend.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),

@@ -24,15 +24,15 @@ export const debuggerEvaluateTool: ToolDefinition<
   { result: unknown; deviceName: string; appName: string; logicalDeviceId: string | undefined }
 > = {
   id: "debugger-evaluate",
+  description: `Execute arbitrary JavaScript in the app's JS runtime via CDP: Hermes on iOS / Android / Vega, V8 on Chromium.
+Returns the result serialized by value as JSON, with deviceName, appName, and logicalDeviceId. Use when you need to read app state, call app functions, or test logic at runtime. Cyclic objects, which many RN runtime values are (fiber nodes, navigation refs, global), fail with a serialization error. Fails if the expression throws or the runtime is not connected.`,
+  zodSchema,
   interaction: {
     startedMsg: () => "Running JavaScript in the app",
     completedMsg: () => "Ran JavaScript in the app",
     failedMsg: ({ failureSignal }) =>
       `Failed to run JavaScript in the app: ${failureSignal.error_code}`,
   },
-  description: `Execute arbitrary JavaScript in the app's JS runtime via CDP: Hermes on iOS / Android / Vega, V8 on Chromium.
-Returns the evaluation result as a JSON-serializable value, along with deviceName, appName, and logicalDeviceId for context. Use when you need to read app state, call app functions, or test logic at runtime. The result is serialized by value, so cyclic objects (many RN runtime values, such as fiber nodes, navigation refs and global, are cyclic) fail with a serialization error rather than returning silently. Fails if the expression throws or the runtime is not connected.`,
-  zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: debuggerServiceRef(params),

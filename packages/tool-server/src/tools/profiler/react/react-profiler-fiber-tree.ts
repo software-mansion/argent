@@ -105,24 +105,24 @@ const zodSchema = z.object({
     .int()
     .positive()
     .default(10)
-    .describe("Maximum tree depth to traverse (default 10)"),
+    .describe("Maximum tree depth to traverse"),
   filter: z.string().optional().describe("Regex string to filter component names"),
 });
 
 export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
   id: "react-profiler-fiber-tree",
+  description: `Inspect the React fiber tree and return a JSON representation of the component hierarchy.
+Use when tracing the ancestry of a library component.
+Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBaseDuration, and children.
+Fails if the React DevTools hook is not present or no fiber roots have been committed yet.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: () => "Reading React fiber tree",
     completedMsg: () => "Read React fiber tree",
     failedMsg: ({ failureSignal }) =>
       `Failed to read React fiber tree: ${failureSignal.error_code}`,
   },
-  description: `Inspect the React fiber tree and return a JSON representation of the component hierarchy.
-Use when tracing ancestry of a library component or checking for useMemoCache hook (confirms React Compiler is active on a component).
-Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBaseDuration, and children.
-Fails if the React DevTools hook is not present or no fiber roots have been committed yet.`,
-  readOnly: true,
-  zodSchema,
   // RN-only: walks the fiber tree via the React DevTools backend hook.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({

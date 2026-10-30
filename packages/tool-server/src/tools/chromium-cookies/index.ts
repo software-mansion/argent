@@ -11,34 +11,6 @@ import {
   type Cookie,
 } from "../../chromium-server/storage";
 
-const zodSchema = z.object({
-  udid: z.string().describe("Chromium device id from `list-devices` (e.g. `chromium-cdp-9222`)."),
-  action: z
-    .enum(["get", "set", "delete", "clear"])
-    .describe(
-      "get: read cookies. set: create/update a cookie. delete: remove a named cookie. clear: remove all browser cookies."
-    ),
-  name: z.string().optional().describe("set/delete: cookie name."),
-  value: z.string().optional().describe("set: cookie value."),
-  url: z
-    .string()
-    .optional()
-    .describe(
-      "get: restrict to these URLs (defaults to the active page). set/delete: scope the cookie by URL."
-    ),
-  domain: z.string().optional().describe("set/delete: scope the cookie by domain (alt to url)."),
-  path: z.string().optional().describe("set/delete: cookie path (default /)."),
-  secure: z.boolean().optional().describe("set: mark Secure."),
-  httpOnly: z.boolean().optional().describe("set: mark HttpOnly."),
-  sameSite: z.enum(["Strict", "Lax", "None"]).optional().describe("set: SameSite policy."),
-  expires: z
-    .number()
-    .optional()
-    .describe("set: expiry as a Unix timestamp (seconds). Omit for a session cookie."),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 const cookieAction = {
   get: { started: "Reading", completed: "Read", failure: "read" },
   set: { started: "Setting", completed: "Set", failure: "set" },
@@ -53,23 +25,48 @@ const capability: ToolCapability = {
   chromium: { app: true },
 };
 
+const zodSchema = z.object({
+  udid: z.string().describe("Chromium device id from `list-devices` (e.g. `chromium-cdp-9222`)."),
+  action: z
+    .enum(["get", "set", "delete", "clear"])
+    .describe(
+      "get: read cookies. set: create/update a cookie. delete: remove matching cookies. clear: remove ALL browser cookies."
+    ),
+  name: z.string().optional().describe("Cookie name."),
+  value: z.string().optional().describe("Cookie value."),
+  url: z
+    .string()
+    .optional()
+    .describe(
+      "get: restrict to this URL (defaults to the active page). set/delete: scope the cookie by URL."
+    ),
+  domain: z.string().optional().describe("set/delete: scope the cookie by domain."),
+  path: z.string().optional().describe("set/delete: cookie path (default /)."),
+  secure: z.boolean().optional().describe("set: mark Secure."),
+  httpOnly: z.boolean().optional().describe("set: mark HttpOnly."),
+  sameSite: z.enum(["Strict", "Lax", "None"]).optional().describe("set: SameSite policy."),
+  expires: z
+    .number()
+    .optional()
+    .describe("set: expiry as a Unix timestamp (seconds). Omit for a session cookie."),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const chromiumCookiesTool: ToolDefinition<Params, Result> = {
   id: "chromium-cookies",
+  description: `Read and write cookies of a Chromium (CDP) app, HttpOnly cookies included.
+\`set\` needs \`name\`, \`value\`, and \`url\` or \`domain\`; \`delete\` needs \`name\` and \`url\` or \`domain\`.
+Use when seeding an authenticated session before an e2e test (set the session cookie, then navigate) or asserting cookie state after one.
+Returns { cookies, count } for get, or a small status object ({ set } / { deleted } / { cleared }) otherwise. Fails if the device is not a Chromium (CDP) device, or a param that \`set\` / \`delete\` needs is missing.`,
+  zodSchema,
+  searchHint: "cookies cookie get set delete clear httponly samesite session auth chromium",
   interaction: {
     startedMsg: ({ params }) => `${cookieAction[params.action].started} browser cookies`,
     completedMsg: ({ params }) => `${cookieAction[params.action].completed} browser cookies`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to ${cookieAction[params.action].failure} browser cookies: ${failureSignal.error_code}`,
   },
-  description: `Read and write cookies of a Chromium (CDP) app (via the Network domain, so HttpOnly cookies are included).
-- action="get" (url?): list cookies, optionally restricted to given URLs (defaults to the active page).
-- action="set" (name, value, + url OR domain, optional path/secure/httpOnly/sameSite/expires): create or update a cookie.
-- action="delete" (name, + url/domain/path): remove a matching cookie.
-- action="clear": remove ALL browser cookies.
-Use when seeding an authenticated session before an e2e test (set the session cookie, then navigate) or asserting cookie state after one.
-Returns { cookies, count } for get, or a small status object ({ set } / { deleted } / { cleared }) otherwise. Fails if the device is not a Chromium (CDP) device, or set is missing name/value. Chromium-only.`,
-  searchHint: "cookies cookie get set delete clear httponly samesite session auth chromium",
-  zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);

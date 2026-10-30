@@ -42,6 +42,10 @@ describe("gather-workspace-data tool", () => {
     expect(gatherWorkspaceDataTool.description).toBeTruthy();
   });
 
+  it("is hidden from MCP", () => {
+    expect(gatherWorkspaceDataTool.hideFromMcp).toBe(true);
+  });
+
   it("declares no service dependencies", () => {
     expect(gatherWorkspaceDataTool.services({ workspacePath: "/tmp" })).toEqual({});
   });

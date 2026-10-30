@@ -75,34 +75,6 @@ import {
   type WaitCondition,
 } from "../../utils/ui-tree-match";
 
-const zodSchema = z.object({
-  name: z
-    .string()
-    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording. Together with `name` it identifies which recording this step belongs to."
-    ),
-  command: z
-    .string()
-    .describe(
-      'MCP tool to execute and record, for example "gesture-tap". Do not pass an e2e test directive or a recording tool. Call e2e-add-script directly for a requested script step.'
-    ),
-  args: z
-    .string()
-    .optional()
-    .describe(
-      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
-    ),
-  delayMs: z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe("Milliseconds to sleep before executing this step during replay."),
-});
-
 // Replay gates on the platform's full-hierarchy source (`treeSourceGate` in
 // flow-run.ts) and refuses to degrade to the fallback tree, so a selector
 // derived from the fallback deserves a caveat even when it derives cleanly.
@@ -1321,6 +1293,34 @@ const fileInputs: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
 ];
 
+const zodSchema = z.object({
+  name: z
+    .string()
+    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
+    ),
+  command: z
+    .string()
+    .describe(
+      'MCP tool to execute and record, for example "gesture-tap". Do not pass an e2e test directive or a recording tool. Call e2e-add-script directly for a requested script step.'
+    ),
+  args: z
+    .string()
+    .optional()
+    .describe(
+      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
+    ),
+  delayMs: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Milliseconds to sleep before executing this step during replay."),
+});
+
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
   {
@@ -1335,6 +1335,10 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
 > {
   return {
     id: "e2e-add-step",
+    description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
+A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
+Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
+    zodSchema,
     aliases: ["flow-add-step"],
     interaction: {
       // Name the flow: recordings are concurrent, so several of these lines can
@@ -1347,16 +1351,12 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
       failedMsg: ({ params, failureSignal }) =>
         `Failed to add ${params.command} step to e2e test ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
-A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
-Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the
     // MCP adapter capped the POST at 30s and retried the identical body four
     // more times — and every retry re-runs the action and appends another step,
     // because an aborted request still appends its first.
     longRunning: true,
-    zodSchema,
     fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx) {

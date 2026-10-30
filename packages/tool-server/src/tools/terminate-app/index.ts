@@ -11,16 +11,6 @@ import { vegaDevice } from "../../utils/vega-cli";
 
 const execFileAsync = promisify(execFile);
 
-const zodSchema = z.object({
-  udid: z.string().min(1).describe("Target device id from `list-devices`."),
-  bundleId: z
-    .string()
-    .min(1)
-    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
-    .describe("App identifier. iOS: bundle id. Android: package name."),
-});
-
-type Params = z.infer<typeof zodSchema>;
 type TerminateAppResult = { terminated: boolean; bundleId: string };
 
 // The same kill steps restart-app runs, kept here on purpose so restart-app is
@@ -46,20 +36,31 @@ async function tolerateNotRunning(terminate: Promise<unknown>): Promise<boolean>
   }
 }
 
+const zodSchema = z.object({
+  udid: z.string().min(1).describe("Target device id from `list-devices`."),
+  bundleId: z
+    .string()
+    .min(1)
+    .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
+    .describe("App identifier. iOS: bundle id. Android: package name."),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const terminateAppTool: ToolDefinition<Params, TerminateAppResult> = {
   id: "terminate-app",
+  description: `Stop a running app without relaunching it, for SDK callers.
+Use when a program needs the app closed between steps; agents use restart-app.
+Returns { terminated, bundleId }; terminated is false on iOS when the app was not running.
+Succeeds when the app is not running or not installed.`,
+  zodSchema,
+  hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `Terminating ${params.bundleId}`,
     completedMsg: ({ params }) => `Terminated ${params.bundleId}`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to terminate ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  description: `Stop a running app without relaunching it, for SDK callers.
-Use when a program needs the app closed between steps; agents use restart-app.
-Returns { terminated, bundleId }; terminated is false on iOS when the app was not running.
-Succeeds when the app is not running or not installed.`,
-  hideFromMcp: true,
-  zodSchema,
   capability,
   services: () => ({}),
   execute: dispatchByPlatform({
