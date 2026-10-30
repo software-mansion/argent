@@ -13,13 +13,7 @@ const PUBLISH_PATH = "argent";
 
 export interface MoqClient {
   sendControl(payload: Uint8Array): Promise<void>;
-  /**
-   * Key events ride the reliable, ordered "keys" track. The control track
-   * writes one MoQ group per frame and the server reads it latest-wins, so a
-   * Down overtaken by its Up drops the letter and an overtaken Up holds the key
-   * into auto-repeat. The SDK falls back to the control track by itself against
-   * a server without the keys track.
-   */
+  /** Ordered "keys" track; the latest-wins control track drops reordered Down/Up pairs. */
   key(action: KeyActionName, code: number): Promise<void>;
   screenshot(opts?: { scale?: number }): Promise<Buffer>;
   close(): Promise<void>;

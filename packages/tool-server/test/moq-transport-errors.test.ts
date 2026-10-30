@@ -195,13 +195,8 @@ describe("sendCommand over a MoQ transport", () => {
 });
 
 /**
- * Keys must not ride the control track. `sendControl` writes one MoQ group per
- * frame and the server reads that track latest-wins, so independent QUIC
- * streams reordering in transit drop a Down overtaken by its Up (missing
- * letter) or an Up overtaken by the next Down (held key, auto-repeat). The
- * SDK's `key` writes every event into one ordered group on the "keys" track.
- * Seen as roughly one exact string in ten when typing into a cloud simulator
- * at the default 50 ms key delay.
+ * `sendControl` is one MoQ group per frame, read latest-wins: a Down overtaken
+ * by its Up loses the letter. Keys go through the SDK's ordered "keys" track.
  */
 describe("keys ride the ordered keys track", () => {
   it("pressKey calls key, never sendControl", async () => {
