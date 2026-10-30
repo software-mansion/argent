@@ -19,6 +19,12 @@ import { isFoldableSimulator, isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
 import { openMoqClient } from "../utils/moq-client";
+import { openMjpegStream } from "../tools/screen-recording/mjpeg-stream";
+import {
+  readAutoRotate,
+  removeScreenSharingReverses,
+  restoreAutoRotate,
+} from "../utils/android-device-controller-state";
 import {
   createMoqTransport,
   fetchDisplayState,
@@ -71,6 +77,10 @@ const STDERR_MAX_LINE_CHARS = 500;
 // env_logger's routine lines ("[<ts> INFO  simulator_server::…] …") say nothing
 // about why the binary stopped; its errors are printed without that prefix.
 const ROUTINE_LOG_LINE = /^\[\S+\s+(?:INFO|DEBUG|TRACE)\s/;
+
+// With RUST_BACKTRACE set, the error line is followed by enough frames to push
+// it out of the tail, and the frames themselves name nothing useful.
+const BACKTRACE_START = /^\s*stack backtrace:/i;
 
 function exitedBeforeReadyMessage(
   code: number | null,
@@ -129,6 +139,13 @@ export interface SimulatorServerApi {
    * screen 1 as before.
    */
   display?: SimulatorDisplayState;
+  /**
+   * Set for an emulator driven through the phone controller (see
+   * `spawnWithEmulatorFallback`). That controller lifts two fingers with one
+   * ACTION_UP that carries both pointers, which Android rejects: both pointers
+   * stay down and every later touch on the device is refused until it reboots.
+   */
+  singleTouchOnly?: true;
 }
 
 /** Bound on the `GET /api/display` probe a foldable's server gets at attach time. */
@@ -280,7 +297,9 @@ const SAFE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 /**
  * iOS simulators, Android emulators and physical Android phones each get their
  * own simulator-server controller; the phone one (`android_device`, screen-sharing
- * agent over adb) is picked by `kind`, not by platform alone.
+ * agent over adb) is picked by `kind`, not by platform alone. An emulator whose
+ * gRPC bridge cannot be discovered is later retried on `android_device` too
+ * (see `spawnWithEmulatorFallback`), while keeping `kind: "emulator"`.
  */
 function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_device" {
   if (device.platform === "ios") {
@@ -297,6 +316,106 @@ function subcommandForDevice(device: DeviceInfo): "ios" | "android" | "android_d
     return "ios";
   }
   return device.kind === "device" ? "android_device" : "android";
+}
+
+/**
+ * The emulator controller finds an AVD's gRPC bridge through the emulator's
+ * discovery file (`avd/running/pid_*.ini` in a per-user directory: under the
+ * user's home or cache folder, or `$XDG_RUNTIME_DIR` / `/run/user/<uid>` on
+ * Linux). An emulator started outside argent by another user or HOME (a CI
+ * runner, a service account) has no such file where argent looks, so
+ * simulator-server exits with "not found among running emulators", or, on
+ * Linux when no discovery directory exists at all, "Failed to find any running
+ * emulator". The phone controller (screen-sharing agent over adb) needs
+ * nothing but adb, so such an emulator is retried through it instead of
+ * leaving the device with no screenshot, tap or swipe at all.
+ */
+const EMULATOR_NOT_DISCOVERED =
+  /not found among running emulators|Failed to find any running emulator/;
+
+const FIRST_FRAME_TIMEOUT_MS = 5_000;
+
+/**
+ * The phone controller prints its readiness lines before the agent injects
+ * input: a touch sent before the first frame is acked but never lands.
+ */
+async function waitForFirstFrame(streamUrl: string): Promise<void> {
+  if (!streamUrl) return;
+  const stream = await openMjpegStream(streamUrl).catch(() => null);
+  if (!stream) return;
+  await stream
+    .waitForFirstFrame(FIRST_FRAME_TIMEOUT_MS)
+    .catch(() => {})
+    .finally(() => stream.close());
+}
+
+type SpawnedServer = Awaited<ReturnType<typeof spawnSimulatorServerProcess>>;
+
+type StartedServer = SpawnedServer & {
+  adbFallback: boolean;
+  /** The auto-rotate setting to put back on dispose (adb fallback only). */
+  autoRotate: string | null;
+};
+
+function trackExit(proc: ChildProcess): { exited: boolean; code: number | null } {
+  const state = { exited: false, code: null as number | null };
+  proc.once("exit", (code) => {
+    state.exited = true;
+    state.code = code;
+  });
+  return state;
+}
+
+async function spawnWithEmulatorFallback(device: DeviceInfo): Promise<StartedServer> {
+  const subcommand = subcommandForDevice(device);
+  try {
+    const server = await spawnSimulatorServerProcess(device.id, subcommand);
+    return { ...server, adbFallback: false, autoRotate: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (subcommand !== "android" || !EMULATOR_NOT_DISCOVERED.test(message)) throw err;
+    process.stderr.write(
+      `[sim ${device.id}] emulator not found through gRPC discovery; ` +
+        `falling back to the adb screen-sharing controller\n`
+    );
+    return spawnAdbFallback(device.id, err);
+  }
+}
+
+async function spawnAdbFallback(serial: string, discoveryErr: unknown): Promise<StartedServer> {
+  await removeScreenSharingReverses(serial).catch(() => {});
+  let server: SpawnedServer;
+  try {
+    server = await spawnSimulatorServerProcess(serial, "android_device");
+  } catch (fallbackErr) {
+    // "Failed to find any running emulator" also means no emulator is up at
+    // all; then the fallback fails too, and the emulator controller's error
+    // (and its failure signal) is the one that explains it.
+    const fallbackMessage =
+      fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+    process.stderr.write(
+      `[sim ${serial}] adb screen-sharing fallback failed too: ${fallbackMessage}\n`
+    );
+    throw discoveryErr;
+  }
+
+  // The registry only listens for `terminated` once the factory resolves, so an
+  // exit during these waits has to fail the start instead.
+  const exit = trackExit(server.proc);
+  await waitForFirstFrame(server.streamUrl);
+  const autoRotate = await readAutoRotate(serial).catch(() => null);
+  if (exit.exited) {
+    throw new FailureError(
+      `simulator-server exited with code ${exit.code} before its first frame`,
+      {
+        error_code: FAILURE_CODES.SIMULATOR_SERVER_TERMINATED,
+        failure_stage: "simulator_server_process_exit",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      }
+    );
+  }
+  return { ...server, adbFallback: true, autoRotate };
 }
 
 async function spawnSimulatorServerProcess(
@@ -386,8 +505,10 @@ async function spawnSimulatorServerProcess(
     let partialLine = "";
     // Routine lines are dropped here, not when the message is built, so a burst
     // of shutdown logging cannot push the error out of the tail.
+    let inBacktrace = false;
     const keepLine = (line: string) => {
-      if (!line.trim() || ROUTINE_LOG_LINE.test(line)) return;
+      if (BACKTRACE_START.test(line)) inBacktrace = true;
+      if (inBacktrace || !line.trim() || ROUTINE_LOG_LINE.test(line)) return;
       stderrTail.push(line.trimEnd().slice(0, STDERR_MAX_LINE_CHARS));
       stderrTail.splice(0, Math.max(0, stderrTail.length - STDERR_TAIL_LINES));
     };
@@ -589,10 +710,8 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
-    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
-      device.id,
-      subcommandForDevice(device)
-    );
+    const { proc, apiUrl, streamUrl, adbFallback, autoRotate } =
+      await spawnWithEmulatorFallback(device);
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
@@ -624,9 +743,11 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
           proc.stdin?.write(`key ${direction} ${keyCode}\n`);
           return Promise.resolve();
         },
+        ...(adbFallback ? { singleTouchOnly: true as const } : {}),
       },
       dispose: async () => {
         proc.kill();
+        if (autoRotate !== null) await restoreAutoRotate(device.id, autoRotate).catch(() => {});
       },
       events,
     };

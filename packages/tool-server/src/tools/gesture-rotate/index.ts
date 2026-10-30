@@ -2,7 +2,7 @@ import { z } from "zod";
 import { type ToolCapability, type ToolContext, type ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { sendTouchEvent } from "../../utils/gesture-utils";
+import { assertTwoFingerTouchSupported, sendTouchEvent } from "../../utils/gesture-utils";
 import { sleep } from "../../utils/timing";
 
 const zodSchema = z
@@ -103,6 +103,7 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
   }),
   async execute(services, params, ctx?: ToolContext) {
     const api = services.simulatorServer as SimulatorServerApi;
+    assertTwoFingerTouchSupported(api, "gesture-rotate", resolveDevice(params.udid));
     const duration = params.durationMs ?? 300;
     const steps = Math.max(1, Math.round(duration / 16));
     // Refines guarantee radius is set whenever the per-axis pair is absent.

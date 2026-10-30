@@ -43,6 +43,25 @@ Argent drives these foldable devices closed, half-open and open:
 
 The agent folds and unfolds the device with the `fold` tool. `list-devices` marks a foldable device with `foldable: true`. Screenshots, element trees, taps and recordings use the panel that shows the UI. Argent cannot fold a physical Android device. See the [tools reference](/docs/reference/tools).
 
+### Emulators started by another user
+
+Argent finds an emulator through a discovery file that the emulator writes in a directory of its user:
+
+- On macOS, the directory is in the home directory.
+- On Linux, the directory is in `$XDG_RUNTIME_DIR` or `/run/user/<uid>`, and in the home directory only when neither exists.
+
+Argent does not find the file of an emulator that another user started. On macOS, Argent also does not find the file when the same user started the emulator with another `HOME`. Argent then controls that emulator over adb, the same way as a physical Android device. This path has these limits:
+
+- Two-finger gestures (pinch, rotate, a two-finger `gesture-custom`) fail with an error. On this path, Android keeps both fingers down after the gesture and refuses all later touches.
+- Screenshots have a lower resolution than on an emulator that Argent finds. `screenshot-diff` reports a size mismatch when it compares screenshots from the two paths.
+- Only one Argent tool-server can control the emulator. When a second tool-server connects, the first one loses its connection and connects again on its next call.
+- Argent copies its screen-sharing agent to `/data/local/tmp/.studio` on the emulator and keeps it there for the next start.
+- A touch turns off auto-rotate on the emulator. Argent sets auto-rotate back when it stops controlling the emulator. If the tool-server crashes, or two tool-servers take turns on the emulator, auto-rotate can stay off. To turn it on again, run `adb -s <serial> shell settings put system accelerometer_rotation 1`.
+
+`shake` and `fold` fail on an emulator that another user or another `HOME` started. These tools use the emulator console, and the console accepts only the auth token from the home directory of the emulator.
+
+To remove these limits, stop the emulator from the account that started it. Then start it with `boot-device`, or with the same user and `HOME` as Argent. `boot-device` reuses an emulator that is already running, and `boot-device` with `force` cannot stop this emulator.
+
 ### Physical iPhones
 
 Argent also drives a physical iPhone over a USB cable. Physical iPads are not supported yet. Automation on hardware is scoped to one app at a time, and a subset of the simulator tools is available. See [Physical iOS devices](/docs/features/physical-ios-devices).

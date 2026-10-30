@@ -12,7 +12,7 @@ import {
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { InvalidToolInputError } from "../../utils/capability";
 import { sendCommand } from "../../utils/simulator-client";
-import { interpolateEvents } from "../../utils/gesture-utils";
+import { assertTwoFingerTouchSupported, interpolateEvents } from "../../utils/gesture-utils";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -84,6 +84,10 @@ type IosDeviceGesturePlan =
   | { kind: "gesture"; down: GestureEvent; hold?: GestureEvent; up: GestureEvent }
   | { kind: "unsupported"; reason: string };
 
+function hasSecondTouch(event: GestureEvent): boolean {
+  return event.x2 !== undefined || event.y2 !== undefined;
+}
+
 function samePoint(a: GestureEvent, b: GestureEvent): boolean {
   return Math.abs(a.x - b.x) <= SAME_POINT_EPSILON && Math.abs(a.y - b.y) <= SAME_POINT_EPSILON;
 }
@@ -99,7 +103,7 @@ function samePoint(a: GestureEvent, b: GestureEvent): boolean {
  * list item is picked up with a long press and dragged.
  */
 function planIosDeviceGesture(events: Params["events"]): IosDeviceGesturePlan {
-  if (events.some((e) => e.x2 !== undefined || e.y2 !== undefined)) {
+  if (events.some(hasSecondTouch)) {
     return {
       kind: "unsupported",
       reason:
@@ -226,6 +230,9 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
       );
     }
     const api = services.simulatorServer as SimulatorServerApi;
+    if (params.events.some(hasSecondTouch)) {
+      assertTwoFingerTouchSupported(api, "gesture-custom", device);
+    }
     const events =
       params.interpolate && params.interpolate > 0
         ? interpolateEvents(params.events, params.interpolate)

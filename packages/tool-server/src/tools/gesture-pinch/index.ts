@@ -3,7 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { harmonyConnectKey, resolveDevice } from "../../utils/device-info";
 import { ensureDep } from "../../utils/check-deps";
-import { sendTouchEvent } from "../../utils/gesture-utils";
+import { assertTwoFingerTouchSupported, sendTouchEvent } from "../../utils/gesture-utils";
 import {
   HARMONY_INTERACTION_TIMEOUT_MS,
   assertHarmonyDisplayReady,
@@ -180,6 +180,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       return { pinched: true, timestampMs };
     }
     const api = services.simulatorServer as SimulatorServerApi;
+    assertTwoFingerTouchSupported(api, "gesture-pinch", device);
     const steps = Math.max(1, Math.round(duration / 16));
 
     let timestampMs = 0;
