@@ -162,7 +162,9 @@ describe("tool interaction messages", () => {
     // Degenerate sources (these calls fail validation, but the started message
     // renders first) still say something honest — never "" or "undefined".
     expect(
-      interaction.startedMsg!({ params: { e2e_test_path: "/repo/flows/.yaml", project_root: "/repo" } })
+      interaction.startedMsg!({
+        params: { e2e_test_path: "/repo/flows/.yaml", project_root: "/repo" },
+      })
     ).toBe("Running e2e test .yaml");
     // Unlike the bare ".yaml" above, this path has an empty basename stem, so
     // the raw path — not the stem — is what names the flow here.

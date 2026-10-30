@@ -566,7 +566,8 @@ describe("argent e2e run", () => {
     const sent = async (ref: string): Promise<unknown> => {
       toolsClientMock.callTool.mockClear();
       await expect(flow(["run", ref], opts)).rejects.toThrow("process.exit:0");
-      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string }).e2e_test_path;
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string })
+        .e2e_test_path;
     };
     try {
       process.chdir(tempRoot);
@@ -601,7 +602,8 @@ describe("argent e2e run", () => {
       } finally {
         process.chdir(previousCwd);
       }
-      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string }).e2e_test_path;
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string })
+        .e2e_test_path;
     }
 
     it("runs a name saved under .argent/e2e", async () => {

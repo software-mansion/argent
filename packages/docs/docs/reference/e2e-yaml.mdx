@@ -26,6 +26,8 @@ Earlier versions of Argent called this feature Argent flows. The old names still
 | `argent flow` command      | `argent e2e` command     |
 | `.argent/flows/` directory | `.argent/e2e/` directory |
 | `ARGENT_FLOW_FILES_LOG`    | `ARGENT_E2E_FILES_LOG`   |
+| `flow_path` param          | `e2e_test_path` param    |
+| `flow_file` param          | `e2e_test_file` param    |
 
 Argent reads an e2e test from `.argent/e2e/` first, then from `.argent/flows/`. When both directories hold an e2e test with the same name, Argent runs the file in `.argent/e2e/` and prints a warning that names the other file. Argent writes a new e2e test to `.argent/e2e/`. Argent does not move the existing files. When you move an e2e test by hand, also move its `__baselines__/<test>/` directory.
 
@@ -496,7 +498,7 @@ A file argument is an argument that a `tool:` step reads as one file, named by a
 | A `tool:` step that takes a directory, an app or an output directory, for example `gather-workspace-data`, `reinstall-app` or `screenshot-diff` with `outputDir` | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
 | A `tool:` step that builds a file path from two or more arguments, for example `e2e-read-prerequisite` with `name`                                               | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
 | `tool: e2e-execute` with `name` and an absolute `project_root` without a `..` segment                                                                            | Runs. The CLI also uploads the e2e test that the step names, with its own files. The same rules apply to that e2e test. When the CLI or the tool-server is an older version, the tool-server rejects the e2e test before the first step |
-| `tool: e2e-execute` with `flow_path`, or with `name` and a `project_root` that is relative or has a `..` segment                                                 | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
+| `tool: e2e-execute` with `e2e_test_path`, or with `name` and a `project_root` that is relative or has a `..` segment                                             | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
 | A `tool:` step that records an e2e test, for example `e2e-add-step`                                                                                              | The tool-server rejects the e2e test before the first step                                                                                                                                                                              |
 | A relative `launch: { chromium: <path> }`                                                                                                                        | The launch fails. Use an absolute path on the tool-server                                                                                                                                                                               |
 
@@ -562,7 +564,7 @@ When the CLI cannot connect to the tool-server that a link names, the e2e test d
 
 ## Remote runs
 
-The `e2e-execute` tool takes one e2e test source: `name` for a saved e2e test, or `flow_path` for any file. Without a link, the tool-server reads the file in place, and all step kinds run.
+The `e2e-execute` tool takes one e2e test source: `name` for a saved e2e test, or `e2e_test_path` for any file. Without a link, the tool-server reads the file in place, and all step kinds run.
 
 Over a link, both sources send these files with the call, and the tool-server runs those copies:
 

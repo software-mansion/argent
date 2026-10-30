@@ -3376,7 +3376,9 @@ export async function resolveFlowSource(
     params.e2e_test_file &&
     (!path.isAbsolute(params.e2e_test_file) ||
       params.e2e_test_file.split(/[\\/]+/).includes("..") ||
-      !candidates.some((candidate) => path.resolve(candidate) === path.resolve(params.e2e_test_file!)))
+      !candidates.some(
+        (candidate) => path.resolve(candidate) === path.resolve(params.e2e_test_file!)
+      ))
   ) {
     throw new FailureError(
       `Invalid e2e_test_file "${params.e2e_test_file}": it must resolve to the e2e test's path under the ` +

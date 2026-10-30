@@ -881,7 +881,9 @@ describe("flow replay with an explicit boundary-resolved e2e_test_path", () => {
         'matched "UpperCase.yaml" case-insensitively to "uppercase.yaml"'
       );
       expect(err?.message).toContain("__baselines__");
-      expect(err?.message).toContain('Pass e2e_test_path with the on-disk basename "uppercase.yaml"');
+      expect(err?.message).toContain(
+        'Pass e2e_test_path with the on-disk basename "uppercase.yaml"'
+      );
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -993,7 +995,9 @@ describe("flow replay with an explicit boundary-resolved e2e_test_path", () => {
         presentOnHost: false,
         viaUpload: true,
       })
-    ).rejects.toThrow('Invalid e2e_test_path "flows/relative.yaml": e2e test paths must be absolute');
+    ).rejects.toThrow(
+      'Invalid e2e_test_path "flows/relative.yaml": e2e test paths must be absolute'
+    );
   });
 
   it("rejects an uploaded e2e_test_path whose client spelling has a .. segment", async () => {

@@ -85,7 +85,7 @@ function isResolvedAbsolute(value: unknown): value is string {
 
 /**
  * The tool-server's own shape rules for the flow a call names: `project_root`
- * absolute with no `..` segment, and exactly one of `flow_path` (the same,
+ * absolute with no `..` segment, and exactly one of `e2e_test_path` (the same,
  * named `<flow-name>.yaml`) and `name` (a flow name). The tool-server refuses
  * any other call before step 1, and roots taken from its arguments could
  * reach past the project, so such a call sends none of the flow's files.
@@ -694,7 +694,7 @@ function recordedStep(
  * that run. The recorder also resolves the recording file
  * `<project_root>/.argent/e2e/<name>.yaml` for its real directory, and the
  * sibling `<name>.yaml` there, which a nested flow is recorded as a `run:`
- * step of only when it is the flow that ran. A `flow_path` the recorder
+ * step of only when it is the flow that ran. An `e2e_test_path` the recorder
  * rewrites to that sibling's name (it is a file in the recording's
  * directory, or in the project's other e2e test directory) is sent under its
  * own spelling too, for the recorder's on-disk

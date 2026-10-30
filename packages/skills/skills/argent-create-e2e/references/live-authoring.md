@@ -268,7 +268,7 @@ Resolve every hit and confirm:
 
 Run `e2e-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`.
 
-`e2e-execute` takes exactly one test source: `name`, for a test saved under `.argent/e2e/` (or the legacy `.argent/flows/`), or `flow_path`, an absolute path to any test `.yaml`.
+`e2e-execute` takes exactly one test source: `name`, for a test saved under `.argent/e2e/` (or the legacy `.argent/flows/`), or `e2e_test_path`, an absolute path to any test `.yaml`.
 
 Over `argent link` or `ARGENT_TOOLS_URL`, the client sends the test file, its `run:` fragments, the tests that its `tool: e2e-execute` steps name, the snapshot baselines of each run and the file arguments of its `tool:` steps with the call. These steps work over a link:
 
@@ -283,7 +283,7 @@ These steps do not work over a link, in the test or in a fragment or test that i
 - a `tool:` step that takes a directory, an app or an output directory, such as `reinstall-app`, `gather-workspace-data`, or `screenshot-diff` with `outputDir`
 - a `tool:` step with a relative file path, or a file other than `.png` or `.yaml`
 - a `tool:` step whose tool builds the file path from several arguments, such as `e2e-read-prerequisite` with `name`
-- a `tool: e2e-execute` step with `flow_path`, or with `name` and a relative `project_root` or one with a `..` segment
+- a `tool: e2e-execute` step with `e2e_test_path`, or with `name` and a relative `project_root` or one with a `..` segment
 - a `tool:` step that records an e2e test
 
 The tool-server checks the test, its fragments and the tests that it runs before the first step. The error lists each step that does not work over a link, and each `run:` or `tool: e2e-execute` step whose test the client could not send, with the reason. A fragment or a test that does not exist fails its step when the step runs. Run a test that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.

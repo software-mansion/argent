@@ -10,29 +10,37 @@ This page shows how a client sends the files of an e2e test run to a tool-server
 
 ## `collect` in `GET /tools`
 
-The `GET /tools` entry of a tool lists its file inputs in `fileInputs`. The `flow_path` and `flow_file` inputs of `e2e-execute` have `"collect": "flow"`:
+The `GET /tools` entry of a tool lists its file inputs in `fileInputs`. The `e2e_test_path` and `e2e_test_file` inputs of `e2e-execute` have `"collect": "flow"`:
 
 ```json
 {
   "name": "e2e-execute",
   "fileInputs": [
     {
-      "target": "flow_path",
-      "path": "${flow_path}",
+      "target": "e2e_test_path",
+      "path": "${e2e_test_path}",
       "kind": "file",
       "optional": true,
       "unwrapWhenSet": "name",
       "collect": "flow"
     },
     {
-      "target": "flow_file",
+      "target": "e2e_test_file",
       "path": "${project_root}/.argent/flows/${name}.yaml",
       "paths": [
         "${project_root}/.argent/e2e/${name}.yaml",
         "${project_root}/.argent/flows/${name}.yaml"
       ],
       "kind": "file",
-      "skipWhenSet": "flow_path",
+      "skipWhenSet": "e2e_test_path",
+      "collect": "flow"
+    },
+    {
+      "target": "flow_path",
+      "path": "${flow_path}",
+      "kind": "file",
+      "optional": true,
+      "unwrapWhenSet": "name",
       "collect": "flow"
     }
   ]
@@ -59,6 +67,8 @@ The `project_root` input of `e2e-add-step` carries `"collect": "step"`:
 An entry with `"readOnly": true` is a tool that only reads state. The MCP adapter sends it with the `readOnlyHint` annotation.
 
 `GET /tools` also lists each old `flow-*` name as an entry with `"hideFromMcp": true` and `aliasOf`, the new name. A call to the old name runs the new tool.
+
+`e2e-execute` and `e2e-read-prerequisite` also take their old param names: `flow_path` for `e2e_test_path`, and `flow_file` for `e2e_test_file`. The input schema lists only the new names. The tool-server reads an old name as the new one, and answers `400` to a call that sets both names of one param. The last entry of `fileInputs`, with the target `flow_path`, is the `e2e_test_path` input under its old name, so that a client older than the rename sends the file of a call by `flow_path`.
 
 <a id="the-flow-file-input" />
 
@@ -108,7 +118,7 @@ The client collects the members before the call:
 
 The client resolves each pair of directory and target one time. The client stops at 20 levels, the maximum depth of a `run:` chain. A cycle stops when a pair repeats.
 
-The client also follows each `tool: e2e-execute` step that names its e2e test with `name` and an absolute `project_root` without a `..` segment, in each e2e test that it found. The e2e test that such a step names is a nested e2e test. The client sends it as a member with the directory `<project_root>/.argent/e2e` of the step and the target `<name>.yaml`, or with `<project_root>/.argent/flows` when only that directory has the file, and collects its members in the same way. A nested e2e test counts as one level of the same depth limit. The client does not follow a step that names its e2e test with `flow_path`.
+The client also follows each `tool: e2e-execute` step that names its e2e test with `name` and an absolute `project_root` without a `..` segment, in each e2e test that it found. The e2e test that such a step names is a nested e2e test. The client sends it as a member with the directory `<project_root>/.argent/e2e` of the step and the target `<name>.yaml`, or with `<project_root>/.argent/flows` when only that directory has the file, and collects its members in the same way. A nested e2e test counts as one level of the same depth limit. The client does not follow a step that names its e2e test with `e2e_test_path`.
 
 A flow member has these fields:
 
@@ -242,12 +252,12 @@ The client writes the baselines only when the result arrives. When the connectio
 
 The `project_root` input of `e2e-add-step` has the kind `probe` and carries `"collect": "step"`. Over a link, the client adds `members` to its file-input object. The object has no `content`, `canonical` or `spelling`, and the tool-server passes `project_root` through unchanged. The client builds the step from `command` and the JSON text of `args`, and sends the files that this one step makes the tool-server read:
 
-| Step                                                                                                                                     | Members                                                                                                                                                                                                                                          |
-| ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A `tool:` step with file arguments                                                                                                       | Each file argument, as in [Tool files](#tool-files)                                                                                                                                                                                              |
-| `command: e2e-execute` with `name` and an absolute `project_root` in `args`                                                              | The recording file, by its directory and file name. The file with the e2e test name of the step beside the real file of the recording. The e2e test that the step names, with its members and the baselines of its run, as for a nested e2e test |
-| `command: e2e-execute` with a `flow_path` in `args`, in the directory of the recording or in the other e2e test directory of the project | The members of the row above for the name of that file. Also that file, by its directory and the file name of `flow_path`                                                                                                                        |
-| `command: e2e-execute` with another `flow_path`                                                                                          | The recording file                                                                                                                                                                                                                               |
+| Step                                                                                                                                          | Members                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A `tool:` step with file arguments                                                                                                            | Each file argument, as in [Tool files](#tool-files)                                                                                                                                                                                              |
+| `command: e2e-execute` with `name` and an absolute `project_root` in `args`                                                                   | The recording file, by its directory and file name. The file with the e2e test name of the step beside the real file of the recording. The e2e test that the step names, with its members and the baselines of its run, as for a nested e2e test |
+| `command: e2e-execute` with an `e2e_test_path` in `args`, in the directory of the recording or in the other e2e test directory of the project | The members of the row above for the name of that file. Also that file, by its directory and the file name of `e2e_test_path`                                                                                                                    |
+| `command: e2e-execute` with another `e2e_test_path`                                                                                           | The recording file                                                                                                                                                                                                                               |
 
 The recording file is `<project_root>/.argent/e2e/<name>.yaml`, with the `project_root` and the `name` of the call. A recording that the client keeps is in `<project_root>/.argent/flows/<name>.yaml` when the client does not send the [`x-argent-e2e-dir` header](#the-x-argent-e2e-dir-header). The [client policy](#client-policy) applies, with the recording file in place of the e2e test file.
 
@@ -273,7 +283,7 @@ An argent client that is older than the tool-server sends no header and no membe
 - The tool-server writes the file over a link to `127.0.0.1`, or when the `project_root` path also exists on its computer. The recorder then applies none of the refusals above. Such a client can record steps that a replay over that link rejects, a `script:` step among them.
 - The client keeps the file when the `project_root` path does not exist on the computer of the tool-server. The recorder applies the refusals. It also refuses these steps, because such a client sends no file with the call, and the error tells you to update the argent CLI or the MCP adapter:
   - an `e2e-execute` step with `name`
-  - an `e2e-execute` step with the `flow_path` of an e2e test beside the recording
+  - an `e2e-execute` step with the `e2e_test_path` of an e2e test beside the recording
   - a `tool:` step with a file argument
 
 Keep the client and the tool-server at the same version.

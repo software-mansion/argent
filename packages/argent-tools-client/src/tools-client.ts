@@ -280,7 +280,7 @@ function findTool(tools: readonly ToolMeta[], name: string): ToolMeta | null {
  * with the call, so a call the tool-server would refuse must not send them
  * first. Presence only: a present but invalid
  * value is the tool-server's call. A target that the client derives from other
- * arguments (`flow_file` from `name`) is left to the tool-server.
+ * arguments (`e2e_test_file` from `name`) is left to the tool-server.
  */
 function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   const record = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};

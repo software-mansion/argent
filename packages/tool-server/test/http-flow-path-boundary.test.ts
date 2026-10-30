@@ -212,7 +212,12 @@ describe("flow-execute e2e_test_path over HTTP", () => {
         .send({
           project_root: projectRoot,
           device: DEVICE,
-          e2e_test_path: { __argentFileInput: true, path: relPath, size: st.size, mtimeMs: st.mtimeMs },
+          e2e_test_path: {
+            __argentFileInput: true,
+            path: relPath,
+            size: st.size,
+            mtimeMs: st.mtimeMs,
+          },
         });
 
       expect(res.status).toBe(500);
@@ -312,7 +317,12 @@ describe("flow-execute e2e_test_path over HTTP", () => {
         name: "checkout",
         project_root: projectRoot,
         device: DEVICE,
-        e2e_test_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+        e2e_test_path: {
+          __argentFileInput: true,
+          path: flowPath,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+        },
         e2e_test_file: {
           __argentFileInput: true,
           path: path.join(projectRoot, ".argent", "flows", "checkout.yaml"),
@@ -343,7 +353,12 @@ describe("flow-execute e2e_test_path over HTTP", () => {
         name: "good",
         project_root: projectRoot,
         device: DEVICE,
-        e2e_test_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+        e2e_test_path: {
+          __argentFileInput: true,
+          path: flowPath,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+        },
         e2e_test_file: {
           __argentFileInput: true,
           path: savedPath,
@@ -367,7 +382,12 @@ describe("flow-execute e2e_test_path over HTTP", () => {
         name: "checkout",
         project_root: projectRoot,
         device: DEVICE,
-        e2e_test_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+        e2e_test_path: {
+          __argentFileInput: true,
+          path: flowPath,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+        },
       });
 
     expect(res.status).toBe(400);
@@ -1330,7 +1350,11 @@ describe("flow-execute with run: fragments sent through POST /upload", () => {
       },
     });
     const outcome = await client
-      .callTool("flow-execute", { e2e_test_path: flowPath, project_root: projectRoot, device: DEVICE })
+      .callTool("flow-execute", {
+        e2e_test_path: flowPath,
+        project_root: projectRoot,
+        device: DEVICE,
+      })
       .then(
         ({ data }) => (data as FlowRunResult).steps.map((step) => `${step.status} ${step.flow}`),
         (err: unknown) => err
@@ -1374,7 +1398,10 @@ describe("flow-execute with run: fragments sent through POST /upload", () => {
     // The upload of the second fragment is gone, not only its file.
     const again = await supertest(handle.app)
       .post("/tools/flow-execute")
-      .send({ ...sent, e2e_test_path: { ...sent.e2e_test_path, members: [sent.e2e_test_path.members[1]] } });
+      .send({
+        ...sent,
+        e2e_test_path: { ...sent.e2e_test_path, members: [sent.e2e_test_path.members[1]] },
+      });
     expect(again.status).toBe(422);
     expect(again.body.error).toMatch(/was not found on the tool-server/);
   });

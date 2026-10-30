@@ -276,9 +276,10 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: true }),
     });
 
-    const err = await callTool("run-flow", { e2e_test_path: flowPath, project_root: TEST_HOME }).catch(
-      (e: unknown) => e
-    );
+    const err = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+    }).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(ToolInvocationError);
     expect(err).toMatchObject({

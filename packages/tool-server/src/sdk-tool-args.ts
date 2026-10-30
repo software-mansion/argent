@@ -63,11 +63,16 @@ export function toType(schema: Schema, indent = ""): string {
 /** A former param name stays accepted, so it keeps the type of the param it names. */
 function withFormerParams(id: string, schema: Schema): Schema {
   const properties: Record<string, Schema> | undefined = schema.properties;
-  const former = Object.entries(toolParamAliases(id)).filter(([, current]) => properties?.[current]);
+  const former = Object.entries(toolParamAliases(id)).filter(
+    ([, current]) => properties?.[current]
+  );
   if (!properties || former.length === 0) return schema;
   const withFormer = { ...properties };
   for (const [name, current] of former) {
-    withFormer[name] = { ...properties[current], description: `@deprecated Renamed to \`${current}\`.` };
+    withFormer[name] = {
+      ...properties[current],
+      description: `@deprecated Renamed to \`${current}\`.`,
+    };
   }
   return { ...schema, properties: withFormer };
 }

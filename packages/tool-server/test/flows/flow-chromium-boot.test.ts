@@ -1171,7 +1171,11 @@ describe("flow-execute chromium boot", () => {
     );
 
     await expect(
-      runFlow(registry, { name: "missing-then-e2e", project_root: PROJECT_ROOT, e2e_test_file: top })
+      runFlow(registry, {
+        name: "missing-then-e2e",
+        project_root: PROJECT_ROOT,
+        e2e_test_file: top,
+      })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
 

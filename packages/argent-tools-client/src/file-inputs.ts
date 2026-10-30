@@ -412,7 +412,7 @@ export async function prepareFileInputs(
     const filePath = await specPath(spec, record);
     if (filePath === null) continue;
     // When the target IS a source param the interpolated path equals its
-    // value; a derived target (flow_file) is wrapped only when unset.
+    // value; a derived target (e2e_test_file) is wrapped only when unset.
     if (spec.target in record && record[spec.target] !== filePath) continue;
 
     const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: filePath };

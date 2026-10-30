@@ -206,7 +206,7 @@ export type OnDiskSpelling =
  * comparison lie.
  *
  * What an `absent` verdict means is the caller's to decide, and they differ:
- * `flow_path` arrives with the boundary's stat already vouching for the file,
+ * `e2e_test_path` arrives with the boundary's stat already vouching for the file,
  * so a listing that lacks it is itself the phantom-spelling bug, while a `name`
  * may simply not name a saved flow — an ordinary missing-flow error the later
  * read reports far better than a casing complaint could.
@@ -254,7 +254,7 @@ export interface ResolvedFlowRelativeFile {
  *
  * There is deliberately NO path fence here on the tool-server. A target is
  * reachable exactly when the tool-server user can read it, which is the reach
- * the front door already grants: an operator can point `flow_path` at any YAML
+ * the front door already grants: an operator can point `e2e_test_path` at any YAML
  * on the host. The one route that carries untrusted content, an uploaded flow,
  * never resolves a target of its own on the host: the runner either refuses
  * the step kind before any step runs, or looks the reference up in the files

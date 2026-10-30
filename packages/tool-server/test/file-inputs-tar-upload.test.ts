@@ -396,7 +396,9 @@ describe("resolveFileInputs — flow members sent through POST /upload", () => {
 
     const { fileInputs, cleanup } = await resolveFileInputs(
       { fileInputs: FLOW_SPEC },
-      { e2e_test_path: flowWire([member("a.yaml", "a", a, { size: Buffer.byteLength(FRAGMENT) })]) },
+      {
+        e2e_test_path: flowWire([member("a.yaml", "a", a, { size: Buffer.byteLength(FRAGMENT) })]),
+      },
       store.lookup
     );
     cleanups.push(cleanup);
