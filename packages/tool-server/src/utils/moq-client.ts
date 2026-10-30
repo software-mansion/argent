@@ -24,14 +24,18 @@ export async function openMoqClient(udid: string): Promise<MoqClient> {
 async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
   await installNodeWebTransport();
   const session = new MoqDeviceSession(await connectMoq(info), { publishPath: PUBLISH_PATH });
-  disposeWhenTransportDies(session);
+  let closed = false;
+  disposeWhenTransportDies(session, () => (closed = true));
 
   return {
-    sendControl: (payload) => session.sendControl(payload),
+    // The SDK resolves sends on a closed session, reporting undelivered input as sent.
+    sendControl: (payload) =>
+      closed ? Promise.reject(new Error("MoQ session is closed")) : session.sendControl(payload),
     async screenshot(opts) {
       return Buffer.from(await session.screenshot({ scale: opts?.scale }));
     },
     async close() {
+      closed = true;
       session.close();
     },
   };
@@ -47,12 +51,12 @@ async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
  * asking a released machine for a screenshot killed the tool server.
  *
  * Closing the session when its transport closes takes the SDK's own guarded
- * path instead: `screenshot` then rejects before it opens any stream. Sends are
- * unaffected - they reuse the control track resolved at connect and keep
- * failing with `track is closed`.
+ * path instead: `screenshot` then rejects before it opens any stream. Sends get
+ * no such guard from the SDK, so `onDispose` lets the client refuse them.
  */
-function disposeWhenTransportDies(session: MoqDeviceSession): void {
+function disposeWhenTransportDies(session: MoqDeviceSession, onDispose: () => void): void {
   const dispose = () => {
+    onDispose();
     try {
       session.close();
     } catch {

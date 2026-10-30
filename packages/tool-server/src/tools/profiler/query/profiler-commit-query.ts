@@ -394,6 +394,7 @@ Modes:
 Use when drilling into specific components or time windows after react-profiler-analyze.
 Returns a markdown table or tree of commit data matching the requested mode.
 Fails if react-profiler-stop has not been called or no commit data is stored.`,
+  readOnly: true,
   zodSchema,
   // Reads React commit data captured via the React DevTools backend.
   capability: RN_ONLY_TOOL_CAPABILITY,

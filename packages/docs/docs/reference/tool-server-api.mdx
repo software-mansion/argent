@@ -56,6 +56,8 @@ The `project_root` input of `e2e-add-step` carries `"collect": "step"`:
 
 `"collect": "step"` tells the client to send the files that the recorded step makes the tool-server read. See [Members of a recorded step](#members-of-a-recorded-step).
 
+An entry with `"readOnly": true` is a tool that only reads state. The MCP adapter sends it with the `readOnlyHint` annotation.
+
 `GET /tools` also lists each old `flow-*` name as an entry with `"hideFromMcp": true` and `aliasOf`, the new name. A call to the old name runs the new tool.
 
 <a id="the-flow-file-input" />
@@ -275,6 +277,18 @@ An argent client that is older than the tool-server sends no header and no membe
   - a `tool:` step with a file argument
 
 Keep the client and the tool-server at the same version.
+
+## The `x-argent-client-secrets` header
+
+The client sends this header with a `POST /tools/<name>` call over a link when the `forward-secrets` flag is on and the call contains a `{{secret:NAME}}` placeholder. See [Secrets over a link](/docs/reference/configuration#secrets-over-a-link). The value is base64 text of a JSON object. Each key is a secret name, and each value is the secret value as a string:
+
+```text
+x-argent-client-secrets: eyJBUFBfUEFTU1dPUkQiOiJodW50ZXIyIn0=
+```
+
+The object is empty when the client does not define any of the names. The tool-server then knows that the client forwards secrets. When a name resolves nowhere, the error says that the client did not provide the secret.
+
+The tool-server resolves each placeholder of the call with these values first, then with its own sources. A sub-tool call of `run-sequence` or `e2e-execute` uses the same values. The tool-server accepts 16 KiB of request headers in total. The tool-server answers `400` and runs no tool when the header is not base64 text of a JSON object, a key is not a valid secret name, or a value is not a string.
 
 ## Older clients and tool-servers
 
