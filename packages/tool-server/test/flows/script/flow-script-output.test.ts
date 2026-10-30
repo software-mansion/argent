@@ -135,7 +135,7 @@ describe("flow script executor — output validation", () => {
     expect(result.failure?.message).toBe("output is a string; output must be a plain object");
   });
 
-  it.each(["5", "0", "-3"])(
+  it.each(["5", "0", "-3", "1.5"])(
     "names a finite number replacing output as a number (%s)",
     async (n) => {
       const result = await run(`output = ${n};`);
