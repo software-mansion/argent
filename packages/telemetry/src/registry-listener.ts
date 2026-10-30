@@ -30,11 +30,17 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     return meta ?? {};
   }
 
-  const onInvoked = (toolId: string, toolInvocationId: string): void => {
+  const onInvoked = (
+    toolId: string,
+    toolInvocationId: string,
+    _msg: string,
+    calledAs?: string
+  ): void => {
     totalToolCalls += 1;
     const meta = activeMetaByInvocationId.get(toolInvocationId) ?? {};
     track("tool:invoke", {
       tool: toolId,
+      ...(calledAs ? { alias_used: true } : {}),
       tool_invocation_id: toolInvocationId,
       ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),
@@ -43,10 +49,17 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     });
   };
 
-  const onCompleted = (toolId: string, toolInvocationId: string, durationMs: number): void => {
+  const onCompleted = (
+    toolId: string,
+    toolInvocationId: string,
+    durationMs: number,
+    _msg: string,
+    calledAs?: string
+  ): void => {
     const meta = consumeActiveMeta(toolInvocationId);
     track("tool:complete", {
       tool: toolId,
+      ...(calledAs ? { alias_used: true } : {}),
       tool_invocation_id: toolInvocationId,
       ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),
@@ -60,7 +73,9 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     toolId: string,
     toolInvocationId: string,
     error: Error,
-    durationMs = 0
+    durationMs = 0,
+    _msg?: string,
+    calledAs?: string
   ): void => {
     const meta = consumeActiveMeta(toolInvocationId);
     const signal = getFailureSignalOrFallback(error, {
@@ -71,6 +86,7 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     });
     track("tool:fail", {
       tool: toolId,
+      ...(calledAs ? { alias_used: true } : {}),
       tool_invocation_id: toolInvocationId,
       ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
       ...(meta.platform ? { platform: meta.platform } : {}),

@@ -1,3 +1,4 @@
+import { canonicalToolId } from "@argent/registry";
 import type { StepStatus } from "./flow-run";
 
 /**
@@ -20,7 +21,7 @@ import type { StepStatus } from "./flow-run";
  * verdict.
  */
 
-const FLOW_EXECUTE_TOOL_ID = "flow-execute";
+const FLOW_EXECUTE_TOOL_ID = "e2e-execute";
 const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 
 interface NestedOutcome {
@@ -57,7 +58,7 @@ function count(value: unknown): number {
 
 /** A nested `flow-execute` result: a run report, or a prerequisite notice. */
 function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | undefined {
-  const flow = typeof result.flow === "string" ? result.flow : "the composed flow";
+  const flow = typeof result.flow === "string" ? result.flow : "the composed e2e test";
 
   // A notice means the sub-flow ran NOTHING: nothing was asserted, so this is
   // the runner's error class — never runnable as written, like an unreadable
@@ -70,7 +71,7 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
     return {
       status: "error",
       reason:
-        `flow "${flow}" did not run — its execution prerequisite was not acknowledged${prerequisite}. ` +
+        `e2e test "${flow}" did not run — its execution prerequisite was not acknowledged${prerequisite}. ` +
         `Add prerequisiteAcknowledged: true to the step's args, or compose with run: instead.`,
     };
   }
@@ -78,7 +79,7 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
   // Cancellation is a skip, never a failure — the rule the runner applies to
   // its own steps.
   if (result.aborted === true) {
-    return { status: "skip", reason: `flow "${flow}" was aborted` };
+    return { status: "skip", reason: `e2e test "${flow}" was aborted` };
   }
 
   if (result.ok === false) {
@@ -86,7 +87,7 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
     return {
       status: "fail",
       reason:
-        `flow "${flow}" failed: ${count(result.passed)} passed, ${count(result.failed)} failed, ` +
+        `e2e test "${flow}" failed: ${count(result.passed)} passed, ${count(result.failed)} failed, ` +
         `${count(result.errored)} errored${detail ? ` (${detail})` : ""}`,
     };
   }
@@ -144,7 +145,7 @@ const NESTED_ORCHESTRATORS = new Map<
 
 /** Whether a `tool:` step runs other tools through a run of its own. */
 export function isNestedOrchestratorTool(tool: string): boolean {
-  return NESTED_ORCHESTRATORS.has(tool);
+  return NESTED_ORCHESTRATORS.has(canonicalToolId(tool));
 }
 
 /**
@@ -157,5 +158,5 @@ export function nestedOrchestratorOutcome(
   result: unknown
 ): NestedOutcome | undefined {
   if (!isRecord(result)) return undefined;
-  return NESTED_ORCHESTRATORS.get(tool)?.(result);
+  return NESTED_ORCHESTRATORS.get(canonicalToolId(tool))?.(result);
 }

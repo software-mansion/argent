@@ -153,13 +153,13 @@ describe("script path rules, shared with a run: target", () => {
   });
 
   it("refuses an absolute path", () => {
-    expect(() => step("{ path: /abs/seed.mjs }")).toThrow(/must be relative to the flow file/);
+    expect(() => step("{ path: /abs/seed.mjs }")).toThrow(/must be relative to the e2e test file/);
   });
 
   it("refuses a Windows drive-relative prefix", () => {
     // `C:foo` resolves against that drive's own current directory.
-    expect(() => step("{ path: C:seed.mjs }")).toThrow(/must be relative to the flow file/);
-    expect(() => step("{ path: 'C:/seed.mjs' }")).toThrow(/must be relative to the flow file/);
+    expect(() => step("{ path: C:seed.mjs }")).toThrow(/must be relative to the e2e test file/);
+    expect(() => step("{ path: 'C:/seed.mjs' }")).toThrow(/must be relative to the e2e test file/);
   });
 
   it("refuses an uppercase extension, saying which spelling it wants", () => {
@@ -205,7 +205,7 @@ afterEach(async () => {
 
 describe("a hand-written script step under the recorder", () => {
   it("survives a flow-add-step append and the finish that re-reads the file", async () => {
-    const flowFile = path.join(root, ".argent", "flows", "seeded.yaml");
+    const flowFile = path.join(root, ".argent", "e2e", "seeded.yaml");
     await flowStartRecordingTool.execute({}, { name: "seeded", project_root: root });
     await fs.writeFile(
       flowFile,

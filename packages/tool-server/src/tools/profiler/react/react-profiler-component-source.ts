@@ -35,6 +35,7 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
 Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
 Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).
 When several files define a component with the same name (e.g. platform variants like List.tsx and List.web.tsx), returns the primary match and lists the rest under otherMatches[] (file/line/col). Check it before assuming the returned file is the one you meant.`,
+  readOnly: true,
   zodSchema,
   // Declared so the tool catalogue groups this with the other react-profiler-*
   // tools; the HTTP gate itself is a no-op here, as there is no device arg to

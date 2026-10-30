@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const describeFrameSchema = z.object({
+const describeFrameSchema = z.object({
   x: z.number().finite().min(0).max(1),
   y: z.number().finite().min(0).max(1),
   width: z.number().finite().min(0).max(1),
@@ -63,8 +63,9 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 // Where the tree came from. "ax-service" / "native-devtools": iOS.
 // "uiautomator" / "android-devtools": Android. "cdp-dom": the Chromium DOM walk
 // over Chrome DevTools Protocol. "vega-automation": the Vega on-device
-// automation toolkit. "tv-focus": the focus-driven view for a TV target (Apple
-// TV / Android TV), which reports focused / focusable elements rather than a
+// automation toolkit. "harmony-uitest": the HarmonyOS device's own `uitest
+// dumpLayout`. "tv-focus": the focus-driven view for a TV target (Apple TV /
+// Android TV), which reports focused / focusable elements rather than a
 // tap-oriented tree.
 export type DescribeSource =
   | "ax-service"
@@ -73,6 +74,7 @@ export type DescribeSource =
   | "android-devtools"
   | "cdp-dom"
   | "vega-automation"
+  | "harmony-uitest"
   | "tv-focus"
   // Physical iOS: the XCUITest runner accessibility snapshot.
   | "xcuitest-runner";
@@ -86,6 +88,8 @@ export interface DescribeTreeData {
   // "degraded" means boot-state on the simulator path and a truncated snapshot on the device path.
   // Each path writes this hint once.
   hint?: string;
+  // Possibly not the live screen (a suspended HarmonyOS panel); `hint` says why.
+  stale?: boolean;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set
