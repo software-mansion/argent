@@ -561,9 +561,7 @@ describe("exportFailureArtifacts", () => {
       const dest = path.join(own, "home__ios-390x844-current.png");
       expect(step.artifacts?.current).toBe(dest);
       expect(await fs.readFile(dest, "utf8")).toBe("new-bytes");
-      expect(await fs.readFile(path.join(own, ".argent-e2e-source"), "utf8")).toBe(
-        `${flowFile}\n`
-      );
+      expect(await fs.readFile(path.join(own, ".argent-e2e-source"), "utf8")).toBe(`${flowFile}\n`);
       expect(await fs.readdir(outDir)).toEqual(["checkout"]);
       expect(errSpy).not.toHaveBeenCalled();
 

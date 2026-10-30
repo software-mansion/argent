@@ -372,7 +372,10 @@ describe("prepareFileInputs — collect: flow", () => {
     vi.stubEnv("ARGENT_E2E_FILES_LOG", "1");
     try {
       await fs.writeFile(path.join(flows, "frag.yaml"), flowYaml("echo: frag"));
-      await fs.writeFile(path.join(flows, "main.yaml"), flowYaml("run: frag.yaml", "snapshot: home"));
+      await fs.writeFile(
+        path.join(flows, "main.yaml"),
+        flowYaml("run: frag.yaml", "snapshot: home")
+      );
       const baselines = path.join(
         flows,
         "__baselines__",

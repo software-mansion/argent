@@ -326,7 +326,12 @@ describe("createToolsClient options", () => {
     vi.stubEnv("ARGENT_E2E_FILES_LOG", "1");
     const flowPath = join(TEST_HOME, "logged.yaml");
     writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
-    const written = join(realpathSync(TEST_HOME), "__baselines__", "logged", "title__ios-30x60.png");
+    const written = join(
+      realpathSync(TEST_HOME),
+      "__baselines__",
+      "logged",
+      "title__ios-30x60.png"
+    );
     runFlowData = {
       ok: true,
       baselineWrites: [
@@ -344,7 +349,11 @@ describe("createToolsClient options", () => {
       onDiagnostic: (line) => diagnostics.push(line),
     });
 
-    await callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME, updateBaselines: true });
+    await callTool("run-flow", {
+      flow_path: flowPath,
+      project_root: TEST_HOME,
+      updateBaselines: true,
+    });
 
     expect(diagnostics).toContain(`[e2e-files] baseline ${written}: written`);
   });
