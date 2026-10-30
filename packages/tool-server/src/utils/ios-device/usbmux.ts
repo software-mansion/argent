@@ -47,6 +47,14 @@ interface OpenUsbmuxRunnerSocketOptions {
 }
 
 /**
+ * Mux DeviceIDs resolved by earlier `ListDevices` lookups, keyed by usbmuxd socket and UDID.
+ * usbmuxd keeps a DeviceID for as long as the device stays attached, so every command after the
+ * first skips one usbmuxd round trip. A re-attached device gets a new DeviceID and usbmuxd answers
+ * `Connect` with BadDevice for the old one; the entry is then dropped and looked up again.
+ */
+const deviceIdCache = new Map<string, number>();
+
+/**
  * Open a paused socket that is a raw pipe to `device:port` on the given device.
  */
 export async function openUsbmuxRunnerSocket(
@@ -54,9 +62,30 @@ export async function openUsbmuxRunnerSocket(
 ): Promise<net.Socket> {
   const socketPath = options.socketPath ?? USBMUXD_SOCKET_PATH;
   const deadline = createDeadline(options.timeoutMs ?? USBMUX_DEFAULT_TIMEOUT_MS);
+  const cacheKey = `${socketPath}\n${options.udid}`;
+
+  const cachedDeviceId = deviceIdCache.get(cacheKey);
+  if (cachedDeviceId !== undefined) {
+    try {
+      return await connectToDevicePort(
+        socketPath,
+        options.udid,
+        cachedDeviceId,
+        options.port,
+        deadline
+      );
+    } catch (error) {
+      // Only a rejected DeviceID warrants a fresh lookup; every other verdict stands.
+      if (!(error instanceof IosDeviceTransportError && error.kind === "device-unattached")) {
+        throw error;
+      }
+      deviceIdCache.delete(cacheKey);
+    }
+  }
 
   // ListDevices on a throwaway socket resolves the mux DeviceID.
   const deviceId = await resolveUsbmuxDeviceId(socketPath, options.udid, deadline);
+  deviceIdCache.set(cacheKey, deviceId);
 
   // Connect on a fresh socket becomes the raw byte pipe to the runner.
   return await connectToDevicePort(socketPath, options.udid, deviceId, options.port, deadline);
