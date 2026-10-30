@@ -75,6 +75,8 @@ The menu bar of a background app is not on the screen, so the agent does not cli
 
 A system service draws the file list of an open panel or a save panel, so the agent cannot read or click this list. The agent answers the panel with a path, and the app reads or writes the file as after a choice of the user. When the app asks whether to keep an edited new document, the agent can delete the document instead.
 
+The app can add its own controls to a panel, for example a format pop-up or an option checkbox. The agent reads and clicks these controls before it answers the panel.
+
 The agent can prepare an answer before it opens a panel. Only a panel of the kind that the agent prepared the answer for receives it. Thus a save panel that comes first, for example after "Do you want to save the changes?", does not write over the file that the agent wants to open.
 
 ### React Native
@@ -153,6 +155,7 @@ Each tool that does not support a Mac app fails with a `not supported on macos a
 - On macOS 14, the agent cannot select the file format of a save panel. The app saves in the format that the panel selects when it opens.
 - Key events use the key codes of the US keyboard layout. An app that reads key codes sees the US key, also when the Mac uses a different layout.
 - The agent cannot reach a dialog that a different process draws. Examples are the permission prompts of macOS, the content of the share sheet, and the file list of an open or save panel.
+- An open panel shows the controls of the app only after a click on Show Options. The panel service draws this button, so the agent cannot click it.
 - The tree, the screenshot and the coordinates cover the area of the app window with its sheets, popovers, alerts and open menus. The screenshot does not show the other windows of the app.
 - Argent cannot capture a window that the app protects from screen capture (`sharingType` none). A screenshot, a screenshot diff and an e2e snapshot of it fail. The tree, clicks and typing still work.
 - Argent drives an app through a standard window. The start fails for a menu bar app that shows no standard window, and for an app that shows only panels or borderless windows.

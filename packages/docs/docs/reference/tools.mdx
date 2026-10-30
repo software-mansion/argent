@@ -300,6 +300,8 @@ The tree does not show the identifiers that AppKit and SwiftUI set themselves, f
 
 A system service draws the file list of a file panel. Thus `describe` cannot read the list, and `gesture-tap` cannot select a file in it. `file-panel` completes the panel from inside the app, as the choice of the user does.
 
+The app can add its own controls to a panel, for example a format pop-up. `describe` shows these controls, and `gesture-tap` clicks them. Set them before `choose`, because `choose` closes the panel.
+
 | Parameter   | Description                                                                                                                                                                         |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `udid`      | The Mac app id                                                                                                                                                                      |
