@@ -62,6 +62,18 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
 
 const DEFAULT_DELAY_MS = 1400;
 
+/**
+ * The most the screenshot and the element tree may take together once the
+ * settle wait is over; the settle call gets this on top of its own cap. A
+ * capture call that times out is not sent again: the tool-server keeps reading
+ * after the adapter gives up, so a retry queues behind the read it abandoned.
+ * A frozen helper on a Huawei phone made the four retries of `describe` take
+ * two minutes.
+ * In the telemetry of the 14 days to 2026-10-28, 15 s cuts off 0.05-0.35% of
+ * `describe` calls on iOS and Android, and 2.3% on Android TV emulators.
+ */
+export const CAPTURE_TIMEOUT_MS = 15_000;
+
 // Opt-out only: the `disable-auto-screenshot` flag is off by default.
 // `options` lets tests point flag storage at a temp dir.
 export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {

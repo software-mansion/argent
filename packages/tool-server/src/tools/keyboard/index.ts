@@ -42,6 +42,7 @@ const zodSchema = z.object({
         "tool-server, from the first source that defines the name: the `ARGENT_SECRET_<NAME>` environment variable, " +
         "`.argent/secrets.env` in the project, the project's `.env.local` / `.env` (only their `ARGENT_SECRET_`-prefixed keys), " +
         "then `~/.argent/secrets.env`. Nothing else on the host is reachable. " +
+        "Over a link with the `forward-secrets` flag on, the client's own sources are checked first. " +
         "Placeholders can be embedded in longer text and are never echoed back resolved. " +
         "If the secret you need is not set, the failure lists the available names and every source it looked in; ask the user to add it " +
         "to one of them (a secrets file applies immediately; an env var needs a restart), NEVER ask the user to paste the secret value into the conversation."
@@ -124,7 +125,7 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
 A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front).<flag:macos-apps> A Mac app types any character: one with no US key (an accent, an emoji) is inserted at the focused field in order.</flag:macos-apps> A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
-- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\`, resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\`: that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
+- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\`, resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`; over a link with \`forward-secrets\` on, the client's own sources first), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\`: that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1-f12). NOT supported on TV targets; move focus with \`tv-remote\` instead. <flag:harmonyos>HarmonyOS presses enter (or \`return\`), backspace (or \`delete\`), space and the horizontal arrows; any other key name is rejected. </flag:harmonyos>Physical iOS: only \`enter\` and \`backspace\`.
 On a TV target (runtimeKind 'tv') only \`text\` applies. Focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
 One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` ({ text: "hello" } then { key: "enter" }), which also keeps it to a single round-trip.`,
@@ -209,7 +210,9 @@ One call does one action: pass text OR key, never both. To type and then press a
       // see only the placeholder) and before the dispatch, so run-sequence and
       // flow `type` steps are covered for free.
       if (params.text === undefined) return dispatch(services, params, options);
-      const { text, secrets } = resolveSecretPlaceholders(params.text);
+      const { text, secrets } = resolveSecretPlaceholders(params.text, {
+        clientSecrets: options?.clientSecrets,
+      });
       if (secrets.length === 0) return dispatch(services, params, options);
       try {
         const result = await dispatch(services, { ...params, text }, options);

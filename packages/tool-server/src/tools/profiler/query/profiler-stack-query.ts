@@ -5,6 +5,7 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
+import { adbCommandPrefix } from "../../../utils/adb-server";
 import type { CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../../../utils/ios-profiler/types";
 import {
   findDominantFunction,
@@ -411,7 +412,7 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
     );
   }
   if (params.mode === "leak_stacks") {
-    return "_Memory leak detection is not yet supported on Android. Use the RSS-growth weak signal in the analyze report as a hint, or capture a heap dump manually with `adb shell am dumpheap`._";
+    return `_Memory leak detection is not yet supported on Android. Use the RSS-growth weak signal in the analyze report as a hint, or capture a heap dump manually with \`${adbCommandPrefix(process.env)}adb shell am dumpheap\`._`;
   }
   return runAndroidStackQuery({
     tracePath: api.traceFile,

@@ -83,7 +83,9 @@ Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is neve
       // Resolve inside `execute`: after every logging boundary (transcript,
       // event log and recorded sequences see only the placeholder) and before
       // the dispatch.
-      const { text, secrets } = resolveSecretPlaceholders(params.text);
+      const { text, secrets } = resolveSecretPlaceholders(params.text, {
+        clientSecrets: options?.clientSecrets,
+      });
       return serializedPerDevice(params.udid, async () => {
         if (secrets.length === 0) return dispatch(services, params, options);
         try {

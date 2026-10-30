@@ -41,7 +41,7 @@ export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
     macos: { app: true },
   },
   description: `Retrieve network requests captured at the native NSURLProtocol level. 
-Unlike the JS-level network inspector (view-network-logs), this captures ALL network traffic from the app including native modules, Swift/Objective-C networking, and background transfers that never pass through JS XMLHttpRequest or fetch. 
+Unlike view-network-logs, it also sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing. Capture starts at the first call, so the first call is usually empty: repeat the action, then call again. 
 Use when you need to inspect native-level HTTP traffic that is invisible to the JS-level capture. 
 Returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
 <flag:macos-apps>

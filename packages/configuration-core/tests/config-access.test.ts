@@ -13,6 +13,7 @@ import {
   coerceCliValue,
   getAdditionalIosDeviceSets,
   getAndroidSdkRoot,
+  getAndroidAdbServerPort,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,
@@ -269,6 +270,24 @@ describe("android.sdkRoot — project wins, ~ expands", () => {
     expect(getAndroidSdkRoot(opts())).toBe(path.resolve("/opt/global-sdk"));
     setConfigValue("android.sdkRoot", "~/Android/Sdk", "project", opts());
     expect(getAndroidSdkRoot(opts())).toBe(path.join(homeDir, "Android/Sdk"));
+  });
+});
+
+describe("android.adbServerPort — project wins, a TCP port only", () => {
+  it("reads as null when unset and rejects anything but a port", () => {
+    expect(getAndroidAdbServerPort(opts())).toBeNull();
+    for (const bad of [0, 65536, 5037.5, "5038", -1]) {
+      expect(() => setConfigValue("android.adbServerPort", bad, "global", opts())).toThrow(
+        ConfigValidationError
+      );
+    }
+  });
+
+  it("returns the project value over the global one", () => {
+    setConfigValue("android.adbServerPort", 5038, "global", opts());
+    expect(getAndroidAdbServerPort(opts())).toBe(5038);
+    setConfigValue("android.adbServerPort", 6000, "project", opts());
+    expect(getAndroidAdbServerPort(opts())).toBe(6000);
   });
 });
 

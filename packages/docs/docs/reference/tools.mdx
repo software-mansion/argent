@@ -96,6 +96,13 @@ With the `macos-apps` flag on, `list-devices` shows each native Mac app that Arg
 
 `gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
+Through the MCP server, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
+
+- Argent waits at most 15 seconds for the screenshot and the element tree together. If a capture takes longer, the result does not include it.
+- Argent does not send a capture call again after a timeout.
+
+Call `screenshot` or `describe` to read the screen again.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |

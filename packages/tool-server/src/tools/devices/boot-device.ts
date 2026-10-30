@@ -39,11 +39,14 @@ import {
   hasDefaultBootSnapshot,
   listAndroidDevices,
   listAvds,
+  readEmulatorConsoleAvdName,
   resolveEmulatorOrThrow,
   runAdb,
   waitForBootCompleted,
+  type AndroidDevice,
 } from "../../utils/adb";
 import { ensureDep } from "../../utils/check-deps";
+import { listEmulatorPidsForAvd } from "../../utils/emulator-process";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
@@ -350,10 +353,11 @@ const BOOT_POLL_INTERVALS_MS = {
   serialByAvd: 1_500, // findSerialByAvdName: re-scan when >1 new emulator appeared
   adbRegister: 1_000, // attemptBoot stage 2: re-scan adb devices for the new serial
   earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
-  serialGone: 500, // awaitEmulatorsGone: re-scan adb devices for a killed emulator
+  serialGone: 500, // awaitEmulatorsGone, awaitOwnEmulatorSettled: re-check for a dying emulator
 } as const;
 
-// How long a killed emulator may stay listed by adb before the next spawn.
+// How long a killed emulator may stay listed by adb, or its process alive,
+// before the next spawn.
 const EMULATOR_GONE_BUDGET_MS = 30_000;
 
 // Probe shared by assertScreencapAlive (hot boot) and awaitFirstRealFrame
@@ -539,6 +543,99 @@ async function awaitEmulatorsGone(serials: string[]): Promise<void> {
     if (!serials.some((s) => listed.includes(s))) return;
     await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.serialGone));
   }
+}
+
+function isRunningAvd(device: AndroidDevice, avdName: string): boolean {
+  return device.isEmulator && device.avdName === avdName && device.state === "device";
+}
+
+/**
+ * Wait (bounded) while an emulator process for this AVD is alive but not
+ * healthy in adb. That is an emulator killed outside argent (window closed,
+ * crash, `adb emu kill`) and still shutting down, which takes up to ~20 s, or
+ * one somebody else started that is still coming up. adb lists it as `offline`
+ * or as `device` with getprop failing, so it reads as neither ours nor gone, and
+ * a spawn now would collide with it on the AVD lock or come up on its freed
+ * console port, which the before-spawn snapshot already holds, and never count
+ * as new.
+ *
+ * The process table names the AVD when adb cannot. Only this AVD's process is
+ * waited on, so an unrelated frozen emulator costs nothing here. Resolves when
+ * the process exits (null) or when the emulator answers getprop with this AVD,
+ * returning the device list that showed it so the caller can reuse it. Without
+ * `ps` (Windows) there is nothing to wait on and the spawn proceeds as before.
+ */
+async function awaitOwnEmulatorSettled(
+  avdName: string,
+  deadline: number
+): Promise<AndroidDevice[] | null> {
+  let healthy: AndroidDevice[] | null = null;
+  let listing: Promise<void> | null = null;
+  while (Date.now() < deadline) {
+    if (healthy) return healthy;
+    if ((await listEmulatorPidsForAvd(avdName)).length === 0) return null;
+    // A dying emulator listed as `device` holds listAndroidDevices for
+    // ENRICH_TIMEOUT_MS per getprop, so the listing runs alongside the process
+    // poll rather than pacing it: the exit is still noticed within one interval.
+    listing ??= listAndroidDevices()
+      .then((devices) => {
+        if (devices.some((d) => isRunningAvd(d, avdName))) healthy = devices;
+      })
+      .catch(() => {})
+      .finally(() => {
+        listing = null;
+      });
+    await new Promise((r) =>
+      setTimeout(r, Math.min(BOOT_POLL_INTERVALS_MS.serialGone, deadline - Date.now()))
+    );
+  }
+  return healthy;
+}
+
+/**
+ * Drop from `serialsBefore` the emulator serials adb still lists with nothing
+ * behind them. After qemu exits, adb keeps the serial for up to a second, and
+ * the next spawn takes the freed console port, so it would register under a
+ * serial already counted as pre-existing. Only serials without a readable AVD
+ * name are asked; the console refuses the connection at once when the port is
+ * free. One that names another AVD, or does not answer (frozen, shutting down),
+ * stays: it still holds its port. No waiting is involved.
+ */
+async function dropUnreachableSerials(
+  devices: AndroidDevice[],
+  serialsBefore: Set<string>
+): Promise<void> {
+  await Promise.all(
+    devices
+      .filter((d) => d.isEmulator && !(d.state === "device" && d.avdName !== null))
+      .map(async (d) => {
+        if ((await readEmulatorConsoleAvdName(d.serial)).status === "unreachable") {
+          serialsBefore.delete(d.serial);
+        }
+      })
+  );
+}
+
+/**
+ * Pick ours among the serials new since the before-spawn snapshot. The console
+ * names an emulator's AVD within milliseconds of the serial appearing, while
+ * getprop still fails, and a serial that names another AVD is never ours: an
+ * unrelated emulator killed and restarted at the same moment comes back on its
+ * freed port, which the snapshot no longer holds. When no console names this
+ * AVD, fall back to the before/after diff: a single unnamed serial is ours,
+ * several are told apart by getprop.
+ */
+async function pickOwnSerial(avdName: string, newSerials: string[]): Promise<string | null> {
+  const names = await Promise.all(newSerials.map((s) => readEmulatorConsoleAvdName(s)));
+  const own = newSerials.find((_, i) => {
+    const answer = names[i]!;
+    return answer.status === "ok" && answer.avdName === avdName;
+  });
+  if (own) return own;
+  const unnamed = newSerials.filter((_, i) => names[i]!.status !== "ok");
+  if (unnamed.length === 0) return null;
+  if (unnamed.length === 1) return unnamed[0]!;
+  return findSerialByAvdName(avdName, Date.now() + 3_000);
 }
 
 async function bootIos(
@@ -854,13 +951,9 @@ async function attemptBoot(params: {
       if (launchError) throw launchError;
       const newSerials = await listNewEmulatorSerials(params.serialsBefore);
       if (newSerials.length >= 1) {
-        if (newSerials.length === 1) {
-          serial = newSerials[0]!;
-          break;
-        }
-        const byAvd = await findSerialByAvdName(params.avdName, Date.now() + 3_000);
-        if (byAvd) {
-          serial = byAvd;
+        const own = await pickOwnSerial(params.avdName, newSerials);
+        if (own) {
+          serial = own;
           break;
         }
       }
@@ -1108,6 +1201,17 @@ async function bootAndroidImpl(params: {
   await runAdb(["start-server"], { timeoutMs: 10_000 }).catch(() => {});
   const existingDevices = await listAndroidDevices().catch(() => []);
 
+  // This AVD may be alive without being healthy in adb (killed outside argent
+  // and shutting down, or still coming up). Wait for its process to exit or for
+  // it to become reusable, within the boot budget; see awaitOwnEmulatorSettled.
+  if (!existingDevices.some((d) => isRunningAvd(d, params.avdName))) {
+    const settled = await awaitOwnEmulatorSettled(
+      params.avdName,
+      Math.min(overallDeadline, Date.now() + EMULATOR_GONE_BUDGET_MS)
+    );
+    if (settled) existingDevices.splice(0, existingDevices.length, ...settled);
+  }
+
   // Fast path: reuse this AVD when it is already running and ready, instead of
   // spawning a second emulator that collides on AVD locks and fails with a
   // misleading "Running multiple emulators" error.
@@ -1117,9 +1221,7 @@ async function bootAndroidImpl(params: {
     const refreshed = await listAndroidDevices().catch(() => existingDevices);
     existingDevices.splice(0, existingDevices.length, ...refreshed);
   };
-  const alreadyRunning = existingDevices.find(
-    (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
-  );
+  const alreadyRunning = existingDevices.find((d) => isRunningAvd(d, params.avdName));
   if (alreadyRunning) {
     if (params.force) {
       await killEmulatorQuietly(alreadyRunning.serial);
@@ -1147,6 +1249,7 @@ async function bootAndroidImpl(params: {
     }
   }
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
+  await dropUnreachableSerials(existingDevices, serialsBefore);
 
   // Suppress the emulator's crash-report prompt/uploader on builds that accept
   // the flag: without it an emulator crash pops a Qt consent dialog that blocks

@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.30.1",
+  "version": "0.31.0",
   "mcpName": "io.github.software-mansion/argent",
   "description": "MCP server for iOS Simulator, Android Emulator, Chromium app and Mac app control",
   "license": "Apache-2.0",
