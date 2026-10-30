@@ -39,7 +39,7 @@ export interface ServerRecordingControl {
 }
 
 /** Finalizes one server-side recording and hands back the muxed video. */
-export type ServerRecordingStop = () => Promise<ServerRecordingResult>;
+type ServerRecordingStop = () => Promise<ServerRecordingResult>;
 
 /** Called by {@link startCapture} after its admission guards. */
 export async function startServerCapture(
