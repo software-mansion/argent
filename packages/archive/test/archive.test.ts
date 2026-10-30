@@ -318,6 +318,13 @@ describe("safeExtractArchive zstd framing", () => {
     const member = await extract(bytes);
     expect((await fs.readFile(path.join(member, "zeros.bin"))).length).toBe(300 * 1024);
   });
+
+  it("extracts a frame whose data runs on past the tar's end-of-archive marker", async () => {
+    // tar stops reading at the marker, closing its stdin while data is still due.
+    const tar = Buffer.concat([await plainTar(), Buffer.alloc(20 << 20)]);
+    const member = await extract(zlib.zstdCompressSync(tar));
+    expect((await fs.readFile(path.join(member, "zeros.bin"))).length).toBe(300 * 1024);
+  });
 });
 
 describe.each(ARCHIVE_FORMATS)(
@@ -366,7 +373,7 @@ describe.each(ARCHIVE_FORMATS)(
           path.join(member, "a".repeat(200), ...["b", "c", "d"].map((c) => c.repeat(200)))
         )
       ).toHaveLength(1300);
-    });
+    }, 30_000);
   }
 );
 

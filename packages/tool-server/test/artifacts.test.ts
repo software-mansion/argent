@@ -4,12 +4,29 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import type { Transform } from "node:stream";
 import { safeExtractArchive } from "@argent/archive";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { ArtifactStore } from "@argent/registry";
 import type { Registry } from "@argent/registry";
 
 const isFlagEnabledMock = vi.hoisted(() => vi.fn(() => false));
+const compressors = vi.hoisted(() => [] as Transform[]);
+
+vi.mock("@argent/archive", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/archive")>();
+  return {
+    ...actual,
+    createCompressor: (format: Parameters<typeof actual.createCompressor>[0]) => {
+      const compressor = actual.createCompressor(format);
+      compressors.push(compressor);
+      return compressor;
+    },
+  };
+});
 
 // supertest/superagent doesn't buffer binary bodies (gzip) by default.
 function binaryParser(res: NodeJS.ReadableStream, cb: (err: Error | null, body: Buffer) => void) {
@@ -367,6 +384,37 @@ describe("GET /artifacts/:id", () => {
       const member = await safeExtractArchive(archive, await mkdtemp(join(root, "d-")), "B.trace");
       expect(await readFile(join(member, "d"), "utf8")).toBe("d".repeat(512));
     });
+  });
+
+  it("destroys the compressor when the client aborts mid-download", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-abort-"));
+    const server = createServer();
+    try {
+      const bundle = join(root, "big.trace");
+      await mkdir(bundle);
+      await writeFile(join(bundle, "blob"), randomBytes(8 << 20));
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: bundle,
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      server.on("request", handle.app);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as AddressInfo;
+
+      const abort = new AbortController();
+      const res = await fetch(`http://127.0.0.1:${port}/artifacts/${artifact.id}`, {
+        signal: abort.signal,
+      });
+      await res.body!.getReader().read();
+      abort.abort();
+      await vi.waitFor(() => expect(compressors.at(-1)?.destroyed).toBe(true));
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("404s an unknown artifact id", async () => {

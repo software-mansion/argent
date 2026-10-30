@@ -126,12 +126,14 @@ function streamDirectoryAsArchive(
       res.destroy();
     }
   });
-  // Don't leave tar running if the client aborts mid-stream; `writableFinished`
-  // tells an abort apart from a clean end.
+  const compressor = createCompressor(format);
+  // On a client abort, stop tar and the compressor, which would otherwise stay
+  // alive undrained with its buffers; `writableFinished` tells an abort apart
+  // from a clean end.
   res.on("close", () => {
-    if (!res.writableFinished && child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGTERM");
-    }
+    if (res.writableFinished) return;
+    compressor.destroy();
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   });
   // tar can exit non-zero after a whole archive (that live-trace warning), but an
   // abandoned one lacks the end-of-archive marker. The compressor closes a valid
@@ -140,7 +142,6 @@ function streamDirectoryAsArchive(
   const tarEnd = trackTarEnd();
   child.stdout.on("data", (chunk: Buffer) => tarEnd.push(chunk));
   const tarClosed = new Promise<number | null>((resolve) => child.on("close", resolve));
-  const compressor = createCompressor(format);
   compressor.on("error", () => res.destroy());
   compressor.on("end", () => {
     void tarClosed.then((code) => {
