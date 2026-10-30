@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import * as p from "@clack/prompts";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
-import { isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
+import { isGloballyInstalled, isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
 
 // Exercises installLocally's failure handling: the retry-once semantics, the
@@ -32,6 +32,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     isYarnPnp: vi.fn(() => false),
     getLocallyInstalledVersion: vi.fn(() => "1.0.0"),
     detectProjectPackageManager: vi.fn(() => "pnpm" as const),
+    isGloballyInstalled: vi.fn(() => false),
   };
 });
 
@@ -46,6 +47,7 @@ vi.mock("@clack/prompts", async (importOriginal) => {
 });
 
 vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
+vi.mock("../src/skills.js", () => ({ reportSkillRefresh: vi.fn() }));
 
 class ExitCalled extends Error {
   constructor(readonly code: number | undefined) {
@@ -230,4 +232,30 @@ describe("installLocally failure handling", () => {
       }
     }
   );
+});
+
+describe("global install verification", () => {
+  it("fails when the package manager succeeds but Argent is still not globally available", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(false);
+    vi.mocked(runShellCommand).mockResolvedValue(undefined);
+    const tel = makeTel();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new ExitCalled(code);
+    }) as never);
+
+    try {
+      await expect(
+        runInstall({
+          installMode: "global",
+          fromTar: null,
+          nonInteractive: true,
+          version: "0.0.0",
+          tel,
+        })
+      ).rejects.toThrow(ExitCalled);
+      expect(p.log.error).toHaveBeenCalledWith(expect.stringContaining("not available on PATH"));
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
 });
