@@ -132,3 +132,19 @@ export function adbServerAddress(env: NodeJS.ProcessEnv): { host: string; port: 
     port: Number.isInteger(port) && port > 0 && port < 65536 ? port : 5037,
   };
 }
+
+/**
+ * The variables to put before an `adb` command the agent runs from its own
+ * shell, so it reaches the server this env names, with a trailing space; "" for
+ * adb's default server. The agent's shell does not inherit the tool-server's
+ * environment, so without them its adb talks to 5037 and misses these serials.
+ */
+export function adbCommandPrefix(env: NodeJS.ProcessEnv): string {
+  // Mirrored verbatim: it wins over the other two for the agent's adb as well.
+  const socketSpec = env.ADB_SERVER_SOCKET?.trim();
+  if (socketSpec) return `ADB_SERVER_SOCKET=${socketSpec} `;
+  const { host, port } = adbServerAddress(env);
+  let prefix = port === 5037 ? "" : `ANDROID_ADB_SERVER_PORT=${port} `;
+  if (host !== "127.0.0.1" && host !== "localhost") prefix += `ANDROID_ADB_SERVER_ADDRESS=${host} `;
+  return prefix;
+}

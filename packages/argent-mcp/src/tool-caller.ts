@@ -95,7 +95,7 @@ interface ToolCallerDeps {
    */
   remote: boolean;
   reconnect: () => Promise<void>;
-  /** Headers added to every attempt, beside the auth header. */
+  /** Headers added to every request, beside the auth header. */
   extraHeaders: () => Record<string, string>;
   /** Per-attempt timeout for a call that is not `longRunning` and carries no upload. */
   fetchTimeoutMs?: number;
@@ -153,12 +153,12 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
     const { token } = deps.getHandle();
     if (token) headers.set("Authorization", `Bearer ${token}`);
     else headers.delete("Authorization");
-    for (const [name, value] of Object.entries(deps.extraHeaders())) headers.set(name, value);
     return { ...init, headers };
   }
 
   const client = createToolsClient({
     baseUrl: async () => ({ ...deps.getHandle(), remote: deps.remote }),
+    headers: deps.extraHeaders,
     fetchImpl: async (url, init, meta) => {
       // A retry cannot fix a URL that does not parse, so fail at once.
       parseUrl(url);
