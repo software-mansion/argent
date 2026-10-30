@@ -4,7 +4,7 @@ import { invokeSubTool } from "../src/utils/sub-invoke";
 
 function mockRegistry(impl?: (id: string, args: unknown) => unknown): Registry {
   return {
-    invokeTool: vi.fn(async (id: string, args: unknown) => impl?.(id, args)),
+    invokeTool: vi.fn(async (id: string, args: unknown, _opts?: unknown) => impl?.(id, args)),
   } as unknown as Registry;
 }
 
@@ -55,6 +55,27 @@ describe("invokeSubTool", () => {
       }
     );
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["without", undefined],
+    ["with", () => vi.fn()],
+  ])("forwards the same secret holder %s a recorder, the one in extra first", async (_, rec) => {
+    const registry = mockRegistry();
+    const fromCtx = {};
+    const fromExtra = {};
+    const ctx = {
+      artifacts: {},
+      flowSecret: fromCtx,
+      ...(rec ? { recordChildInvocation: vi.fn(rec) } : {}),
+    } as unknown as ToolContext;
+
+    await invokeSubTool(registry, ctx, "e2e-execute", {});
+    await invokeSubTool(registry, ctx, "e2e-execute", {}, { flowSecret: fromExtra });
+
+    const calls = vi.mocked(registry.invokeTool).mock.calls;
+    expect((calls[0]![2] as { flowSecret?: object }).flowSecret).toBe(fromCtx);
+    expect((calls[1]![2] as { flowSecret?: object }).flowSecret).toBe(fromExtra);
   });
 
   it("mints a distinct id per call", async () => {

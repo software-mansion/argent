@@ -409,7 +409,7 @@ argent e2e run .argent/e2e --recursive
 
 The file name without `.yaml` names the report and the artifacts. It contains only letters, numbers, `_` and `-`.
 
-When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. With `--output`, Argent writes the screenshot to `<dir>/<test>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
+When a step fails, Argent takes a screenshot of the device. Argent shows its path under the step as `screen`. Argent takes no screenshot when an earlier step or the failed step types a `{{secret:…}}` value, because the value can be on the screen. This rule includes the steps of an e2e test that a `tool: e2e-execute` step runs, and the steps of the e2e tests that run it. With `--output`, Argent writes the screenshot to `<dir>/<test>/step-<n>-screen.png`, where `<n>` is the number of the step in the report.
 
 Each step line shows the time of the step before the reason, for example `(1.2s)`. A step that did not run shows no time. The time of a `when` or `run` step does not include the steps in its block or fragment. The last line of an e2e test run shows the time of the run. The summary of a directory run shows the time of all e2e tests, for example `(1m 32s)`.
 
