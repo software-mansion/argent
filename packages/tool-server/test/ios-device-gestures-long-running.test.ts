@@ -6,6 +6,8 @@
 import { describe, expect, it } from "vitest";
 import { buttonTool } from "../src/tools/button";
 import { gestureCustomTool } from "../src/tools/gesture-custom";
+import { gesturePinchTool } from "../src/tools/gesture-pinch";
+import { gestureRotateTool } from "../src/tools/gesture-rotate";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 
@@ -13,6 +15,8 @@ const runnerMutatingTools: { id: string; longRunning?: boolean }[] = [
   gestureTapTool,
   gestureSwipeTool,
   gestureCustomTool,
+  gesturePinchTool,
+  gestureRotateTool,
   buttonTool,
 ];
 
