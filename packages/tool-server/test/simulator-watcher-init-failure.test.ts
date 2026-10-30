@@ -76,6 +76,7 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
+    networkLogEvicted: () => false,
     getAppState: async () => {
       throw new Error("not implemented");
     },
@@ -180,6 +181,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
       activateNetworkInspection: () => {},
       getNetworkLog: () => [],
       clearNetworkLog: () => {},
+      networkLogEvicted: () => false,
       getAppState: async () => {
         throw new Error("not implemented");
       },
