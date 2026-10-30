@@ -161,6 +161,10 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([]);
   });
 
+  it("returns empty steps for content of only whitespace", async () => {
+    expect(parseFlow(" \n\t\n")).toEqual({ executionPrerequisite: "", steps: [] });
+  });
+
   it("defaults executionPrerequisite to empty string when missing", async () => {
     const content = "steps:\n  - echo: Hello\n";
     const flow = parseFlow(content);
