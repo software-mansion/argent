@@ -4,10 +4,8 @@ import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// plutil (bundle id) and xcrun (uninstall/install) both go through execFile;
-// CI runs on Linux, so neither is real here.
+// xcrun (uninstall/install) goes through execFile; CI runs on Linux, so it is not real here.
 const execFileCalls: { cmd: string; args: string[] }[] = [];
-let plistBundleId = "";
 vi.mock("node:child_process", () => ({
   execFile: (
     cmd: string,
@@ -15,12 +13,7 @@ vi.mock("node:child_process", () => ({
     cb: (err: Error | null, out?: { stdout: string; stderr: string }) => void
   ) => {
     execFileCalls.push({ cmd, args });
-    if (cmd === "plutil") {
-      if (plistBundleId) cb(null, { stdout: `${plistBundleId}\n`, stderr: "" });
-      else cb(new Error("No value at that key path"));
-    } else {
-      cb(null, { stdout: "", stderr: "" });
-    }
+    cb(null, { stdout: "", stderr: "" });
   },
 }));
 vi.mock("../src/utils/ios-device-sets", () => ({
@@ -32,6 +25,7 @@ vi.mock("../src/utils/adb", () => ({ runAdb: (...a: unknown[]) => runAdb(...a) }
 import { getFailureSignal, FAILURE_CODES, type DeviceInfo } from "@argent/registry";
 import { parseManifestPackage, readApkPackageName } from "../src/utils/apk-package";
 import { iosImpl } from "../src/tools/reinstall-app/platforms/ios";
+import { buildPlist } from "../src/utils/plist";
 import { androidImpl } from "../src/tools/reinstall-app/platforms/android";
 
 /** Binary AndroidManifest.xml: `<manifest package="…">` with the given string-pool encoding. */
@@ -116,7 +110,6 @@ let dir: string;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "reinstall-validate-"));
   execFileCalls.length = 0;
-  plistBundleId = "";
   runAdb.mockReset().mockResolvedValue({ stdout: "Success", stderr: "" });
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
@@ -184,10 +177,14 @@ describe("reinstall-app ios: validates before uninstalling", () => {
     appPath,
   });
   const xcrunCalls = () => execFileCalls.filter((c) => c.cmd === "xcrun");
-  const makeApp = (withPlist = true) => {
+  /** An .app whose Info.plist carries `plistBundleId`; null writes no Info.plist. */
+  const makeApp = (plistBundleId: string | null = "") => {
     const app = join(dir, "My.app");
     mkdirSync(app);
-    if (withPlist) writeFileSync(join(app, "Info.plist"), "<plist/>");
+    if (plistBundleId !== null) {
+      const info = plistBundleId ? { CFBundleIdentifier: plistBundleId } : {};
+      writeFileSync(join(app, "Info.plist"), buildPlist(info));
+    }
     return app;
   };
 
@@ -199,29 +196,30 @@ describe("reinstall-app ios: validates before uninstalling", () => {
   });
 
   it("rejects a directory with no Info.plist without running simctl", async () => {
-    await expect(iosImpl.handler({}, params(makeApp(false)), DEVICE)).rejects.toThrow(
+    await expect(iosImpl.handler({}, params(makeApp(null)), DEVICE)).rejects.toThrow(
       /no Info\.plist/
     );
     expect(xcrunCalls()).toEqual([]);
   });
 
   it("rejects a bundle id that does not match the .app without running simctl", async () => {
-    plistBundleId = "com.example.Other";
-    await expect(iosImpl.handler({}, params(makeApp()), DEVICE)).rejects.toThrow(
+    await expect(iosImpl.handler({}, params(makeApp("com.example.Other")), DEVICE)).rejects.toThrow(
       /com\.example\.App does not match .* which is com\.example\.Other/
     );
     expect(xcrunCalls()).toEqual([]);
   });
 
   it("rejects a bundle id that differs only in case: simctl would uninstall nothing", async () => {
-    plistBundleId = "com.example.app";
-    await expect(iosImpl.handler({}, params(makeApp()), DEVICE)).rejects.toThrow(/does not match/);
+    await expect(iosImpl.handler({}, params(makeApp("com.example.app")), DEVICE)).rejects.toThrow(
+      /does not match/
+    );
     expect(xcrunCalls()).toEqual([]);
   });
 
   it("uninstalls and installs when the bundle id matches", async () => {
-    plistBundleId = "com.example.App";
-    await expect(iosImpl.handler({}, params(makeApp()), DEVICE)).resolves.toMatchObject({
+    await expect(
+      iosImpl.handler({}, params(makeApp("com.example.App")), DEVICE)
+    ).resolves.toMatchObject({
       reinstalled: true,
     });
     expect(xcrunCalls().map((c) => c.args[1])).toEqual(["uninstall", "install"]);

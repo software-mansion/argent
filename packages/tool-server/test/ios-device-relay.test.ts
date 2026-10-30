@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import net, { type Server } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { ensureDeviceReady } from "../src/utils/ios-device/devicectl";
@@ -22,9 +20,8 @@ import {
   writeXctestrunWithRunnerPort,
 } from "../src/utils/ios-device/xctestrun";
 import { listUsbmuxSerials } from "../src/utils/ios-device/usbmux";
+import { buildPlist, parsePlist } from "../src/utils/plist";
 import { encodeUsbmuxPacket, readUsbmuxSerials } from "../src/utils/ios-device/usbmux-protocol";
-
-const execFileAsync = promisify(execFile);
 
 const UDID = "00008120-000154913A05A01E";
 const OTHER_UDID = "00008030-000D4856146B802E";
@@ -179,10 +176,9 @@ describe("writeXctestrunWithRunnerPort", () => {
     const dir = await tempDir();
     const source = path.join(dir, "ArgentRunner_iphoneos18.0-arm64.xctestrun");
     const target = path.join(dir, "pinned.xctestrun");
-    const json = path.join(dir, "source.json");
     await fs.writeFile(
-      json,
-      JSON.stringify({
+      source,
+      buildPlist({
         __xctestrun_metadata__: { FormatVersion: 1 },
         ArgentRunnerUITests: {
           BlueprintName: "ArgentRunnerUITests",
@@ -191,12 +187,13 @@ describe("writeXctestrunWithRunnerPort", () => {
         },
       })
     );
-    await execFileAsync("plutil", ["-convert", "xml1", "-o", source, json]);
 
     await writeXctestrunWithRunnerPort(source, target, 27042);
 
-    const { stdout } = await execFileAsync("plutil", ["-convert", "json", "-o", "-", target]);
-    const written = JSON.parse(stdout) as Record<string, Record<string, unknown>>;
+    const written = parsePlist(await fs.readFile(target)) as Record<
+      string,
+      Record<string, unknown>
+    >;
     expect(written.ArgentRunnerUITests!.EnvironmentVariables).toEqual({
       OS_ACTIVITY_DT_MODE: "YES",
       ARGENT_RUNNER_PORT: "27042",
