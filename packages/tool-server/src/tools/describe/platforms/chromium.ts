@@ -88,6 +88,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getOwnerDocument = protoGetter(Node.prototype, "ownerDocument");
   const getActiveElement = protoGetter(docProto, "activeElement");
   const getDocBody = protoGetter(docProto, "body");
+  const getRootNode = Node.prototype.getRootNode;
+  const containsNode = Node.prototype.contains;
+  const docElementsFromPoint = docProto.elementsFromPoint;
+  // A document's named getter can shadow elementsFromPoint; a shadow root has none.
+  function elementsAt(root, x, y) {
+    return docElementsFromPoint && getNodeType.call(root) === 9
+      ? docElementsFromPoint.call(root, x, y)
+      : root.elementsFromPoint(x, y);
+  }
 
   function nodeRole(el) {
     const r = getAttr.call(el, "role");
@@ -312,8 +321,40 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return m[1] ? [n[0], n[1], n[4], n[5], n[12], n[13]] : n;
   }
 
+  function multiply(p, q) {
+    return [
+      p[0] * q[0] + p[2] * q[1],
+      p[1] * q[0] + p[3] * q[1],
+      p[0] * q[2] + p[2] * q[3],
+      p[1] * q[2] + p[3] * q[3],
+      p[0] * q[4] + p[2] * q[5] + p[4],
+      p[1] * q[4] + p[3] * q[5] + p[5],
+    ];
+  }
+
+  // The 2D matrix of translate, rotate, scale and transform, applied in that order.
+  function transformMatrix(style) {
+    let t = [1, 0, 0, 1, 0, 0];
+    if (isSet(style.translate)) {
+      const [tx = 0, ty = 0] = style.translate.split(" ").map((v) => parseFloat(v) || 0);
+      t = multiply(t, [1, 0, 0, 1, tx, ty]);
+    }
+    // Only a rotation about z is 2D: "45deg" or "z 45deg".
+    const rot = /^(?:z )?(-?[\\d.]+)deg$/.exec(style.rotate || "");
+    if (rot) {
+      const a = (parseFloat(rot[1]) * Math.PI) / 180;
+      t = multiply(t, [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0]);
+    }
+    if (isSet(style.scale)) {
+      const [sx = 1, sy = sx] = style.scale.split(" ").map(parseFloat);
+      t = multiply(t, [sx, 0, 0, sy, 0, 0]);
+    }
+    const m = matrix2d(style.transform);
+    return m ? multiply(t, m) : t;
+  }
+
   // A nested <svg>'s rect bounds its content, not its viewport: its x/y/width/height in
-  // the parent's user space, moved by its own transform about its transform-origin.
+  // the parent's user space, moved by its own transforms about its transform-origin.
   function nestedSvgViewport(el, style) {
     if (!(el instanceof SVGSVGElement) || !el.ownerSVGElement) return null;
     const m = el.parentNode.getScreenCTM?.();
@@ -322,7 +363,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const y = el.y.animVal.value;
     const w = el.width.animVal.value;
     const h = el.height.animVal.value;
-    const t = matrix2d(style.transform) || [1, 0, 0, 1, 0, 0];
+    const t = transformMatrix(style);
     const [ox = 0, oy = 0] = (style.transformOrigin || "").split(" ").map((v) => parseFloat(v) || 0);
     const xs = [];
     const ys = [];
@@ -566,31 +607,41 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return overflowApplies(el, style) && overflowClips(style);
   }
 
-  // Smallest normalized box covering every surviving child frame — the frame we give
-  // a box-less wrapper we still emit, since it has no rect of its own.
-  // Whether the page hit-tests el outside \`clip\`, where the clip would cut it: content
-  // slotted into a closed shadow root paints where its unseen slot sits, which may escape
-  // its host's clips.
+  // Whether the page hit-tests el or its content outside \`clip\`, where the clip would
+  // cut it: content slotted into a closed shadow root paints where its unseen slot sits,
+  // which may escape its host's clips. Integer client sizes put a clip edge up to a pixel
+  // inside the true one, so a point must lie more than a pixel outside.
   function paintsOutside(el, clip) {
     const v = intersect(getBCR.call(el), { left: 0, top: 0, right: w, bottom: h });
+    const e = {
+      left: clip.left - 1,
+      top: clip.top - 1,
+      right: clip.right + 1,
+      bottom: clip.bottom + 1,
+    };
     const cx = (v.left + v.right) / 2;
     const cy = (v.top + v.bottom) / 2;
+    // A shadow root's elementsFromPoint returns nodes of its own tree, where the
+    // document's returns their host.
+    const root = getRootNode ? getRootNode.call(el) : document;
     return [
-      [(v.left + Math.min(v.right, clip.left)) / 2, cy],
-      [(Math.max(v.left, clip.right) + v.right) / 2, cy],
-      [cx, (v.top + Math.min(v.bottom, clip.top)) / 2],
-      [cx, (Math.max(v.top, clip.bottom) + v.bottom) / 2],
+      [(v.left + Math.min(v.right, e.left)) / 2, cy],
+      [(Math.max(v.left, e.right) + v.right) / 2, cy],
+      [cx, (v.top + Math.min(v.bottom, e.top)) / 2],
+      [cx, (Math.max(v.top, e.bottom) + v.bottom) / 2],
     ].some(
       ([x, y]) =>
         x >= v.left &&
         x < v.right &&
         y >= v.top &&
         y < v.bottom &&
-        (x < clip.left || x >= clip.right || y < clip.top || y >= clip.bottom) &&
-        document.elementsFromPoint(x, y).includes(el)
+        (x < e.left || x >= e.right || y < e.top || y >= e.bottom) &&
+        elementsAt(root, x, y).some((hit) => containsNode.call(el, hit))
     );
   }
 
+  // Smallest normalized box covering every surviving child frame — the frame we give
+  // a box-less wrapper we still emit, since it has no rect of its own.
   function unionFrame(children) {
     let minX = 1;
     let minY = 1;
@@ -732,6 +783,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // with this child- or content-spanning frame.)
     let selfFrame;
     let clipBounds;
+    let clipAxes;
     if (bl) {
       selfFrame = unionFrame(childResults);
       if (text && selfFrame.width <= 0 && selfFrame.height <= 0) {
@@ -766,6 +818,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         const cutX = sc.left > r.left + 1 || sc.right < r.right - 1;
         const cutY = sc.top > r.top + 1 || sc.bottom < r.bottom - 1;
         if (cutX || cutY) {
+          clipAxes = (cutX ? "x" : "") + (cutY ? "y" : "");
           const c = normRect(sc);
           clipBounds = {
             x: cutX ? c.x : 0,
@@ -800,7 +853,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       frame: selfFrame,
       children: childResults,
     };
-    if (clipBounds) node.clipBounds = clipBounds;
+    if (clipBounds) {
+      node.clipBounds = clipBounds;
+      node.clipAxes = clipAxes;
+    }
     if (name) node.label = name;
     if (text && text !== name) node.value = text.slice(0, 200);
     if (id) node.identifier = id;

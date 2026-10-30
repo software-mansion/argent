@@ -30,6 +30,8 @@ export interface DescribeNode {
   // Where scroll containers cut the element by more than a pixel (Chromium):
   // their window along each axis they cut it, the whole screen along the other.
   clipBounds?: DescribeFrame;
+  // The axes `clipBounds` cuts along: a window spanning the whole screen can cut too.
+  clipAxes?: "x" | "y" | "xy";
   checkable?: boolean;
   checked?: boolean;
   disabled?: boolean;
@@ -57,6 +59,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       scrollable: z.boolean().optional(),
       clipFrame: describeFrameSchema.optional(),
       clipBounds: describeFrameSchema.optional(),
+      clipAxes: z.enum(["x", "y", "xy"]).optional(),
       checkable: z.boolean().optional(),
       checked: z.boolean().optional(),
       disabled: z.boolean().optional(),

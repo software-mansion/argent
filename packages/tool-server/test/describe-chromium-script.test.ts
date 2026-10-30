@@ -78,6 +78,29 @@ elementProto.getAttribute = function (this: Record<string, unknown>, n: string) 
 elementProto.hasAttribute = function (this: Record<string, unknown>, n: string) {
   return n in ((this.__attrs as Record<string, string>) ?? {});
 };
+// Hit testing: the elements of a tree whose `painted` rect holds the point. A shadow
+// root's own tree is separate, so the document never returns a shadow tree's nodes.
+function paintedAt(nodes: unknown[], x: number, y: number): unknown[] {
+  const hits: unknown[] = [];
+  const visit = (n: Record<string, unknown>) => {
+    const p = n.__painted as Rect | undefined;
+    if (p && x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h) hits.push(n);
+    for (const k of (n.__children as Record<string, unknown>[]) ?? []) visit(k);
+  };
+  for (const n of nodes) visit(n as Record<string, unknown>);
+  return hits;
+}
+const nodeProto = MockNode.prototype as unknown as Record<string, unknown>;
+nodeProto.contains = function (this: Record<string, unknown>, other: unknown): boolean {
+  if (other === this) return true;
+  return ((this.__children as Record<string, unknown>[]) ?? []).some((k) =>
+    (nodeProto.contains as (o: unknown) => boolean).call(k, other)
+  );
+};
+// A node in a shadow tree carries that root as __root.
+nodeProto.getRootNode = function (this: Record<string, unknown>) {
+  return this.__root ?? (globalThis as Record<string, unknown>).document;
+};
 // Matches only the fixture's top-layer pseudo-class and throws on any other, as a
 // Chromium does on a pseudo-class it lacks.
 elementProto.matches = function (this: Record<string, unknown>, sel: string) {
@@ -164,7 +187,20 @@ function el(opts: Opts = {}): MockElement {
     : [];
   // An open shadow root is a DocumentFragment exposing `.children`; the walker reads
   // `getShadowRoot.call(el)` then iterates `shadow.children`. null unless a fixture sets it.
-  node.shadowRoot = opts.shadow ? ({ children: opts.shadow } as unknown) : null;
+  if (opts.shadow) {
+    const shadowRoot = {
+      children: opts.shadow,
+      elementsFromPoint: (x: number, y: number) => paintedAt(opts.shadow!, x, y),
+    };
+    const own = (n: Record<string, unknown>) => {
+      n.__root = shadowRoot;
+      for (const k of (n.__children as Record<string, unknown>[]) ?? []) own(k);
+    };
+    for (const k of opts.shadow) own(k as unknown as Record<string, unknown>);
+    node.shadowRoot = shadowRoot;
+  } else {
+    node.shadowRoot = null;
+  }
   // A same-origin <iframe> exposes contentDocument.documentElement (read directly, not via
   // a prototype getter). Only meaningful when tag === "iframe".
   if (opts.iframeDoc) {
@@ -281,16 +317,7 @@ function run(
       };
       return find(root);
     },
-    elementsFromPoint: (x: number, y: number) => {
-      const hits: unknown[] = [];
-      const visit = (n: Record<string, unknown>) => {
-        const p = n.__painted as Rect | undefined;
-        if (p && x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h) hits.push(n);
-        for (const k of (n.__children as Record<string, unknown>[]) ?? []) visit(k);
-      };
-      visit(root);
-      return hits;
-    },
+    elementsFromPoint: (x: number, y: number) => paintedAt([root], x, y),
     createRange: () => {
       let target: Record<string, unknown> | null = null;
       return {
@@ -1024,6 +1051,18 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "sc")).toEqual({ x: 0, y: 0, w: 300, h: 100 });
   });
 
+  it("names the axes a scroll container cuts along, even one spanning the whole screen", () => {
+    const { tree } = run([
+      scroller([row("cut", { x: 1, y: 950, w: 285, h: 100 })], {
+        rect: { x: 0, y: 0, w: 300, h: H },
+        client: { left: 0, top: 0, width: 285, height: H },
+        offset: { width: 300, height: H },
+      }),
+    ]);
+    expect(pxFrame(tree, "cut", "clipBounds")).toEqual({ x: 0, y: 0, w: W, h: H });
+    expect(findById(tree, "cut")?.clipAxes).toBe("y");
+  });
+
   it("reports clipBounds only where a scroll container cuts by more than a pixel", () => {
     const tree = (style: Record<string, string>, rect: Rect) =>
       run([scroller([row("r", rect)], { style })]).tree;
@@ -1299,6 +1338,55 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     const box = { x: 400, y: 400, w: 120, h: 40 };
     expect(pxFrame(card(box), "popped")).toEqual(box);
     expect(pxFrame(card(), "popped").h).toBe(0);
+  });
+
+  it("frames closed-root popup content by where its descendants or a shadow tree hit-test", () => {
+    const box = { x: 400, y: 400, w: 120, h: 40 };
+    const popup = (child: MockElement) =>
+      scroller([el({ tag: "x-pop", rect: { x: 1, y: 1, w: 285, h: 20 }, children: [child] })], {
+        style: { overflow: "hidden" },
+      });
+    // A wrapper that hit-testing skips (pointer-events: none) around a button it hits.
+    const wrapped = run([
+      popup(
+        el({
+          rect: box,
+          children: [el({ attrs: { id: "inner" }, rect: box, painted: box })],
+        })
+      ),
+    ]).tree;
+    expect(pxFrame(wrapped, "inner")).toEqual(box);
+    // The popup's host inside another component's open shadow tree.
+    const nested = run([
+      el({
+        tag: "x-app",
+        rect: { x: 0, y: 0, w: 300, h: 100 },
+        shadow: [popup(el({ attrs: { id: "nested" }, rect: box, painted: box }))],
+      }),
+    ]).tree;
+    expect(pxFrame(nested, "nested")).toEqual(box);
+  });
+
+  it("keeps clipping a custom element's child the page hit-tests only within a pixel of the clip", () => {
+    // The real clip edge is up to a pixel past the one integer client sizes give
+    // (x 286), so Chrome hits the list there; below the clip it hits nothing.
+    const list = { x: 1, y: 1, w: 285.5, h: 400 };
+    const { tree } = run([
+      scroller([
+        el({
+          tag: "x-list",
+          rect: list,
+          children: [
+            el({
+              rect: list,
+              painted: { x: 1, y: 1, w: 285.5, h: 98 },
+              children: [row("hidden", { x: 1, y: 200, w: 285, h: 40 })],
+            }),
+          ],
+        }),
+      ]),
+    ]);
+    expect(pxFrame(tree, "hidden").h).toBe(0);
   });
 
   it("clips an absolute box only when the clipper is its containing block or inside it", () => {
@@ -1984,6 +2072,16 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
         "moved"
       )
     ).toEqual(grown);
+    // The individual properties, which the computed transform leaves out.
+    expect(pxFrame(nested({ translate: "150px 50px" }, shifted), "moved")).toEqual(shifted);
+    expect(pxFrame(nested({ scale: "2", transformOrigin: "150px 130px" }, grown), "moved")).toEqual(
+      grown
+    );
+    // rotate(90deg) about the viewport's centre: it spans x 120..180, y 80..180.
+    const turned = { x: 125, y: 85, w: 50, h: 90 };
+    expect(
+      pxFrame(nested({ rotate: "90deg", transformOrigin: "150px 130px" }, turned), "moved")
+    ).toEqual(turned);
   });
 
   it("clips everything under an HTML clipper whose padding box is empty", () => {

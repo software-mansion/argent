@@ -235,7 +235,8 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
       "ancestor — zero height for a node cut off above or below, zero width for one cut off " +
       "left or right, since the walker clips each edge on its own. Where a scroll reveals it " +
       "(off-viewport, or in a scroller), the fix there is a `scroll-to` before the check rather " +
-      "than a different selector; one an `overflow: hidden` box clips stays hidden however the " +
+      "than a different selector, with `within` naming a scroller away from the screen's " +
+      "center; one an `overflow: hidden` box clips stays hidden however the " +
       "page scrolls. A password field reaches the runner under the name `[password]`, so only " +
       "an `id`/`role` selector can match it"
     );

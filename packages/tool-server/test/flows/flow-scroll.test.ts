@@ -387,6 +387,7 @@ describe("scroll-to directive", () => {
         ? { x: 0.6, y: 0.5, width: 0.3, height: 0.1 }
         : { x: 0.6, y: 0.75, width: 0.3, height: 0.05 },
       clipBounds: scrolled ? undefined : { x: 0, y: 0.4, width: 1, height: 0.4 },
+      clipAxes: scrolled ? undefined : "y",
     });
 
   it("scrolls a target its scroller cuts inside that scroller's clip window", async () => {
@@ -395,9 +396,9 @@ describe("scroll-to directive", () => {
       target: { identifier: "row" },
     });
     expect(swipes).toHaveLength(1);
-    // At the target across the axis: the window spans the screen there.
+    // On the target's visible part, travelling half the window.
     expect(swipes[0].fromX).toBeCloseTo(0.75);
-    expect(swipes[0].fromY).toBeCloseTo(0.6);
+    expect(swipes[0].fromY).toBeCloseTo(0.775);
     expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.2);
   });
 
@@ -439,6 +440,7 @@ describe("scroll-to directive", () => {
           identifier: "row",
           frame: { x: 0.6, y: 0.75 + dy, width: 0.3, height: 0.05 },
           clipBounds: { x: 0, y: 0.4 + dy, width: 1, height: 0.4 },
+          clipAxes: "y",
         }),
       ]);
     };
@@ -460,7 +462,28 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
-  it("anchors a horizontal scroll in the cutting clip along the axis, on the target across it", async () => {
+  it("scrolls a target cut by a scroller whose window spans the whole screen on the axis", async () => {
+    // A full-height side pane cuts the target at the screen's bottom edge.
+    const swipes = await scrollTo(
+      "full-height-cut",
+      (scrolled) => [
+        n({
+          identifier: "row",
+          frame: scrolled
+            ? { x: 0.05, y: 0.1, width: 0.25, height: 0.6 }
+            : { x: 0.05, y: 0.4, width: 0.25, height: 0.6 },
+          clipBounds: scrolled ? undefined : { x: 0, y: 0, width: 1, height: 1 },
+          clipAxes: scrolled ? undefined : "y",
+        }),
+      ],
+      { target: { identifier: "row" } }
+    );
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX).toBeCloseTo(0.175);
+    expect(swipes[0].fromY).toBeCloseTo(0.7);
+  });
+
+  it("anchors a horizontal scroll on the cut target's visible part", async () => {
     const swipes = await scrollTo(
       "cut-left",
       (scrolled) => [
@@ -470,12 +493,13 @@ describe("scroll-to directive", () => {
             ? { x: 0.4, y: 0.3, width: 0.2, height: 0.1 }
             : { x: 0.2, y: 0.3, width: 0.05, height: 0.1 },
           clipBounds: scrolled ? undefined : { x: 0.2, y: 0, width: 0.6, height: 1 },
+          clipAxes: scrolled ? undefined : "x",
         }),
       ],
       { target: { identifier: "card" }, direction: "left" }
     );
     expect(swipes).toHaveLength(1);
-    expect(swipes[0].fromX).toBeCloseTo(0.5);
+    expect(swipes[0].fromX).toBeCloseTo(0.225);
     expect(swipes[0].fromY).toBeCloseTo(0.35);
   });
 
@@ -486,17 +510,19 @@ describe("scroll-to directive", () => {
         cut: { x: 0.6, y: 0.55, width: 0.3, height: 0.05 },
         after: { x: 0.6, y: 0.3, width: 0.3, height: 0.1 },
         window: { x: 0, y: 0, width: 1, height: 0.6 },
-        from: { x: 0.75, y: 0.3 },
+        axes: "y",
+        from: { x: 0.75, y: 0.575 },
       },
       {
         direction: "right",
         cut: { x: 0.55, y: 0.3, width: 0.05, height: 0.1 },
         after: { x: 0.3, y: 0.3, width: 0.2, height: 0.1 },
         window: { x: 0, y: 0, width: 0.6, height: 1 },
-        from: { x: 0.3, y: 0.35 },
+        axes: "x",
+        from: { x: 0.575, y: 0.35 },
       },
     ];
-    for (const { direction, cut, after, window, from } of cases) {
+    for (const { direction, cut, after, window, axes, from } of cases) {
       const swipes = await scrollTo(
         `leading-${direction}`,
         (scrolled) => [
@@ -504,6 +530,7 @@ describe("scroll-to directive", () => {
             identifier: "card",
             frame: scrolled ? after : cut,
             clipBounds: scrolled ? undefined : window,
+            clipAxes: scrolled ? undefined : (axes as DescribeNode["clipAxes"]),
           }),
         ],
         { target: { identifier: "card" }, direction }
@@ -522,7 +549,7 @@ describe("scroll-to directive", () => {
       within: { identifier: "panel" },
     });
     expect(swipes).toHaveLength(1);
-    expect(swipes[0].fromY).toBeCloseTo(0.6);
+    expect(swipes[0].fromY).toBeCloseTo(0.775);
   });
 
   it("anchors a `within` gesture in the named container when the cut is across the axis", async () => {
@@ -537,6 +564,7 @@ describe("scroll-to directive", () => {
             ? { x: 0.6, y: 0.6, width: 0.2, height: 0.1 }
             : { x: 0.6, y: 0.97, width: 0.2, height: 0.03 },
           clipBounds: { x: 0.2, y: 0, width: 0.6, height: 1 },
+          clipAxes: "x",
         }),
       ],
       { target: { identifier: "card" }, within: { identifier: "panel" } }
@@ -569,6 +597,7 @@ describe("scroll-to directive", () => {
               : vertical
                 ? { x: 0, y: 0.4, width: 1, height: 0.4 }
                 : { x: 0.4, y: 0, width: 0.4, height: 1 },
+            clipAxes: scrolled ? undefined : vertical ? "y" : "x",
           }),
         ],
         { target: { identifier: "card" }, direction }
@@ -594,9 +623,9 @@ describe("scroll-to directive", () => {
       within: { identifier: "pane" },
     });
     expect(swipes).toHaveLength(1);
-    // In the inner list: anchored on the pane, the gesture would carry it along.
+    // On the row: anchored on the pane, the gesture would carry the list along.
     expect(swipes[0].fromX).toBeCloseTo(0.75);
-    expect(swipes[0].fromY).toBeCloseTo(0.6);
+    expect(swipes[0].fromY).toBeCloseTo(0.775);
   });
 
   it("measures a target cut on the cross axis only against the screen along the scroll axis", async () => {
@@ -607,6 +636,7 @@ describe("scroll-to directive", () => {
           identifier: "row",
           frame: { x: 0.2, y: 0.7, width: 0.5, height: 0.1 },
           clipBounds: { x: 0.2, y: 0, width: 0.5, height: 1 },
+          clipAxes: "x",
         }),
       ],
       { target: { identifier: "row" } }

@@ -743,7 +743,7 @@ function leadingRoom(
 
 /**
  * Dispatch one momentum-free scroll increment anchored at the center of
- * `region`. The anchor (the touch-down / wheel point) is what selects the scroll
+ * `anchor`, else of `region`. The anchor (the touch-down / wheel point) is what selects the scroll
  * container — the OS routes the gesture to the innermost scroller hit-tested
  * there — so anchoring inside a `within` region is how nested scrollers are
  * disambiguated. The travel is half the region along the axis (only the end
@@ -758,10 +758,12 @@ async function scrollIncrement(
   env: ActionEnv,
   direction: ScrollDirection,
   region: DescribeFrame,
-  limit = Infinity
+  limit = Infinity,
+  anchor: DescribeFrame | undefined = undefined
 ): Promise<string | undefined> {
-  const cx = clamp01(region.x + region.width / 2);
-  const cy = clamp01(region.y + region.height / 2);
+  const at = anchor ?? region;
+  const cx = clamp01(at.x + at.width / 2);
+  const cy = clamp01(at.y + at.height / 2);
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
   const dist = Math.min(limit, SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
@@ -850,15 +852,15 @@ async function scrollToVisible(
     const orientation = readingOrientation(env);
     const axisDirection = nativeDirection(direction, orientation);
 
-    // A target a scroll container cuts along the axis (`clipBounds` spans the
-    // whole screen along an axis nothing cuts) anchors the gesture in that
-    // window along the axis and on the target across it, so inside the
-    // scroller that cuts it, whether or not the tree has a node for it: a
-    // gesture anchored elsewhere moves only what holds that scroller, carrying
-    // the cut along. Any other gesture is anchored inside the container (so the
-    // right nested scroller moves), or spans the whole screen when none is
-    // named. The axis check measures the target against the window that cuts
-    // it, else the one the container clips its content to, else the
+    // A target a scroll container cuts along the axis (`clipAxes`) is scrolled
+    // inside that scroller, whether or not the tree has a node for it: the
+    // gesture is anchored on the target's visible part, which hit-tests to the
+    // scroller holding it, and its region is the cutting window along the axis.
+    // A gesture anchored elsewhere moves another scroller, or what holds this
+    // one, carrying the cut along. Any other gesture is anchored inside the
+    // container (so the right nested scroller moves), or spans the whole screen
+    // when none is named. The axis check measures the target against the window
+    // that cuts it, else the one the container clips its content to, else the
     // container's frame.
     const container = within ? flowSelectorToNode(tree, within, orientation) : undefined;
     if (within && !container) {
@@ -868,10 +870,7 @@ async function scrollToVisible(
     const frame = targetNode?.frame;
     const cut = frame && targetNode.clipBounds;
     const vertical = axisDirection === "up" || axisDirection === "down";
-    const axisCut =
-      cut && (vertical ? cut.y > 0 || cut.height < 1 : cut.x > 0 || cut.width < 1)
-        ? cut
-        : undefined;
+    const axisCut = cut && targetNode.clipAxes?.includes(vertical ? "y" : "x") ? cut : undefined;
     const region =
       frame && axisCut
         ? vertical
@@ -918,7 +917,7 @@ async function scrollToVisible(
 
     // A cut target moves no further than its visible start is from the
     // window's, or one taller than half the window would be carried past it.
-    warning ??= await scrollIncrement(env, axisDirection, region, room);
+    warning ??= await scrollIncrement(env, axisDirection, region, room, axisCut && frame);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
