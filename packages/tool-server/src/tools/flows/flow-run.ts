@@ -1485,7 +1485,13 @@ function assertUploadSelfContained(
       offending.map((o) => `  - ${o.line}`).join("\n") +
       `\nRun the e2e test on the computer that runs the tool-server, with no link and no ` +
       `ARGENT_TOOLS_URL, so that the tool-server reads the files in place.` +
-      `${uploadUpdateHint(servable)}${toolFilePathHints(toolFileFixes)}`,
+      `${uploadUpdateHint(servable)}` +
+      // Such a client sees e2e_test_path in this server's schema, but collects
+      // the files only for the former name.
+      (!closure && servable.length > 0
+        ? " A client older than the e2e_test_path param sends those files for a test passed as flow_path."
+        : "") +
+      toolFilePathHints(toolFileFixes),
     {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: UPLOAD_STAGE_BY_KIND[offending[0]!.kind],
