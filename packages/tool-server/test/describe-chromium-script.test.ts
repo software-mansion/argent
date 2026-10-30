@@ -1104,6 +1104,33 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(unseen, "cut")!.clipAnchors).toBeUndefined();
   });
 
+  it("anchors a horizontal cut farthest from the element along x", () => {
+    const strip = { x: 0, y: 400, w: W, h: 200 };
+    const { tree } = run([
+      scroller([el({ attrs: { id: "card" }, rect: { x: 950, y: 400, w: 200, h: 50 } })], {
+        rect: strip,
+        client: { left: 0, top: 0, width: W, height: 200 },
+        offset: { width: W, height: 200 },
+        scrollSize: { width: 3 * W, height: 200 },
+        painted: strip,
+      }),
+    ]);
+    expect(findById(tree, "card")!.clipAnchors).toEqual({ x: { x: 0.1, y: 0.42 } });
+  });
+
+  it("anchors a cut by a scroller in an open shadow tree, which the document hit-tests as its host", () => {
+    const area = { x: 0, y: 0, w: 300, h: 100 };
+    const { tree } = run([
+      el({
+        tag: "x-content",
+        rect: area,
+        painted: area,
+        shadow: [scroller([row("cut", { x: 1, y: 81, w: 285, h: 40 })], { painted: area })],
+      }),
+    ]);
+    expect(findById(tree, "cut")!.clipAnchors).toEqual({ y: { x: 0.0295, y: 0.0108 } });
+  });
+
   it("reports clipBounds only where a scroll container cuts by more than a pixel", () => {
     const tree = (
       style: Record<string, string>,
@@ -1443,6 +1470,8 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     (nav as unknown as Record<string, unknown>).parentNode = feed;
     const fixed = run([popup(feed)]).tree;
     expect(pxFrame(fixed, "feed")).toEqual({ x: 1, y: 1, w: 285, h: 98 });
+    (nav as unknown as Record<string, unknown>).__style = { position: "absolute" };
+    expect(pxFrame(run([popup(feed)]).tree, "feed")).toEqual({ x: 1, y: 1, w: 285, h: 98 });
   });
 
   it("keeps clipping a custom element's child the page hit-tests only within a pixel of the clip", () => {
