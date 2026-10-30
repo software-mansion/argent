@@ -76,6 +76,51 @@ describe("chromium-server/navigation", () => {
     ).resolves.toBe(undefined);
   });
 
+  it("navigate: a repeat of a URL still in flight waits for it instead of sending again", async () => {
+    let finish!: (v: object) => void;
+    const send = vi
+      .fn()
+      .mockReturnValueOnce(new Promise((r) => (finish = r)))
+      .mockResolvedValue({ errorText: "net::ERR_ABORTED" });
+    const cdp = { send } as unknown as CDPClient;
+    const first = navigate(cdp, "http://h/slow");
+    const repeat = navigate(cdp, "http://H/slow");
+    expect(send).toHaveBeenCalledTimes(1);
+    finish({});
+    await expect(Promise.all([first, repeat])).resolves.toEqual([undefined, undefined]);
+
+    await expect(navigate(cdp, "http://h/slow")).rejects.toThrow("net::ERR_ABORTED");
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("navigate: a repeat shares the failure of the navigation it waited for", async () => {
+    let finish!: (v: object) => void;
+    const send = vi.fn().mockReturnValueOnce(new Promise((r) => (finish = r)));
+    const cdp = { send } as unknown as CDPClient;
+    const first = navigate(cdp, "http://h/slow").catch((e: unknown) => e);
+    const repeat = navigate(cdp, "http://h/slow").catch((e: unknown) => e);
+    finish({ errorText: "net::ERR_ABORTED" });
+    for (const err of await Promise.all([first, repeat])) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED);
+    }
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("navigate: sends a different URL, or a repeated javascript: URL, while one is in flight", async () => {
+    const send = vi.fn().mockReturnValue(new Promise(() => {}));
+    const cdp = { send } as unknown as CDPClient;
+    void navigate(cdp, "http://h/slow");
+    void navigate(cdp, "http://h/other");
+    void navigate(cdp, "javascript:void 0");
+    void navigate(cdp, "javascript:void 0");
+    expect(send.mock.calls.map((c) => c[1].url)).toEqual([
+      "http://h/slow",
+      "http://h/other",
+      "javascript:void 0",
+      "javascript:void 0",
+    ]);
+  });
+
   it("open-url: propagates a failed navigation without refreshing the viewport", async () => {
     const refreshViewport = vi.fn();
     const services = {

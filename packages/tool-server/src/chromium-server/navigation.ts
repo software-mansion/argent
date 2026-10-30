@@ -6,15 +6,35 @@ interface NavigationHistory {
   entries: Array<{ id: number; url: string; title: string }>;
 }
 
-function isJavascriptUrl(url: string): boolean {
+function parseUrl(url: string): URL | undefined {
   try {
-    return new URL(url).protocol === "javascript:";
+    return new URL(url);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-export async function navigate(cdp: CDPClient, url: string): Promise<void> {
+const inFlight = new WeakMap<CDPClient, Map<string, Promise<void>>>();
+
+/**
+ * Chromium answers a navigation that repeats one still in flight with
+ * net::ERR_ABORTED and lets the first one load, so a repeat waits for the first.
+ */
+export function navigate(cdp: CDPClient, url: string): Promise<void> {
+  const parsed = parseUrl(url);
+  // Each javascript: URL runs its script, so a repeat is not a duplicate.
+  if (parsed?.protocol === "javascript:") return navigateOnce(cdp, url, true);
+  const key = parsed?.href ?? url;
+  let pending = inFlight.get(cdp);
+  if (!pending) inFlight.set(cdp, (pending = new Map()));
+  const running = pending.get(key);
+  if (running) return running;
+  const started = navigateOnce(cdp, url, false).finally(() => pending.delete(key));
+  pending.set(key, started);
+  return started;
+}
+
+async function navigateOnce(cdp: CDPClient, url: string, isJavascript: boolean): Promise<void> {
   const { errorText, isDownload } = (await cdp.send("Page.navigate", { url })) as {
     errorText?: string;
     isDownload?: boolean;
@@ -26,7 +46,7 @@ export async function navigate(cdp: CDPClient, url: string): Promise<void> {
     !errorText ||
     errorText === "net::ERR_HTTP_RESPONSE_CODE_FAILURE" ||
     (isDownload && errorText === "net::ERR_ABORTED") ||
-    isJavascriptUrl(url)
+    isJavascript
   )
     return;
   // The url is left out so credentials and tokens in it stay out of the logs.
