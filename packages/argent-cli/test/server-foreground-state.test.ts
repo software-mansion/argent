@@ -21,7 +21,16 @@ const { stateFileForBundle } = await import("@argent/tools-client");
 
 const stateDir = path.join(home, ".argent");
 
-afterEach(() => {
+// The run of the current test, so a child that outlives it (timeout, regression)
+// is reaped before its exit can land in the next test's process.exit mock.
+let live: { pid: number; exited: Promise<unknown>; done: boolean } | null = null;
+
+afterEach(async () => {
+  if (live && !live.done) {
+    process.kill(live.pid, "SIGKILL");
+    await live.exited;
+  }
+  live = null;
   vi.restoreAllMocks();
   // Here rather than in the test, which skips its `finally` when it times out.
   if (fs.existsSync(stateDir)) fs.chmodSync(stateDir, 0o755);
@@ -51,6 +60,7 @@ async function runForeground(
 
   const exited = new Promise<{ code: number | undefined; stateFile: string | null }>((resolve) => {
     vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      if (live) live.done = true;
       resolve({
         code,
         stateFile: fs.existsSync(stateFile) ? fs.readFileSync(stateFile, "utf8") : null,
@@ -62,6 +72,8 @@ async function runForeground(
     paths: { bundlePath, simulatorServerDir: home, nativeDevtoolsDir: home },
   });
   await vi.waitFor(() => expect(fs.existsSync(stateFile)).toBe(true), { timeout: 2000 });
+  const { pid } = JSON.parse(fs.readFileSync(stateFile, "utf8")) as { pid: number };
+  live = { pid, exited, done: false };
   whileRunning(stateFile);
   return exited;
 }
@@ -81,12 +93,20 @@ it("keeps a state file that another server wrote over ours", async () => {
   expect(result).toEqual({ code: 3, stateFile: theirs });
 });
 
-it("stops the child with SIGTERM on SIGHUP and removes the state file", async () => {
-  const result = await runForeground("hup", "setTimeout(() => process.exit(0), 3000);\n", () => {
-    process.emit("SIGHUP", "SIGHUP");
-  });
-  expect(result).toEqual({ code: 143, stateFile: null });
-});
+// The child has no handlers, so the exit code names the signal it was sent.
+it.each([
+  ["SIGINT", "SIGINT", 130],
+  ["SIGTERM", "SIGTERM", 143],
+  ["SIGHUP", "SIGTERM", 143],
+] as const)(
+  "forwards %s to the child as %s and removes the state file",
+  async (signal, _, code) => {
+    const result = await runForeground(signal, "setTimeout(() => process.exit(0), 3000);\n", () => {
+      process.emit(signal, signal);
+    });
+    expect(result).toEqual({ code, stateFile: null });
+  }
+);
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "mirrors the child's exit code when the state file cannot be removed",
