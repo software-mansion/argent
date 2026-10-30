@@ -132,6 +132,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     );
   }
 
+  // JS \\s, minus U+FEFF: a zero-width no-break space must not collapse to a visible one.
+  const WHITESPACE = /[^\\S\\uFEFF]+/g;
+
   function ownText(el) {
     let s = "";
     for (const child of getChildNodes.call(el)) {
@@ -143,32 +146,38 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (getNodeType.call(child) === 3) s += getNodeValue.call(child);
       else if (isRenderedBr(child)) s += " ";
     }
-    return s.replace(/\\s+/g, " ").trim();
+    return s.replace(WHITESPACE, " ").trim();
   }
 
   // An aria-labelledby target's textContent (text and CDATA), read like ownText: a
-  // rendered <br> is a space and whitespace collapses. Iterative: the target's depth has
-  // no MAX_DEPTH bound, so recursion could overflow the stack. Memoized, as many controls
-  // can share one target.
+  // rendered <br> is a space and whitespace collapses. A <br> under a display:none
+  // element inside the target is not rendered (its own display does not inherit that);
+  // in a wholly hidden target it still is a space, as in Chrome's accessible name.
+  // Iterative: the target's depth has no MAX_DEPTH bound, so recursion could overflow
+  // the stack. Memoized, as many controls can share one target.
   const labelTexts = new Map();
   function labelText(root) {
     const cached = labelTexts.get(root);
     if (cached !== undefined) return cached;
     let s = "";
+    // Flat [node, underNone] pairs.
     const stack = [];
-    const pushChildren = (node) => {
+    const pushChildren = (node, underNone) => {
       const kids = getChildNodes.call(node);
-      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i], underNone);
     };
-    pushChildren(root);
+    pushChildren(root, false);
     while (stack.length) {
+      const underNone = stack.pop();
       const node = stack.pop();
       const type = getNodeType.call(node);
       if (type === 3 || type === 4) s += getNodeValue.call(node);
-      else if (isRenderedBr(node)) s += " ";
-      else if (type === 1) pushChildren(node);
+      else if (!underNone && isRenderedBr(node)) s += " ";
+      else if (type === 1) {
+        pushChildren(node, underNone || window.getComputedStyle(node).display === "none");
+      }
     }
-    s = s.replace(/\\s+/g, " ");
+    s = s.replace(WHITESPACE, " ");
     labelTexts.set(root, s);
     return s;
   }

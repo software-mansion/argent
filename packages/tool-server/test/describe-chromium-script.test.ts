@@ -609,6 +609,70 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "btn")!.label).toBe("Save draft");
   });
 
+  it("reads a <br> under a display:none element of an aria-labelledby target as nothing", () => {
+    // Each <br> sits two elements below the target. Its own display stays inline under
+    // the display:none span, as display does not inherit.
+    const nested = (display: string) => {
+      const outer = el({ tag: "span", rect: ZERO, style: { display } }) as MockElement &
+        Record<string, unknown>;
+      const inner = el({ tag: "b", rect: ZERO }) as MockElement & Record<string, unknown>;
+      inner.childNodes = [Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 })];
+      outer.childNodes = [Object.assign(inner, { nodeType: 1 })];
+      return Object.assign(outer, { nodeType: 1 });
+    };
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    label.childNodes = [
+      { nodeType: 3, nodeValue: "Save" },
+      nested("none"),
+      { nodeType: 3, nodeValue: "my" },
+      nested("inline"),
+      { nodeType: 3, nodeValue: "draft" },
+    ];
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, label]);
+    expect(findById(tree, "btn")!.label).toBe("Savemy draft");
+  });
+
+  it("reads a <br> in a display:none aria-labelledby target as a space", () => {
+    const label = el({
+      tag: "span",
+      rect: ZERO,
+      style: { display: "none" },
+      attrs: { id: "lbl" },
+    }) as MockElement & Record<string, unknown>;
+    const br = Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 });
+    label.childNodes = [
+      { nodeType: 3, nodeValue: "Save" },
+      br,
+      { nodeType: 3, nodeValue: "draft" },
+    ];
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, label]);
+    expect(findById(tree, "btn")!.label).toBe("Save draft");
+  });
+
+  it("keeps a U+FEFF in own and aria-labelledby text", () => {
+    const label = el({ tag: "span", text: "Save﻿draft", rect: BOX, attrs: { id: "lbl" } });
+    const labelled = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "labelled", "aria-labelledby": "lbl" },
+    });
+    const own = el({ tag: "button", text: "Save﻿draft", rect: BOX, attrs: { id: "own" } });
+    const { tree } = run([labelled, own, label]);
+    expect(findById(tree, "labelled")!.label).toBe("Save﻿draft");
+    expect(findById(tree, "own")!.value).toBe("Save﻿draft");
+  });
+
   it("walks an aria-labelledby target shared by many controls only once", () => {
     // An empty target too: its cached "" must count as a hit.
     const childNodesReads = (text: string, buttons: number) => {
