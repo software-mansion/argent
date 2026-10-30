@@ -10,7 +10,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { FLOW_FILE_NAME_PATTERN, FLOW_NAME_PATTERN } from "./file-inputs";
 import { e2eFileCandidates } from "./e2e-dirs";
-import { canonicalToolId } from "./tool-ids";
+import { canonicalToolArgs, canonicalToolId } from "./tool-ids";
 
 /**
  * The input must arrive with any `..` segments intact (no path.resolve/join
@@ -86,6 +86,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** A `tool:` step's args under the current param names; as written when they set both names. */
+function toolStepArgs(tool: string, args: unknown): Record<string, unknown> {
+  if (!isRecord(args)) return {};
+  try {
+    return canonicalToolArgs(tool, args);
+  } catch {
+    return args;
+  }
+}
+
 /**
  * The project files a parsed flow document makes the runner read: the `run:`
  * targets of its steps and of the steps of its block directives (`when:`),
@@ -129,7 +139,7 @@ export function collectFlowRequests(doc: unknown): {
       const snapshot = isRecord(step.snapshot) ? step.snapshot.name : step.snapshot;
       if (typeof snapshot === "string" && FLOW_NAME_PATTERN.test(snapshot)) snapshots.add(snapshot);
       if (typeof step.tool === "string") {
-        const args = isRecord(step.args) ? step.args : {};
+        const args = toolStepArgs(step.tool, step.args);
         toolSteps.push({ tool: step.tool, args });
         const target =
           canonicalToolId(step.tool) === "e2e-execute" ? nestedFlowTarget(args) : undefined;
@@ -282,21 +292,27 @@ export async function resolveFlowRelativeFile(
 /**
  * The flow a nested `tool: flow-execute` step names, in a form both sides of a
  * link accept, or undefined. `name`: a flow name with an absolute
- * `project_root` that has no `..` segment, and no `flow_path`; `paths` are the
- * places the saved test can be, in lookup order ({@link e2eFileCandidates}),
- * and `path` is the first of them. `flow_path`: an
+ * `project_root` that has no `..` segment, and no `e2e_test_path`; `paths` are
+ * the places the saved test can be, in lookup order ({@link e2eFileCandidates}),
+ * and `path` is the first of them. `e2e_test_path`: an
  * absolute path with no `..` segment to a `<flow-name>.yaml` file, and no
- * `name`. The argent client sends the flow of a `name` step with the call,
+ * `name`. `args` may use the former param names. The argent client sends the flow of a `name` step with the call,
  * and the tool-server runs a nested step over a link only in that form, so the
  * two decide with this one function.
  */
 export type NestedFlowTarget =
   | { kind: "name"; projectRoot: string; name: string; path: string; paths: string[] }
-  | { kind: "flow_path"; path: string };
+  | { kind: "e2e_test_path"; path: string };
 
 export function nestedFlowTarget(args: unknown): NestedFlowTarget | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
-  const { name, project_root: projectRoot, flow_path: flowPath } = args as Record<string, unknown>;
+  let canonical: Record<string, unknown>;
+  try {
+    canonical = canonicalToolArgs("e2e-execute", args as Record<string, unknown>);
+  } catch {
+    return undefined;
+  }
+  const { name, project_root: projectRoot, e2e_test_path: flowPath } = canonical;
   if (flowPath === undefined) {
     if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return undefined;
     if (!isResolvedAbsolute(projectRoot)) return undefined;
@@ -305,7 +321,7 @@ export function nestedFlowTarget(args: unknown): NestedFlowTarget | undefined {
   }
   if (name !== undefined || !isResolvedAbsolute(flowPath)) return undefined;
   if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flowPath))) return undefined;
-  return { kind: "flow_path", path: flowPath };
+  return { kind: "e2e_test_path", path: flowPath };
 }
 
 function isResolvedAbsolute(value: unknown): value is string {
