@@ -25,6 +25,7 @@ import {
 import * as fs from "node:fs/promises";
 import { createUsbmuxCommandSender } from "../utils/ios-device/runner-route";
 import { isIosDeviceTransportError } from "../utils/ios-device/usbmux-protocol";
+import { iosRelayFor } from "../utils/ios-device/relay";
 import { readRunnerCrashSummary } from "../utils/ios-device/runner-crash";
 import {
   createRunnerClient,
@@ -176,7 +177,7 @@ async function startRunner(
 
   const exited = new Promise<never>((_resolve, reject) => {
     onExit = (code) =>
-      reject(new Error(`xcodebuild exited (code ${code}) before the runner became ready`));
+      reject(new Error(`the runner launcher exited (code ${code}) before the runner became ready`));
   });
 
   // Swallow the losing race. A post-kill exit on the timeout path still fires onExit.
@@ -191,10 +192,13 @@ async function startRunner(
 
     // The runner binds a system-assigned loopback port on the device and logs it.
     // Nothing on the Mac can pick that port, so the client waits for the line.
-    const port = await Promise.race([
-      waitForRunnerListeningPort(launched.logPath, { timeoutMs: RUNNER_READY_TIMEOUT_MS }),
-      exited,
-    ]);
+    // A relayed launch pins the port instead, since go-ios does not forward the log.
+    const port =
+      launched.port ??
+      (await Promise.race([
+        waitForRunnerListeningPort(launched.logPath, { timeoutMs: RUNNER_READY_TIMEOUT_MS }),
+        exited,
+      ]));
 
     client = createRunnerClient({
       udid,
@@ -251,12 +255,22 @@ async function buildAndStartRunner(
 ): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
   let artifact: RunnerArtifact;
 
+  // Xcode registers a device in the team only when it can see it, which it
+  // never can for a relayed phone. Say so instead of attempting the rebuild.
+  const relay = iosRelayFor(udid);
+  const registrationHint = relay
+    ? ` The phone is relayed by ${relay.providerName}, so Xcode cannot register it itself: add UDID ` +
+      `${relay.udid} to the team's devices (developer.apple.com, or cable the phone to a Mac with ` +
+      `Xcode once), then retry.`
+    : "";
+
   try {
     artifact = await ensureRunnerArtifact(signing);
   } catch (error) {
     // A new team cannot mint a profile from the generic build. Rebuild against this device to register it.
     const message = error instanceof Error ? error.message : String(error);
     if (!isProfileMissingDeviceFailure(message)) throw error;
+    if (relay) throw appendToMessage(error, registrationHint);
     artifact = await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true });
   }
 
@@ -265,6 +279,7 @@ async function buildAndStartRunner(
   } catch (error) {
     const logText = (error as { runnerLogText?: string }).runnerLogText ?? "";
     if (!isProfileMissingDeviceFailure(logText) && !isProfileExpiredFailure(logText)) throw error;
+    if (relay) throw appendToMessage(error, registrationHint);
     // The profile lacks this device or has expired. Rebuild against the device:
     // automatic signing registers it and mints a fresh profile. Retry once.
     return await startRunner(
@@ -272,6 +287,14 @@ async function buildAndStartRunner(
       await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true })
     );
   }
+}
+
+function appendToMessage(error: unknown, suffix: string): unknown {
+  if (error instanceof Error) {
+    error.message = `${error.message}${suffix}`;
+  }
+
+  return error;
 }
 
 /** Registry blueprint that builds, launches, and recycles the on-device runner. */

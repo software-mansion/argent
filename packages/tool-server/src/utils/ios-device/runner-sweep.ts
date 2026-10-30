@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as path from "node:path";
 import { pidIsAlive, pollPidsUntilGone, signalGroupThenPid } from "../process-kill";
+import { externalNativeId } from "../external-devices";
 import { PS_BIN } from "../vega-process";
 
 /**
@@ -50,13 +51,17 @@ export async function killStaleRunnersForDevice(
   const kill = process.kill.bind(process);
   const signaled: number[] = [];
 
+  const nativeUdid = externalNativeId(udid);
+
   for (const line of stdout.split("\n")) {
-    // Match only our processes: test-without-building, this UDID, and the cache root.
-    if (
-      !line.includes("test-without-building") ||
-      !line.includes(`platform=iOS,id=${udid}`) ||
-      !line.includes(path.join(".argent", "ios-device-runner"))
-    ) {
+    // Match only our processes: an xcodebuild or go-ios runner launch, this
+    // UDID, and the cache root (the relayed launch keeps its xctestrun there).
+    const cacheRoot = path.join(".argent", "ios-device-runner");
+    const xcodebuildLaunch =
+      line.includes("test-without-building") && line.includes(`platform=iOS,id=${nativeUdid}`);
+    const goIosLaunch = line.includes("runxctest") && line.includes(`--udid ${nativeUdid}`);
+
+    if ((!xcodebuildLaunch && !goIosLaunch) || !line.includes(cacheRoot)) {
       continue;
     }
 

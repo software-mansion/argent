@@ -1,13 +1,23 @@
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import net, { type Server } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { ensureDeviceReady } from "../src/utils/ios-device/devicectl";
+import { goIosErrorSummary } from "../src/utils/ios-device/go-ios";
 import { iosRelayFor, parseUsbmuxEndpoint } from "../src/utils/ios-device/relay";
+import {
+  runnerAppsFromXctestrun,
+  writeXctestrunWithRunnerPort,
+} from "../src/utils/ios-device/runner-launch";
+import { killStaleRunnersForDevice } from "../src/utils/ios-device/runner-sweep";
 import { listUsbmuxSerials } from "../src/utils/ios-device/usbmux";
 import { encodeUsbmuxPacket, readUsbmuxSerials } from "../src/utils/ios-device/usbmux-protocol";
+
+const execFileAsync = promisify(execFile);
 
 const UDID = "00008120-000154913A05A01E";
 const OTHER_UDID = "00008030-000D4856146B802E";
@@ -154,5 +164,118 @@ describe("a relayed phone's readiness", () => {
 
     expect((error as Error).message).toContain("did not answer");
     expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED);
+  });
+});
+
+describe("writeXctestrunWithRunnerPort", () => {
+  it("pins ARGENT_RUNNER_PORT in the runner's environment and leaves the rest intact", async () => {
+    const dir = await tempDir();
+    const source = path.join(dir, "ArgentRunner_iphoneos18.0-arm64.xctestrun");
+    const target = path.join(dir, "pinned.xctestrun");
+    const json = path.join(dir, "source.json");
+    await fs.writeFile(
+      json,
+      JSON.stringify({
+        __xctestrun_metadata__: { FormatVersion: 1 },
+        ArgentRunnerUITests: {
+          BlueprintName: "ArgentRunnerUITests",
+          EnvironmentVariables: { OS_ACTIVITY_DT_MODE: "YES" },
+          TestHostPath: "__TESTROOT__/Debug-iphoneos/ArgentRunnerUITests-Runner.app",
+        },
+      })
+    );
+    await execFileAsync("plutil", ["-convert", "xml1", "-o", source, json]);
+
+    await writeXctestrunWithRunnerPort(source, target, 27042);
+
+    const { stdout } = await execFileAsync("plutil", ["-convert", "json", "-o", "-", target]);
+    const written = JSON.parse(stdout) as Record<string, Record<string, unknown>>;
+    expect(written.ArgentRunnerUITests!.EnvironmentVariables).toEqual({
+      OS_ACTIVITY_DT_MODE: "YES",
+      ARGENT_RUNNER_PORT: "27042",
+    });
+    expect(written.ArgentRunnerUITests!.TestingEnvironmentVariables).toEqual({
+      ARGENT_RUNNER_PORT: "27042",
+    });
+    expect(written.ArgentRunnerUITests!.TestHostPath).toContain("ArgentRunnerUITests-Runner.app");
+    expect(written.__xctestrun_metadata__).toEqual({ FormatVersion: 1 });
+  });
+});
+
+describe("runnerAppsFromXctestrun", () => {
+  it("names the runner app with its bundle id and the UI target by path", () => {
+    const apps = runnerAppsFromXctestrun(
+      {
+        __xctestrun_metadata__: { FormatVersion: 1 },
+        ArgentRunnerUITests: {
+          TestHostBundleIdentifier: "com.argent.runner.tteam.uitests.xctrunner",
+          TestHostPath: "__TESTROOT__/Debug-iphoneos/ArgentRunnerUITests-Runner.app",
+          UITargetAppPath: "__TESTROOT__/Debug-iphoneos/ArgentRunner.app",
+        },
+      },
+      "/Users/dev/.argent/ios-device-runner/derived/Build/Products"
+    );
+
+    expect(apps).toEqual([
+      {
+        path: "/Users/dev/.argent/ios-device-runner/derived/Build/Products/Debug-iphoneos/ArgentRunnerUITests-Runner.app",
+        bundleId: "com.argent.runner.tteam.uitests.xctrunner",
+      },
+      {
+        path: "/Users/dev/.argent/ios-device-runner/derived/Build/Products/Debug-iphoneos/ArgentRunner.app",
+      },
+    ]);
+  });
+});
+
+describe("goIosErrorSummary", () => {
+  it("reads the last error line go-ios logged as JSON", () => {
+    const output = [
+      JSON.stringify({ level: "INFO", msg: "installing" }),
+      JSON.stringify({
+        level: "ERROR",
+        msg: "failed writing",
+        err: "ApplicationVerificationFailed",
+      }),
+      JSON.stringify({ level: "INFO", msg: "done" }),
+    ].join("\n");
+
+    expect(goIosErrorSummary(output)).toBe("failed writing: ApplicationVerificationFailed");
+    expect(goIosErrorSummary("plain text\nlast line")).toBe("last line");
+  });
+});
+
+describe("the stale-runner sweep on relayed launches", () => {
+  const RELAY_XCTESTRUN = `/Users/dev/.argent/ios-device-runner/relay/${UDID}.xctestrun`;
+
+  function goIosPsLine(pid: number, ppid: number, udid = UDID): string {
+    return [
+      String(pid).padStart(5),
+      String(ppid).padStart(5),
+      "/usr/local/bin/ios",
+      "runxctest",
+      `--xctestrun-file-path=${RELAY_XCTESTRUN}`,
+      "--udid",
+      udid,
+      "--tunnel-info-port",
+      "60105",
+    ].join(" ");
+  }
+
+  it("kills an orphaned go-ios runner for the device, named by its ext: id", async () => {
+    const kills: number[] = [];
+    vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (signal === 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+      kills.push(pid);
+      return true;
+    });
+
+    const killed = await killStaleRunnersForDevice(`ext:acme-15038:${UDID}`, async () =>
+      [goIosPsLine(501, 1), goIosPsLine(502, 1, OTHER_UDID)].join("\n")
+    );
+
+    expect(killed).toBe(1);
+    expect(kills).toContain(-501);
+    expect(kills).not.toContain(-502);
   });
 });
