@@ -219,12 +219,18 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // A slotted element paints where its <slot> sits in the shadow tree, so it takes the
   // clips in force there; each host's shadow tree is walked before its light children.
-  const slotClips = new Map();
+  // globalThis: a page's top-level \`class Map\` shadows the bare name, not the property.
+  const slotClips = new globalThis.Map();
   // Elements hidden() pruned: a slot inside one paints nothing.
-  const pruned = new Set();
+  const pruned = new globalThis.Set();
   function inPruned(node) {
     for (let n = node; n; n = getParentNode.call(n)) if (pruned.has(n)) return true;
     return false;
+  }
+
+  // An XHTML document keeps tagName lowercase.
+  function htmlTag(el) {
+    return getTagName.call(el).toUpperCase();
   }
 
   // False for a pseudo-class this Chromium lacks.
@@ -245,8 +251,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // An open customizable select draws every child but a leading <button> in its
   // top-layer ::picker(select).
   function inPicker(el, child, i) {
-    if (getTagName.call(el) !== "SELECT" || !matches(el, ":open")) return false;
-    return i > 0 || getTagName.call(child) !== "BUTTON";
+    if (htmlTag(el) !== "SELECT" || !matches(el, ":open")) return false;
+    return i > 0 || htmlTag(child) !== "BUTTON";
   }
 
   // A display: contents element has no box to position: its own text is in flow.
@@ -298,8 +304,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     );
   }
 
-  // A nested <svg>'s rect bounds its content, not its viewport.
-  function nestedSvgViewport(el) {
+  // A computed transform's 2D part as [a, b, c, d, e, f], or null for none.
+  function matrix2d(v) {
+    const m = /^matrix(3d)?\\(([^)]*)\\)$/.exec(v || "");
+    if (!m) return null;
+    const n = m[2].split(",").map(parseFloat);
+    return m[1] ? [n[0], n[1], n[4], n[5], n[12], n[13]] : n;
+  }
+
+  // A nested <svg>'s rect bounds its content, not its viewport: its x/y/width/height in
+  // the parent's user space, moved by its own transform about its transform-origin.
+  function nestedSvgViewport(el, style) {
     if (!(el instanceof SVGSVGElement) || !el.ownerSVGElement) return null;
     const m = el.parentNode.getScreenCTM?.();
     if (!m) return null;
@@ -307,11 +322,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const y = el.y.animVal.value;
     const w = el.width.animVal.value;
     const h = el.height.animVal.value;
+    const t = matrix2d(style.transform) || [1, 0, 0, 1, 0, 0];
+    const [ox = 0, oy = 0] = (style.transformOrigin || "").split(" ").map((v) => parseFloat(v) || 0);
     const xs = [];
     const ys = [];
     for (const [px, py] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
-      xs.push(m.a * px + m.c * py + m.e);
-      ys.push(m.b * px + m.d * py + m.f);
+      const qx = t[0] * (px - ox) + t[2] * (py - oy) + t[4] + ox;
+      const qy = t[1] * (px - ox) + t[3] * (py - oy) + t[5] + oy;
+      xs.push(m.a * qx + m.c * qy + m.e);
+      ys.push(m.b * qx + m.d * qy + m.f);
     }
     return {
       left: Math.min(...xs),
@@ -327,11 +346,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // px to the rendered (transformed) box. A non-HTML clipper has no offset* to scale by:
   // an outer <svg> clips at its content box, a <foreignObject> at its rect.
   function paddingBox(el, style) {
-    const vp = nestedSvgViewport(el);
+    const vp = nestedSvgViewport(el, style);
     if (vp) return vp;
     const r = getBCR.call(el);
     // A quirks-mode body reports the viewport's client size, so its own borders measure it.
-    if (getTagName.call(el) === "BODY" && getOwnerDocument.call(el)?.compatMode === "BackCompat") {
+    if (htmlTag(el) === "BODY" && getOwnerDocument.call(el)?.compatMode === "BackCompat") {
       const border = (side) => parseFloat(style["border" + side + "Width"]) || 0;
       return {
         left: r.left + border("Left"),
@@ -400,7 +419,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // Chromium ignores overflow on inline HTML boxes and on table rows, row groups and
   // columns.
   function overflowApplies(el, style) {
-    const tag = getTagName.call(el);
+    const tag = htmlTag(el);
     if (tag === "HTML") return false;
     if (tag === "BODY") {
       const doc = getOwnerDocument.call(el);
@@ -467,9 +486,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // A fieldset's overflow clips its content box, never its rendered legend: the first
   // <legend> child that is neither floated nor out of flow.
   function renderedLegend(el, kids) {
-    if (getTagName.call(el) !== "FIELDSET") return null;
+    if (htmlTag(el) !== "FIELDSET") return null;
     for (const kid of kids) {
-      if (getTagName.call(kid) !== "LEGEND") continue;
+      if (htmlTag(kid) !== "LEGEND") continue;
       const ks = window.getComputedStyle(kid);
       if (ks.cssFloat === "none" && ks.position !== "absolute" && ks.position !== "fixed") {
         return kid;
@@ -540,7 +559,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const r = getBCR.call(el);
     if (r.width > 0 && r.height > 0) return false;
     // Zero-area box: prune it only when it clips its overflow (a collapsed
-    // overflow:hidden container genuinely hides its content). With the default
+    // overflow:hidden container hides its in-flow content). With the default
     // overflow:visible, or overflow Chromium ignores, abs-positioned / overflowing /
     // floated descendants still paint, so walk() must descend and promote them
     // instead of cutting the subtree.
@@ -549,6 +568,29 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // Smallest normalized box covering every surviving child frame — the frame we give
   // a box-less wrapper we still emit, since it has no rect of its own.
+  // Whether the page hit-tests el outside \`clip\`, where the clip would cut it: content
+  // slotted into a closed shadow root paints where its unseen slot sits, which may escape
+  // its host's clips.
+  function paintsOutside(el, clip) {
+    const v = intersect(getBCR.call(el), { left: 0, top: 0, right: w, bottom: h });
+    const cx = (v.left + v.right) / 2;
+    const cy = (v.top + v.bottom) / 2;
+    return [
+      [(v.left + Math.min(v.right, clip.left)) / 2, cy],
+      [(Math.max(v.left, clip.right) + v.right) / 2, cy],
+      [cx, (v.top + Math.min(v.bottom, clip.top)) / 2],
+      [cx, (Math.max(v.top, clip.bottom) + v.bottom) / 2],
+    ].some(
+      ([x, y]) =>
+        x >= v.left &&
+        x < v.right &&
+        y >= v.top &&
+        y < v.bottom &&
+        (x < clip.left || x >= clip.right || y < clip.top || y >= clip.bottom) &&
+        document.elementsFromPoint(x, y).includes(el)
+    );
+  }
+
   function unionFrame(children) {
     let minX = 1;
     let minY = 1;
@@ -568,8 +610,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x: minX, y: minY, width: maxRight - minX, height: maxBottom - minY };
   }
 
-  // An iframe's document starts again from NO_CLIP: its rects are in its own viewport.
-  function walk(el, depth, clips = NO_CLIP) {
+  function walk(el, depth, clips = NO_CLIP, unseenSlot = false) {
     if (truncated) return null;
     if (depth > MAX_DEPTH) return null;
     if (!(el instanceof Element)) return null;
@@ -594,9 +635,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
 
     if (inTopLayer(el, style)) clips = NO_CLIP;
-    const clip = ownClip(clips, style);
+    let clip = ownClip(clips, style);
+    if (unseenSlot && clip && paintsOutside(el, clip)) {
+      clips = NO_CLIP;
+      clip = null;
+    }
     const inner = childClips(el, style, clips, clip);
-    if (getTagName.call(el) === "SLOT") slotClips.set(el, inner);
+    if (htmlTag(el) === "SLOT") slotClips.set(el, inner);
 
     // Pierce open shadow roots — closed roots are unreachable by design.
     // Web-components-heavy apps (VS Code, every Lit/Polymer SPA) put their
@@ -618,6 +663,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const childResults = [];
     const kids = getChildrenEls.call(el);
     const legend = renderedLegend(el, kids);
+    // A custom element with no open shadow root may have a closed one, whose slots the
+    // walker cannot see.
+    const closedHost = !shadow && getTagName.call(el).includes("-");
     for (let i = 0; i < kids.length; i++) {
       const slot = getAssignedSlot.call(kids[i]);
       // A slot in a pruned subtree paints none of its assigned nodes.
@@ -629,7 +677,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           : kids[i] === legend
             ? clipsWithin(el, style, clips, clip)
             : inner;
-      const c = walk(kids[i], depth + 1, kidClips);
+      const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot);
       if (c) childResults.push(c);
     }
     childResults.push(...shadowResults);

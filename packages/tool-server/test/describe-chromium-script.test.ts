@@ -104,6 +104,7 @@ type Opts = {
   // screen CTM [a, b, c, d, e, f].
   nestedSvg?: { viewport: Rect; ctm: number[] };
   topLayer?: string; // the pseudo-class (":modal", ...) that puts it in the top layer
+  painted?: Rect; // where document.elementsFromPoint hits it
   content?: Rect | null; // painted extent of own inline content (Range)
   style?: Record<string, string>;
   attrs?: Record<string, string>;
@@ -139,6 +140,7 @@ function el(opts: Opts = {}): MockElement {
   node.__attrs = opts.attrs ?? {};
   node.__rect = rect;
   node.__topLayer = opts.topLayer;
+  node.__painted = opts.painted;
   if (opts.client) {
     node.__clientLeft = opts.client.left;
     node.__clientTop = opts.client.top;
@@ -278,6 +280,16 @@ function run(
         return null;
       };
       return find(root);
+    },
+    elementsFromPoint: (x: number, y: number) => {
+      const hits: unknown[] = [];
+      const visit = (n: Record<string, unknown>) => {
+        const p = n.__painted as Rect | undefined;
+        if (p && x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h) hits.push(n);
+        for (const k of (n.__children as Record<string, unknown>[]) ?? []) visit(k);
+      };
+      visit(root);
+      return hits;
     },
     createRange: () => {
       let target: Record<string, unknown> | null = null;
@@ -1252,21 +1264,27 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(tree, "unpainted")).toBeNull();
   });
 
-  it("starts an iframe's document from no clip, its rects being in its own viewport", () => {
-    const inner = el({
-      tag: "html",
-      rect: { x: 0, y: 0, w: 285, h: 500 },
-      children: [
-        el({
-          tag: "body",
-          rect: { x: 0, y: 0, w: 285, h: 500 },
-          children: [row("inside", { x: 1, y: 150, w: 100, h: 20 })],
-        }),
-      ],
-    });
-    const iframe = el({ tag: "iframe", rect: { x: 1, y: 1, w: 285, h: 500 }, iframeDoc: inner });
-    const { tree } = run([scroller([iframe], { style: { overflow: "hidden" } })]);
-    expect(pxFrame(tree, "inside")).toEqual({ x: 1, y: 150, w: 100, h: 20 });
+  it("frames content a closed shadow root paints outside its host's clip", () => {
+    // A custom element without an open shadow root: its light child either paints
+    // where a closed root's slot sits (here a fixed popup) or in the host itself.
+    const card = (painted?: Rect) =>
+      run([
+        scroller(
+          [
+            el({
+              tag: "x-pop",
+              rect: { x: 1, y: 1, w: 285, h: 20 },
+              children: [
+                el({ attrs: { id: "popped" }, rect: { x: 400, y: 400, w: 120, h: 40 }, painted }),
+              ],
+            }),
+          ],
+          { style: { overflow: "hidden" } }
+        ),
+      ]).tree;
+    const box = { x: 400, y: 400, w: 120, h: 40 };
+    expect(pxFrame(card(box), "popped")).toEqual(box);
+    expect(pxFrame(card(), "popped").h).toBe(0);
   });
 
   it("clips an absolute box only when the clipper is its containing block or inside it", () => {
@@ -1562,6 +1580,18 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "far")).toEqual({ x: 0, y: 900, w: 100, h: 20 });
   });
 
+  it("leaves an XHTML body's overflow to the viewport, its tagName being lowercase", () => {
+    const body = el({
+      tag: "body",
+      rect: { x: 0, y: 0, w: W, h: 50 },
+      client: { left: 0, top: 0, width: W, height: 50 },
+      style: { overflow: "hidden" },
+    }) as MockElement & Record<string, unknown>;
+    body.tagName = "body";
+    const { tree } = run([row("far", { x: 0, y: 900, w: 100, h: 20 })], body);
+    expect(pxFrame(tree, "far")).toEqual({ x: 0, y: 900, w: 100, h: 20 });
+  });
+
   it("treats the body's overflow as a clip once the root's overflow is set", () => {
     const body = el({
       tag: "body",
@@ -1839,6 +1869,40 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       }),
     ]);
     expect(pxFrame(tree, "wide")).toEqual({ x: 50, y: 5, w: 20, h: 10 });
+  });
+
+  it("moves a nested <svg>'s viewport by its own transform about its origin", () => {
+    const nested = (style: Record<string, string>, r: Rect) =>
+      run([
+        el({
+          svg: true,
+          tag: "svg",
+          rect: { x: 0, y: 0, w: 400, h: 400 },
+          style: { display: "inline", overflow: "hidden" },
+          children: [
+            el({
+              tag: "svg",
+              nestedSvg: { viewport: { x: 100, y: 100, w: 100, h: 60 }, ctm: [1, 0, 0, 1, 0, 0] },
+              rect: r,
+              style: { display: "inline", overflow: "hidden", ...style },
+              children: [row("moved", r)],
+            }),
+          ],
+        }),
+      ]).tree;
+    // translate(150, 50): the viewport spans x 250..350, y 150..210.
+    const shifted = { x: 260, y: 160, w: 80, h: 40 };
+    expect(pxFrame(nested({ transform: "matrix(1, 0, 0, 1, 150, 50)" }, shifted), "moved")).toEqual(
+      shifted
+    );
+    // scale(2) about the viewport's centre: it spans x 50..250, y 70..190.
+    const grown = { x: 60, y: 80, w: 20, h: 10 };
+    expect(
+      pxFrame(
+        nested({ transform: "matrix(2, 0, 0, 2, 0, 0)", transformOrigin: "150px 130px" }, grown),
+        "moved"
+      )
+    ).toEqual(grown);
   });
 
   it("clips everything under an HTML clipper whose padding box is empty", () => {

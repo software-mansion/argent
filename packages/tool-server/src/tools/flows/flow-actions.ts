@@ -834,6 +834,7 @@ async function scrollToVisible(
   within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
+  let prevRoom: number | undefined;
   let warning: string | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
@@ -880,6 +881,13 @@ async function scrollToVisible(
     if (frame && axisFullyInside(frame, axisDirection, cut ?? container?.clipFrame ?? region)) {
       return { frame, ...warnedBy(warning) };
     }
+    // A cut that the last increment left where it was is one its scroller cannot
+    // scroll away (negative overflow): further wheels only chain to the page.
+    const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
+    if (room !== undefined && prevRoom !== undefined && Math.abs(room - prevRoom) < 1e-4) {
+      return { frame: frame!, ...warnedBy(warning) };
+    }
+    prevRoom = room;
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
@@ -910,12 +918,7 @@ async function scrollToVisible(
 
     // A cut target moves no further than its visible start is from the
     // window's, or one taller than half the window would be carried past it.
-    warning ??= await scrollIncrement(
-      env,
-      axisDirection,
-      region,
-      frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined
-    );
+    warning ??= await scrollIncrement(env, axisDirection, region, room);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,

@@ -428,6 +428,38 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("stops once a cut target keeps its place in the clip while the page moves both", async () => {
+    // The list cannot scroll the row's cut away, so each wheel moves the page,
+    // carrying the list window and the row up together.
+    let pageScrolls = 0;
+    currentTree = () => {
+      const dy = -0.05 * pageScrolls;
+      return screen([
+        n({
+          identifier: "row",
+          frame: { x: 0.6, y: 0.75 + dy, width: 0.3, height: 0.05 },
+          clipBounds: { x: 0, y: 0.4 + dy, width: 1, height: 0.4 },
+        }),
+      ]);
+    };
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      pageScrolls++;
+    });
+    await writeFlow("pinned-cut", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "pinned-cut", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+  });
+
   it("anchors a horizontal scroll in the cutting clip along the axis, on the target across it", async () => {
     const swipes = await scrollTo(
       "cut-left",
