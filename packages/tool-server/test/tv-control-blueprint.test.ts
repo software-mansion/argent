@@ -21,8 +21,9 @@ const h = vi.hoisted(() => {
   const unlinked: string[] = [];
   // The in-sim readers `simctl spawn` starts. Killing the spawn process does not
   // kill its reader; only `pkill` does. A reader that idles out unlinks its
-  // socket path, as the real one does on `--timeout`.
-  const readers: Array<{ sock: string; alive: boolean }> = [];
+  // socket path, as the real one does on `--timeout`. `cmd` is the command line
+  // `pkill -f` sees, the ax reader's unless set.
+  const readers: Array<{ sock: string; alive: boolean; cmd?: string }> = [];
   // When set, the host HID daemon spawn fails to ever bind its socket and exits,
   // so the factory's waitForSocket(hidSock) rejects and the error/cleanup path
   // runs. Lets a test exercise the half-up-daemon teardown without a 15s wait.
@@ -36,6 +37,8 @@ const h = vi.hoisted(() => {
     // binding or exiting — the case waitForSocket must surface fast.
     hidSpawnError: false,
     axConnectHook: null as null | (() => void),
+    // Fires once when an ax request is written, before the reader replies.
+    axWriteHook: null as null | (() => void),
   };
 
   function socketArg(args: string[]): string | undefined {
@@ -73,7 +76,7 @@ vi.mock("node:child_process", async () => {
           for (const r of h.readers) {
             if (
               r.alive &&
-              pattern.test(`/fake/tvos-ax-service --socket ${r.sock} --timeout 3600`)
+              pattern.test(r.cmd ?? `/fake/tvos-ax-service --socket ${r.sock} --timeout 3600`)
             ) {
               r.alive = false;
             }
@@ -131,7 +134,14 @@ vi.mock("node:net", async () => {
       destroy: () => void;
     };
     sock.destroy = () => {};
+    // A killed reader closes the connection without replying.
+    const reader = h.readers.findLast((r) => r.sock === path && r.alive);
     sock.write = (line: string) => {
+      if (path.includes("-ax-") && h.state.axWriteHook) {
+        const hook = h.state.axWriteHook;
+        h.state.axWriteHook = null;
+        hook();
+      }
       // `describe` expects a JSON body; navigate/type tolerate an empty reply.
       const reply = line.startsWith("describe")
         ? JSON.stringify({
@@ -141,7 +151,7 @@ vi.mock("node:net", async () => {
           })
         : "";
       setImmediate(() => {
-        sock.emit("data", Buffer.from(reply, "utf8"));
+        if (!reader || reader.alive) sock.emit("data", Buffer.from(reply, "utf8"));
         sock.emit("end");
       });
     };
@@ -203,6 +213,7 @@ beforeEach(() => {
   h.state.failHidSpawn = false;
   h.state.hidSpawnError = false;
   h.state.axConnectHook = null;
+  h.state.axWriteHook = null;
   listIosSimulatorsMock.mockReset();
   cacheSimulatorRuntimeKindMock.mockReset();
   listIosSimulatorsMock.mockResolvedValue([
@@ -277,6 +288,47 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     // one extra respawn happened (init + the single recycle).
     expect(res.bundleId).toBe("com.example.tvapp");
     expect(axSpawnCount()).toBe(2);
+    await instance.dispose();
+  });
+
+  it("retries describe() on the new reader when a recycle reaps the one answering it", async () => {
+    const instance = await buildService();
+
+    // The reap SIGKILLs the reader mid-request, so it closes without a reply.
+    let recycling: Promise<void> | undefined;
+    h.state.axWriteHook = () => {
+      recycling = instance.api.recycleAx();
+    };
+
+    const res = await instance.api.describe();
+    await recycling;
+
+    expect(res.bundleId).toBe("com.example.tvapp");
+    expect(res.focusable).toHaveLength(2);
+    expect(axSpawnCount()).toBe(2);
+    await instance.dispose();
+  });
+
+  it("reaps daemons a dead tool-server with the same pid left on its socket paths", async () => {
+    // A SIGKILLed tool-server never disposes, so its daemons keep these paths
+    // until their idle exit unlinks them.
+    const axPath = `/tmp/argent-tv-ax-DDDDDDDD-${process.pid}.sock`;
+    const hidPath = `/tmp/argent-tv-hid-DDDDDDDD-${process.pid}.sock`;
+    const staleAx = { sock: axPath, alive: true };
+    const staleHid = {
+      sock: hidPath,
+      alive: true,
+      cmd: `/fake/tvos-hid-daemon --udid ${UDID} --socket ${hidPath} --timeout 3600`,
+    };
+    h.readers.push(staleAx, staleHid);
+    h.liveSockets.add(axPath);
+    h.liveSockets.add(hidPath);
+
+    const instance = await buildService();
+
+    expect(staleAx.alive).toBe(false);
+    expect(staleHid.alive).toBe(false);
+    expect(axSpawnCount()).toBe(1);
     await instance.dispose();
   });
 

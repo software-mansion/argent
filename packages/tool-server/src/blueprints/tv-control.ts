@@ -96,7 +96,10 @@ export function typeTimeoutMs(textLength: number): number {
 }
 
 async function sendJson(socketPath: string, command: string, timeoutMs?: number): Promise<unknown> {
-  const raw = (await sendLine(socketPath, command, timeoutMs)).trim();
+  return parseReply((await sendLine(socketPath, command, timeoutMs)).trim(), command);
+}
+
+function parseReply(raw: string, command: string): unknown {
   if (!raw) return {};
   try {
     return JSON.parse(raw);
@@ -131,12 +134,12 @@ function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
   return proc;
 }
 
-// Kills every in-sim reader bound to `socketPath`. SIGKILLing `simctl spawn`
-// does not reach its reader, and a reader left running unlinks the path when
-// its idle `--timeout` fires (or on SIGTERM), even after a newer reader has
-// bound it. SIGKILL, so the reader never runs that unlink.
-function reapAxReaders(socketPath: string): Promise<void> {
-  const pattern = `tvos-ax-service --socket ${socketPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
+// Kills every daemon (in-sim reader or host HID daemon) bound to `socketPath`.
+// SIGKILLing `simctl spawn` does not reach its reader, and a daemon left
+// running unlinks the path when its idle `--timeout` fires (or on SIGTERM),
+// even after a newer daemon has bound it. SIGKILL, so it never runs that unlink.
+function reapDaemons(socketPath: string): Promise<void> {
+  const pattern = `tvos-.* --socket ${socketPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
   // pkill exits 1 when nothing matched, the common case.
   return new Promise((resolve) => execFile("pkill", ["-KILL", "-f", pattern], () => resolve()));
 }
@@ -264,6 +267,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     let disposed = false;
 
     await ensureAutomationEnabled(udid);
+    // Daemons of a dead tool-server that had this pid would read as ready, then
+    // unlink our sockets when they idle out.
+    await Promise.all([reapDaemons(axSock), reapDaemons(hidSock)]);
 
     let axProc = spawnAxDaemon(udid, axSock);
     const hidProc = spawnHidDaemon(udid, hidSock);
@@ -314,11 +320,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       axProc.removeListener("error", onAxError);
       hidProc.removeListener("exit", onHidExit);
       hidProc.removeListener("error", onHidError);
-      // The ax reader is reaped by `reapAxReaders`. The hid daemon is a direct
+      // The ax reader is reaped by `reapDaemons`. The hid daemon is a direct
       // host process, so SIGTERM reaps it.
       if (!axProc.killed) axProc.kill("SIGKILL");
       if (!hidProc.killed) hidProc.kill("SIGTERM");
-      await reapAxReaders(axSock);
+      await reapDaemons(axSock);
       // Drop any socket a daemon already bound, so a stale file can't make the
       // next factory's accept-probe read as "ready" against a dead socket.
       for (const p of [axSock, hidSock]) {
@@ -346,7 +352,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       } catch {
         /* no stale socket to remove */
       }
-      await reapAxReaders(axSock);
+      await reapDaemons(axSock);
       axProc = spawnAxDaemon(udid, axSock);
       axProc.on("exit", onAxExit);
       axProc.on("error", onAxError);
@@ -421,7 +427,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       for (let attempt = 0; ; attempt++) {
         await ensureAxAlive();
         try {
-          return await sendJson(axSock, command, timeoutMs);
+          const raw = (await sendLine(axSock, command, timeoutMs)).trim();
+          // The reader answers every command, so no reply means it died
+          // mid-request, as a concurrent recycle's reap does.
+          if (!raw && axRespawn) throw new Error(`tvOS AX reader was reaped during "${command}"`);
+          return parseReply(raw, command);
         } catch (err) {
           // `axRespawn` is set synchronously (kill + unlink precede
           // spawnFreshAx's first await), so it is non-null here exactly when a
@@ -478,11 +488,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
             /* respawn failed — nothing extra to kill beyond the current axProc */
           }
         }
-        // The ax reader is reaped by `reapAxReaders`. The hid daemon is a
+        // The ax reader is reaped by `reapDaemons`. The hid daemon is a
         // direct host process, so SIGTERM reaps it.
         if (!axProc.killed) axProc.kill("SIGKILL");
         if (!hidProc.killed) hidProc.kill("SIGTERM");
-        await reapAxReaders(axSock);
+        await reapDaemons(axSock);
         for (const p of [axSock, hidSock]) {
           try {
             fs.unlinkSync(p);
