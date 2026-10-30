@@ -85,7 +85,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    launching, `native-profiler-start { malloc_stack_logging: true }` is **rejected
    up front** on those versions (before the app is touched) rather than silently
    capturing nothing — re-run without the flag (CPU and hang data only: that capture has no
-   leak data) or set `ARGENT_IOS_CAPTURE=device` to force it on a known-good
+   leak data, and the reports say so) or set `ARGENT_IOS_CAPTURE=device` to force it on a known-good
    host. The non-malloc path already routes around this via the capture-strategy
    selector (`--all-processes` fallback), but that fallback cannot `--launch`, so
    it cannot substitute for the malloc cold start. Forcing

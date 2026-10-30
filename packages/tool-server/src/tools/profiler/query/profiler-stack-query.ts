@@ -18,6 +18,7 @@ import {
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
+import { LEAKS_NOT_RECORDED } from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const stackQueryMode = {
@@ -244,8 +245,12 @@ export function renderLeakStacksIos(
   memoryLeaks: MemoryLeak[],
   objectTypeFilter: string | undefined,
   topN: number,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  leaksRecorded?: boolean
 ): string {
+  // Empty because nothing was recorded, not because nothing leaked.
+  if (leaksRecorded === false) return `_${LEAKS_NOT_RECORDED}_`;
+
   // Read from the FULL capture, never the object_type-filtered slice: one
   // attributed group proves the process ran under malloc stack logging however
   // it was launched, so an attach-mode flag must not claim "no malloc-stack
@@ -353,7 +358,8 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         data.memoryLeaks,
         params.object_type,
         params.top_n,
-        data.mallocStackLogging
+        data.mallocStackLogging,
+        data.leaksRecorded
       );
     default:
       throw new FailureError(`Unknown mode: ${params.mode}`, {

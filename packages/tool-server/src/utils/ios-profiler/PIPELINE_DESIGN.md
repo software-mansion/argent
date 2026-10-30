@@ -87,6 +87,8 @@ Same rationale as the React profiler pipeline: LLM context efficiency. JSON fiel
 
 If zero bottlenecks survive filtering, the report says "All clear" rather than manufacturing findings. Prevents false alarms on well-performing apps.
 
+A trace with no leaks export (the `all-processes` fallback records the Time Profiler template, which has no Leaks instrument) is not all clear for memory: the report, `leak_stacks`, the combined report and `profiler-load` say that no leak data was recorded (`LEAKS_NOT_RECORDED` in `render.ts`). A template with the Leaks instrument exports an empty table when nothing leaked, so a missing export always means the leaks were not checked.
+
 ---
 
 ## Stage Summary

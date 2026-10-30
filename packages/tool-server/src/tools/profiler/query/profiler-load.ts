@@ -397,6 +397,8 @@ async function loadNativeSession(
     uiHangs,
     cpuHotspots,
     memoryLeaks,
+    // Stop writes no raw_leaks.xml when the trace had no Leaks table.
+    leaksRecorded: files.leaks != null,
     mallocStackLogging: null,
     wallClockStartMs: null,
   };
@@ -416,7 +418,7 @@ async function loadNativeSession(
     `- CPU samples: ${cpuSamples.length}`,
     `- UI hangs: ${uiHangs.length}`,
     `- CPU hotspots: ${cpuHotspots.length}`,
-    `- Memory leaks: ${memoryLeaks.length}`,
+    `- Memory leaks: ${files.leaks ? memoryLeaks.length : "not recorded"}`,
     "",
     "Query tools (`profiler-stack-query`) are now ready to use against this data.",
   ];

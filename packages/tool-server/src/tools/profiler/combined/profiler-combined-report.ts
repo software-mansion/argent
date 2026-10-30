@@ -121,6 +121,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 
     let uiHangs: UiHang[];
     let memoryLeaks: MemoryLeak[];
+    // Android has no leak capture; on iOS the trace may lack a Leaks table.
+    let leaksRecorded: boolean;
     // iOS froze uiHangs + memoryLeaks into parsedData at analyze; Android
     // re-queries the .pftrace on demand here.
     if (nativeApi.platform === "android") {
@@ -142,6 +144,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       const data = await loadAndroidCombinedData(nativeApi.traceFile, nativeApi.appProcess ?? "");
       uiHangs = data.uiHangs;
       memoryLeaks = [];
+      leaksRecorded = false;
     } else {
       if (!nativeApi.parsedData) {
         throw new FailureError("No native profiler data. Run native-profiler-analyze first.", {
@@ -153,6 +156,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       }
       uiHangs = nativeApi.parsedData.uiHangs;
       memoryLeaks = nativeApi.parsedData.memoryLeaks;
+      leaksRecorded = nativeApi.parsedData.leaksRecorded;
     }
 
     // Cache lookup only — this report needs no live CDP connection.
@@ -280,7 +284,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       "React Profiler + Native Profiler — Cross-Tool Correlation",
       "",
       `**React Profiler:** ${nonMarginCommits.length} hot commits  `,
-      `**Native Profiler:** ${uiHangs.length} hangs, ${memoryLeaks.length} leaks`,
+      `**Native Profiler:** ${uiHangs.length} hangs, ` +
+        (leaksRecorded ? `${memoryLeaks.length} leaks` : `leaks not recorded`),
       "",
       `**Clock offset:** React started ${((reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
       "",
