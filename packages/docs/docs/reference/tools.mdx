@@ -69,7 +69,7 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `screenshot`                | Capture the device screen                                                        |
 | `describe`                  | Get the accessibility / DOM element tree for the current screen                  |
 | `screenshot-diff`           | Compare two PNG screenshots and return a visual-diff summary                     |
-| `await-screen-idle`         | Block until the screen has rendered content and stopped changing                 |
+| `await-screen-idle`         | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`          | Block until a UI element reaches an expected state, instead of polling in a loop |
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
