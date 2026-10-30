@@ -16,7 +16,7 @@ import { assertExternalCapability } from "../utils/external-devices";
 import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
 
 // Moved to ../utils/ax-prefs; re-exported so existing import paths keep working.
-export { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../utils/ax-prefs";
+export { ensureAutomationEnabled } from "../utils/ax-prefs";
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
