@@ -5,6 +5,8 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
@@ -354,6 +356,13 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBe(true);
     expect(textOf(result)).toBe("nope");
     expect(requests.filter((r) => r.url === "/tools/reject")).toHaveLength(1);
+    const logged = readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .split("\n")
+      .filter((l) => l.includes('"event":"tool_result"') && l.includes('"name":"reject"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ isError: true });
+    expect(logged[0]).not.toHaveProperty("cancelled");
   });
 
   it("ends the tool-server request of a call the client cancels, and answers the next call", async () => {
@@ -608,33 +617,57 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(text).toContain(AUTO_DESCRIBE_HEADER);
   });
 
+  it("keeps the settle and capture budgets through a garbage collection", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "300");
+    idleHangs = true;
+    describeHangs = true;
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const collect = setInterval(gc, 20);
+    const started = Date.now();
+    try {
+      const result = await tap();
+
+      // 300 + CAPTURE_MS for the settle wait, CAPTURE_MS for the captures.
+      expect(Date.now() - started).toBeLessThan(4_000);
+      expect(textOf(result)).toContain("--- Screen after action ---");
+      expect(textOf(result)).not.toContain(AUTO_DESCRIBE_HEADER);
+    } finally {
+      clearInterval(collect);
+    }
+  });
+
   const cancellableTap = (signal: AbortSignal) =>
     client.callTool({ name: "gesture-tap", arguments: { udid: "u", x: 0.5, y: 0.5 } }, undefined, {
       signal,
     });
 
-  it("drops a screenshot download that outlasts the capture budget", async () => {
-    shotAsArtifact = true;
-    stub.hanging.add("/artifacts/shot-1");
-    const started = Date.now();
+  it.each(["/artifacts/shot-1", "/shot.png"])(
+    "drops a screenshot download %s that outlasts the capture budget",
+    async (route) => {
+      shotAsArtifact = route !== "/shot.png";
+      stub.hanging.add(route);
+      const started = Date.now();
 
-    const result = await tap();
+      const result = await tap();
 
-    // The stalled download answers after 3 s; CAPTURE_MS ends it first.
-    expect(Date.now() - started).toBeLessThan(2_500);
-    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/artifacts/shot-1"]));
-    const text = textOf(result);
-    expect(text).not.toContain("--- Screen after action ---");
-    expect(text).toContain(AUTO_DESCRIBE_HEADER);
-  });
+      // The stalled download answers after 3 s; CAPTURE_MS ends it first.
+      expect(Date.now() - started).toBeLessThan(2_500);
+      await vi.waitFor(() => expect(stub.hungUp).toEqual([route]));
+      const text = textOf(result);
+      expect(text).not.toContain("--- Screen after action ---");
+      expect(text).toContain(AUTO_DESCRIBE_HEADER);
+    }
+  );
 
   it.each([
     "/tools/await-screen-idle",
     "/tools/screenshot",
     "/artifacts/shot-1",
+    "/shot.png",
     "/tools/describe",
   ])("ends the capture request %s of an interaction the client cancels", async (route) => {
-    shotAsArtifact = true;
+    shotAsArtifact = route !== "/shot.png";
     stub.hanging.add(route);
     const controller = new AbortController();
 
@@ -666,6 +699,38 @@ describe("startMcpServer screen capture after an interaction", () => {
       )
     );
     expect(toolCalls()).not.toContain("/tools/screenshot");
+  });
+
+  it("sleeps out the settle budget when the settle wait fails", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "600");
+    idleStatus = 400;
+    const started = Date.now();
+
+    await tap();
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(550);
+  });
+
+  it("ends the fallback sleep at a cancel", async () => {
+    vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "60000");
+    idleStatus = 400;
+    const controller = new AbortController();
+
+    const pending = cancellableTap(controller.signal);
+    await vi.waitFor(() =>
+      expect(toolCalls().filter((url) => url === "/tools/await-screen-idle")).toHaveLength(1)
+    );
+    // Into the sleep that follows the failed settle wait.
+    await new Promise((r) => setTimeout(r, 100));
+    controller.abort("cancelled during the sleep");
+
+    await expect(pending).rejects.toThrow("cancelled during the sleep");
+    // The handler's last step logs the describe it skipped.
+    await vi.waitFor(() =>
+      expect(readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")).toContain(
+        '"error":"cancelled during the sleep"'
+      )
+    );
   });
 });
 
