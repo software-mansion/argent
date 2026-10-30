@@ -185,6 +185,7 @@ Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.
 Set resolveSourceMaps to false to skip symbolication and get raw bundled locations instead.
 Set includeSkipped=true to see filtered items annotated with skip reasons.
 Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
+  readOnly: true,
   zodSchema,
   // RN-only: needs React Native's internal getInspectorDataForViewAtPoint and
   // Metro's /symbolicate; the Chromium session has no source resolver.

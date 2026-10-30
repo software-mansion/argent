@@ -27,6 +27,7 @@ export {
 export {
   createToolsClient,
   errorBodyMessage,
+  secretsTransportRefusal,
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,

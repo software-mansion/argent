@@ -102,7 +102,7 @@ export function createRunSequenceTool(
         `Failed to run interaction sequence: ${failureSignal.error_code}`,
     },
     description: `Execute multiple device interaction steps in a single call (iOS simulator or physical device, Android emulator, Apple TV / Android TV, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app).
-On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, button, keyboard, and await-ui-element steps run; others fail at their own gate.
+On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, and await-ui-element steps run; others fail at their own gate.
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
@@ -124,7 +124,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android<flag:harmonyos>/harmony; harmony: home/back/power only</flag:harmonyos>]
   keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only<flag:harmonyos>; harmony: enter/return, backspace/delete, space, arrow-left, arrow-right only</flag:harmonyos>)  [ios/android/chromium/vega/tv<flag:harmonyos>/harmony</flag:harmonyos>]
-                  text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file; credentials never enter agent context
+                  text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file (over a forward-secrets link, the client's first); credentials never enter agent context
   paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP; keyboard otherwise)   [ios sim/android emu]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]

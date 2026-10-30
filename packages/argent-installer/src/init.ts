@@ -162,7 +162,7 @@ export async function init(args: string[]): Promise<void> {
     tel.editorsConfiguredCount = writtenAdapters.length;
 
     track("installation:editors_select", {
-      editors: writtenAdapters.map((a) => sanitizeEditorName(a.name)),
+      editors: writtenAdapters.map((a) => a.telemetryName ?? sanitizeEditorName(a.name)),
       detected_editor_count: detected.length,
       scope,
       install_mode: tel.installMode,
