@@ -13,6 +13,7 @@ import {
   parse as parseJsonc,
   type JSONPath,
 } from "jsonc-parser";
+import { canonicalPath } from "@argent/configuration-core";
 import { resolvePackageRoot } from "./package-root.js";
 
 // Re-exported so existing `./utils.js` import sites keep resolving after these
@@ -154,13 +155,15 @@ const PROJECT_ROOT_MARKERS = [
 // The walk never climbs into the home directory: `~/.claude`, `~/.cursor`,
 // `~/.codex`, … are the editors' global config dirs, not project markers, so
 // matching them would resolve every markerless project under home to home.
+// Home is matched by canonical path: process.cwd() is physical, while $HOME may
+// run through a symlink (Fedora Atomic's /home -> /var/home).
 export function resolveProjectRoot(startDir: string, homeDir: string = os.homedir()): string {
   const initialDir = path.resolve(startDir);
-  const home = path.resolve(homeDir);
+  const home = canonicalPath(homeDir);
   let currentDir = initialDir;
 
   while (true) {
-    if (currentDir === home && currentDir !== initialDir) {
+    if (currentDir !== initialDir && canonicalPath(currentDir) === home) {
       return initialDir;
     }
 

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
+import { canonicalPath } from "@argent/configuration-core";
 import {
   MCP_SERVER_KEY,
   MCP_BINARY_NAME,
@@ -704,19 +705,11 @@ const cursorAdapter: McpConfigAdapter = {
 
 // MARK: Claude
 
-// ~/.claude.json keys its per-project entries by absolute path, so match
-// loosely: realpathSync.native canonicalizes symlinks and, on case-insensitive
-// filesystems, on-disk case.
+// ~/.claude.json keys its per-project entries by absolute path, so match them
+// by canonical path.
 function claudeProjectKeysForRoot(projects: Record<string, unknown>, root: string): string[] {
-  const canonical = (value: string): string => {
-    try {
-      return fs.realpathSync.native(value);
-    } catch {
-      return path.resolve(value);
-    }
-  };
-  const target = canonical(root);
-  return Object.keys(projects).filter((key) => key === root || canonical(key) === target);
+  const target = canonicalPath(root);
+  return Object.keys(projects).filter((key) => key === root || canonicalPath(key) === target);
 }
 
 // A recorded "reject" for the argent .mcp.json server: a rejection made before
@@ -1714,9 +1707,11 @@ function formatCopyDestination(
 }
 
 function formatManagedPathLabel(targetPath: string, root: string): string {
-  const home = homedir();
-  if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
-    return `~${targetPath.slice(home.length)}`;
+  // targetPath may be physical (from process.cwd() or realpath) while $HOME is not.
+  for (const home of [path.resolve(homedir()), canonicalPath(homedir())]) {
+    if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
+      return `~${targetPath.slice(home.length)}`;
+    }
   }
 
   const relative = path.relative(root, targetPath);
