@@ -1667,6 +1667,14 @@ describe("argent e2e run", () => {
     expect(errs.join("\n")).toContain("--json-stream");
   });
 
+  it("keeps help off stdout for --json --help", async () => {
+    await flow(["run", checkoutPath, "--json", "--help"], opts);
+
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+    expect(errs.join("\n")).toContain("Usage: argent e2e");
+  });
+
   it("emits a structured error for a pre-flight refusal in streaming mode", async () => {
     const missing = path.join(path.dirname(checkoutPath), "missing.yaml");
     await expect(flow(["run", missing, "--json-stream"], opts)).rejects.toThrow("process.exit:2");
