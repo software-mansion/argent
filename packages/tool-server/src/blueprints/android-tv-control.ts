@@ -1,6 +1,7 @@
 import {
   TypedEventEmitter,
   type DeviceInfo,
+  type Registry,
   type ServiceBlueprint,
   type ServiceInstance,
   type ServiceEvents,
@@ -12,28 +13,49 @@ import {
   parseUiAutomatorXml,
   attrIsTrue,
   labelOf,
+  type ParsedXmlNode,
 } from "../tools/describe/platforms/android/uiautomator-parser";
 import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
+import { androidDevtoolsRef, type AndroidDevtoolsApi } from "./android-devtools";
 
 export const ANDROID_TV_CONTROL_NAMESPACE = "AndroidTvControl";
 
 // DeviceInfo-via-options pattern, matching the other Android/Apple blueprints.
 type AndroidTvControlFactoryOptions = Record<string, unknown> & {
   device: DeviceInfo;
+  /** Reads the hierarchy through the android-devtools helper; see `readHierarchy`. */
+  readHelperHierarchy?: () => Promise<string>;
 };
 
 /**
  * `ServiceRef` for the Android TV control service. The leanback check happens in
- * the factory, not here (mirroring `tvControlRef` on the tvOS side).
+ * the factory, not here (mirroring `tvControlRef` on the tvOS side). With a
+ * registry, describe reads through the android-devtools helper first.
  */
-export function androidTvControlRef(device: DeviceInfo): {
+export function androidTvControlRef(
+  device: DeviceInfo,
+  registry?: Registry
+): {
   urn: string;
   options: AndroidTvControlFactoryOptions;
 } {
   return {
     urn: `${ANDROID_TV_CONTROL_NAMESPACE}:${device.id}`,
-    options: { device },
+    options: registry
+      ? { device, readHelperHierarchy: () => readHelperHierarchy(registry, device) }
+      : { device },
   };
+}
+
+// Resolved per read, not held: the registry respawns a helper that exited or
+// was disposed, and a helper that can't start fails just this read.
+async function readHelperHierarchy(registry: Registry, device: DeviceInfo): Promise<string> {
+  const ref = androidDevtoolsRef(device);
+  const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+  // clearCache: describe is re-read right after each tv-remote press, and a
+  // cached read can serve the focus from before it.
+  const { xml } = await devtools.getHierarchy({ clearCache: true });
+  return xml;
 }
 
 // android.view.KeyEvent keycodes for the TV-remote vocabulary (`adb input keyevent`).
@@ -76,6 +98,31 @@ function valueOf(attrs: Record<string, string>): string {
   return cd && text && cd !== text ? text : "";
 }
 
+// AccessibilityWindowInfo.TYPE_INPUT_METHOD.
+const WINDOW_TYPE_INPUT_METHOD = "2";
+
+function hasFocusedNode(node: ParsedXmlNode): boolean {
+  return attrIsTrue(node.attrs, "focused") || node.children.some(hasFocusedNode);
+}
+
+/**
+ * The window the remote drives. The helper reads every interactive window, its
+ * roots tagged `window-type` and topmost first, and the window under a dialog
+ * keeps its view focus, so the topmost window holding focus wins. That is the
+ * on-screen keyboard while it is up: the D-pad moves between its keys, so they
+ * are the focusable set. A tree with no tagged roots (a dump, or the helper's
+ * active-window fallback) is already one window.
+ */
+function activeWindow(root: ParsedXmlNode): ParsedXmlNode {
+  const windows = root.children.filter((c) => c.attrs["window-type"] !== undefined);
+  if (windows.length === 0) return root;
+  return (
+    windows.find(hasFocusedNode) ??
+    windows.find((w) => w.attrs["window-type"] !== WINDOW_TYPE_INPUT_METHOD) ??
+    windows[0]!
+  );
+}
+
 /**
  * Collect the focused node and every focusable node. `parseUiAutomatorDump`
  * drops the `focused` attribute, so the focus walk needs its own pass.
@@ -86,9 +133,12 @@ function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNod
   let focused: TvNode | null = null;
   if (!root) return { focused, focusable };
 
-  const stack = [root];
+  const stack = [activeWindow(root)];
   while (stack.length > 0) {
     const node = stack.pop()!;
+    // `uiautomator dump` leaves out a node the user can't see and everything
+    // under it; the helper keeps it and marks it, so skip it the same way.
+    if (node.attrs["visible-to-user"] === "false") continue;
     // Push children in reverse so they pop back in document order.
     for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
 
@@ -150,7 +200,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
           `Use androidTvControlRef(device) when registering the service ref.`
       );
     }
-    const { device } = opts;
+    const { device, readHelperHierarchy } = opts;
     if (typeof device.id !== "string" || device.id.length === 0) {
       throw new Error(
         `${ANDROID_TV_CONTROL_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
@@ -194,16 +244,46 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
         )
       ).toString("utf-8");
       if (!raw.includes("<hierarchy")) {
+        const output = raw.trim().slice(0, 200);
+        // `uiautomator` can't register its UiAutomation connection while another
+        // client holds one, and the system kills it.
+        if (/\bKilled\b/.test(output)) {
+          throw new Error(
+            `uiautomator could not capture the screen: ${output}. Another UiAutomation client ` +
+              `(the argent devtools helper, or a test runner such as Espresso or Appium) holds ` +
+              `the accessibility connection. Stop it, for the helper with ` +
+              `\`adb shell am force-stop com.argent.androiddevtools\`, and try again.`
+          );
+        }
         throw new Error(
-          `uiautomator could not capture the screen: ${raw.trim().slice(0, 200)}. ` +
+          `uiautomator could not capture the screen: ${output}. ` +
             `The device may be locked or showing a secure overlay — take a screenshot to confirm.`
         );
       }
       return raw;
     }
 
+    // The helper first, `uiautomator dump` on any error. They can't both run:
+    // the helper holds the device's UiAutomation connection, and a dump taken
+    // while it does is killed (#1316). The helper's XML is the same format,
+    // with the focusable / focused / selected attributes collectTvNodes reads.
+    async function readHierarchy(): Promise<string> {
+      if (readHelperHierarchy) {
+        try {
+          return await readHelperHierarchy();
+        } catch (err) {
+          console.debug(
+            `[android-tv-control] devtools helper failed, falling back to uiautomator dump: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        }
+      }
+      return dumpHierarchy();
+    }
+
     async function read(): Promise<{ focused: TvNode | null; focusable: TvNode[] }> {
-      return collectTvNodes(await dumpHierarchy());
+      return collectTvNodes(await readHierarchy());
     }
 
     async function pressKey(direction: TvDirection): Promise<void> {

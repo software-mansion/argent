@@ -37,9 +37,9 @@ If argent is ABSENT, treat it as an expected state, not an error to retry. Do no
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from screenshot pixels</important>
-Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree: the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
+Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch-app`, `open-url`, `run-sequence`, `await-ui-element`, …) return the screen **after** the action: a screenshot AND the accessibility element tree (`--- Elements after action (describe) ---`, the same format `describe` prints, with normalized 0–1 frames). Take tap coordinates from that tree: the centre of the element's frame (`x + width/2`, `y + height/2`). You do not need a separate discovery call before a tap when the last result already lists the target.
 
-Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load, or when the last tree did not list your target. Preferred tools are, in order:
+Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load without `await-ui-element`, or when the last tree did not list your target. Preferred tools are, in order:
 
 - `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
 - `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
@@ -78,11 +78,13 @@ Decision order:
 - Always open apps with `launch-app` or `open-url`; never tap home screen icons.
 - If a task can require a saved e2e test, choose `argent-create-e2e` or `argent-qa-e2e` before the first launch or in-app action. Start the recorder before walking the path; recording is not retroactive.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
-- When the session ends or the user says they are done: call `stop-all-simulator-servers` with `devices: [...]`
-  naming the devices this session actually used. One tool-server is shared by every other agent using this
-  argent install, so an unscoped call tears down their devices too; reserve that form for a deliberate
-  machine-wide cleanup.
-  If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
+- Do not stop simulator servers when a task finishes: the next task reuses them, and stopping them makes its
+  first device action start cold again. Call `stop-all-simulator-servers` when the user asks to clean up or
+  ends the session, or when a skill tells you to recycle a device's services (e.g. before a QA proof pass).
+  Always pass `devices: [...]` naming the devices this session used. One tool-server is shared by every other
+  agent using this argent install, so an unscoped call tears down their devices too; reserve that form for a
+  deliberate machine-wide cleanup.
+  Never stop a Metro the user started unless they ask (`stop-metro`, specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc. Not on a physical iPhone.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Use the `await-ui-element` tool to block until the UI settles (e.g. wait for an element to become `visible`/`hidden`, or to contain expected `text`) instead of polling.
   </general_rules>

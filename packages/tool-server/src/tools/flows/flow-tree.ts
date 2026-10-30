@@ -29,18 +29,21 @@ export async function fetchFlowTree(
   device: DeviceInfo,
   target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
-  return FLOW_TREE_SOURCES[device.platform](registry, device, target);
+  const source = FLOW_TREE_SOURCES[device.platform];
+  if (!source) {
+    throw new Error(`ui-tree matching is not supported on platform "${device.platform}"`);
+  }
+  return source(registry, device, target);
 }
 
-/**
- * The source {@link fetchFlowTree} reads on each platform. Total by type: a
- * `Platform` added without a source here is a compile error, not a read that
- * quietly degrades at runtime.
- */
-const FLOW_TREE_SOURCES: Record<
-  Platform,
-  (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
-> = {
+type FlowTreeSource = (
+  registry: Registry,
+  device: DeviceInfo,
+  target?: FlowTreeTarget
+) => Promise<DescribeTreeData>;
+
+/** Per-platform source; `null` where flows have none. */
+const FLOW_TREE_SOURCES: Record<Platform, FlowTreeSource | null> = {
   // Simulator iOS uses the injected hierarchy and an optional target.
   // Physical devices use the XCUITest runner tree.
   "ios": (registry, device, target) =>
@@ -56,4 +59,11 @@ const FLOW_TREE_SOURCES: Record<
   "android": (registry, device) => queryAndroidFullHierarchy(registry, device),
   "chromium": (registry, device) => queryChromiumTree(registry, device),
   "vega": (_registry, device) => queryVegaTree(device),
+  // Coordinate steps and `snapshot` run; selector steps error.
+  "harmony": null,
 };
+
+/** Absent, not down: every read fails by construction. */
+export function supportsFlowTree(platform: Platform): boolean {
+  return FLOW_TREE_SOURCES[platform] !== null;
+}

@@ -10,8 +10,11 @@ Argent hosts its automation server inside one.
 
 ```
 ArgentRunner/
-  ArgentRunner.xcodeproj      Two targets: ArgentRunner (placeholder host app)
-                              and ArgentRunnerUITests (the runner itself).
+  ArgentRunner.xcodeproj      Three targets: ArgentRunner (placeholder host app),
+                              ArgentRunnerUITests (the runner itself) and
+                              BrandRunner (runs brand-runner.sh).
+  brand-runner.sh             Names the runner app "Argent Runner", gives it
+                              the icon and re-seals its signature.
   ArgentRunner/               Host app: a single black "Argent Runner" screen.
   ArgentRunnerUITests/
     ArgentRunnerSession.swift            Entry test + dispatch, coalescing, busy gate
@@ -27,6 +30,7 @@ ArgentRunner/
     CommandJournal.swift                 send-once bookkeeping for lost replies
     MainThreadGate.swift                 watchdog + busy/wedged reporting
     ArgentExceptionGuard.{h,m}           @try/@catch shim for XCTest NSExceptions
+    Assets.xcassets                      runner app icon
 ```
 
 The TypeScript side (build orchestration, transport, command client) lives in

@@ -20,6 +20,18 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// The HarmonyOS deps ship inside DevEco Studio and probe through their own resolvers.
+const resolveHdcMock = vi.fn();
+const resolveHarmonyEmulatorMock = vi.fn();
+vi.mock("../src/utils/harmony-hdc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-hdc")>()),
+  resolveHdc: () => resolveHdcMock(),
+}));
+vi.mock("../src/utils/harmony-cli", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-cli")>()),
+  resolveHarmonyEmulator: () => resolveHarmonyEmulatorMock(),
+}));
+
 import {
   DependencyMissingError,
   __resetDepCacheForTests,
@@ -47,6 +59,8 @@ describe("check-deps", () => {
     __resetDepCacheForTests();
     commandOnPathMock.mockReset();
     resolveAndroidBinaryMock.mockReset();
+    resolveHdcMock.mockReset().mockResolvedValue("/deveco/hdc");
+    resolveHarmonyEmulatorMock.mockReset().mockResolvedValue("/deveco/Emulator");
   });
 
   it("returns without throwing when all deps are on PATH", async () => {
@@ -93,6 +107,23 @@ describe("check-deps", () => {
   it("ensureDep is the single-dep form of ensureDeps", async () => {
     stubProbe(["xcrun"]);
     await expect(ensureDep("xcrun")).rejects.toBeInstanceOf(DependencyMissingError);
+  });
+
+  it("probes the HarmonyOS deps through the DevEco resolvers, not PATH", async () => {
+    stubProbe(["hdc", "Emulator", "harmony-emulator"]);
+
+    await expect(ensureDeps(["hdc", "harmony-emulator"])).resolves.toBeUndefined();
+    expect(commandOnPathMock).not.toHaveBeenCalledWith("hdc");
+    expect(commandOnPathMock).not.toHaveBeenCalledWith("harmony-emulator");
+  });
+
+  it("reports each HarmonyOS dep as missing when its own resolver finds nothing", async () => {
+    stubProbe([]);
+    resolveHdcMock.mockResolvedValue(null);
+    resolveHarmonyEmulatorMock.mockResolvedValue(null);
+
+    await expect(ensureDep("hdc")).rejects.toThrow(/DEVECO_STUDIO_HOME/);
+    await expect(ensureDep("harmony-emulator")).rejects.toBeInstanceOf(DependencyMissingError);
   });
 });
 

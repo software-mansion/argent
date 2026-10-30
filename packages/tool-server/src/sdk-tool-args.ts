@@ -6,6 +6,7 @@
 import { writeFileSync } from "node:fs";
 import { zodObjectToJsonSchema } from "@argent/registry";
 import { createRegistry, listToolDefinitions } from "./utils/setup-registry";
+import { renderFlagGated } from "./utils/flag-gated-text";
 
 type Schema = Record<string, any>;
 
@@ -64,7 +65,8 @@ export function renderSdkToolArgs(): string {
   const entries = definitions
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([id, { inputSchema, zodSchema }]) => {
-      const schema = inputSchema ?? zodObjectToJsonSchema(zodSchema!);
+      // Rendered as if every flag were on: the SDK is typed once, at build time.
+      const schema = renderFlagGated(inputSchema ?? zodObjectToJsonSchema(zodSchema!), () => true);
       return `  ${key(id)}: ${toType(schema, "  ")};`;
     });
   // A former id stays callable, so it keeps its type: the args of the tool it names.

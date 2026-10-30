@@ -8,7 +8,10 @@ export interface OpenUrlParams {
 export interface OpenUrlResult {
   opened: boolean;
   url: string;
-  /** Deep-link caveat: set only for http(s) URLs on iOS/Android, never for custom schemes or Chromium. */
+  /**
+   * Caveat: set for http(s) URLs on iOS/Android and for every URL on HarmonyOS;
+   * never on Chromium.
+   */
   note?: string;
 }
 

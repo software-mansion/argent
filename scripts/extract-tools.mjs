@@ -9,6 +9,9 @@
  * the same tree with the real TypeScript parser and requires an exact match, so
  * a lexing gap on a shape that reaches the tree fails CI.
  *
+ * Flag spans (`<flag:NAME>...</flag:NAME>`) are emitted as if every flag were
+ * on, so the scan reads the full text a user with the flag on is served.
+ *
  * Usage:
  *   node scripts/extract-tools.mjs > tools.json
  */
@@ -27,6 +30,21 @@ const toolsRoot = join(__dir, "..", "packages", "tool-server", "src", "tools");
 // handles the rest (\xNN, \uNNNN, \u{...}, line continuations, and identity
 // escapes, where the backslash simply drops).
 const UNESCAPE_MAP = { n: "\n", r: "\r", t: "\t", v: "\v", b: "\b", f: "\f", 0: "\0" };
+
+// Same span syntax as packages/tool-server/src/utils/flag-gated-text.ts, which
+// this dependency-free script cannot import.
+const FLAG_SPAN = /<flag:([a-z0-9-]+)>([\s\S]*?)<\/flag:\1>/g;
+
+/**
+ * Renders a description with every flag on: each flag span keeps its text and
+ * loses its tags.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function renderAllFlagsOn(text) {
+  return text.replace(FLAG_SPAN, "$2");
+}
 
 // Sticky so findOwnDescriptionValue can anchor it per candidate position
 // instead of allocating a substring per character.
@@ -455,7 +473,7 @@ export function extractToolsFromSource(src, filePath = "<source>") {
           // Template literals cook `\r\n` / `\r` to `\n` per spec (relevant on a
           // CRLF checkout) before escape semantics apply.
           const text = delim === "`" ? valueMatch[1].replace(/\r\n?/g, "\n") : valueMatch[1];
-          description = unescapeJsString(text).trim();
+          description = renderAllFlagsOn(unescapeJsString(text)).trim();
         }
       }
     }

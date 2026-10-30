@@ -3701,7 +3701,7 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     }
     const step: FlowStep = { kind: "snapshot", name: b.name };
     if (b.maxMismatch !== undefined) {
-      // The runner compares `mismatchPercentage <= maxMismatch` — a NaN here
+      // The runner compares the diff against `maxMismatch` — a NaN here
       // (e.g. from "5%") would make every comparison false, failing the snapshot
       // even on byte-identical frames.
       const m = Number(b.maxMismatch);

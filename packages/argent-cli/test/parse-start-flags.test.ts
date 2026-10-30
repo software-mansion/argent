@@ -29,6 +29,12 @@ describe("parseStartFlags", () => {
     expect(parseStartFlags(["--host=::1"]).host).toBe("::1");
   });
 
+  it("trims --host and treats an empty or blank one as the 127.0.0.1 default", () => {
+    expect(parseStartFlags(["--host", ""]).host).toBe("127.0.0.1");
+    expect(parseStartFlags(["--host=  "]).host).toBe("127.0.0.1");
+    expect(parseStartFlags(["--host", " 0.0.0.0 "]).host).toBe("0.0.0.0");
+  });
+
   it("parses --idle-timeout in space and equals form", () => {
     expect(parseStartFlags(["--idle-timeout", "5"]).idleTimeoutMinutes).toBe(5);
     expect(parseStartFlags(["--idle-timeout=10"]).idleTimeoutMinutes).toBe(10);

@@ -98,8 +98,7 @@ Steps:
 ```
 1. gesture-tap { x: 0.5, y: 0.7 } → trigger an action that fetches data
 2. screenshot → loading spinner is showing
-3. await-ui-element { condition: hidden, selector: { text: "Loading" } } → block until the fetch finishes and the spinner disappears
-4. describe / screenshot → verify the fetched content rendered
+3. await-ui-element { condition: hidden, selector: { text: "Loading" } } → block until the fetch finishes and the spinner disappears; its result carries the screenshot and element tree, so verify the fetched content rendered from it
 ```
 
 ---

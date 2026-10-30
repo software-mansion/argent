@@ -66,6 +66,7 @@ import {
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
+import { renderFlagGated } from "./utils/flag-gated-text";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -271,6 +272,10 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   // `device_id` calls refine an Android TV AVD once the cache is warm.
   if (typeof (data as Record<string, unknown>).avdName === "string") {
     return { platform: "android" };
+  }
+  // HarmonyOS twin: an instance is named, not addressed.
+  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") {
+    return { platform: "harmony" };
   }
   return null;
 }
@@ -684,13 +689,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           aliasOf?: string;
         } = {
           name: def.id,
-          description: def.description ?? "",
-          inputSchema: def.inputSchema ?? { type: "object", properties: {} },
+          description: renderFlagGated(def.description ?? "", isFlagEnabled),
+          inputSchema: renderFlagGated(
+            def.inputSchema ?? { type: "object", properties: {} },
+            isFlagEnabled
+          ),
         };
-        if (def.outputHint) entry.outputHint = def.outputHint;
+        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagEnabled);
         if (def.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
         if (def.alwaysLoad) entry.alwaysLoad = true;
-        if (def.searchHint) entry.searchHint = def.searchHint;
+        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagEnabled);
         if (def.longRunning) entry.longRunning = true;
         if (def.hideFromMcp) entry.hideFromMcp = true;
         // A former id is listed too, so a client that calls by it finds the

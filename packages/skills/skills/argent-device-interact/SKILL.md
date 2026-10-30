@@ -13,7 +13,7 @@ All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs A
 
 If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
-Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. Pick the first entry that matches the platform you need; if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly; no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
+Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`, `android`, or `chromium`); booted/ready devices come first. For a `harmony` target, read `references/harmonyos.md` before driving it. Pick the first entry that matches the platform you need; if none are ready, call `boot-device` with `udid` (iOS), `avdName` (Android), or `electronAppPath` (boots an Electron app as a `chromium` device). A Chromium browser already running with a CDP port shows up directly; no `boot-device` needed. See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
 
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred: their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 
@@ -36,7 +36,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 { "udid": "<UDID>", "bundleId": "com.apple.MobileSMS" }
 ```
 
-Common IDs: `com.apple.MobileSMS` (Messages), `com.apple.mobilesafari` (Safari), `com.apple.Preferences` (Settings), `com.apple.Maps`, `com.apple.Photos`, `com.apple.mobilemail`, `com.apple.mobilenotes`, `com.apple.MobileAddressBook` (Contacts)
+Common IDs: `com.apple.MobileSMS` (Messages), `com.apple.mobilesafari` (Safari), `com.apple.Preferences` (Settings), `com.apple.Maps`, `com.apple.mobileslideshow` (Photos), `com.apple.MobileAddressBook` (Contacts)
 
 ### open-url: by URL scheme
 
@@ -168,6 +168,8 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 ```
 
 One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8): `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
+
+**React Native: the first tap after typing may only close the keyboard.** Inside a scroll view with the default `keyboardShouldPersistTaps="never"`, React Native uses a tap outside the focused field to dismiss the keyboard and does not pass it on (with `"handled"` or `"always"` the tap reaches the button), so a button tapped right after typing may need a second tap; check the returned tree. When the field submits on return, `{ "key": "enter" }` avoids the extra tap.
 
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms); applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 

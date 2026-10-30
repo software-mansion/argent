@@ -334,4 +334,25 @@ describe("view-network-request-details (chromium branch)", () => {
     });
     expect(out).toMatch(/not found/);
   });
+
+  it.each(["false", "0", "true"])("rejects a string includeBody %j", (value) => {
+    const result = networkRequestTool.zodSchema!.safeParse({
+      device_id: "chromium-cdp-9222",
+      requestId: "r1",
+      includeBody: value,
+    });
+
+    expect(result.error?.issues).toMatchObject([{ code: "invalid_type", path: ["includeBody"] }]);
+  });
+
+  it.each([true, false])("accepts a boolean includeBody %j", (value) => {
+    const result = networkRequestTool.zodSchema!.safeParse({
+      device_id: "chromium-cdp-9222",
+      requestId: "r1",
+      includeBody: value,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.includeBody).toBe(value);
+  });
 });

@@ -26,6 +26,8 @@ PORT="${ARGENT_PORT:-3033}"
 OUT_DIR="${OUT_DIR:-artifacts}"
 mkdir -p "$OUT_DIR"
 KEPLER_VPKG="${KEPLER_VPKG:-fixtures/keplervideoapp_aarch64.vpkg}"
+# The container's own node is the Vega SDK's (20.x), older than argent supports.
+ARGENT_NODE="${ARGENT_NODE:-node}"
 APP_PKG="${APP_PKG:-com.amazondeveloper.keplervideoapp}"
 APP_ID="${APP_ID:-${APP_PKG}.main}"
 TOOLS_URL="http://127.0.0.1:${PORT}"
@@ -93,7 +95,7 @@ PY
 }
 
 group "Environment"
-echo "node $(node -v 2>/dev/null || echo '<none>')"
+echo "node $("$ARGENT_NODE" -v 2>/dev/null || echo '<none>')"
 adb version 2>/dev/null | head -1 || echo "adb <none>"
 echo "vega $(vega -v 2>/dev/null | tr '\n' ' ' || echo '<none>')"
 if test -f packages/argent/dist/tool-server.cjs; then
@@ -105,7 +107,7 @@ endg
 
 group "Start tool-server"
 : > /tmp/tool-server.log
-setsid env ARGENT_PORT="$PORT" node packages/argent/dist/tool-server.cjs start \
+setsid env ARGENT_PORT="$PORT" "$ARGENT_NODE" packages/argent/dist/tool-server.cjs start \
   </dev/null >/tmp/tool-server.log 2>&1 &
 ready=""
 for _ in $(seq 1 30); do

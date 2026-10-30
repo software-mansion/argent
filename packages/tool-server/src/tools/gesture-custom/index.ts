@@ -18,14 +18,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const eventSchema = z.object({
   type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
-  x: z.number().describe("Normalized x 0.0–1.0 (not pixels; same as tap/swipe)"),
-  y: z.number().describe("Normalized y 0.0–1.0 (not pixels; same as tap/swipe)"),
+  x: z.number().min(0).max(1).describe("Normalized x 0.0–1.0 (not pixels; same as tap/swipe)"),
+  y: z.number().min(0).max(1).describe("Normalized y 0.0–1.0 (not pixels; same as tap/swipe)"),
   x2: z
     .number()
+    .min(0)
+    .max(1)
     .optional()
     .describe("Second touch x for two-finger gestures: normalized 0.0–1.0 (not pixels)"),
   y2: z
     .number()
+    .min(0)
+    .max(1)
     .optional()
     .describe("Second touch y for two-finger gestures: normalized 0.0–1.0 (not pixels)"),
   delayMs: z

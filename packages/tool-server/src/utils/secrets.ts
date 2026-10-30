@@ -246,7 +246,12 @@ export function redactSecretsFromError(
   err: unknown,
   secrets: ReadonlyArray<{ name: string; value: string }>
 ): unknown {
-  const scrub = (s: string) => scrubSecretValues(s, secrets);
+  // A shell-quoted command line carries each `'` of a value as `'\''`.
+  const forms = secrets.flatMap((secret) => {
+    const quoted = secret.value.replaceAll("'", "'\\''");
+    return quoted === secret.value ? [secret] : [secret, { name: secret.name, value: quoted }];
+  });
+  const scrub = (s: string) => scrubSecretValues(s, forms);
   if (err instanceof Error) {
     err.message = scrub(err.message);
     if (err.stack) err.stack = scrub(err.stack);

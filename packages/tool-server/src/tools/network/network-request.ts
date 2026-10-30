@@ -78,7 +78,7 @@ const zodSchema = z.object({
       "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect."
     ),
   requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
-  includeBody: z.coerce
+  includeBody: z
     .boolean()
     .default(true)
     .describe("Whether to include the response body (if captured). Defaults to true."),

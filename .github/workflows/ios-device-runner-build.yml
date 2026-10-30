@@ -22,7 +22,9 @@ concurrency:
 jobs:
   build-runner:
     name: Compile the XCUITest runner
-    runs-on: macos-latest-xlarge
+    # Argent's self-hosted tart VMs. They persist between jobs, so fork PRs
+    # get a GitHub-hosted runner instead.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","tart"]') }}
     timeout-minutes: 20
     permissions:
       contents: read

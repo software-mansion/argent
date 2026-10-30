@@ -18,7 +18,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 ## Requirements
 
 - **macOS** with Xcode installed (required for `xcrun simctl` and iOS simulator support)
-- **Node.js 22.15+**
+- **Node.js 22.22.2+ or 24.15+** (the workspace dependencies' floor; the published package needs 22.15+)
 - The `simulator-server` and `ax-service` binaries in `packages/native-devtools-ios/bin/` (arm64 macOS, installed separately via `npx @swmansion/argent install`)
 
 ---

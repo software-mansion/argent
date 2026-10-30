@@ -27,6 +27,7 @@ import {
   type CliSessionStartedStats,
 } from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
+import { renderFlagGated } from "./utils/flag-gated-text";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
@@ -543,7 +544,10 @@ export function getAvailableTools(): Array<{
   const registry = createRegistry();
   return registry.getSnapshot().tools.map((id) => {
     const def = registry.getTool(id)!;
-    return { id: def.id, description: def.description, inputSchema: def.inputSchema };
+    return renderFlagGated(
+      { id: def.id, description: def.description, inputSchema: def.inputSchema },
+      isFlagEnabled
+    );
   });
 }
 
