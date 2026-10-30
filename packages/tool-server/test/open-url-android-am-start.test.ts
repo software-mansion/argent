@@ -31,7 +31,7 @@ const SERIAL = "emulator-5554";
 const device = { id: SERIAL, platform: "android", kind: "emulator" } as DeviceInfo;
 
 // Verbatim `adb shell am start -a android.intent.action.VIEW -d <url>` output
-// from an API 34 emulator. adb exits 0 in every case.
+// from an API 34 emulator. adb exits 0 in every case, as before Android 14 QPR2.
 const UNRESOLVED = {
   stdout: "Starting: Intent { act=android.intent.action.VIEW dat=nosuchscheme://x/... }\n",
   stderr:

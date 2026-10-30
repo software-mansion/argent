@@ -14,8 +14,8 @@ export const androidImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlRe
       ["-s", params.udid, "shell", `am start -a android.intent.action.VIEW -d ${quoted}`],
       { timeoutMs: 15_000 }
     );
-    // Without `-W`, failures go to stderr, with exit 0 below API 35. The stdout
-    // `Starting:` echo is skipped: it repeats the URL's scheme and host, which could match.
+    // Without `-W`, failures go to stderr, with exit 0 before Android 14 QPR2.
+    // The stdout `Starting:` echo is skipped: it repeats the URL, which could match.
     const out = `${stdout}\n${stderr}`
       .split("\n")
       .filter((line) => !line.startsWith("Starting: "))
