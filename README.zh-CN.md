@@ -17,7 +17,6 @@ npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest ini
 
 ## Argent 能做什么？
 
-
 - **交互操作（Interact）** - 点按、滑动、手势操作、文字输入、硬件按键；电视上支持方向键（D-pad），桌面端支持鼠标和键盘。
 - **端到端测试(E2E)** -将操作路径录制一次并保存为端到端测试，之后可确定性重放，用于复现问题或执行冒烟测试。
 - **视觉回归（Visual Regression)** - 将基准截图与实时截图进行对比，支持 OCR 并感知字体差异。
@@ -39,10 +38,8 @@ npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest ini
 
 Argent 采用混合许可模式。**源代码**基于 [Apache License 2.0](LICENSE.txt) 发布。**专有二进制文件**（各平台的 `bin/<platform>/simulator-server` 和 `bin/darwin/ax-service` 可执行文件，以及 `native-devtools-ios` 中的 `.dylib` 文件）是 Software Mansion S.A. 的知识产权，仅授权在本项目内使用。未经明确书面许可，禁止对其进行反编译、逆向工程或再分发。使用 Argent 即表示你知悉并同意上述许可结构。完整内容请参阅 [LICENSE](https://github.com/software-mansion/argent/blob/main/LICENSE.txt)。
 
-
 ## Argent 由 Software Mansion 打造
 
 [Software Mansion](https://swmansion.com) 成立于 2012 年，是一家在 Web 和移动应用开发方面经验丰富的软件公司。我们是 React Native 核心贡献者，擅长解决各类 React Native 问题。我们可以帮你打造下一款理想产品 – [联系我们](https://swmansion.com/contact/projects?utm_source=argent&utm_medium=readme)。
 
 [![swm](https://logo.swmansion.com/logo?color=white&variant=desktop&width=150&tag=argent-github "Software Mansion")](https://swmansion.com)
-
