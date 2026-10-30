@@ -90,6 +90,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return t;
   }
 
+  // aria-labelledby id -> trimmed target text (null: no such element), as many controls
+  // can share one target. Not a Map: the script runs in the page's scope, where a page
+  // script's own global Map would shadow the builtin.
+  const labelTexts = Object.create(null);
+
   function accessibleName(el) {
     const aria = getAttr.call(el, "aria-label");
     if (aria) return aria.trim().slice(0, 200);
@@ -98,8 +103,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const ids = labelledBy.split(/\\s+/);
       const parts = [];
       for (const id of ids) {
-        const ref = document.getElementById(id);
-        if (ref) parts.push(labelText(ref).trim());
+        let text = labelTexts[id];
+        if (text === undefined) {
+          const ref = document.getElementById(id);
+          text = labelTexts[id] = ref ? labelText(ref).trim() : null;
+        }
+        if (text !== null) parts.push(text);
       }
       if (parts.length) return parts.join(" ").slice(0, 200);
     }
@@ -154,11 +163,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // element inside the target is not rendered (its own display does not inherit that);
   // in a wholly hidden target it still is a space, as in Chrome's accessible name.
   // Iterative: the target's depth has no MAX_DEPTH bound, so recursion could overflow
-  // the stack. Memoized, as many controls can share one target.
-  const labelTexts = new Map();
+  // the stack.
   function labelText(root) {
-    const cached = labelTexts.get(root);
-    if (cached !== undefined) return cached;
     let s = "";
     // Flat [node, underNone] pairs.
     const stack = [];
@@ -177,9 +183,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         pushChildren(node, underNone || window.getComputedStyle(node).display === "none");
       }
     }
-    s = s.replace(WHITESPACE, " ");
-    labelTexts.set(root, s);
-    return s;
+    return s.replace(WHITESPACE, " ");
   }
 
   function isInteractive(el) {

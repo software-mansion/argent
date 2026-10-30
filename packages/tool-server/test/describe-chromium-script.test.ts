@@ -187,13 +187,18 @@ function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: str
   return node;
 }
 
-function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean } {
+// `pageGlobals` are globals a page script defines, in scope while the script evaluates.
+function run(
+  rootChildren: MockElement[],
+  pageGlobals: Record<string, unknown> = {}
+): { tree: unknown; truncated: boolean } {
   const root = el({ tag: "html", rect: { x: 0, y: 0, w: W, h: H } }) as MockElement &
     Record<string, unknown>;
   root.children = [el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H }, children: rootChildren })];
 
   const g = globalThis as Record<string, unknown>;
-  const saved = {
+  const saved: Record<string, unknown> = {
+    ...Object.fromEntries(Object.keys(pageGlobals).map((k) => [k, g[k]])),
     window: g.window,
     document: g.document,
     Node: g.Node,
@@ -277,6 +282,7 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
   g.HTMLInputElement = MockHTMLInputElement;
   g.HTMLTextAreaElement = MockHTMLTextAreaElement;
   g.HTMLImageElement = MockHTMLImageElement;
+  Object.assign(g, pageGlobals);
   try {
     const payload = (0, eval)(DESCRIBE_DOM_SCRIPT) as string;
     return JSON.parse(payload);
@@ -506,7 +512,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect((serialized.match(/deep-inner/g) || []).length).toBe(1);
   });
 
-  it("does not crash on an aria-labelledby target whose form clobbers childNodes", () => {
+  it("reads an aria-labelledby target whose form clobbers childNodes", () => {
     // accessibleName resolves aria-labelledby via getElementById, then walks the target's
     // childNodes. A <form id="lbl"> with a control named "childNodes" shadows the
     // inherited getter, so a direct read returns the control and loses the label.
@@ -660,17 +666,23 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "btn")!.label).toBe("Save draft");
   });
 
-  it("keeps a U+FEFF in own and aria-labelledby text", () => {
-    const label = el({ tag: "span", text: "Save﻿draft", rect: BOX, attrs: { id: "lbl" } });
-    const labelled = el({
-      tag: "button",
-      rect: BOX,
-      attrs: { "id": "labelled", "aria-labelledby": "lbl" },
-    });
-    const own = el({ tag: "button", text: "Save﻿draft", rect: BOX, attrs: { id: "own" } });
-    const { tree } = run([labelled, own, label]);
-    expect(findById(tree, "labelled")!.label).toBe("Save﻿draft");
-    expect(findById(tree, "own")!.value).toBe("Save﻿draft");
+  it("keeps a U+FEFF, and folds other whitespace to a space, in own and aria-labelledby text", () => {
+    for (const [text, expected] of [
+      ["Save\uFEFFdraft", "Save\uFEFFdraft"],
+      ["Save\u00A0draft", "Save draft"],
+      ["Save\u2003\u2003draft", "Save draft"],
+    ]) {
+      const label = el({ tag: "span", text, rect: BOX, attrs: { id: "lbl" } });
+      const labelled = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "labelled", "aria-labelledby": "lbl" },
+      });
+      const own = el({ tag: "button", text, rect: BOX, attrs: { id: "own" } });
+      const { tree } = run([labelled, own, label]);
+      expect(findById(tree, "labelled")!.label).toBe(expected);
+      expect(findById(tree, "own")!.value).toBe(expected);
+    }
   });
 
   it("walks an aria-labelledby target shared by many controls only once", () => {
@@ -693,6 +705,38 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     for (const text of ["Shared", ""]) {
       expect(childNodesReads(text, 5)).toBe(childNodesReads(text, 1));
     }
+  });
+
+  it("reads a shared aria-labelledby target on a page whose own global Map is not the builtin", () => {
+    // A classic page script's top-level \`class Map\` or \`var Map = {...}\` shadows the builtin.
+    const label = el({ tag: "span", text: "Shared", rect: BOX, attrs: { id: "lbl" } });
+    const controls = ["b1", "b2"].map((id) =>
+      el({ tag: "button", rect: BOX, attrs: { "id": id, "aria-labelledby": "lbl" } })
+    );
+    for (const Map of [class {}, { tiles: [] }]) {
+      const { tree } = run([...controls, label], { Map });
+      expect(findById(tree, "b1")!.label).toBe("Shared");
+      expect(findById(tree, "b2")!.label).toBe("Shared");
+    }
+  });
+
+  it("falls back to the title when no aria-labelledby id resolves, however often", () => {
+    const controls = ["b1", "b2"].map((id) =>
+      el({ tag: "button", rect: BOX, attrs: { "id": id, "aria-labelledby": "nope", "title": "T" } })
+    );
+    const { tree } = run(controls);
+    expect(findById(tree, "b1")!.label).toBe("T");
+    expect(findById(tree, "b2")!.label).toBe("T");
+  });
+
+  it("reads aria-labelledby ids that name Object.prototype members", () => {
+    const ids = ["constructor", "toString", "__proto__"];
+    const labels = ids.map((id) => el({ tag: "span", text: `L-${id}`, rect: BOX, attrs: { id } }));
+    const controls = ids.map((id) =>
+      el({ tag: "button", rect: BOX, attrs: { "id": `b-${id}`, "aria-labelledby": id } })
+    );
+    const { tree } = run([...controls, ...labels]);
+    for (const id of ids) expect(findById(tree, `b-${id}`)!.label).toBe(`L-${id}`);
   });
 
   it("reads each aria-labelledby target as its own text", () => {
