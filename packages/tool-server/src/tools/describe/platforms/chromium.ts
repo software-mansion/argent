@@ -65,13 +65,20 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getTagName = protoGetter(Element.prototype, "tagName");
   const getChildrenEls = protoGetter(Element.prototype, "children");
   const getShadowRoot = protoGetter(Element.prototype, "shadowRoot");
+  const getAssignedSlot = protoGetter(Element.prototype, "assignedSlot");
+  const getParentNode = protoGetter(Node.prototype, "parentNode");
   const getScrollHeight = protoGetter(Element.prototype, "scrollHeight");
   const getClientHeight = protoGetter(Element.prototype, "clientHeight");
   const getScrollWidth = protoGetter(Element.prototype, "scrollWidth");
   const getClientWidth = protoGetter(Element.prototype, "clientWidth");
+  const getClientLeft = protoGetter(Element.prototype, "clientLeft");
+  const getClientTop = protoGetter(Element.prototype, "clientTop");
+  const getOffsetWidth = protoGetter(HTMLElement.prototype, "offsetWidth");
+  const getOffsetHeight = protoGetter(HTMLElement.prototype, "offsetHeight");
   const getAttr = Element.prototype.getAttribute;
   const hasAttr = Element.prototype.hasAttribute;
   const getBCR = Element.prototype.getBoundingClientRect;
+  const matchesSel = Element.prototype.matches;
   // Document's named getter is [LegacyOverrideBuiltIns] (like a form's): a
   // <form name="activeElement"> shadows document.activeElement, so both focus
   // reads go through prototype accessors. The typeof guard covers the test
@@ -81,6 +88,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getOwnerDocument = protoGetter(Node.prototype, "ownerDocument");
   const getActiveElement = protoGetter(docProto, "activeElement");
   const getDocBody = protoGetter(docProto, "body");
+  const getRootNode = Node.prototype.getRootNode;
+  const containsNode = Node.prototype.contains;
+  const docElementsFromPoint = docProto.elementsFromPoint;
+  // A document's named getter can shadow elementsFromPoint; a shadow root has none.
+  function elementsAt(root, x, y) {
+    return docElementsFromPoint && getNodeType.call(root) === 9
+      ? docElementsFromPoint.call(root, x, y)
+      : root.elementsFromPoint(x, y);
+  }
 
   function nodeRole(el) {
     const r = getAttr.call(el, "role");
@@ -188,8 +204,395 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
   }
 
-  function frame(el) {
-    return normRect(getBCR.call(el));
+  // Clip windows are viewport-px rects; null means only the viewport, which normRect
+  // already clamps to.
+  function intersect(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    return {
+      left: Math.max(a.left, b.left),
+      top: Math.max(a.top, b.top),
+      right: Math.min(a.right, b.right),
+      bottom: Math.min(a.bottom, b.bottom),
+    };
+  }
+
+  function frame(el, clip) {
+    return normRect(intersect(getBCR.call(el), clip));
+  }
+
+  // Overflow clips a descendant only when the clipper is on its containing-block chain,
+  // so an absolute or fixed box takes the clip in force at its containing block. Each
+  // entry is the clip a child with that position gets.
+  const NO_CLIP = { flow: null, abs: null, fixed: null };
+
+  // A slotted element paints where its <slot> sits in the shadow tree, so it takes the
+  // clips in force there; each host's shadow tree is walked before its light children.
+  // globalThis: a page's top-level \`class Map\` shadows the bare name, not the property.
+  const slotClips = new globalThis.Map();
+  // Elements hidden() pruned: a slot inside one paints nothing.
+  const pruned = new globalThis.Set();
+  function inPruned(node) {
+    for (let n = node; n; n = getParentNode.call(n)) if (pruned.has(n)) return true;
+    return false;
+  }
+
+  // Each walked element's scrollers, its own last when it scrolls; the elements a
+  // scroller cuts are anchored once the whole tree has been walked.
+  const chains = new globalThis.Map();
+  const cuts = [];
+
+  // The scroller a wheel at (x, y) scrolls along an axis: the innermost on the
+  // painted element's chain, the one Chrome latches to. Null where that is unknown:
+  // over a frame, whose own document may take the wheel.
+  function wheelScroller(x, y, axis) {
+    let hit = elementsAt(document, x, y)[0];
+    for (let sr = hit && getShadowRoot.call(hit); sr; sr = getShadowRoot.call(hit)) {
+      const deeper = sr.elementsFromPoint(x, y)[0];
+      if (!deeper || deeper === hit) break;
+      hit = deeper;
+    }
+    if (hit && /^(IFRAME|FRAME|EMBED|OBJECT)$/.test(htmlTag(hit))) return null;
+    for (let n = hit; n; ) {
+      if (chains.has(n)) {
+        const chain = chains.get(n) || [];
+        for (let i = chain.length - 1; i >= 0; i--) if (chain[i][axis]) return chain[i].el;
+        return null;
+      }
+      const p = getAssignedSlot.call(n) || getParentNode.call(n);
+      n = p && getNodeType.call(p) === 11 ? p.host : p;
+    }
+    return null;
+  }
+
+  // A point where a wheel scrolls the element (visible part r) against a scroller
+  // cutting it along the axis: one on its chain from the outermost cutter in, of
+  // scrollers \`scs\`. Elsewhere the wheel may move an overlay's scroller, the element's
+  // own, or one holding the cutter. The innermost cutter's window is tried first, its
+  // points farthest along the axis first: content scrolling under the point mid-wheel
+  // takes the rest of it. With no such point on screen, the centre of the cut window
+  // \`win\` across the element.
+  function wheelAnchor(r, scs, cutters, win, axis) {
+    const movers = scs.slice(scs.indexOf(cutters[0])).filter((s) => s[axis]);
+    const away = ([x, y]) =>
+      axis === "sx" ? Math.max(r.left - x, x - r.right) : Math.max(r.top - y, y - r.bottom);
+    const points = [];
+    for (let i = cutters.length - 1; i >= 0; i--) {
+      const v = intersect(cutters[i].win, { left: 0, top: 0, right: w, bottom: h });
+      const grid = [];
+      for (const f of [0.1, 0.5, 0.9]) {
+        for (const g of [0.1, 0.5, 0.9]) {
+          grid.push([v.left + (v.right - v.left) * f, v.top + (v.bottom - v.top) * g]);
+        }
+      }
+      points.push(...grid.sort((a, b) => away(b) - away(a)));
+    }
+    points.push([(r.left + r.right) / 2, (r.top + r.bottom) / 2]);
+    for (const [x, y] of points) {
+      const s = wheelScroller(x, y, axis);
+      if (s && movers.some((m) => m.el === s)) return { x: x / w, y: y / h };
+    }
+    return axis === "sx"
+      ? { x: (win.left + win.right) / 2 / w, y: (r.top + r.bottom) / 2 / h }
+      : { x: (r.left + r.right) / 2 / w, y: (win.top + win.bottom) / 2 / h };
+  }
+
+  // An XHTML document keeps tagName lowercase.
+  function htmlTag(el) {
+    return getTagName.call(el).toUpperCase();
+  }
+
+  // False for a pseudo-class this Chromium lacks.
+  function matches(el, sel) {
+    try {
+      return matchesSel.call(el, sel);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // A top-layer box (modal dialog, open popover, fullscreen element) escapes every clip.
+  function inTopLayer(el, style) {
+    if (style.position !== "fixed" && style.position !== "absolute") return false;
+    return [":modal", ":popover-open", ":fullscreen"].some((sel) => matches(el, sel));
+  }
+
+  // An open customizable select draws every child but a leading <button> in its
+  // top-layer ::picker(select).
+  function inPicker(el, child, i) {
+    if (htmlTag(el) !== "SELECT" || !matches(el, ":open")) return false;
+    return i > 0 || htmlTag(child) !== "BUTTON";
+  }
+
+  // A display: contents element has no box to position: its own text is in flow.
+  function ownClip(clips, style) {
+    if (style.display === "contents") return clips.flow;
+    if (style.position === "absolute") return clips.abs;
+    if (style.position === "fixed") return clips.fixed;
+    return clips.flow;
+  }
+
+  function isSet(v) {
+    return Boolean(v) && v !== "none";
+  }
+
+  // content-visibility: auto or hidden applies paint containment that computed contain omits.
+  function paintContained(style) {
+    return (
+      /paint|strict|content/.test(style.contain || "") ||
+      /auto|hidden/.test(style.contentVisibility || "")
+    );
+  }
+
+  // Whether an element is the containing block of fixed descendants. Chromium ignores
+  // transforms on inline boxes, and containment wherever it ignores overflow.
+  function containsFixed(el, style) {
+    // Computed will-change keeps the author's case and -webkit- aliases.
+    const hints = (style.willChange || "")
+      .split(",")
+      .map((t) => t.trim().toLowerCase().replace(/^-webkit-/, ""));
+    const hinted = (...props) => props.some((p) => hints.includes(p));
+    if (isSet(style.filter) || isSet(style.backdropFilter) || hinted("filter", "backdrop-filter")) {
+      return true;
+    }
+    if (style.display === "inline") return false;
+    if (
+      isSet(style.transform) ||
+      isSet(style.translate) ||
+      isSet(style.rotate) ||
+      isSet(style.scale) ||
+      isSet(style.perspective) ||
+      style.transformStyle === "preserve-3d" ||
+      hinted("transform", "translate", "rotate", "scale", "perspective", "transform-style")
+    ) {
+      return true;
+    }
+    return (
+      overflowApplies(el, style) &&
+      (/layout/.test(style.contain || "") || paintContained(style) || hinted("contain"))
+    );
+  }
+
+  // A computed transform's 2D part as [a, b, c, d, e, f], or null for none.
+  function matrix2d(v) {
+    const m = /^matrix(3d)?\\(([^)]*)\\)$/.exec(v || "");
+    if (!m) return null;
+    const n = m[2].split(",").map(parseFloat);
+    return m[1] ? [n[0], n[1], n[4], n[5], n[12], n[13]] : n;
+  }
+
+  function multiply(p, q) {
+    return [
+      p[0] * q[0] + p[2] * q[1],
+      p[1] * q[0] + p[3] * q[1],
+      p[0] * q[2] + p[2] * q[3],
+      p[1] * q[2] + p[3] * q[3],
+      p[0] * q[4] + p[2] * q[5] + p[4],
+      p[1] * q[4] + p[3] * q[5] + p[5],
+    ];
+  }
+
+  // The 2D matrix of translate, rotate, scale and transform, applied in that order.
+  function transformMatrix(style) {
+    let t = [1, 0, 0, 1, 0, 0];
+    if (isSet(style.translate)) {
+      const [tx = 0, ty = 0] = style.translate.split(" ").map((v) => parseFloat(v) || 0);
+      t = multiply(t, [1, 0, 0, 1, tx, ty]);
+    }
+    // Only a rotation about z is 2D: "45deg" or "z 45deg".
+    const rot = /^(?:z )?(-?[\\d.]+)deg$/.exec(style.rotate || "");
+    if (rot) {
+      const a = (parseFloat(rot[1]) * Math.PI) / 180;
+      t = multiply(t, [Math.cos(a), Math.sin(a), -Math.sin(a), Math.cos(a), 0, 0]);
+    }
+    if (isSet(style.scale)) {
+      const [sx = 1, sy = sx] = style.scale.split(" ").map(parseFloat);
+      t = multiply(t, [sx, 0, 0, sy, 0, 0]);
+    }
+    const m = matrix2d(style.transform);
+    return m ? multiply(t, m) : t;
+  }
+
+  // A nested <svg>'s rect bounds its content, not its viewport: its x/y/width/height in
+  // the parent's user space, moved by its own transforms about its transform-origin.
+  function nestedSvgViewport(el, style) {
+    if (!(el instanceof SVGSVGElement) || !el.ownerSVGElement) return null;
+    const m = el.parentNode.getScreenCTM?.();
+    if (!m) return null;
+    const x = el.x.animVal.value;
+    const y = el.y.animVal.value;
+    const w = el.width.animVal.value;
+    const h = el.height.animVal.value;
+    const t = transformMatrix(style);
+    const [ox = 0, oy = 0] = (style.transformOrigin || "").split(" ").map((v) => parseFloat(v) || 0);
+    const xs = [];
+    const ys = [];
+    for (const [px, py] of [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) {
+      const qx = t[0] * (px - ox) + t[2] * (py - oy) + t[4] + ox;
+      const qy = t[1] * (px - ox) + t[3] * (py - oy) + t[5] + oy;
+      xs.push(m.a * qx + m.c * qy + m.e);
+      ys.push(m.b * qx + m.d * qy + m.f);
+    }
+    return {
+      left: Math.min(...xs),
+      top: Math.min(...ys),
+      right: Math.max(...xs),
+      bottom: Math.max(...ys),
+      sx: 1,
+      sy: 1,
+    };
+  }
+
+  // Padding box in viewport px, scrollbars excluded, and the scale (sx, sy) from layout
+  // px to the rendered (transformed) box. A non-HTML clipper has no offset* to scale by:
+  // an outer <svg> clips at its content box, a <foreignObject> at its rect.
+  function paddingBox(el, style) {
+    const vp = nestedSvgViewport(el, style);
+    if (vp) return vp;
+    const r = getBCR.call(el);
+    // A quirks-mode body reports the viewport's client size, so its own borders measure it.
+    if (htmlTag(el) === "BODY" && getOwnerDocument.call(el)?.compatMode === "BackCompat") {
+      const border = (side) => parseFloat(style["border" + side + "Width"]) || 0;
+      return {
+        left: r.left + border("Left"),
+        top: r.top + border("Top"),
+        right: r.right - border("Right"),
+        bottom: r.bottom - border("Bottom"),
+        sx: 1,
+        sy: 1,
+      };
+    }
+    if (!(el instanceof HTMLElement)) {
+      if (!(el instanceof SVGSVGElement)) {
+        return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, sx: 1, sy: 1 };
+      }
+      const px = (prop) => parseFloat(style[prop]) || 0;
+      const inset = (side) => px("border" + side + "Width") + px("padding" + side);
+      const borderBox = style.boxSizing === "border-box";
+      const lw = px("width") + (borderBox ? 0 : inset("Left") + inset("Right"));
+      const lh = px("height") + (borderBox ? 0 : inset("Top") + inset("Bottom"));
+      const sx = px("width") > 0 && lw > 0 ? r.width / lw : 1;
+      const sy = px("height") > 0 && lh > 0 ? r.height / lh : 1;
+      return {
+        left: r.left + inset("Left") * sx,
+        top: r.top + inset("Top") * sy,
+        right: r.right - inset("Right") * sx,
+        bottom: r.bottom - inset("Bottom") * sy,
+        sx,
+        sy,
+      };
+    }
+    const ow = getOffsetWidth.call(el);
+    const oh = getOffsetHeight.call(el);
+    const sx = ow > 0 ? r.width / ow : 1;
+    const sy = oh > 0 ? r.height / oh : 1;
+    const left = r.left + getClientLeft.call(el) * sx;
+    const top = r.top + getClientTop.call(el) * sy;
+    return {
+      left,
+      top,
+      right: left + getClientWidth.call(el) * sx,
+      bottom: top + getClientHeight.call(el) * sy,
+      sx,
+      sy,
+    };
+  }
+
+  // How far overflow-clip-margin moves a clip edge out of the clip box (the padding box,
+  // or an outer <svg>'s content box). It applies only where the axis clips by
+  // overflow: clip or by paint containment, and to overflow: clip only when both axes do.
+  function clipMargin(el, style, overflow, side, scale) {
+    if (overflow !== "clip" && overflow !== "visible") return 0;
+    if (!paintContained(style) && (style.overflowX !== "clip" || style.overflowY !== "clip")) {
+      return 0;
+    }
+    const v = style.overflowClipMargin || "";
+    const len = parseFloat(v.replace(/^[a-z-]+/, "")) || 0;
+    const padding = parseFloat(style["padding" + side]) || 0;
+    let box = el instanceof SVGSVGElement ? padding : 0;
+    if (v.startsWith("content-box")) box -= padding;
+    if (v.startsWith("border-box")) box += parseFloat(style["border" + side + "Width"]) || 0;
+    return (box + len) * scale;
+  }
+
+  // The root's overflow clips the viewport, not its box, and so does the body's unless
+  // the root's is set or either has containment; the viewport is left to the clamp.
+  // Chromium ignores overflow on inline HTML boxes and on table rows, row groups and
+  // columns.
+  function overflowApplies(el, style) {
+    const tag = htmlTag(el);
+    if (tag === "HTML") return false;
+    if (tag === "BODY") {
+      const doc = getOwnerDocument.call(el);
+      const rootStyle = doc && doc.documentElement && window.getComputedStyle(doc.documentElement);
+      if (!rootStyle) return false;
+      const contained = (st) => isSet(st.contain) || paintContained(st);
+      const rootClips = rootStyle.overflowX !== "visible" || rootStyle.overflowY !== "visible";
+      if (!rootClips && !contained(rootStyle) && !contained(style)) return false;
+    }
+    if (el.namespaceURI === "http://www.w3.org/2000/svg") return true;
+    return style.display !== "inline" && !/^table-(row|column|header|footer)/.test(style.display);
+  }
+
+  function childClips(el, style, clips, clip) {
+    if (style.display === "contents") return clips;
+    let inner = clip;
+    if (overflowApplies(el, style)) {
+      // content-visibility: hidden paints none of the content.
+      if (style.contentVisibility === "hidden") {
+        return clipsWithin(el, style, clips, { left: 0, top: 0, right: 0, bottom: 0 });
+      }
+      const paint = paintContained(style);
+      const cx = paint || style.overflowX !== "visible";
+      const cy = paint || style.overflowY !== "visible";
+      if (cx || cy) {
+        const p = paddingBox(el, style);
+        const ox = style.overflowX;
+        const oy = style.overflowY;
+        const own = {
+          left: cx ? p.left - clipMargin(el, style, ox, "Left", p.sx) : -Infinity,
+          top: cy ? p.top - clipMargin(el, style, oy, "Top", p.sy) : -Infinity,
+          right: cx ? p.right + clipMargin(el, style, ox, "Right", p.sx) : Infinity,
+          bottom: cy ? p.bottom + clipMargin(el, style, oy, "Bottom", p.sy) : Infinity,
+        };
+        inner = intersect(clip, own);
+        // inner.scrollers lists, outermost first, the clippers on the chain that a user
+        // can scroll content past, with the axes they scroll along.
+        const sx =
+          (ox === "auto" || ox === "scroll") && getScrollWidth.call(el) > getClientWidth.call(el);
+        const sy =
+          (oy === "auto" || oy === "scroll") &&
+          getScrollHeight.call(el) > getClientHeight.call(el);
+        const scrollers = clip && clip.scrollers;
+        inner.scrollers =
+          sx || sy ? (scrollers || []).concat([{ el, sx, sy, win: own }]) : scrollers;
+      }
+    }
+    return clipsWithin(el, style, clips, inner);
+  }
+
+  // The clips children get when \`el\` clips its content to \`inner\`.
+  function clipsWithin(el, style, clips, inner) {
+    const fixedBlock = containsFixed(el, style) || getTagName.call(el) === "foreignObject";
+    return {
+      flow: inner,
+      abs: fixedBlock || style.position !== "static" ? inner : clips.abs,
+      fixed: fixedBlock ? inner : clips.fixed,
+    };
+  }
+
+  // A fieldset's overflow clips its content box, never its rendered legend: the first
+  // <legend> child that is neither floated nor out of flow.
+  function renderedLegend(el, kids) {
+    if (htmlTag(el) !== "FIELDSET") return null;
+    for (const kid of kids) {
+      if (htmlTag(kid) !== "LEGEND") continue;
+      const ks = window.getComputedStyle(kid);
+      if (ks.cssFloat === "none" && ks.position !== "absolute" && ks.position !== "fixed") {
+        return kid;
+      }
+    }
+    return null;
   }
 
   // Painted extent of an element's own inline TEXT. A box-less element (display:contents,
@@ -200,7 +603,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // (they keep a layout box but paint nothing), oversizing the frame and mis-placing the
   // tap point. Returns 0x0 when an ancestor transform (e.g. scale(0)) or display:none
   // collapses the paint. walk() consults this only when the element has its own text.
-  function contentFrame(el) {
+  function contentFrame(el, clip) {
     try {
       let box = null;
       for (const child of getChildNodes.call(el)) {
@@ -220,7 +623,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         }
       }
       if (!box || box.right <= box.left || box.bottom <= box.top) return null;
-      return normRect(box);
+      return normRect(intersect(box, clip));
     } catch (e) {
       return null;
     }
@@ -254,10 +657,54 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const r = getBCR.call(el);
     if (r.width > 0 && r.height > 0) return false;
     // Zero-area box: prune it only when it clips its overflow (a collapsed
-    // overflow:hidden container genuinely hides its content). With the default
-    // overflow:visible, abs-positioned / overflowing / floated descendants still
-    // paint, so walk() must descend and promote them instead of cutting the subtree.
-    return overflowClips(style);
+    // overflow:hidden container hides its in-flow content). With the default
+    // overflow:visible, or overflow Chromium ignores, abs-positioned / overflowing /
+    // floated descendants still paint, so walk() must descend and promote them
+    // instead of cutting the subtree.
+    return overflowApplies(el, style) && overflowClips(style);
+  }
+
+  // Whether the page hit-tests el or its content outside \`clip\`, where the clip would
+  // cut it: content slotted into a closed shadow root paints where its unseen slot sits,
+  // which may escape its host's clips. Integer client sizes put a clip edge up to a pixel
+  // inside the true one, so a point must lie more than a pixel outside.
+  function paintsOutside(el, clip) {
+    const v = intersect(getBCR.call(el), { left: 0, top: 0, right: w, bottom: h });
+    const e = {
+      left: clip.left - 1,
+      top: clip.top - 1,
+      right: clip.right + 1,
+      bottom: clip.bottom + 1,
+    };
+    const cx = (v.left + v.right) / 2;
+    const cy = (v.top + v.bottom) / 2;
+    // A shadow root's elementsFromPoint returns nodes of its own tree, where the
+    // document's returns their host.
+    const root = getRootNode ? getRootNode.call(el) : document;
+    return [
+      [(v.left + Math.min(v.right, e.left)) / 2, cy],
+      [(Math.max(v.left, e.right) + v.right) / 2, cy],
+      [cx, (v.top + Math.min(v.bottom, e.top)) / 2],
+      [cx, (Math.max(v.top, e.bottom) + v.bottom) / 2],
+    ].some(
+      ([x, y]) =>
+        x >= v.left &&
+        x < v.right &&
+        y >= v.top &&
+        y < v.bottom &&
+        (x < e.left || x >= e.right || y < e.top || y >= e.bottom) &&
+        elementsAt(root, x, y).some((hit) => containsNode.call(el, hit) && carried(el, hit))
+    );
+  }
+
+  // Whether el's own painting puts hit where it is: no box between them is fixed or
+  // absolute, which would paint by its own containing block, escaping el's clips.
+  function carried(el, hit) {
+    for (let n = hit; n && n !== el; n = getParentNode.call(n)) {
+      const position = window.getComputedStyle(n).position;
+      if (position === "fixed" || position === "absolute") return false;
+    }
+    return true;
   }
 
   // Smallest normalized box covering every surviving child frame — the frame we give
@@ -268,6 +715,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     let maxRight = 0;
     let maxBottom = 0;
     for (const c of children) {
+      // A child clipped or scrolled out of view has no extent to cover.
+      if (c.frame.width <= 0 || c.frame.height <= 0) continue;
       minX = Math.min(minX, c.frame.x);
       minY = Math.min(minY, c.frame.y);
       maxRight = Math.max(maxRight, c.frame.x + c.frame.width);
@@ -279,12 +728,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return { x: minX, y: minY, width: maxRight - minX, height: maxBottom - minY };
   }
 
-  function walk(el, depth) {
+  function walk(el, depth, clips = NO_CLIP, unseenSlot = false) {
     if (truncated) return null;
     if (depth > MAX_DEPTH) return null;
     if (!(el instanceof Element)) return null;
     const style = window.getComputedStyle(el);
-    if (hidden(el, style)) return null;
+    if (hidden(el, style)) {
+      pruned.add(el);
+      return null;
+    }
     // Charge the node budget only for elements that can actually EMIT. A
     // visibility:hidden element paints nothing itself and is descended into
     // purely to catch a descendant that overrides visibility back to visible
@@ -300,11 +752,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       nodeBudget--;
     }
 
-    const childResults = [];
-    for (const child of getChildrenEls.call(el)) {
-      const c = walk(child, depth + 1);
-      if (c) childResults.push(c);
+    if (inTopLayer(el, style)) clips = NO_CLIP;
+    let clip = ownClip(clips, style);
+    if (unseenSlot && clip && paintsOutside(el, clip)) {
+      clips = NO_CLIP;
+      clip = null;
     }
+    const inner = childClips(el, style, clips, clip);
+    if (htmlTag(el) === "SLOT") slotClips.set(el, inner);
+    chains.set(el, inner.flow && inner.flow.scrollers);
 
     // Pierce open shadow roots — closed roots are unreachable by design.
     // Web-components-heavy apps (VS Code, every Lit/Polymer SPA) put their
@@ -314,13 +770,36 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // would otherwise return that control, and we'd re-walk its light-DOM children as
     // shadow content and duplicate the subtree. A real ShadowRoot is a DocumentFragment
     // (never a form), so its own .children read is safe.
+    const shadowResults = [];
     const shadow = getShadowRoot.call(el);
     if (shadow) {
       for (const child of shadow.children) {
-        const c = walk(child, depth + 1);
-        if (c) childResults.push(c);
+        const c = walk(child, depth + 1, inner);
+        if (c) shadowResults.push(c);
       }
     }
+
+    const childResults = [];
+    const kids = getChildrenEls.call(el);
+    const legend = renderedLegend(el, kids);
+    // A custom element with no open shadow root may have a closed one, whose slots the
+    // walker cannot see.
+    const closedHost = !shadow && getTagName.call(el).includes("-");
+    for (let i = 0; i < kids.length; i++) {
+      const slot = getAssignedSlot.call(kids[i]);
+      // A slot in a pruned subtree paints none of its assigned nodes.
+      if (slot && !slotClips.has(slot) && inPruned(slot)) continue;
+      const kidClips = inPicker(el, kids[i], i)
+        ? NO_CLIP
+        : slot && slotClips.has(slot)
+          ? slotClips.get(slot)
+          : kids[i] === legend
+            ? clipsWithin(el, style, clips, clip)
+            : inner;
+      const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot);
+      if (c) childResults.push(c);
+    }
+    childResults.push(...shadowResults);
 
     // Same-origin iframes: pierce contentDocument if accessible. Cross-origin
     // contentDocument access throws SecurityError — swallowed silently so the
@@ -371,10 +850,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // child. (Clickable / named / identified box-less nodes fall through and are emitted
     // with this child- or content-spanning frame.)
     let selfFrame;
+    let clipBounds;
+    let cut;
     if (bl) {
       selfFrame = unionFrame(childResults);
       if (text && selfFrame.width <= 0 && selfFrame.height <= 0) {
-        const cf = contentFrame(el);
+        const cf = contentFrame(el, clip);
         if (cf) selfFrame = cf;
       }
       if (childResults.length === 0 && selfFrame.width <= 0 && selfFrame.height <= 0) {
@@ -397,7 +878,31 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         return childResults[0];
       }
     } else {
-      selfFrame = frame(el);
+      selfFrame = frame(el, clip);
+      const scs = clip && clip.scrollers;
+      if (scs && selfFrame.width > 0 && selfFrame.height > 0) {
+        const r = getBCR.call(el);
+        // Integer client sizes put a clip edge up to a pixel inside the true one.
+        const cutsX = scs.filter(
+          (s) => s.sx && (s.win.left > r.left + 1 || s.win.right < r.right - 1)
+        );
+        const cutsY = scs.filter(
+          (s) => s.sy && (s.win.top > r.top + 1 || s.win.bottom < r.bottom - 1)
+        );
+        if (cutsX.length || cutsY.length) {
+          const win = {
+            left: Math.max(0, ...cutsX.map((s) => s.win.left)),
+            top: Math.max(0, ...cutsY.map((s) => s.win.top)),
+            right: Math.min(w, ...cutsX.map((s) => s.win.right)),
+            bottom: Math.min(h, ...cutsY.map((s) => s.win.bottom)),
+          };
+          clipBounds = normRect(win);
+          if (getOwnerDocument.call(el) === document) {
+            const vis = intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h });
+            cut = { r: vis, scs, win, cutsX, cutsY };
+          }
+        }
+      }
     }
 
     const scrollable = isScrollable(el, style);
@@ -423,6 +928,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       frame: selfFrame,
       children: childResults,
     };
+    if (clipBounds) {
+      node.clipBounds = clipBounds;
+      if (cut) cuts.push({ ...cut, node });
+    }
     if (name) node.label = name;
     if (text && text !== name) node.value = text.slice(0, 200);
     if (id) node.identifier = id;
@@ -430,7 +939,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isDisabled(el)) node.disabled = true;
     if (isChecked(el)) node.checked = true;
     if (isPassword(el)) node.password = true;
-    if (scrollable) node.scrollable = true;
+    if (scrollable) {
+      node.scrollable = true;
+      if (inner.flow) node.clipFrame = normRect(inner.flow);
+    }
     // Input focus: el is its document's activeElement. Deliberately emitted to
     // EVERY describe consumer (the agent-facing tool as much as the flow type
     // directive's focus wait) — where the caret is is useful targeting info.
@@ -457,6 +969,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children: [],
   };
+  for (const { node, r, scs, win, cutsX, cutsY } of cuts) {
+    node.clipAnchors = {};
+    if (cutsX.length) node.clipAnchors.x = wheelAnchor(r, scs, cutsX, win, "sx");
+    if (cutsY.length) node.clipAnchors.y = wheelAnchor(r, scs, cutsY, win, "sy");
+  }
   return JSON.stringify({ tree: root, truncated });
 })()`;
 

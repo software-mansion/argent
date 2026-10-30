@@ -229,13 +229,16 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
     }
     return (
       settle +
-      // Name both axes: `normRect` clamps each edge on its own, so a
+      // Name both axes: the walker clips each edge on its own, so a
       // horizontally scrolled node comes back zero-WIDTH at a normal height.
-      "A zero-area frame in `describe` means off-viewport — zero height for a node above or " +
-      "below the viewport, zero width for one left or right of it, since the walker clamps " +
-      "each edge on its own — and the fix there is a `scroll-to` before the check rather than " +
-      "a different selector; a password field reaches the runner under the name `[password]`, " +
-      "so only an `id`/`role` selector can match it"
+      "A zero-area frame in `describe` means off-viewport or clipped by an `overflow` " +
+      "ancestor — zero height for a node cut off above or below, zero width for one cut off " +
+      "left or right, since the walker clips each edge on its own. Where a scroll reveals it " +
+      "(off-viewport, or in a scroller), the fix there is a `scroll-to` before the check rather " +
+      "than a different selector, with `within` naming a scroller away from the screen's " +
+      "center; one an `overflow: hidden` box clips stays hidden however the " +
+      "page scrolls. A password field reaches the runner under the name `[password]`, so only " +
+      "an `id`/`role` selector can match it"
     );
   }
   if (platform === "vega") {
@@ -287,8 +290,9 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "Both read the same DOM but project it differently, and here it is the RUNNER's side to " +
       "check: the live wait passed, so the recorder's tree did hold a matching element and its " +
       "5000-node walk limit is not what went wrong. The runner tree keeps only addressable nodes " +
-      "(id, label, value, clickable or focused) whose frame the walker did not clamp to zero " +
-      "area for being off-viewport, and it redacts a password field's name to `[password]`." +
+      "(id, label, value, clickable or focused) whose frame the walker did not clip to zero " +
+      "area (off-viewport, or cut off by an `overflow` ancestor), and it redacts a password " +
+      "field's name to `[password]`." +
       SCREEN_MAY_HAVE_MOVED
     );
   }

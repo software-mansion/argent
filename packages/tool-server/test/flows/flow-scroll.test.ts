@@ -301,6 +301,405 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("measures a `within` target against the container's clip window, not its frame", async () => {
+    // The pane clips its content short of its frame (a scrollbar along its
+    // bottom), so a half-revealed row is cut flush at 0.55, inside the frame.
+    const pane = () =>
+      n({
+        identifier: "pane",
+        frame: { x: 0, y: 0.3, width: 1, height: 0.3 },
+        clipFrame: { x: 0, y: 0.3, width: 1, height: 0.25 },
+      });
+    let scrolled = false;
+    currentTree = () =>
+      screen([
+        pane(),
+        n({
+          label: "Row 5",
+          frame: scrolled
+            ? { x: 0.1, y: 0.4, width: 0.8, height: 0.1 }
+            : { x: 0.1, y: 0.5, width: 0.8, height: 0.05 },
+        }),
+      ]);
+
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+
+    await writeFlow("clip-window", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 5" },
+          direction: "down",
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+
+    const tool = createRunFlowTool(registry);
+    const result = asRun(
+      await tool.execute({}, { name: "clip-window", project_root: tmpDir, device: DEVICE })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+  });
+
+  async function scrollTo(
+    name: string,
+    nodes: (scrolled: boolean) => DescribeNode[],
+    step: Record<string, unknown>
+  ): Promise<SwipeCall[]> {
+    let scrolled = false;
+    currentTree = () => screen(nodes(scrolled));
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      scrolled = true;
+    });
+    await writeFlow(name, {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", ...step } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, device: DEVICE })
+    );
+    expect(result.steps[0].status).toBe("pass");
+    return swipes;
+  }
+
+  const list = n({
+    identifier: "list",
+    scrollable: true,
+    frame: { x: 0, y: 0.1, width: 1, height: 0.8 },
+    clipFrame: { x: 0, y: 0.1, width: 1, height: 0.7 },
+  });
+
+  // A row cut flush at the bottom (0.8) of a list window spanning 0.4-0.8 on
+  // the right half, well inside the screen; one increment reveals it. The walker
+  // found a wheel at (0.3, 0.45) reaches the list.
+  const cutRow = (scrolled: boolean) =>
+    n({
+      identifier: "row",
+      frame: scrolled
+        ? { x: 0.6, y: 0.5, width: 0.3, height: 0.1 }
+        : { x: 0.6, y: 0.75, width: 0.3, height: 0.05 },
+      clipBounds: scrolled ? undefined : { x: 0, y: 0.4, width: 1, height: 0.4 },
+      clipAnchors: scrolled ? undefined : { y: { x: 0.3, y: 0.45 } },
+    });
+
+  it("scrolls a target its scroller cuts inside that scroller's clip window", async () => {
+    // The scroller has no identifier, so the flow tree holds no node for it.
+    const swipes = await scrollTo("cut-row", (scrolled) => [cutRow(scrolled)], {
+      target: { identifier: "row" },
+    });
+    expect(swipes).toHaveLength(1);
+    // At the walker's anchor, travelling half the window.
+    expect(swipes[0].fromX).toBeCloseTo(0.3);
+    expect(swipes[0].fromY).toBeCloseTo(0.45);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.2);
+  });
+
+  it("accepts a whole target flush with its scroller's far edge without scrolling", async () => {
+    const swipes = await scrollTo(
+      "flush-row",
+      () => [list, n({ identifier: "row", frame: { x: 0.1, y: 0.7, width: 0.8, height: 0.1 } })],
+      { target: { identifier: "row" } }
+    );
+    expect(swipes).toHaveLength(0);
+  });
+
+  it("ends the scroll once the clip cutting a target stops moving, whatever moves outside it", async () => {
+    // The list is at its end, so the row stays cut under a wheel at the anchor and
+    // one at the screen's centre, while each moves the page's top bar.
+    const swipes = await scrollTo(
+      "stuck-cut",
+      (scrolled) => [
+        n({
+          identifier: "bar",
+          label: scrolled ? "moved" : "still",
+          frame: { x: 0, y: 0, width: 1, height: 0.1 },
+        }),
+        cutRow(false),
+      ],
+      { target: { identifier: "row" } }
+    );
+    expect(swipes).toHaveLength(2);
+  });
+
+  it("retries a cut the anchor's wheel left in place where an uncut target's gesture goes", async () => {
+    // A wheel taker the walker cannot see (a closed shadow root's scroller, a
+    // page's wheel listener) holds the anchor, and the tree shows nothing move.
+    const pane = n({
+      identifier: "pane",
+      scrollable: true,
+      frame: { x: 0.5, y: 0.3, width: 0.5, height: 0.6 },
+    });
+    for (const within of [undefined, { identifier: "pane" }]) {
+      let wheels = 0;
+      currentTree = () => screen([pane, cutRow(wheels > 1)]);
+      const swipes: SwipeCall[] = [];
+      const registry = mockRegistry(swipes, () => {
+        wheels++;
+      });
+      await writeFlow("hidden-taker", {
+        executionPrerequisite: "",
+        steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" }, within }],
+      });
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "hidden-taker", project_root: tmpDir, device: DEVICE }
+        )
+      );
+      expect(result.steps[0].status).toBe("pass");
+      expect(swipes).toHaveLength(2);
+      expect([swipes[0].fromX, swipes[0].fromY]).toEqual([0.3, 0.45]);
+      // The screen's centre, else the named container's.
+      expect(swipes[1].fromX).toBeCloseTo(within ? 0.75 : 0.5);
+      expect(swipes[1].fromY).toBeCloseTo(within ? 0.6 : 0.5);
+      // Still no further than the row's visible start is from the window's (0.35).
+      expect(swipes[1].fromY - swipes[1].toY).toBeCloseTo(within ? 0.3 : 0.35);
+    }
+  });
+
+  it("keeps the anchor for a cut whose room recurs in a window of another length", async () => {
+    // The first wheel scrolls the inner of two cutting lists until it no longer
+    // cuts the row, leaving it as far from the outer list's window start.
+    const states = [
+      n({
+        identifier: "row",
+        frame: { x: 0.6, y: 0.75, width: 0.3, height: 0.1 },
+        clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+        clipAnchors: { y: { x: 0.3, y: 0.45 } },
+      }),
+      n({
+        identifier: "row",
+        frame: { x: 0.6, y: 0.65, width: 0.3, height: 0.1 },
+        clipBounds: { x: 0, y: 0.3, width: 1, height: 0.42 },
+        clipAnchors: { y: { x: 0.2, y: 0.35 } },
+      }),
+      n({ identifier: "row", frame: { x: 0.6, y: 0.5, width: 0.3, height: 0.1 } }),
+    ];
+    let wheels = 0;
+    currentTree = () => screen([states[Math.min(wheels, 2)]]);
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      wheels++;
+    });
+    await writeFlow("regrown-cut", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "regrown-cut", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes.map((sw) => [sw.fromX, sw.fromY])).toEqual([
+      [0.3, 0.45],
+      [0.2, 0.35],
+    ]);
+  });
+
+  it("stops once a cut target keeps its place in the clip while the page moves both", async () => {
+    // The list cannot scroll the row's cut away, so each wheel moves the page,
+    // carrying the list window and the row up together.
+    let pageScrolls = 0;
+    currentTree = () => {
+      const dy = -0.05 * pageScrolls;
+      return screen([
+        n({
+          identifier: "row",
+          frame: { x: 0.6, y: 0.75 + dy, width: 0.3, height: 0.05 },
+          clipBounds: { x: 0, y: 0.4 + dy, width: 1, height: 0.4 },
+          clipAnchors: { y: { x: 0.3, y: 0.45 + dy } },
+        }),
+      ]);
+    };
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      pageScrolls++;
+    });
+    await writeFlow("pinned-cut", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "pinned-cut", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(2);
+  });
+
+  it("scrolls a target cut by a scroller whose window spans the whole screen on the axis", async () => {
+    // A full-height side pane cuts the target at the screen's bottom edge.
+    const swipes = await scrollTo(
+      "full-height-cut",
+      (scrolled) => [
+        n({
+          identifier: "row",
+          frame: scrolled
+            ? { x: 0.05, y: 0.1, width: 0.25, height: 0.6 }
+            : { x: 0.05, y: 0.4, width: 0.25, height: 0.6 },
+          clipBounds: scrolled ? undefined : { x: 0, y: 0, width: 1, height: 1 },
+          clipAnchors: scrolled ? undefined : { y: { x: 0.175, y: 0.1 } },
+        }),
+      ],
+      { target: { identifier: "row" } }
+    );
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX).toBeCloseTo(0.175);
+    expect(swipes[0].fromY).toBeCloseTo(0.1);
+  });
+
+  it("scrolls a cut target with no wheel anchor on the axis like an uncut one", async () => {
+    // Nothing on screen hit-tests to the scroller cutting the row (an overlay covers it).
+    const swipes = await scrollTo(
+      "unanchored-cut",
+      (scrolled) => [n({ ...cutRow(scrolled), clipAnchors: undefined })],
+      { target: { identifier: "row" } }
+    );
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX).toBeCloseTo(0.5);
+    expect(swipes[0].fromY).toBeCloseTo(0.5);
+  });
+
+  it("anchors a horizontal scroll where the walker found a wheel reaches the cutter", async () => {
+    const swipes = await scrollTo(
+      "cut-left",
+      (scrolled) => [
+        n({
+          identifier: "card",
+          frame: scrolled
+            ? { x: 0.4, y: 0.3, width: 0.2, height: 0.1 }
+            : { x: 0.2, y: 0.3, width: 0.05, height: 0.1 },
+          clipBounds: scrolled ? undefined : { x: 0.2, y: 0, width: 0.6, height: 1 },
+          clipAnchors: scrolled ? undefined : { x: { x: 0.7, y: 0.32 } },
+        }),
+      ],
+      { target: { identifier: "card" }, direction: "left" }
+    );
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX).toBeCloseTo(0.7);
+    expect(swipes[0].fromY).toBeCloseTo(0.32);
+  });
+
+  it("scrolls a `within` target in the scroller cutting it, not at the named container's centre", async () => {
+    // A padded panel round the list, which does not scroll itself.
+    const panel = n({ identifier: "panel", frame: { x: 0, y: 0.2, width: 1, height: 0.75 } });
+    const swipes = await scrollTo("cut-within", (scrolled) => [panel, cutRow(scrolled)], {
+      target: { identifier: "row" },
+      within: { identifier: "panel" },
+    });
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromY).toBeCloseTo(0.45);
+  });
+
+  it("anchors a `within` gesture in the named container when the cut is across the axis", async () => {
+    const panel = n({ identifier: "panel", frame: { x: 0, y: 0.2, width: 1, height: 0.75 } });
+    const swipes = await scrollTo(
+      "cross-within",
+      (scrolled) => [
+        panel,
+        n({
+          identifier: "card",
+          frame: scrolled
+            ? { x: 0.6, y: 0.6, width: 0.2, height: 0.1 }
+            : { x: 0.6, y: 0.97, width: 0.2, height: 0.03 },
+          clipBounds: { x: 0.2, y: 0, width: 0.6, height: 1 },
+          clipAnchors: { x: { x: 0.7, y: 0.98 } },
+        }),
+      ],
+      { target: { identifier: "card" }, within: { identifier: "panel" } }
+    );
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX).toBeCloseTo(0.5);
+    expect(swipes[0].fromY).toBeCloseTo(0.575);
+  });
+
+  it("moves a cut target no further than its visible start is from the window's", async () => {
+    // A 0.4 window at 0.4-0.8 on the axis; the target is taller than half of it,
+    // and a 0.2 increment would carry its start past the window's.
+    const cases = [
+      { direction: "down", cut: { y: 0.5, height: 0.3 }, after: { y: 0.4, height: 0.35 } },
+      { direction: "up", cut: { y: 0.4, height: 0.3 }, after: { y: 0.45, height: 0.35 } },
+      { direction: "right", cut: { x: 0.5, width: 0.3 }, after: { x: 0.4, width: 0.35 } },
+      { direction: "left", cut: { x: 0.4, width: 0.3 }, after: { x: 0.45, width: 0.35 } },
+    ];
+    for (const { direction, cut, after } of cases) {
+      const vertical = direction === "up" || direction === "down";
+      const base = vertical ? { x: 0.6, width: 0.3 } : { y: 0.3, height: 0.1 };
+      const swipes = await scrollTo(
+        `room-${direction}`,
+        (scrolled) => [
+          n({
+            identifier: "card",
+            frame: { ...base, ...(scrolled ? after : cut) } as DescribeNode["frame"],
+            clipBounds: scrolled
+              ? undefined
+              : vertical
+                ? { x: 0, y: 0.4, width: 1, height: 0.4 }
+                : { x: 0.4, y: 0, width: 0.4, height: 1 },
+            clipAnchors: scrolled
+              ? undefined
+              : vertical
+                ? { y: { x: 0.75, y: 0.45 } }
+                : { x: { x: 0.45, y: 0.35 } },
+          }),
+        ],
+        { target: { identifier: "card" }, direction }
+      );
+      expect(swipes, direction).toHaveLength(1);
+      const travel = vertical
+        ? Math.abs(swipes[0].fromY - swipes[0].toY)
+        : Math.abs(swipes[0].fromX - swipes[0].toX);
+      expect(travel, direction).toBeCloseTo(0.1);
+    }
+  });
+
+  it("measures a `within` target against an inner scroller cutting it, not the container's window", async () => {
+    // The page pane's window runs on to 0.9; the inner list cuts the row at 0.8.
+    const pane = n({
+      identifier: "pane",
+      scrollable: true,
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      clipFrame: { x: 0, y: 0.1, width: 1, height: 0.8 },
+    });
+    const swipes = await scrollTo("inner-cut", (scrolled) => [pane, cutRow(scrolled)], {
+      target: { identifier: "row" },
+      within: { identifier: "pane" },
+    });
+    expect(swipes).toHaveLength(1);
+    // At the list's anchor: anchored on the pane, the gesture would carry the list along.
+    expect(swipes[0].fromX).toBeCloseTo(0.3);
+    expect(swipes[0].fromY).toBeCloseTo(0.45);
+  });
+
+  it("measures a target cut on the cross axis only against the screen along the scroll axis", async () => {
+    const swipes = await scrollTo(
+      "cross-cut",
+      () => [
+        n({
+          identifier: "row",
+          frame: { x: 0.2, y: 0.7, width: 0.5, height: 0.1 },
+          clipBounds: { x: 0.2, y: 0, width: 0.5, height: 1 },
+          clipAnchors: { x: { x: 0.3, y: 0.75 } },
+        }),
+      ],
+      { target: { identifier: "row" } }
+    );
+    expect(swipes).toHaveLength(0);
+  });
+
   it("accepts a last item flush at the far edge once the scroll hits its end", async () => {
     // The LAST item sits flush against the container's far edge at max scroll —
     // the axis check can never clear its entry edge. Since the tree stops
