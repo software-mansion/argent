@@ -27,15 +27,16 @@ export async function runEmuConsole(serial: string, args: string[]): Promise<str
  * The whole `adb emu` reply on one line, for an error message.
  *
  * Before auth the console refuses every command as unknown, and adb skips auth
- * unless its token file is a non-empty regular file (not a symlink), so that
- * reply also names the file.
+ * unless its token file is non-empty and, outside Windows, not a symlink (adb
+ * opens it with O_NOFOLLOW, which Windows lacks), so that reply also names the file.
  */
 export function describeConsoleReply(stdout: string): string {
   const lines = replyLines(stdout);
   const reply = lines.join("; ") || "empty reply";
   if (!lines.at(-1)?.startsWith("KO: unknown command")) return reply;
   const tokenFile = join(homedir(), ".emulator_console_auth_token");
-  return `${reply} (adb authenticates to the console with ${tokenFile}, which must be a regular file, not a symlink, holding the emulator's token)`;
+  const fileKind = process.platform === "win32" ? "a file" : "a regular file, not a symlink,";
+  return `${reply} (adb authenticates to the console with ${tokenFile}, which must be ${fileKind} holding the emulator's token)`;
 }
 
 function replyLines(stdout: string): string[] {
