@@ -237,6 +237,57 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return false;
   }
 
+  // Each walked element's scrollers, its own last when it scrolls; the elements a
+  // scroller cuts are anchored once the whole tree has been walked.
+  const chains = new globalThis.Map();
+  const cuts = [];
+
+  // The scroller a wheel at (x, y) scrolls along an axis: the innermost on the
+  // painted element's chain, the one Chrome latches to.
+  function wheelScroller(x, y, axis) {
+    let hit = elementsAt(document, x, y)[0];
+    for (let sr = hit && getShadowRoot.call(hit); sr; sr = getShadowRoot.call(hit)) {
+      const deeper = sr.elementsFromPoint(x, y)[0];
+      if (!deeper || deeper === hit) break;
+      hit = deeper;
+    }
+    for (let n = hit; n; ) {
+      if (chains.has(n)) {
+        const chain = chains.get(n) || [];
+        for (let i = chain.length - 1; i >= 0; i--) if (chain[i][axis]) return chain[i].el;
+        return null;
+      }
+      const p = getAssignedSlot.call(n) || getParentNode.call(n);
+      n = p && getNodeType.call(p) === 11 ? p.host : p;
+    }
+    return null;
+  }
+
+  // A point where a wheel reaches a scroller that cuts the element (visible part r)
+  // along the axis. Elsewhere the wheel may move an overlay's scroller, the element's
+  // own, or one nested in the cutter. The farthest along the axis comes first: content
+  // scrolling under the point mid-wheel takes the rest of it, and the element itself
+  // may scroll.
+  function wheelAnchor(r, cutters, axis) {
+    const points = [[(r.left + r.right) / 2, (r.top + r.bottom) / 2]];
+    for (const c of cutters) {
+      const v = intersect(c.win, { left: 0, top: 0, right: w, bottom: h });
+      for (const f of [0.1, 0.5, 0.9]) {
+        for (const g of [0.1, 0.5, 0.9]) {
+          points.push([v.left + (v.right - v.left) * f, v.top + (v.bottom - v.top) * g]);
+        }
+      }
+    }
+    const away = ([x, y]) =>
+      axis === "sx" ? Math.max(r.left - x, x - r.right) : Math.max(r.top - y, y - r.bottom);
+    points.sort((a, b) => away(b) - away(a));
+    for (const [x, y] of points) {
+      const s = wheelScroller(x, y, axis);
+      if (s && cutters.some((c) => c.el === s)) return { x: x / w, y: y / h };
+    }
+    return undefined;
+  }
+
   // An XHTML document keeps tagName lowercase.
   function htmlTag(el) {
     return getTagName.call(el).toUpperCase();
@@ -496,19 +547,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           bottom: cy ? p.bottom + clipMargin(el, style, oy, "Bottom", p.sy) : Infinity,
         };
         inner = intersect(clip, own);
-        // inner.scroll keeps only the edges a user can scroll content past.
-        const sx = ox === "auto" || ox === "scroll";
-        const sy = oy === "auto" || oy === "scroll";
-        const scroll = clip && clip.scroll;
-        inner.scroll =
-          sx || sy
-            ? intersect(scroll, {
-                left: sx ? own.left : -Infinity,
-                top: sy ? own.top : -Infinity,
-                right: sx ? own.right : Infinity,
-                bottom: sy ? own.bottom : Infinity,
-              })
-            : scroll;
+        // inner.scrollers lists, outermost first, the clippers on the chain that a user
+        // can scroll content past, with the axes they scroll along.
+        const sx =
+          (ox === "auto" || ox === "scroll") && getScrollWidth.call(el) > getClientWidth.call(el);
+        const sy =
+          (oy === "auto" || oy === "scroll") &&
+          getScrollHeight.call(el) > getClientHeight.call(el);
+        const scrollers = clip && clip.scrollers;
+        inner.scrollers =
+          sx || sy ? (scrollers || []).concat([{ el, sx, sy, win: own }]) : scrollers;
       }
     }
     return clipsWithin(el, style, clips, inner);
@@ -636,8 +684,18 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         y >= v.top &&
         y < v.bottom &&
         (x < e.left || x >= e.right || y < e.top || y >= e.bottom) &&
-        elementsAt(root, x, y).some((hit) => containsNode.call(el, hit))
+        elementsAt(root, x, y).some((hit) => containsNode.call(el, hit) && carried(el, hit))
     );
+  }
+
+  // Whether el's own painting puts hit where it is: no box between them is fixed or
+  // absolute, which would paint by its own containing block, escaping el's clips.
+  function carried(el, hit) {
+    for (let n = hit; n && n !== el; n = getParentNode.call(n)) {
+      const position = window.getComputedStyle(n).position;
+      if (position === "fixed" || position === "absolute") return false;
+    }
+    return true;
   }
 
   // Smallest normalized box covering every surviving child frame — the frame we give
@@ -693,6 +751,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
     const inner = childClips(el, style, clips, clip);
     if (htmlTag(el) === "SLOT") slotClips.set(el, inner);
+    chains.set(el, inner.flow && inner.flow.scrollers);
 
     // Pierce open shadow roots — closed roots are unreachable by design.
     // Web-components-heavy apps (VS Code, every Lit/Polymer SPA) put their
@@ -783,7 +842,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // with this child- or content-spanning frame.)
     let selfFrame;
     let clipBounds;
-    let clipAxes;
+    let cut;
     if (bl) {
       selfFrame = unionFrame(childResults);
       if (text && selfFrame.width <= 0 && selfFrame.height <= 0) {
@@ -811,21 +870,27 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     } else {
       selfFrame = frame(el, clip);
-      const sc = clip && clip.scroll;
-      if (sc && selfFrame.width > 0 && selfFrame.height > 0) {
+      const scs = clip && clip.scrollers;
+      if (scs && selfFrame.width > 0 && selfFrame.height > 0) {
         const r = getBCR.call(el);
         // Integer client sizes put a clip edge up to a pixel inside the true one.
-        const cutX = sc.left > r.left + 1 || sc.right < r.right - 1;
-        const cutY = sc.top > r.top + 1 || sc.bottom < r.bottom - 1;
-        if (cutX || cutY) {
-          clipAxes = (cutX ? "x" : "") + (cutY ? "y" : "");
-          const c = normRect(sc);
-          clipBounds = {
-            x: cutX ? c.x : 0,
-            y: cutY ? c.y : 0,
-            width: cutX ? c.width : 1,
-            height: cutY ? c.height : 1,
-          };
+        const cutsX = scs.filter(
+          (s) => s.sx && (s.win.left > r.left + 1 || s.win.right < r.right - 1)
+        );
+        const cutsY = scs.filter(
+          (s) => s.sy && (s.win.top > r.top + 1 || s.win.bottom < r.bottom - 1)
+        );
+        if (cutsX.length || cutsY.length) {
+          const c = normRect({
+            left: Math.max(0, ...cutsX.map((s) => s.win.left)),
+            top: Math.max(0, ...cutsY.map((s) => s.win.top)),
+            right: Math.min(w, ...cutsX.map((s) => s.win.right)),
+            bottom: Math.min(h, ...cutsY.map((s) => s.win.bottom)),
+          });
+          clipBounds = c;
+          if (getOwnerDocument.call(el) === document) {
+            cut = { r: intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h }), cutsX, cutsY };
+          }
         }
       }
     }
@@ -855,7 +920,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     };
     if (clipBounds) {
       node.clipBounds = clipBounds;
-      node.clipAxes = clipAxes;
+      if (cut) cuts.push({ ...cut, node });
     }
     if (name) node.label = name;
     if (text && text !== name) node.value = text.slice(0, 200);
@@ -894,6 +959,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children: [],
   };
+  for (const { node, r, cutsX, cutsY } of cuts) {
+    const x = cutsX.length ? wheelAnchor(r, cutsX, "sx") : undefined;
+    const y = cutsY.length ? wheelAnchor(r, cutsY, "sy") : undefined;
+    if (x || y) node.clipAnchors = x && y ? { x, y } : x ? { x } : { y };
+  }
   return JSON.stringify({ tree: root, truncated });
 })()`;
 

@@ -51,6 +51,16 @@ function defineNative(proto: object, prop: string, field: string): void {
 }
 defineNative(MockNode.prototype, "childNodes", "__childNodes");
 defineNative(MockNode.prototype, "textContent", "__textContent");
+// A node belongs to the page's document unless a fixture gives it another.
+Object.defineProperty(MockNode.prototype, "ownerDocument", {
+  get(this: Record<string, unknown>) {
+    return this.__ownerDocument ?? (globalThis as Record<string, unknown>).document;
+  },
+  set(this: Record<string, unknown>, v: unknown) {
+    this.__ownerDocument = v;
+  },
+  configurable: true,
+});
 defineNative(MockElement.prototype, "tagName", "__tagName");
 defineNative(MockElement.prototype, "children", "__children");
 defineNative(MockElement.prototype, "shadowRoot", "__shadowRoot");
@@ -78,8 +88,9 @@ elementProto.getAttribute = function (this: Record<string, unknown>, n: string) 
 elementProto.hasAttribute = function (this: Record<string, unknown>, n: string) {
   return n in ((this.__attrs as Record<string, string>) ?? {});
 };
-// Hit testing: the elements of a tree whose `painted` rect holds the point. A shadow
-// root's own tree is separate, so the document never returns a shadow tree's nodes.
+// Hit testing: the elements of a tree whose `painted` rect holds the point, the last in
+// tree order on top. A shadow root's own tree is separate, so the document never
+// returns a shadow tree's nodes.
 function paintedAt(nodes: unknown[], x: number, y: number): unknown[] {
   const hits: unknown[] = [];
   const visit = (n: Record<string, unknown>) => {
@@ -88,7 +99,7 @@ function paintedAt(nodes: unknown[], x: number, y: number): unknown[] {
     for (const k of (n.__children as Record<string, unknown>[]) ?? []) visit(k);
   };
   for (const n of nodes) visit(n as Record<string, unknown>);
-  return hits;
+  return hits.reverse();
 }
 const nodeProto = MockNode.prototype as unknown as Record<string, unknown>;
 nodeProto.contains = function (this: Record<string, unknown>, other: unknown): boolean {
@@ -1022,6 +1033,7 @@ function scroller(children: MockElement[], opts: Opts = {}): MockElement {
     rect: { x: 0, y: 0, w: 300, h: 100 },
     client: { left: 1, top: 1, width: 285, height: 98 },
     offset: { width: 300, height: 100 },
+    scrollSize: { width: 285, height: 400 },
     ...opts,
     style: { overflow: "auto", ...opts.style },
     children,
@@ -1051,22 +1063,60 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "sc")).toEqual({ x: 0, y: 0, w: 300, h: 100 });
   });
 
-  it("names the axes a scroll container cuts along, even one spanning the whole screen", () => {
-    const { tree } = run([
-      scroller([row("cut", { x: 1, y: 950, w: 285, h: 100 })], {
+  it("anchors a cut where a wheel reaches the scroller cutting it, farthest from the element", () => {
+    // A pane spanning the whole screen height cuts the row at the screen's bottom.
+    const pane = (kids: MockElement[], painted?: Rect) =>
+      scroller(kids, {
         rect: { x: 0, y: 0, w: 300, h: H },
         client: { left: 0, top: 0, width: 285, height: H },
         offset: { width: 300, height: H },
-      }),
-    ]);
-    expect(pxFrame(tree, "cut", "clipBounds")).toEqual({ x: 0, y: 0, w: W, h: H });
-    expect(findById(tree, "cut")?.clipAxes).toBe("y");
+        scrollSize: { width: 285, height: 2 * H },
+        painted,
+      });
+    const cutRow = (painted?: Rect) =>
+      el({ attrs: { id: "cut" }, rect: { x: 1, y: 950, w: 285, h: 100 }, painted });
+    const PANE = { x: 0, y: 0, w: 300, h: H };
+    const plain = run([pane([cutRow()], PANE)]).tree;
+    expect(pxFrame(plain, "cut", "clipBounds")).toEqual({ x: 0, y: 0, w: W, h: H });
+    expect(findById(plain, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.1 } });
+    // A fixed bar over the pane's upper part: the wheel there scrolls the page.
+    const bar = el({
+      rect: { x: 0, y: 0, w: 300, h: 300 },
+      painted: { x: 0, y: 0, w: 300, h: 300 },
+      style: { position: "fixed" },
+    });
+    const barred = run([pane([cutRow()], PANE), bar]).tree;
+    expect(findById(barred, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.5 } });
+    // The row scrolls itself, so a wheel on it moves the row's content instead.
+    const own = el({
+      attrs: { id: "cut" },
+      rect: { x: 1, y: 950, w: 285, h: 100 },
+      client: { left: 0, top: 0, width: 285, height: 100 },
+      scrollSize: { width: 285, height: 400 },
+      style: { overflow: "auto" },
+      painted: { x: 1, y: 950, w: 285, h: 50 },
+    });
+    const self = run([pane([own], { x: 0, y: 940, w: 300, h: 60 })]).tree;
+    expect(findById(self, "cut")!.clipAnchors).toBeUndefined();
+    // Nothing on screen hit-tests to the pane: no anchor, though the cut stands.
+    const unseen = run([pane([cutRow()])]).tree;
+    expect(pxFrame(unseen, "cut", "clipBounds")).toEqual({ x: 0, y: 0, w: W, h: H });
+    expect(findById(unseen, "cut")!.clipAnchors).toBeUndefined();
   });
 
   it("reports clipBounds only where a scroll container cuts by more than a pixel", () => {
-    const tree = (style: Record<string, string>, rect: Rect) =>
-      run([scroller([row("r", rect)], { style })]).tree;
+    const tree = (
+      style: Record<string, string>,
+      rect: Rect,
+      scrollSize = { width: 400, height: 400 }
+    ) => run([scroller([row("r", rect)], { style, scrollSize })]).tree;
     const PART = { x: 1, y: 81, w: 285, h: 40 };
+    // A scroller with no overflow along an axis has nothing to scroll there.
+    expect(
+      findById(tree({}, { x: -40, y: 1, w: 100, h: 20 }, { width: 285, height: 400 }), "r")!
+        .clipBounds
+    ).toBeUndefined();
+    expect(findById(tree({}, PART, { width: 400, height: 98 }), "r")!.clipBounds).toBeUndefined();
     // overflow: hidden or clip and paint containment cut for good: no gesture uncuts them.
     const fixedClips: Record<string, string>[] = [
       { overflow: "hidden" },
@@ -1139,20 +1189,33 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     });
   });
 
-  it("reports the window every scroll container cutting the element leaves", () => {
-    // The inner list's window runs to 150; the outer one's stops at 99.
-    const { tree } = run([
-      scroller([
-        el({
-          rect: { x: 1, y: 50, w: 200, h: 100 },
-          client: { left: 0, top: 0, width: 200, height: 100 },
-          offset: { width: 200, height: 100 },
-          style: { overflow: "auto" },
-          children: [row("r", { x: 1, y: 80, w: 200, h: 40 })],
-        }),
-      ]),
-    ]);
-    expect(pxFrame(tree, "r", "clipBounds")).toEqual({ x: 0, y: 50, w: 1000, h: 49 });
+  it("reports the window the scroll containers cutting the element leave, not one holding it", () => {
+    // The inner list's window runs 50-150; the outer one's stops at 99.
+    const nested = (rect: Rect) =>
+      run([
+        scroller([
+          el({
+            rect: { x: 1, y: 50, w: 200, h: 100 },
+            client: { left: 0, top: 0, width: 200, height: 100 },
+            offset: { width: 200, height: 100 },
+            scrollSize: { width: 200, height: 400 },
+            style: { overflow: "auto" },
+            children: [row("r", rect)],
+          }),
+        ]),
+      ]).tree;
+    expect(pxFrame(nested({ x: 1, y: 40, w: 200, h: 130 }), "r", "clipBounds")).toEqual({
+      x: 0,
+      y: 50,
+      w: 1000,
+      h: 49,
+    });
+    expect(pxFrame(nested({ x: 1, y: 80, w: 200, h: 40 }), "r", "clipBounds")).toEqual({
+      x: 0,
+      y: 1,
+      w: 1000,
+      h: 98,
+    });
   });
 
   it("reports the scroll container's window, not a fixed clip's inside it", () => {
@@ -1176,7 +1239,11 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
   });
 
   it("clips by the padding box, so a row under the scrollbar is cut there", () => {
-    const { tree } = run([scroller([row("wide", { x: 1, y: 1, w: 400, h: 20 })])]);
+    const { tree } = run([
+      scroller([row("wide", { x: 1, y: 1, w: 400, h: 20 })], {
+        scrollSize: { width: 400, height: 400 },
+      }),
+    ]);
     expect(pxFrame(tree, "wide")).toEqual({ x: 1, y: 1, w: 285, h: 20 });
     expect(pxFrame(tree, "wide", "clipBounds")).toEqual({ x: 1, y: 0, w: 285, h: 1000 });
   });
@@ -1365,6 +1432,17 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       }),
     ]).tree;
     expect(pxFrame(nested, "nested")).toEqual(box);
+    // A fixed descendant paints by its own containing block, not by the child's slot.
+    const bar = { x: 1, y: 120, w: 285, h: 60 };
+    const nav = el({ rect: bar, painted: bar, style: { position: "fixed" } });
+    const feed = el({
+      attrs: { id: "feed" },
+      rect: { x: 1, y: 1, w: 285, h: 200 },
+      children: [nav],
+    });
+    (nav as unknown as Record<string, unknown>).parentNode = feed;
+    const fixed = run([popup(feed)]).tree;
+    expect(pxFrame(fixed, "feed")).toEqual({ x: 1, y: 1, w: 285, h: 98 });
   });
 
   it("keeps clipping a custom element's child the page hit-tests only within a pixel of the clip", () => {

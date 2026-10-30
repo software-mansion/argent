@@ -9,6 +9,13 @@ const describeFrameSchema = z.object({
 
 export type DescribeFrame = z.infer<typeof describeFrameSchema>;
 
+const describePointSchema = z.object({
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+});
+
+type DescribePoint = z.infer<typeof describePointSchema>;
+
 export interface DescribeNode {
   role: string;
   frame: DescribeFrame;
@@ -30,8 +37,9 @@ export interface DescribeNode {
   // Where scroll containers cut the element by more than a pixel (Chromium):
   // their window along each axis they cut it, the whole screen along the other.
   clipBounds?: DescribeFrame;
-  // The axes `clipBounds` cuts along: a window spanning the whole screen can cut too.
-  clipAxes?: "x" | "y" | "xy";
+  // Per axis of `clipBounds`, a point where a wheel scrolls a scroller that cuts the
+  // element; absent where none was found on screen.
+  clipAnchors?: { x?: DescribePoint; y?: DescribePoint };
   checkable?: boolean;
   checked?: boolean;
   disabled?: boolean;
@@ -59,7 +67,9 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       scrollable: z.boolean().optional(),
       clipFrame: describeFrameSchema.optional(),
       clipBounds: describeFrameSchema.optional(),
-      clipAxes: z.enum(["x", "y", "xy"]).optional(),
+      clipAnchors: z
+        .object({ x: describePointSchema.optional(), y: describePointSchema.optional() })
+        .optional(),
       checkable: z.boolean().optional(),
       checked: z.boolean().optional(),
       disabled: z.boolean().optional(),

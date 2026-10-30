@@ -742,8 +742,8 @@ function leadingRoom(
 }
 
 /**
- * Dispatch one momentum-free scroll increment anchored at the center of
- * `anchor`, else of `region`. The anchor (the touch-down / wheel point) is what selects the scroll
+ * Dispatch one momentum-free scroll increment anchored at `anchor`, else at the
+ * center of `region`. The anchor (the touch-down / wheel point) is what selects the scroll
  * container — the OS routes the gesture to the innermost scroller hit-tested
  * there — so anchoring inside a `within` region is how nested scrollers are
  * disambiguated. The travel is half the region along the axis (only the end
@@ -759,11 +759,10 @@ async function scrollIncrement(
   direction: ScrollDirection,
   region: DescribeFrame,
   limit = Infinity,
-  anchor: DescribeFrame | undefined = undefined
+  anchor: { x: number; y: number } | undefined = undefined
 ): Promise<string | undefined> {
-  const at = anchor ?? region;
-  const cx = clamp01(at.x + at.width / 2);
-  const cy = clamp01(at.y + at.height / 2);
+  const cx = clamp01(anchor ? anchor.x : region.x + region.width / 2);
+  const cy = clamp01(anchor ? anchor.y : region.y + region.height / 2);
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
   const dist = Math.min(limit, SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
@@ -852,12 +851,12 @@ async function scrollToVisible(
     const orientation = readingOrientation(env);
     const axisDirection = nativeDirection(direction, orientation);
 
-    // A target a scroll container cuts along the axis (`clipAxes`) is scrolled
-    // inside that scroller, whether or not the tree has a node for it: the
-    // gesture is anchored on the target's visible part, which hit-tests to the
-    // scroller holding it, and its region is the cutting window along the axis.
-    // A gesture anchored elsewhere moves another scroller, or what holds this
-    // one, carrying the cut along. Any other gesture is anchored inside the
+    // A target a scroll container cuts along the axis is scrolled inside that
+    // scroller, whether or not the tree has a node for it: the gesture is anchored
+    // where the walker found a wheel reaches a cutting scroller (`clipAnchors`),
+    // and its region is the cutting window along the axis. A gesture anchored
+    // elsewhere moves another scroller, or what holds this one, carrying the cut
+    // along. Any other gesture is anchored inside the
     // container (so the right nested scroller moves), or spans the whole screen
     // when none is named. The axis check measures the target against the window
     // that cuts it, else the one the container clips its content to, else the
@@ -870,7 +869,8 @@ async function scrollToVisible(
     const frame = targetNode?.frame;
     const cut = frame && targetNode.clipBounds;
     const vertical = axisDirection === "up" || axisDirection === "down";
-    const axisCut = cut && targetNode.clipAxes?.includes(vertical ? "y" : "x") ? cut : undefined;
+    const anchor = cut && targetNode.clipAnchors?.[vertical ? "y" : "x"];
+    const axisCut = anchor ? cut : undefined;
     const region =
       frame && axisCut
         ? vertical
@@ -881,7 +881,7 @@ async function scrollToVisible(
       return { frame, ...warnedBy(warning) };
     }
     // A cut that the last increment left where it was is one its scroller cannot
-    // scroll away (negative overflow): further wheels only chain to the page.
+    // scroll away (it is at its end): further wheels only chain to the page.
     const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
     if (room !== undefined && prevRoom !== undefined && Math.abs(room - prevRoom) < 1e-4) {
       return { frame: frame!, ...warnedBy(warning) };
@@ -917,7 +917,7 @@ async function scrollToVisible(
 
     // A cut target moves no further than its visible start is from the
     // window's, or one taller than half the window would be carried past it.
-    warning ??= await scrollIncrement(env, axisDirection, region, room, axisCut && frame);
+    warning ??= await scrollIncrement(env, axisDirection, region, room, anchor);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
