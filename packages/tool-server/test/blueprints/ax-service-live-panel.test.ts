@@ -254,7 +254,7 @@ describe("ax-service livePanel", () => {
 });
 
 describe("ax-service tree", () => {
-  it("answers the daemon's nodes, alert state, truncation and front app", async () => {
+  it("answers the daemon's nodes, alert state, truncation, front app and orientation", async () => {
     answers.set("tree", {
       alertVisible: true,
       screenFrame: { width: 402, height: 874 },
@@ -264,7 +264,8 @@ describe("ax-service tree", () => {
       ],
       truncated: true,
       foregroundApp: "com.example.app",
-      treeVersion: 2,
+      interfaceOrientation: "landscapeRight",
+      treeVersion: 3,
     });
     const api = await attach();
     expect(await api.tree()).toEqual({
@@ -276,7 +277,8 @@ describe("ax-service tree", () => {
       ],
       truncated: true,
       foregroundApp: "com.example.app",
-      treeVersion: 2,
+      interfaceOrientation: "landscapeRight",
+      treeVersion: 3,
     });
   });
 
@@ -284,6 +286,6 @@ describe("ax-service tree", () => {
     const api = await attach();
     const err = await api.tree().catch((e: unknown) => e);
     expect((err as Error).message).toBe("ax-service predates `tree`; update argent");
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AX_QUERY_FAILED);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AX_TREE_UNSUPPORTED);
   });
 });

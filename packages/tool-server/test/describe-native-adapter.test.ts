@@ -3,6 +3,7 @@ import {
   adaptNativeDescribeElementToDescribeNode,
   adaptNativeDescribeToDescribeResult,
   mapNativeTraitsToDescribeRole,
+  NATIVE_DESCRIBE_ROLES,
 } from "../src/tools/describe/platforms/ios/ios-native-adapter";
 import type { NativeDescribeScreenResult } from "../src/tools/native-devtools/native-describe-contract";
 
@@ -10,11 +11,33 @@ describe("describe native adapter", () => {
   it("maps native traits to public describe roles", () => {
     expect(mapNativeTraitsToDescribeRole(["header"])).toBe("AXHeading");
     expect(mapNativeTraitsToDescribeRole(["button"])).toBe("AXButton");
-    expect(mapNativeTraitsToDescribeRole(["toggleButton"])).toBe("AXButton");
+    // UIKit gives a switch both traits; XCTest calls it a Switch.
+    expect(mapNativeTraitsToDescribeRole(["toggleButton"])).toBe("AXSwitch");
+    expect(mapNativeTraitsToDescribeRole(["button", "toggleButton"])).toBe("AXSwitch");
     expect(mapNativeTraitsToDescribeRole(["staticText"])).toBe("AXStaticText");
     expect(mapNativeTraitsToDescribeRole(["textEntry"])).toBe("AXTextField");
     expect(mapNativeTraitsToDescribeRole(["searchField", "textEntry"])).toBe("AXTextField");
     expect(mapNativeTraitsToDescribeRole([])).toBe("AXGroup");
+  });
+
+  it("lists every role the trait mapping returns", () => {
+    // Flows call a selector role outside this list stale on an iOS simulator.
+    const traits = [
+      "header",
+      "toggleButton",
+      "button",
+      "searchField",
+      "textEntry",
+      "link",
+      "image",
+    ];
+    const more = ["staticText", "tabBar", "adjustable", "selected", "keyboardKey"];
+    const all = [...traits, ...more];
+    const seen = new Set<string>();
+    for (let mask = 0; mask < 1 << all.length; mask++) {
+      seen.add(mapNativeTraitsToDescribeRole(all.filter((_, i) => mask & (1 << i))));
+    }
+    expect([...seen].sort()).toEqual([...NATIVE_DESCRIBE_ROLES].sort());
   });
 
   it("converts a native element into a leaf describe node", () => {

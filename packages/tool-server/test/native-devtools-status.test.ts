@@ -26,7 +26,6 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => {
   };
 });
 
-import { flowLaunchGateReason } from "../src/tools/flows/flow-run";
 import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-devtools-status";
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
 import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
@@ -1400,13 +1399,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     const surfaces: [string, string][] = [
       ...(Object.keys(ALL_STATES) as NativeDevtoolsAppState[])
         .filter((s): s is Exclude<NativeDevtoolsAppState, "connected"> => s !== "connected")
-        .flatMap((s): [string, string][] => [
-          [`${s} message`, buildAppStateMessage("com.example.app", s)],
-          // The flow gate rewrites every state for a reader who has just
-          // launched, so it is a second copy of the same remedies on a surface
-          // none of the verbatim pins reach.
-          [`${s} flow-gate reason`, flowLaunchGateReason("com.example.app", s)],
-        ]),
+        .map((s): [string, string] => [`${s} message`, buildAppStateMessage("com.example.app", s)]),
       ["native-devtools-status description", nativeDevtoolsStatusTool.description!],
       ...tools.map((t): [string, string] => [`${t.id} description`, t.description!]),
     ];

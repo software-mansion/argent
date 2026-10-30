@@ -103,6 +103,10 @@ export interface DescribeTreeData {
   // into the frame space with this. Absent when the source does not report
   // it, which is when its frames are in the UI's own space.
   uiOrientation?: UiOrientation;
+  // The source cut its walk short (a node, depth or time cap): what it found is
+  // real, but an element past the cut reads as absent. Set by the iOS
+  // simulator flow tree.
+  truncated?: boolean;
 }
 
 /** Interface orientation as UIKit names it, relative to the portrait-native screen. */

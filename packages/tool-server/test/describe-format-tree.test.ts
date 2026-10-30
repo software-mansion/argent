@@ -121,6 +121,7 @@ describe("formatDescribeTree", () => {
           frame: { x: 0.1, y: 0.3, width: 0.3, height: 0.2 },
         }),
         leaf({ role: "AXButton", frame: { x: 0.4, y: 0.5, width: 0.2, height: 0.1 } }),
+        leaf({ role: "AXSwitch", frame: { x: 0.4, y: 0.6, width: 0.2, height: 0.05 } }),
         // AXGroup with no label is a pure container — should still be dropped.
         leaf({ role: "AXGroup", frame: { x: 0.7, y: 0.7, width: 0.2, height: 0.1 } }),
       ],
@@ -130,6 +131,7 @@ describe("formatDescribeTree", () => {
     expect(lines.some((l) => /^\s*AXImage\b/.test(l) && !l.includes('"'))).toBe(true);
     expect(lines.some((l) => l.includes('"Hero illustration"'))).toBe(true);
     expect(lines.some((l) => /^\s*AXButton\b/.test(l) && !l.includes('"'))).toBe(true);
+    expect(lines.some((l) => /^\s*AXSwitch\b/.test(l))).toBe(true);
     expect(lines.some((l) => /^\s*AXGroup\b/.test(l))).toBe(false);
   });
 

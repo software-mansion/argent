@@ -43,6 +43,20 @@ const root = node({
   ],
 });
 
+describe("whitespace folding", () => {
+  const node = {
+    role: "AXStaticText",
+    frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    children: [],
+    label: "Hubert\u00A0Gancarczyk",
+  };
+  it("matches a label joined with a no-break space from a plain-space selector", () => {
+    expect(matchNode(node, { text: "Hubert Gancarczyk" })).toBe(true);
+    expect(textMatches(node.label, "hubert gancarczyk", "equals")).toBe(true);
+    expect(textMatches(node.label, "Hubert  Gancarczyk", "contains")).toBe(true);
+  });
+});
+
 describe("ui-tree-match", () => {
   it("nodeAtPoint returns the smallest element under a point", () => {
     // (0.2, 0.15) sits inside both the button and the surrounding group; the
@@ -143,6 +157,36 @@ describe("ui-tree-match", () => {
     ).toEqual({ role: "AXButton" });
   });
 
+  it("deriveSelector takes no text from a toggle's state or a password's value", () => {
+    const frame = { x: 0, y: 0, width: 0.1, height: 0.1 };
+    // A switch's "0"/"1" flips with every tap: it names no element.
+    expect(deriveSelector(node({ role: "AXSwitch", value: "0", checked: false, frame }))).toEqual({
+      role: "AXSwitch",
+    });
+    expect(deriveSelector(node({ role: "AXSwitch", value: "1", checked: true, frame }))).toEqual({
+      role: "AXSwitch",
+    });
+    // Its label still names it.
+    expect(
+      deriveSelector(node({ role: "AXSwitch", label: "Wi-Fi", value: "1", checked: true, frame }))
+    ).toEqual({ text: "Wi-Fi" });
+    expect(
+      deriveSelector(node({ role: "AXTextField", value: "hunter2", password: true, frame }))
+    ).toEqual({ role: "AXTextField" });
+    expect(
+      deriveSelector(
+        node({ role: "AXTextField", label: "Password", value: "•••", password: true, frame })
+      )
+    ).toEqual({ text: "Password" });
+    // A value that is no state stays text: Chromium puts a button's own text there.
+    expect(deriveSelector(node({ role: "button", value: "Edit", frame }))).toEqual({
+      text: "Edit",
+    });
+    expect(deriveSelector(node({ role: "AXStaticText", value: "0", frame }))).toEqual({
+      text: "0",
+    });
+  });
+
   it("deriveSelector refuses invisible-only text (icon-font PUA glyphs, zero-width chars)", () => {
     const frame = { x: 0, y: 0, width: 0.1, height: 0.1 };
     // The QA repro: an expo-router tab-bar icon whose accessibility label is
@@ -224,16 +268,30 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "x", [field], "contains")).toBe(false);
   });
 
-  it("a regex text condition does not read an iOS text field with no text as empty", () => {
-    // The simulator's view tree has no typed text: a field holding "Rex" reads "".
+  it("a regex text condition reads an empty iOS text field as an empty string", () => {
+    // The iOS tree carries typed text and an empty field's placeholder, so a
+    // field with neither is empty.
     const field = node({
       role: "AXTextField",
       identifier: "name",
       frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
     });
 
+    expect(evaluateCondition("text", "^$", [field], "matches")).toBe(true);
+    expect(evaluateCondition("text", "^(?!.*Rex)", [field], "matches")).toBe(true);
+  });
+
+  it("a regex text condition does not read a password field with no text as empty", () => {
+    // The iOS tree drops a typed secret: a field holding one reads "".
+    const field = node({
+      role: "AXTextField",
+      identifier: "password",
+      password: true,
+      frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.05 },
+    });
+
     expect(evaluateCondition("text", "^$", [field], "matches")).toBe(false);
-    expect(evaluateCondition("text", "^(?!.*Rex)", [field], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^(?!.*hunter2)", [field], "matches")).toBe(false);
   });
 
   it("a regex text condition does not read a container with hoisted text as empty", () => {

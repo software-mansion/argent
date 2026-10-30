@@ -15,6 +15,7 @@ import {
   evaluateCondition,
   firstInReadingOrder,
   frameContains,
+  identifierMatches,
   isVisible,
   assertText,
   nodeText,
@@ -28,6 +29,9 @@ import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
+import { readIosSimulatorUiTree } from "./flow-ios-tree";
+import { NATIVE_DESCRIBE_ROLES } from "../describe/platforms/ios/ios-native-adapter";
+import type { UiTreeNode } from "../ui-tree";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -65,8 +69,8 @@ import {
 } from "./flow-utils";
 
 /**
- * The app an iOS tree read should describe, and how far the runner will vouch
- * for it (see `queryFullHierarchyTree` for what each level buys).
+ * The app an iOS simulator tree read expects in the foreground, and whether the
+ * runner vouches for it (see `queryIosSimulatorFlowTree`).
  */
 export interface FlowTreeTarget {
   /**
@@ -76,24 +80,10 @@ export interface FlowTreeTarget {
   bundleId: string;
   /**
    * Whether the runner still vouches that `bundleId` is what is on screen. A
-   * pinned read targets it directly, skipping the auto-resolve fan-out that
-   * probes every connected app. Unpinned, it is only a hint: auto-resolve
-   * decides the target, and `bundleId` breaks the tie solely when that
-   * resolution times out.
+   * pinned read fails when the tree names another foreground app (the app
+   * crashed, or a step opened another one). Unpinned, the id is only a hint.
    */
   pinned: boolean;
-  /**
-   * Whether a pinned read's `Application.getState` probe has ever answered for
-   * THIS target. MUTATED IN PLACE by `queryFullHierarchyTree` (its only writer
-   * after construction) so every read of the same pin sees it — `deviceEnv`
-   * shallow-spreads the run state, so they all reach the same object.
-   *
-   * It is the only evidence the runner has that the app's main queue was ever
-   * serviced, which tells the two causes of a timed-out probe apart. A later
-   * `launch` builds a fresh target, since a re-pinned app cold-starts again;
-   * an unpinned target neither consults nor arms it.
-   */
-  probeAnswered: boolean;
 }
 
 /** Everything a directive needs to act on the run's device. */
@@ -106,10 +96,8 @@ export interface ActionEnv {
    * The app the run's most recent successful `launch` step started - or, after
    * a `tool:` `launch-app`/`restart-app` step, the app that step's own args
    * named - and whether the runner still vouches for it being on screen.
-   * Demoted to an unpinned hint by a raw `tool:` step (its effect on the
-   * foreground is opaque to the runner), dropped outright by a `tool:` step
-   * that can change the foreground app and by a launch attempt until it
-   * succeeds (see `FOREGROUND_CHANGING_TOOLS` in flow-run). Shared with nested
+   * Other raw `tool:` steps keep it; a launch attempt drops it until it
+   * succeeds (see `runLaunch` in flow-run). Shared with nested
    * `run:` flows, since ExecState is per-run. Only iOS tree reads consume it
    * (see `fetchFlowTree`).
    */
@@ -118,9 +106,8 @@ export interface ActionEnv {
    * Run-scoped memo of a tree source that answered nothing: written by a
    * {@link settleTree} that failed every read attempt, cleared by any directive
    * read that comes back — they all go through {@link readFlowTree} — by a
-   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), by a
-   * raw `tool:` step that demotes a pinned {@link ActionEnv.treeTarget}, and by
-   * a nested orchestrator step, which can do either out of this holder's sight.
+   * relaunch (`launch:` or one of flow-run's `FOREGROUND_CHANGING_TOOLS`), and
+   * by a nested orchestrator step, which can do either out of this holder's sight.
    * One holder per run, built in flow-run's ExecState and shared by every
    * `deviceEnv`. A `tool:` step's own read clears nothing: it goes through
    * `invokeSubTool` and never reaches {@link readFlowTree}. Nor is the clear
@@ -248,6 +235,7 @@ const TYPE_FOCUS_TIMEOUT_MS = 3000;
 //   the whole timeout on every type step.
 // - "xcuitest-runner" emits focused, but first-responder handoff on hardware is unverified. Keep the fixed settle.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
+  "ax-service",
   "native-devtools",
   "android-devtools",
   "cdp-dom",
@@ -804,6 +792,12 @@ async function scrollToVisible(
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
   let warning: string | undefined;
+  // The target never showed: say so when it looks stale.
+  const missed = async (reason: string): Promise<ScrollResolve> => {
+    const stale = await staleSelectorReason(env, target, reason);
+    if (stale === "aborted") return { aborted: true };
+    return { reason: stale ?? reason, ...warnedBy(warning) };
+  };
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
 
@@ -850,27 +844,154 @@ async function scrollToVisible(
     if (prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
       if (frame) return { frame, ...warnedBy(warning) };
-      return {
-        reason: `reached the end of the scroll without finding ${describeSelector(target)}`,
-        ...warnedBy(warning),
-      };
+      return missed(`reached the end of the scroll without finding ${describeSelector(target)}`);
     }
     prevFp = fp;
 
     warning ??= await scrollIncrement(env, axisDirection, region);
   }
-  return {
-    reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
-    ...warnedBy(warning),
-  };
+  return missed(
+    `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`
+  );
 }
 
 // `tap`/`type` auto-wait but deliberately do NOT auto-scroll: an implicit
 // scroll would widen a loose selector's match scope from the viewport to the
 // whole page, mutate scroll state even when the step fails, and stretch a
 // failure to the scroll search's worst case.
-export function offscreenHint(sel: FlowSelector): string {
+function offscreenHint(sel: FlowSelector): string {
   return `no visible element matched selector ${describeSelector(sel)} — if it is off-screen, add a scroll-to step before this one`;
+}
+
+const OLDER_FLOW =
+  "an e2e test recorded on an iOS simulator by an older Argent can carry an id or role from the " +
+  "view hierarchy, such as an SF Symbol name on an icon inside a button";
+
+const RE_RECORD = "re-record the step, or target the control `describe` shows there.";
+
+function isIosSimulatorEnv(env: ActionEnv): boolean {
+  const { platform, kind } = env.device;
+  return platform === "ios-remote" || (platform === "ios" && kind !== "device");
+}
+
+/** A role anywhere in the selector that passes `test` (given it lowercased). */
+function selectorRole(
+  sel: FlowSelector | undefined,
+  test: (role: string) => boolean
+): string | undefined {
+  if (sel === undefined) return undefined;
+  if (sel.role !== undefined && test(sel.role.toLowerCase())) return sel.role;
+  return (
+    selectorRole(sel.within, test) ?? selectorRole(sel.after, test) ?? selectorRole(sel.next, test)
+  );
+}
+
+/** A role anywhere in the selector that the iOS simulator tree never gives a node. */
+function unknownIosRole(sel: FlowSelector): string | undefined {
+  return selectorRole(
+    sel,
+    (role) => !NATIVE_DESCRIBE_ROLES.some((r) => r.toLowerCase().includes(role))
+  );
+}
+
+/**
+ * An older Argent gave a switch the role AXAdjustable from its view class; the
+ * simulator tree calls it AXSwitch. Sliders keep AXAdjustable, so this only
+ * words a miss.
+ */
+function switchRoleReason(sel: FlowSelector, missed: string): string | undefined {
+  const role = selectorRole(sel, (r) => r === "axadjustable");
+  if (role === undefined) return undefined;
+  return `${missed}, and a switch has the role "AXSwitch" on an iOS simulator, not "${role}": ${OLDER_FLOW}; ${RE_RECORD}`;
+}
+
+/** On an iOS simulator, why a selector naming a role no element has can never match. */
+function unknownRoleReason(
+  env: ActionEnv,
+  sel: FlowSelector,
+  missed = `no visible element matched selector ${describeSelector(sel)}`
+): string | undefined {
+  const role = isIosSimulatorEnv(env) ? unknownIosRole(sel) : undefined;
+  if (role === undefined) return undefined;
+  return `${missed}, and no element on an iOS simulator has the role "${role}": ${OLDER_FLOW}; ${RE_RECORD}`;
+}
+
+/**
+ * Why a selector that matched nothing may be stale, on an iOS simulator only;
+ * undefined when nothing shows it. A role the simulator tree never gives needs
+ * no read. A miss on an `id` pays one more read of the accessibility tree,
+ * hidden nodes included: the flow tree drops off-screen nodes, so only this
+ * read can tell an id that is off the screen from one that is nowhere right
+ * now. That still has two causes the read cannot tell apart, a transient
+ * element that already left and a flow recorded on the injected view
+ * hierarchy, so the reason names both. The read only words the reason, never
+ * decides a match, and any failure of it gives undefined.
+ */
+async function staleSelectorReason(
+  env: ActionEnv,
+  sel: FlowSelector,
+  missed = `no visible element matched selector ${describeSelector(sel)}`
+): Promise<string | "aborted" | undefined> {
+  if (!isIosSimulatorEnv(env)) return undefined;
+  const role = unknownRoleReason(env, sel, missed);
+  if (role !== undefined) return role;
+  // Every alternative must be an id: a bare string also tries its text, which
+  // this check does not look for.
+  const ids = selectorAlternatives(sel).map((alt) => alt.identifier);
+  if (!ids.every((id): id is string => id !== undefined)) return switchRoleReason(sel, missed);
+  const read = await settleWithin(
+    readIosSimulatorUiTree(env.registry, env.device),
+    undefined,
+    env.signal
+  );
+  // Cancelled while this read was in flight.
+  if (read.type === "aborted") return "aborted";
+  // A cut-short walk cannot show the id is nowhere.
+  if (read.type !== "value" || read.value.truncated) return undefined;
+  const carriers: UiTreeNode[] = [];
+  let uncovered = false;
+  const collect = (nodes: UiTreeNode[], covered: boolean): void => {
+    for (const n of nodes) {
+      const under = covered || n.covered === true;
+      if (ids.some((id) => identifierMatches(n.identifier, id))) {
+        carriers.push(n);
+        if (!under) uncovered = true;
+      }
+      collect(n.children, under);
+    }
+  };
+  collect(read.value.roots, false);
+  if (carriers.length === 0) {
+    return (
+      `${missed}, and no element with this id is in the accessibility tree right now, on ` +
+      `screen or off. Either the element is not there at this moment (a banner or sheet that ` +
+      `already closed, a list row not loaded yet): add an await or scroll-to step before this ` +
+      `one. Or ${OLDER_FLOW}; ${RE_RECORD}`
+    );
+  }
+  // The flow tree drops what an alert, sheet or popover covers.
+  if (!uncovered) {
+    return (
+      `${missed}: the element with this id is covered by an alert, sheet or popover. Dismiss ` +
+      `it first, or add an await step for it to close.`
+    );
+  }
+  const wanted = sel.role?.toLowerCase();
+  if (wanted !== undefined && carriers.every((n) => !n.role?.toLowerCase().includes(wanted))) {
+    const roles = [...new Set(carriers.map((n) => `"${n.role}"`))].join(" or ");
+    return `${missed}: the element with this id has the role ${roles}, not "${sel.role}"; ${OLDER_FLOW}; ${RE_RECORD}`;
+  }
+  return switchRoleReason(sel, missed);
+}
+
+/** Why a selector step found no element: the stale reason when one shows, else the scroll-to hint. */
+export async function selectorMissReason(
+  env: ActionEnv,
+  sel: FlowSelector
+): Promise<DirectiveOutcome> {
+  const stale = await staleSelectorReason(env, sel);
+  if (stale === "aborted") return ABORTED_OUTCOME;
+  return { ok: false, reason: stale ?? offscreenHint(sel) };
 }
 
 /**
@@ -950,12 +1071,15 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
     case "type":
       return runType(env, step);
     case "await":
-      return waitForCondition(env, step, step.timeout ?? DEFAULT_ACTION_TIMEOUT_MS);
+      return waitForCondition(env, step, step.timeout ?? DEFAULT_ACTION_TIMEOUT_MS, true);
     case "assert":
-      return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS);
+      return waitForCondition(env, step, DEFAULT_ASSERT_TIMEOUT_MS, true);
     case "idle":
       return waitForIdle(env, step);
     case "scroll-to": {
+      // A role no element has needs no swiping to fail.
+      const role = unknownRoleReason(env, step.target);
+      if (role) return { ok: false, reason: role };
       const r = await scrollToVisible(env, step.target, step.direction, step.within);
       if (r.aborted) return ABORTED_OUTCOME;
       return { ok: Boolean(r.frame), reason: r.reason, ...warnedBy(r.warning) };
@@ -1079,7 +1203,7 @@ async function resolveTargetPoint(
     const frame = await waitForFrame(env, target.selector);
     if (frame === "aborted") return { fail: ABORTED_OUTCOME };
     if (!frame) {
-      return { fail: { ok: false, reason: offscreenHint(target.selector) } };
+      return { fail: await selectorMissReason(env, target.selector) };
     }
     return { point: getDescribeTapPoint(frame) };
   }
@@ -1198,7 +1322,7 @@ async function runPinch(
   if (step.selector) {
     const resolved = await waitForFrame(env, step.selector);
     if (resolved === "aborted") return ABORTED_OUTCOME;
-    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    if (!resolved) return await selectorMissReason(env, step.selector);
     frame = resolved;
     center = getDescribeTapPoint(resolved);
   } else {
@@ -1299,7 +1423,7 @@ async function runRotate(
   if (step.selector) {
     const resolved = await waitForFrame(env, step.selector);
     if (resolved === "aborted") return ABORTED_OUTCOME;
-    if (!resolved) return { ok: false, reason: offscreenHint(step.selector) };
+    if (!resolved) return await selectorMissReason(env, step.selector);
     frame = resolved;
     center = getDescribeTapPoint(resolved);
   } else {
@@ -1412,7 +1536,9 @@ async function runSwipe(
   const selectors = ends.map((end) => (end && "selector" in end ? end.selector : undefined));
   const frames = await waitForFrames(env, selectors);
   if (frames === "aborted") return ABORTED_OUTCOME;
-  if (!Array.isArray(frames)) return { ok: false, reason: offscreenHint(frames.unresolved) };
+  if (!Array.isArray(frames)) {
+    return await selectorMissReason(env, frames.unresolved);
+  }
   const [fromFrame, toFrame] = frames;
 
   // A selector end already resolved against a settled tree; with neither end
@@ -1632,7 +1758,7 @@ async function runType(
   const frame = await waitForFrame(env, step.into);
   if (frame === "aborted") return ABORTED_OUTCOME;
   if (!frame) {
-    return { ok: false, reason: offscreenHint(step.into) };
+    return await selectorMissReason(env, step.into);
   }
   const focusTap = await invokeOnDevice(env, "gesture-tap", getDescribeTapPoint(frame));
   // Keys are injected at the HID level and go to whatever holds focus, so the
@@ -1660,6 +1786,10 @@ async function runType(
   }
   return { ok: true, ...warnedBy(toolWarning(focusTap)) };
 }
+
+const CUT_SHORT_READ =
+  "the screen has more elements than the accessibility service reads in one walk, so an " +
+  "element past the cut reads as absent";
 
 /**
  * Poll a condition against the flow tree until it holds or `timeoutMs` passes.
@@ -1689,7 +1819,10 @@ async function waitForCondition(
     expectedText?: string;
     textMatch?: TextMatchMode;
   },
-  timeoutMs: number
+  timeoutMs: number,
+  // Word a stale selector's miss (an extra read): `await` and `assert` only,
+  // never a `when:` guard, whose unmet condition is a clean skip.
+  explainMiss = false
 ): Promise<DirectiveOutcome> {
   const deadline = Date.now() + timeoutMs;
 
@@ -1709,9 +1842,11 @@ async function waitForCondition(
     try {
       const data = await readFlowTree(env);
       lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
-      fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
-      const blind = isBlindRead(data, everMatched);
+      // A cut-short read vouches for what it found, never for an absence.
+      const cutShort = data.truncated === true && lastMatches.length === 0;
+      fetchError = cutShort ? CUT_SHORT_READ : undefined;
+      const blind = cutShort || isBlindRead(data, everMatched);
       if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
       if (
@@ -1804,6 +1939,12 @@ async function waitForCondition(
     !lastReadTrusted && fetchError
       ? ` (the final poll could not read the UI tree: ${fetchError})`
       : "";
+  // Nothing matched: say so when the selector looks stale.
+  if (explainMiss && lastMatches.length === 0 && step.condition !== "hidden") {
+    const stale = await staleSelectorReason(env, step.selector);
+    if (stale === "aborted") return ABORTED_OUTCOME;
+    if (stale) return { ok: false, reason: stale + blipNote };
+  }
   return {
     ok: false,
     reason:
