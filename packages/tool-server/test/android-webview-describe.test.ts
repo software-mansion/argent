@@ -11,6 +11,13 @@ import { parseUiAutomatorDump } from "../src/tools/describe/platforms/android/ui
 import { describeAndroid, hasUnreadWebView } from "../src/tools/describe/platforms/android";
 import { formatDescribeTree } from "../src/tools/describe/format-tree";
 import type { DescribeNode } from "../src/tools/describe/contract";
+import { adbExecOutBinary, adbShell } from "../src/utils/adb";
+
+vi.mock("../src/utils/adb", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/adb")>()),
+  adbShell: vi.fn(),
+  adbExecOutBinary: vi.fn(),
+}));
 
 const fixture = (name: string): string =>
   readFileSync(join(__dirname, "fixtures", `android-webview-${name}.xml`), "utf-8");
@@ -116,5 +123,25 @@ describe("describeAndroid — re-read on an unread WebView", () => {
     expect(getHierarchy).toHaveBeenCalledTimes(7);
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(flatten(tree).find((n) => n.role === "WebView")?.label).toBe("(no web content exposed)");
+  });
+});
+
+describe("describeAndroid — helper failure", () => {
+  it("falls back to uiautomator dump when the helper cannot be started", async () => {
+    const native = `<?xml version='1.0'?><hierarchy rotation="0">
+      <node class="android.widget.Button" text="Settings" clickable="true" bounds="[0,0][200,100]"/>
+    </hierarchy>`;
+    vi.mocked(adbShell).mockResolvedValue("Physical size: 1080x2424");
+    vi.mocked(adbExecOutBinary).mockResolvedValue(Buffer.from(native));
+    const registry = {
+      resolveService: vi.fn(async () => {
+        throw new Error("adb install rejected");
+      }),
+    } as unknown as Registry;
+
+    const { tree, source } = await describeAndroid(registry, "emulator-5554", undefined, false);
+
+    expect(source).toBe("uiautomator");
+    expect(flatten(tree).some((n) => n.label === "Settings")).toBe(true);
   });
 });
