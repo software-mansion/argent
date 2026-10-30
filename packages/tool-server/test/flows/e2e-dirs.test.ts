@@ -122,7 +122,7 @@ async function runLinked(
         fileInputs: boundary.fileInputs,
       })
     );
-    const wire = (sent.flow_file ?? sent.flow_path) as FileInputWire;
+    const wire = (sent.e2e_test_file ?? sent.e2e_test_path) as FileInputWire;
     return { result, wire };
   } finally {
     await boundary.cleanup();
@@ -195,21 +195,21 @@ describe("a test addressed by name", () => {
     });
   });
 
-  it("accepts a client-derived flow_file in either directory, and no other path", async () => {
+  it("accepts a client-derived e2e_test_file in either directory, and no other path", async () => {
     await write(e2e("a.yaml"), echoes("a"));
     await write(legacy("b.yaml"), echoes("b"));
 
     await expect(
-      resolveFlowSource({ name: "a", project_root: root, flow_file: e2e("a.yaml") })
+      resolveFlowSource({ name: "a", project_root: root, e2e_test_file: e2e("a.yaml") })
     ).resolves.toMatchObject({ filePath: e2e("a.yaml") });
     await expect(
-      resolveFlowSource({ name: "b", project_root: root, flow_file: legacy("b.yaml") })
+      resolveFlowSource({ name: "b", project_root: root, e2e_test_file: legacy("b.yaml") })
     ).resolves.toMatchObject({ filePath: legacy("b.yaml") });
     await expect(
       resolveFlowSource({
         name: "b",
         project_root: root,
-        flow_file: path.join(root, "elsewhere", "b.yaml"),
+        e2e_test_file: path.join(root, "elsewhere", "b.yaml"),
       })
     ).rejects.toThrow(`("${e2e("b.yaml")}" or "${legacy("b.yaml")}")`);
   });
@@ -293,7 +293,7 @@ describe("recording", () => {
     ]);
   });
 
-  it("records a nested flow_path in .argent/flows as run: of its path from the recording", async () => {
+  it("records a nested e2e_test_path in .argent/flows as run: of its path from the recording", async () => {
     await write(legacy("frag.yaml"), echoes("hi"));
     const invokeTool = vi.fn(async () => ({ ok: true, steps: [] }));
     const registry = { invokeTool, getTool: vi.fn(() => ({})) } as unknown as Registry;
@@ -305,7 +305,7 @@ describe("recording", () => {
         name: "rec",
         project_root: root,
         command: "e2e-execute",
-        args: JSON.stringify({ flow_path: legacy("frag.yaml"), project_root: root }),
+        args: JSON.stringify({ e2e_test_path: legacy("frag.yaml"), project_root: root }),
       }
     );
 
@@ -314,7 +314,7 @@ describe("recording", () => {
     expect(parseFlow(yaml).steps).toEqual([{ kind: "run", flow: "../flows/frag.yaml" }]);
   });
 
-  it("refuses a nested flow_path in .argent/flows that a same-named .argent/e2e test hides", async () => {
+  it("refuses a nested e2e_test_path in .argent/flows that a same-named .argent/e2e test hides", async () => {
     await write(legacy("frag.yaml"), echoes("old"));
     await write(e2e("frag.yaml"), echoes("new"));
     const registry = { invokeTool: vi.fn(), getTool: vi.fn(() => ({})) } as unknown as Registry;
@@ -327,7 +327,7 @@ describe("recording", () => {
           name: "rec",
           project_root: root,
           command: "e2e-execute",
-          args: JSON.stringify({ flow_path: legacy("frag.yaml"), project_root: root }),
+          args: JSON.stringify({ e2e_test_path: legacy("frag.yaml"), project_root: root }),
         }
       )
     ).rejects.toThrow(`resolves "frag" to "${e2e("frag.yaml")}" instead`);
@@ -335,7 +335,7 @@ describe("recording", () => {
 
   it.each([
     ["name", () => ({ name: "frag", project_root: root })],
-    ["flow_path", () => ({ flow_path: legacy("frag.yaml"), project_root: root })],
+    ["e2e_test_path", () => ({ e2e_test_path: legacy("frag.yaml"), project_root: root })],
   ])(
     "over a link, records a nested fragment in .argent/flows by %s as run: of its path",
     async (_by, nestedArgs) => {
@@ -572,9 +572,9 @@ describe("a fragment found in the other directory", () => {
           uploadEndpoint: { url: "http://tool-server.test", token: "" },
         }
       )) as Record<string, unknown>;
-      const members = ((sent.flow_file as FileInputWire).members ?? []) as FileInputMember[];
+      const members = ((sent.e2e_test_file as FileInputWire).members ?? []) as FileInputMember[];
 
-      expect((sent.flow_file as FileInputWire).path).toBe(e2e("main.yaml"));
+      expect((sent.e2e_test_file as FileInputWire).path).toBe(e2e("main.yaml"));
       expect(members).toEqual([
         expect.objectContaining({ role: "flow", path: e2e("login.yaml"), state: "missing" }),
         expect.objectContaining({ role: "flow", path: legacy("login.yaml"), uploadId: "u1" }),

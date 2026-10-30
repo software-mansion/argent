@@ -146,9 +146,6 @@ export class Registry {
       // `params ?? {}` mirrors express.json's {} for an empty body.
       try {
         params = canonicalToolArgs(toolId, params);
-        if (options?.fileInputs) {
-          options = { ...options, fileInputs: canonicalToolArgs(toolId, options.fileInputs) };
-        }
       } catch (err) {
         if (!(err instanceof ToolParamAliasError)) throw err;
         throw new FailureError(`Invalid params for tool "${toolId}": ${err.message}`, {

@@ -95,14 +95,14 @@ describe("prepareFileInputs", () => {
     });
   });
 
-  it("derives a new target param from a multi-param template (flow_file)", async () => {
+  it("derives a new target param from a multi-param template (e2e_test_file)", async () => {
     const flowsDir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(flowsDir, { recursive: true });
     const flowPath = path.join(flowsDir, "my-flow.yaml");
     await fs.writeFile(flowPath, "steps: []\n");
 
     const specs: FileInputSpec[] = [
-      { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+      { target: "e2e_test_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
     ];
     const out = (await prepareFileInputs(
       specs,
@@ -113,8 +113,8 @@ describe("prepareFileInputs", () => {
     // Source params stay strings; the derived target carries the wrapper.
     expect(out.project_root).toBe(tmpDir);
     expect(out.name).toBe("my-flow");
-    expect(out.flow_file).toMatchObject({ [FILE_INPUT_MARKER]: true, path: flowPath });
-    expect((out.flow_file as FileInputWire).content).toBeDefined();
+    expect(out.e2e_test_file).toMatchObject({ [FILE_INPUT_MARKER]: true, path: flowPath });
+    expect((out.e2e_test_file as FileInputWire).content).toBeDefined();
   });
 
   it("skips a spec whose referenced params are absent (live-capture mode)", async () => {
@@ -126,7 +126,7 @@ describe("prepareFileInputs", () => {
     expect(out).toBe(args);
   });
 
-  it("does not derive flow_file when the superseding flow_path source is set (skipWhenSet)", async () => {
+  it("does not derive e2e_test_file when the superseding e2e_test_path source is set (skipWhenSet)", async () => {
     const flowsDir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(flowsDir, { recursive: true });
     const savedPath = path.join(flowsDir, "my-flow.yaml");
@@ -135,34 +135,34 @@ describe("prepareFileInputs", () => {
     await fs.writeFile(explicitPath, "steps: []\n");
 
     const specs: FileInputSpec[] = [
-      { target: "flow_path", path: "${flow_path}", kind: "file", optional: true },
+      { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", optional: true },
       {
-        target: "flow_file",
+        target: "e2e_test_file",
         path: "${project_root}/.argent/flows/${name}.yaml",
         kind: "file",
-        skipWhenSet: "flow_path",
+        skipWhenSet: "e2e_test_path",
       },
     ];
 
-    // Dual-source misuse: flow_file must not be derived — even though the
+    // Dual-source misuse: e2e_test_file must not be derived — even though the
     // saved flow exists — so the server's exactly-one validation, not this
     // boundary's file resolution, diagnoses the call.
     const both = (await prepareFileInputs(
       specs,
-      { name: "my-flow", project_root: tmpDir, flow_path: explicitPath },
+      { name: "my-flow", project_root: tmpDir, e2e_test_path: explicitPath },
       { includeContent: true }
     )) as Record<string, unknown>;
-    expect(both.flow_file).toBeUndefined();
-    expect(both.flow_path).toMatchObject({ [FILE_INPUT_MARKER]: true, path: explicitPath });
+    expect(both.e2e_test_file).toBeUndefined();
+    expect(both.e2e_test_path).toMatchObject({ [FILE_INPUT_MARKER]: true, path: explicitPath });
 
     // "" is still a provided source to the server's `=== undefined`
     // dual-source check, so it must suppress the derivation the same way.
     const emptySource = (await prepareFileInputs(
       specs,
-      { name: "my-flow", project_root: tmpDir, flow_path: "" },
+      { name: "my-flow", project_root: tmpDir, e2e_test_path: "" },
       { includeContent: true }
     )) as Record<string, unknown>;
-    expect(emptySource.flow_file).toBeUndefined();
+    expect(emptySource.e2e_test_file).toBeUndefined();
 
     // Name-only calls keep deriving the wrapper exactly as before.
     const nameOnly = (await prepareFileInputs(
@@ -170,19 +170,19 @@ describe("prepareFileInputs", () => {
       { name: "my-flow", project_root: tmpDir },
       { includeContent: true }
     )) as Record<string, unknown>;
-    expect(nameOnly.flow_file).toMatchObject({ [FILE_INPUT_MARKER]: true, path: savedPath });
+    expect(nameOnly.e2e_test_file).toMatchObject({ [FILE_INPUT_MARKER]: true, path: savedPath });
   });
 
   it("respects an explicitly set derived target (server-side override)", async () => {
     const specs: FileInputSpec[] = [
-      { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+      { target: "e2e_test_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
     ];
     const out = (await prepareFileInputs(
       specs,
-      { name: "f", project_root: tmpDir, flow_file: "/server/side/flow.yaml" },
+      { name: "f", project_root: tmpDir, e2e_test_file: "/server/side/flow.yaml" },
       { includeContent: true }
     )) as Record<string, unknown>;
-    expect(out.flow_file).toBe("/server/side/flow.yaml");
+    expect(out.e2e_test_file).toBe("/server/side/flow.yaml");
   });
 
   it("still sends a path-only wrapper for an unreadable file", async () => {
@@ -306,7 +306,7 @@ describe("prepareFileInputs — tar-upload kind", () => {
 
 describe("prepareFileInputs — collect: flow", () => {
   const specs: FileInputSpec[] = [
-    { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+    { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
   ];
   let project: string;
   let flows: string;
@@ -332,10 +332,10 @@ describe("prepareFileInputs — collect: flow", () => {
   ): Promise<FileInputMember[]> {
     const out = (await prepareFileInputs(
       specs,
-      { flow_path: path.join(flows, root), project_root: project },
+      { e2e_test_path: path.join(flows, root), project_root: project },
       { includeContent: true, collectMembers: collectFlowMembers, ...opts }
     )) as Record<string, FileInputWire>;
-    return out.flow_path!.members!;
+    return out.e2e_test_path!.members!;
   }
 
   const names = (members: FileInputMember[]): string[] =>

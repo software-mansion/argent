@@ -86,16 +86,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** A `tool:` step's args under the current param names; as written when they set both names. */
-function toolStepArgs(tool: string, args: unknown): Record<string, unknown> {
-  if (!isRecord(args)) return {};
-  try {
-    return canonicalToolArgs(tool, args);
-  } catch {
-    return args;
-  }
-}
-
 /**
  * The project files a parsed flow document makes the runner read: the `run:`
  * targets of its steps and of the steps of its block directives (`when:`),
@@ -139,7 +129,7 @@ export function collectFlowRequests(doc: unknown): {
       const snapshot = isRecord(step.snapshot) ? step.snapshot.name : step.snapshot;
       if (typeof snapshot === "string" && FLOW_NAME_PATTERN.test(snapshot)) snapshots.add(snapshot);
       if (typeof step.tool === "string") {
-        const args = toolStepArgs(step.tool, step.args);
+        const args = isRecord(step.args) ? step.args : {};
         toolSteps.push({ tool: step.tool, args });
         const target =
           canonicalToolId(step.tool) === "e2e-execute" ? nestedFlowTarget(args) : undefined;
@@ -296,9 +286,10 @@ export async function resolveFlowRelativeFile(
  * the places the saved test can be, in lookup order ({@link e2eFileCandidates}),
  * and `path` is the first of them. `e2e_test_path`: an
  * absolute path with no `..` segment to a `<flow-name>.yaml` file, and no
- * `name`. `args` may use the former param names. The argent client sends the flow of a `name` step with the call,
+ * `name`. The argent client sends the flow of a `name` step with the call,
  * and the tool-server runs a nested step over a link only in that form, so the
- * two decide with this one function.
+ * two decide with this one function: on the args as written in YAML (the
+ * client) and as parsed (the runner), which may differ in param names.
  */
 export type NestedFlowTarget =
   | { kind: "name"; projectRoot: string; name: string; path: string; paths: string[] }

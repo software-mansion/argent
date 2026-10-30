@@ -1408,7 +1408,7 @@ describe("flow-add-step", () => {
     ]);
   });
 
-  it("records a flow-execute of a sibling flow_path as a run: directive", async () => {
+  it("records a flow-execute of a sibling e2e_test_path as a run: directive", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
@@ -1424,7 +1424,7 @@ describe("flow-add-step", () => {
         name: "compose-path",
         project_root: tmpDir,
         command: "flow-execute",
-        args: JSON.stringify({ flow_path: sibling, project_root: tmpDir }),
+        args: JSON.stringify({ e2e_test_path: sibling, project_root: tmpDir }),
       }
     );
 
@@ -1443,7 +1443,7 @@ describe("flow-add-step", () => {
     });
   });
 
-  it("names the flow_path the author wrote when the rewritten call is rejected", async () => {
+  it("names the e2e_test_path the author wrote when the rewritten call is rejected", async () => {
     const registry = new Registry();
     registry.registerTool(createRunFlowTool(registry) as never);
     const tool = createFlowAddStepTool(registry);
@@ -1460,14 +1460,14 @@ describe("flow-add-step", () => {
           name: "reframe",
           project_root: tmpDir,
           command: "flow-execute",
-          args: JSON.stringify({ flow_path: sibling, project_root: tmpDir, platform: "iOS" }),
+          args: JSON.stringify({ e2e_test_path: sibling, project_root: tmpDir, platform: "iOS" }),
         }
       )
       .then(() => undefined)
       .catch((err: unknown) => (err as Error).message);
 
     expect(authored).toContain("`platform`");
-    expect(authored).toContain("You sent: `flow_path`, `project_root`, `platform`.");
+    expect(authored).toContain("You sent: `e2e_test_path`, `project_root`, `platform`.");
     expect(authored).not.toContain("`name`");
 
     const byName = await tool
@@ -1488,7 +1488,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(await onDisk("reframe")).steps).toEqual([]);
   });
 
-  it("rejects a mis-cased sibling flow_path, naming the on-disk spelling", async () => {
+  it("rejects a mis-cased sibling e2e_test_path, naming the on-disk spelling", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
@@ -1511,7 +1511,7 @@ describe("flow-add-step", () => {
           project_root: tmpDir,
           command: "flow-execute",
           args: JSON.stringify({
-            flow_path: path.join(tmpDir, ".argent", "e2e", "Sibling.yaml"),
+            e2e_test_path: path.join(tmpDir, ".argent", "e2e", "Sibling.yaml"),
             project_root: tmpDir,
           }),
         }
@@ -1523,9 +1523,9 @@ describe("flow-add-step", () => {
 
     // The refusal must name the phantom spelling, the real directory entry,
     // and hand back the recordable on-disk basename.
-    expect(err?.message).toContain("Cannot record an e2e-execute of flow_path");
+    expect(err?.message).toContain("Cannot record an e2e-execute of e2e_test_path");
     expect(err?.message).toContain('case-insensitively to "sibling.yaml"');
-    expect(err?.message).toContain('pass flow_path with the on-disk basename "sibling.yaml"');
+    expect(err?.message).toContain('pass e2e_test_path with the on-disk basename "sibling.yaml"');
     // Rejected before the live sub-invoke and the append: nothing ran, nothing recorded.
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(parseFlow(await readFlowFile("compose-casing")).steps).toEqual([]);
@@ -1539,7 +1539,7 @@ describe("flow-add-step", () => {
 
     await flowStartRecordingTool.execute({}, { name: "compose-rename", project_root: tmpDir });
     // The sibling's REAL name trips the lowercase-extension arm, so the
-    // message must ask for a rename, not point at a flow_path this same
+    // message must ask for a rename, not point at an e2e_test_path this same
     // ladder refuses.
     await fs.writeFile(
       path.join(tmpDir, ".argent", "e2e", "frag.YAML"),
@@ -1555,7 +1555,7 @@ describe("flow-add-step", () => {
           project_root: tmpDir,
           command: "flow-execute",
           args: JSON.stringify({
-            flow_path: path.join(tmpDir, ".argent", "e2e", "frag.yaml"),
+            e2e_test_path: path.join(tmpDir, ".argent", "e2e", "frag.yaml"),
             project_root: tmpDir,
           }),
         }
@@ -1573,7 +1573,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(await readFlowFile("compose-rename")).steps).toEqual([]);
   });
 
-  it("rejects a flow_path outside the recording's flow directory without running it", async () => {
+  it("rejects an e2e_test_path outside the recording's flow directory without running it", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
@@ -1590,7 +1590,7 @@ describe("flow-add-step", () => {
           name: "compose-outside",
           project_root: tmpDir,
           command: "flow-execute",
-          args: JSON.stringify({ flow_path: outside, project_root: tmpDir }),
+          args: JSON.stringify({ e2e_test_path: outside, project_root: tmpDir }),
         }
       )
     ).rejects.toThrow(/not in the recording's e2e test directory/i);
@@ -1599,7 +1599,7 @@ describe("flow-add-step", () => {
     expect(parseFlow(await readFlowFile("compose-outside")).steps).toEqual([]);
   });
 
-  it('rejects a sibling flow_path containing a ".." segment without running it', async () => {
+  it('rejects a sibling e2e_test_path containing a ".." segment without running it', async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
@@ -1620,7 +1620,7 @@ describe("flow-add-step", () => {
           name: "compose-dotdot",
           project_root: tmpDir,
           command: "flow-execute",
-          args: JSON.stringify({ flow_path: dotdot, project_root: tmpDir }),
+          args: JSON.stringify({ e2e_test_path: dotdot, project_root: tmpDir }),
         }
       )
     ).rejects.toThrow(/must not contain "\.\." segments/);
@@ -1650,7 +1650,7 @@ describe("flow-add-step", () => {
             name: "compose-stemless",
             project_root: tmpDir,
             command: "flow-execute",
-            args: JSON.stringify({ flow_path: stemless, project_root: tmpDir }),
+            args: JSON.stringify({ e2e_test_path: stemless, project_root: tmpDir }),
           }
         );
       await expect(record()).rejects.toThrow('Invalid e2e test name ""');
@@ -1679,7 +1679,7 @@ describe("flow-add-step", () => {
           project_root: tmpDir,
           command: "flow-execute",
           args: JSON.stringify({
-            flow_path: path.join(tmpDir, ".argent", "e2e", "Login.YAML"),
+            e2e_test_path: path.join(tmpDir, ".argent", "e2e", "Login.YAML"),
             project_root: tmpDir,
           }),
         }
@@ -1689,7 +1689,7 @@ describe("flow-add-step", () => {
     expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("rejects a sibling flow_path that the call's project_root does not resolve to", async () => {
+  it("rejects a sibling e2e_test_path that the call's project_root does not resolve to", async () => {
     const registry = createMockRegistry({
       "flow-execute": { result: { ok: true, steps: [] } },
     });
@@ -1706,7 +1706,7 @@ describe("flow-add-step", () => {
           project_root: tmpDir,
           command: "flow-execute",
           args: JSON.stringify({
-            flow_path: path.join(tmpDir, ".argent", "e2e", "login.yaml"),
+            e2e_test_path: path.join(tmpDir, ".argent", "e2e", "login.yaml"),
             project_root: path.join(tmpDir, "other-project"),
           }),
         }
@@ -1756,7 +1756,7 @@ describe("flow-add-step", () => {
               name: "compose-relative",
               project_root: tmpDir,
               command: "flow-execute",
-              args: JSON.stringify({ flow_path: sibling, project_root: root }),
+              args: JSON.stringify({ e2e_test_path: sibling, project_root: root }),
             }
           )
         ).rejects.toThrow(/project_root must be an absolute path/);
@@ -1788,7 +1788,7 @@ describe("flow-add-step", () => {
           project_root: tmpDir,
           command: "flow-execute",
           args: JSON.stringify({
-            flow_path: path.join(tmpDir, ".argent", "e2e", "login.yaml"),
+            e2e_test_path: path.join(tmpDir, ".argent", "e2e", "login.yaml"),
           }),
         }
       )
@@ -1800,7 +1800,7 @@ describe("flow-add-step", () => {
 
   // The two shapes add-step must NOT rewrite: naming both sources, or neither,
   // is flow-execute's schema to judge. The both-sources case is the dangerous
-  // one — rewriting it would delete flow_path and overwrite the caller's name
+  // one — rewriting it would delete e2e_test_path and overwrite the caller's name
   // with the stem, so a call asking for "checkout" would run and record "login"
   // with nothing to say the requested name was discarded.
   it.each([
@@ -1808,7 +1808,7 @@ describe("flow-add-step", () => {
       "names both sources",
       (sibling: string, root: string) => ({
         name: "checkout",
-        flow_path: sibling,
+        e2e_test_path: sibling,
         project_root: root,
       }),
     ],
@@ -1821,7 +1821,7 @@ describe("flow-add-step", () => {
 
     await flowStartRecordingTool.execute({}, { name: "compose-ambiguous", project_root: tmpDir });
     // For the both-sources shape, a genuinely rewritable target: every check
-    // downstream of the bail-out accepts this flow_path, so the bail-out is the
+    // downstream of the bail-out accepts this e2e_test_path, so the bail-out is the
     // only thing standing between the caller's "checkout" and a swap to "login".
     await writeSiblingFlow("login", "steps:\n  - echo: hi\n");
     const args = buildArgs(path.join(tmpDir, ".argent", "e2e", "login.yaml"), tmpDir);
@@ -1838,7 +1838,7 @@ describe("flow-add-step", () => {
       )
     ).rejects.toThrow();
 
-    // The nested call must reach flow-execute exactly as written — no flow_path
+    // The nested call must reach flow-execute exactly as written — no e2e_test_path
     // deleted, no name substituted…
     expect(registry.invokeTool).toHaveBeenCalledWith("flow-execute", args);
     // …so that a real tool-server is the one that rejects it.
@@ -2781,7 +2781,7 @@ describe("flow-execute", () => {
 
 /**
  * The `name` branch has to hold the same on-disk-spelling invariant the
- * flow_path branch holds: a case-insensitive filesystem (APFS, NTFS) opens
+ * e2e_test_path branch holds: a case-insensitive filesystem (APFS, NTFS) opens
  * snap.yaml for "Snap", and the name — not the file — is what keys the report
  * and __baselines__/, so the run would seed baselines in a directory no entry
  * carries and fail on the first case-sensitive checkout. Every case here reads
@@ -2813,13 +2813,13 @@ describe("saved-flow name spelling", () => {
     );
 
     // The refusal must name the phantom spelling, the real directory entry,
-    // and the stake — then hand back a name, not a flow_path: the caller
+    // and the stake — then hand back a name, not an e2e_test_path: the caller
     // passed a name and may have no filesystem to spell a path against.
     expect(err?.message).toContain('Invalid e2e test name "Snap"');
     expect(err?.message).toContain('matched it case-insensitively to "snap.yaml"');
     expect(err?.message).toContain("__baselines__");
     expect(err?.message).toContain('Pass name "snap".');
-    expect(err?.message).not.toContain("flow_path");
+    expect(err?.message).not.toContain("e2e_test_path");
   });
 
   it("suggests a rename when the on-disk flow's extension case is unaddressable", async () => {
@@ -2899,7 +2899,7 @@ describe("saved-flow name spelling", () => {
 
     await expect(
       resolveFlowSource(
-        { name: "Snap", project_root: tmpDir, flow_file: uploaded },
+        { name: "Snap", project_root: tmpDir, e2e_test_file: uploaded },
         {
           clientPath: path.join(tmpDir, ".argent", "flows", "Snap.yaml"),
           presentOnHost: false,
@@ -2978,29 +2978,29 @@ describe("flow-read-prerequisite", () => {
     ).rejects.toThrow();
   });
 
-  it("advertises exactly one of name and flow_path as the flow source", () => {
+  it("advertises exactly one of name and e2e_test_path as the flow source", () => {
     // The pre-flight must offer the same source contract as the run it
-    // precedes — a schema still requiring `name` would leave flow_path flows
+    // precedes — a schema still requiring `name` would leave e2e_test_path flows
     // unaddressable and silently answer for a saved flow of the same stem.
     const schema = zodObjectToJsonSchema(flowReadPrerequisiteTool.zodSchema!);
     expect(schema).toMatchObject({
       type: "object",
       properties: {
         name: { type: "string" },
-        flow_path: { type: "string" },
+        e2e_test_path: { type: "string" },
       },
     });
     // Neither source may be `required`: the exactly-one rule cannot be a
     // top-level oneOf (tool-input-schema-contract.test.ts), so the zod
     // superRefine enforces it and the description states it.
     expect(schema.required as string[]).not.toContain("name");
-    expect(schema.required as string[]).not.toContain("flow_path");
+    expect(schema.required as string[]).not.toContain("e2e_test_path");
     expect(flowReadPrerequisiteTool.description).toMatch(/one and only one/i);
   });
 
-  it("reads a boundary-verified flow_path's prerequisite, not the saved flow of the same stem", async () => {
+  it("reads a boundary-verified e2e_test_path's prerequisite, not the saved flow of the same stem", async () => {
     // Two flows share the stem "gate": the saved copy under .argent/flows and
-    // an explicit file elsewhere. The flow_path call must answer with the
+    // an explicit file elsewhere. The e2e_test_path call must answer with the
     // explicit file's contract and the basename-derived name — exactly what
     // flow-execute would run for the same params — never the saved copy's.
     const savedDir = path.join(tmpDir, ".argent", "flows");
@@ -3019,11 +3019,11 @@ describe("flow-read-prerequisite", () => {
 
     const result = await flowReadPrerequisiteTool.execute(
       {},
-      { project_root: tmpDir, flow_path: explicitPath },
+      { project_root: tmpDir, e2e_test_path: explicitPath },
       {
         artifacts: new ArtifactStore(),
         fileInputs: {
-          flow_path: {
+          e2e_test_path: {
             clientPath: explicitPath,
             presentOnHost: true,
             viaUpload: false,
@@ -3037,7 +3037,7 @@ describe("flow-read-prerequisite", () => {
     expect(result.executionPrerequisite).toBe("SHARED-COPY: DETAIL screen");
   });
 
-  it("rejects a raw flow_path that skipped the boundary even when the file exists", async () => {
+  it("rejects a raw e2e_test_path that skipped the boundary even when the file exists", async () => {
     // Same gate as flow-execute: without boundary evidence an explicit path
     // must not be read — otherwise this tool would hand out prerequisites for
     // arbitrary server files the run tool itself refuses to touch.
@@ -3045,11 +3045,11 @@ describe("flow-read-prerequisite", () => {
     await fs.writeFile(rawPath, serializeFlow({ executionPrerequisite: "raw", steps: [] }));
 
     await expect(
-      flowReadPrerequisiteTool.execute({}, { project_root: tmpDir, flow_path: rawPath })
-    ).rejects.toThrow("flow_path file-input boundary");
+      flowReadPrerequisiteTool.execute({}, { project_root: tmpDir, e2e_test_path: rawPath })
+    ).rejects.toThrow("e2e_test_path file-input boundary");
   });
 
-  it("rejects a presence-only flow_path without the client-stat match", async () => {
+  it("rejects a presence-only e2e_test_path without the client-stat match", async () => {
     // presentOnHost alone is satisfiable by a hand-crafted stat-less wrapper;
     // the read must require the same statVerified evidence flow-execute does,
     // not a weaker copy of the gate.
@@ -3059,15 +3059,15 @@ describe("flow-read-prerequisite", () => {
     await expect(
       flowReadPrerequisiteTool.execute(
         {},
-        { project_root: tmpDir, flow_path: presentPath },
+        { project_root: tmpDir, e2e_test_path: presentPath },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_path: { clientPath: presentPath, presentOnHost: true, viaUpload: false },
+            e2e_test_path: { clientPath: presentPath, presentOnHost: true, viaUpload: false },
           },
         }
       )
-    ).rejects.toThrow("flow_path file-input boundary");
+    ).rejects.toThrow("e2e_test_path file-input boundary");
   });
 
   it("rejects direct callers that provide both flow sources", async () => {
@@ -3076,7 +3076,7 @@ describe("flow-read-prerequisite", () => {
     await expect(
       flowReadPrerequisiteTool.execute(
         {},
-        { name: "gate", project_root: tmpDir, flow_path: path.join(tmpDir, "gate.yaml") }
+        { name: "gate", project_root: tmpDir, e2e_test_path: path.join(tmpDir, "gate.yaml") }
       )
     ).rejects.toThrow("exactly one e2e test source");
   });

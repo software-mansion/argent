@@ -118,7 +118,7 @@ beforeEach(async () => {
   delete process.env.ARGENT_AUTH_TOKEN; // dev mode — auth is covered elsewhere
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "http-flow-path-test-"));
   // The YAML sits outside the declared project root — the reach a forged
-  // wrapper would gain over the name/flow_file branch's containment.
+  // wrapper would gain over the name/e2e_test_file branch's containment.
   projectRoot = path.join(tmpDir, "project");
   await fs.mkdir(projectRoot);
   flowPath = path.join(tmpDir, "out-of-project.yaml");
@@ -144,20 +144,20 @@ afterEach(async () => {
   else process.env.ARGENT_AUTH_TOKEN = originalToken;
 });
 
-describe("flow-execute flow_path over HTTP", () => {
+describe("flow-execute e2e_test_path over HTTP", () => {
   it("rejects a hand-crafted stat-less wrapper without executing the YAML", async () => {
     const res = await supertest(handle.app)
       .post("/tools/flow-execute")
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: flowPath },
+        e2e_test_path: { __argentFileInput: true, path: flowPath },
       });
 
     // The server's own stat succeeds (presentOnHost), but no client stat was
     // matched — the gate must refuse before any step dispatches.
     expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/flow_path file-input boundary/);
+    expect(res.body.error).toMatch(/e2e_test_path file-input boundary/);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
@@ -168,14 +168,14 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: flowPath, size: st.size },
+        e2e_test_path: { __argentFileInput: true, path: flowPath, size: st.size },
       });
 
     // The size is the real file's, so the wrapper resolves in place — but a
     // size is knowable without ever having statted the file, so half the
     // client stat must not clear the boundary the stat-less wrapper cannot.
     expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/flow_path file-input boundary/);
+    expect(res.body.error).toMatch(/e2e_test_path file-input boundary/);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
@@ -186,17 +186,17 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: flowPath, mtimeMs: st.mtimeMs },
+        e2e_test_path: { __argentFileInput: true, path: flowPath, mtimeMs: st.mtimeMs },
       });
 
     // The mirror-image half: a matching mtime with no size on the wire is
     // still not the both-fields evidence statVerified stands for.
     expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/flow_path file-input boundary/);
+    expect(res.body.error).toMatch(/e2e_test_path file-input boundary/);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("rejects a relative flow_path without blaming the boundary it cleared", async () => {
+  it("rejects a relative e2e_test_path without blaming the boundary it cleared", async () => {
     // The spelling `argent flow list` prints. Running the server from the
     // flow's own directory is what makes this wrapper legitimate: it stats the
     // relative path against this process's cwd, finds the file, and matches the
@@ -212,7 +212,7 @@ describe("flow-execute flow_path over HTTP", () => {
         .send({
           project_root: projectRoot,
           device: DEVICE,
-          flow_path: { __argentFileInput: true, path: relPath, size: st.size, mtimeMs: st.mtimeMs },
+          e2e_test_path: { __argentFileInput: true, path: relPath, size: st.size, mtimeMs: st.mtimeMs },
         });
 
       expect(res.status).toBe(500);
@@ -224,7 +224,7 @@ describe("flow-execute flow_path over HTTP", () => {
     }
   });
 
-  it("still validates project_root on the flow_path branch", async () => {
+  it("still validates project_root on the e2e_test_path branch", async () => {
     // `getFlowPath` validates the root, but only the `name` branch reaches it.
     // Deleting `setActiveProjectRoot` — which ran unconditionally, ahead of
     // both branches — left this branch with no check at all, so a relative or
@@ -244,7 +244,7 @@ describe("flow-execute flow_path over HTTP", () => {
     ] as const) {
       const res = await supertest(handle.app)
         .post("/tools/flow-execute")
-        .send({ project_root: root, device: DEVICE, flow_path: wrapper });
+        .send({ project_root: root, device: DEVICE, e2e_test_path: wrapper });
 
       expect(res.status).toBe(500);
       expect(res.body.error).toMatch(expected);
@@ -253,7 +253,7 @@ describe("flow-execute flow_path over HTTP", () => {
     }
   });
 
-  it('rejects a ".." flow_path whose kernel and lexical resolutions disagree', async () => {
+  it('rejects a ".." e2e_test_path whose kernel and lexical resolutions disagree', async () => {
     // <tmp>/link -> <tmp>/deep/inner, so the kernel reads <tmp>/deep/flow.yaml
     // while path.dirname keeps "<tmp>/link/.." and path.join collapses it to
     // <tmp> — the run: sibling and __baselines__ would come from the wrong
@@ -285,7 +285,7 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: {
+        e2e_test_path: {
           __argentFileInput: true,
           path: viaSymlink,
           size: st.size,
@@ -298,11 +298,11 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("diagnoses name + flow_path with the exactly-one rule when the saved flow does not exist", async () => {
+  it("diagnoses name + e2e_test_path with the exactly-one rule when the saved flow does not exist", async () => {
     // The old-client wire for the dual-source misuse: pre-skipWhenSet clients
     // interpolate ${project_root}/.argent/flows/${name}.yaml whenever name is
-    // set — even alongside flow_path — and since "checkout" is not saved, the
-    // flow_file wrapper is path-only. Without the skip, the boundary 422s on
+    // set — even alongside e2e_test_path — and since "checkout" is not saved, the
+    // e2e_test_file wrapper is path-only. Without the skip, the boundary 422s on
     // that missing file before zod's exactly-one rule can run, telling the
     // agent to re-create a flow it never asked for.
     const st = await fs.stat(flowPath);
@@ -312,20 +312,20 @@ describe("flow-execute flow_path over HTTP", () => {
         name: "checkout",
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
-        flow_file: {
+        e2e_test_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+        e2e_test_file: {
           __argentFileInput: true,
           path: path.join(projectRoot, ".argent", "flows", "checkout.yaml"),
         },
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or flow_path\./);
+    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or e2e_test_path\./);
     expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("diagnoses name + flow_path with the exactly-one rule when the saved flow exists", async () => {
+  it("diagnoses name + e2e_test_path with the exactly-one rule when the saved flow exists", async () => {
     // Same misuse, but the unused saved flow resolves cleanly — the diagnosis
     // must be identical to the nonexistent-name case above.
     const savedPath = path.join(projectRoot, ".argent", "flows", "good.yaml");
@@ -343,8 +343,8 @@ describe("flow-execute flow_path over HTTP", () => {
         name: "good",
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
-        flow_file: {
+        e2e_test_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+        e2e_test_file: {
           __argentFileInput: true,
           path: savedPath,
           size: savedSt.size,
@@ -353,13 +353,13 @@ describe("flow-execute flow_path over HTTP", () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or flow_path\./);
+    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or e2e_test_path\./);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
   it("diagnoses a dual-source call from a skipWhenSet-aware client the same way", async () => {
-    // A current client never derives flow_file alongside flow_path, so the
-    // wire carries both sources and no flow_file wrapper at all.
+    // A current client never derives e2e_test_file alongside e2e_test_path, so the
+    // wire carries both sources and no e2e_test_file wrapper at all.
     const st = await fs.stat(flowPath);
     const res = await supertest(handle.app)
       .post("/tools/flow-execute")
@@ -367,19 +367,19 @@ describe("flow-execute flow_path over HTTP", () => {
         name: "checkout",
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
+        e2e_test_path: { __argentFileInput: true, path: flowPath, size: st.size, mtimeMs: st.mtimeMs },
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or flow_path\./);
+    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or e2e_test_path\./);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("diagnoses name + flow_path with the exactly-one rule when the flow_path file does not resolve", async () => {
+  it("diagnoses name + e2e_test_path with the exactly-one rule when the e2e_test_path file does not resolve", async () => {
     // The reciprocal of the missing-saved-flow case: this time the
     // CALLER-authored source is the one that cannot resolve. The wrapper is
     // path-only — the client cannot stat (let alone inline) a file that never
-    // existed. Without the flow_path spec's unwrap the boundary would 422 on
+    // existed. Without the e2e_test_path spec's unwrap the boundary would 422 on
     // it before zod's exactly-one rule runs, telling the agent to re-create a
     // file the call never needed.
     const res = await supertest(handle.app)
@@ -388,18 +388,18 @@ describe("flow-execute flow_path over HTTP", () => {
         name: "checkout",
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+        e2e_test_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or flow_path\./);
+    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or e2e_test_path\./);
     expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
   it("diagnoses an old-client dual-source wire where neither wrapper resolves", async () => {
-    // Worst case of the skew: a pre-skipWhenSet client derived flow_file for
-    // an unsaved name AND the caller mistyped flow_path, so both wrappers are
+    // Worst case of the skew: a pre-skipWhenSet client derived e2e_test_file for
+    // an unsaved name AND the caller mistyped e2e_test_path, so both wrappers are
     // path-only. Whichever spec ran first used to pick the error; the
     // diagnosis must not consult either file.
     const res = await supertest(handle.app)
@@ -408,21 +408,21 @@ describe("flow-execute flow_path over HTTP", () => {
         name: "checkout",
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
-        flow_file: {
+        e2e_test_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+        e2e_test_file: {
           __argentFileInput: true,
           path: path.join(projectRoot, ".argent", "flows", "checkout.yaml"),
         },
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or flow_path\./);
+    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or e2e_test_path\./);
     expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
-  it("still fails the boundary when a lone flow_path does not resolve", async () => {
-    // No name on the wire, so the unwrap must not fire: a flow_path-only call
+  it("still fails the boundary when a lone e2e_test_path does not resolve", async () => {
+    // No name on the wire, so the unwrap must not fire: an e2e_test_path-only call
     // whose file resolves nowhere is a genuine boundary failure, and the 422
     // guidance about the missing file is the right diagnosis.
     const res = await supertest(handle.app)
@@ -430,7 +430,7 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+        e2e_test_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
       });
 
     expect(res.status).toBe(422);
@@ -439,7 +439,7 @@ describe("flow-execute flow_path over HTTP", () => {
   });
 
   it("diagnoses a source-less call with the exactly-one rule at the validation layer", async () => {
-    // The other half of exactly-one: no name and no flow_path. Nothing on the
+    // The other half of exactly-one: no name and no e2e_test_path. Nothing on the
     // wire is a wrapper, so file-input resolution passes through untouched and
     // the schema's superRefine is the only guard left before execute — it must
     // classify the miss as a 400 validation failure, not fall through to
@@ -449,7 +449,7 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({ project_root: projectRoot, device: DEVICE });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or flow_path\./);
+    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or e2e_test_path\./);
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
@@ -460,7 +460,7 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: {
+        e2e_test_path: {
           __argentFileInput: true,
           path: flowPath,
           size: st.size,
@@ -491,7 +491,7 @@ describe("flow-execute flow_path over HTTP", () => {
     };
   }
 
-  it("runs an uploaded self-contained flow_path", async () => {
+  it("runs an uploaded self-contained e2e_test_path", async () => {
     // The whole remote chain: the boundary finds no host file, materializes
     // the content, and resolveFlowSource runs the copy under the client's
     // flow name — the same contract an uploaded `name` run has.
@@ -507,7 +507,7 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: uploadedWrapper("/client/.argent/flows/remote.yaml", yaml),
+        e2e_test_path: uploadedWrapper("/client/.argent/flows/remote.yaml", yaml),
       });
 
     expect(res.status).toBe(200);
@@ -522,7 +522,7 @@ describe("flow-execute flow_path over HTTP", () => {
     expect(dispatched).toContain("tap");
   });
 
-  it("rejects an uploaded flow_path that composes", async () => {
+  it("rejects an uploaded e2e_test_path that composes", async () => {
     // The files beside the client's flow stayed on the client, so the run is
     // refused before step 1 with the list of steps that would read them.
     const yaml = serializeFlow({
@@ -538,7 +538,7 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: uploadedWrapper("/client/.argent/flows/composed.yaml", yaml),
+        e2e_test_path: uploadedWrapper("/client/.argent/flows/composed.yaml", yaml),
       });
 
     expect(res.status).toBe(500);
@@ -561,11 +561,11 @@ describe("flow-execute flow_path over HTTP", () => {
 
       for (const [root, quoted] of [
         ["C:\\work\\proj", `project_root "C:\\work\\proj"`],
-        [projectRoot, `flow_path "C:\\work\\proj\\.argent\\flows\\basic.yaml"`],
+        [projectRoot, `e2e_test_path "C:\\work\\proj\\.argent\\flows\\basic.yaml"`],
       ] as const) {
         const res = await supertest(handle.app)
           .post("/tools/flow-execute")
-          .send({ project_root: root, device: DEVICE, flow_path: wrapper });
+          .send({ project_root: root, device: DEVICE, e2e_test_path: wrapper });
 
         expect(res.status).toBe(500);
         expect(res.body.error).toContain(`${quoted} is a Windows path`);
@@ -598,7 +598,7 @@ describe("flow-execute flow_path over HTTP", () => {
       .send({
         project_root: projectRoot,
         device: DEVICE,
-        flow_path: await mirroredUpload(flowWith("server"), flowWith("client")),
+        e2e_test_path: await mirroredUpload(flowWith("server"), flowWith("client")),
       });
 
     expect(res.status).toBe(200);
@@ -626,7 +626,7 @@ describe("flow-execute flow_path over HTTP", () => {
     );
     const res = await supertest(handle.app)
       .post("/tools/flow-execute")
-      .send({ project_root: projectRoot, device: DEVICE, flow_path: wire });
+      .send({ project_root: projectRoot, device: DEVICE, e2e_test_path: wire });
 
     expect(res.status).toBe(500);
     expect(res.body.error_code).toBe("FLOW_FILE_INVALID");
@@ -635,8 +635,8 @@ describe("flow-execute flow_path over HTTP", () => {
   });
 });
 
-describe("flow-read-prerequisite flow_path over HTTP", () => {
-  it("answers about the boundary-verified flow_path, not the saved flow of the same stem", async () => {
+describe("flow-read-prerequisite e2e_test_path over HTTP", () => {
+  it("answers about the boundary-verified e2e_test_path, not the saved flow of the same stem", async () => {
     // Two flows share the stem "gate": the saved copy under the project root
     // and the explicit file flow-execute would run for the same params. The
     // documented pre-flight (read the prerequisite, then run) is only sound if
@@ -662,7 +662,7 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
       .post("/tools/flow-read-prerequisite")
       .send({
         project_root: projectRoot,
-        flow_path: {
+        e2e_test_path: {
           __argentFileInput: true,
           path: sharedPath,
           size: st.size,
@@ -685,15 +685,15 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
       .post("/tools/flow-read-prerequisite")
       .send({
         project_root: projectRoot,
-        flow_path: { __argentFileInput: true, path: flowPath },
+        e2e_test_path: { __argentFileInput: true, path: flowPath },
       });
 
     expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/flow_path file-input boundary/);
+    expect(res.body.error).toMatch(/e2e_test_path file-input boundary/);
   });
 
-  it("diagnoses name + flow_path with the exactly-one rule when the flow_path file does not resolve", async () => {
-    // flow-execute's unwrap case, mirrored: the caller-authored flow_path must
+  it("diagnoses name + e2e_test_path with the exactly-one rule when the e2e_test_path file does not resolve", async () => {
+    // flow-execute's unwrap case, mirrored: the caller-authored e2e_test_path must
     // reach zod as a plain string so the dual-source misuse is diagnosed by
     // the schema — not by a 422 about a file the call never needed, and not by
     // silently answering for the saved flow.
@@ -702,16 +702,16 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
       .send({
         name: "checkout",
         project_root: projectRoot,
-        flow_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
+        e2e_test_path: { __argentFileInput: true, path: path.join(tmpDir, "nope.yaml") },
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or flow_path\./);
+    expect(res.body.error).toMatch(/Pass exactly one e2e test source: name or e2e_test_path\./);
     expect(res.body.error).not.toMatch(/was not found on the tool-server host/);
   });
 
   it("still reads a saved flow by name alone", async () => {
-    // name became optional to admit flow_path; a name-only wire (no wrapper at
+    // name became optional to admit e2e_test_path; a name-only wire (no wrapper at
     // all — the shape a direct HTTP caller sends) must keep resolving to
     // ${project_root}/.argent/flows/${name}.yaml exactly as before.
     const savedPath = path.join(projectRoot, ".argent", "flows", "saved-only.yaml");
@@ -733,7 +733,7 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
     });
   });
 
-  it("reads an uploaded flow_path, as flow-execute runs one", async () => {
+  it("reads an uploaded e2e_test_path, as flow-execute runs one", async () => {
     // Over a link both tools get the same uploaded copy, so the prerequisite an
     // agent reads belongs to the flow that will run.
     const yaml = serializeFlow({ executionPrerequisite: "be logged in", steps: [] });
@@ -741,7 +741,7 @@ describe("flow-read-prerequisite flow_path over HTTP", () => {
       .post("/tools/flow-read-prerequisite")
       .send({
         project_root: projectRoot,
-        flow_path: {
+        e2e_test_path: {
           __argentFileInput: true,
           path: "/client/.argent/flows/remote.yaml",
           size: Buffer.byteLength(yaml, "utf8"),
@@ -809,7 +809,7 @@ describe("flow-execute over a link, from the real argent client", () => {
   ): Promise<{ steps: Omit<FlowRunResult["steps"][number], "durationMs">[]; writes?: unknown }> {
     const client = await toolsClient(remote, "flow-execute", beforeSend);
     const { data } = await client.callTool("flow-execute", {
-      flow_path: flowPath,
+      e2e_test_path: flowPath,
       project_root: projectRoot,
       device: DEVICE,
       ...extra,
@@ -855,7 +855,7 @@ describe("flow-execute over a link, from the real argent client", () => {
     let members: { state?: string; content?: string }[] = [];
 
     const err = await callFlow(true, fenced, async (body) => {
-      members = JSON.parse(body).flow_path.members;
+      members = JSON.parse(body).e2e_test_path.members;
     }).catch((e: unknown) => e);
 
     expect(String(err)).toContain(
@@ -885,7 +885,7 @@ describe("flow-execute over a link, from the real argent client", () => {
     await write(".argent/flows/__baselines__/root/other__ios-30x60.png", "another snapshot");
     let members: { key: string; state?: string; content?: string }[] = [];
     const keep = async (body: string) => {
-      members = JSON.parse(body).flow_path.members;
+      members = JSON.parse(body).e2e_test_path.members;
     };
 
     const update = await callFlow(true, root, keep, { updateBaselines: true });
@@ -942,7 +942,7 @@ describe("flow-execute over a link, from the real argent client", () => {
       true,
       root,
       async (body) => {
-        members = JSON.parse(body).flow_path.members;
+        members = JSON.parse(body).e2e_test_path.members;
       },
       { updateBaselines: true }
     );
@@ -1002,7 +1002,7 @@ describe("flow-execute over a link, from the real argent client", () => {
       true,
       root,
       async (body) => {
-        members = JSON.parse(body).flow_path.members;
+        members = JSON.parse(body).e2e_test_path.members;
         await fs.rename(projectRoot, `${projectRoot}-moved`);
       },
       { updateBaselines: true, platform: "ios" }
@@ -1057,8 +1057,8 @@ describe("flow-execute over a link, from the real argent client", () => {
       members = JSON.parse(body).project_root.members;
       await fs.rename(projectRoot, `${projectRoot}-moved`);
     };
-    // A sibling by flow_path, which the recorder runs and records by its name.
-    await addFlow({ flow_path: path.join(flows, "child.yaml") });
+    // A sibling by e2e_test_path, which the recorder runs and records by its name.
+    await addFlow({ e2e_test_path: path.join(flows, "child.yaml") });
 
     expect(members.map(memberShape)).toEqual([
       ["flow", "e2e/rec.yaml", undefined, "string"],
@@ -1096,7 +1096,7 @@ describe("flow-execute over a link, from the real argent client", () => {
       let members: { state?: string; content?: string }[] = [];
 
       const { steps: linked } = await callFlow(true, root, async (body) => {
-        members = JSON.parse(body).flow_path.members;
+        members = JSON.parse(body).e2e_test_path.members;
       });
       const { steps: colocated } = await callFlow(false, root);
 
@@ -1112,7 +1112,7 @@ describe("flow-execute over a link, from the real argent client", () => {
   it("sends no fragment for arguments the tool-server refuses, and gets its error", async () => {
     // Each call names a flow whose run: target lies outside the project. The
     // roots taken from such arguments (the directory a bad name climbs to, a
-    // project_root with "..", the filesystem root for a relative flow_path)
+    // project_root with "..", the filesystem root for a relative e2e_test_path)
     // would reach it, so they must not be taken before the arguments pass.
     await write(".argent/flows/keep.yaml", "steps:\n  - echo: keep\n");
     await write(".argent/flows/relative.yaml", "steps:\n  - run: ../../../sib/frag.yaml\n");
@@ -1133,13 +1133,13 @@ describe("flow-execute over a link, from the real argent client", () => {
       for (const [args, error] of [
         [{ name: "../../../above" }, 'Invalid e2e test name "../../../above"'],
         [
-          { flow_path: nested, project_root: `${projectRoot}/e2e/../..` },
+          { e2e_test_path: nested, project_root: `${projectRoot}/e2e/../..` },
           'project_root must not contain ".." segments',
         ],
-        [{ flow_path: ".argent/flows/relative.yaml" }, "e2e test paths must be absolute"],
+        [{ e2e_test_path: ".argent/flows/relative.yaml" }, "e2e test paths must be absolute"],
         [
-          { name: "keep", flow_path: above },
-          "Pass exactly one e2e test source: name or flow_path.",
+          { name: "keep", e2e_test_path: above },
+          "Pass exactly one e2e test source: name or e2e_test_path.",
         ],
       ] as const) {
         let wire: { content?: string; members?: unknown } | undefined;
@@ -1148,7 +1148,7 @@ describe("flow-execute over a link, from the real argent client", () => {
           fetchImpl: async (target: string, init: RequestInit) => {
             if (target.endsWith("/tools/flow-execute")) {
               const body = JSON.parse(String(init.body));
-              wire = body.flow_path ?? body.flow_file;
+              wire = body.e2e_test_path ?? body.e2e_test_file;
             }
             return fetch(target, init);
           },
@@ -1216,13 +1216,13 @@ describe("flow-execute over a link, from the real argent client", () => {
         if (!target.endsWith("/tools/flow-execute")) return fetch(target, init);
         // An older client sends the flow file alone, with no members.
         const body = JSON.parse(String(init.body));
-        const { members: _m, canonical: _c, spelling: _s, ...wire } = body.flow_path;
-        return fetch(target, { ...init, body: JSON.stringify({ ...body, flow_path: wire }) });
+        const { members: _m, canonical: _c, spelling: _s, ...wire } = body.e2e_test_path;
+        return fetch(target, { ...init, body: JSON.stringify({ ...body, e2e_test_path: wire }) });
       },
     });
 
     const err = await client
-      .callTool("flow-execute", { flow_path: root, project_root: projectRoot, device: DEVICE })
+      .callTool("flow-execute", { e2e_test_path: root, project_root: projectRoot, device: DEVICE })
       .catch((e: unknown) => e);
 
     expect(String(err)).toContain("  - step 2: run: frag.yaml\n");
@@ -1249,7 +1249,7 @@ describe("flow-execute over a link, from the real argent client", () => {
 
     const { steps: colocated } = await callFlow(false, root);
     const { steps: linked } = await callFlow(true, root, async (body) => {
-      members = JSON.parse(body).flow_path.members;
+      members = JSON.parse(body).e2e_test_path.members;
     });
 
     expect(linked).toEqual(colocated);
@@ -1309,7 +1309,7 @@ describe("flow-execute with run: fragments sent through POST /upload", () => {
     return path.join(flows, "root.yaml");
   }
 
-  type Body = { flow_path: { members: Record<string, unknown>[] } };
+  type Body = { e2e_test_path: { members: Record<string, unknown>[] } };
 
   /** Run `flowPath` over a link. `tamper` edits the body after the client built it. */
   async function callLinked(flowPath: string, tamper?: (body: Body) => void) {
@@ -1330,7 +1330,7 @@ describe("flow-execute with run: fragments sent through POST /upload", () => {
       },
     });
     const outcome = await client
-      .callTool("flow-execute", { flow_path: flowPath, project_root: projectRoot, device: DEVICE })
+      .callTool("flow-execute", { e2e_test_path: flowPath, project_root: projectRoot, device: DEVICE })
       .then(
         ({ data }) => (data as FlowRunResult).steps.map((step) => `${step.status} ${step.flow}`),
         (err: unknown) => err
@@ -1346,7 +1346,7 @@ describe("flow-execute with run: fragments sent through POST /upload", () => {
 
     const { outcome, sent } = await callLinked(root);
 
-    expect(sent.flow_path.members.map((m) => [typeof m.uploadId, m.content])).toEqual([
+    expect(sent.e2e_test_path.members.map((m) => [typeof m.uploadId, m.content])).toEqual([
       ["string", undefined],
     ]);
     expect(outcome).toEqual(["pass big", "pass big", "pass root"]);
@@ -1365,7 +1365,7 @@ describe("flow-execute with run: fragments sent through POST /upload", () => {
     });
 
     const { outcome, sent } = await callLinked(root, (body) => {
-      Object.assign(body.flow_path.members[0]!, change);
+      Object.assign(body.e2e_test_path.members[0]!, change);
     });
 
     expect(String(outcome)).toMatch(error);
@@ -1374,7 +1374,7 @@ describe("flow-execute with run: fragments sent through POST /upload", () => {
     // The upload of the second fragment is gone, not only its file.
     const again = await supertest(handle.app)
       .post("/tools/flow-execute")
-      .send({ ...sent, flow_path: { ...sent.flow_path, members: [sent.flow_path.members[1]] } });
+      .send({ ...sent, e2e_test_path: { ...sent.e2e_test_path, members: [sent.e2e_test_path.members[1]] } });
     expect(again.status).toBe(422);
     expect(again.body.error).toMatch(/was not found on the tool-server/);
   });

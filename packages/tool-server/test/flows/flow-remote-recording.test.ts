@@ -51,7 +51,7 @@ function uploadCtx(): ToolContext {
   return {
     artifacts: new ArtifactStore(),
     fileInputs: {
-      flow_file: { clientPath: CLIENT_FLOW_PATH, presentOnHost: false, viaUpload: true },
+      e2e_test_file: { clientPath: CLIENT_FLOW_PATH, presentOnHost: false, viaUpload: true },
     },
   };
 }
@@ -196,7 +196,7 @@ describe("flow recording with a remote client (probe miss)", () => {
     ]);
   });
 
-  it("add-step rejects a flow-execute flow_path — a client sibling is unreadable here", async () => {
+  it("add-step rejects a flow-execute e2e_test_path — a client sibling is unreadable here", async () => {
     const registry = createMockRegistry({ "flow-execute": { result: { ok: true, steps: [] } } });
     const addStep = createFlowAddStepTool(registry);
 
@@ -214,7 +214,7 @@ describe("flow recording with a remote client (probe miss)", () => {
           project_root: CLIENT_ROOT,
           command: "flow-execute",
           args: JSON.stringify({
-            flow_path: path.join(CLIENT_ROOT, ".argent", "e2e", "login.yaml"),
+            e2e_test_path: path.join(CLIENT_ROOT, ".argent", "e2e", "login.yaml"),
             project_root: CLIENT_ROOT,
           }),
         }
@@ -545,7 +545,7 @@ describe("recording for a client released before the rename (legacyE2eDir)", () 
     }
   });
 
-  describe("nesting a sibling by flow_path in a legacy recording", () => {
+  describe("nesting a sibling by e2e_test_path in a legacy recording", () => {
     const fragLegacy = path.join(CLIENT_ROOT, ".argent", "flows", "frag.yaml");
     const fragE2e = path.join(CLIENT_ROOT, ".argent", "e2e", "frag.yaml");
     const member = (spelled: string, text?: string): [string, ResolvedMember] => [
@@ -580,7 +580,7 @@ describe("recording for a client released before the rename (legacyE2eDir)", () 
           name: "remote-flow",
           project_root: CLIENT_ROOT,
           command: "flow-execute",
-          args: JSON.stringify({ flow_path: fragLegacy, project_root: CLIENT_ROOT }),
+          args: JSON.stringify({ e2e_test_path: fragLegacy, project_root: CLIENT_ROOT }),
         },
         {
           artifacts: new ArtifactStore(),
@@ -609,7 +609,7 @@ describe("recording for a client released before the rename (legacyE2eDir)", () 
         expect.objectContaining({
           name: "frag",
           project_root: CLIENT_ROOT,
-          flow_file: expect.objectContaining({ path: fragLegacy }),
+          e2e_test_file: expect.objectContaining({ path: fragLegacy }),
         })
       );
     });
@@ -622,7 +622,7 @@ describe("recording for a client released before the rename (legacyE2eDir)", () 
   });
 });
 
-describe("flow replay with a boundary-resolved flow_file", () => {
+describe("flow replay with a boundary-resolved e2e_test_file", () => {
   it("flow-execute reads the resolved path instead of deriving from project_root", async () => {
     // Simulates the server-side temp file the boundary materialized from the
     // client's upload.
@@ -638,7 +638,7 @@ describe("flow replay with a boundary-resolved flow_file", () => {
         {
           name: "remote-flow",
           project_root: CLIENT_ROOT,
-          flow_file: uploaded,
+          e2e_test_file: uploaded,
           device: "00000000-0000-0000-0000-0000000000ab",
         },
         uploadCtx()
@@ -661,7 +661,7 @@ describe("flow replay with a boundary-resolved flow_file", () => {
     try {
       const result = await flowReadPrerequisiteTool.execute(
         {},
-        { name: "remote-flow", project_root: CLIENT_ROOT, flow_file: uploaded },
+        { name: "remote-flow", project_root: CLIENT_ROOT, e2e_test_file: uploaded },
         uploadCtx()
       );
       expect(result.executionPrerequisite).toBe("Device unlocked");
@@ -671,8 +671,8 @@ describe("flow replay with a boundary-resolved flow_file", () => {
   });
 });
 
-describe("flow replay with an explicit boundary-resolved flow_path", () => {
-  it("advertises exactly one of name and flow_path as the flow source", () => {
+describe("flow replay with an explicit boundary-resolved e2e_test_path", () => {
+  it("advertises exactly one of name and e2e_test_path as the flow source", () => {
     const runFlow = createRunFlowTool(createMockRegistry());
     const schema = zodObjectToJsonSchema(runFlow.zodSchema!);
 
@@ -680,39 +680,39 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
       type: "object",
       properties: {
         name: { type: "string" },
-        flow_path: { type: "string" },
+        e2e_test_path: { type: "string" },
       },
     });
     // Neither source may be `required`: the exactly-one rule cannot be a
     // top-level oneOf (tool-input-schema-contract.test.ts), so the zod
     // superRefine enforces it and the description states it.
     expect(schema.required as string[]).not.toContain("name");
-    expect(schema.required as string[]).not.toContain("flow_path");
+    expect(schema.required as string[]).not.toContain("e2e_test_path");
     expect(runFlow.description).toMatch(/exactly one e2e test source/i);
   });
 
-  it("states the absolute-path requirement in the flow_path description", () => {
+  it("states the absolute-path requirement in the e2e_test_path description", () => {
     const runFlow = createRunFlowTool(createMockRegistry());
 
     // An agent reading only the schema is the caller that gets this wrong —
     // `argent flow list` hands it a relative path — so the requirement has to
     // be legible before the call, the way project_root's description states it.
     expect(zodObjectToJsonSchema(runFlow.zodSchema!)).toMatchObject({
-      properties: { flow_path: { description: expect.stringMatching(/absolute/i) } },
+      properties: { e2e_test_path: { description: expect.stringMatching(/absolute/i) } },
     });
   });
 
   it("documents both flow sources in the project_root description", () => {
     const runFlow = createRunFlowTool(createMockRegistry());
 
-    // On the flow_path branch the flow, its run: siblings, and baselines all
+    // On the e2e_test_path branch the flow, its run: siblings, and baselines all
     // resolve beside the YAML — project_root locates nothing there — so the
     // description must not promise `.argent/flows/<name>.yaml` lives under it
     // (`name` is exactly what that branch forbids).
     expect(zodObjectToJsonSchema(runFlow.zodSchema!)).toMatchObject({
       properties: {
         project_root: {
-          description: expect.stringMatching(/with flow_path.*beside the YAML/i),
+          description: expect.stringMatching(/with e2e_test_path.*beside the YAML/i),
         },
       },
     });
@@ -730,13 +730,13 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         {},
         {
           project_root: CLIENT_ROOT,
-          flow_path: flowPath,
+          e2e_test_path: flowPath,
           device: "00000000-0000-0000-0000-0000000000ab",
         },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_path: {
+            e2e_test_path: {
               clientPath: flowPath,
               presentOnHost: true,
               viaUpload: false,
@@ -755,7 +755,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     }
   });
 
-  it("rejects a raw unwrapped flow_path even when the file exists", async () => {
+  it("rejects a raw unwrapped e2e_test_path even when the file exists", async () => {
     const flowPath = path.join(os.tmpdir(), `raw-flow-${Date.now()}.yaml`);
     await fs.writeFile(flowPath, ["executionPrerequisite: ''", "steps: []", ""].join("\n"));
     try {
@@ -765,11 +765,11 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
           {},
           {
             project_root: CLIENT_ROOT,
-            flow_path: flowPath,
+            e2e_test_path: flowPath,
             device: "00000000-0000-0000-0000-0000000000ab",
           }
         )
-      ).rejects.toThrow("flow_path file-input boundary");
+      ).rejects.toThrow("e2e_test_path file-input boundary");
     } finally {
       await fs.rm(flowPath, { force: true });
     }
@@ -778,22 +778,22 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
   it("rejects boundary metadata for a different co-located path", async () => {
     const flowPath = path.join(os.tmpdir(), "selected.yaml");
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: flowPath }, undefined, {
         clientPath: path.join(os.tmpdir(), "different.yaml"),
         presentOnHost: true,
         viaUpload: false,
         statVerified: true,
       })
-    ).rejects.toThrow("flow_path file-input boundary");
+    ).rejects.toThrow("e2e_test_path file-input boundary");
   });
 
-  it("rejects a relative flow_path without blaming the boundary it cleared", async () => {
+  it("rejects a relative e2e_test_path without blaming the boundary it cleared", async () => {
     // The spelling `argent flow list` prints, in a fully legitimate wrapper:
     // the boundary resolved this path in place and matched the client stat, so
     // the only thing wrong with it is its shape.
     const flowPath = path.join(".argent", "flows", "relflow.yaml");
     const err = await resolveFlowSource(
-      { project_root: CLIENT_ROOT, flow_path: flowPath },
+      { project_root: CLIENT_ROOT, e2e_test_path: flowPath },
       undefined,
       { clientPath: flowPath, presentOnHost: true, viaUpload: false, statVerified: true }
     ).then(
@@ -804,14 +804,14 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     expect(err?.message).not.toContain("file-input boundary");
   });
 
-  it('rejects a flow_path carrying ".." segments', async () => {
+  it('rejects an e2e_test_path carrying ".." segments', async () => {
     // A fully legitimate wrapper — the host stat succeeds through the kernel,
     // which resolves any symlinked directory component before the "..". What
     // the gate has to stop is the lexical half: dirname keeps the raw string,
     // so run: siblings and __baselines__ would come from another directory.
     const flowPath = [os.tmpdir(), "link", "..", "selected.yaml"].join(path.sep);
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: flowPath }, undefined, {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
@@ -830,7 +830,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     // names the empty stem for the same three shapes; so must this path.
     const flowPath = path.join(...segments);
     const err = await resolveFlowSource(
-      { project_root: CLIENT_ROOT, flow_path: flowPath },
+      { project_root: CLIENT_ROOT, e2e_test_path: flowPath },
       undefined,
       { clientPath: flowPath, presentOnHost: true, viaUpload: false, statVerified: true }
     ).then(
@@ -846,7 +846,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     // must keep reaching the lowercase-extension arm.
     const flowPath = path.join(os.tmpdir(), "Checkout.YAML");
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: flowPath }, undefined, {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
@@ -867,7 +867,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
       await fs.writeFile(path.join(dir, "uppercase.yaml"), "steps: []\n", "utf8");
       const flowPath = path.join(dir, "UpperCase.yaml");
       const err = await resolveFlowSource(
-        { project_root: CLIENT_ROOT, flow_path: flowPath },
+        { project_root: CLIENT_ROOT, e2e_test_path: flowPath },
         undefined,
         { clientPath: flowPath, presentOnHost: true, viaUpload: false, statVerified: true }
       ).then(
@@ -881,7 +881,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
         'matched "UpperCase.yaml" case-insensitively to "uppercase.yaml"'
       );
       expect(err?.message).toContain("__baselines__");
-      expect(err?.message).toContain('Pass flow_path with the on-disk basename "uppercase.yaml"');
+      expect(err?.message).toContain('Pass e2e_test_path with the on-disk basename "uppercase.yaml"');
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
@@ -889,7 +889,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
 
   it("suggests a rename when the on-disk sibling's own extension case is unrunnable", async () => {
     // The other recovery fork: checkout.YAML is what the name really is, but
-    // passing it as flow_path would trip the lowercase-extension arm — so the
+    // passing it as e2e_test_path would trip the lowercase-extension arm — so the
     // message must ask for a rename, not point at a spelling this same ladder
     // refuses.
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-path-casing-"));
@@ -897,7 +897,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
       await fs.writeFile(path.join(dir, "checkout.YAML"), "steps: []\n", "utf8");
       const flowPath = path.join(dir, "checkout.yaml");
       const err = await resolveFlowSource(
-        { project_root: CLIENT_ROOT, flow_path: flowPath },
+        { project_root: CLIENT_ROOT, e2e_test_path: flowPath },
         undefined,
         { clientPath: flowPath, presentOnHost: true, viaUpload: false, statVerified: true }
       ).then(
@@ -923,7 +923,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
       const flowPath = path.join(dir, "MixedCase.yaml");
       await fs.writeFile(flowPath, "steps: []\n", "utf8");
       await expect(
-        resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+        resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: flowPath }, undefined, {
           clientPath: flowPath,
           presentOnHost: true,
           viaUpload: false,
@@ -948,7 +948,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
       "present.yaml"
     );
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: flowPath }, undefined, {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
@@ -962,22 +962,22 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     // succeeded, but nothing tied the caller to the file's client-side stat.
     const flowPath = path.join(os.tmpdir(), "forged.yaml");
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: flowPath }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: flowPath }, undefined, {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
       })
-    ).rejects.toThrow("flow_path file-input boundary");
+    ).rejects.toThrow("e2e_test_path file-input boundary");
   });
 
-  it("accepts an uploaded flow_path and marks it viaUpload", async () => {
+  it("accepts an uploaded e2e_test_path and marks it viaUpload", async () => {
     // The materialized temp file is this process's own copy of the client's
     // file, so no boundary stat and no host listing has anything to judge; the
     // flow name comes from the client's spelling, and viaUpload is what makes
     // execute() refuse a run:, script: or snapshot: step before step 1.
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: uploaded }, undefined, {
         clientPath: path.join(CLIENT_ROOT, "flows", "caller-visible.yaml"),
         presentOnHost: false,
         viaUpload: true,
@@ -985,21 +985,21 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     ).resolves.toEqual({ filePath: uploaded, flowName: "caller-visible", viaUpload: true });
   });
 
-  it("rejects an uploaded flow_path whose client spelling is relative", async () => {
+  it("rejects an uploaded e2e_test_path whose client spelling is relative", async () => {
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: uploaded }, undefined, {
         clientPath: "flows/relative.yaml",
         presentOnHost: false,
         viaUpload: true,
       })
-    ).rejects.toThrow('Invalid flow_path "flows/relative.yaml": e2e test paths must be absolute');
+    ).rejects.toThrow('Invalid e2e_test_path "flows/relative.yaml": e2e test paths must be absolute');
   });
 
-  it("rejects an uploaded flow_path whose client spelling has a .. segment", async () => {
+  it("rejects an uploaded e2e_test_path whose client spelling has a .. segment", async () => {
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: uploaded }, undefined, {
         // Spelled, not joined: path.join collapses the segment this test exists to catch.
         clientPath: `${CLIENT_ROOT}/flows/../shared/caller-visible.yaml`,
         presentOnHost: false,
@@ -1008,10 +1008,10 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
     ).rejects.toThrow('e2e test paths must not contain ".." segments');
   });
 
-  it("rejects an uploaded flow_path without the .yaml extension", async () => {
+  it("rejects an uploaded e2e_test_path without the .yaml extension", async () => {
     const uploaded = path.join(os.tmpdir(), "argent-file-input-abc", "materialized.yaml");
     await expect(
-      resolveFlowSource({ project_root: CLIENT_ROOT, flow_path: uploaded }, undefined, {
+      resolveFlowSource({ project_root: CLIENT_ROOT, e2e_test_path: uploaded }, undefined, {
         clientPath: path.join(CLIENT_ROOT, "flows", "caller-visible.yml"),
         presentOnHost: false,
         viaUpload: true,
@@ -1022,7 +1022,7 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
   it("rejects direct callers that provide both flow sources", async () => {
     await expect(
       resolveFlowSource(
-        { name: "saved", project_root: CLIENT_ROOT, flow_path: "/tmp/explicit.yaml" },
+        { name: "saved", project_root: CLIENT_ROOT, e2e_test_path: "/tmp/explicit.yaml" },
         undefined,
         { clientPath: "/tmp/explicit.yaml", presentOnHost: true, viaUpload: false }
       )
@@ -1036,11 +1036,11 @@ describe("flow replay with an explicit boundary-resolved flow_path", () => {
   });
 });
 
-describe("flow_file containment", () => {
-  const params = (flow_file: string) => ({
+describe("e2e_test_file containment", () => {
+  const params = (e2e_test_file: string) => ({
     name: "remote-flow",
     project_root: CLIENT_ROOT,
-    flow_file,
+    e2e_test_file,
   });
 
   it("accepts the exact ${project_root}/.argent/flows/${name}.yaml path", async () => {
@@ -1071,11 +1071,11 @@ describe("flow_file containment", () => {
     // left the whole suite green while opening the containment bypass to the
     // COMMON shape: `resolveOne` returns `viaUpload: false` for any wire path
     // that already exists on the host, i.e. every same-machine `flow-execute`
-    // carrying a `flow_file`.
+    // carrying an `e2e_test_file`.
     const hostPath = { clientPath: CLIENT_FLOW_PATH, presentOnHost: true, viaUpload: false };
 
     await expect(resolveFlowSource(params("/etc/anything.yaml"), hostPath)).rejects.toThrow(
-      "Invalid flow_file"
+      "Invalid e2e_test_file"
     );
     // The same input with the upload flag set is the trusted case, and must
     // still pass — otherwise this test would also hold for a guard that simply
@@ -1086,29 +1086,29 @@ describe("flow_file containment", () => {
     ).toBe("/etc/anything.yaml");
   });
 
-  it("rejects a relative flow_file", async () => {
+  it("rejects a relative e2e_test_file", async () => {
     await expect(resolveFlowSource(params(".argent/flows/remote-flow.yaml"))).rejects.toThrow(
-      "Invalid flow_file"
+      "Invalid e2e_test_file"
     );
   });
 
   it('rejects ".." traversal even when it resolves back to the flows dir', async () => {
     // Raw concatenation — path.join would collapse the ".." before the check.
     const sneaky = `${CLIENT_ROOT}/.argent/flows/../flows/remote-flow.yaml`;
-    await expect(resolveFlowSource(params(sneaky))).rejects.toThrow("Invalid flow_file");
+    await expect(resolveFlowSource(params(sneaky))).rejects.toThrow("Invalid e2e_test_file");
   });
 
   it("rejects an absolute path outside the project's flows dir", async () => {
     await expect(resolveFlowSource(params("/etc/anything.yaml"))).rejects.toThrow(
-      "Invalid flow_file"
+      "Invalid e2e_test_file"
     );
     // A different flow's file under the right dir is not this flow's path either.
     await expect(
       resolveFlowSource(params(path.join(CLIENT_ROOT, ".argent", "flows", "other.yaml")))
-    ).rejects.toThrow("Invalid flow_file");
+    ).rejects.toThrow("Invalid e2e_test_file");
   });
 
-  it("flow-execute refuses an out-of-project flow_file without reading it", async () => {
+  it("flow-execute refuses an out-of-project e2e_test_file without reading it", async () => {
     const runFlow = createRunFlowTool(createMockRegistry());
     await expect(
       runFlow.execute(
@@ -1116,11 +1116,11 @@ describe("flow_file containment", () => {
         {
           name: "remote-flow",
           project_root: CLIENT_ROOT,
-          flow_file: "/etc/anything.yaml",
+          e2e_test_file: "/etc/anything.yaml",
           device: "00000000-0000-0000-0000-0000000000ab",
         }
       )
-    ).rejects.toThrow("Invalid flow_file");
+    ).rejects.toThrow("Invalid e2e_test_file");
   });
 });
 

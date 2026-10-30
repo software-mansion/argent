@@ -62,7 +62,7 @@ async function run(tool: string, nestedResult: unknown) {
   const result = asRun(
     await createRunFlowTool(registry).execute(
       {},
-      { name: "outer", project_root: PROJECT_ROOT, flow_file: flowFile, device: "DEV" }
+      { name: "outer", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "DEV" }
     )
   );
   return { result, registry };

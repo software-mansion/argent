@@ -97,7 +97,7 @@ describe("flow param errors over HTTP", () => {
     expect(typeof res.body.issues[0].message).toBe("string");
   });
 
-  it("leaves the client-DERIVED flow_file out of the keys it reads back", async () => {
+  it("leaves the client-DERIVED e2e_test_file out of the keys it reads back", async () => {
     const registry = new Registry();
     registry.registerTool(createRunFlowTool(registry) as never);
     const { app } = createHttpApp(registry);
@@ -108,13 +108,13 @@ describe("flow param errors over HTTP", () => {
         name: "demo",
         project_root: tmpDir,
         platform: "iOS",
-        flow_file: { [FILE_INPUT_MARKER]: true, path: flowFile },
+        e2e_test_file: { [FILE_INPUT_MARKER]: true, path: flowFile },
       });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toContain("`platform`");
     expect(res.body.message).toContain("You sent: `name`, `project_root`, `platform`.");
-    expect(res.body.message).not.toContain("`flow_file`");
+    expect(res.body.message).not.toContain("`e2e_test_file`");
   });
 
   it("still names a file-input the CALLER authored", async () => {
@@ -127,12 +127,12 @@ describe("flow param errors over HTTP", () => {
       .send({
         project_root: tmpDir,
         device: 5,
-        flow_path: { [FILE_INPUT_MARKER]: true, path: flowFile },
+        e2e_test_path: { [FILE_INPUT_MARKER]: true, path: flowFile },
       });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toContain("`device`");
-    expect(res.body.message).toContain("`flow_path`");
+    expect(res.body.message).toContain("`e2e_test_path`");
   });
 
   it("answers a NESTED tool's schema miss with 400, matching the direct call", async () => {

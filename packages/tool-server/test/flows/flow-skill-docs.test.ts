@@ -230,7 +230,7 @@ describe("create-flow directive-answer docs", () => {
  * resolves from, so that claim is pinned here rather than left to prose review.
  */
 describe("create-flow script docs", () => {
-  it("lists a script path among what a flow_path run re-anchors", () => {
+  it("lists a script path among what an e2e_test_path run re-anchors", () => {
     // `project_root` still names the script's working directory either way; it
     // is the RESOLUTION that moves to the YAML, and a `script:` path is the
     // third thing that moves with it.
@@ -239,6 +239,6 @@ describe("create-flow script docs", () => {
     ) as { properties: Record<string, { description?: string }> };
     const projectRoot = schema.properties.project_root?.description;
     expect(projectRoot, "`project_root` no longer describes itself").toBeDefined();
-    expect(projectRoot!).toMatch(/with flow_path[^.]*script:/);
+    expect(projectRoot!).toMatch(/with e2e_test_path[^.]*script:/);
   });
 });

@@ -72,7 +72,7 @@ beforeEach(async () => {
             description: "",
             inputSchema: {},
             fileInputs: [
-              { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+              { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
             ],
           },
         ],
@@ -213,12 +213,12 @@ describe("createToolsClient options", () => {
       const { callTool } = createToolsClient({
         baseUrl: async () => ({ url, token: "t", remote }),
       });
-      await callTool("run-flow", { flow_path: flowPath });
+      await callTool("run-flow", { e2e_test_path: flowPath });
     }
 
     const [routed, local] = requests
       .filter((r) => r.url === "/tools/run-flow")
-      .map((r) => (JSON.parse(r.body) as { flow_path: Record<string, unknown> }).flow_path);
+      .map((r) => (JSON.parse(r.body) as { e2e_test_path: Record<string, unknown> }).e2e_test_path);
     expect(Buffer.from(routed!.content as string, "base64").toString("utf8")).toBe("steps: []\n");
     expect(local).toMatchObject({ __argentFileInput: true, path: flowPath });
     expect(local).not.toHaveProperty("content");
@@ -237,7 +237,7 @@ describe("createToolsClient options", () => {
     });
 
     await expect(
-      callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME })
+      callTool("run-flow", { e2e_test_path: flowPath, project_root: TEST_HOME })
     ).rejects.toThrow(
       "The connection to the tool-server closed before run-flow finished (fetch failed). " +
         "The tool may have run; check its effect before you run it again."
@@ -276,7 +276,7 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: true }),
     });
 
-    const err = await callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME }).catch(
+    const err = await callTool("run-flow", { e2e_test_path: flowPath, project_root: TEST_HOME }).catch(
       (e: unknown) => e
     );
 
@@ -310,7 +310,7 @@ describe("createToolsClient options", () => {
     });
 
     const { data } = await callTool("run-flow", {
-      flow_path: flowPath,
+      e2e_test_path: flowPath,
       project_root: TEST_HOME,
       updateBaselines: true,
     });
