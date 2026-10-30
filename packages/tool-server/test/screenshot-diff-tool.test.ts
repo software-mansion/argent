@@ -54,6 +54,17 @@ describe("screenshotDiffTool", () => {
     expect(result.success).toBe(false);
   });
 
+  it.each(["captureBaseline", "captureCurrent"])("rejects a string %s", (flag) => {
+    const result = screenshotDiffTool.zodSchema!.safeParse({
+      baselinePath: "/tmp/baseline.png",
+      currentPath: "/tmp/current.png",
+      udid: "ABC",
+      [flag]: "false",
+    });
+
+    expect(result.error?.issues).toMatchObject([{ code: "invalid_type", path: [flag] }]);
+  });
+
   it("requires udid and only declares the simulator-server service for live captures", () => {
     expect(
       screenshotDiffTool.zodSchema!.safeParse({

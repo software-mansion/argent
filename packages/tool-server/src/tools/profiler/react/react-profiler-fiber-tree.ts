@@ -121,6 +121,7 @@ export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema
 Use when tracing ancestry of a library component or checking for useMemoCache hook (confirms React Compiler is active on a component).
 Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBaseDuration, and children.
 Fails if the React DevTools hook is not present or no fiber roots have been committed yet.`,
+  readOnly: true,
   zodSchema,
   // RN-only: walks the fiber tree via the React DevTools backend hook.
   capability: RN_ONLY_TOOL_CAPABILITY,

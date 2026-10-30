@@ -39,15 +39,22 @@ import {
   hasDefaultBootSnapshot,
   listAndroidDevices,
   listAvds,
+  readEmulatorConsoleAvdName,
   resolveEmulatorOrThrow,
   runAdb,
   waitForBootCompleted,
+  type AndroidDevice,
 } from "../../utils/adb";
 import { ensureDep } from "../../utils/check-deps";
+import { listEmulatorPidsForAvd } from "../../utils/emulator-process";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
-import { androidHeadlessFromEnv, iosHeadlessFromEnv } from "../../utils/no-window-env";
+import {
+  androidGuestVulkanFromEnv,
+  androidHeadlessFromEnv,
+  iosHeadlessFromEnv,
+} from "../../utils/no-window-env";
 import {
   assertHarmonyEnabled,
   classifyDevice,
@@ -143,6 +150,12 @@ const zodSchema = z.object({
     .describe(
       "Android only: boot the emulator with audio output enabled. Defaults to false: argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which argent never mutes."
     ),
+  guestVulkan: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android on a macOS host only: boot the emulator with guest Vulkan. Defaults to false: guest Vulkan crashes Chrome's GPU process, which breaks Chrome and Custom Tab sign-in flows. Without it apps find no Vulkan device, although the guest still lists the Vulkan features, so a Vulkan-only renderer such as WebGPU (react-native-wgpu) draws nothing; pass `true` to test one. Takes effect at boot: an emulator already running in the other mode is reused with a `note`, and `force: true` reboots it. A boot snapshot saved in the other mode can't be reused, so the first boot after toggling is a slower cold boot. The `ARGENT_EMULATOR_GUEST_VULKAN` env var flips this default to true. Ignored on other hosts and platforms."
+    ),
   headless: z
     .boolean()
     .optional()
@@ -174,10 +187,18 @@ const zodSchema = z.object({
 
 type BootDeviceParams = z.infer<typeof zodSchema>;
 
+type AndroidBootResult = {
+  platform: "android";
+  serial: string;
+  avdName: string;
+  booted: true;
+  note?: string;
+};
+
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
   | { platform: "ios-remote"; udid: string; booted: true }
-  | { platform: "android"; serial: string; avdName: string; booted: true }
+  | AndroidBootResult
   | VegaBootResult
   | HarmonyBootResult
   | ElectronBootResult
@@ -288,6 +309,30 @@ function selectGpuMode(): string {
   return process.platform === "linux" ? "swiftshader" : "auto";
 }
 
+// macOS: guest Vulkan crashes Chrome's GPU process on every host backend
+// (lavapipe, SwiftShader, MoltenVK). Passed both ways so
+// ~/.android/advancedFeatures.ini cannot override `guestVulkan`.
+function guestVulkanArgs(guestVulkan: boolean): string[] {
+  if (process.platform !== "darwin") return [];
+  return ["-feature", guestVulkan ? "Vulkan" : "-Vulkan"];
+}
+
+// Only `ro.boot.hardware.vulkan` reliably tracks `-feature -Vulkan`;
+// `ro.hardware.vulkan` stays set on some images (API 34).
+async function runningGuestVulkanNote(
+  serial: string,
+  guestVulkan: boolean
+): Promise<string | undefined> {
+  if (process.platform !== "darwin") return undefined;
+  const prop = await adbShell(serial, "getprop ro.boot.hardware.vulkan", { timeoutMs: 5_000 })
+    .then((out) => out.trim())
+    .catch(() => null);
+  if (prop === null || (prop !== "") === guestVulkan) return undefined;
+  return guestVulkan
+    ? "This emulator was already running without guest Vulkan, so apps find no Vulkan device. Pass `force: true` to reboot it with guest Vulkan."
+    : "This emulator was already running with guest Vulkan, which can crash Chrome's GPU process. Pass `force: true` to reboot it without guest Vulkan.";
+}
+
 // Poll cadences for the boot state machine: they bound latency, not
 // correctness. Deliberately conservative so a hung adb on the default 30s
 // timeout is not re-spawned every few ms.
@@ -295,7 +340,12 @@ const BOOT_POLL_INTERVALS_MS = {
   serialByAvd: 1_500, // findSerialByAvdName: re-scan when >1 new emulator appeared
   adbRegister: 1_000, // attemptBoot stage 2: re-scan adb devices for the new serial
   earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
+  serialGone: 500, // awaitEmulatorsGone, awaitOwnEmulatorSettled: re-check for a dying emulator
 } as const;
+
+// How long a killed emulator may stay listed by adb, or its process alive,
+// before the next spawn.
+const EMULATOR_GONE_BUDGET_MS = 30_000;
 
 // Probe shared by assertScreencapAlive (hot boot) and awaitFirstRealFrame
 // (cold boot): `screencap -p` emits a PNG of the current frame and awk
@@ -448,20 +498,131 @@ async function findSerialByAvdName(avdName: string, deadline: number): Promise<s
   return null;
 }
 
-async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
+async function listEmulatorSerials(): Promise<string[]> {
   // 3 s per poll — a hung adb daemon on the default 30 s timeout would eat
   // the whole outer stage budget in a single call.
   const { stdout } = await runAdb(["devices"], { timeoutMs: 3_000 }).catch(() => ({
     stdout: "",
     stderr: "",
   }));
-  const lines = stdout.split("\n");
   const now: string[] = [];
-  for (const line of lines) {
+  for (const line of stdout.split("\n")) {
     const m = line.match(/^(emulator-\d+)\s+/);
     if (m) now.push(m[1]!);
   }
-  return now.filter((s) => !before.has(s));
+  return now;
+}
+
+async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
+  return (await listEmulatorSerials()).filter((s) => !before.has(s));
+}
+
+/**
+ * Wait (bounded) for killed emulators to drop off adb. `adb emu kill` returns
+ * before qemu exits, and the next spawn usually takes the freed console port, so
+ * it registers under the killed emulator's serial: snapshotting the device list
+ * before that serial is gone would count the new emulator as pre-existing.
+ */
+async function awaitEmulatorsGone(serials: string[]): Promise<void> {
+  const deadline = Date.now() + EMULATOR_GONE_BUDGET_MS;
+  while (serials.length > 0 && Date.now() < deadline) {
+    const listed = await listEmulatorSerials();
+    if (!serials.some((s) => listed.includes(s))) return;
+    await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.serialGone));
+  }
+}
+
+function isRunningAvd(device: AndroidDevice, avdName: string): boolean {
+  return device.isEmulator && device.avdName === avdName && device.state === "device";
+}
+
+/**
+ * Wait (bounded) while an emulator process for this AVD is alive but not
+ * healthy in adb. That is an emulator killed outside argent (window closed,
+ * crash, `adb emu kill`) and still shutting down, which takes up to ~20 s, or
+ * one somebody else started that is still coming up. adb lists it as `offline`
+ * or as `device` with getprop failing, so it reads as neither ours nor gone, and
+ * a spawn now would collide with it on the AVD lock or come up on its freed
+ * console port, which the before-spawn snapshot already holds, and never count
+ * as new.
+ *
+ * The process table names the AVD when adb cannot. Only this AVD's process is
+ * waited on, so an unrelated frozen emulator costs nothing here. Resolves when
+ * the process exits (null) or when the emulator answers getprop with this AVD,
+ * returning the device list that showed it so the caller can reuse it. Without
+ * `ps` (Windows) there is nothing to wait on and the spawn proceeds as before.
+ */
+async function awaitOwnEmulatorSettled(
+  avdName: string,
+  deadline: number
+): Promise<AndroidDevice[] | null> {
+  let healthy: AndroidDevice[] | null = null;
+  let listing: Promise<void> | null = null;
+  while (Date.now() < deadline) {
+    if (healthy) return healthy;
+    if ((await listEmulatorPidsForAvd(avdName)).length === 0) return null;
+    // A dying emulator listed as `device` holds listAndroidDevices for
+    // ENRICH_TIMEOUT_MS per getprop, so the listing runs alongside the process
+    // poll rather than pacing it: the exit is still noticed within one interval.
+    listing ??= listAndroidDevices()
+      .then((devices) => {
+        if (devices.some((d) => isRunningAvd(d, avdName))) healthy = devices;
+      })
+      .catch(() => {})
+      .finally(() => {
+        listing = null;
+      });
+    await new Promise((r) =>
+      setTimeout(r, Math.min(BOOT_POLL_INTERVALS_MS.serialGone, deadline - Date.now()))
+    );
+  }
+  return healthy;
+}
+
+/**
+ * Drop from `serialsBefore` the emulator serials adb still lists with nothing
+ * behind them. After qemu exits, adb keeps the serial for up to a second, and
+ * the next spawn takes the freed console port, so it would register under a
+ * serial already counted as pre-existing. Only serials without a readable AVD
+ * name are asked; the console refuses the connection at once when the port is
+ * free. One that names another AVD, or does not answer (frozen, shutting down),
+ * stays: it still holds its port. No waiting is involved.
+ */
+async function dropUnreachableSerials(
+  devices: AndroidDevice[],
+  serialsBefore: Set<string>
+): Promise<void> {
+  await Promise.all(
+    devices
+      .filter((d) => d.isEmulator && !(d.state === "device" && d.avdName !== null))
+      .map(async (d) => {
+        if ((await readEmulatorConsoleAvdName(d.serial)).status === "unreachable") {
+          serialsBefore.delete(d.serial);
+        }
+      })
+  );
+}
+
+/**
+ * Pick ours among the serials new since the before-spawn snapshot. The console
+ * names an emulator's AVD within milliseconds of the serial appearing, while
+ * getprop still fails, and a serial that names another AVD is never ours: an
+ * unrelated emulator killed and restarted at the same moment comes back on its
+ * freed port, which the snapshot no longer holds. When no console names this
+ * AVD, fall back to the before/after diff: a single unnamed serial is ours,
+ * several are told apart by getprop.
+ */
+async function pickOwnSerial(avdName: string, newSerials: string[]): Promise<string | null> {
+  const names = await Promise.all(newSerials.map((s) => readEmulatorConsoleAvdName(s)));
+  const own = newSerials.find((_, i) => {
+    const answer = names[i]!;
+    return answer.status === "ok" && answer.avdName === avdName;
+  });
+  if (own) return own;
+  const unnamed = newSerials.filter((_, i) => names[i]!.status !== "ok");
+  if (unnamed.length === 0) return null;
+  if (unnamed.length === 1) return unnamed[0]!;
+  return findSerialByAvdName(avdName, Date.now() + 3_000);
 }
 
 async function bootIos(
@@ -777,13 +938,9 @@ async function attemptBoot(params: {
       if (launchError) throw launchError;
       const newSerials = await listNewEmulatorSerials(params.serialsBefore);
       if (newSerials.length >= 1) {
-        if (newSerials.length === 1) {
-          serial = newSerials[0]!;
-          break;
-        }
-        const byAvd = await findSerialByAvdName(params.avdName, Date.now() + 3_000);
-        if (byAvd) {
-          serial = byAvd;
+        const own = await pickOwnSerial(params.avdName, newSerials);
+        if (own) {
+          serial = own;
           break;
         }
       }
@@ -938,12 +1095,8 @@ async function bootAndroid(params: {
   bootTimeoutMs: number;
   force?: boolean;
   sound: boolean;
-}): Promise<{
-  platform: "android";
-  serial: string;
-  avdName: string;
-  booted: true;
-}> {
+  guestVulkan: boolean;
+}): Promise<AndroidBootResult> {
   const existing = inFlightBoots.get(params.avdName);
   if (existing) return existing;
   const promise = bootAndroidImpl(params).finally(() => {
@@ -958,12 +1111,8 @@ async function bootAndroidImpl(params: {
   bootTimeoutMs: number;
   force?: boolean;
   sound: boolean;
-}): Promise<{
-  platform: "android";
-  serial: string;
-  avdName: string;
-  booted: true;
-}> {
+  guestVulkan: boolean;
+}): Promise<AndroidBootResult> {
   // Preflight both Android binaries up front so a missing emulator package
   // surfaces as an install hint, not a misleading "no AVDs" from `listAvds()`.
   // `ensureDep` resolves through `$ANDROID_HOME` as well as PATH.
@@ -973,8 +1122,12 @@ async function bootAndroidImpl(params: {
   // ARGENT_EMULATOR_GPU_MODE surfaces immediately rather than mid-boot with a
   // misleading "emulator has been terminated" suffix.
   const gpuMode = selectGpuMode();
-  // Opt-in headless mode via ARGENT_EMULATOR_NO_WINDOW (see no-window-env.ts).
-  const extraEmulatorArgs = androidHeadlessFromEnv() ? ["-no-window"] : [];
+  // Opt-in headless mode via ARGENT_EMULATOR_NO_WINDOW (see no-window-env.ts),
+  // and the macOS guest Vulkan choice.
+  const extraEmulatorArgs = [
+    ...(androidHeadlessFromEnv() ? ["-no-window"] : []),
+    ...guestVulkanArgs(params.guestVulkan),
+  ];
   const hardeningArgs = launchHardeningArgs(params.sound);
 
   for (const msg of linuxBootDiagnostics(params.avdName) ?? []) {
@@ -1035,18 +1188,31 @@ async function bootAndroidImpl(params: {
   await runAdb(["start-server"], { timeoutMs: 10_000 }).catch(() => {});
   const existingDevices = await listAndroidDevices().catch(() => []);
 
+  // This AVD may be alive without being healthy in adb (killed outside argent
+  // and shutting down, or still coming up). Wait for its process to exit or for
+  // it to become reusable, within the boot budget; see awaitOwnEmulatorSettled.
+  if (!existingDevices.some((d) => isRunningAvd(d, params.avdName))) {
+    const settled = await awaitOwnEmulatorSettled(
+      params.avdName,
+      Math.min(overallDeadline, Date.now() + EMULATOR_GONE_BUDGET_MS)
+    );
+    if (settled) existingDevices.splice(0, existingDevices.length, ...settled);
+  }
+
   // Fast path: reuse this AVD when it is already running and ready, instead of
   // spawning a second emulator that collides on AVD locks and fails with a
   // misleading "Running multiple emulators" error.
   let hotBootFailureReason: string | null;
-  const alreadyRunning = existingDevices.find(
-    (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
-  );
+  const dropKilledEmulator = async (serial: string) => {
+    await awaitEmulatorsGone([serial]);
+    const refreshed = await listAndroidDevices().catch(() => existingDevices);
+    existingDevices.splice(0, existingDevices.length, ...refreshed);
+  };
+  const alreadyRunning = existingDevices.find((d) => isRunningAvd(d, params.avdName));
   if (alreadyRunning) {
     if (params.force) {
       await killEmulatorQuietly(alreadyRunning.serial);
-      const refreshed = await listAndroidDevices().catch(() => existingDevices);
-      existingDevices.splice(0, existingDevices.length, ...refreshed);
+      await dropKilledEmulator(alreadyRunning.serial);
     } else {
       // A long-running emulator can drift into the same sticky-blank
       // SurfaceFlinger state `assertScreencapAlive` guards against on hot boot:
@@ -1055,22 +1221,22 @@ async function bootAndroidImpl(params: {
       // the emulator and we fall through to the boot pipeline below.
       try {
         await assertScreencapAlive(alreadyRunning.serial);
+        const note = await runningGuestVulkanNote(alreadyRunning.serial, params.guestVulkan);
         return {
           platform: "android",
           serial: alreadyRunning.serial,
           avdName: params.avdName,
           booted: true,
+          ...(note ? { note } : {}),
         };
       } catch (_err) {
-        // assertScreencapAlive already killed the emulator; refresh the snapshot
-        // so the killed serial is in serialsBefore and the upcoming spawn's
-        // "new serial" diff stays correct.
-        const refreshed = await listAndroidDevices().catch(() => existingDevices);
-        existingDevices.splice(0, existingDevices.length, ...refreshed);
+        // assertScreencapAlive already killed the emulator.
+        await dropKilledEmulator(alreadyRunning.serial);
       }
     }
   }
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
+  await dropUnreachableSerials(existingDevices, serialsBefore);
 
   // Suppress the emulator's crash-report prompt/uploader on builds that accept
   // the flag: without it an emulator crash pops a Qt consent dialog that blocks
@@ -1149,9 +1315,9 @@ async function bootAndroidImpl(params: {
         };
       } catch (err) {
         hotBootFailureReason = err instanceof Error ? err.message : String(err);
-        // attemptBoot already killed the failed child. Refresh the before-set so
-        // the cold-boot attempt doesn't mistake a zombie serial still listed by
-        // `adb devices` for a new one.
+        // attemptBoot already killed the failed child. A serial still listed
+        // past the wait is a zombie the cold boot must not take for its own.
+        await awaitEmulatorsGone(await listNewEmulatorSerials(serialsBefore));
         const refreshed = new Set(
           (await listAndroidDevices().catch(() => [])).map((d) => d.serial)
         );
@@ -2052,7 +2218,7 @@ export function createBootDeviceTool(
     description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, <flag:harmonyos>start a HarmonyOS emulator, </flag:harmonyos>or spawn an Electron app and wait until it is ready to accept interactions.
 Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), <flag:harmonyos>'harmonyInstance' for a HarmonyOS emulator instance (the 'name' of a harmony device from list-devices), </flag:harmonyos>or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, note? } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
 Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.<flag:harmonyos>
 HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for it to register with 'hdc' and returns its connect key as 'udid', the id the interaction tools drive. The manager itself reports no readiness signal and never names a port, so an instance that is already running is left alone unless you pass 'force: true'; when the key could not be resolved the payload names the instance instead, and a 'note' is present whenever the boot left something unproven: no key and why, or a key that is not yet answering or could not be checked against the instance. Huawei serves the emulator images only within mainland China, so a host outside it usually has no instance to start; one that already has an image is started like any other.</flag:harmonyos>`,
     alwaysLoad: true,
@@ -2144,6 +2310,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
           // the default when the caller left `sound` unset. Read live per call
           // so `argent enable/disable boot-sound` applies without a restart.
           sound: params.sound ?? isFlagEnabled("boot-sound"),
+          guestVulkan: params.guestVulkan ?? androidGuestVulkanFromEnv(),
         });
       }
       if (hasVega) {

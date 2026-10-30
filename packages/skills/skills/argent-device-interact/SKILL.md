@@ -36,7 +36,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 { "udid": "<UDID>", "bundleId": "com.apple.MobileSMS" }
 ```
 
-Common IDs: `com.apple.MobileSMS` (Messages), `com.apple.mobilesafari` (Safari), `com.apple.Preferences` (Settings), `com.apple.Maps`, `com.apple.Photos`, `com.apple.mobilemail`, `com.apple.mobilenotes`, `com.apple.MobileAddressBook` (Contacts)
+Common IDs: `com.apple.MobileSMS` (Messages), `com.apple.mobilesafari` (Safari), `com.apple.Preferences` (Settings), `com.apple.Maps`, `com.apple.mobileslideshow` (Photos), `com.apple.MobileAddressBook` (Contacts)
 
 ### open-url: by URL scheme
 
@@ -168,6 +168,8 @@ Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionB
 ```
 
 One call does one action. `text` and `key` are mutually exclusive, and a call that carries both is rejected with nothing typed. To type and then submit, send two `keyboard` steps in one `run-sequence` (§ 8): `{ "text": "search query" }`, then `{ "key": "enter" }`. Two separate calls do the same work, but cost an extra round-trip.
+
+**React Native: the first tap after typing may only close the keyboard.** Inside a scroll view with the default `keyboardShouldPersistTaps="never"`, React Native uses a tap outside the focused field to dismiss the keyboard and does not pass it on (with `"handled"` or `"always"` the tap reaches the button), so a button tapped right after typing may need a second tap; check the returned tree. When the field submits on return, `{ "key": "enter" }` avoids the extra tap.
 
 Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms); applies to the iOS simulator and Chromium; it is ignored on Android phones/tablets (typed via `adb input text`, no per-key cadence), on Vega, and on TV targets.
 
@@ -385,7 +387,7 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 
 ### Android
 
-- **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` on the device before the RN app starts, or Metro won't be reachable from the device. See `argent-metro-debugger` for the full workflow. Re-run if the device restarts.
+- **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` on the device before the RN app starts, or Metro won't be reachable from the device. See `argent-metro-debugger` for the full workflow. Re-run if the device restarts. If `list-devices` returns a `hint` about the adb server, prefix the command as the hint shows.
 - **First-launch permission prompts**: `reinstall-app` on Android always installs with `-g` so runtime permissions are pre-granted on first launch; no flag to pass.
 - **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
 - **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.
