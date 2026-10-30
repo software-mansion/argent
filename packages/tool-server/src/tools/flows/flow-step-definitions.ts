@@ -48,7 +48,8 @@ function yamlSelectorLabel(sel: FlowSelector): string {
 // Render a text condition for the summary: the comparator is preserved — regex
 // patterns as `matches /…/`, exact text as `== "…"`, substrings as
 // `contains "…"` — and literals use JSON quoting so embedded quotes and
-// control characters stay unambiguous.
+// control characters stay unambiguous. A pattern's control characters go
+// through `escapeInline` instead, which leaves its backslashes copyable.
 function yamlTextConditionLabel(
   sel: FlowSelector,
   expectedText: string | undefined,
@@ -57,7 +58,7 @@ function yamlTextConditionLabel(
   const selector = yamlSelectorLabel(sel);
   const expected = expectedText ?? "";
   return textMatch === "matches"
-    ? `text ${selector} matches /${expected}/`
+    ? `text ${selector} matches /${escapeInline(expected)}/`
     : textMatch === "equals"
       ? `text ${selector} == ${JSON.stringify(expected)}`
       : `text ${selector} contains ${JSON.stringify(expected)}`;
@@ -309,27 +310,29 @@ const FLOW_STEP_DEFINITIONS: {
   [K in FlowStep["kind"]]: FlowStepDefinition<Extract<FlowStep, { kind: K }>>;
 } = {
   "tool": {
-    summary: (step) => `${step.name} ${renderToolArgs(step.args)}${delayLabel(step)}`,
+    summary: (step) =>
+      `${escapeInline(String(step.name))} ${renderToolArgs(step.args)}${delayLabel(step)}`,
     // Carries its subject in a report field of its own (`tool`) that renderers
     // print in the target's place.
     target: () => undefined,
   },
   "echo": {
-    summary: (step) => step.message,
+    summary: (step) => escapeInline(step.message),
     // As for `tool`, but the field is `message`.
     target: () => undefined,
   },
   "launch": {
-    summary: (step) => (typeof step.app === "string" ? step.app : JSON.stringify(step.app)),
+    summary: (step) =>
+      typeof step.app === "string" ? escapeInline(step.app) : JSON.stringify(step.app),
     // A launch's app id may be per-platform (`appIdForPlatform`), and a step
     // alone does not know the run device.
     target: () => undefined,
   },
   "run": {
-    summary: (step) => step.flow,
-    // The as-written path, so a report line shows exactly what the flow
-    // references (`run ../shared/login.yaml`), not just the attribution stem.
-    target: (step) => step.flow,
+    summary: (step) => escapeInline(step.flow),
+    // The as-written path (control characters escaped), so a report line shows
+    // what the flow references (`run ../shared/login.yaml`), not just the attribution stem.
+    target: (step) => escapeInline(step.flow),
   },
   "when": {
     summary: (step) => {
@@ -421,8 +424,8 @@ const FLOW_STEP_DEFINITIONS: {
     // replays, the way tap's `times` does, while a report target names only
     // what the step acts on.
     summary: (step) =>
-      `${step.path}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
-    target: (step) => step.path,
+      `${escapeInline(step.path)}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
+    target: (step) => escapeInline(step.path),
   },
   "snapshot": {
     // `name` interpolates raw on both surfaces. It becomes a baseline filename,

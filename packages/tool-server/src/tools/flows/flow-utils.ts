@@ -1295,7 +1295,7 @@ export function describeTextExpectation(
     case "equals":
       return `${verbForm === "infinitive" ? "equal" : mode} ${JSON.stringify(expected)}`;
     case "matches":
-      return `${verbForm === "infinitive" ? "match" : mode} /${expected}/`;
+      return `${verbForm === "infinitive" ? "match" : mode} /${escapeInline(expected)}/`;
   }
 }
 

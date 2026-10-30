@@ -11,7 +11,7 @@ import {
   type ToolStepFile,
 } from "@argent/registry";
 import { FileInputError, resolveFileInputs } from "../../file-inputs";
-import { flowNameCasingError } from "./flow-utils";
+import { escapeInline, flowNameCasingError } from "./flow-utils";
 import { ClientProjectAccess, resolveSavedTest, type ProjectAccess } from "./project-access";
 
 /** The stage each step kind an upload cannot carry is refused under. */
@@ -26,8 +26,8 @@ export const UPLOAD_STAGE_BY_KIND = {
 
 /** The flow a nested `tool: flow-execute` step names, quoted in the refusal's step list. */
 function nestedFlowRef(args: Record<string, unknown>): string {
-  if (typeof args.name === "string") return ` (name: ${args.name})`;
-  if (typeof args.flow_path === "string") return ` (flow_path: ${args.flow_path})`;
+  if (typeof args.name === "string") return ` (name: ${escapeInline(args.name)})`;
+  if (typeof args.flow_path === "string") return ` (flow_path: ${escapeInline(args.flow_path)})`;
   return "";
 }
 
@@ -107,7 +107,7 @@ export function toolStepUploadIssue(
   }
   return {
     kind: "toolFile",
-    line: `tool: ${tool} (${refused.map((file) => file.path).join(", ")})`,
+    line: `tool: ${tool} (${refused.map((file) => escapeInline(file.path)).join(", ")})`,
     fixes: [...fixes],
   };
 }

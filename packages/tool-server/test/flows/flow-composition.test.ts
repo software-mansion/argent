@@ -497,6 +497,72 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1]).toMatchObject({ flow: "login", message: "inside the shared fragment" });
   });
 
+  it("reports a run step's target on one line whether the fragment loads or not", async () => {
+    // Only a target's basename is pattern-checked, so its directory can carry a line break.
+    const oddDir = path.join(tmpDir, ".argent", "flows", "sub\nok");
+    await fs.mkdir(oddDir, { recursive: true });
+    await fs.writeFile(
+      path.join(oddDir, "frag.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("checkout", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "sub\nok/frag.yaml" },
+        { kind: "run", flow: "sub\nmissing/frag.yaml" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "checkout", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.target}`)).toEqual([
+      "run:pass:sub\\nok/frag.yaml",
+      "echo:pass:undefined",
+      "run:error:sub\\nmissing/frag.yaml",
+    ]);
+    expect(result.steps[2]!.reason).toMatch(
+      /^could not load fragment "sub\\nmissing\/frag\.yaml": ENOENT[^\n]*sub\\nmissing\/frag\.yaml'$/
+    );
+  });
+
+  it("attributes a same-stem fragment on one line whether it loads or not", async () => {
+    // Root login.yaml composing sub<LF>ok/login.yaml: on a stem collision the
+    // attribution keeps the directory, line break included.
+    const oddDir = path.join(tmpDir, ".argent", "flows", "sub\nok");
+    await fs.mkdir(oddDir, { recursive: true });
+    await fs.writeFile(
+      path.join(oddDir, "login.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "sub\nok/login.yaml" },
+        { kind: "run", flow: "sub\nmissing/login.yaml" },
+      ],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "login", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps.map((s) => `${s.kind}:${s.status}:${s.flow}`)).toEqual([
+      "run:pass:sub\\nok/login",
+      "echo:pass:sub\\nok/login",
+      "run:error:sub\\nmissing/login",
+    ]);
+  });
+
   it("qualifies a nested fragment's bare same-stem spelling as ./<stem>", async () => {
     // Root login.yaml → helpers/steps.yaml → run: login.yaml. The bare
     // spelling resolves against the CONTAINING file's directory, so it names
@@ -1189,6 +1255,26 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0]?.reason).toContain("unrecognized step kind");
   });
 
+  it("keeps a fragment's YAML error frame in the run step's reason", async () => {
+    const dir = path.join(tmpDir, ".argent", "flows", "sub\nx");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "typo.yaml"), "steps:\n  - echo: a: b\n", "utf8");
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub\nx/typo.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[0]?.reason).toMatch(/^could not load fragment "sub\\nx\/typo\.yaml": /);
+    expect(result.steps[0]?.reason).toContain("\n  - echo: a: b\n");
+  });
+
   it("bounds the reason when a run: target is in-project YAML but not a flow", async () => {
     // A mistyped run: path can select any YAML file inside the project root —
     // here a CI config whose sole top-level key happens to be `steps`. Its
@@ -1386,6 +1472,31 @@ describe("flow composition (run:)", () => {
     expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-SUBDIR-FILE");
   });
 
+  it("quotes a mis-cased target and its fix on one line", async () => {
+    const subDir = path.join(tmpDir, ".argent", "flows", "sub\nx");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(
+      path.join(subDir, "frag.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub\nx/Frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    const reason = result.steps[0]?.reason ?? "";
+    expect(reason).toMatch(/^mis-cased fragment reference "sub\\nx\/Frag\.yaml": /);
+    expect(reason).toContain(`reference it as "sub\\nx/frag.yaml"`);
+  });
+
   it("asks for a rename when the on-disk spelling no run: target could reach", async () => {
     // The on-disk name here is frag.YAML, which the run: extension gate
     // (parseRunTarget) refuses outright — quoting it back as a replacement
@@ -1496,6 +1607,34 @@ describe("flow composition (run:)", () => {
         }
       )
     ).rejects.toThrow("step 1 of the when: block at step 1: run: login.yaml");
+  });
+
+  it("keeps each refused uploaded step on its own line", async () => {
+    const uploadedPath = path.join(tmpDir, "materialized-upload.yaml");
+    await fs.writeFile(
+      uploadedPath,
+      'steps:\n  - run: "sub\\nok/login.yaml"\n  - script: { path: "sub\\nok/seed.mjs" }\n',
+      "utf8"
+    );
+
+    await expect(
+      createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, flow_file: uploadedPath, device: DEVICE },
+        {
+          artifacts: new ArtifactStore(),
+          fileInputs: {
+            flow_file: {
+              clientPath: "/client/.argent/flows/main.yaml",
+              presentOnHost: false,
+              viaUpload: true,
+            },
+          },
+        }
+      )
+    ).rejects.toThrow(
+      /step 1: run: sub\\nok\/login\.yaml\n.*step 2: script: \{ path: sub\\nok\/seed\.mjs \}/
+    );
   });
 
   it("rejects an uploaded flow whose run: sits two when: blocks deep", async () => {
@@ -1960,6 +2099,31 @@ describe("flow composition (run:)", () => {
     );
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_upload_nested_flow");
     expect(registry.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("keeps each refused uploaded tool: step on its own line", async () => {
+    const tools: Record<string, { fileInputs?: unknown }> = {
+      "screenshot-diff": screenshotDiffTool,
+    };
+    const registry = mockRegistry();
+    vi.mocked(registry.getTool).mockImplementation((id: string) => tools[id] as never);
+    const err = await rejectUpload(
+      [
+        { kind: "tool", name: "e2e-execute", args: { flow_path: "/client/a\nb.yaml" } },
+        { kind: "tool", name: "e2e-execute", args: { name: "a\nb" } },
+        {
+          kind: "tool",
+          name: "screenshot-diff",
+          args: { baselinePath: "/client/a\nb.png", currentPath: "/client/now.png" },
+        },
+      ],
+      registry
+    );
+    expect((err as Error).message).toContain(
+      "  - step 1: tool: e2e-execute (flow_path: /client/a\\nb.yaml)\n" +
+        "  - step 2: tool: e2e-execute (name: a\\nb)\n" +
+        "  - step 3: tool: screenshot-diff (/client/a\\nb.png, /client/now.png)\n"
+    );
   });
 
   it("files an upload whose first offending step records a flow under the recording stage", async () => {

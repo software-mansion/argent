@@ -37,6 +37,7 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
+  escapeInline,
   flowNameCasingError,
   iosLaunchArgs,
   isBlockStep,
@@ -250,8 +251,8 @@ export interface StepReport {
   /**
    * The fragment a step belongs to (set on `run` and the steps it expands) —
    * the target's basename stem; when that stem collides with the top-level
-   * flow's name, the as-written path minus `.yaml` (`./<stem>` for a bare
-   * spelling). Renderers distinguish fragment steps by this differing from the
+   * flow's name, the as-written path minus `.yaml`, control characters escaped
+   * (`./<stem>` for a bare spelling). Renderers distinguish fragment steps by this differing from the
    * report's `flow`, which the collision fallback guarantees: both
    * disambiguated shapes contain a `/`, which FLOW_NAME_PATTERN forbids.
    */
@@ -1310,7 +1311,9 @@ function fragmentLoadRefusal(
   target: string
 ): string | undefined {
   const retiredArg = findRetiredToolArg(registry, fragment.steps);
-  return retiredArg ? `fragment "${target}" ${retiredArgReason(retiredArg)}` : undefined;
+  return retiredArg
+    ? `fragment "${escapeInline(target)}" ${retiredArgReason(retiredArg)}`
+    : undefined;
 }
 
 /**
@@ -1399,7 +1402,10 @@ function assertUploadSelfContained(
         ? closure.project.runMember(anchorDir, target)
         : closure.project.savedTestMember(entry.paths);
     if (member?.state === "refused") {
-      offending.push({ kind: entry.kind, line: `${entry.line} (${member.error})` });
+      offending.push({
+        kind: entry.kind,
+        line: `${entry.line} (${escapeInline(String(member.error))})`,
+      });
     } else if (
       member?.state === "present" &&
       member.canonical !== undefined &&
@@ -1414,7 +1420,7 @@ function assertUploadSelfContained(
       queue.push({
         flow: next,
         canonical: member.canonical,
-        within: ` in ${member.canonical}`,
+        within: ` in ${escapeInline(member.canonical)}`,
         hop: file.hop + 1,
       });
     }
@@ -1422,11 +1428,14 @@ function assertUploadSelfContained(
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
     for (const { step, where } of walkSteps(file.flow.steps, file.within)) {
       if (step.kind === "run") {
-        const line = `${where}: run: ${step.flow}`;
+        const line = `${where}: run: ${escapeInline(step.flow)}`;
         if (!closure) offending.push({ kind: "run", line });
         else follow(file, path.dirname(file.canonical), step.flow, { kind: "run", line });
       } else if (step.kind === "script") {
-        offending.push({ kind: "script", line: `${where}: script: { path: ${step.path} }` });
+        offending.push({
+          kind: "script",
+          line: `${where}: script: { path: ${escapeInline(step.path)} }`,
+        });
       } else if (step.kind === "snapshot") {
         if (closure) continue;
         offending.push({ kind: "snapshot", line: `${where}: snapshot: ${step.name}` });
@@ -2220,7 +2229,8 @@ function scopeFlow(scope: StepScope): string {
 /**
  * The report attribution for a `run:` target: its basename stem
  * ({@link runTargetName}), except when that stem equals the ROOT flow's name —
- * then the as-written path with the `.yaml` extension stripped, or `./<stem>`
+ * then the as-written path with the `.yaml` extension stripped (control
+ * characters escaped, as only the basename is pattern-checked), or `./<stem>`
  * when the spelling is bare (stripping would reproduce the stem). Two
  * different files may legitimately share a stem (root `login.yaml` composing
  * `helpers/login.yaml`), and a bare-stem attribution there would make
@@ -2249,7 +2259,7 @@ function runDisplayFor(target: string, rootDisplay: string): string {
   // Parse guarantees the target ends in lowercase ".yaml", so slicing the
   // extension off never truncates a real path segment.
   const spelled = target.slice(0, -".yaml".length);
-  return spelled === stem ? `./${stem}` : spelled;
+  return spelled === stem ? `./${stem}` : escapeInline(spelled);
 }
 
 /**
@@ -2544,6 +2554,9 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
+  // Reasons quote the target; their own error text stays raw (a YAML error's
+  // code frame is multi-line).
+  const shown = escapeInline(target);
   // Shared with stepFlow so the marker/error reports here and every skip path
   // there attribute the same `run:` step identically; the fragment's expanded
   // steps inherit it through the runStack entry pushed below.
@@ -2556,7 +2569,7 @@ async function execRunStep(
       kind: "run",
       status: "error",
       flow: display,
-      target,
+      target: stepTarget(step),
       reason,
       ...depthOf(scope),
       durationMs: Date.now() - startedAt,
@@ -2572,7 +2585,7 @@ async function execRunStep(
   try {
     hop = await resolveRunTarget(state.project, scopeFlowDir(scope), target);
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
   }
   const { canonical, spelling } = hop;
 
@@ -2608,11 +2621,11 @@ async function execRunStep(
     // can paste. An on-disk ".YAML" is reachable by no run: target at all, so
     // that fork asks for the rename it really needs.
     const recovery = spelling.addressable
-      ? `reference it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
+      ? `reference it as "${escapeInline(target.slice(0, target.length - suppliedBase.length))}${spelling.actual}"`
       : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — e2e test files must be ` +
         `lowercase .yaml`;
     return fail(
-      `mis-cased fragment reference "${target}": no directory entry is named "${suppliedBase}" ` +
+      `mis-cased fragment reference "${shown}": no directory entry is named "${suppliedBase}" ` +
         `(this filesystem matched it case-insensitively to "${spelling.actual}"), so the fragment ` +
         `name keying its step reports is one nothing on disk carries and a case-sensitive ` +
         `checkout could not find the file at all — ${recovery}`
@@ -2642,12 +2655,12 @@ async function execRunStep(
     const text = await hop.read();
     if (text === null) {
       return fail(
-        `could not load fragment "${target}": ENOENT: no such file or directory, open '${canonical}'`
+        `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(canonical)}'`
       );
     }
     fragment = parseFlow(text);
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
   }
 
   // Charged to the run: step, so the fragment is refused whole rather than
@@ -2665,7 +2678,7 @@ async function execRunStep(
     kind: "run",
     status: "pass",
     flow: display,
-    target,
+    target: stepTarget(step),
     ...depthOf(scope),
     durationMs: Date.now() - startedAt,
   });
