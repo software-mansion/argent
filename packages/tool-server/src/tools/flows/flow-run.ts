@@ -37,6 +37,7 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
+  PROJECT_ROOT_INPUT,
   flowNameCasingError,
   iosLaunchArgs,
   isBlockStep,
@@ -210,6 +211,7 @@ const fileInputs: FileInputSpec[] = [
     skipWhenSet: "flow_path",
     collect: "flow",
   },
+  ...PROJECT_ROOT_INPUT,
 ];
 
 export type StepStatus = "pass" | "fail" | "skip" | "error";
@@ -3100,8 +3102,8 @@ function assertFlowPathShape(flowPath: string): void {
   // which requires an absolute input — its realpath, the read, and every root
   // anchor derived from the one canonical result would otherwise resolve
   // against the tool server's working directory, which is not the caller's.
-  // The argent client resolves a relative flow_path before sending it, so only
-  // a direct HTTP caller reaches this.
+  // The argent client resolves a relative flow_path before sending it; a direct
+  // HTTP caller and an older client do not.
   const windows = windowsPathRefusal("flow_path", flowPath);
   if (windows) {
     throw new FailureError(windows, {

@@ -3,7 +3,7 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   requireRecordingSession,
   appendStepToFlow,
-  RECORDING_ROOT_INPUT,
+  PROJECT_ROOT_INPUT,
   type FlowSavedTo,
 } from "./flow-utils";
 
@@ -36,7 +36,7 @@ export const flowInsertEchoTool: ToolDefinition<
 Use when you want to annotate a recorded e2e test with a human-readable label or checkpoint message.
 Returns { message, stepCount, savedTo }. Fails if that e2e test has no recording in progress.`,
   zodSchema,
-  fileInputs: RECORDING_ROOT_INPUT,
+  fileInputs: PROJECT_ROOT_INPUT,
   services: () => ({}),
   async execute(_services, params) {
     const session = await requireRecordingSession(params.project_root, params.name);

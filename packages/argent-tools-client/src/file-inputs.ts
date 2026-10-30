@@ -180,13 +180,18 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
 /**
  * `p` as an absolute path on this machine. The tool-server works in the
  * directory of whichever client spawned it, so it cannot resolve a relative
- * path. A path with a `..` segment is prefixed, not normalized: collapsing `..`
- * ignores symlinks, so it can name another file than the kernel opens. A
- * Windows path on another OS is left for the tool-server to refuse.
+ * path. A path with a `..` segment is prefixed with the directory it is
+ * relative to (on Windows, that of its drive for `D:dir`), not normalized:
+ * collapsing `..` ignores symlinks, so it can name another file than the kernel
+ * opens. A Windows path on another OS is left for the tool-server to refuse.
  */
 function callerPath(p: string): string {
   if (path.isAbsolute(p) || path.win32.isAbsolute(p)) return p;
-  return p.split(/[\\/]/).includes("..") ? `${process.cwd()}${path.sep}${p}` : path.resolve(p);
+  const { root } = path.parse(p);
+  const rest = p.slice(root.length);
+  if (!rest.split(/[\\/]/).includes("..")) return path.resolve(p);
+  const base = path.resolve(root);
+  return base.endsWith(path.sep) ? `${base}${rest}` : `${base}${path.sep}${rest}`;
 }
 
 /**
@@ -411,7 +416,10 @@ export async function prepareFileInputs(
     return args;
   }
   const record = args as Record<string, unknown>;
-  let out: Record<string, unknown> | null = null;
+  const planned: { spec: FileInputSpec; filePath: string }[] = [];
+  // The collectors read every target the call sets as the wire names it,
+  // whichever spec they run for.
+  const callArgs: Record<string, unknown> = { ...record };
 
   for (const spec of specs) {
     // Deriving this target too would have the boundary vouch for a file the
@@ -427,9 +435,13 @@ export async function prepareFileInputs(
     // value; a derived target (flow_file) is wrapped only when unset.
     if (spec.target in record && record[spec.target] !== spelled) continue;
     const filePath = callerPath(spelled);
-    // The collectors read the target as the wire names it.
-    const callArgs = spec.target in record ? { ...record, [spec.target]: filePath } : record;
+    planned.push({ spec, filePath });
+    if (spec.target in record) callArgs[spec.target] = filePath;
+  }
+  if (planned.length === 0) return args;
 
+  const out: Record<string, unknown> = { ...record };
+  for (const { spec, filePath } of planned) {
     const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: filePath };
     if (spec.kind === "file") {
       // Unreadable here (null) keeps the path-only wrapper, which still
@@ -474,11 +486,10 @@ export async function prepareFileInputs(
       }
     }
 
-    out = out ?? { ...record };
     out[spec.target] = wire;
   }
 
-  return out ?? args;
+  return out;
 }
 
 export interface AppliedClientFiles {

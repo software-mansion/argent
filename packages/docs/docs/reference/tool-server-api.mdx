@@ -34,7 +34,8 @@ The `GET /tools` entry of a tool lists its file inputs in `fileInputs`. The `flo
       "kind": "file",
       "skipWhenSet": "flow_path",
       "collect": "flow"
-    }
+    },
+    { "target": "project_root", "path": "${project_root}", "kind": "probe" }
   ]
 }
 ```

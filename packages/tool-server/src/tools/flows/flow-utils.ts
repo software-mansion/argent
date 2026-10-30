@@ -114,10 +114,10 @@ export const E2E_FILE_TEMPLATES: string[] = E2E_DIRS.map(
 );
 
 /**
- * `project_root` of a tool that continues a recording. The client resolves a
- * relative root, as for e2e-start-recording, so both name the same recording.
+ * `project_root` of an e2e tool that names a test by it. The client resolves a
+ * relative root, so every e2e tool names the same project.
  */
-export const RECORDING_ROOT_INPUT: FileInputSpec[] = [
+export const PROJECT_ROOT_INPUT: FileInputSpec[] = [
   { target: "project_root", path: "${project_root}", kind: "probe" },
 ];
 

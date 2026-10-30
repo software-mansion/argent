@@ -1227,6 +1227,41 @@ describe("flow-execute over a link, from the real argent client", () => {
     }
   );
 
+  it.each([false, true])(
+    "replays a saved test by name with a relative project_root (remote: %s)",
+    async (remote) => {
+      await write(
+        ".argent/e2e/rel.yaml",
+        "executionPrerequisite: none\nsteps:\n  - echo: start\n  - run: frag.yaml\n"
+      );
+      await write(".argent/e2e/frag.yaml", "steps:\n  - echo: fragment\n");
+      const client = await toolsClient(remote, "flow-execute");
+      const originalCwd = process.cwd();
+      process.chdir(projectRoot);
+      try {
+        const { data: run } = await client.callTool("flow-execute", {
+          name: "rel",
+          project_root: ".",
+          device: DEVICE,
+          prerequisiteAcknowledged: true,
+        });
+        const { data: read } = await client.callTool("flow-read-prerequisite", {
+          name: "rel",
+          project_root: ".",
+        });
+
+        expect((run as FlowRunResult).steps.map((s) => `${s.status} ${s.flow}`)).toEqual([
+          "pass rel",
+          "pass frag",
+          "pass frag",
+        ]);
+        expect((read as { executionPrerequisite: string }).executionPrerequisite).toBe("none");
+      } finally {
+        process.chdir(originalCwd);
+      }
+    }
+  );
+
   /** A flow whose first step acts on the device, then runs `target`. */
   function tapThenRun(target: string): Promise<string> {
     return write(

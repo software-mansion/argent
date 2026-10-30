@@ -568,7 +568,11 @@ describe("prepareFileInputs — relative paths", () => {
     expect(out.project_root!.path).toBe("C:\\work\\app");
   });
 
-  it("finds a .. segment written with Windows separators", async () => {
+  it.each([
+    ["..\\proj\\app.apk", "C:\\work\\app\\..\\proj\\app.apk"],
+    ["C:..\\proj\\app.apk", "C:\\work\\app\\..\\proj\\app.apk"],
+    ["D:build\\..\\app.apk", "D:\\build\\..\\app.apk"],
+  ])("finds a .. segment written with Windows separators in %s", async (appPath, sent) => {
     vi.resetModules();
     vi.doMock("node:path", () => ({ ...path.win32, default: path.win32 }));
     vi.spyOn(process, "cwd").mockReturnValue("C:\\work\\app");
@@ -578,13 +582,12 @@ describe("prepareFileInputs — relative paths", () => {
         { target: "appPath", path: "${appPath}", kind: "tar-upload" },
       ];
 
-      const out = (await prepareOnWindows(
-        specs,
-        { appPath: "..\\proj\\app.apk" },
-        { includeContent: false }
-      )) as Record<string, FileInputWire>;
+      const out = (await prepareOnWindows(specs, { appPath }, { includeContent: false })) as Record<
+        string,
+        FileInputWire
+      >;
 
-      expect(out.appPath!.path).toBe("C:\\work\\app\\..\\proj\\app.apk");
+      expect(out.appPath!.path).toBe(sent);
     } finally {
       vi.doUnmock("node:path");
       vi.restoreAllMocks();
