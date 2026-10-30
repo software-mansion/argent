@@ -5,7 +5,6 @@ import { toSimulatorNetworkError } from "./format-error";
 import { sleep } from "./timing";
 import {
   encodeButton,
-  encodeKey,
   encodeRotate,
   encodeTouch,
   type ButtonName,
@@ -958,7 +957,7 @@ export function createMoqTransport(
       await options.pasteText(text);
     },
     async pressKey(direction, keyCode) {
-      await moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+      await moq.key(direction, keyCode);
     },
     async screenshot(opts) {
       const scale = opts?.scale ?? getScreenshotScale();

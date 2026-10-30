@@ -5,7 +5,7 @@
  * Node WebTransport polyfill, and `Buffer` screenshots.
  */
 
-import { MoqDeviceSession, connectMoq } from "@swmansion/argent-cloud-sdk";
+import { MoqDeviceSession, connectMoq, type KeyActionName } from "@swmansion/argent-cloud-sdk";
 import { installNodeWebTransport } from "@swmansion/argent-cloud-sdk/node";
 import { moqInfo, type MoqInfo } from "./sim-remote";
 
@@ -13,6 +13,14 @@ const PUBLISH_PATH = "argent";
 
 export interface MoqClient {
   sendControl(payload: Uint8Array): Promise<void>;
+  /**
+   * Key events ride the reliable, ordered "keys" track. The control track
+   * writes one MoQ group per frame and the server reads it latest-wins, so a
+   * Down overtaken by its Up drops the letter and an overtaken Up holds the key
+   * into auto-repeat. The SDK falls back to the control track by itself against
+   * a server without the keys track.
+   */
+  key(action: KeyActionName, code: number): Promise<void>;
   screenshot(opts?: { scale?: number }): Promise<Buffer>;
   close(): Promise<void>;
 }
@@ -27,10 +35,13 @@ async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
   let closed = false;
   disposeWhenTransportDies(session, () => (closed = true));
 
+  // The SDK resolves sends on a closed session, reporting undelivered input as sent.
+  const refuseClosed = (send: () => Promise<void>) =>
+    closed ? Promise.reject(new Error("MoQ session is closed")) : send();
+
   return {
-    // The SDK resolves sends on a closed session, reporting undelivered input as sent.
-    sendControl: (payload) =>
-      closed ? Promise.reject(new Error("MoQ session is closed")) : session.sendControl(payload),
+    sendControl: (payload) => refuseClosed(() => session.sendControl(payload)),
+    key: (action, code) => refuseClosed(() => session.key(action, code)),
     async screenshot(opts) {
       return Buffer.from(await session.screenshot({ scale: opts?.scale }));
     },

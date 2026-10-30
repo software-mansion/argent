@@ -49,7 +49,7 @@ const TOUCH = {
   second_y: null,
 } as const;
 
-/** What `MoqClient.sendControl` throws once its session is closed. */
+/** What `MoqClient.sendControl` and `MoqClient.key` throw once the session is closed. */
 const CLOSED = () => new Error("MoQ session is closed");
 
 function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
@@ -65,6 +65,7 @@ function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
 function closedMoqClient(): MoqClient {
   return {
     sendControl: () => Promise.reject(CLOSED()),
+    key: () => Promise.reject(CLOSED()),
     screenshot: () => Promise.reject(new Error("unexpected end of stream")),
     close: () => Promise.resolve(),
   };
@@ -141,6 +142,7 @@ describe("sendCommand over a MoQ transport", () => {
           sent.push(payload);
           return Promise.resolve();
         },
+        key: () => Promise.reject(new Error("not used")),
         screenshot: () => Promise.reject(new Error("not used")),
         close: () => Promise.resolve(),
       },
@@ -189,6 +191,48 @@ describe("sendCommand over a MoQ transport", () => {
     const err = await sent!.catch((e: unknown) => e);
     expect(String(err)).toMatch(/does not implement sendCommand cmd 'wiggle'/);
     expect(getFailureSignal(err)).toBeNull();
+  });
+});
+
+/**
+ * Keys must not ride the control track. `sendControl` writes one MoQ group per
+ * frame and the server reads that track latest-wins, so independent QUIC
+ * streams reordering in transit drop a Down overtaken by its Up (missing
+ * letter) or an Up overtaken by the next Down (held key, auto-repeat). The
+ * SDK's `key` writes every event into one ordered group on the "keys" track.
+ * Seen as roughly one exact string in ten when typing into a cloud simulator
+ * at the default 50 ms key delay.
+ */
+describe("keys ride the ordered keys track", () => {
+  it("pressKey calls key, never sendControl", async () => {
+    const keys: [string, number][] = [];
+    let controlSends = 0;
+    const transport = createMoqTransport(
+      {
+        sendControl: () => {
+          controlSends++;
+          return Promise.resolve();
+        },
+        key: (action, code) => {
+          keys.push([action, code]);
+          return Promise.resolve();
+        },
+        screenshot: () => Promise.reject(new Error("not used")),
+        close: () => Promise.resolve(),
+      },
+      { pasteText: () => Promise.resolve() }
+    );
+
+    await expect(
+      sendCommand(apiWith(transport), { cmd: "key", direction: "Down", code: 4 })
+    ).resolves.toEqual({});
+    await transport.pressKey("Up", 4);
+
+    expect(keys).toEqual([
+      ["Down", 4],
+      ["Up", 4],
+    ]);
+    expect(controlSends).toBe(0);
   });
 });
 
@@ -270,7 +314,7 @@ describe("the remote paste chord", () => {
     let sends = 0;
     vi.mocked(openMoqClient).mockResolvedValueOnce({
       ...closedMoqClient(),
-      sendControl: () => (sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve()),
+      key: () => (sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve()),
     });
     const instance = await simulatorServerBlueprint.factory(
       {} as never,
