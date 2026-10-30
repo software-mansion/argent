@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Registry } from "../src/registry";
 import { TypedEventEmitter } from "../src/event-emitter";
 import { ServiceState } from "../src/types";
-import type { ServiceEvents } from "../src/types";
+import type { ServiceEvents, ServiceInstance } from "../src/types";
 import {
   ServiceNotFoundError,
   ServiceInitializationError,
@@ -747,5 +747,78 @@ describe("Registry -- terminated-during-initialization signal", () => {
     expect(thrown).toBeInstanceOf(ServiceInitializationError);
     expect((thrown as Error).message).toContain("terminated during initialization");
     expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.REGISTRY_SERVICE_TERMINATING);
+  });
+});
+
+describe("Registry -- teardown during initialization", () => {
+  /**
+   * A factory that waits on something outside the process (a socket, a
+   * handshake) has no instance for the registry to dispose yet, so the signal
+   * is the only way a shutdown reaches it.
+   */
+  const registerWaitingBlueprint = (registry: Registry): { aborted: () => boolean } => {
+    let sawAbort = false;
+
+    registry.registerBlueprint({
+      factory: (_deps, _payload, _options, signal) =>
+        new Promise<ServiceInstance>((_resolve, reject) => {
+          signal!.addEventListener("abort", () => {
+            sawAbort = true;
+            reject(new Error("gave up"));
+          });
+        }),
+      getURN: (payload: string) => `Waiting:${payload}`,
+      namespace: "Waiting",
+    });
+
+    return { aborted: () => sawAbort };
+  };
+
+  it("aborts the factory's signal on dispose and reports the teardown", async () => {
+    const registry = new Registry();
+    const waiting = registerWaitingBlueprint(registry);
+
+    const resolving = registry.resolveService("Waiting:x");
+    resolving.catch(() => {});
+
+    await registry.dispose();
+
+    expect(waiting.aborted()).toBe(true);
+
+    const thrown = await resolving.then(
+      () => undefined,
+      (reason: unknown) => reason
+    );
+
+    expect(thrown).toBeInstanceOf(ServiceInitializationError);
+    expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.REGISTRY_SERVICE_TERMINATING);
+    /**
+     * The teardown owns the state; the factory's own error does not flip it to
+     * ERROR.
+     */
+    expect(registry.getServiceState("Waiting:x")).toBe(ServiceState.IDLE);
+  });
+
+  it("does not abort a factory that already resolved", async () => {
+    const registry = new Registry();
+    let signal: AbortSignal | undefined;
+
+    registry.registerBlueprint({
+      factory: async (_deps, _payload, _options, received) => {
+        signal = received;
+        return {
+          api: {},
+          dispose: async () => {},
+          events: new TypedEventEmitter<ServiceEvents>(),
+        };
+      },
+      getURN: (payload: string) => `Quick:${payload}`,
+      namespace: "Quick",
+    });
+
+    await registry.resolveService("Quick:x");
+    await registry.dispose();
+
+    expect(signal?.aborted).toBe(false);
   });
 });

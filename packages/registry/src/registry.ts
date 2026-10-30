@@ -335,6 +335,7 @@ export class Registry {
         blueprint: blueprint as ServiceBlueprint<unknown, unknown>,
         state: ServiceState.IDLE,
         instance: null,
+        initAbort: null,
         initPromise: null,
         dependents: new Set(),
       };
@@ -367,7 +368,16 @@ export class Registry {
     }
 
     this._transition(node, ServiceState.STARTING);
-    const initPromise = this._initialize<T>(node, [...resolutionPath, urn], options);
+    const initAbort = new AbortController();
+    node.initAbort = initAbort;
+
+    const initPromise = this._initialize<T>(
+      node,
+      [...resolutionPath, urn],
+      initAbort.signal,
+      options
+    );
+
     node.initPromise = initPromise;
     return initPromise;
   }
@@ -375,6 +385,7 @@ export class Registry {
   private async _initialize<T>(
     node: ServiceNode,
     resolutionPath: string[],
+    signal: AbortSignal,
     options?: Record<string, unknown>
   ): Promise<T> {
     const { urn, blueprint } = node;
@@ -388,7 +399,9 @@ export class Registry {
         depNode.dependents.add(urn);
       }
 
-      const instance = await blueprint.factory(resolvedDeps, payload, options);
+      const instance = await blueprint.factory(resolvedDeps, payload, options, signal);
+
+      if (!signal.aborted) node.initAbort = null;
 
       // Terminated while the factory was awaited: discard the fresh instance.
       if (node.state !== ServiceState.STARTING) {
@@ -412,6 +425,19 @@ export class Registry {
 
       return instance.api as T;
     } catch (error) {
+      /**
+       * Torn down while the factory ran, so the factory most likely gave up
+       * because `signal` told it to. The teardown already owns the node's
+       * state, so report the teardown rather than the factory's own error.
+       */
+      if (signal.aborted) {
+        throw new ServiceInitializationError(urn, "Service was terminated during initialization", {
+          cause: terminatingSignalCause("Service was terminated during initialization"),
+        });
+      }
+
+      node.initAbort = null;
+
       const cause = error instanceof Error ? error : new Error(String(error));
       this._transition(node, ServiceState.ERROR, cause);
       node.initPromise = null;
@@ -441,6 +467,9 @@ export class Registry {
       return;
 
     this._transition(node, ServiceState.TERMINATING);
+
+    node.initAbort?.abort();
+    node.initAbort = null;
 
     for (const depUrn of [...node.dependents]) {
       await this._teardown(depUrn, cause);
