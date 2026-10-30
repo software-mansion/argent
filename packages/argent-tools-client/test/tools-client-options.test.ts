@@ -351,7 +351,7 @@ describe("createToolsClient options", () => {
     });
 
     await callTool("run-flow", {
-      flow_path: flowPath,
+      e2e_test_path: flowPath,
       project_root: TEST_HOME,
       updateBaselines: true,
     });

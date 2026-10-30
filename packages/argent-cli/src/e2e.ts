@@ -1944,6 +1944,3 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   }
   return exitAfterFlush(report.ok && unwritten.length === 0 ? 0 : 1);
 }
-
-/** @deprecated The former name of {@link e2e}, kept as a silent alias. */
-export const flow = e2e;
