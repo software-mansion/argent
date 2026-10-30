@@ -59,6 +59,12 @@ vi.mock("../src/blueprints/ax-service", () => ({
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
+// The launch-crash record lives in the real ~/.argent; its own suite covers it.
+const launchSimulatorAppMock = vi.hoisted(() => vi.fn());
+vi.mock("../src/utils/simulator-app-launch", () => ({
+  launchSimulatorApp: (...args: unknown[]) => launchSimulatorAppMock(...args),
+}));
+
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
@@ -86,6 +92,12 @@ describe("boot-device — iOS path", () => {
       return {} as never;
     });
     existsSyncMock.mockReset().mockImplementation((path: string) => path === SIMULATOR_APP);
+    launchSimulatorAppMock
+      .mockReset()
+      .mockImplementation(async (_app: string, launch: () => Promise<unknown>) => {
+        await launch();
+        return true;
+      });
     // Default state: 11111111 + 33333333 Shutdown (happy path), 22222222
     // Booted (kickstart-fallback path). Individual tests override.
     listIosSimulatorsMock.mockReset().mockResolvedValue([
@@ -278,6 +290,51 @@ describe("boot-device — iOS path", () => {
         booted: true,
       });
       expect(openCalls()).toEqual([["open", ["-a", SIMULATOR_APP]]]);
+    });
+
+    it("does not open a Simulator.app on record as crashing at launch, nor Device Hub", async () => {
+      existsSyncMock.mockImplementation(
+        (path: string) => path === SIMULATOR_APP || path === DEVICE_HUB_APP
+      );
+      launchSimulatorAppMock.mockResolvedValue(false);
+
+      await expect(createBootDeviceTool(registry).execute!({}, { udid })).resolves.toEqual({
+        platform: "ios",
+        udid,
+        booted: true,
+        note: `${SIMULATOR_APP} exits right after launch on this host, so Argent no longer opens it and the device runs without a window. Delete ~/.argent/simulator-app-launch.json to try opening it again.`,
+      });
+      expect(launchSimulatorAppMock).toHaveBeenCalledWith(SIMULATOR_APP, expect.any(Function));
+      expect(openCalls()).toEqual([]);
+    });
+
+    it("hands over a launch that settles only once open has", async () => {
+      let launch: () => Promise<unknown> = async () => undefined;
+      launchSimulatorAppMock.mockImplementation(
+        async (_app: string, fn: () => Promise<unknown>) => {
+          launch = fn;
+          return true;
+        }
+      );
+      await createBootDeviceTool(registry).execute!({}, { udid });
+
+      let finishOpen = () => {};
+      mockExecFile.mockImplementation((...args: unknown[]) => {
+        finishOpen = () => getCallback(args)(null, { stdout: "", stderr: "" } as never);
+        return {} as never;
+      });
+      let settled = false;
+      const launched = launch().finally(() => (settled = true));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finishOpen();
+      await launched;
+      expect(openCalls()).toEqual([["open", ["-a", SIMULATOR_APP]]]);
+    });
+
+    it("adds no note when the Simulator.app opens", async () => {
+      const result = await createBootDeviceTool(registry).execute!({}, { udid });
+      expect(result).not.toHaveProperty("note");
     });
 
     it("bounds the GUI lookups with a timeout", async () => {

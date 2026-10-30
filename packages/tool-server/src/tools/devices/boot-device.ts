@@ -49,6 +49,7 @@ import { ensureDep } from "../../utils/check-deps";
 import { listEmulatorPidsForAvd } from "../../utils/emulator-process";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { launchSimulatorApp } from "../../utils/simulator-app-launch";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
 import {
   androidGuestVulkanFromEnv,
@@ -191,7 +192,7 @@ type AndroidBootResult = {
 };
 
 type BootDeviceResult =
-  | { platform: "ios"; udid: string; booted: true }
+  | { platform: "ios"; udid: string; booted: true; note?: string }
   | { platform: "ios-remote"; udid: string; booted: true }
   | AndroidBootResult
   | VegaBootResult
@@ -625,7 +626,9 @@ async function bootIos(
   registry: Registry,
   force?: boolean,
   headless?: boolean
-): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
+): Promise<
+  { platform: "ios"; udid: string; booted: true; note?: string } | NativeDevtoolsInitFailedResult
+> {
   // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
   // gets "iOS requires macOS" rather than a misleading "install xcode-select".
   if (process.platform !== "darwin") {
@@ -741,11 +744,12 @@ async function bootIos(
   // Simulator.app only attaches the GUI window, which surfaces streaming through
   // simulator-server don't need. ARGENT_SIMULATOR_NO_WINDOW forces the same skip
   // host-wide.
+  let note: string | undefined;
   if (!headless && !iosHeadlessFromEnv() && !deviceSet) {
     // Best-effort: a missing GUI app never fails a boot whose core is already up.
-    await openSimulatorWindow(udid).catch(() => {});
+    note = await openSimulatorWindow(udid).catch(() => undefined);
   }
-  return { platform: "ios", udid, booted: true };
+  return { platform: "ios", udid, booted: true, ...(note ? { note } : {}) };
 }
 
 /**
@@ -755,16 +759,22 @@ async function bootIos(
  * Xcode 27 replaces Simulator.app with Device Hub, which opens the device's
  * own window from a `devices://device/open?id=<udid>` URL; it reports success
  * even when it cannot show the device, so a missing window goes unnoticed.
- * Without either app nothing is opened.
+ * Without either app, or with a Simulator.app on record as crashing at launch,
+ * nothing is opened. Returns a note once the Simulator.app is on record so,
+ * including from the launch that records it.
  */
-async function openSimulatorWindow(udid: string): Promise<void> {
+async function openSimulatorWindow(udid: string): Promise<string | undefined> {
   const timeout = 5_000;
   const { stdout } = await execFileAsync("xcode-select", ["-p"], { timeout });
   const developerDir = realpathSync(stdout.trim());
   const simulatorApp = join(developerDir, "Applications", "Simulator.app");
   if (existsSync(simulatorApp)) {
-    await execFileAsync("open", ["-a", simulatorApp], { timeout });
-    return;
+    const launched = await launchSimulatorApp(simulatorApp, () =>
+      execFileAsync("open", ["-a", simulatorApp], { timeout })
+    );
+    return launched
+      ? undefined
+      : `${simulatorApp} exits right after launch on this host, so Argent no longer opens it and the device runs without a window. Delete ~/.argent/simulator-app-launch.json to try opening it again.`;
   }
   const deviceHubApp = join(developerDir, "..", "Applications", "DeviceHub.app");
   if (existsSync(deviceHubApp)) {
@@ -2213,7 +2223,7 @@ export function createBootDeviceTool(
     description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, <flag:harmonyos>start a HarmonyOS emulator, </flag:harmonyos>or spawn an Electron app and wait until it is ready to accept interactions.
 Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), <flag:harmonyos>'harmonyInstance' for a HarmonyOS emulator instance (the 'name' of a harmony device from list-devices), </flag:harmonyos>or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, note? } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
+Returns a tagged payload: { platform: 'ios', udid, booted, note? } or { platform: 'android', serial, avdName, booted, note? } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
 Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.<flag:harmonyos>
 HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for it to register with 'hdc' and returns its connect key as 'udid', the id the interaction tools drive. The manager itself reports no readiness signal and never names a port, so an instance that is already running is left alone unless you pass 'force: true'; when the key could not be resolved the payload names the instance instead, and a 'note' is present whenever the boot left something unproven: no key and why, or a key that is not yet answering or could not be checked against the instance. Huawei serves the emulator images only within mainland China, so a host outside it usually has no instance to start; one that already has an image is started like any other.</flag:harmonyos>`,
     alwaysLoad: true,
