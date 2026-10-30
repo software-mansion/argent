@@ -15,6 +15,8 @@ export async function freePort(): Promise<number> {
 
 export interface MockMetroCdp {
   port: number;
+  /** Every CDP method the target received, in order. */
+  methods: string[];
   close: () => Promise<void>;
 }
 
@@ -29,8 +31,15 @@ export interface MockMetroCdp {
 export async function startMockMetroCdp(opts?: {
   /** Advertise this logicalDeviceId on the single target (default: none). */
   logicalDeviceId?: string;
+  /** List the target as the legacy inspector does (RN 0.72, Vega): no `reactNative` block. */
+  legacy?: boolean;
 }): Promise<MockMetroCdp> {
   let port = 0;
+  const methods: string[] = [];
+  const reactNative = {
+    capabilities: { prefersFuseboxFrontend: true },
+    ...(opts?.logicalDeviceId ? { logicalDeviceId: opts.logicalDeviceId } : {}),
+  };
   const server = http.createServer((req, res) => {
     if (req.url === "/status") {
       res.setHeader("X-React-Native-Project-Root", "/mock/project");
@@ -47,10 +56,7 @@ export async function startMockMetroCdp(opts?: {
             description: "[C++ connection]",
             webSocketDebuggerUrl: `ws://localhost:${port}/inspector/debug?device=0&page=1`,
             deviceName: "MockDevice",
-            reactNative: {
-              capabilities: { prefersFuseboxFrontend: true },
-              ...(opts?.logicalDeviceId ? { logicalDeviceId: opts.logicalDeviceId } : {}),
-            },
+            ...(opts?.legacy ? {} : { reactNative }),
           },
         ])
       );
@@ -63,6 +69,7 @@ export async function startMockMetroCdp(opts?: {
   wss.on("connection", (ws) => {
     ws.on("message", (raw) => {
       const msg = JSON.parse(raw.toString());
+      methods.push(msg.method);
       if (msg.method === "Debugger.enable") {
         ws.send(JSON.stringify({ id: msg.id, result: { debuggerId: "mock-debugger" } }));
         ws.send(
@@ -91,6 +98,7 @@ export async function startMockMetroCdp(opts?: {
   port = (server.address() as AddressInfo).port;
   return {
     port,
+    methods,
     close: () =>
       new Promise((resolve) => {
         for (const c of wss.clients) c.close();

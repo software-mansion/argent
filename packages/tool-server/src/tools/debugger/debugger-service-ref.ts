@@ -12,8 +12,10 @@ import { metroPort } from "../../utils/debugger/metro-port";
  * `Runtime.evaluate`, which the legacy Hermes inspector in its RN 0.72 fork
  * serves — the network inspector included, since it patches `XMLHttpRequest`
  * (React Native's `fetch` runs over it) in the JS runtime rather than using the
- * CDP `Network` domain. Requires a Debug `.vpkg` + Metro reachable from the
- * device; see the argent-tv-interact skill.
+ * CDP `Network` domain. `debugger-evaluate` waits on a Promise result with
+ * object handles, which that inspector never releases, so there it evaluates
+ * by value and a Promise comes back unsettled. Requires a Debug `.vpkg` + Metro
+ * reachable from the device; see the argent-tv-interact skill.
  */
 export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true },

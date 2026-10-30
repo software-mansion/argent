@@ -248,7 +248,10 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const onPublishedBundler = publishedMetroPort(deviceId, port) === undefined;
     const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
 
-    const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
+    // Legacy targets (RN 0.72 / Vega) carry no `reactNative` block.
+    const cdp = new CDPClient(proxied ?? selected.webSocketUrl, {
+      releasesHandles: selected.target.reactNative ? undefined : false,
+    });
     await cdp.connect();
 
     const sourceMaps = new SourceMapsRegistry();
