@@ -124,8 +124,11 @@ describe("trainPaths", () => {
       {
         points: [
           { x: 200, y: 400, tMs: 0 },
+          { x: 200, y: 400, tMs: 15 },
           { x: 240, y: 400, tMs: 16 },
+          { x: 240, y: 400, tMs: 115 },
           { x: 280, y: 400, tMs: 116 },
+          { x: 280, y: 400, tMs: 165 },
           { x: 320, y: 400, tMs: 166 },
         ],
       },
@@ -141,7 +144,39 @@ describe("trainPaths", () => {
       VIEWPORT
     );
 
-    expect(finger.points.map((p) => p.tMs)).toEqual([0, 20]);
+    expect(finger.points.map((p) => p.tMs)).toEqual([0, 19, 20]);
+  });
+
+  it("holds a finger at its last point through an event's delay, then moves it, as a simulator does", () => {
+    const [finger] = trainPaths(
+      [
+        { type: "Down", x: 0.5, y: 0.5 },
+        { type: "Move", x: 0.5, y: 0.25, delayMs: 1000 },
+        { type: "Up", x: 0.5, y: 0.25 },
+      ],
+      VIEWPORT
+    );
+
+    expect(finger.points).toEqual([
+      { x: 200, y: 400, tMs: 0 },
+      { x: 200, y: 400, tMs: 999 },
+      { x: 200, y: 200, tMs: 1000 },
+      { x: 200, y: 200, tMs: 1016 },
+    ]);
+  });
+
+  it("adds no rest when the finger stays put or the delay is a single step or less", () => {
+    const [finger] = trainPaths(
+      [
+        { type: "Down", x: 0.5, y: 0.5 },
+        { type: "Move", x: 0.5, y: 0.5, delayMs: 500 },
+        { type: "Move", x: 0.6, y: 0.5, delayMs: 1 },
+        { type: "Up", x: 0.7, y: 0.5, delayMs: 0 },
+      ],
+      VIEWPORT
+    );
+
+    expect(finger.points.map((p) => p.tMs)).toEqual([0, 500, 501, 501]);
   });
 
   it.each([
