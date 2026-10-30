@@ -533,9 +533,59 @@ describe("exportFailureArtifacts", () => {
     expect(await fs.readdir(outDir)).toEqual(["checkout"]);
     // The claim marker names the producing YAML so uploaded artifacts stay
     // auditable and the next run can recognize its own directory.
-    expect(await fs.readFile(path.join(outDir, "checkout", ".argent-flow-source"), "utf8")).toBe(
+    expect(await fs.readFile(path.join(outDir, "checkout", ".argent-e2e-source"), "utf8")).toBe(
       `${flowFile}\n`
     );
+  });
+
+  it("claims a directory an older CLI marked with .argent-flow-source as that marker says", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const other = path.join(tmpDir, "other", "checkout.yaml");
+      const own = path.join(outDir, "checkout");
+      const foreign = path.join(outDir, `checkout-${pathHash(flowFile)}`);
+      // Own stem directory, exported by an older CLI from this same YAML file.
+      await fs.mkdir(own, { recursive: true });
+      await fs.writeFile(path.join(own, ".argent-flow-source"), `${flowFile}\n`);
+      await fs.writeFile(path.join(own, "home__ios-390x844-current.png"), "old-bytes");
+      const step: StepReport = {
+        index: 0,
+        kind: "snapshot",
+        status: "fail",
+        snapshotKey: "home__ios-390x844",
+        artifacts: { current: await writeFile("c.png", "new-bytes") },
+      };
+
+      await exportFailureArtifacts(mkReport([step]), outDir, flowFile, ctx);
+
+      const dest = path.join(own, "home__ios-390x844-current.png");
+      expect(step.artifacts?.current).toBe(dest);
+      expect(await fs.readFile(dest, "utf8")).toBe("new-bytes");
+      expect(await fs.readFile(path.join(own, ".argent-e2e-source"), "utf8")).toBe(`${flowFile}\n`);
+      expect(await fs.readdir(outDir)).toEqual(["checkout"]);
+      expect(errSpy).not.toHaveBeenCalled();
+
+      // An older CLI's directory for a different YAML file stays foreign.
+      await fs.rm(own, { recursive: true });
+      await fs.mkdir(own, { recursive: true });
+      await fs.writeFile(path.join(own, ".argent-flow-source"), `${other}\n`);
+      await fs.writeFile(path.join(own, "home__ios-390x844-current.png"), "other-bytes");
+      const again: StepReport = { ...step, artifacts: { current: await writeFile("d.png", "x") } };
+
+      await exportFailureArtifacts(mkReport([again]), outDir, flowFile, ctx);
+
+      expect(again.artifacts?.current).toBe(path.join(foreign, "home__ios-390x844-current.png"));
+      expect(await fs.readFile(dest, "utf8")).toBe("other-bytes");
+      expect((await fs.readdir(own)).sort()).toEqual([
+        ".argent-flow-source",
+        "home__ios-390x844-current.png",
+      ]);
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`${own} already holds artifacts from ${other}`)
+      );
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("redirects away from a same-named directory it cannot prove it owns", async () => {
@@ -584,10 +634,10 @@ describe("exportFailureArtifacts", () => {
       const h8 = pathHash(flowB);
       const suiteD = path.join(tmpDir, "suiteD", `checks-${h8}.yaml`);
       await fs.mkdir(path.join(outDir, "checks"), { recursive: true });
-      await fs.writeFile(path.join(outDir, "checks", ".argent-flow-source"), `${flowA}\n`);
+      await fs.writeFile(path.join(outDir, "checks", ".argent-e2e-source"), `${flowA}\n`);
       const occupied = path.join(outDir, `checks-${h8}`);
       await fs.mkdir(occupied, { recursive: true });
-      await fs.writeFile(path.join(occupied, ".argent-flow-source"), `${suiteD}\n`);
+      await fs.writeFile(path.join(occupied, ".argent-e2e-source"), `${suiteD}\n`);
       await fs.writeFile(path.join(occupied, "shot__ios-390x844-current.png"), "suiteD-bytes");
       const stepB: StepReport = {
         index: 0,
@@ -600,7 +650,7 @@ describe("exportFailureArtifacts", () => {
       await exportFailureArtifacts(mkReport([stepB]), outDir, flowB, ctx);
 
       // suiteD's evidence survives byte-for-byte, marker included.
-      expect(await fs.readFile(path.join(occupied, ".argent-flow-source"), "utf8")).toBe(
+      expect(await fs.readFile(path.join(occupied, ".argent-e2e-source"), "utf8")).toBe(
         `${suiteD}\n`
       );
       expect(await fs.readFile(path.join(occupied, "shot__ios-390x844-current.png"), "utf8")).toBe(
@@ -682,7 +732,7 @@ describe("exportFailureArtifacts", () => {
       expect(step.artifacts?.current).toBe(dest);
       expect(await fs.readFile(dest, "utf8")).toBe("current-bytes");
       // Claimed with the usual marker — no escalation to a longer prefix.
-      expect(await fs.readFile(path.join(target, ".argent-flow-source"), "utf8")).toBe(
+      expect(await fs.readFile(path.join(target, ".argent-e2e-source"), "utf8")).toBe(
         `${flowFile}\n`
       );
       expect((await fs.readdir(outDir)).sort()).toEqual([
@@ -797,7 +847,7 @@ describe("exportFailureArtifacts", () => {
       expect(await fs.readdir(outDir)).toEqual(["checkout"]); // no hash-suffixed sibling
       // The claim is completed with the usual marker, so the next run of this
       // same file recognizes the directory and overwrites in place.
-      expect(await fs.readFile(path.join(outDir, "checkout", ".argent-flow-source"), "utf8")).toBe(
+      expect(await fs.readFile(path.join(outDir, "checkout", ".argent-e2e-source"), "utf8")).toBe(
         `${flowFile}\n`
       );
       expect(errSpy).not.toHaveBeenCalled();
@@ -883,11 +933,11 @@ describe("exportFailureArtifacts", () => {
         // The marker names the flow whose bytes are actually in the directory:
         // the property a lost race silently breaks, and the one a later run of
         // the named flow then relies on to overwrite in place.
-        expect(await fs.readFile(path.join(dir, ".argent-flow-source"), "utf8")).toBe(`${flow}\n`);
+        expect(await fs.readFile(path.join(dir, ".argent-e2e-source"), "utf8")).toBe(`${flow}\n`);
         expect(await fs.readFile(dest, "utf8")).toBe(bytes);
         // Marker + this run's one PNG, so nothing of the other run leaked in.
         expect((await fs.readdir(dir)).sort()).toEqual([
-          ".argent-flow-source",
+          ".argent-e2e-source",
           "shot__ios-390x844-current.png",
         ]);
       }
@@ -935,7 +985,7 @@ describe("exportFailureArtifacts", () => {
       const [winner, loser] = a.dir === stemDir ? [a, b] : [b, a];
       expect(winner.dir).toBe(stemDir);
       expect(loser.dir).toBe(path.join(outDir, `checks-${pathHash(loser.flow)}`));
-      expect(await fs.readFile(path.join(stemDir, ".argent-flow-source"), "utf8")).toBe(
+      expect(await fs.readFile(path.join(stemDir, ".argent-e2e-source"), "utf8")).toBe(
         `${winner.flow}\n`
       );
       expect(errSpy).toHaveBeenCalledWith(
@@ -973,7 +1023,7 @@ describe("exportFailureArtifacts", () => {
       expect(first.artifacts?.current).toBe(dest);
       expect(second.artifacts?.current).toBe(dest);
       expect(await fs.readdir(outDir)).toEqual(["checkout"]); // no spurious redirect
-      expect(await fs.readFile(path.join(outDir, "checkout", ".argent-flow-source"), "utf8")).toBe(
+      expect(await fs.readFile(path.join(outDir, "checkout", ".argent-e2e-source"), "utf8")).toBe(
         `${flowFile}\n`
       );
       expect(errSpy).not.toHaveBeenCalled();
@@ -989,7 +1039,7 @@ describe("exportFailureArtifacts", () => {
   it("escalates when the marker that beat its exclusive create is gone by the time it reads it", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const stemDir = path.join(outDir, "checkout");
-    const marker = path.join(stemDir, ".argent-flow-source");
+    const marker = path.join(stemDir, ".argent-e2e-source");
     try {
       // The third way the exclusive create can lose: the marker that beat it is
       // already gone when the loser goes to read it — a racing claim that was
@@ -1030,7 +1080,7 @@ describe("exportFailureArtifacts", () => {
       const target = path.join(outDir, `checkout-${pathHash(flowFile)}`);
       expect(step.artifacts?.current).toBe(path.join(target, "home__ios-390x844-current.png"));
       expect(await fs.readFile(step.artifacts?.current as string, "utf8")).toBe("current-bytes");
-      expect(await fs.readFile(path.join(target, ".argent-flow-source"), "utf8")).toBe(
+      expect(await fs.readFile(path.join(target, ".argent-e2e-source"), "utf8")).toBe(
         `${flowFile}\n`
       );
       // The stem is bare: created by the mkdir that preceded the lost create,
@@ -1115,10 +1165,10 @@ describe("exportFailureArtifacts", () => {
       // directory foreign and split its evidence across a hash sibling for no
       // reason, so an empty read is retried before the marker is written off.
       await fs.mkdir(path.join(outDir, "checkout"), { recursive: true });
-      await fs.writeFile(path.join(outDir, "checkout", ".argent-flow-source"), `${flowFile}\n`);
+      await fs.writeFile(path.join(outDir, "checkout", ".argent-e2e-source"), `${flowFile}\n`);
       let served = false;
       vi.mocked(fs.readFile).mockImplementation((async (file: unknown, options: unknown) => {
-        if (!served && String(file).endsWith(".argent-flow-source")) {
+        if (!served && String(file).endsWith(".argent-e2e-source")) {
           served = true; // exactly one read falls inside the window
           return "";
         }
@@ -1160,7 +1210,7 @@ describe("exportFailureArtifacts", () => {
       // empty, so if the exhausted read reported "no marker" rather than "names
       // nobody" the emptiness probe would hand the directory straight over.
       await fs.mkdir(stemDir, { recursive: true });
-      const marker = path.join(stemDir, ".argent-flow-source");
+      const marker = path.join(stemDir, ".argent-e2e-source");
       let reads = 0;
       vi.mocked(fs.readFile).mockImplementation((async (file: unknown, options: unknown) => {
         if (String(file) === marker) {
@@ -1225,7 +1275,7 @@ describe("exportFailureArtifacts", () => {
         expect(errSpy).toHaveBeenCalledTimes(1);
         expect(errSpy).toHaveBeenCalledWith(
           `warning: ${stemDir} could not be claimed (EACCES: permission denied, ` +
-            `open '${path.join(stemDir, ".argent-flow-source")}'); ` +
+            `open '${path.join(stemDir, ".argent-e2e-source")}'); ` +
             `writing this e2e test's artifacts to ${target} so neither set is overwritten`
         );
       } finally {

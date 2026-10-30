@@ -9,6 +9,7 @@ import {
   getFailureSignal,
   MAX_RUN_DEPTH,
   type Registry,
+  type ToolContext,
 } from "@argent/registry";
 import {
   createRunFlowTool,
@@ -16,6 +17,7 @@ import {
   LAUNCH_TO_VERDICT_MS,
   NATIVE_READY_TIMEOUT_MS,
   type FlowRunResult,
+  type StepReport,
 } from "../../src/tools/flows/flow-run";
 import { serializeFlow, parseFlow, type FlowStep } from "../../src/tools/flows/flow-utils";
 import { bindDeviceArgs, stripDeviceKeys } from "../../src/tools/flows/flow-device";
@@ -178,6 +180,42 @@ describe("flow composition (run:)", () => {
     expect(result.steps[1].flow).toBe("login");
     expect(result.steps[3].flow).toBe("main");
     expect(result.ok).toBe(true);
+  });
+
+  it("names the e2e test in e2eTest and in the deprecated flow, on the report and on every step", async () => {
+    await writeFlow("login", {
+      executionPrerequisite: "",
+      steps: [{ kind: "echo", message: "logging in" }],
+    });
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "run", flow: "login.yaml" },
+        { kind: "echo", message: "done" },
+      ],
+    });
+
+    const progress: StepReport[] = [];
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE },
+        // Copied on emit, as the HTTP stream serializes it then.
+        {
+          emitProgress: (event: unknown) => progress.push(structuredClone(event) as StepReport),
+        } as unknown as ToolContext
+      )
+    );
+
+    expect(result.e2eTest).toBe("main");
+    expect(result.flow).toBe("main");
+    const attribution = result.steps.map((s) => [s.e2eTest, s.flow]);
+    expect(attribution).toEqual([
+      ["login", "login"],
+      ["login", "login"],
+      ["main", "main"],
+    ]);
+    expect(progress.map((s) => [s.e2eTest, s.flow])).toEqual(attribution);
   });
 
   it("composes a bare run: name from the containing flow's own directory", async () => {

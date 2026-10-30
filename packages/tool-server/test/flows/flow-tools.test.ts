@@ -143,6 +143,29 @@ describe("flow-start-recording", () => {
     expect(flow.executionPrerequisite).toBe("Different prereq");
   });
 
+  it("returns the YAML as e2eTestFile and as the deprecated flowFile, at start and at finish", async () => {
+    const started = await flowStartRecordingTool.execute(
+      {},
+      { name: "yaml-fields", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const atStart = await readFlowFile("yaml-fields");
+    expect(started.e2eTestFile).toBe(atStart);
+    expect(started.flowFile).toBe(atStart);
+
+    await flowInsertEchoTool.execute(
+      {},
+      { name: "yaml-fields", project_root: tmpDir, message: "hello" }
+    );
+    const finished = await flowFinishRecordingTool.execute(
+      {},
+      { name: "yaml-fields", project_root: tmpDir }
+    );
+    const atFinish = await readFlowFile("yaml-fields");
+    expect(atFinish).toContain("hello");
+    expect(finished.e2eTestFile).toBe(atFinish);
+    expect(finished.flowFile).toBe(atFinish);
+  });
+
   it("rejects a relative project_root", async () => {
     await expect(
       flowStartRecordingTool.execute(
@@ -248,7 +271,10 @@ describe("flow-start-recording edge cases", () => {
     expect(result.message).toContain("same-flow");
 
     // The earlier take is gone from the file too, prerequisite included.
-    const flow = parseFlow(await readFlowFile("same-flow"));
+    const reset = await readFlowFile("same-flow");
+    expect(result.e2eTestFile).toBe(reset);
+    expect(result.flowFile).toBe(reset);
+    const flow = parseFlow(reset);
     expect(flow.steps).toEqual([]);
     expect(flow.executionPrerequisite).toBe("Updated prereq");
 
@@ -2513,6 +2539,7 @@ describe("flow-execute", () => {
     const result = await runFlow.execute({}, { name: "gated", project_root: tmpDir });
 
     expect(result).toMatchObject({
+      e2eTest: "gated",
       flow: "gated",
       notice: expect.stringContaining("prerequisite"),
       executionPrerequisite: "Device unlocked",
@@ -2950,6 +2977,7 @@ describe("flow-read-prerequisite", () => {
       { name: "read-test", project_root: tmpDir }
     );
 
+    expect(result.e2eTest).toBe("read-test");
     expect(result.flow).toBe("read-test");
     expect(result.executionPrerequisite).toBe("App on home screen");
   });

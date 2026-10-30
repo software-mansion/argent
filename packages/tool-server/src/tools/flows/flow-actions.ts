@@ -935,7 +935,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
       ok: false,
       indeterminate: true,
       reason:
-        `\`await: { idle }\` cannot run on ${env.device.platform}: flows have no UI-tree source on ` +
+        `\`await: { idle }\` cannot run on ${env.device.platform}: e2e tests have no UI-tree source on ` +
         `this platform, so screen stillness can never be judged. Replace this step with an explicit ` +
         `\`wait:\`.`,
     };

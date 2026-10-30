@@ -692,6 +692,7 @@ describe("flow-read-prerequisite e2e_test_path over HTTP", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
+      e2eTest: "gate",
       flow: "gate",
       executionPrerequisite: "SHARED-COPY: DETAIL screen",
     });
@@ -748,6 +749,7 @@ describe("flow-read-prerequisite e2e_test_path over HTTP", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
+      e2eTest: "saved-only",
       flow: "saved-only",
       executionPrerequisite: "App on home screen",
     });
@@ -771,7 +773,11 @@ describe("flow-read-prerequisite e2e_test_path over HTTP", () => {
       });
 
     expect(res.status).toBe(200);
-    expect(res.body.data).toEqual({ flow: "remote", executionPrerequisite: "be logged in" });
+    expect(res.body.data).toEqual({
+      e2eTest: "remote",
+      flow: "remote",
+      executionPrerequisite: "be logged in",
+    });
   });
 });
 
