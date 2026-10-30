@@ -167,6 +167,9 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
     expect(reaped).toBeDefined();
     expect(reaped!.salvage).toContain("18 captured console entries");
+    expect(reaped!.logTail?.map((e) => e.message)).toEqual(
+      Array.from({ length: 18 }, (_, i) => `captured ${i}`)
+    );
     expect(fs.existsSync(instance.api.logWriter.getFilePath())).toBe(false);
   });
 

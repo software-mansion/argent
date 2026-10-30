@@ -25,6 +25,7 @@ import {
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger-log-registry";
 import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
+import { TAIL_MAX } from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -147,6 +148,34 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
     expect(result.note).toContain("torn down");
   });
 
+  it("returns the newest lines of the torn-down session to a read with tail", async () => {
+    await registry.disposeService(await connectAndCapture(LOGICAL_ID, 5));
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+      tail: 2,
+    })) as { totalEntries: number; previousSessionEntries?: Array<{ message: string }> };
+
+    expect(result.totalEntries).toBe(0);
+    expect(result.previousSessionEntries?.map((e) => e.message)).toEqual([
+      "captured 3",
+      "captured 4",
+    ]);
+  });
+
+  it("leaves the torn-down session's lines out when tail is not passed", async () => {
+    await registry.disposeService(await connectAndCapture(LOGICAL_ID, 5));
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { note?: string; previousSessionEntries?: unknown };
+
+    expect(result.note).toBeDefined();
+    expect(result.previousSessionEntries).toBeUndefined();
+  });
+
   it("stays silent when the previous session had captured nothing", async () => {
     // A teardown that destroyed no history has nothing to explain, and saying
     // otherwise would make every empty registry look like a lost one.
@@ -165,16 +194,42 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
   it("does not attach the explanation to a registry that has its own entries", async () => {
     const urn = await connectAndCapture(LOGICAL_ID, 5);
     await registry.disposeService(urn);
-    // Reconnect and capture fresh history before reading.
-    await connectAndCapture(LOGICAL_ID, 3);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    api.logWriter.write({
+      id: 0,
+      timestamp: new Date().toISOString(),
+      level: "log",
+      message: "new",
+    });
 
     const result = (await registry.invokeTool("debugger-log-registry", {
       port: mockPort,
       device_id: LOGICAL_ID,
-    })) as { totalEntries: number; note?: string };
+      tail: 5,
+    })) as { totalEntries: number; note?: string; previousSessionEntries?: unknown };
 
-    expect(result.totalEntries).toBe(3);
+    expect(result.totalEntries).toBe(1);
     expect(result.note).toBeUndefined();
+    expect(result.previousSessionEntries).toBeUndefined();
+  });
+
+  it("keeps the torn-down session's lines away from a read on another Metro port", async () => {
+    await registry.disposeService(await connectAndCapture(LOGICAL_ID, 3));
+
+    const otherApp = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort + 1,
+      device_id: LOGICAL_ID,
+      tail: 5,
+    })) as { note?: string; previousSessionEntries?: unknown };
+    const sameApp = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+      tail: 5,
+    })) as { previousSessionEntries?: unknown[] };
+
+    expect(otherApp.note).toBeUndefined();
+    expect(otherApp.previousSessionEntries).toBeUndefined();
+    expect(sameApp.previousSessionEntries).toHaveLength(3);
   });
 
   it("reports the loss once, not on every later empty read", async () => {
@@ -317,6 +372,55 @@ describe("a debugger session whose app crashed", () => {
     expect(result.note).not.toContain("stop-all-simulator-servers");
   });
 
+  it("returns the newest lines from before the crash once, with the note", async () => {
+    const file = await crash(await connectAndCapture(LOGICAL_ID, 3));
+    const read = () =>
+      registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: LOGICAL_ID,
+        tail: 2,
+        levels: ["log"],
+      }) as Promise<{
+        status: string;
+        note?: string;
+        previousSessionEntries?: Array<{ message: string }>;
+      }>;
+
+    const first = await read();
+    const second = await read();
+
+    expect(first.status).toBe("not_connected");
+    expect(first.note).toContain(`kept at ${file}`);
+    expect(first.previousSessionEntries?.map((e) => e.message)).toEqual([
+      "captured 1",
+      "captured 2",
+    ]);
+    expect(second.previousSessionEntries).toBeUndefined();
+  });
+
+  it("filters the lines from before the crash by levels", async () => {
+    const urn = await connectAndCapture(LOGICAL_ID, 0);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    ["log", "error", "log", "error"].forEach((level, i) =>
+      api.logWriter.write({
+        id: i,
+        timestamp: new Date().toISOString(),
+        level,
+        message: `${level} ${i}`,
+      })
+    );
+    await crash(urn);
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+      tail: 5,
+      levels: ["error"],
+    })) as { previousSessionEntries?: Array<{ message: string }> };
+
+    expect(result.previousSessionEntries?.map((e) => e.message)).toEqual(["error 1", "error 3"]);
+  });
+
   it("names the kept file on the next debugger-connect", async () => {
     const file = await crash(await connectAndCapture(LOGICAL_ID, 3));
     appRunning = true;
@@ -369,5 +473,141 @@ describe("a debugger session whose app crashed", () => {
     expect(emptyRead.note).toBeUndefined();
     expect(reconnect.note).toBeUndefined();
     await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`);
+  });
+});
+
+describe("debugger-log-registry tail", () => {
+  beforeEach(async () => {
+    // A session another case connected under a different id still answers to
+    // LOGICAL_ID, so drop every debugger before reading this one.
+    for (const urn of registry.getSnapshot().services.keys()) {
+      if (urn.startsWith("JsRuntimeDebugger:")) await registry.disposeService(urn).catch(() => {});
+    }
+  });
+
+  async function connectWith(
+    entries: Array<{ level: string; message: string; url?: string }>
+  ): Promise<void> {
+    await registry.invokeTool("debugger-connect", { port: mockPort, device_id: LOGICAL_ID });
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(
+      `JsRuntimeDebugger:${mockPort}:${LOGICAL_ID}`
+    );
+    entries.forEach(({ level, message, url }, i) =>
+      api.logWriter.write({
+        id: i,
+        timestamp: new Date(1710000000000 + i * 1000).toISOString(),
+        level,
+        message,
+        ...(url
+          ? {
+              stackTrace: {
+                callFrames: [
+                  { functionName: "f", scriptId: "1", url, lineNumber: 7, columnNumber: 0 },
+                ],
+              },
+            }
+          : {}),
+      })
+    );
+  }
+
+  type Entry = { level: string; message: string; sourceFile?: string; sourceLine?: number };
+  const read = (extra: Record<string, unknown>) =>
+    registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+      ...extra,
+    }) as Promise<{ totalEntries: number; entries?: Entry[] }>;
+
+  it("returns the newest entries inline, filtered by level", async () => {
+    await connectWith(
+      Array.from({ length: 6 }, (_, i) => ({
+        level: i % 2 ? "warning" : "log",
+        message: `entry ${i}`,
+      }))
+    );
+
+    const result = await read({ tail: 2, levels: ["warning"] });
+
+    expect(result.totalEntries).toBe(6);
+    expect(result.entries?.map((e) => e.message)).toEqual(["entry 3", "entry 5"]);
+  });
+
+  it("returns every level when levels is left out", async () => {
+    await connectWith([
+      { level: "log", message: "a" },
+      { level: "error", message: "b" },
+      { level: "warning", message: "c" },
+    ]);
+
+    const result = await read({ tail: 2 });
+
+    expect(result.entries?.map((e) => e.message)).toEqual(["b", "c"]);
+  });
+
+  it("keeps a message with a carriage return and names where it was logged", async () => {
+    await connectWith([
+      { level: "warning", message: "a\r\nb", url: "http://localhost:8081/src/app.js" },
+    ]);
+
+    const result = await read({ tail: 1 });
+
+    expect(result.entries).toEqual([
+      expect.objectContaining({ message: "a\r\nb", sourceFile: "src/app.js", sourceLine: 7 }),
+    ]);
+  });
+
+  it("accepts tail sent as a string, like the other numeric debugger parameters", async () => {
+    await connectWith([
+      { level: "log", message: "a" },
+      { level: "log", message: "b" },
+    ]);
+
+    const result = await read({ tail: "1" });
+
+    expect(result.entries?.map((e) => e.message)).toEqual(["b"]);
+  });
+
+  it("leaves entries out when tail is not passed", async () => {
+    await connectWith([{ level: "log", message: "a" }]);
+    expect((await read({})).entries).toBeUndefined();
+  });
+
+  it("filters by the error level the description uses as its example", async () => {
+    await connectWith([
+      { level: "log", message: "a" },
+      { level: "error", message: "b" },
+      { level: "warning", message: "c" },
+    ]);
+
+    const result = await read({ tail: 5, levels: ["error"] });
+
+    expect(result.entries?.map((e) => e.message)).toEqual(["b"]);
+  });
+
+  it.each(["log", "info", "debug", "timeEnd"])(
+    "accepts and filters by the %s level",
+    async (level) => {
+      await connectWith([
+        { level: "warning", message: "other" },
+        { level, message: "wanted" },
+      ]);
+
+      const result = await read({ tail: 5, levels: [level] });
+
+      expect(result.entries).toEqual([expect.objectContaining({ level, message: "wanted" })]);
+    }
+  );
+
+  it.each([
+    ["an unknown level", { tail: 3, levels: ["warn"] }],
+    ["a zero tail", { tail: 0 }],
+    ["a fractional tail", { tail: 1.5 }],
+    ["an empty levels list", { tail: 3, levels: [] }],
+    ["levels without tail", { levels: ["warning"] }],
+    ["a tail above the cap", { tail: TAIL_MAX + 1 }],
+  ])("rejects %s instead of returning no entries", async (_, extra) => {
+    await connectWith([{ level: "warning", message: "a" }]);
+    await expect(read(extra)).rejects.toThrow();
   });
 });

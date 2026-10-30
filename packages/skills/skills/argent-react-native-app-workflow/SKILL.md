@@ -161,7 +161,7 @@ For full simulator setup workflow, refer to the `argent-ios-simulator-setup` ski
 
 | Problem type                      | Tool / Where to look                                                                                                                                                                                                                                              |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep` to search. If it returns `status: "not_connected"`, no log file is returned; follow its `guidance` to reconnect first.                                                                |
+| **JavaScript errors / logs**      | Use `debugger-log-registry` with `tail` (and `levels`) to get a summary and the newest log lines; `Grep` the log file for older ones. If it returns `status: "not_connected"`, no log file is returned; follow its `guidance` to reconnect first.                 |
 | **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific logical pixel coordinates (not normalized 0-1).                                                                                                                     |
 | **Visual state of the app**       | Use `screenshot` tool to capture the current screen, but prefer `describe` or `debugger-component-tree` for actual navigation and target discovery. If a permission prompt or system-owned modal overlay is not exposed reliably, then fall back to `screenshot`. |
 | **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                                                                                                                                                                              |
@@ -172,7 +172,7 @@ For comprehensive Metro debugging workflows (component inspection, console logs,
 
 ### 4.2 JS Console Logs (Log Registry)
 
-Logs are written to a flat log file on disk under `~/.argent/tmp/`. Use the **log-registry → grep** pattern instead of reading logs inline.
+Logs are written to a flat log file on disk under `~/.argent/tmp/`. Read the newest lines inline with `debugger-log-registry` `tail`/`levels`, and use the **log-registry → grep** pattern for older ones.
 
 For the full workflow, flat entry format, and grep examples, see `argent-metro-debugger` skill §5.
 

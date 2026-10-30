@@ -4,6 +4,7 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { describeReapedSession, takeReapedSessionAnyId } from "../../utils/reaped-sessions";
+import { debuggerMetroPort } from "./not-connected";
 
 const zodSchema = z.object({
   port: metroPortField,
@@ -55,10 +56,11 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
     // Not in the blueprint's factory: that also runs for the implicit resolve
     // `debugger-log-registry` reconnects through, which would consume the
     // breadcrumb just before the read that exists to report it.
-    const reaped = takeReapedSessionAnyId("js-runtime-debugger", [
-      params.device_id,
-      api.logicalDeviceId,
-    ]);
+    const reaped = takeReapedSessionAnyId(
+      "js-runtime-debugger",
+      [params.device_id, api.logicalDeviceId],
+      debuggerMetroPort(params)
+    );
     return {
       port: api.port,
       projectRoot: api.projectRoot,
