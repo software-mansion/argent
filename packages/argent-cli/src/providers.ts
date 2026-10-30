@@ -50,6 +50,15 @@ const SUBCOMMANDS = ["check", "list", "prune", "publish", "withdraw"] as const;
 
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
+/** The flags each subcommand reads; `--help` is handled before parsing. */
+const SUBCOMMAND_FLAGS: Record<Subcommand, readonly string[]> = {
+  check: ["--file", "--json", "--schema-version"],
+  list: ["--json"],
+  prune: ["--dry-run", "--json"],
+  publish: ["--file", "--json", "--pid", "--schema-version", "--stdin"],
+  withdraw: ["--json"],
+};
+
 /**
  * Thrown for anything the user typed wrong; the caller turns it into exit 2.
  */
@@ -61,6 +70,8 @@ interface ParsedArgs {
   dryRun: boolean;
   /** Read (or check) a single descriptor rather than the whole directory. */
   file?: string;
+  /** Every flag given, without its `=value`. */
+  flags: string[];
   json: boolean;
   /** Positional operands, e.g. the provider id `withdraw` takes. */
   operands: string[];
@@ -72,6 +83,7 @@ interface ParsedArgs {
 function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {
     dryRun: false,
+    flags: [],
     json: false,
     operands: [],
     schemaVersion: PROVIDER_SCHEMA_VERSION,
@@ -100,6 +112,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
+    if (token.startsWith("--")) parsed.flags.push(token.split("=")[0]!);
 
     if (token === "--json") {
       parsed.json = true;
@@ -633,6 +646,19 @@ export async function providers(argv: string[]): Promise<void> {
    */
   if (subcommand !== "withdraw" && args.operands.length > 0) {
     console.error(`Unknown argument: "${args.operands[0]}"`);
+    process.exit(2);
+  }
+
+  /**
+   * A flag another subcommand reads would otherwise be dropped, and
+   * `withdraw acme --dry-run` would delete the descriptor for real.
+   */
+  const stray = args.flags.find(
+    (flag) => !SUBCOMMAND_FLAGS[subcommand as Subcommand].includes(flag)
+  );
+
+  if (stray !== undefined) {
+    console.error(`${stray} does not apply to \`argent providers ${subcommand}\``);
     process.exit(2);
   }
 

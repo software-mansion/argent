@@ -64,7 +64,7 @@ export async function telemetry(args: string[]): Promise<void> {
     default:
       console.error(`Unknown subcommand: telemetry ${sub}`);
       await telemetryShutdown();
-      process.exit(1);
+      process.exit(2);
   }
 }
 

@@ -96,6 +96,8 @@ describe("argent server status / stop / logs", () => {
   it.each([
     [["stop", "--anything"], "Unknown flag: --anything"],
     [["stop", "now"], 'Unexpected argument "now"'],
+    [["stop", "--json"], "Unknown flag: --json"],
+    [["stop", "-f"], "Unknown flag: -f"],
     [["status", "--bogus"], "Unknown flag: --bogus"],
     [["status", "-f"], "Unknown flag: -f"],
     [["logs", "--json"], "Unknown flag: --json"],
@@ -103,6 +105,22 @@ describe("argent server status / stop / logs", () => {
     await expect(server(argv)).rejects.toThrow("process.exit:2");
 
     expect(errors()).toContain(`Error: ${message}`);
+    expect(output()).toContain(`Usage: argent server ${argv[0]}`);
+    expectNoAction();
+  });
+
+  it.each([[[]], [["--help"]], [["-h"]]])("prints the server usage for %j", async (argv) => {
+    await server(argv);
+
+    expect(output()).toContain("argent server stop              Terminate the running tool-server");
+    expect(output()).toContain("Run `argent server <subcommand> --help` for its flags.");
+    expectNoAction();
+  });
+
+  it("rejects an unknown subcommand with exit 2", async () => {
+    await expect(server(["restart"])).rejects.toThrow("process.exit:2");
+
+    expect(errors()).toContain("Unknown subcommand: server restart");
     expectNoAction();
   });
 

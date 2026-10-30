@@ -355,6 +355,12 @@ describe("flags (list) CLI", () => {
     expect(out.stdout).toBe("");
   });
 
+  it("rejects --scope, which only enable and disable take", () => {
+    const out = expectExit(2, () => flagsCmd(["--scope", "global"], TEST_REGISTRY));
+    expect(out.stderr).toContain("Unknown flag: --scope");
+    expect(out.stdout).toBe("");
+  });
+
   it("rejects a positional argument", () => {
     const out = expectExit(2, () => flagsCmd(["a"], TEST_REGISTRY));
     expect(out.stderr).toContain('Unexpected extra argument: "a"');

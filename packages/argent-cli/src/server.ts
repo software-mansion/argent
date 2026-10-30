@@ -553,6 +553,6 @@ Run \`argent server <subcommand> --help\` for its flags.
     }
     default:
       console.error(`Unknown subcommand: server ${sub}`);
-      process.exit(1);
+      process.exit(2);
   }
 }

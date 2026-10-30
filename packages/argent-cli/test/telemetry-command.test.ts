@@ -131,6 +131,11 @@ describe("argent telemetry — scopes", () => {
     expect(errSpy.mock.calls.join(" ")).toContain("Unknown flag: --scope");
   });
 
+  it("rejects an unknown subcommand with exit 2", async () => {
+    await expect(telemetry(["off"])).rejects.toThrow("process.exit(2)");
+    expect(errSpy.mock.calls.join(" ")).toContain("Unknown subcommand: telemetry off");
+  });
+
   // `argent <command> --help` is what the top-level help tells the user to run,
   // and every other subcommand honours it after its own subcommand too.
   // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
