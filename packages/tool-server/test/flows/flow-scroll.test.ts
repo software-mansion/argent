@@ -479,6 +479,41 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY).toBeCloseTo(0.35);
   });
 
+  it("anchors in a cutting window that starts at the screen's leading edge", async () => {
+    const cases = [
+      {
+        direction: "down",
+        cut: { x: 0.6, y: 0.55, width: 0.3, height: 0.05 },
+        after: { x: 0.6, y: 0.3, width: 0.3, height: 0.1 },
+        window: { x: 0, y: 0, width: 1, height: 0.6 },
+        from: { x: 0.75, y: 0.3 },
+      },
+      {
+        direction: "right",
+        cut: { x: 0.55, y: 0.3, width: 0.05, height: 0.1 },
+        after: { x: 0.3, y: 0.3, width: 0.2, height: 0.1 },
+        window: { x: 0, y: 0, width: 0.6, height: 1 },
+        from: { x: 0.3, y: 0.35 },
+      },
+    ];
+    for (const { direction, cut, after, window, from } of cases) {
+      const swipes = await scrollTo(
+        `leading-${direction}`,
+        (scrolled) => [
+          n({
+            identifier: "card",
+            frame: scrolled ? after : cut,
+            clipBounds: scrolled ? undefined : window,
+          }),
+        ],
+        { target: { identifier: "card" }, direction }
+      );
+      expect(swipes, direction).toHaveLength(1);
+      expect(swipes[0].fromX, direction).toBeCloseTo(from.x);
+      expect(swipes[0].fromY, direction).toBeCloseTo(from.y);
+    }
+  });
+
   it("scrolls a `within` target in the scroller cutting it, not at the named container's centre", async () => {
     // A padded panel round the list, which does not scroll itself.
     const panel = n({ identifier: "panel", frame: { x: 0, y: 0.2, width: 1, height: 0.75 } });

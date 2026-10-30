@@ -1054,6 +1054,20 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       w: 285,
       h: 1000,
     });
+    expect(findById(tree({}, { x: 1, y: 0.5, w: 285, h: 20 }), "r")!.clipBounds).toBeUndefined();
+    expect(findById(tree({}, { x: 0.5, y: 1, w: 285, h: 20 }), "r")!.clipBounds).toBeUndefined();
+    expect(pxFrame(tree({}, { x: 1, y: -2, w: 285, h: 20 }), "r", "clipBounds")).toEqual({
+      x: 0,
+      y: 1,
+      w: 1000,
+      h: 98,
+    });
+    expect(pxFrame(tree({}, { x: -2, y: 1, w: 285, h: 20 }), "r", "clipBounds")).toEqual({
+      x: 1,
+      y: 0,
+      w: 285,
+      h: 1000,
+    });
     // Either edge of either axis, and overflow: scroll as well as auto.
     const window = { x: 0, y: 1, w: 1000, h: 98 };
     expect(pxFrame(tree({}, { x: 1, y: -19, w: 285, h: 40 }), "r", "clipBounds")).toEqual(window);
@@ -1334,6 +1348,9 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       { transformStyle: "preserve-3d" },
       { willChange: "transform" },
       { willChange: "translate" },
+      { willChange: "rotate" },
+      { willChange: "scale" },
+      { willChange: "perspective" },
       { willChange: "contain" },
       { willChange: "filter" },
       { willChange: "backdrop-filter" },
@@ -1538,16 +1555,22 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     const contained: Record<string, string>[] = [
       { contain: "paint" },
       { contain: "strict" },
+      { contain: "content" },
       { contentVisibility: "auto" },
       { contentVisibility: "hidden" },
     ];
     for (const style of contained) {
       const { tree } = run([
-        scroller([row("out", { x: 1, y: 150, w: 100, h: 20 })], {
-          style: { overflow: "visible", ...style },
-        }),
+        scroller(
+          [
+            row("out", { x: 1, y: 150, w: 100, h: 20 }),
+            row("right", { x: 400, y: 10, w: 50, h: 20 }),
+          ],
+          { style: { overflow: "visible", ...style } }
+        ),
       ]);
       expect(pxFrame(tree, "out").h, JSON.stringify(style)).toBe(0);
+      expect(pxFrame(tree, "right").w, JSON.stringify(style)).toBe(0);
     }
   });
 
@@ -1603,6 +1626,19 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       overflow: "hidden",
     });
     expect(pxFrame(tree, "far").h).toBe(0);
+  });
+
+  it("treats the body's overflow as a clip once either axis of the root's overflow is set", () => {
+    for (const rootStyle of [{ overflowX: "clip" }, { overflowY: "clip" }]) {
+      const body = el({
+        tag: "body",
+        rect: { x: 0, y: 0, w: W, h: 50 },
+        client: { left: 0, top: 0, width: W, height: 50 },
+        style: { overflow: "hidden" },
+      });
+      const { tree } = run([row("far", { x: 0, y: 900, w: 100, h: 20 })], body, rootStyle);
+      expect(pxFrame(tree, "far").h, JSON.stringify(rootStyle)).toBe(0);
+    }
   });
 
   it("treats the body's overflow as a clip once the root or the body has containment", () => {
@@ -1694,6 +1730,23 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     }
   });
 
+  it("clips a fixed legend like the fieldset's other content: it is not the rendered legend", () => {
+    const legend = (id: string, style: Record<string, string> = {}) =>
+      el({ tag: "legend", attrs: { id }, rect: { x: 20, y: 3, w: 60, h: 10 }, style });
+    const { tree } = run([
+      el({
+        tag: "fieldset",
+        rect: { x: 0, y: 0, w: 300, h: 100 },
+        client: { left: 16, top: 16, width: 268, height: 68 },
+        offset: { width: 300, height: 100 },
+        style: { overflow: "hidden", transform: "matrix(1, 0, 0, 1, 0, 0)" },
+        children: [legend("fixed", { position: "fixed" }), legend("rendered")],
+      }),
+    ]);
+    expect(pxFrame(tree, "fixed").h).toBe(0);
+    expect(pxFrame(tree, "rendered")).toEqual({ x: 20, y: 3, w: 60, h: 10 });
+  });
+
   it("scales the padding box by the clipper's transform", () => {
     // Rendered at 2x: border box 600x200 on screen for a 300x100 layout box.
     const { tree } = run([
@@ -1756,6 +1809,33 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
           overflow: "hidden",
           width: "100px",
           height: "40px",
+          paddingLeft: "20px",
+          paddingTop: "20px",
+          paddingRight: "20px",
+          paddingBottom: "20px",
+          borderLeftWidth: "5px",
+          borderTopWidth: "5px",
+          borderRightWidth: "5px",
+          borderBottomWidth: "5px",
+        },
+        children: [row("edge", { x: 240, y: 60, w: 20, h: 10 })],
+      }),
+    ]);
+    expect(pxFrame(tree, "edge")).toEqual({ x: 240, y: 60, w: 10, h: 10 });
+  });
+
+  it("scales an outer <svg>'s inset by its border-box size under box-sizing: border-box", () => {
+    // Laid out 150x90 border box with 25px of border and padding a side, rendered at 2x.
+    const { tree } = run([
+      el({
+        outerSvg: true,
+        tag: "svg",
+        rect: { x: 0, y: 0, w: 300, h: 180 },
+        style: {
+          overflow: "hidden",
+          boxSizing: "border-box",
+          width: "150px",
+          height: "90px",
           paddingLeft: "20px",
           paddingTop: "20px",
           paddingRight: "20px",
@@ -1927,6 +2007,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
           children: [
             row("shown", { x: 1, y: 10, w: 100, h: 20 }),
             row("gone", { x: 1, y: 300, w: 100, h: 20 }),
+            row("beside", { x: 400, y: 10, w: 100, h: 20 }),
           ],
         }),
       ]),
