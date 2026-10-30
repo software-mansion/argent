@@ -25,6 +25,7 @@ interface FakeSessionShape {
   close(): void;
   screenshot(): Promise<Uint8Array>;
   sendControl(): Promise<void>;
+  key(): Promise<void>;
 }
 
 vi.mock("@swmansion/argent-cloud-sdk", () => {
@@ -72,6 +73,11 @@ vi.mock("@swmansion/argent-cloud-sdk", () => {
     }
 
     sendControl(): Promise<void> {
+      this.sent += 1;
+      return Promise.resolve();
+    }
+
+    key(): Promise<void> {
       this.sent += 1;
       return Promise.resolve();
     }
@@ -167,6 +173,7 @@ describe("a MoQ session whose transport died", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     await expect(client.sendControl(new Uint8Array([1]))).rejects.toThrow(/session is closed/i);
+    await expect(client.key("Down", 0x19)).rejects.toThrow(/session is closed/i);
     expect(session().sent).toBe(0);
   });
 
@@ -176,6 +183,7 @@ describe("a MoQ session whose transport died", () => {
 
     expect(session().disposed).toBe(true);
     await expect(client.sendControl(new Uint8Array([1]))).rejects.toThrow(/session is closed/i);
+    await expect(client.key("Down", 0x19)).rejects.toThrow(/session is closed/i);
     expect(session().sent).toBe(0);
   });
 
