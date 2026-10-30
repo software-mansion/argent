@@ -130,7 +130,7 @@ describe("normalizeToCommonSize", () => {
     expect(pixelAt(result!.current, 4, 9)).toEqual({ r: 12, g: 34, b: 56 });
   });
 
-  it("normalizes when aspect ratios differ within the 1% tolerance", () => {
+  it("normalizes when aspect ratios differ by rescale rounding", () => {
     // 0.5 vs 0.4995 aspect (~0.1% difference) -> treated as the same framebuffer.
     const baseline = gradientImage(1000, 2000);
     const current = gradientImage(999, 2000);
@@ -139,6 +139,24 @@ describe("normalizeToCommonSize", () => {
     expect(result).not.toBeNull();
     expect(result!.baseline.width).toBe(result!.current.width);
     expect(result!.baseline.height).toBe(result!.current.height);
+  });
+
+  it("returns null for two different devices inside the 1% aspect band", () => {
+    // iPhone 16 vs 16 Pro Max (~0.22% apart): beyond what rescale rounding produces.
+    const result = normalizeToCommonSize(gradientImage(1179, 2556), gradientImage(1320, 2868));
+    expect(result).toBeNull();
+  });
+
+  it("normalizes a rounded 0.25x rescale of the same screen", () => {
+    // sips -Z 639 of 1179x2556 yields 294x639.
+    const result = normalizeToCommonSize(gradientImage(1179, 2556), gradientImage(294, 639));
+    expect(result).not.toBeNull();
+  });
+
+  it("normalizes two rounded rescales of the same screen", () => {
+    // 1242x2688 at 0.70 and 0.75: the two rounding errors add up past 1 / shortest side.
+    const result = normalizeToCommonSize(gradientImage(869, 1882), gradientImage(932, 2016));
+    expect(result).not.toBeNull();
   });
 
   it("returns null for a transposed aspect ratio", () => {
