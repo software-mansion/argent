@@ -11,7 +11,8 @@ import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
  *
  * The mock implements only the DOM surface the script reads: getBoundingClientRect,
  * getComputedStyle (display / visibility / opacity / overflow{,X,Y}), children,
- * childNodes (text), getAttribute/hasAttribute, open shadowRoot, iframe contentDocument,
+ * childNodes (text, and <br> / comment nodes), localName/namespaceURI, getAttribute/hasAttribute,
+ * open shadowRoot, iframe contentDocument,
  * and a Range whose rect unions the element's own painted content with the still-laid-out
  * boxes of its descendants (everything but display:none) — so it reproduces the real
  * behaviour where a box-less wrapper's Range is non-zero purely from a visibility:hidden /
@@ -33,10 +34,14 @@ class MockHTMLImageElement extends MockElement {}
 // field, so a test can shadow the *public* property (see `clobberStructural`) while the
 // prototype getter still returns the real value — exactly the real [LegacyOverrideBuiltins]
 // behaviour the fix relies on. childNodes lives on Node.prototype, tagName/children on
-// Element.prototype, matching where the script captures each getter.
+// Element.prototype, matching where the script captures each getter. Like Chrome's, an
+// Element.prototype getter throws on a non-element receiver (a text or comment node).
 function defineNative(proto: object, prop: string, field: string): void {
   Object.defineProperty(proto, prop, {
     get(this: Record<string, unknown>) {
+      if (proto === MockElement.prototype && !(this instanceof MockElement)) {
+        throw new TypeError("Illegal invocation");
+      }
       return this[field];
     },
     set(this: Record<string, unknown>, v: unknown) {
@@ -46,8 +51,21 @@ function defineNative(proto: object, prop: string, field: string): void {
   });
 }
 defineNative(MockNode.prototype, "childNodes", "__childNodes");
-defineNative(MockNode.prototype, "textContent", "__textContent");
+defineNative(MockNode.prototype, "parentNode", "__parentNode");
+// nodeType too, so a test can clobber an element's public nodeType. The fixtures' text,
+// CDATA and comment nodes are plain objects, which keep their own nodeType field.
+Object.defineProperty(MockNode.prototype, "nodeType", {
+  get(this: Record<string, unknown>) {
+    return this instanceof MockNode ? this.__nodeType : this.nodeType;
+  },
+  set(this: Record<string, unknown>, v: unknown) {
+    this.__nodeType = v;
+  },
+  configurable: true,
+});
 defineNative(MockElement.prototype, "tagName", "__tagName");
+defineNative(MockElement.prototype, "localName", "__localName");
+defineNative(MockElement.prototype, "namespaceURI", "__namespaceURI");
 defineNative(MockElement.prototype, "children", "__children");
 defineNative(MockElement.prototype, "shadowRoot", "__shadowRoot");
 // Scroll-dimension getters live on Element.prototype too; the script captures their
@@ -94,6 +112,8 @@ function el(opts: Opts = {}): MockElement {
   const node = new MockElement() as MockElement & Record<string, unknown>;
   const rect = opts.rect ?? { x: 0, y: 0, w: 100, h: 20 };
   node.tagName = (opts.tag ?? "div").toUpperCase();
+  node.localName = opts.tag ?? "div";
+  node.namespaceURI = "http://www.w3.org/1999/xhtml";
   // Backing fields read by the Element.prototype getAttribute/hasAttribute/
   // getBoundingClientRect methods defined above (the script reads them via the prototype).
   node.__attrs = opts.attrs ?? {};
@@ -136,13 +156,7 @@ function el(opts: Opts = {}): MockElement {
     // read would re-walk the control's children (duplicating the subtree). The script must
     // route every one of these through the captured Element.prototype accessor.
     const ctrl = (opts.children ?? [])[0];
-    for (const m of [
-      "getAttribute",
-      "hasAttribute",
-      "getBoundingClientRect",
-      "shadowRoot",
-      "textContent",
-    ]) {
+    for (const m of ["getAttribute", "hasAttribute", "getBoundingClientRect", "shadowRoot"]) {
       Object.defineProperty(node, m, { value: ctrl, configurable: true });
     }
   }
@@ -174,13 +188,18 @@ function inputEl(opts: Opts & { type?: string; value?: string; placeholder?: str
   return node;
 }
 
-function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean } {
+// `pageGlobals` are globals a page script defines, in scope while the script evaluates.
+function run(
+  rootChildren: MockElement[],
+  pageGlobals: Record<string, unknown> = {}
+): { tree: unknown; truncated: boolean } {
   const root = el({ tag: "html", rect: { x: 0, y: 0, w: W, h: H } }) as MockElement &
     Record<string, unknown>;
   root.children = [el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H }, children: rootChildren })];
 
   const g = globalThis as Record<string, unknown>;
-  const saved = {
+  const saved: Record<string, unknown> = {
+    ...Object.fromEntries(Object.keys(pageGlobals).map((k) => [k, g[k]])),
     window: g.window,
     document: g.document,
     Node: g.Node,
@@ -192,7 +211,11 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
   g.window = {
     innerWidth: W,
     innerHeight: H,
-    getComputedStyle: (e: Record<string, unknown>) => e.__style,
+    // Like Chrome's, it rejects a non-element (a document, text or comment node).
+    getComputedStyle: (e: Record<string, unknown>) => {
+      if (!(e instanceof MockElement)) throw new TypeError("parameter 1 is not of type 'Element'");
+      return e.__style;
+    },
   };
   g.document = {
     documentElement: root,
@@ -264,6 +287,7 @@ function run(rootChildren: MockElement[]): { tree: unknown; truncated: boolean }
   g.HTMLInputElement = MockHTMLInputElement;
   g.HTMLTextAreaElement = MockHTMLTextAreaElement;
   g.HTMLImageElement = MockHTMLImageElement;
+  Object.assign(g, pageGlobals);
   try {
     const payload = (0, eval)(DESCRIBE_DOM_SCRIPT) as string;
     return JSON.parse(payload);
@@ -493,28 +517,26 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect((serialized.match(/deep-inner/g) || []).length).toBe(1);
   });
 
-  it("does not crash on an aria-labelledby target whose form clobbers textContent", () => {
-    // accessibleName resolves aria-labelledby via getElementById, then reads textContent.
-    // A <form id="lbl"> with a control named "textContent" shadows the inherited getter,
-    // so a direct read returns the control and crashes (.trim on a non-string). The fix
-    // routes through Node.prototype.textContent.
+  it("reads an aria-labelledby target whose form clobbers childNodes", () => {
+    // accessibleName resolves aria-labelledby via getElementById, then walks the target's
+    // childNodes. A <form id="lbl"> with a control named "childNodes" shadows the
+    // inherited getter, so a direct read returns the control and loses the label.
+    const control = el({
+      tag: "input",
+      attrs: { id: "cn", name: "childNodes" },
+      rect: { x: 0, y: 200, w: 100, h: 20 },
+    });
     const labelForm = el({
       tag: "form",
       attrs: { id: "lbl" },
+      text: "Real Label",
       rect: { x: 0, y: 200, w: 200, h: 20 },
-      children: [
-        el({
-          tag: "input",
-          attrs: { id: "tc", name: "textContent" },
-          rect: { x: 0, y: 200, w: 100, h: 20 },
-        }),
-      ],
-      clobberAccessors: true,
-    }) as MockElement & Record<string, unknown>;
-    labelForm.__textContent = "Real Label";
+      children: [control],
+    });
+    Object.defineProperty(labelForm, "childNodes", { value: control, configurable: true });
     const labelled = el({
       tag: "div",
-      attrs: { "aria-labelledby": "lbl" },
+      attrs: { "id": "labelled", "aria-labelledby": "lbl" },
       rect: BOX,
       children: [el({ text: "BODY", rect: BOX })],
     });
@@ -522,8 +544,297 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(() => {
       result = run([labelled, labelForm]);
     }).not.toThrow();
-    // The label resolves via the prototype textContent despite the clobber.
-    expect(JSON.stringify(result!.tree)).toContain("Real Label");
+    expect(findById(result!.tree, "labelled")!.label).toBe("Real Label");
+  });
+
+  it("reads a form aria-labelledby target whose control clobbers parentNode", () => {
+    // A direct read would reach the control (an <input type=hidden>, display:none) and treat
+    // the rendered form as hidden, reading the <br> under its display:none span as a space.
+    const control = el({ tag: "input", attrs: { name: "parentNode" }, style: { display: "none" } });
+    const gone = el({ tag: "span", rect: ZERO, style: { display: "none" } }) as MockElement &
+      Record<string, unknown>;
+    gone.childNodes = [Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 })];
+    const form = el({ tag: "form", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    form.childNodes = [
+      { nodeType: 3, nodeValue: "Save" },
+      Object.assign(gone, { nodeType: 1 }),
+      { nodeType: 3, nodeValue: "draft" },
+      Object.assign(control, { nodeType: 1 }),
+    ];
+    Object.assign(form, { nodeType: 1, parentNode: { nodeType: 9 } });
+    Object.defineProperty(form, "parentNode", { value: control, configurable: true });
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, form]);
+    expect(findById(tree, "btn")!.label).toBe("Savedraft");
+  });
+
+  it("reads a deeply nested aria-labelledby target without overflowing the stack", () => {
+    let inner = el({ tag: "span", text: "deep", rect: BOX }) as MockElement &
+      Record<string, unknown>;
+    for (let i = 0; i < 50000; i++) {
+      const wrap = el({ tag: "span", rect: BOX }) as MockElement & Record<string, unknown>;
+      wrap.childNodes = [Object.assign(inner, { nodeType: 1 })];
+      inner = wrap;
+    }
+    (inner.__attrs as Record<string, string>).id = "lbl";
+    // Reachable only through getElementById: walk() would stop at MAX_DEPTH anyway.
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, el({ rect: BOX, children: [inner] })]);
+    expect(findById(tree, "btn")!.label).toBe("deep");
+  });
+
+  it("keeps CDATA text and skips comments in an aria-labelledby target, as textContent does", () => {
+    // React SSR puts <!-- --> markers between text nodes.
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    label.childNodes = [
+      { nodeType: 3, nodeValue: "Save " },
+      { nodeType: 8, nodeValue: "$" },
+      { nodeType: 4, nodeValue: "my" },
+      { nodeType: 3, nodeValue: " draft" },
+    ];
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, label]);
+    expect(findById(tree, "btn")!.label).toBe("Save my draft");
+  });
+
+  it("reads a nested form that clobbers nodeType in an aria-labelledby target", () => {
+    const control = el({ tag: "input", attrs: { name: "nodeType" }, rect: BOX });
+    const form = Object.assign(el({ tag: "form", text: "my", rect: BOX }), { nodeType: 1 });
+    Object.defineProperty(form, "nodeType", { value: control, configurable: true });
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    label.childNodes = [
+      { nodeType: 3, nodeValue: "Save " },
+      form,
+      { nodeType: 3, nodeValue: " draft" },
+    ];
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, label]);
+    expect(findById(tree, "btn")!.label).toBe("Save my draft");
+  });
+
+  it("reads a <br> in an aria-labelledby target as a space", () => {
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    const br = Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 });
+    const bold = Object.assign(el({ tag: "b", text: "draft", rect: BOX }), { nodeType: 1 });
+    label.childNodes = [{ nodeType: 3, nodeValue: "Save" }, br, bold];
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, label]);
+    expect(findById(tree, "btn")!.label).toBe("Save draft");
+  });
+
+  it("reads a <br> under a display:none element of an aria-labelledby target as nothing", () => {
+    // Each <br> sits two elements below the target. Its own display stays inline under
+    // the display:none span, as display does not inherit.
+    const nested = (display: string) => {
+      const outer = el({ tag: "span", rect: ZERO, style: { display } }) as MockElement &
+        Record<string, unknown>;
+      const inner = el({ tag: "b", rect: ZERO }) as MockElement & Record<string, unknown>;
+      inner.childNodes = [Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 })];
+      outer.childNodes = [Object.assign(inner, { nodeType: 1 })];
+      return Object.assign(outer, { nodeType: 1 });
+    };
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    // The script checks the target's ancestors up to the document.
+    Object.assign(label, { nodeType: 1, parentNode: { nodeType: 9 } });
+    label.childNodes = [
+      { nodeType: 3, nodeValue: "Save" },
+      nested("none"),
+      { nodeType: 3, nodeValue: "my" },
+      nested("inline"),
+      { nodeType: 3, nodeValue: "draft" },
+    ];
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, label]);
+    expect(findById(tree, "btn")!.label).toBe("Savemy draft");
+  });
+
+  it("reads every <br> in a display:none aria-labelledby target as a space", () => {
+    // Nothing in the target renders, so a <br> under a further display:none element counts
+    // too. The target is display:none itself, or sits under a display:none ancestor.
+    const br = () => Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 });
+    const label = (style: Record<string, string>) => {
+      const node = el({ tag: "span", rect: ZERO, style, attrs: { id: "lbl" } }) as MockElement &
+        Record<string, unknown>;
+      const gone = el({ tag: "span", rect: ZERO, style: { display: "none" } }) as MockElement &
+        Record<string, unknown>;
+      gone.childNodes = [br()];
+      node.childNodes = [
+        { nodeType: 3, nodeValue: "Save" },
+        br(),
+        { nodeType: 3, nodeValue: "my" },
+        Object.assign(gone, { nodeType: 1 }),
+        { nodeType: 3, nodeValue: "draft" },
+      ];
+      return Object.assign(node, { nodeType: 1 });
+    };
+    const button = () =>
+      el({ tag: "button", rect: BOX, attrs: { "id": "btn", "aria-labelledby": "lbl" } });
+
+    const own = run([button(), label({ display: "none" })]);
+    expect(findById(own.tree, "btn")!.label).toBe("Save my draft");
+
+    const inner = label({});
+    const host = el({ rect: ZERO, style: { display: "none" }, children: [inner] });
+    inner.parentNode = Object.assign(host, { nodeType: 1, parentNode: { nodeType: 9 } });
+    const viaAncestor = run([button(), host]);
+    expect(findById(viaAncestor.tree, "btn")!.label).toBe("Save my draft");
+  });
+
+  it("reads a visibility:hidden <br> as a space, since it still breaks the line", () => {
+    const br = () =>
+      Object.assign(el({ tag: "br", rect: ZERO, style: { visibility: "hidden" } }), {
+        nodeType: 1,
+      });
+    const text = () => [
+      { nodeType: 3, nodeValue: "alpha" },
+      br(),
+      { nodeType: 3, nodeValue: "beta" },
+    ];
+    const div = el({ rect: BOX, attrs: { id: "own" } }) as MockElement & Record<string, unknown>;
+    div.childNodes = text();
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    label.childNodes = text();
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([div, button, label]);
+    expect(findById(tree, "own")!.value).toBe("alpha beta");
+    expect(findById(tree, "btn")!.label).toBe("alpha beta");
+  });
+
+  it("keeps a U+FEFF, and folds other whitespace to a space, in own and aria-labelledby text", () => {
+    for (const [text, expected] of [
+      ["Save\uFEFFdraft", "Save\uFEFFdraft"],
+      ["Save\u00A0draft", "Save draft"],
+      ["Save\u2003\u2003draft", "Save draft"],
+    ]) {
+      const label = el({ tag: "span", text, rect: BOX, attrs: { id: "lbl" } });
+      const labelled = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "labelled", "aria-labelledby": "lbl" },
+      });
+      const own = el({ tag: "button", text, rect: BOX, attrs: { id: "own" } });
+      const { tree } = run([labelled, own, label]);
+      expect(findById(tree, "labelled")!.label).toBe(expected);
+      expect(findById(tree, "own")!.value).toBe(expected);
+    }
+  });
+
+  it("walks an aria-labelledby target shared by many controls only once", () => {
+    // An empty target too: its cached "" must count as a hit.
+    const childNodesReads = (text: string, buttons: number) => {
+      const label = el({ tag: "span", text, rect: BOX, attrs: { id: "lbl" } });
+      let reads = 0;
+      const kids = (label as MockElement & Record<string, unknown>).__childNodes;
+      Object.defineProperty(label, "__childNodes", {
+        get: () => (reads++, kids),
+        configurable: true,
+      });
+      const controls = Array.from({ length: buttons }, (_, i) =>
+        el({ tag: "button", rect: BOX, attrs: { "id": `b${i}`, "aria-labelledby": "lbl" } })
+      );
+      const { tree } = run([...controls, label]);
+      expect(findById(tree, `b${buttons - 1}`)!.label).toBe(text || undefined);
+      return reads;
+    };
+    for (const text of ["Shared", ""]) {
+      expect(childNodesReads(text, 5)).toBe(childNodesReads(text, 1));
+    }
+  });
+
+  it("reads a shared aria-labelledby target on a page whose own global Map is not the builtin", () => {
+    // A classic page script's top-level `class Map` or `var Map = {...}` shadows the builtin.
+    const label = el({ tag: "span", text: "Shared", rect: BOX, attrs: { id: "lbl" } });
+    const controls = ["b1", "b2"].map((id) =>
+      el({ tag: "button", rect: BOX, attrs: { "id": id, "aria-labelledby": "lbl" } })
+    );
+    for (const Map of [class {}, { tiles: [] }]) {
+      const { tree } = run([...controls, label], { Map });
+      expect(findById(tree, "b1")!.label).toBe("Shared");
+      expect(findById(tree, "b2")!.label).toBe("Shared");
+    }
+  });
+
+  it("falls back to the title when no aria-labelledby id resolves, however often", () => {
+    const controls = ["b1", "b2"].map((id) =>
+      el({ tag: "button", rect: BOX, attrs: { "id": id, "aria-labelledby": "nope", "title": "T" } })
+    );
+    const { tree } = run(controls);
+    expect(findById(tree, "b1")!.label).toBe("T");
+    expect(findById(tree, "b2")!.label).toBe("T");
+  });
+
+  it("reads aria-labelledby ids that name Object.prototype members", () => {
+    const ids = ["constructor", "toString", "__proto__"];
+    const labels = ids.map((id) => el({ tag: "span", text: `L-${id}`, rect: BOX, attrs: { id } }));
+    const controls = ids.map((id) =>
+      el({ tag: "button", rect: BOX, attrs: { "id": `b-${id}`, "aria-labelledby": id } })
+    );
+    const { tree } = run([...controls, ...labels]);
+    for (const id of ids) expect(findById(tree, `b-${id}`)!.label).toBe(`L-${id}`);
+  });
+
+  it("reads each aria-labelledby target as its own text", () => {
+    const one = el({ tag: "span", text: "One", rect: BOX, attrs: { id: "l1" } });
+    const two = el({ tag: "span", text: "Two", rect: BOX, attrs: { id: "l2" } });
+    const button = (id: string, labelledBy: string) =>
+      el({ tag: "button", rect: BOX, attrs: { "id": id, "aria-labelledby": labelledBy } });
+    const { tree } = run([button("b1", "l1"), button("b2", "l2"), button("b3", "l1 l2"), one, two]);
+    expect(findById(tree, "b1")!.label).toBe("One");
+    expect(findById(tree, "b2")!.label).toBe("Two");
+    expect(findById(tree, "b3")!.label).toBe("One Two");
+  });
+
+  it("collapses whitespace in an aria-labelledby target, as in own text", () => {
+    // A <br> beside a space must not leave a double space a text selector would miss,
+    // and a self-labelled button's label then equals its own text, so it is not repeated.
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "btn" },
+    }) as MockElement & Record<string, unknown>;
+    const br = Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 });
+    button.childNodes = [
+      { nodeType: 3, nodeValue: "  Save as " },
+      br,
+      { nodeType: 3, nodeValue: "\n    draft  " },
+    ];
+    const node = findById(run([button]).tree, "btn")!;
+    expect(node.label).toBe("Save as draft");
+    expect(node.value).toBeUndefined();
   });
 
   it("leaves an ordinary visible element unchanged", () => {
@@ -778,6 +1089,61 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       el({ tag: "iframe", rect: { x: 0, y: 0, w: 500, h: 500 }, iframeDoc: innerDoc }),
     ]);
     expect(valuesOf(tree)).toContain("IFRAMETEXT");
+  });
+
+  it("reads a <br> between own text nodes as a space", () => {
+    const div = el({ rect: BOX, attrs: { id: "nl" } }) as MockElement & Record<string, unknown>;
+    const br = Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 });
+    div.childNodes = [{ nodeType: 3, nodeValue: "alpha" }, br, { nodeType: 3, nodeValue: "beta" }];
+    const { tree } = run([div]);
+    expect(findById(tree, "nl")!.value).toBe("alpha beta");
+  });
+
+  it("skips a comment child between own text nodes", () => {
+    // Element.prototype getters throw on a Comment, which would abort the whole walk.
+    const div = el({ rect: BOX, attrs: { id: "nl" } }) as MockElement & Record<string, unknown>;
+    div.childNodes = [
+      { nodeType: 3, nodeValue: "alpha" },
+      { nodeType: 8, nodeValue: " note " },
+      { nodeType: 3, nodeValue: "beta" },
+    ];
+    const { tree } = run([div]);
+    expect(findById(tree, "nl")!.value).toBe("alphabeta");
+  });
+
+  it("reads a non-HTML br element as nothing, since it renders inline", () => {
+    // An SVG, MathML or null-namespace <br>, or createElementNS(XHTML, "BR") (localName
+    // "BR"), is not a line break even though its tagName lowercases to "br".
+    for (const [localName, namespaceURI] of [
+      ["br", "http://www.w3.org/2000/svg"],
+      ["br", "http://www.w3.org/1998/Math/MathML"],
+      ["br", null],
+      ["BR", "http://www.w3.org/1999/xhtml"],
+    ]) {
+      const div = el({ rect: BOX, attrs: { id: "nl" } }) as MockElement & Record<string, unknown>;
+      const br = Object.assign(el({ tag: "br", rect: ZERO }), {
+        nodeType: 1,
+        localName,
+        namespaceURI,
+      });
+      div.childNodes = [
+        { nodeType: 3, nodeValue: "alpha" },
+        br,
+        { nodeType: 3, nodeValue: "beta" },
+      ];
+      const { tree } = run([div]);
+      expect(findById(tree, "nl")!.value).toBe("alphabeta");
+    }
+  });
+
+  it("reads a display:none <br> as nothing, since the words around it stay joined", () => {
+    const div = el({ rect: BOX, attrs: { id: "nl" } }) as MockElement & Record<string, unknown>;
+    const br = Object.assign(el({ tag: "br", rect: ZERO, style: { display: "none" } }), {
+      nodeType: 1,
+    });
+    div.childNodes = [{ nodeType: 3, nodeValue: "alpha" }, br, { nodeType: 3, nodeValue: "beta" }];
+    const { tree } = run([div]);
+    expect(findById(tree, "nl")!.value).toBe("alphabeta");
   });
 
   // ---- a password input's typed value must never become its label ----
