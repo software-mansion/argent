@@ -271,7 +271,10 @@ describe("flow-start-recording edge cases", () => {
     expect(result.message).toContain("same-flow");
 
     // The earlier take is gone from the file too, prerequisite included.
-    const flow = parseFlow(await readFlowFile("same-flow"));
+    const reset = await readFlowFile("same-flow");
+    expect(result.e2eTestFile).toBe(reset);
+    expect(result.flowFile).toBe(reset);
+    const flow = parseFlow(reset);
     expect(flow.steps).toEqual([]);
     expect(flow.executionPrerequisite).toBe("Updated prereq");
 

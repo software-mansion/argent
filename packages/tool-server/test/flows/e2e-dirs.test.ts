@@ -180,11 +180,16 @@ describe("a test addressed by name", () => {
       flowReadPrerequisiteTool.execute({}, { name, project_root: root });
 
     await expect(read("dup")).resolves.toEqual({
+      e2eTest: "dup",
       flow: "dup",
       executionPrerequisite: "From e2e",
       warning: `${legacy("dup.yaml")} is not used: ${e2e("dup.yaml")} has the same name and is read first.`,
     });
-    await expect(read("solo")).resolves.toEqual({ flow: "solo", executionPrerequisite: "Solo" });
+    await expect(read("solo")).resolves.toEqual({
+      e2eTest: "solo",
+      flow: "solo",
+      executionPrerequisite: "Solo",
+    });
   });
 
   it("reports a missing test at the .argent/e2e path", async () => {
