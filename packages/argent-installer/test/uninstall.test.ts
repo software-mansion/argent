@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
+import { hashBundledContent } from "../src/utils.js";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -47,6 +48,26 @@ vi.mock("node:child_process", () => ({
       : childProcessMock.execFileSync(bin, ...rest),
 }));
 vi.mock("@argent/tools-client", () => toolsClientMock);
+// Lets a test stand in for a release whose agents bundle dropped a file, with
+// a retired list whose hashes match the test's own copies.
+const bundleOverride = vi.hoisted(() => ({
+  agentsDir: undefined as string | undefined,
+  retired: undefined as import("../src/utils.js").RetiredBundledPath[] | undefined,
+}));
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    get AGENTS_DIR() {
+      return bundleOverride.agentsDir ?? actual.AGENTS_DIR;
+    },
+    get RETIRED_BUNDLED_PATHS() {
+      return bundleOverride.retired
+        ? { agents: bundleOverride.retired, rules: [] }
+        : actual.RETIRED_BUNDLED_PATHS;
+    },
+  };
+});
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   outro: vi.fn(),
@@ -88,6 +109,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  bundleOverride.agentsDir = undefined;
+  bundleOverride.retired = undefined;
   process.chdir(originalCwd);
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
   else process.env.npm_config_user_agent = savedAgent;
@@ -787,6 +810,73 @@ describe("uninstall — scoped config cleanup", () => {
     await uninstall(["--yes"]);
 
     expect(fs.readdirSync(path.join(projDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
+  });
+
+  // An upgrade to a release that dropped the inspector, then an uninstall.
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n";
+  const CHECKLIST = "## Quality control checklist\n";
+
+  function stageRetiredAgents(): string {
+    const bundle = path.join(tmpDir, "bundle-agents");
+    writeFile(path.join(bundle, "argent-current.md"), "current");
+    bundleOverride.agentsDir = bundle;
+    bundleOverride.retired = [
+      {
+        path: "argent-environment-inspector.md",
+        shipped: [hashBundledContent(INSPECTOR)],
+        marker: "name: argent-environment-inspector",
+      },
+      {
+        path: "references/quality-control-checklist.md",
+        shipped: [hashBundledContent(CHECKLIST)],
+        marker: "## Quality control checklist",
+      },
+    ];
+
+    const agents = path.join(projDir, ".claude", "agents");
+    writeFile(path.join(agents, "argent-current.md"), "current");
+    writeFile(path.join(agents, "argent-environment-inspector.md"), INSPECTOR);
+    writeFile(path.join(agents, "references", "quality-control-checklist.md"), CHECKLIST);
+    fs.mkdirSync(path.join(projDir, ".git"));
+    return agents;
+  }
+
+  it("--yes removes retired agents the bundle no longer ships, and keeps the user's", async () => {
+    const agents = stageRetiredAgents();
+    writeFile(path.join(agents, "my-agent.md"), "mine");
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(agents)).toEqual(["my-agent.md"]);
+  });
+
+  it.each(["--yes", "-y"])(
+    "%s keeps a retired agent the user edited, unasked, and says so",
+    async (flag) => {
+      const agents = stageRetiredAgents();
+      const edited = path.join(agents, "references", "quality-control-checklist.md");
+      writeFile(edited, `${CHECKLIST}My own field.\n`);
+      process.chdir(projDir);
+
+      await uninstall([flag]);
+
+      const clack = await import("@clack/prompts");
+      expect(clack.confirm).not.toHaveBeenCalled();
+      expect(fs.existsSync(edited)).toBe(true);
+      expect(fs.existsSync(path.join(agents, "argent-environment-inspector.md"))).toBe(false);
+      const notes = vi.mocked(clack.note).mock.calls.map(([body]) => String(body));
+      expect(notes.some((body) => body.includes("Kept, as they were edited"))).toBe(true);
+    }
+  );
+
+  it("--yes removes the agents dir once retired and bundled agents are gone", async () => {
+    const agents = stageRetiredAgents();
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(agents)).toBe(false);
   });
 
   it("--yes removes .kiro/ only when it is left empty", async () => {
