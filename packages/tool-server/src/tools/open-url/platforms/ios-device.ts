@@ -1,6 +1,7 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { InvalidToolInputError } from "../../../utils/capability";
 import { ensureDeviceReady, launchApp } from "../../../utils/ios-device/devicectl";
+import { isRelayedIosDevice } from "../../../utils/ios-device/relay";
 import {
   isSessionOnlySystemUi,
   setCurrentIosDeviceApp,
@@ -54,6 +55,15 @@ export const iosDeviceImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrl
     if (isSessionOnlySystemUi(bundleId)) {
       throw new InvalidToolInputError(
         `${bundleId} is system UI and cannot receive a URL. Pass the app that handles this URL instead.`
+      );
+    }
+
+    // CoreDevice delivers a URL at launch; go-ios, which drives a relayed
+    // phone, has no such option. Say so before the launch would.
+    if (isRelayedIosDevice(params.udid)) {
+      throw new InvalidToolInputError(
+        "open-url is not available on a relayed iPhone: its launcher cannot pass a URL to the app. " +
+          "Use launch-app and navigate inside the app instead."
       );
     }
 

@@ -12,6 +12,8 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { appendHintToMessage } from "./usbmux-protocol";
+import { iosRelayFor, type IosRelay } from "./relay";
+import { listUsbmuxSerials } from "./usbmux";
 
 /**
  * Wrappers around `xcrun devicectl` for discovery, app lifecycle, and connection readiness.
@@ -417,6 +419,14 @@ export async function ensureDeviceReady(udid: string): Promise<void> {
     return;
   }
 
+  const relay = iosRelayFor(udid);
+
+  if (relay) {
+    await ensureRelayedDeviceReady(relay);
+    readyMemo.set(udid, Date.now());
+    return;
+  }
+
   // An unplugged paired device can keep a network tunnel. usbmux still needs the cable.
   const info = await deviceInfoDetails(udid, { timeoutSeconds: 15 });
 
@@ -440,4 +450,41 @@ export async function ensureDeviceReady(udid: string): Promise<void> {
   }
 
   readyMemo.set(udid, Date.now());
+}
+
+const RELAY_LIST_TIMEOUT_MS = 5_000;
+
+/**
+ * A relayed phone is ready while its usbmuxd lists it: the provider still
+ * offers it and the relay is up. CoreDevice has no say here.
+ */
+async function ensureRelayedDeviceReady(relay: IosRelay): Promise<void> {
+  let serials: string[];
+
+  try {
+    serials = await listUsbmuxSerials(relay.endpoint, RELAY_LIST_TIMEOUT_MS);
+  } catch (error) {
+    throw withFailureSignal(
+      new IosDeviceControlError(
+        `The usbmuxd relay for this iPhone did not answer at ${relay.endpoint}`,
+        {
+          hint: `Check that ${relay.providerName} still relays the phone (it may have withdrawn it), then retry.`,
+          cause: error,
+        }
+      ),
+      readyFailureSignal("network")
+    );
+  }
+
+  if (!serials.includes(relay.udid)) {
+    throw withFailureSignal(
+      new IosDeviceControlError(
+        `The usbmuxd relay at ${relay.endpoint} no longer lists iPhone ${relay.udid}`,
+        {
+          hint: `${relay.providerName} may have withdrawn the phone or it was unplugged on its side; offer it again and retry.`,
+        }
+      ),
+      readyFailureSignal("not_found")
+    );
+  }
 }
