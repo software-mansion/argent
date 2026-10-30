@@ -18,20 +18,26 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.doUnmock("node:child_process");
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+/** Resolves on the first process.exit with its code and what was printed before it. */
+function captureExit(): Promise<{ code?: number; printed: string[] }> {
+  const err: string[] = [];
+  vi.spyOn(console, "error").mockImplementation((...args) => void err.push(args.join(" ")));
+  // Snapshot at exit: the real process.exit drops anything printed after it.
+  return new Promise((resolve) => {
+    vi.spyOn(process, "exit").mockImplementation(((code?: number) =>
+      resolve({ code, printed: [...err] })) as never);
+  });
+}
+
 describe("argent server logs --follow", () => {
   it("reports a `tail` that cannot be spawned and exits 1", async () => {
-    const err: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...args) => void err.push(args.join(" ")));
-    // Snapshot at exit: the real process.exit drops anything printed after it.
-    const exited = new Promise<{ code?: number; printed: string[] }>((resolve) => {
-      vi.spyOn(process, "exit").mockImplementation(((code?: number) =>
-        resolve({ code, printed: [...err] })) as never);
-    });
+    const exited = captureExit();
     const { server } = await import("../src/server.js");
 
     await server(["logs", "-f"]);
@@ -40,6 +46,27 @@ describe("argent server logs --follow", () => {
       code: 1,
       printed: [
         "argent server logs: cannot run `tail` to follow the log (spawn tail ENOENT). " +
+          "Run `argent server logs` without -f to print it.",
+      ],
+    });
+  });
+
+  it("reports a spawn error that spawn() throws instead of emitting", async () => {
+    vi.doMock("node:child_process", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:child_process")>()),
+      spawn: () => {
+        throw new Error("spawn ENOEXEC");
+      },
+    }));
+    const exited = captureExit();
+    const { server } = await import("../src/server.js");
+
+    await server(["logs", "-f"]);
+
+    expect(await exited).toEqual({
+      code: 1,
+      printed: [
+        "argent server logs: cannot run `tail` to follow the log (spawn ENOEXEC). " +
           "Run `argent server logs` without -f to print it.",
       ],
     });
