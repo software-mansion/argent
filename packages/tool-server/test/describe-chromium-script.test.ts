@@ -1369,8 +1369,8 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
 
   it("keeps clipping a custom element's child the page hit-tests only within a pixel of the clip", () => {
     // The real clip edge is up to a pixel past the one integer client sizes give
-    // (x 286), so Chrome hits the list there; below the clip it hits nothing.
-    const list = { x: 1, y: 1, w: 285.5, h: 400 };
+    // (x 286), so Chrome hits the list there; its overflowing row is clipped.
+    const list = { x: 1, y: 1, w: 285.5, h: 98 };
     const { tree } = run([
       scroller([
         el({
@@ -1379,7 +1379,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
           children: [
             el({
               rect: list,
-              painted: { x: 1, y: 1, w: 285.5, h: 98 },
+              painted: list,
               children: [row("hidden", { x: 1, y: 200, w: 285, h: 40 })],
             }),
           ],
