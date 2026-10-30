@@ -1,5 +1,5 @@
 // Unit coverage for the win32 `netstat -ano` → listening-PID parser. The logic
-// only runs on Windows in production (POSIX uses lsof), but the parser is a
+// only runs on Windows in production (other hosts use procfs or lsof), but the parser is a
 // pure function, so it is exercised here on any host. Fixtures mirror real
 // `netstat -ano` output (CRLF line endings, the "Active Connections" banner and
 // column header, IPv4 + IPv6 LISTENING rows, ESTABLISHED rows, a UDP row, and a
