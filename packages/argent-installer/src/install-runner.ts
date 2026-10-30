@@ -6,7 +6,7 @@ import {
   getGloballyInstalledVersion,
   getLatestVersion,
   isNewerVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
@@ -218,6 +218,7 @@ async function runGlobal(opts: {
   const { fromTar, nonInteractive, tel } = opts;
   let version = opts.version;
   const globallyInstalled = isGloballyInstalled();
+  const pm = detectGlobalPackageManager();
 
   if (!globallyInstalled) {
     // No consent prompt here: choosing "Globally" (or --global) in the
@@ -225,7 +226,6 @@ async function runGlobal(opts: {
     p.log.info(`Argent is not installed globally — installing.`);
     track("installation:global_install_decision", { decision: "install" });
 
-    const pm = detectPackageManager();
     const installTarget = fromTar ?? PACKAGE_NAME;
     const cmd = globalInstallCommand(pm, installTarget);
     const cmdStr = formatShellCommand(cmd);
@@ -256,7 +256,6 @@ async function runGlobal(opts: {
   if (fromTar) {
     // Developer-only reinstall (`--from`) — not a product install decision, so
     // no decision event.
-    const pm = detectPackageManager();
     const cmd = globalInstallCommand(pm, fromTar);
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
@@ -340,7 +339,6 @@ async function runGlobal(opts: {
       if (p.isCancel(updateChoice) || updateChoice === "skip") {
         await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
       } else if (updateChoice === "update") {
-        const pm = detectPackageManager();
         const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
         const cmdStr = formatShellCommand(cmd);
         const updateSpinner = p.spinner();

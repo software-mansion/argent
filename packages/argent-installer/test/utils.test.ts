@@ -37,6 +37,7 @@ import {
   copyDir,
   dirExists,
   detectPackageManager,
+  detectGlobalPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
@@ -465,8 +466,13 @@ describe("detectPackageManager", () => {
     expect(detectPackageManager()).toBe("npm");
   });
 
-  it("returns yarn for yarn agent", () => {
-    process.env.npm_config_user_agent = "yarn/4.0.0";
+  it("returns yarn for a Yarn 1 agent", () => {
+    process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v24.14.1 darwin arm64";
+    expect(detectPackageManager()).toBe("yarn");
+  });
+
+  it("returns yarn for a Yarn 2+ agent", () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
     expect(detectPackageManager()).toBe("yarn");
   });
 
@@ -478,6 +484,37 @@ describe("detectPackageManager", () => {
   it("returns bun for bun agent", () => {
     process.env.npm_config_user_agent = "bun/1.0.0";
     expect(detectPackageManager()).toBe("bun");
+  });
+});
+
+// ── detectGlobalPackageManager ────────────────────────────────────────────────
+
+describe("detectGlobalPackageManager", () => {
+  const original = process.env.npm_config_user_agent;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = original;
+  });
+
+  it("returns npm when agent is unset", () => {
+    delete process.env.npm_config_user_agent;
+    expect(detectGlobalPackageManager()).toBe("npm");
+  });
+
+  it("returns yarn for a Yarn 1 agent", () => {
+    process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v24.14.1 darwin arm64";
+    expect(detectGlobalPackageManager()).toBe("yarn");
+  });
+
+  it("returns npm for a Yarn 2+ agent", () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    expect(detectGlobalPackageManager()).toBe("npm");
+  });
+
+  it("returns pnpm for pnpm agent", () => {
+    process.env.npm_config_user_agent = "pnpm/9.0.0 npm/? node/v24.14.1 darwin arm64";
+    expect(detectGlobalPackageManager()).toBe("pnpm");
   });
 });
 
@@ -1047,6 +1084,11 @@ describe("detectProjectPackageManager", () => {
     // must NOT bleed through the .git boundary, so the walk stops and falls
     // back to the (pinned-unset) agent default.
     expect(detectProjectPackageManager(repo)).toBe("npm");
+  });
+  it("falls back to yarn for a markerless project launched from Yarn 2+", () => {
+    fs.mkdirSync(path.join(tmpDir, ".git"));
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
   });
 });
 

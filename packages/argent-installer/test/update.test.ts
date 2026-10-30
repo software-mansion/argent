@@ -5,7 +5,7 @@ import * as path from "node:path";
 import {
   getInstalledVersion,
   getGloballyInstalledVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   globalInstallCommand,
   formatShellCommand,
 } from "../src/utils.js";
@@ -40,7 +40,7 @@ describe("update — install command generation", () => {
 
   it("generates correct npm update command without --registry", () => {
     delete process.env.npm_config_user_agent;
-    const pm = detectPackageManager();
+    const pm = detectGlobalPackageManager();
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@1.0.0`);
     const cmdStr = formatShellCommand(cmd);
     expect(cmdStr).toContain("npm install -g");
@@ -50,7 +50,7 @@ describe("update — install command generation", () => {
 
   it("generates correct pnpm update command", () => {
     process.env.npm_config_user_agent = "pnpm/9.0.0";
-    const pm = detectPackageManager();
+    const pm = detectGlobalPackageManager();
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@1.0.0`);
     const cmdStr = formatShellCommand(cmd);
     expect(cmdStr).toContain("pnpm add -g");

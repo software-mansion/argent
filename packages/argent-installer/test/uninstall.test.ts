@@ -75,7 +75,7 @@ function writeFile(filePath: string, contents = "test"): void {
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-uninstall-test-"));
   originalCwd = process.cwd();
-  // detectPackageManager() reads npm_config_user_agent, so the uninstall
+  // detectGlobalPackageManager() reads npm_config_user_agent, so the uninstall
   // command these tests assert on is whichever package manager runs the suite.
   // Unset it to pin the npm shape — otherwise the execFileSync mock below,
   // which throws only for "npm", never fires and the failure-path tests
@@ -145,6 +145,43 @@ describe("uninstall — telemetry consent preservation", () => {
       expect.any(Object)
     );
     expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
+  });
+
+  it("uninstalls the global package with npm when launched from Yarn 2+", async () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "npm",
+      ["uninstall", "-g", "@swmansion/argent"],
+      expect.any(Object)
+    );
+  });
+
+  it("removes a local devDependency with the project's yarn when launched from Yarn 2+", async () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "host", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    const pkgDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--local"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "yarn",
+      ["remove", "@swmansion/argent"],
+      expect.any(Object)
+    );
   });
 
   it("drains queued uninstall telemetry before deleting the local telemetry id", async () => {
