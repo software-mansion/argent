@@ -34,7 +34,9 @@ On a free Personal Team, the signature of the runner expires after about 7 days.
 
 ## One app at a time
 
-Automation on hardware is scoped to one app. The agent registers the target app when it launches the app. Every screen read and every gesture then goes to that app. To read the home screen or a system dialog, the agent registers the system UI instead, and registers the app again afterwards. The screenshot is the exception: it always captures the full screen of the device.
+Automation on hardware is scoped to one app. The agent registers the target app when it launches the app. Every screen read and every gesture then goes to that app. To read the home screen or a system dialog, the agent registers the system UI instead, and registers the app again afterwards. The screenshot is the exception: it captures a full device display.
+
+On a foldable physical iPhone, fold or unfold the phone by hand. Argent selects a readable secondary display only when the main capture is exactly black and exactly one secondary is readable. Argent corrects bounds and gesture anchoring only for a strict transposed-window mismatch. These corrections do not cover every posture. A near-black main capture remains authoritative. XCTest exposes no public active-display identity. A genuinely black main beside a readable secondary is indistinguishable from an inactive black panel.
 
 Reading the screen does not change the screen. When the target app is in the background, a screen read fails and names the ways out, instead of pulling the app forward. A gesture or typed text does pull the app forward, and the result then says so.
 
@@ -64,6 +66,7 @@ Each tool that does not exist on hardware fails with a `not supported on ios dev
 - Argent drives the device over a USB cable only. Argent does not use Wi-Fi.
 - Two-finger gestures such as pinch and rotate are not possible. The agent uses the zoom controls of the app instead.
 - The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
+- A foldable device does not fold on command. Fold or unfold the phone by hand; the `fold` tool supports simulators and emulators only.
 - The agent presses the home, volume and action buttons only. The power button and the app switcher are not available.
 - The agent types text, Enter and Backspace only. Other named keys are not available.
 - The agent changes an app permission in the Settings app of the phone, not with the permissions tool.

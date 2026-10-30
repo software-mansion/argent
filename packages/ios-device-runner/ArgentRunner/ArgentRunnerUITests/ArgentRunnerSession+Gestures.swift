@@ -1,20 +1,29 @@
 import XCTest
 
 extension ArgentRunnerSession {
+    private func unstableAppGeometryEnvelope() -> Envelope {
+        .failure(
+            .commandFailed,
+            "the app changed display geometry while resolving coordinates",
+            hint: "Wait for the posture or orientation change to finish, re-observe, then retry."
+        )
+    }
+
     /// Builds an XCUICoordinate for absolute wire coordinates. Wire `x`/`y` are
     /// screen points in the same space as `XCUIElement.frame` and snapshot rects.
-    /// `origin` is `app.frame.origin`, which the caller reads once per command:
-    /// app.frame is a live element query, and a drag needs two points.
+    /// The anchor is normally the Application. For a strictly resolved
+    /// transposed app window it is that Window, so XCTest routes the event to
+    /// the same display whose viewport supplied the wire coordinates.
     private func point(
-        _ app: XCUIApplication,
+        _ anchor: XCUIElement,
         _ x: Double,
         _ y: Double,
         relativeTo origin: CGPoint
     ) -> XCUICoordinate {
-        // withOffset is relative to the app element's origin. Subtract it so a
-        // non-zero app.frame.origin is not applied twice. XCUICoordinate handles
+        // withOffset is relative to the anchor's origin. Subtract it so a
+        // non-zero frame origin is not applied twice. XCUICoordinate handles
         // interface orientation itself.
-        return app.coordinate(withNormalizedOffset: .zero).withOffset(
+        return anchor.coordinate(withNormalizedOffset: .zero).withOffset(
             CGVector(dx: x - origin.x, dy: y - origin.y)
         )
     }
@@ -37,7 +46,15 @@ extension ArgentRunnerSession {
             return .failure(.invalidRequest, "tap requires numberOfTaps >= 1")
         }
 
-        let coordinate = point(app, x, y, relativeTo: app.frame.origin)
+        guard let basis = Self.resolvedCoordinateBasis(app) else {
+            return unstableAppGeometryEnvelope()
+        }
+        let coordinate = point(
+            basis.element,
+            x,
+            y,
+            relativeTo: basis.frame.origin
+        )
 
         switch taps {
         case 1:
@@ -62,8 +79,13 @@ extension ArgentRunnerSession {
             return .failure(.invalidRequest, "longPress requires x and y")
         }
 
+        guard let basis = Self.resolvedCoordinateBasis(app) else {
+            return unstableAppGeometryEnvelope()
+        }
         let seconds = max(0.05, (request.durationMs ?? 800) / 1000)
-        point(app, x, y, relativeTo: app.frame.origin).press(forDuration: seconds)
+        point(basis.element, x, y, relativeTo: basis.frame.origin).press(
+            forDuration: seconds
+        )
 
         return .success(MessagePayload(message: "long-pressed"))
     }
@@ -82,9 +104,12 @@ extension ArgentRunnerSession {
             )
         }
 
-        let origin = app.frame.origin
-        let start = point(app, fromX, fromY, relativeTo: origin)
-        let end = point(app, toX, toY, relativeTo: origin)
+        guard let basis = Self.resolvedCoordinateBasis(app) else {
+            return unstableAppGeometryEnvelope()
+        }
+        let origin = basis.frame.origin
+        let start = point(basis.element, fromX, fromY, relativeTo: origin)
+        let end = point(basis.element, toX, toY, relativeTo: origin)
 
         // The press before the movement. 50 ms is a plain drag; a long-press
         // pickup needs the caller's holdMs, since a short press never lifts a
@@ -125,9 +150,12 @@ extension ArgentRunnerSession {
     /// Reports the interaction viewport, the rectangle that normalized 0-1
     /// coordinates map into.
     func appViewport(_ app: XCUIApplication) -> Envelope {
-        // Describe normalizes frames against the snapshot's Application root
-        // frame, so the viewport must be that same rect, keyboard band included.
-        let frame = app.frame
+        // Live geometry is bracketed by app-frame reads. Refuse a transition
+        // instead of returning a viewport that the following gesture cannot use.
+        guard let viewport = Self.resolvedAppViewport(app) else {
+            return unstableAppGeometryEnvelope()
+        }
+        let frame = viewport.frame
 
         guard !frame.isNull, !frame.isInfinite, !frame.isEmpty else {
             return .failure(

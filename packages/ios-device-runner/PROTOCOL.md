@@ -78,11 +78,21 @@ what hardware reports for an app killed outside this session, fail with
 `APP_NOT_AVAILABLE` on every command. Activating either would be a full
 launch, and launching is launch-app's job, never a command side effect):
 
-- `viewport` → `{x, y, width, height}`: `XCUIApplication.frame` (full app,
-  keyboard included). Same rect describe normalizes against, so 0-1 tap
-  coordinates invert that mapping.
+- `viewport` → `{x, y, width, height}`: normally `XCUIApplication.frame` (full
+  app, keyboard included). When exactly one distinct app window has the same
+  origin and area with width and height transposed, the window rectangle is
+  used instead. Duplicate identical windows coalesce; ambiguous or otherwise
+  mismatched geometry keeps the application rectangle. Snapshot clipping and
+  its root node use the same policy, so 0-1 tap coordinates invert the rect
+  describe normalizes against. Snapshot geometry comes only from that captured
+  tree. A live viewport query brackets window lookup with app-frame reads and
+  fails if the frame changes during the query.
 - `tap`, `longPress`, `drag` → `{message}`: coordinate gestures via
-  XCUICoordinate (public API; orientation-safe). `tap` runs `numberOfTaps`
+  XCUICoordinate (public API; orientation-safe). Gestures normally anchor to
+  the application; the strict transposed-window case anchors to the matching
+  window so XCTest routes the point to the display represented by `viewport`.
+  Window lookup is bracketed by app-frame reads; a geometry change fails before
+  any input is sent. `tap` runs `numberOfTaps`
   1 (default) as a tap and 2 as the native `doubleTap()`. Higher counts loop
   single taps on the device, and that loop is not one gesture: XCUICoordinate
   has no N-tap API, each tap is its own synthesized event behind XCTest's
@@ -126,13 +136,14 @@ recordedFailures}`. `state` is `idle | busy | wedged`. `suppressedIssues`
   issue wording, pinned here as part of the contract. Muted: a
   `Failed to get matching snapshot` description that also contains
   `kAXError` or `No matches found for`; kept recorded: `Timed out while
-evaluating UI query`. If an Xcode release rewords those strings,
-  suppression misses silently: `suppressedIssues` stops moving while
-  `recordedFailures` climbs on healthy mutations. Watch the pair for that
-  drift. The same counter, bracketed around each command, is what stamps the
-  envelope-level `warning` (see Envelope) when it grows across an
-  otherwise-ok mutation. With `statusCommandId`: the journaled fate of that
-  command:
+evaluating UI query`. The known exact stale-screen wordings are muted only
+  while `screenshot` probes optional secondary displays; the main capture and
+  all other issue wording still record. If an Xcode release rewords those
+  strings, suppression misses silently: `suppressedIssues` stops moving while
+  `recordedFailures` climbs on healthy mutations. Watch the pair for that drift.
+  The same counter, bracketed around each command, is what stamps the
+  envelope-level `warning` (see Envelope) when it grows across an otherwise-ok
+  mutation. With `statusCommandId`: the journaled fate of that command:
   `{commandId, state: notAccepted|accepted|started|completed|failed,
 command?, responseOk?, responseJson?, errorCode?, errorMessage?,
 errorHint?}`. `responseJson` is the completed command's full envelope,
@@ -156,7 +167,14 @@ errorHint?}`. `responseJson` is the completed command's full envelope,
   the wire: XCUIDevice exposes no public API for either. `volumeUp` and
   `volumeDown` are marked unavailable on the SIMULATOR SDK only, which costs
   nothing here: the runner is built for `generic/platform=iOS`.
-- `screenshot` → `{imageBase64}`: full-screen PNG, always inline.
+- `screenshot` → `{imageBase64}`: full-screen PNG, always inline. The main
+  display is captured first and returned immediately when readable. If it is
+  confirmed black, exactly one usable non-black secondary display is selected;
+  multiple readable secondaries fail as ambiguous. Tiny, empty and unreadable
+  secondary captures are ignored. Single-screen and all-black output preserve
+  the main capture. XCTest exposes no public active-display identity, so a truly
+  black main beside one readable secondary is indistinguishable from an inactive
+  black panel and the secondary is selected.
 - `shutdown` → acknowledges, then ends the session cleanly after the reply
   is flushed.
 

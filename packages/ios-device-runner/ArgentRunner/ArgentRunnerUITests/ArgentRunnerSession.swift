@@ -1,6 +1,48 @@
 import Network
 import XCTest
 
+struct OptionalScreenProbeResult<Value> {
+    let value: Value?
+    let exceptionDescription: String?
+}
+
+/// Tracks the narrow issue-suppression scope around optional XCUIScreen probes.
+/// The Objective-C guard catches NSException before control returns here, so the
+/// depth decrement executes even though Swift defer blocks inside the probe
+/// closure would be skipped by the exception's non-Swift unwind.
+final class OptionalScreenProbeScope {
+    private let lock = NSLock()
+    private var depth = 0
+
+    var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return depth > 0
+    }
+
+    func run<Value>(_ body: () -> Value) -> OptionalScreenProbeResult<Value> {
+        lock.lock()
+        depth += 1
+        lock.unlock()
+
+        var value: Value?
+        let exceptionDescription = ArgentExceptionGuard.runCatching {
+            value = body()
+        }
+
+        // This must be after runCatching returns, not in a defer surrounding
+        // body(): NSException does not unwind Swift frames normally.
+        lock.lock()
+        depth -= 1
+        lock.unlock()
+
+        return OptionalScreenProbeResult(
+            value: value,
+            exceptionDescription: exceptionDescription
+        )
+    }
+}
+
 /// The Argent on-device automation server, hosted inside an XCUITest.
 ///
 /// XCUITest is the only Apple-supported way to drive arbitrary apps on a
@@ -33,6 +75,7 @@ final class ArgentRunnerSession: XCTestCase {
 
     private let suppressedIssuesLock = NSLock()
     private var suppressedIssueCount = 0
+    private let optionalScreenProbeScope = OptionalScreenProbeScope()
 
     /// Keeps the session alive after a recorded failure.
     override func setUp() {
@@ -55,6 +98,13 @@ final class ArgentRunnerSession: XCTestCase {
         static let noise = ["kAXError", "No matches found for"]
     }
 
+    enum OptionalScreenIssueWording {
+        static let bare = "Screen does not exist"
+        static let wrapped =
+            "Failed to get screenshot: Failed to create screenshot. "
+            + "Screen does not exist. Make sure the screen is still connected."
+    }
+
     /// Whether an issue description is known accessibility noise that should be
     /// muted rather than recorded. XCTest tears the test down once recorded
     /// issues accumulate, and the server has to survive long sessions.
@@ -74,12 +124,39 @@ final class ArgentRunnerSession: XCTestCase {
         }
     }
 
+    /// The physical-display probe can race a stale XCUIScreen entry. Suppress
+    /// only Apple's known exact stale-screen wordings while that optional
+    /// alternate-screen call is on the stack; main-screen failures and every
+    /// other issue still record.
+    static func shouldSuppressOptionalScreenIssue(
+        _ description: String,
+        probeActive: Bool
+    ) -> Bool {
+        guard probeActive else { return false }
+
+        return description == OptionalScreenIssueWording.bare
+            || description == OptionalScreenIssueWording.wrapped
+    }
+
+    func withOptionalScreenIssueSuppression<T>(
+        _ body: () -> T
+    ) -> OptionalScreenProbeResult<T> {
+        optionalScreenProbeScope.run(body)
+    }
+
     /// Intercepts every XCTest issue, counting and muting known accessibility
     /// noise and recording the rest.
     override func record(_ issue: XCTIssue) {
         let description = issue.compactDescription
 
-        if Self.isSuppressedAccessibilityIssue(description) {
+        let optionalScreenProbeActive = optionalScreenProbeScope.isActive
+
+        if Self.isSuppressedAccessibilityIssue(description)
+            || Self.shouldSuppressOptionalScreenIssue(
+                description,
+                probeActive: optionalScreenProbeActive
+            )
+        {
             suppressedIssuesLock.lock()
             suppressedIssueCount += 1
             let count = suppressedIssueCount

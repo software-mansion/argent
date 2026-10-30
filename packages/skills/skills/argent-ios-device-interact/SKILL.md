@@ -10,6 +10,7 @@ Read this only for a physical iPhone. `argent-device-interact` still applies for
 ## Contract
 
 - Observation never changes the screen; mutation may. `describe` and `await-ui-element` fail on a backgrounded target instead of re-fronting it; `await-screen-idle` returns `settled: false` with no reason. The first `describe` within a second of `button home` can still return the old tree; describe again. Gestures and `keyboard` re-front it and return `reactivated: true`; re-describe before the next step.
+- On a foldable physical iPhone, the person folds or unfolds the phone by hand. Re-observe after a posture change. Screenshots select a secondary only when the main capture is exactly black and exactly one secondary is readable. Bounds and gesture anchoring correct only the strict transposed-window mismatch. These corrections do not cover every posture; near-black main captures remain authoritative. XCTest has no public active-display identity, so an intentionally black main beside one readable secondary also selects the secondary. Never call `fold` for physical hardware.
 - `launch-app`, `open-url` and `restart-app` set the app under automation; `reinstall-app` clears it; a tool-server restart forgets it: launch again.
 - Each tool's description states its own hardware limits (named keys, `gesture-custom` shapes, buttons, edge swipes, tap counts). A gated tool fails with a bare `not supported on ios device`: the fix is in the list below, not in the error.
 

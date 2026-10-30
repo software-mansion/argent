@@ -22,9 +22,12 @@ ArgentRunner/
                                          recorded-failure detection,
                                          button / shutdown
     ArgentRunnerSession+Gestures.swift   tap / longPress / drag / viewport
+    ArgentRunnerSession+DisplayRouting.swift
+                                         active display + viewport policy
     ArgentRunnerSession+TextEntry.swift  type / keyboardReturn / keyboardDelete
     ArgentRunnerSession+Snapshot.swift   one-shot AX tree capture + flattening
     ArgentRunnerSession+Screenshot.swift inline base64 PNG
+    DisplayRoutingPolicyTests.swift      synthetic display-policy regressions
     RunnerProtocol.swift                 wire models (see PROTOCOL.md)
     RunnerHTTPServer.swift               NWListener HTTP/1.1 framing
     CommandJournal.swift                 send-once bookkeeping for lost replies
@@ -89,7 +92,24 @@ outside the bundle (ts-node, tests) or unusual layouts.
 
 - **Issue suppression**: `record(_:)` mutes two benign "Failed to get
   matching snapshot" accessibility issue shapes that would otherwise tear the
-  long-lived test down; hung-query timeouts still record.
+  long-lived test down; hung-query timeouts still record. During optional
+  alternate-screen probing only, the known exact stale-screen wordings from a
+  stale `XCUIScreen` entry are also muted. Main-screen failures and differently
+  worded issues still record.
+- **Active display**: a readable main screen stays authoritative. Only a
+  confirmed-black main capture plus exactly one usable, non-black secondary
+  selects the secondary display. Ambiguous readable secondaries fail instead
+  of guessing, and single-screen or all-black topologies remain valid. XCTest
+  exposes no public active-display identity, so a truly black main beside one
+  readable secondary is indistinguishable from an inactive black panel and the
+  secondary is selected.
+- **Viewport alignment**: the app/root rectangle changes only when one distinct
+  app-window rectangle has the same origin and area with width and height
+  transposed. Snapshot clipping, root wire geometry, viewport reporting and
+  gesture anchoring share that policy. Duplicate identical windows coalesce;
+  every other topology preserves the ordinary application rectangle. Snapshot
+  geometry comes only from the captured tree. Live viewport and gesture queries
+  bracket window lookup with app-frame reads and fail before input if it changes.
 - **Watchdog**: command work runs on the main thread under a hard budget;
   overruns are abandoned (XCTest work cannot be cancelled) and the runner
   answers `RUNNER_BUSY`, escalating to `RUNNER_WEDGED` when stuck.

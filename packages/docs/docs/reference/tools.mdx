@@ -38,10 +38,10 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 - `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS).
 - `bundleId` does not match the bundle id in the `.app`, the package name in the `.apk` or the bundle name in the `.hap`. On a remote simulator, Argent does not compare the bundle id.
 
-Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
+Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves an iOS simulator or Android emulator hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees. It does not fold physical hardware; fold or unfold a physical iPhone by hand.
 
 - Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. The panel that shows the UI is the active panel.
-- All tools use the active panel. This is also true after a fold made outside Argent.
+- All tools use the active panel. This is also true after a fold made outside Argent, including a manual fold or unfold on a physical iPhone.
 - The coordinates and the screenshot size change with the panel.
 - `fold` returns when the device accepts input again.
 
@@ -60,7 +60,9 @@ On an Android emulator:
 - On a generic foldable profile, closed shows only the left part of the display, and `describe` frames do not match taps. Use a Pixel Fold profile to test the cover panel.
 - A physical device and an emulator without a hinge reject the call.
 
-Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
+Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again.
+
+On a foldable physical iPhone, the person folds or unfolds the phone by hand; the `fold` tool remains unsupported. Screenshots select a secondary only when the main capture is exactly black and exactly one secondary is readable. Bounds and gesture anchoring correct only the strict transposed-window mismatch. These corrections do not cover every posture. A near-black main capture remains authoritative. With no public active-display identity, an intentionally black main beside one readable secondary also selects the secondary. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
 ## Inspecting the screen
 

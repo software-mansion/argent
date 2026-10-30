@@ -26,6 +26,12 @@ extension ArgentRunnerSession {
     /// Ceiling on emitted node depth.
     private static let emittedDepthLimit = 60
 
+    /// Captured windows normally sit directly below the Application snapshot.
+    /// The bounded fallback also covers wrapper containers without walking an
+    /// arbitrary accessibility tree just to resolve viewport geometry.
+    private static let snapshotWindowSearchBudget = 256
+    private static let snapshotWindowSearchDepthLimit = 8
+
     /// Captures the app's accessibility tree and flattens it into a snapshot
     /// payload. The capture is retried once after a short pause: this is the
     /// one runner-side retry, kept here because the capture can read its own
@@ -70,7 +76,13 @@ extension ArgentRunnerSession {
             )
         }
 
-        let nodes = Self.flatten(root)
+        let viewport = AppViewportPolicy.resolveSnapshot(
+            CapturedSnapshotGeometry(
+                rootFrame: root.frame,
+                windowFrames: Self.capturedWindowFrames(root)
+            )
+        )
+        let nodes = Self.flatten(root, viewport: viewport.frame)
         let capped = nodes.count >= Self.snapshotNodeBudget
 
         return .success(
@@ -88,10 +100,49 @@ extension ArgentRunnerSession {
         )
     }
 
+    /// Extracts window geometry from the captured snapshot itself. Never mix a
+    /// captured root with live app/window frames: a fold between those reads
+    /// could otherwise clip old children against a new display rectangle.
+    static func capturedWindowFrames(
+        _ root: XCUIElementSnapshot
+    ) -> [CGRect] {
+        struct WorkItem {
+            let snapshot: XCUIElementSnapshot
+            let depth: Int
+        }
+
+        var frames: [CGRect] = []
+        var visited = 0
+        var stack = root.children.reversed().map {
+            WorkItem(snapshot: $0, depth: 1)
+        }
+
+        while let item = stack.popLast(), visited < snapshotWindowSearchBudget {
+            visited += 1
+
+            if item.snapshot.elementType == .window {
+                frames.append(item.snapshot.frame)
+                continue
+            }
+
+            guard item.depth < snapshotWindowSearchDepthLimit else { continue }
+            for child in item.snapshot.children.reversed() {
+                stack.append(
+                    WorkItem(snapshot: child, depth: item.depth + 1)
+                )
+            }
+        }
+
+        return frames
+    }
+
     /// Flattens the snapshot tree into an ordered node list. Keeps elements an
     /// agent can name or act on, assigns indices and parent links in emission
     /// order, and dedupes mirror elements.
-    static func flatten(_ root: XCUIElementSnapshot) -> [SnapshotNodePayload] {
+    static func flatten(
+        _ root: XCUIElementSnapshot,
+        viewport: CGRect? = nil
+    ) -> [SnapshotNodePayload] {
         struct WorkItem {
             let snapshot: XCUIElementSnapshot
             let rawDepth: Int
@@ -99,8 +150,16 @@ extension ArgentRunnerSession {
             let parentIndex: Int
         }
 
-        let viewport = root.frame
-        var nodes = [makeNode(root, index: 0, depth: 0, parentIndex: nil)]
+        let resolvedViewport = viewport ?? root.frame
+        var nodes = [
+            makeNode(
+                root,
+                index: 0,
+                depth: 0,
+                parentIndex: nil,
+                frameOverride: resolvedViewport
+            )
+        ]
         var seen: Set<String> = [identity(root)]
 
         var stack = root.children.reversed().map {
@@ -114,8 +173,8 @@ extension ArgentRunnerSession {
             let snapshot = item.snapshot
             let frame = snapshot.frame
             let visible =
-                viewport.isEmpty
-                || (!frame.isEmpty && viewport.intersects(frame))
+                resolvedViewport.isEmpty
+                || (!frame.isEmpty && resolvedViewport.intersects(frame))
             let include =
                 visible && item.emittedDepth <= emittedDepthLimit
                 && shouldInclude(snapshot)
@@ -173,9 +232,10 @@ extension ArgentRunnerSession {
         _ snapshot: XCUIElementSnapshot,
         index: Int,
         depth: Int,
-        parentIndex: Int?
+        parentIndex: Int?,
+        frameOverride: CGRect? = nil
     ) -> SnapshotNodePayload {
-        let frame = snapshot.frame
+        let frame = frameOverride ?? snapshot.frame
 
         return SnapshotNodePayload(
             index: index,
