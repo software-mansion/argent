@@ -173,6 +173,23 @@ export const CONFIG_SCHEMA: readonly ConfigDefinition[] = [
     example: "~/Library/Android/sdk",
   },
   {
+    key: "android.adbServerPort",
+    description:
+      "Port of the adb server argent uses, for hosts that run Android devices on a server other " +
+      "than the default 5037 (a device pool with its own server, for example). Applies when the " +
+      "tool-server starts, to the tool-server and every adb and simulator-server it runs. " +
+      "`ANDROID_ADB_SERVER_PORT` or `ADB_SERVER_SOCKET` in the tool-server's environment still " +
+      "wins, as it does for adb itself.",
+    scopes: ["project", "global"],
+    parse: (raw) => {
+      const value = asPositiveInteger(raw);
+      return value !== undefined && value < 65536 ? value : undefined;
+    },
+    expected: "a TCP port, 1-65535",
+    merge: "prioritize-local",
+    example: "5038",
+  },
+  {
     key: "recordings.directory",
     description:
       "Directory where finished screen recordings (mp4) are saved on the client host. " +

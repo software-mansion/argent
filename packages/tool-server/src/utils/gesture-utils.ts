@@ -17,6 +17,57 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+/** Two fingers, each a normalized 0-1 point. */
+export interface Contacts {
+  first: { x: number; y: number };
+  second: { x: number; y: number };
+}
+
+export interface PinchGeometry {
+  centerX: number;
+  centerY: number;
+  startDistance: number;
+  endDistance: number;
+  endCenterX?: number;
+  endCenterY?: number;
+  angle?: number;
+}
+
+/** Linear in `t`, so the endpoints alone determine the path HarmonyOS draws as two lines. */
+export function pinchContacts(params: PinchGeometry, t: number): Contacts {
+  const angleRad = ((params.angle ?? 0) * Math.PI) / 180;
+  const cosA = Math.cos(angleRad);
+  const sinA = Math.sin(angleRad);
+  const halfDist = (params.startDistance + (params.endDistance - params.startDistance) * t) / 2;
+  const cx = params.centerX + ((params.endCenterX ?? params.centerX) - params.centerX) * t;
+  const cy = params.centerY + ((params.endCenterY ?? params.centerY) - params.centerY) * t;
+  return {
+    first: { x: cx - halfDist * cosA, y: cy - halfDist * sinA },
+    second: { x: cx + halfDist * cosA, y: cy + halfDist * sinA },
+  };
+}
+
+export interface RotateGeometry {
+  centerX: number;
+  centerY: number;
+  radiusX: number;
+  radiusY: number;
+  startAngle: number;
+  endAngle: number;
+}
+
+/** Two fingers opposite each other on an arc, swept from `startAngle` to `endAngle`. */
+export function rotateContacts(params: RotateGeometry, t: number): Contacts {
+  const angleDeg = params.startAngle + (params.endAngle - params.startAngle) * t;
+  const angleRad = (angleDeg * Math.PI) / 180;
+  const dx = params.radiusX * Math.cos(angleRad);
+  const dy = params.radiusY * Math.sin(angleRad);
+  return {
+    first: { x: params.centerX + dx, y: params.centerY + dy },
+    second: { x: params.centerX - dx, y: params.centerY - dy },
+  };
+}
+
 /**
  * Insert `steps` interpolated Move events between each pair of events,
  * splitting the segment's delay evenly across the frames it becomes.

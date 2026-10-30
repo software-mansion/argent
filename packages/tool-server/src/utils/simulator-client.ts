@@ -15,6 +15,7 @@ import {
 } from "./datachannel-proto";
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
+import { captureOnDemandDropped } from "./profiling-devices";
 import { resolveLivePanel, screenLabel, unresolvedPanelNote, type FoldablePanel } from "./foldable";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -108,6 +109,19 @@ interface CommandAck {
   message?: string;
 }
 
+/**
+ * The outstanding command an id-less parse error names, if it names one. serde
+ * reports a `cmd` the server has no variant for as "unknown variant `<cmd>`".
+ */
+function pendingIdNamedBy(conn: Connection, message: string | undefined): string | undefined {
+  const named = message?.match(/unknown variant `([^`]+)`/)?.[1];
+  if (named === undefined) return undefined;
+  for (const [id, entry] of conn.pending) {
+    if (entry.cmd === named) return id;
+  }
+  return undefined;
+}
+
 function failAllPending(conn: Connection, makeError: (cmd: string) => FailureError): void {
   const entries = [...conn.pending.values()];
   conn.pending.clear();
@@ -190,7 +204,10 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
     if (ack.id != null && !conn.pending.has(ack.id)) return;
     // Only an id-less reply (i.e. an error) is matched positionally, against
     // the oldest outstanding command, which is what an in-order server means by it.
-    const id = ack.id ?? conn.pending.keys().next().value;
+    // One that names the command it could not parse goes to that command: an
+    // older server rejects `capture_on_demand` that way while a slow command
+    // sent before it (a foldable's `rotate`) still waits for its reply.
+    const id = ack.id ?? pendingIdNamedBy(conn, ack.message) ?? conn.pending.keys().next().value;
     if (id == null) return;
     const entry = conn.pending.get(id);
     if (entry == null) return;
@@ -225,6 +242,8 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
   ws.on("close", () => {
     connections.delete(key);
     failAllPending(conn, (cmd) => transportError(cmd, key, "the connection closed"));
+    // The server drops the connection's capture_on_demand with it.
+    if (api.deviceId) captureOnDemandDropped(api.deviceId, key);
   });
 
   connections.set(key, conn);
@@ -244,10 +263,11 @@ function getOrCreateConnection(api: SimulatorServerApi): Connection {
  * those cases used to be indistinguishable from a landed tap
  * (https://github.com/software-mansion/argent/issues/932).
  *
- * MoQ has no per-command ack, so it reports less: a send the session refuses
- * (a closed track, a released machine) rejects, while a send that goes out is
- * reported as delivered. That is strictly narrower than the WebSocket ack, and
- * it is still the difference between a failed gesture and `{ tapped: true }`.
+ * MoQ has no per-command ack, so it reports less: a send rejects only once the
+ * session is closed - by `close()`, or when its transport is seen to close,
+ * which can lag a released machine by seconds. Any other send is reported as
+ * delivered. That is strictly narrower than the WebSocket ack, and it is still
+ * the difference between a failed gesture and `{ tapped: true }`.
  */
 export async function sendCommand(
   api: SimulatorServerApi,

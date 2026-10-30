@@ -36,8 +36,11 @@ import {
   autoDescribeEnabled,
   shouldAutoDescribe,
   AUTO_DESCRIBE_HEADER,
+  CAPTURE_TIMEOUT_MS,
+  PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
+import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
 
@@ -51,6 +54,8 @@ export interface StartMcpServerOptions {
   paths: ToolsServerPaths;
   /** The editor connection. Defaults to stdio; a test passes an in-memory one. */
   transport?: Transport;
+  /** Cap of the post-action capture. Defaults to CAPTURE_TIMEOUT_MS; a test passes a short one. */
+  captureTimeoutMs?: number;
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
@@ -66,6 +71,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // tool call. A flag change therefore needs an MCP restart to take effect.
   const autoScreenshotOn = autoScreenshotEnabled();
   const autoDescribeOn = autoDescribeEnabled();
+  const captureTimeoutMs = options.captureTimeoutMs ?? CAPTURE_TIMEOUT_MS;
 
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
@@ -100,7 +106,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   // telemetry. Unrecognized names collapse to `other`; the raw name is never sent.
   function aiClientHeaders(): Record<string, string> {
     const rawName = server.getClientVersion()?.name?.trim() || undefined;
-    const aiClient = canonicalizeAiClient(rawName);
+    const aiClient = canonicalizeAiClient(rawName, process.env);
     if (aiClient) return { "X-Argent-AI-Client": aiClient };
     if (rawName) return { "X-Argent-AI-Client": "other" };
     return {};
@@ -149,8 +155,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
    * Lets the screen settle before capturing, bounded by the per-tool budget:
    * `await-screen-idle` polls the tree server-side and usually returns well
    * under the cap. If the call fails (e.g. a tool-server without that tool),
-   * falls back to sleeping the full budget, unless the call was cancelled.
-   * Resolves whether it settled.
+   * falls back to sleeping out the rest of the budget, unless the call was
+   * cancelled. Resolves whether it settled.
    */
   async function awaitScreenSettled(
     udid: string,
@@ -159,8 +165,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   ): Promise<boolean> {
     const maxWaitMs = getAutoScreenshotDelayMs(toolName);
     if (maxWaitMs === 0) return true;
+    const started = Date.now();
     try {
-      const idle = await callTool("await-screen-idle", { udid, timeoutMs: maxWaitMs }, { signal });
+      const idle = await callTool(
+        "await-screen-idle",
+        { udid, timeoutMs: maxWaitMs },
+        // The tool bounds its poll to maxWaitMs; the rest covers its setup.
+        { signal: AbortSignal.any([signal, AbortSignal.timeout(maxWaitMs + captureTimeoutMs)]) }
+      );
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_screenshot_readiness",
@@ -170,7 +182,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       });
       return (idle.result as { settled?: unknown } | null)?.settled === true;
     } catch {
-      if (!signal.aborted) await new Promise((r) => setTimeout(r, maxWaitMs));
+      if (!signal.aborted) {
+        await new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - started))));
+      }
       return false;
     }
   }
@@ -233,12 +247,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     { name: "argent", version: getInstalledVersion() },
     {
       capabilities: { tools: {} },
-      instructions:
-        "Argent — iOS Simulator, Android Emulator, and Chromium app control for interacting, testing, profiling and debugging mobile and Chromium applications. " +
-        "Interaction tools return the screen after the action: a screenshot plus the accessibility element tree with normalized tap frames. Take coordinates from that tree; call describe (or debugger-component-tree) only when no fresh tree is available — never guess coordinates from pixels. " +
-        "Do not stop simulator servers when a task finishes: the next task reuses them. Call stop-all-simulator-servers when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services, always with devices: [...] naming the devices this session used. Never stop a Metro the user started unless they ask. " +
-        "One tool-server is shared by every agent using this argent install, so an unscoped call tears down their devices too — reserve it for a deliberate machine-wide cleanup. " +
-        "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
+      instructions: SERVER_INSTRUCTIONS,
     }
   );
 
@@ -268,9 +277,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       args: params.arguments,
     });
     try {
-      const { result, outputHint, note } = await callTool(params.name, params.arguments, {
-        signal,
-      });
+      const { result, outputHint, note, profiling } = await callTool(
+        params.name,
+        params.arguments,
+        { signal }
+      );
 
       await spyLog({
         ts: new Date().toISOString(),
@@ -321,15 +332,28 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
             text: "Auto-screenshot and element tree skipped: the input contains a {{secret:…}} placeholder, and a capture of this screen could reveal the typed secret. The secret is already typed — do not send the typing step again, or the field will hold two copies of it. Submit or navigate away, then verify the resulting screen as usual. Only this call is covered: the next call is captured normally, and shows the secret if the field is still on screen. To cover the submit as well, put the typing and the submit in ONE `run-sequence` the next time you type a secret.",
           },
         ];
+      } else if (udid && (wantScreenshot || wantTree) && profiling) {
+        // The screenshot and describe load the app a profiler is recording on
+        // this device, distorting the profile. The idle wait stays: without it,
+        // a `describe` sent right after the action reads the screen from before
+        // it. `describe` has already answered with the tree, so it needs no
+        // pointer to itself.
+        if (params.name !== "describe") {
+          await awaitScreenSettled(udid, params.name, signal);
+          content = [...content, { type: "text" as const, text: PROFILING_CAPTURE_SKIPPED_NOTE }];
+        }
       } else if (udid && (wantScreenshot || wantTree)) {
         const screenSettled = await awaitScreenSettled(udid, params.name, signal);
+        const captureSignal = AbortSignal.any([signal, AbortSignal.timeout(captureTimeoutMs)]);
         const screenshot = wantScreenshot
-          ? captureScreenshotBlocks(udid, signal)
+          ? captureScreenshotBlocks(udid, captureSignal)
           : Promise.resolve([]);
         // An unsettled screen can leave a tree read in flight, which a
         // concurrent describe would reuse (physical iPhone).
         if (!screenSettled) await screenshot;
-        const tree = wantTree ? captureTreeBlocks(udid, params.name, signal) : Promise.resolve([]);
+        const tree = wantTree
+          ? captureTreeBlocks(udid, params.name, captureSignal)
+          : Promise.resolve([]);
         content = [...content, ...(await screenshot), ...(await tree)];
       }
 

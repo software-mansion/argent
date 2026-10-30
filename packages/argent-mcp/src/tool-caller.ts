@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import { createToolsClient, type ToolMeta, type ToolsServerHandle } from "@argent/tools-client";
 
 const MAX_RETRIES = 4;
@@ -9,10 +8,7 @@ export async function fetchWithReconnect(
   getUrl: () => string,
   reconnect: () => Promise<void>,
   config?: {
-    /**
-     * A function is called once per attempt, so a retry can carry fresh headers.
-     * Its `signal` ends the call without a retry.
-     */
+    /** A function is called once per attempt, so a retry can carry fresh headers. */
     init?: RequestInit | (() => RequestInit);
     expBackoffBase?: number;
     maxRetries?: number;
@@ -36,29 +32,57 @@ export async function fetchWithReconnect(
     try {
       const attemptInit = typeof init === "function" ? init() : init;
       callerSignal = attemptInit?.signal;
-      return await fetch(getUrl(), {
-        ...attemptInit,
-        signal: callerSignal
-          ? AbortSignal.any([callerSignal, controller.signal])
-          : controller.signal,
-      });
+      const signal = callerSignal
+        ? AbortSignal.any([controller.signal, callerSignal])
+        : controller.signal;
+      return await fetch(getUrl(), { ...attemptInit, signal });
     } catch (err) {
-      if (callerSignal?.aborted) throw err;
       lastError = err;
-      if (attempt === maxRetries) break;
-      if (attempt === 0) {
-        // First failure: trigger reconnect (spawns new server if dead)
-        await reconnect();
+      // The caller stopped waiting, so a retry would only queue work behind
+      // the abandoned attempt, which the tool-server keeps running.
+      if (callerSignal?.aborted || attempt === maxRetries) break;
+      const pause = (async () => {
+        if (attempt === 0) {
+          // First failure: trigger reconnect (spawns new server if dead)
+          await reconnect();
+        }
+        // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
+        await new Promise((r) => setTimeout(r, expBackoffBase * Math.pow(2, attempt)));
+      })();
+      // The caller's signal also ends this pause. A reconnect left behind
+      // keeps running for the calls after this one.
+      await untilAborted(pause, callerSignal);
+      if (callerSignal?.aborted) {
+        lastError = callerSignal.reason;
+        break;
       }
-      // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
-      await sleep(expBackoffBase * Math.pow(2, attempt), undefined, {
-        signal: callerSignal ?? undefined,
-      }).catch(() => callerSignal?.throwIfAborted());
     } finally {
       clearTimeout(timer);
     }
   }
   throw lastError;
+}
+
+/** Waits for `work`, or only until `signal` fires. Does not stop `work`. */
+async function untilAborted(
+  work: Promise<unknown>,
+  signal: AbortSignal | null | undefined
+): Promise<void> {
+  if (!signal) {
+    await work;
+    return;
+  }
+  let onAbort = () => {};
+  const aborted = new Promise<void>((resolve) => {
+    onAbort = resolve;
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([work, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 interface ToolCallerDeps {
@@ -71,7 +95,7 @@ interface ToolCallerDeps {
    */
   remote: boolean;
   reconnect: () => Promise<void>;
-  /** Headers added to every attempt, beside the auth header. */
+  /** Headers added to every request, beside the auth header. */
   extraHeaders: () => Record<string, string>;
   /** Per-attempt timeout for a call that is not `longRunning` and carries no upload. */
   fetchTimeoutMs?: number;
@@ -79,11 +103,15 @@ interface ToolCallerDeps {
 
 interface ToolCaller {
   fetchTools(): Promise<ToolMeta[]>;
+  /**
+   * `opts.signal` bounds the whole call, the listing it reads first included,
+   * and is never retried once it fires.
+   */
   callTool(
     name: string,
     args: unknown,
     opts?: { signal?: AbortSignal }
-  ): Promise<{ result: unknown; outputHint?: string; note?: string }>;
+  ): Promise<{ result: unknown; outputHint?: string; note?: string; profiling?: boolean }>;
 }
 
 // A tool-server URL without `http://` either fails `new URL`, whose error names
@@ -125,12 +153,12 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
     const { token } = deps.getHandle();
     if (token) headers.set("Authorization", `Bearer ${token}`);
     else headers.delete("Authorization");
-    for (const [name, value] of Object.entries(deps.extraHeaders())) headers.set(name, value);
     return { ...init, headers };
   }
 
   const client = createToolsClient({
     baseUrl: async () => ({ ...deps.getHandle(), remote: deps.remote }),
+    headers: deps.extraHeaders,
     fetchImpl: async (url, init, meta) => {
       // A retry cannot fix a URL that does not parse, so fail at once.
       parseUrl(url);
@@ -148,8 +176,8 @@ export function createToolCaller(deps: ToolCallerDeps): ToolCaller {
   return {
     fetchTools: client.fetchTools,
     async callTool(name, args, opts) {
-      const { data, note, outputHint } = await client.callTool(name, args, opts);
-      return { result: data, outputHint, note };
+      const { data, note, outputHint, profiling } = await client.callTool(name, args, opts);
+      return { result: data, outputHint, note, ...(profiling ? { profiling } : {}) };
     },
   };
 }

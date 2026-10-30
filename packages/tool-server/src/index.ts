@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { homedir } from "node:os";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { getAndroidAdbServerPort, isFlagEnabled } from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
@@ -19,6 +19,7 @@ import { createRegistry } from "./utils/setup-registry";
 import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
+import { configuredAdbServerPort } from "./utils/adb-server";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import {
   variantProposalStore,
@@ -80,6 +81,12 @@ function initializeStdioTimestampWrapper(): void {
 
 export function start(): void {
   initializeStdioTimestampWrapper();
+
+  const adbServerPort = configuredAdbServerPort(process.env, getAndroidAdbServerPort());
+  if (adbServerPort !== null) {
+    process.env.ANDROID_ADB_SERVER_PORT = adbServerPort;
+    process.stderr.write(`android.adbServerPort → ANDROID_ADB_SERVER_PORT=${adbServerPort}\n`);
+  }
 
   // Exit on uncaught errors (state may be corrupted), but clean up first so
   // child processes are not orphaned.

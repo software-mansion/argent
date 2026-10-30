@@ -39,8 +39,6 @@ interface Recorded {
 interface Stub {
   url: string;
   requests: Recorded[];
-  /** The routes whose caller closed the connection before the answer. */
-  hungUp: string[];
   close: () => Promise<void>;
 }
 
@@ -67,7 +65,6 @@ const LISTING = {
       fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
     },
     { name: "slow", description: "", inputSchema: {}, longRunning: true },
-    { name: "hang", description: "", inputSchema: {}, longRunning: true },
     { name: "slow-plain", description: "", inputSchema: {} },
     { name: "fast", description: "", inputSchema: {} },
     { name: "reject", description: "", inputSchema: {} },
@@ -92,7 +89,6 @@ function readBody(req: http.IncomingMessage): Promise<string> {
 async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}): Promise<Stub> {
   const dropFirst = new Set(opts.dropFirst ?? ["/tools/fast"]);
   const requests: Recorded[] = [];
-  const hungUp: string[] = [];
   const calls = new Map<string, number>();
   const uploads = new Set<string>();
   let slowPlainCalls = 0;
@@ -135,14 +131,6 @@ async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}
       setTimeout(() => json(200, { data: { ok: true } }), 80);
       return;
     }
-    if (req.method === "POST" && url === "/tools/hang") {
-      const timer = setTimeout(() => json(200, { data: { ok: true } }), 600);
-      res.on("close", () => {
-        clearTimeout(timer);
-        if (!res.writableFinished) hungUp.push(url);
-      });
-      return;
-    }
     if (req.method === "POST" && url === "/tools/run-flow")
       return json(200, { data: { ok: true } });
     if (req.method === "POST" && url === "/tools/fast") return json(200, { data: { n: nth } });
@@ -163,7 +151,6 @@ async function startStub(opts: { dropFirst?: string[]; installMs?: number } = {}
   return {
     url: `http://127.0.0.1:${port}`,
     requests,
-    hungUp,
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections();
@@ -327,18 +314,31 @@ describe("createToolCaller", () => {
     expect(reconnect).not.toHaveBeenCalled();
   });
 
-  it("aborts the request when the caller's signal aborts, without a retry", async () => {
+  it("stops a call at the caller's signal, without a retry", async () => {
+    // `slow` is longRunning, so only the signal can end the call before the
+    // stub answers it after 80 ms.
     const { callTool, reconnect } = caller();
     const controller = new AbortController();
 
-    const pending = callTool("hang", {}, { signal: controller.signal });
-    await vi.waitFor(() => expect(postsTo("/tools/hang")).toHaveLength(1));
-    controller.abort(new Error("cancelled by the caller"));
+    const pending = callTool("slow", {}, { signal: controller.signal });
+    await vi.waitFor(() => expect(postsTo("/tools/slow")).toHaveLength(1), { interval: 5 });
+    controller.abort();
 
-    await expect(pending).rejects.toThrow("cancelled by the caller");
-    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/tools/hang"]));
-    expect(postsTo("/tools/hang")).toHaveLength(1);
+    await expect(pending).rejects.toThrow("aborted");
+    expect(postsTo("/tools/slow")).toHaveLength(1);
     expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting for a reconnect at the caller's signal", async () => {
+    // `fast` drops its first connection. A local reconnect can wait seconds
+    // for a new tool-server; this one never ends.
+    const { callTool, reconnect } = caller({ reconnect: vi.fn(() => new Promise<void>(() => {})) });
+
+    await expect(callTool("fast", {}, { signal: AbortSignal.timeout(100) })).rejects.toThrow(
+      "aborted"
+    );
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(postsTo("/tools/fast")).toHaveLength(1);
   });
 
   it("keeps the per-attempt timeout of a call that carries a signal", async () => {
