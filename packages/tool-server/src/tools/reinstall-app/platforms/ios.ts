@@ -4,6 +4,7 @@ import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlTargetForUdid } from "../../../utils/ios-device-sets";
+import { assertIosAppBundle } from "../validate-app";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -13,6 +14,7 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
+    await assertIosAppBundle(absolute, bundleId);
     const { nativeId, prefix } = await simctlTargetForUdid(udid);
     try {
       await execFileAsync("xcrun", [...prefix, "uninstall", nativeId, bundleId]);

@@ -6,6 +6,7 @@ import {
   isSessionOnlySystemUi,
 } from "../../../utils/ios-device/app-session";
 import { ensureDeviceReady, installApp, uninstallApp } from "../../../utils/ios-device/devicectl";
+import { assertIosAppBundle } from "../validate-app";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 /**
@@ -27,12 +28,15 @@ export const iosDeviceImpl: PlatformImpl<
       );
     }
 
+    const absolute = resolvePath(params.appPath);
+    await assertIosAppBundle(absolute, params.bundleId);
+
     await ensureDeviceReady(params.udid);
     await uninstallApp(params.udid, params.bundleId);
 
     // Uninstall killed the process. Clear the session even if install fails.
     clearCurrentIosDeviceApp(params.udid, params.bundleId);
-    await installApp(params.udid, resolvePath(params.appPath));
+    await installApp(params.udid, absolute);
 
     return {
       reinstalled: true,

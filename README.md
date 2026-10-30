@@ -1,6 +1,8 @@
 <br/>
 <p align="center"><a href="https://argent.swmansion.com"><img width="1100" height="382" alt="argent-header" src="https://github.com/user-attachments/assets/6cec01d5-da3c-4b6c-97c3-0374a63c213c" /></a></p>
 
+<p align="center"><b>English</b> | <a href="README.ja.md">日本語</a> | <a href="README.zh-CN.md">简体中文</a></p>
+
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-1?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-1&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-2?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-2&n=1)
 [![Ad](https://swm-delivery.com/www/images/zone-gh-argent-3?n=1)](https://swm-delivery.com/www/delivery/ck-slug.php?zoneid=zone-gh-argent-3&n=1)
@@ -16,10 +18,10 @@ npx @swmansion/argent@latest init  # pnpm: pnpm dlx @swmansion/argent@latest ini
 ## What it does
 
 - **Interact** - tap, swipe, gesture, type, hardware buttons; D-pad on TV; mouse and keyboard on desktop.
-- **Flows** - record a path once, replay it deterministically as a repro or smoke test.
+- **E2E** - record a path once as an e2e test, replay it deterministically as a repro or smoke test.
 - **Visual regression** - diff a baseline against a live capture, OCR- and font-aware.
 - **Profiling** - Hermes, React DevTools, Xcode Instruments, Perfetto: renders, CPU hotspots, hangs.
-- **Debugging** - logs, network (`fetch` and native), JS evaluation, native and React trees.
+- **Debugging** - logs, network (`XMLHttpRequest` incl. axios, `fetch` incl. Expo's, and native), JS evaluation, native and React trees.
 - **React Native** - build, launch and iterate, no extra setup.
 
 Ask your assistant _"What can Argent do?"_ to list every tool.

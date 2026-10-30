@@ -47,10 +47,7 @@ const cookieAction = {
 } as const;
 
 type Result =
-  | { cookies: Cookie[]; count: number }
-  | { set: boolean }
-  | { deleted: true }
-  | { cleared: true };
+  { cookies: Cookie[]; count: number } | { set: boolean } | { deleted: true } | { cleared: true };
 
 const capability: ToolCapability = {
   chromium: { app: true },
@@ -69,7 +66,7 @@ export const chromiumCookiesTool: ToolDefinition<Params, Result> = {
 - action="set" (name, value, + url OR domain, optional path/secure/httpOnly/sameSite/expires): create or update a cookie.
 - action="delete" (name, + url/domain/path): remove a matching cookie.
 - action="clear": remove ALL browser cookies.
-Use when seeding an authenticated session before a flow (set the session cookie, then navigate) or asserting cookie state after one.
+Use when seeding an authenticated session before an e2e test (set the session cookie, then navigate) or asserting cookie state after one.
 Returns { cookies, count } for get, or a small status object ({ set } / { deleted } / { cleared }) otherwise. Fails if the device is not a Chromium (CDP) device, or set is missing name/value. Chromium-only.`,
   searchHint: "cookies cookie get set delete clear httponly samesite session auth chromium",
   zodSchema,

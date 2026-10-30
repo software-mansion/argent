@@ -51,7 +51,6 @@ export {
   InstallModeFlagError,
 } from "./install-record.js";
 export type { InstallMode } from "./install-record.js";
-export { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 
 // resolvePackageRoot lives in the leaf package-root.ts module: topology.ts
 // needs it too, and importing it from this barrel — which re-exports topology —
@@ -112,6 +111,16 @@ export function getGlobalSkillLockPath(): string {
 // Prefix on every skill argent ships. Argent reserves the namespace, so lock
 // entries under it count as ours even once they leave the bundled set.
 export const ARGENT_SKILL_PREFIX = "argent-";
+
+// Skills earlier argent versions shipped under names no longer bundled.
+// Init, update and uninstall remove them even when no lockfile tracks them.
+export const LEGACY_ARGENT_SKILL_NAMES: readonly string[] = [
+  "argent-create-flow",
+  "argent-qa-flows",
+  "argent-simulator-interact",
+  "argent-simulator-setup",
+  "argent-ios-profiler",
+];
 
 export function listArgentSkillsInLock(lockPath: string): string[] {
   try {
@@ -279,8 +288,7 @@ export function readJsonc(filePath: string): Record<string, unknown> {
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   if (raw.trim() === "") return {};
   const parsed = parseJsonc(raw, [], { allowTrailingComma: true }) as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   return parsed ?? {};
 }
 

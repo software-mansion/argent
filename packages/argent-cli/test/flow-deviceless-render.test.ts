@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderReport, renderSummary, type FlowReport } from "../src/flow.js";
+import { renderReport, renderSummary, type FlowReport } from "../src/e2e.js";
 
 function report(overrides: Partial<FlowReport> = {}): FlowReport {
   return {
@@ -26,7 +26,7 @@ describe("rendering a run that resolved no device", () => {
   it("omits the device from the report header too", () => {
     const lines = renderReport(report()).split("\n");
 
-    expect(lines[0]).toBe('Flow "echo-only"');
+    expect(lines[0]).toBe('E2E test "echo-only"');
   });
 
   it("still names a device when the run had one", () => {
