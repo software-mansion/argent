@@ -110,8 +110,9 @@ describe("resolveFileInputs — tar-upload kind", () => {
         () => undefined
       )
     ).rejects.toThrow(
-      `Path "${appDir}" does not exist on the tool-server host and no upload was provided. ` +
-        `Update argent to a version that supports uploads for remote sessions.`
+      `Path "${appDir}" is on the client, but the tool-server host has no matching ` +
+        `file at that path and the client uploaded none. The client uploads it only when ` +
+        `linked to the tool-server (argent link or ARGENT_TOOLS_URL).`
     );
   });
 
