@@ -233,8 +233,11 @@ async function prepareHostFileArguments(
   for (const file of fileArgs) {
     const st = await stat(file.path).catch(() => null);
     if (!st?.isFile()) {
+      const relative = path.isAbsolute(file.path)
+        ? ""
+        : `; a relative path is resolved against the tool server's working directory, not the e2e test's`;
       throw new FileInputError(
-        `there is no file at "${file.path}" (argument ${file.spec.target} of ${toolId})`
+        `there is no file at "${file.path}" (argument ${file.spec.target} of ${toolId})${relative}`
       );
     }
     const wire: FileInputWire = {

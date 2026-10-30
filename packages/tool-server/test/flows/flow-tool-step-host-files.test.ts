@@ -84,6 +84,30 @@ describe("a tool: step with flow_path, without a link", () => {
     );
   });
 
+  it("says where a relative path that names no file was looked up", async () => {
+    const result = await runOuter(
+      `  - tool: e2e-execute\n    args: { flow_path: elsewhere/frag.yaml, project_root: ${root}, prerequisiteAcknowledged: true }\n`
+    );
+
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toBe(
+      `there is no file at "elsewhere/frag.yaml" (argument flow_path of e2e-execute); a relative ` +
+        `path is resolved against the tool server's working directory, not the e2e test's`
+    );
+  });
+
+  it("leaves a flow_path set beside name to the tool's one-source check", async () => {
+    const missing = path.join(flowsDir, "elsewhere", "missing.yaml");
+    const result = await runOuter(
+      `  - tool: e2e-read-prerequisite\n    args: { name: frag, flow_path: ${missing}, project_root: ${root} }\n`
+    );
+
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toContain(
+      "Pass exactly one e2e test source: name or flow_path."
+    );
+  });
+
   it("fails a step whose file argument is a directory", async () => {
     const dir = path.join(root, "shots.png");
     await fs.mkdir(dir);
