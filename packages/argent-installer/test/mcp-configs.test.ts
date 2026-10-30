@@ -1899,6 +1899,19 @@ describe("copyRulesAndAgents", () => {
     });
   });
 
+  // A release that ships no agents at all must not leave an empty
+  // .claude/agents at every target, nor claim to have copied agents.
+  it("writes and reports nothing for an agents bundle with no files", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    fs.rmSync(agentsDir, { recursive: true });
+    fs.mkdirSync(path.join(agentsDir, "references"), { recursive: true });
+
+    const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(results).toEqual([`  Copied rules to ${path.join(".claude", "rules")}`]);
+    expect(fs.existsSync(path.join(tmpDir, ".claude", "agents"))).toBe(false);
+  });
+
   // init and update ask before removing retired files (see retired-files.ts),
   // so the copy itself must only add.
   it("leaves files the bundle no longer ships in place", () => {

@@ -167,6 +167,17 @@ describe("copyDir", () => {
     expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBeNull();
   });
 
+  // A release that dropped every agent: the copy must not leave an empty
+  // .claude/agents behind, nor report one as written.
+  it("returns null and creates nothing when the source holds no files", () => {
+    const src = path.join(tmpDir, "src");
+    fs.mkdirSync(path.join(src, "sub"), { recursive: true });
+    const dest = path.join(tmpDir, "dest");
+
+    expect(copyDir(src, dest)).toBeNull();
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
   it("copies directory recursively and reports where it wrote", () => {
     const src = stageSource();
     const dest = path.join(tmpDir, "dest");

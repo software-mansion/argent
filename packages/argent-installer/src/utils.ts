@@ -143,6 +143,15 @@ export const RETIRED_BUNDLED_PATHS: Readonly<
 > = {
   agents: [
     {
+      // v0.3.1 and v0.3.2, when the agent and package carried their first names.
+      path: "environment-inspector.md",
+      shipped: [
+        "50f8d1442677a7def3117cc8652f26dd5c1e2271ae0c7c9814c5bb17dfdd7858",
+        "10f998fef549503cf341e1775ff6aacafbf361c1d7ec32c554a9c42343a6998a",
+      ],
+      marker: "name: environment-inspector",
+    },
+    {
       path: "argent-environment-inspector.md",
       shipped: [
         "1f9b285ec30b7298b60b03cae10fb934ab07bc394104ab2d974d452a4c203178",
@@ -453,11 +462,19 @@ export function resolveLinkedDestination(dest: string): string {
 // Argent supports both, and `fs.copyFileSync` reports each failure as a plain,
 // catchable errno.
 export function copyDir(src: string, dest: string): string | null {
-  if (!fs.existsSync(src)) return null;
+  // A source with no files is nothing to copy either: a bundle that stopped
+  // shipping a kind of content must not leave an empty dir at every target.
+  if (!fs.existsSync(src) || !treeHasFiles(src)) return null;
 
   const target = resolveLinkedDestination(dest);
   copyTree(src, target);
   return target;
+}
+
+function treeHasFiles(dir: string): boolean {
+  return fs
+    .readdirSync(dir, { withFileTypes: true })
+    .some((entry) => !entry.isDirectory() || treeHasFiles(path.join(dir, entry.name)));
 }
 
 function copyTree(src: string, dest: string): void {
