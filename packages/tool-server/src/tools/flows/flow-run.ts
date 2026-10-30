@@ -556,18 +556,25 @@ export function flowLaunchGateReason(
  * it does; gating the launch keeps that window from eating the first directive's
  * auto-wait (or silently confirming a `hidden` assert against a blind read).
  */
-async function waitForVegaAutomation(device: DeviceInfo, signal?: AbortSignal): Promise<boolean> {
+async function waitForVegaAutomation(
+  device: DeviceInfo,
+  signal?: AbortSignal
+): Promise<{ ready: boolean; reason?: string }> {
   const deadline = Date.now() + NATIVE_READY_TIMEOUT_MS;
+  let reason: string | undefined;
   for (;;) {
-    if (signal?.aborted) return false;
+    if (signal?.aborted) return { ready: false };
     try {
       const data = await describeVega(device.id);
-      if (!data.hint) return true;
-    } catch {
-      // transient adb/forward failure mid-boot — retry until the deadline
+      if (!data.hint) return { ready: true };
+      reason = undefined;
+    } catch (err) {
+      // A VVD still registering with adb clears up on its own, so keep polling;
+      // a fetch error still standing at the deadline is the reason.
+      reason = err instanceof Error ? err.message : String(err);
     }
-    if (Date.now() >= deadline) return false;
-    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return false;
+    if (Date.now() >= deadline) return { ready: false, reason };
+    if (!(await sleepOrAbort(NATIVE_READY_POLL_MS, signal))) return { ready: false };
   }
 }
 
@@ -660,8 +667,10 @@ async function treeSourceGate(
     }
   }
   if (device.platform === "vega" && !signal?.aborted) {
-    const ready = await waitForVegaAutomation(device, signal);
+    const { ready, reason } = await waitForVegaAutomation(device, signal);
     if (!ready && !signal?.aborted) {
+      if (reason)
+        return `the Vega automation toolkit could not be reached for ${bundleId}: ${reason}`;
       return (
         `the Vega automation toolkit never served a page source for ${bundleId} (the runner tree source). ` +
         `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`
