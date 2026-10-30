@@ -102,10 +102,8 @@ describe("canonicalToolArgs", () => {
   it("leaves the args of another tool, and a former name set to undefined, as they are", () => {
     const args = { flow_path: "/a.yaml" };
     expect(canonicalToolArgs("screenshot-diff", args)).toBe(args);
-    expect(canonicalToolArgs("e2e-execute", { flow_path: undefined, name: "n" })).toEqual({
-      flow_path: undefined,
-      name: "n",
-    });
+    const unset = { flow_path: undefined, e2e_test_path: "/b.yaml" };
+    expect(canonicalToolArgs("e2e-execute", unset)).toBe(unset);
   });
 
   it("throws when a call sets both names of one param", () => {
