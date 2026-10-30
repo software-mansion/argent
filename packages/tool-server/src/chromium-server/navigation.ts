@@ -29,7 +29,11 @@ export function navigate(cdp: CDPClient, url: string): Promise<void> {
   if (!pending) inFlight.set(cdp, (pending = new Map()));
   const running = pending.get(key);
   if (running) return running;
-  const started = navigateOnce(cdp, url, false).finally(() => pending.delete(key));
+  // This navigation cancels any other in flight, so a repeat of one must be sent again.
+  pending.clear();
+  const started: Promise<void> = navigateOnce(cdp, url, false).finally(() => {
+    if (pending.get(key) === started) pending.delete(key);
+  });
   pending.set(key, started);
   return started;
 }

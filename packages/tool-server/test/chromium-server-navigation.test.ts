@@ -104,6 +104,28 @@ describe("chromium-server/navigation", () => {
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED);
     }
     expect(send).toHaveBeenCalledTimes(1);
+
+    send.mockResolvedValueOnce({});
+    await expect(navigate(cdp, "http://h/slow")).resolves.toBe(undefined);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("navigate: sends a repeat again once a different URL replaced the first", async () => {
+    let abortFirst!: (v: object) => void;
+    const send = vi
+      .fn()
+      .mockReturnValueOnce(new Promise((r) => (abortFirst = r)))
+      .mockReturnValue(new Promise(() => {}));
+    const cdp = { send } as unknown as CDPClient;
+    const first = navigate(cdp, "http://h/a").catch((e: unknown) => e);
+    void navigate(cdp, "http://h/b");
+    void navigate(cdp, "http://h/a");
+    expect(send).toHaveBeenCalledTimes(3);
+
+    abortFirst({ errorText: "net::ERR_ABORTED" });
+    await first;
+    void navigate(cdp, "http://h/a");
+    expect(send).toHaveBeenCalledTimes(3);
   });
 
   it("navigate: sends a different URL, or a repeated javascript: URL, while one is in flight", async () => {
