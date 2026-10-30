@@ -6,7 +6,13 @@ import {
   warmTelemetryIdentitySync,
   writeConsentFlag,
 } from "@argent/telemetry";
-import { ALL_ADAPTERS, copyRulesAndAgents, type McpConfigAdapter } from "./mcp-configs.js";
+import {
+  ALL_ADAPTERS,
+  copyRulesAndAgents,
+  findRetiredRulesAndAgents,
+  type McpConfigAdapter,
+} from "./mcp-configs.js";
+import { reportRetiredFiles } from "./retired-files.js";
 import {
   RULES_DIR,
   AGENTS_DIR,
@@ -280,6 +286,17 @@ export async function init(args: string[]): Promise<void> {
     } else {
       p.log.info(pc.dim("No rules or agents to copy for selected editors."));
     }
+
+    await reportRetiredFiles(
+      findRetiredRulesAndAgents(
+        writtenAdapters,
+        effectiveRoot,
+        normalizedScope,
+        RULES_DIR,
+        AGENTS_DIR
+      ),
+      !parsed.nonInteractive
+    );
 
     printSummary({
       installMode: tel.installMode,

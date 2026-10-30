@@ -12,6 +12,7 @@ import {
   isArgentManagedEntry,
   resolveLocalCommandMode,
   copyRulesAndAgents,
+  findRetiredRulesAndAgents,
   type McpConfigAdapter,
   type McpServerEntry,
 } from "./mcp-configs.js";
@@ -41,6 +42,7 @@ import {
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
 import { reportSkillRefresh } from "./skills.js";
+import { reportRetiredFiles } from "./retired-files.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { writeCliRecord } from "./cli-record.js";
@@ -816,6 +818,20 @@ export async function update(args: string[]): Promise<void> {
       if (ruleResults.length > 0) {
         p.note(ruleResults.join("\n"), "Rules & Agents Updated");
       }
+
+      await reportRetiredFiles(
+        [
+          ...findRetiredRulesAndAgents(
+            globalAdapters,
+            projectRoot,
+            "global",
+            RULES_DIR,
+            AGENTS_DIR
+          ),
+          ...findRetiredRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
+        ],
+        !nonInteractive
+      );
 
       reportSkillRefresh(projectRoot, "installer_update_skills_refresh");
     }

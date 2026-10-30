@@ -35,6 +35,10 @@ import {
   readJson,
   writeJson,
   copyDir,
+  findRetiredFiles,
+  hashBundledContent,
+  removeRetiredFiles,
+  RETIRED_BUNDLED_PATHS,
   dirExists,
   detectPackageManager,
   globalInstallCommand,
@@ -351,6 +355,183 @@ describe("copyDir", () => {
     } finally {
       fs.chmodSync(dest, 0o755);
     }
+  });
+});
+
+// ── Retired bundled files ─────────────────────────────────────────────────────
+
+describe("RETIRED_BUNDLED_PATHS", () => {
+  // A retired file the bundle still ships has to be listed as it ships now, or
+  // installs of this version would read their own copy as an edited one.
+  it("lists the hash and marker of every retired file the bundle still ships", () => {
+    for (const [kind, dir] of [
+      ["agents", AGENTS_DIR],
+      ["rules", RULES_DIR],
+    ] as const) {
+      for (const { path: relativePath, shipped, marker } of RETIRED_BUNDLED_PATHS[kind]) {
+        const file = path.join(dir, ...relativePath.split("/"));
+        if (!fs.existsSync(file)) continue;
+        const content = fs.readFileSync(file, "utf8");
+        expect(shipped, relativePath).toContain(hashBundledContent(content));
+        expect(content, relativePath).toContain(marker);
+      }
+    }
+  });
+});
+
+describe("findRetiredFiles / removeRetiredFiles", () => {
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n\nInspects.\n";
+  const CHECKLIST = "## Quality control checklist\n\nFields.\n";
+  const retired = [
+    {
+      path: "argent-environment-inspector.md",
+      shipped: [hashBundledContent(INSPECTOR)],
+      marker: "name: argent-environment-inspector",
+    },
+    {
+      path: "references/quality-control-checklist.md",
+      shipped: [hashBundledContent(CHECKLIST)],
+      marker: "## Quality control checklist",
+    },
+  ];
+  let bundle: string;
+  let target: string;
+
+  function put(filePath: string, contents: string): void {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, contents);
+  }
+
+  function stageRetired(targetDir: string): void {
+    put(path.join(targetDir, "argent-environment-inspector.md"), INSPECTOR);
+    put(path.join(targetDir, "references", "quality-control-checklist.md"), CHECKLIST);
+  }
+
+  function removeAllFound(targetDir: string) {
+    return removeRetiredFiles(targetDir, findRetiredFiles(retired, bundle, targetDir));
+  }
+
+  beforeEach(() => {
+    // A release that no longer ships either retired file.
+    bundle = path.join(tmpDir, "bundle");
+    put(path.join(bundle, "argent-other.md"), "other");
+    target = path.join(tmpDir, ".claude", "agents");
+  });
+
+  it("finds unedited copies of retired files the bundle no longer ships", () => {
+    stageRetired(target);
+
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([
+      {
+        relativePath: "argent-environment-inspector.md",
+        edited: false,
+        sha256: hashBundledContent(INSPECTOR),
+      },
+      {
+        relativePath: "references/quality-control-checklist.md",
+        edited: false,
+        sha256: hashBundledContent(CHECKLIST),
+      },
+    ]);
+  });
+
+  it("reads a copy with CRLF line endings as unedited", () => {
+    put(path.join(target, "argent-environment-inspector.md"), INSPECTOR.replace(/\n/g, "\r\n"));
+
+    expect(findRetiredFiles(retired, bundle, target)).toMatchObject([{ edited: false }]);
+  });
+
+  it("marks a copy edited when it matches no shipped version but keeps the marker", () => {
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}My own step.\n`);
+
+    expect(findRetiredFiles(retired, bundle, target)).toMatchObject([
+      { relativePath: "argent-environment-inspector.md", edited: true },
+    ]);
+  });
+
+  it("does not list a file at a retired path that lacks the marker", () => {
+    put(path.join(target, "argent-environment-inspector.md"), "---\nname: my-inspector\n---\n");
+    put(path.join(target, "references", "quality-control-checklist.md"), "# My own checklist\n");
+
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([]);
+  });
+
+  it("does not list a retired file while the bundle still ships it", () => {
+    put(path.join(bundle, "argent-environment-inspector.md"), INSPECTOR);
+    stageRetired(target);
+
+    expect(findRetiredFiles(retired, bundle, target).map((f) => f.relativePath)).toEqual([
+      "references/quality-control-checklist.md",
+    ]);
+  });
+
+  it("finds nothing when the target dir is missing", () => {
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, ".claude"))).toBe(false);
+  });
+
+  it("removes the files, then the dirs that leaves empty, up to the target itself", () => {
+    stageRetired(target);
+
+    expect(removeAllFound(target)).toEqual({
+      removedPaths: ["argent-environment-inspector.md", "references/quality-control-checklist.md"],
+      removedRoot: true,
+    });
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".claude"))).toBe(true);
+  });
+
+  it("keeps the user's own files and every dir that still holds one", () => {
+    stageRetired(target);
+    put(path.join(target, "my-agent.md"), "mine");
+    put(path.join(target, "references", "my-notes.md"), "mine");
+
+    expect(removeAllFound(target)).toMatchObject({ removedRoot: false });
+    expect(fs.readdirSync(target).sort()).toEqual(["my-agent.md", "references"]);
+    expect(fs.readdirSync(path.join(target, "references"))).toEqual(["my-notes.md"]);
+  });
+
+  it("keeps a file that changed after it was found", () => {
+    stageRetired(target);
+    const found = findRetiredFiles(retired, bundle, target);
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}Changed meanwhile.\n`);
+
+    expect(removeRetiredFiles(target, found).removedPaths).toEqual([
+      "references/quality-control-checklist.md",
+    ]);
+    expect(fs.existsSync(path.join(target, "argent-environment-inspector.md"))).toBe(true);
+  });
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  describe.skipIf(process.platform === "win32")("symlinked targets", () => {
+    it("works through a linked target and keeps the link and the dir it leads to", () => {
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      stageRetired(canonical);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "agents"), target);
+
+      expect(removeAllFound(target)).toEqual({
+        removedPaths: [
+          "argent-environment-inspector.md",
+          "references/quality-control-checklist.md",
+        ],
+        removedRoot: false,
+      });
+      expect(fs.readdirSync(canonical)).toEqual([]);
+      expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
+    });
+
+    it("removes the copy a linked file leads to, and the link left dangling", () => {
+      const shared = path.join(tmpDir, "shared", "argent-environment-inspector.md");
+      const link = path.join(target, "argent-environment-inspector.md");
+      put(shared, INSPECTOR);
+      put(path.join(target, "my-agent.md"), "mine");
+      fs.symlinkSync(path.join("..", "..", "shared", "argent-environment-inspector.md"), link);
+
+      expect(removeAllFound(target).removedPaths).toEqual(["argent-environment-inspector.md"]);
+      expect(fs.existsSync(shared)).toBe(false);
+      expect(fs.lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
+    });
   });
 });
 

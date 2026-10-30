@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as dns from "node:dns";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
 import { execFileSync, execSync } from "node:child_process";
 import semver from "semver";
@@ -121,6 +122,57 @@ export const LEGACY_ARGENT_SKILL_NAMES: readonly string[] = [
   "argent-simulator-setup",
   "argent-ios-profiler",
 ];
+
+export interface RetiredBundledPath {
+  /** Relative to the bundled agents/ or rules/ dir, "/"-separated. */
+  path: string;
+  /** sha256 of every version argent shipped, CRLF read as LF. */
+  shipped: readonly string[];
+  /** Text every shipped version contains: with it, a copy that matches no
+   * hash is argent's, edited; without it, the file is the user's own. */
+  marker: string;
+}
+
+// Files earlier argent versions copied into agents/ and rules/ targets. When a
+// change deletes a file from packages/skills/agents or packages/skills/rules,
+// add it here in the same change, with the hash of each version in its git
+// history. Once the bundle no longer ships it, init, update and uninstall
+// offer to remove it from every target argent manages.
+export const RETIRED_BUNDLED_PATHS: Readonly<
+  Record<"agents" | "rules", readonly RetiredBundledPath[]>
+> = {
+  agents: [
+    {
+      path: "argent-environment-inspector.md",
+      shipped: [
+        "1f9b285ec30b7298b60b03cae10fb934ab07bc394104ab2d974d452a4c203178",
+        "9d417798147fa11f4351109e6331865b79862fc631d7f32b70f64981362b90eb",
+        "0f535893b239040ebe4a001ae7c3639366c4a6fe8d98e2568a59584798454644",
+        "ec5872c9bd2085d281f5d4e1d06b5eb3f32a5be29c2bf8cb5c953ca6e9d73349",
+        "96cb2e5025755448186cd9d29e85ce3db3cedb3dbfd2e6c89e734c76aa7fbdff",
+        "9eff92cf887390fb3ffb68e7de5789e703049795a24d5f268332af488d155531",
+      ],
+      marker: "name: argent-environment-inspector",
+    },
+    {
+      path: "references/quality-control-checklist.md",
+      shipped: [
+        "40f43028524e9544e2c77d2d1ad7eaf9385efadfb079bfec2973b999817203c1",
+        "12a8deb0276a3d9fcd8b6c8fc6080b58be2e3e45fd0409dc2e7594e619e2eceb",
+        "f1c76c1d51aa5a88371061a2bd5f46264ea2082aa4e1c2bca517d901b836c753",
+        "84ecf5920fbca4460484a241a8ad1411fe8d6c3d0c9c25f80096a5a28f219f8a",
+      ],
+      marker: "## Quality control checklist",
+    },
+  ],
+  rules: [],
+};
+
+// The hash RETIRED_BUNDLED_PATHS lists: a checkout with CRLF line endings
+// still matches.
+export function hashBundledContent(content: string): string {
+  return createHash("sha256").update(content.replace(/\r\n/g, "\n")).digest("hex");
+}
 
 export function listArgentSkillsInLock(lockPath: string): string[] {
   try {
@@ -266,14 +318,16 @@ function isEmptyPlainObject(value: unknown): boolean {
   );
 }
 
-function rmEmptyDir(dirPath: string): void {
+function rmEmptyDir(dirPath: string): boolean {
   try {
-    if (!fs.existsSync(dirPath)) return;
-    if (!fs.statSync(dirPath).isDirectory()) return;
-    if (fs.readdirSync(dirPath).length > 0) return;
+    if (!fs.existsSync(dirPath)) return false;
+    if (!fs.statSync(dirPath).isDirectory()) return false;
+    if (fs.readdirSync(dirPath).length > 0) return false;
     fs.rmdirSync(dirPath);
+    return true;
   } catch {
     // non-fatal
+    return false;
   }
 }
 
@@ -356,7 +410,7 @@ export function realpathOrSelf(p: string): string {
 // exists: finishing `.claude/agents -> ../.agents/agents` for someone who has
 // made `.agents` is helpful, conjuring a whole tree is not. Anything else
 // resolves back to `dest`, so the caller fails naming the link the user wrote.
-function resolveLinkedDestination(dest: string): string {
+export function resolveLinkedDestination(dest: string): string {
   let current = dest;
 
   for (let hop = 0; hop < MAX_SYMLINK_HOPS; hop++) {
@@ -419,6 +473,83 @@ function copyTree(src: string, dest: string): void {
     if (entry.isDirectory()) copyTree(from, to);
     else fs.copyFileSync(from, to);
   }
+}
+
+export interface RetiredFile {
+  /** Relative to the target dir, "/"-separated. */
+  relativePath: string;
+  /** Differs from every version argent shipped, so it may hold user changes. */
+  edited: boolean;
+  /** Hash when found: removal skips the file if it has changed since. */
+  sha256: string;
+}
+
+function readRetiredFile(targetDir: string, relativePath: string): string | null {
+  const entryPath = path.join(resolveLinkedDestination(targetDir), ...relativePath.split("/"));
+  const file = resolveLinkedDestination(entryPath);
+  try {
+    if (!fs.statSync(file, { throwIfNoEntry: false })?.isFile()) return null;
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// The retired files in `targetDir` that the bundle in `bundleDir` no longer
+// ships: copies of a version argent shipped, and copies of one edited since.
+// A file at a retired path without the marker is the user's own, so it is not
+// listed. Reads through links the way copyDir writes through them.
+export function findRetiredFiles(
+  retired: readonly RetiredBundledPath[],
+  bundleDir: string,
+  targetDir: string
+): RetiredFile[] {
+  const found: RetiredFile[] = [];
+  for (const { path: relativePath, shipped, marker } of retired) {
+    if (fs.existsSync(path.join(bundleDir, ...relativePath.split("/")))) continue;
+    const content = readRetiredFile(targetDir, relativePath);
+    if (content === null) continue;
+    const sha256 = hashBundledContent(content);
+    if (shipped.includes(sha256)) found.push({ relativePath, edited: false, sha256 });
+    else if (content.includes(marker)) found.push({ relativePath, edited: true, sha256 });
+  }
+  return found;
+}
+
+// Removes `files` (from findRetiredFiles) from `targetDir`, then each directory
+// that left empty. A file whose content changed since it was found stays.
+// `targetDir` itself goes only when it is not a link: the canonical dir a link
+// leads to is the user's.
+export function removeRetiredFiles(
+  targetDir: string,
+  files: readonly RetiredFile[]
+): { removedPaths: string[]; removedRoot: boolean } {
+  const dir = resolveLinkedDestination(targetDir);
+  const removedPaths: string[] = [];
+
+  for (const { relativePath, sha256 } of files) {
+    const content = readRetiredFile(targetDir, relativePath);
+    if (content === null || hashBundledContent(content) !== sha256) continue;
+
+    const segments = relativePath.split("/");
+    const entryPath = path.join(dir, ...segments);
+    const file = resolveLinkedDestination(entryPath);
+    try {
+      fs.rmSync(file);
+      // A link to the removed copy would now dangle.
+      if (file !== entryPath) fs.rmSync(entryPath, { force: true });
+      removedPaths.push(relativePath);
+    } catch {
+      continue;
+    }
+
+    for (let depth = segments.length - 1; depth > 0; depth--) {
+      if (!rmEmptyDir(path.join(dir, ...segments.slice(0, depth)))) break;
+    }
+  }
+
+  const removedRoot = removedPaths.length > 0 && dir === targetDir && rmEmptyDir(dir);
+  return { removedPaths, removedRoot };
 }
 
 export function dirExists(p: string): boolean {

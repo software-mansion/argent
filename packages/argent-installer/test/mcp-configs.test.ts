@@ -13,6 +13,7 @@ import {
   removeClaudePermission,
   copyRulesAndAgents,
   findConfiguredAdapterScopes,
+  findRetiredRulesAndAgents,
   getManagedContentTargets,
   injectCodexRules,
   removeCodexRules,
@@ -1898,6 +1899,19 @@ describe("copyRulesAndAgents", () => {
     });
   });
 
+  // init and update ask before removing retired files (see retired-files.ts),
+  // so the copy itself must only add.
+  it("leaves files the bundle no longer ships in place", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const retired = path.join(tmpDir, ".claude", "agents", "argent-environment-inspector.md");
+    fs.mkdirSync(path.dirname(retired), { recursive: true });
+    fs.writeFileSync(retired, "---\nname: argent-environment-inspector\n---\n");
+
+    copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(fs.existsSync(retired)).toBe(true);
+  });
+
   it("injects Codex rules into developer_instructions in config.toml (local)", () => {
     const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
     // Pre-create the config.toml so the adapter can find it
@@ -1911,6 +1925,115 @@ describe("copyRulesAndAgents", () => {
     expect(content).toContain("argent rules");
     expect(content).toContain("developer_instructions");
   });
+});
+
+// ── findRetiredRulesAndAgents ────────────────────────────────────────────────
+
+describe("findRetiredRulesAndAgents", () => {
+  // Edited copies: an unedited one would have to match the real shipped bytes.
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n\nInspects.\n";
+  const CHECKLIST = "## Quality control checklist\n\nFields.\n";
+  const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+  const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+  const opencodeAdapter = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+  let rulesDir: string;
+  let agentsDir: string;
+
+  function stageRetired(targetDir: string): void {
+    fs.mkdirSync(path.join(targetDir, "references"), { recursive: true });
+    fs.writeFileSync(path.join(targetDir, "argent-environment-inspector.md"), INSPECTOR);
+    fs.writeFileSync(path.join(targetDir, "references", "quality-control-checklist.md"), CHECKLIST);
+  }
+
+  function find(adapters: typeof ALL_ADAPTERS, scope: "local" | "global" = "local") {
+    return findRetiredRulesAndAgents(adapters, tmpDir, scope, rulesDir, agentsDir);
+  }
+
+  beforeEach(() => {
+    // A release that ships neither retired agent.
+    rulesDir = path.join(tmpDir, "src-rules");
+    agentsDir = path.join(tmpDir, "src-agents");
+    fs.mkdirSync(rulesDir, { recursive: true });
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(rulesDir, "argent.md"), "# Rule");
+    fs.writeFileSync(path.join(agentsDir, "argent-current.md"), "# Agent");
+  });
+
+  it("finds retired agents the bundle no longer ships", () => {
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    const found = find([claudeAdapter]);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ kind: "agents", location: path.join(".claude", "agents") });
+    expect(found[0].files.map((f) => [f.relativePath, f.edited])).toEqual([
+      ["argent-environment-inspector.md", true],
+      ["references/quality-control-checklist.md", true],
+    ]);
+  });
+
+  it("finds none while the bundle still ships them", () => {
+    fs.writeFileSync(path.join(agentsDir, "argent-environment-inspector.md"), INSPECTOR);
+    fs.mkdirSync(path.join(agentsDir, "references"));
+    fs.writeFileSync(path.join(agentsDir, "references", "quality-control-checklist.md"), CHECKLIST);
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    expect(find([claudeAdapter])).toEqual([]);
+  });
+
+  it("finds them when the bundle ships no agents dir at all", () => {
+    fs.rmSync(agentsDir, { recursive: true });
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    expect(find([claudeAdapter])[0].files).toHaveLength(2);
+  });
+
+  it("skips the user's own agents, retired names without the marker included", () => {
+    const agents = path.join(tmpDir, ".claude", "agents");
+    fs.mkdirSync(agents, { recursive: true });
+    fs.writeFileSync(path.join(agents, "my-agent.md"), INSPECTOR);
+    fs.writeFileSync(path.join(agents, "argent-environment-inspector.md"), "name: my-inspector");
+
+    expect(find([claudeAdapter])).toEqual([]);
+  });
+
+  it("looks in every agent target, global ones included", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    for (const dir of [
+      path.join(homedirOverride, ".claude", "agents"),
+      path.join(homedirOverride, ".gemini", "agents"),
+      path.join(homedirOverride, ".config", "opencode", "agents"),
+    ]) {
+      stageRetired(dir);
+    }
+
+    const found = find([claudeAdapter, geminiAdapter, opencodeAdapter], "global");
+
+    expect(found.map((f) => f.location)).toEqual([
+      path.join("~", ".claude", "agents"),
+      path.join("~", ".gemini", "agents"),
+      path.join("~", ".config", "opencode", "agents"),
+    ]);
+  });
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  it.skipIf(process.platform === "win32")(
+    "names where a linked target leads, and lists a dir two targets share once",
+    () => {
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      stageRetired(canonical);
+      for (const base of [".claude", ".gemini"]) {
+        fs.mkdirSync(path.join(tmpDir, base), { recursive: true });
+        fs.symlinkSync(path.join("..", ".agents", "agents"), path.join(tmpDir, base, "agents"));
+      }
+
+      const found = find([claudeAdapter, geminiAdapter]);
+
+      expect(found.map((f) => f.location)).toEqual([
+        `.claude/agents -> ${path.join(".agents", "agents")}`,
+      ]);
+    }
+  );
 });
 
 // ── Codex developer_instructions injection ──────────────────────────────────

@@ -20,6 +20,8 @@ import {
   readYaml,
   writeYaml,
   copyDir,
+  findRetiredFiles,
+  resolveLinkedDestination,
   realpathOrSelf,
   editJsoncFile,
   isYarnPnp,
@@ -27,6 +29,8 @@ import {
   RULES_DIR,
   AGENTS_DIR,
   ARGENT_SKILL_PREFIX,
+  RETIRED_BUNDLED_PATHS,
+  type RetiredFile,
 } from "./utils.js";
 import { isMap, parse as parseYamlText } from "yaml";
 import { parse as parseJsoncText, type ParseError } from "jsonc-parser";
@@ -342,8 +346,9 @@ function jsonLooksArgentServerOnly(filePath: string, containerKey: string): bool
 // rules/ and agents/ are byte copies of the bundled payloads, so argent-written
 // means every entry matches a bundled name exactly (a user's own
 // "argent-notes.md" must NOT pass); skills/ come from the skills CLI, where
-// argent owns the ARGENT_SKILL_PREFIX namespace. An empty dir is user evidence:
-// argent's copies always carry content.
+// argent owns the ARGENT_SKILL_PREFIX namespace. Retired paths count too, so a
+// leftover from an older version is not user evidence. An empty dir is user
+// evidence: argent's copies always carry content.
 let bundledManagedNamesCache: Map<string, Set<string>> | null = null;
 function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
   if (!bundledManagedNamesCache) bundledManagedNamesCache = new Map();
@@ -355,6 +360,7 @@ function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
   } catch {
     names = new Set();
   }
+  for (const retired of RETIRED_BUNDLED_PATHS[kind]) names.add(retired.path.split("/")[0]);
   bundledManagedNamesCache.set(kind, names);
   return names;
 }
@@ -1901,6 +1907,42 @@ export function removeCodexRules(configPath: string): boolean {
 }
 
 // MARK: Copy orchestrator
+
+export interface RetiredTargetFiles {
+  kind: "rules" | "agents";
+  target: ManagedContentTarget;
+  /** The target's label, naming where its link leads when it is one. */
+  location: string;
+  files: RetiredFile[];
+}
+
+// Copying only adds files, so one an older version wrote and this one dropped
+// stays, and editors keep loading it. Same targets as copyRulesAndAgents.
+export function findRetiredRulesAndAgents(
+  adapters: McpConfigAdapter[],
+  root: string,
+  scope: ManagedContentScope,
+  rulesDir: string,
+  agentsDir: string
+): RetiredTargetFiles[] {
+  const { ruleTargets, agentTargets } = getManagedContentTargets(adapters, root, scope);
+  const scans = [
+    ...ruleTargets.map((target) => ({ kind: "rules" as const, target, bundleDir: rulesDir })),
+    ...agentTargets.map((target) => ({ kind: "agents" as const, target, bundleDir: agentsDir })),
+  ];
+  const found: RetiredTargetFiles[] = [];
+  // Targets linked to one canonical dir share its files: list them once.
+  const seen = new Set<string>();
+  for (const { kind, target, bundleDir } of scans) {
+    const dir = resolveLinkedDestination(target.targetPath);
+    if (seen.has(`${kind}:${realpathOrSelf(dir)}`)) continue;
+    seen.add(`${kind}:${realpathOrSelf(dir)}`);
+    const files = findRetiredFiles(RETIRED_BUNDLED_PATHS[kind], bundleDir, target.targetPath);
+    if (files.length === 0) continue;
+    found.push({ kind, target, location: formatCopyDestination(target, dir, root), files });
+  }
+  return found;
+}
 
 export function copyRulesAndAgents(
   adapters: McpConfigAdapter[],
