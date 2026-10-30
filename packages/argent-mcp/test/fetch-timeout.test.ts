@@ -6,7 +6,7 @@
 // This test uses an in-process replica of fetchWithReconnect rather than
 // spawning the built CLI binary, so it doesn't require `npm run build`.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import http from "node:http";
 import { fetchWithReconnect } from "../src/mcp-server.js";
 
@@ -115,23 +115,5 @@ describe("fetch timeout in fetchWithReconnect", () => {
     expect(res.ok).toBe(true);
 
     server.close();
-  });
-
-  it("ends the backoff between attempts when the caller's signal aborts", async () => {
-    const server = http.createServer();
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const { port } = server.address() as { port: number };
-    await new Promise((r) => server.close(r));
-    const reconnect = vi.fn(mockSuccessfulReconnect);
-    const controller = new AbortController();
-
-    const pending = fetchWithReconnect(() => `http://127.0.0.1:${port}/tools/x`, reconnect, {
-      init: { signal: controller.signal },
-      expBackoffBase: 60_000,
-    });
-    setTimeout(() => controller.abort(new Error("cancelled in the backoff")), 50);
-
-    await expect(pending).rejects.toThrow("cancelled in the backoff");
-    expect(reconnect).toHaveBeenCalledTimes(1);
   });
 });

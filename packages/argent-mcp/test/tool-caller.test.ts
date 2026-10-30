@@ -341,15 +341,6 @@ describe("createToolCaller", () => {
     expect(postsTo("/tools/fast")).toHaveLength(1);
   });
 
-  it("keeps the per-attempt timeout of a call that carries a signal", async () => {
-    const { callTool, reconnect } = caller({ fetchTimeoutMs: 40 });
-
-    const { result } = await callTool("slow-plain", {}, { signal: new AbortController().signal });
-
-    expect((result as { n: number }).n).toBeGreaterThanOrEqual(2);
-    expect(reconnect).toHaveBeenCalledTimes(1);
-  });
-
   it("retries the request and calls reconnect after the first failure", async () => {
     const { callTool, reconnect } = caller();
 

@@ -367,6 +367,16 @@ describe("startMcpServer tool calls", () => {
 
     await expect(pending).rejects.toThrow("stopped in the editor");
     await vi.waitFor(() => expect(stub.hungUp).toEqual(["/tools/hang"]));
+    await vi.waitFor(() =>
+      expect(readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")).toContain(
+        '"name":"hang","durationMs"'
+      )
+    );
+    const logged = readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .split("\n")
+      .filter((l) => l.includes('"event":"tool_result"') && l.includes('"name":"hang"'))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(logged).toMatchObject([{ isError: true, cancelled: true }]);
     const next = await client.callTool({ name: "noted", arguments: {} });
     expect(next.isError).toBeFalsy();
   });
@@ -404,6 +414,8 @@ describe("startMcpServer screen capture after an interaction", () => {
   // A hanging route never answers, as a read of a frozen device's tree.
   let idleHangs: boolean;
   let describeHangs: boolean;
+  // The screenshot answers with an artifact handle, which the adapter downloads.
+  let shotAsArtifact: boolean;
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -426,6 +438,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     waitResult = { success: true, elapsed: 120 };
     idleHangs = false;
     describeHangs = false;
+    shotAsArtifact = false;
     const describeRoute = slow("describe", (res) =>
       send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
     );
@@ -439,9 +452,19 @@ describe("startMcpServer screen capture after an interaction", () => {
           else send(res, idleStatus, { error: "await-screen-idle is not supported" });
         },
         "/tools/screenshot": slow("screenshot", (res) =>
-          screenshotStatus === 200
-            ? send(res, 200, { data: { url: `${stub.url}/shot.png`, path: "/tmp/shot.png" } })
-            : send(res, screenshotStatus, { error: "screenshot failed" })
+          screenshotStatus !== 200
+            ? send(res, screenshotStatus, { error: "screenshot failed" })
+            : shotAsArtifact
+              ? send(res, 200, {
+                  data: {
+                    __argentArtifact: true,
+                    id: "shot-1",
+                    filename: "shot.png",
+                    mimeType: "image/png",
+                    size: PNG.length,
+                  },
+                })
+              : send(res, 200, { data: { url: `${stub.url}/shot.png`, path: "/tmp/shot.png" } })
         ),
         "/tools/describe": (res) => (describeHangs ? undefined : describeRoute(res)),
         "/shot.png": (res) => {
@@ -590,21 +613,39 @@ describe("startMcpServer screen capture after an interaction", () => {
       signal,
     });
 
-  it.each(["/tools/await-screen-idle", "/tools/screenshot", "/tools/describe"])(
-    "ends the capture request %s of an interaction the client cancels",
-    async (route) => {
-      stub.hanging.add(route);
-      const controller = new AbortController();
+  it("drops a screenshot download that outlasts the capture budget", async () => {
+    shotAsArtifact = true;
+    stub.hanging.add("/artifacts/shot-1");
+    const started = Date.now();
 
-      const pending = cancellableTap(controller.signal);
-      await vi.waitFor(() => expect(toolCalls().filter((url) => url === route)).toHaveLength(1));
-      controller.abort("stopped in the editor");
+    const result = await tap();
 
-      await expect(pending).rejects.toThrow("stopped in the editor");
-      // Well inside CAPTURE_MS, whose timeout also ends a capture request.
-      await vi.waitFor(() => expect(stub.hungUp).toEqual([route]), { timeout: 300 });
-    }
-  );
+    // The stalled download answers after 3 s; CAPTURE_MS ends it first.
+    expect(Date.now() - started).toBeLessThan(2_500);
+    await vi.waitFor(() => expect(stub.hungUp).toEqual(["/artifacts/shot-1"]));
+    const text = textOf(result);
+    expect(text).not.toContain("--- Screen after action ---");
+    expect(text).toContain(AUTO_DESCRIBE_HEADER);
+  });
+
+  it.each([
+    "/tools/await-screen-idle",
+    "/tools/screenshot",
+    "/artifacts/shot-1",
+    "/tools/describe",
+  ])("ends the capture request %s of an interaction the client cancels", async (route) => {
+    shotAsArtifact = true;
+    stub.hanging.add(route);
+    const controller = new AbortController();
+
+    const pending = cancellableTap(controller.signal);
+    await vi.waitFor(() => expect(stub.requests.filter((r) => r.url === route)).toHaveLength(1));
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    // Well inside CAPTURE_MS, whose timeout also ends a capture request.
+    await vi.waitFor(() => expect(stub.hungUp).toEqual([route]), { timeout: 300 });
+  });
 
   it("skips the fallback wait for the screen once the client cancels", async () => {
     vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "60000");

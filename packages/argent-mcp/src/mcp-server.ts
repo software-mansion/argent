@@ -199,6 +199,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         toolsUrl: TOOLS_URL,
         authToken: AUTH_TOKEN,
         deviceId: udid,
+        signal,
       });
       if (!blocks.some((b) => b.type === "image")) return [];
       return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
@@ -369,6 +370,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         name: params.name,
         durationMs: Date.now() - t0,
         isError: true,
+        ...(signal.aborted ? { cancelled: true } : {}),
         error: String(err instanceof Error ? err.message : err),
       });
       return {
