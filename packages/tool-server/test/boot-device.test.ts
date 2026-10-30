@@ -297,19 +297,15 @@ describe("boot-device — iOS path", () => {
         (path: string) => path === SIMULATOR_APP || path === DEVICE_HUB_APP
       );
       launchSimulatorAppMock.mockResolvedValue(false);
-      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-      await expect(createBootDeviceTool(registry).execute!({}, { udid })).resolves.toMatchObject({
+      await expect(createBootDeviceTool(registry).execute!({}, { udid })).resolves.toEqual({
+        platform: "ios",
+        udid,
         booted: true,
+        note: `${SIMULATOR_APP} exits right after launch on this host, so Argent no longer opens it and the device runs without a window. Delete ~/.argent/simulator-app-launch.json to try opening it again.`,
       });
       expect(launchSimulatorAppMock).toHaveBeenCalledWith(SIMULATOR_APP, expect.any(Function));
       expect(openCalls()).toEqual([]);
-      expect(stderr).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `not opening ${SIMULATOR_APP}: it exited right after an earlier launch, so the device runs without a window. Delete ~/.argent/simulator-app-launch.json to try again.`
-        )
-      );
-      stderr.mockRestore();
     });
 
     it("hands over a launch that settles only once open has", async () => {
@@ -336,12 +332,9 @@ describe("boot-device — iOS path", () => {
       expect(openCalls()).toEqual([["open", ["-a", SIMULATOR_APP]]]);
     });
 
-    it("says nothing about the record when the Simulator.app opens", async () => {
-      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-
-      await createBootDeviceTool(registry).execute!({}, { udid });
-      expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("simulator-app-launch.json"));
-      stderr.mockRestore();
+    it("adds no note when the Simulator.app opens", async () => {
+      const result = await createBootDeviceTool(registry).execute!({}, { udid });
+      expect(result).not.toHaveProperty("note");
     });
 
     it("bounds the GUI lookups with a timeout", async () => {

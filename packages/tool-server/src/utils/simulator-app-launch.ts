@@ -74,7 +74,8 @@ async function launchKey(simulatorApp: string): Promise<string> {
 const comparablePath = (p: string) => p.normalize("NFC").toLowerCase();
 
 async function isRunning(executable: string): Promise<boolean> {
-  const { stdout } = await execFileAsync(PS_BIN, ["-axo", "comm="], {
+  // Without -a: another user's instance of the same app is not this launch.
+  const { stdout } = await execFileAsync(PS_BIN, ["-xo", "comm="], {
     timeout: 5_000,
     env: { ...process.env, LC_ALL: "en_US.UTF-8" },
   });
@@ -96,7 +97,8 @@ async function survivesLaunch(executable: string): Promise<boolean> {
  * watched for {@link LAUNCH_WATCH_MS}, and an app whose process is gone by then
  * is recorded as crashing. A launch that only activates an instance already
  * running is not watched. Records live in `~/.argent/simulator-app-launch.json`;
- * delete it to retry. Returns false when the launch was skipped.
+ * delete it to retry. Returns false when the app is on record as crashing at
+ * launch: the launch was skipped, or this one has just been recorded so.
  */
 export function launchSimulatorApp(
   simulatorApp: string,
@@ -124,7 +126,8 @@ export function launchSimulatorApp(
           err instanceof Error ? err.message : String(err)
         }\n`
       );
+      return true;
     }
-    return true;
+    return runs;
   });
 }

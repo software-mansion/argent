@@ -31,6 +31,8 @@ let launchedAppStays: boolean;
 let psExecutable: string;
 // Other processes in the list, beside launchd and CoreSimulatorService.
 let psOthers: string[];
+// Processes of other users logged in to the Mac.
+let psOtherUsers: string[];
 let psFails: boolean;
 let launch: Mock<() => Promise<unknown>>;
 
@@ -57,6 +59,7 @@ beforeEach(() => {
   launchedAppStays = false;
   psExecutable = EXECUTABLE;
   psOthers = [];
+  psOtherUsers = [];
   psFails = false;
   launch = vi.fn(async (): Promise<void> => {
     appRunning = launchedAppStays;
@@ -82,10 +85,17 @@ beforeEach(() => {
         callback(new Error("ps failed"));
         return {};
       }
-      // Without -ax, ps leaves out processes with no terminal, as LaunchServices starts apps.
-      const listsAll = argv.join(" ") === "-axo comm=";
-      const app = appRunning && listsAll ? [psExecutable] : [];
-      stdout = ["/sbin/launchd", CORE_SIMULATOR_SERVICE, ...psOthers, ...app, ""].join("\n");
+      // Without -x, ps leaves out processes with no terminal, as LaunchServices
+      // starts apps; without -a, those of other users.
+      const [flags, format] = argv as [string, string];
+      const app = appRunning && flags.includes("x") ? [psExecutable] : [];
+      const otherUsers = flags.includes("a") ? psOtherUsers : [];
+      stdout =
+        format === "comm="
+          ? ["/sbin/launchd", CORE_SIMULATOR_SERVICE, ...psOthers, ...otherUsers, ...app, ""].join(
+              "\n"
+            )
+          : "";
     }
     callback(null, { stdout, stderr: "" });
     return {};
@@ -100,7 +110,7 @@ afterEach(() => {
 
 describe("launchSimulatorApp", () => {
   it("stops launching an app that dies right after launch", async () => {
-    await expect(run()).resolves.toBe(true);
+    await expect(run()).resolves.toBe(false);
     expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
 
     await expect(run()).resolves.toBe(false);
@@ -125,7 +135,7 @@ describe("launchSimulatorApp", () => {
     appRunning = false;
     await vi.advanceTimersByTimeAsync(10_000);
 
-    await expect(result).resolves.toBe(true);
+    await expect(result).resolves.toBe(false);
     expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
   });
 
@@ -135,7 +145,7 @@ describe("launchSimulatorApp", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(settled).toBe(true);
-    await expect(result).resolves.toBe(true);
+    await expect(result).resolves.toBe(false);
   });
 
   it("stops watching once the watch window has passed", async () => {
@@ -152,7 +162,7 @@ describe("launchSimulatorApp", () => {
     const results = Promise.all([launchSimulatorApp(APP, launch), launchSimulatorApp(APP, launch)]);
     await vi.advanceTimersByTimeAsync(10_000);
 
-    await expect(results).resolves.toEqual([true, false]);
+    await expect(results).resolves.toEqual([false, false]);
     expect(launch).toHaveBeenCalledTimes(1);
   });
 
@@ -201,6 +211,13 @@ describe("launchSimulatorApp", () => {
     ];
 
     await run();
+    expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
+  });
+
+  it("does not take another user's instance for the launched one", async () => {
+    psOtherUsers = [EXECUTABLE];
+
+    await expect(run()).resolves.toBe(false);
     expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
   });
 
@@ -313,7 +330,7 @@ describe("launchSimulatorApp", () => {
     fs.mkdirSync(path.join(home, ".argent"));
     fs.writeFileSync(path.join(home, ".argent", "simulator-app-launch.json"), "null");
 
-    await expect(run()).resolves.toBe(true);
+    await expect(run()).resolves.toBe(false);
     expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
   });
 
