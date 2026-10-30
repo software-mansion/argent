@@ -413,8 +413,8 @@ describe("scroll-to directive", () => {
   });
 
   it("ends the scroll once the clip cutting a target stops moving, whatever moves outside it", async () => {
-    // The list is at its end, so the row stays cut, while the gesture moves the
-    // page's top bar.
+    // The list is at its end, so the row stays cut under a wheel at the anchor and
+    // one at the screen's centre, while each moves the page's top bar.
     const swipes = await scrollTo(
       "stuck-cut",
       (scrolled) => [
@@ -427,7 +427,41 @@ describe("scroll-to directive", () => {
       ],
       { target: { identifier: "row" } }
     );
-    expect(swipes).toHaveLength(1);
+    expect(swipes).toHaveLength(2);
+  });
+
+  it("retries a cut the anchor's wheel left in place where an uncut target's gesture goes", async () => {
+    // A wheel taker the walker cannot see (a closed shadow root's scroller, a
+    // page's wheel listener) holds the anchor, and the tree shows nothing move.
+    const pane = n({
+      identifier: "pane",
+      scrollable: true,
+      frame: { x: 0.5, y: 0.3, width: 0.5, height: 0.6 },
+    });
+    for (const within of [undefined, { identifier: "pane" }]) {
+      let wheels = 0;
+      currentTree = () => screen([pane, cutRow(wheels > 1)]);
+      const swipes: SwipeCall[] = [];
+      const registry = mockRegistry(swipes, () => {
+        wheels++;
+      });
+      await writeFlow("hidden-taker", {
+        executionPrerequisite: "",
+        steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" }, within }],
+      });
+      const result = asRun(
+        await createRunFlowTool(registry).execute(
+          {},
+          { name: "hidden-taker", project_root: tmpDir, device: DEVICE }
+        )
+      );
+      expect(result.steps[0].status).toBe("pass");
+      expect(swipes).toHaveLength(2);
+      expect([swipes[0].fromX, swipes[0].fromY]).toEqual([0.3, 0.45]);
+      // The screen's centre, else the named container's.
+      expect(swipes[1].fromX).toBeCloseTo(within ? 0.75 : 0.5);
+      expect(swipes[1].fromY).toBeCloseTo(within ? 0.6 : 0.5);
+    }
   });
 
   it("stops once a cut target keeps its place in the clip while the page moves both", async () => {
@@ -460,7 +494,7 @@ describe("scroll-to directive", () => {
       )
     );
     expect(result.steps[0].status).toBe("pass");
-    expect(swipes).toHaveLength(1);
+    expect(swipes).toHaveLength(2);
   });
 
   it("scrolls a target cut by a scroller whose window spans the whole screen on the axis", async () => {

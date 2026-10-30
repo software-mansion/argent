@@ -37,8 +37,8 @@ export interface DescribeNode {
   // Where scroll containers cut the element by more than a pixel (Chromium):
   // their window along each axis they cut it, the whole screen along the other.
   clipBounds?: DescribeFrame;
-  // Per axis of `clipBounds`, a point where a wheel scrolls a scroller that cuts the
-  // element; absent where none was found on screen.
+  // Per axis a scroll container cuts the element along, where a wheel scrolls it
+  // against that scroller: a point hit-tested on screen, else the window's centre.
   clipAnchors?: { x?: DescribePoint; y?: DescribePoint };
   checkable?: boolean;
   checked?: boolean;

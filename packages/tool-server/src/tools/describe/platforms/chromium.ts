@@ -243,7 +243,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const cuts = [];
 
   // The scroller a wheel at (x, y) scrolls along an axis: the innermost on the
-  // painted element's chain, the one Chrome latches to.
+  // painted element's chain, the one Chrome latches to. Null where that is unknown:
+  // over a frame, whose own document may take the wheel.
   function wheelScroller(x, y, axis) {
     let hit = elementsAt(document, x, y)[0];
     for (let sr = hit && getShadowRoot.call(hit); sr; sr = getShadowRoot.call(hit)) {
@@ -251,6 +252,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (!deeper || deeper === hit) break;
       hit = deeper;
     }
+    if (hit && /^(IFRAME|FRAME|EMBED|OBJECT)$/.test(htmlTag(hit))) return null;
     for (let n = hit; n; ) {
       if (chains.has(n)) {
         const chain = chains.get(n) || [];
@@ -263,29 +265,36 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return null;
   }
 
-  // A point where a wheel reaches a scroller that cuts the element (visible part r)
-  // along the axis. Elsewhere the wheel may move an overlay's scroller, the element's
-  // own, or one nested in the cutter. The farthest along the axis comes first: content
-  // scrolling under the point mid-wheel takes the rest of it, and the element itself
-  // may scroll.
-  function wheelAnchor(r, cutters, axis) {
-    const points = [[(r.left + r.right) / 2, (r.top + r.bottom) / 2]];
-    for (const c of cutters) {
-      const v = intersect(c.win, { left: 0, top: 0, right: w, bottom: h });
-      for (const f of [0.1, 0.5, 0.9]) {
-        for (const g of [0.1, 0.5, 0.9]) {
-          points.push([v.left + (v.right - v.left) * f, v.top + (v.bottom - v.top) * g]);
-        }
-      }
-    }
+  // A point where a wheel scrolls the element (visible part r) against a scroller
+  // cutting it along the axis: one on its chain from the outermost cutter in, of
+  // scrollers \`scs\`. Elsewhere the wheel may move an overlay's scroller, the element's
+  // own, or one holding the cutter. The innermost cutter's window is tried first, its
+  // points farthest along the axis first: content scrolling under the point mid-wheel
+  // takes the rest of it. With no such point on screen, the centre of the cut window
+  // \`win\` across the element.
+  function wheelAnchor(r, scs, cutters, win, axis) {
+    const movers = scs.slice(scs.indexOf(cutters[0])).filter((s) => s[axis]);
     const away = ([x, y]) =>
       axis === "sx" ? Math.max(r.left - x, x - r.right) : Math.max(r.top - y, y - r.bottom);
-    points.sort((a, b) => away(b) - away(a));
+    const points = [];
+    for (let i = cutters.length - 1; i >= 0; i--) {
+      const v = intersect(cutters[i].win, { left: 0, top: 0, right: w, bottom: h });
+      const grid = [];
+      for (const f of [0.1, 0.5, 0.9]) {
+        for (const g of [0.1, 0.5, 0.9]) {
+          grid.push([v.left + (v.right - v.left) * f, v.top + (v.bottom - v.top) * g]);
+        }
+      }
+      points.push(...grid.sort((a, b) => away(b) - away(a)));
+    }
+    points.push([(r.left + r.right) / 2, (r.top + r.bottom) / 2]);
     for (const [x, y] of points) {
       const s = wheelScroller(x, y, axis);
-      if (s && cutters.some((c) => c.el === s)) return { x: x / w, y: y / h };
+      if (s && movers.some((m) => m.el === s)) return { x: x / w, y: y / h };
     }
-    return undefined;
+    return axis === "sx"
+      ? { x: (win.left + win.right) / 2 / w, y: (r.top + r.bottom) / 2 / h }
+      : { x: (r.left + r.right) / 2 / w, y: (win.top + win.bottom) / 2 / h };
   }
 
   // An XHTML document keeps tagName lowercase.
@@ -881,15 +890,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           (s) => s.sy && (s.win.top > r.top + 1 || s.win.bottom < r.bottom - 1)
         );
         if (cutsX.length || cutsY.length) {
-          const c = normRect({
+          const win = {
             left: Math.max(0, ...cutsX.map((s) => s.win.left)),
             top: Math.max(0, ...cutsY.map((s) => s.win.top)),
             right: Math.min(w, ...cutsX.map((s) => s.win.right)),
             bottom: Math.min(h, ...cutsY.map((s) => s.win.bottom)),
-          });
-          clipBounds = c;
+          };
+          clipBounds = normRect(win);
           if (getOwnerDocument.call(el) === document) {
-            cut = { r: intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h }), cutsX, cutsY };
+            const vis = intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h });
+            cut = { r: vis, scs, win, cutsX, cutsY };
           }
         }
       }
@@ -959,10 +969,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children: [],
   };
-  for (const { node, r, cutsX, cutsY } of cuts) {
-    const x = cutsX.length ? wheelAnchor(r, cutsX, "sx") : undefined;
-    const y = cutsY.length ? wheelAnchor(r, cutsY, "sy") : undefined;
-    if (x || y) node.clipAnchors = x && y ? { x, y } : x ? { x } : { y };
+  for (const { node, r, scs, win, cutsX, cutsY } of cuts) {
+    node.clipAnchors = {};
+    if (cutsX.length) node.clipAnchors.x = wheelAnchor(r, scs, cutsX, win, "sx");
+    if (cutsY.length) node.clipAnchors.y = wheelAnchor(r, scs, cutsY, win, "sy");
   }
   return JSON.stringify({ tree: root, truncated });
 })()`;

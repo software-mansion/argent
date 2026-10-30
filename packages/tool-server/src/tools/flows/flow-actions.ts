@@ -836,6 +836,8 @@ async function scrollToVisible(
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
   let prevRoom: number | undefined;
+  // Whether the walker's anchor is spent: a wheel there left the cut in place.
+  let anchorSpent = false;
   let warning: string | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
@@ -853,7 +855,7 @@ async function scrollToVisible(
 
     // A target a scroll container cuts along the axis is scrolled inside that
     // scroller, whether or not the tree has a node for it: the gesture is anchored
-    // where the walker found a wheel reaches a cutting scroller (`clipAnchors`),
+    // where the walker found a wheel moves it against a cutting scroller (`clipAnchors`),
     // and its region is the cutting window along the axis. A gesture anchored
     // elsewhere moves another scroller, or what holds this one, carrying the cut
     // along. Any other gesture is anchored inside the
@@ -880,11 +882,16 @@ async function scrollToVisible(
     if (frame && axisFullyInside(frame, axisDirection, cut ?? container?.clipFrame ?? region)) {
       return { frame, ...warnedBy(warning) };
     }
-    // A cut that the last increment left where it was is one its scroller cannot
-    // scroll away (it is at its end): further wheels only chain to the page.
+    // A cut the last increment left where it was: the walker cannot see every wheel
+    // taker (a page's wheel listener, a closed shadow root's scroller, a scroller
+    // that moved under the anchor), so later increments go where an uncut target's
+    // would. One that leaves it in place too is a cut its scroller cannot scroll
+    // away (it is at its end): further wheels only chain to the page.
     const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
+    let spentNow = false;
     if (room !== undefined && prevRoom !== undefined && Math.abs(room - prevRoom) < 1e-4) {
-      return { frame: frame!, ...warnedBy(warning) };
+      if (anchorSpent) return { frame: frame!, ...warnedBy(warning) };
+      anchorSpent = spentNow = true;
     }
     prevRoom = room;
 
@@ -905,7 +912,8 @@ async function scrollToVisible(
       within || axisCut ? [region] : anchorScrollFrames(tree, getDescribeTapPoint(region));
     if (scope.length === 0) scope.push(FULL_SCREEN);
     const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
-    if (prevFp !== undefined && fp === prevFp) {
+    // A wheel taker the tree cannot see leaves the fingerprint as it was too.
+    if (!spentNow && prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
       if (frame) return { frame, ...warnedBy(warning) };
       return {
@@ -917,7 +925,9 @@ async function scrollToVisible(
 
     // A cut target moves no further than its visible start is from the
     // window's, or one taller than half the window would be carried past it.
-    warning ??= await scrollIncrement(env, axisDirection, region, room, anchor);
+    warning ??= anchorSpent
+      ? await scrollIncrement(env, axisDirection, container?.frame ?? FULL_SCREEN, room)
+      : await scrollIncrement(env, axisDirection, region, room, anchor);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,

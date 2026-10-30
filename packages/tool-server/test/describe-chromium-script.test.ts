@@ -1063,7 +1063,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "sc")).toEqual({ x: 0, y: 0, w: 300, h: 100 });
   });
 
-  it("anchors a cut where a wheel reaches the scroller cutting it, farthest from the element", () => {
+  it("anchors a cut where a wheel reaches a scroller moving it in the cutter, farthest from the element", () => {
     // A pane spanning the whole screen height cuts the row at the screen's bottom.
     const pane = (kids: MockElement[], painted?: Rect) =>
       scroller(kids, {
@@ -1087,6 +1087,25 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     });
     const barred = run([pane([cutRow()], PANE), bar]).tree;
     expect(findById(barred, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.5 } });
+    // A frame's own document may take the wheel, though its element sits in the pane.
+    const TOP = { x: 0, y: 0, w: 300, h: 300 };
+    const frame = el({ tag: "iframe", rect: TOP, painted: TOP });
+    const framed = run([pane([frame, cutRow()], PANE)]).tree;
+    expect(findById(framed, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.5 } });
+    // A scroller between the cutter and the row carries the row as it scrolls.
+    const inner = el({
+      rect: { x: 0, y: 0, w: 285, h: 2 * H },
+      client: { left: 0, top: 0, width: 285, height: 2 * H },
+      offset: { width: 285, height: 2 * H },
+      scrollSize: { width: 285, height: 4 * H },
+      style: { overflow: "auto" },
+      painted: PANE,
+      children: [cutRow()],
+    });
+    const carried = run([pane([inner])]).tree;
+    expect(findById(carried, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.1 } });
+    // Where no wheel is seen to reach one, the cut window's centre across the row.
+    const fallback = { y: { x: 0.143, y: 0.5 } };
     // The row scrolls itself, so a wheel on it moves the row's content instead.
     const own = el({
       attrs: { id: "cut" },
@@ -1097,11 +1116,10 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       painted: { x: 1, y: 950, w: 285, h: 50 },
     });
     const self = run([pane([own], { x: 0, y: 940, w: 300, h: 60 })]).tree;
-    expect(findById(self, "cut")!.clipAnchors).toBeUndefined();
-    // Nothing on screen hit-tests to the pane: no anchor, though the cut stands.
+    expect(findById(self, "cut")!.clipAnchors).toEqual(fallback);
     const unseen = run([pane([cutRow()])]).tree;
     expect(pxFrame(unseen, "cut", "clipBounds")).toEqual({ x: 0, y: 0, w: W, h: H });
-    expect(findById(unseen, "cut")!.clipAnchors).toBeUndefined();
+    expect(findById(unseen, "cut")!.clipAnchors).toEqual(fallback);
   });
 
   it("anchors a horizontal cut farthest from the element along x", () => {
