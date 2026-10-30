@@ -27,6 +27,15 @@ The agent does not read coordinates from a screenshot. Before a tap, the agent h
 - the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
+The element list does not show which element is on top. When a labelled element covers the centre of another element, for example a tab bar over a list row, the element list gives the second element a note. A tap at that centre can reach the other element, so the agent checks a screenshot before the tap. These elements get no note:
+
+- an element that lies wholly inside another element, for example a switch inside its row or a row that is fully under a tab bar,
+- an element and its own parent or child, when the source gives a tree with parents,
+- text over text and image, and the text runs of one paragraph,
+- keyboard keys, sliders, page indicators and elements of half the screen or more.
+
+Only the element list of the accessibility tree and the DOM adds the note. The React component tree, the TV focus view and Vega devices get no such note.
+
 After a screen change, the action returns the new screen: a screenshot and the element tree. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
 
 ## Launching apps
