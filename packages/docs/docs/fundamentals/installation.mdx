@@ -40,7 +40,7 @@ The installation wizard:
 
 - installs `@swmansion/argent` globally,
 - detects your editor and registers the MCP server,
-- copies skills, rules and agent definitions into your workspace.
+- copies skills and rules into your workspace.
 
 <Video
   src="/video/installation-wizard.mp4"
@@ -75,7 +75,7 @@ By default Argent installs **globally**. To version Argent with your repo, so ev
 npx @swmansion/argent@latest init --local
 ```
 
-This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP configs that launch the project-local copy. Commit `package.json` and your lockfile, the generated MCP config (`.mcp.json`, `.cursor/mcp.json`, and so on), `.argent/install.json`, and the skills, rules and agents files. Teammates then run `npm install`.
+This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP configs that launch the project-local copy. Commit `package.json` and your lockfile, the generated MCP config (`.mcp.json`, `.cursor/mcp.json`, and so on), `.argent/install.json`, and the skills and rules files. Teammates then run `npm install`.
 
 Pass `--global` to force the default mode in scripts. `--local` and `--global` are mutually exclusive. A non-interactive (`--yes`) run defaults to global unless the project already opted into local mode.
 

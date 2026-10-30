@@ -814,7 +814,7 @@ export async function update(args: string[]): Promise<void> {
       }
 
       if (ruleResults.length > 0) {
-        p.note(ruleResults.join("\n"), "Rules & Agents Updated");
+        p.note(ruleResults.join("\n"), "Rules Updated");
       }
 
       reportSkillRefresh(projectRoot, "installer_update_skills_refresh");
