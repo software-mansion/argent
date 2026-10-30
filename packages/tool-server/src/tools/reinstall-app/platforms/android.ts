@@ -6,9 +6,10 @@ import { assertApk } from "../validate-app";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 // `pm list packages <filter>` matches substrings, exits 0 either way and ends
-// lines with `\r\n` before API 24.
+// lines with `\r\n` before API 24. `-u` adds packages that are hidden or
+// uninstalled for one user only, e.g. a system app removed for user 0.
 async function isInstalled(udid: string, bundleId: string): Promise<boolean> {
-  const listing = await adbShell(udid, `pm list packages ${shellQuote(bundleId)}`, {
+  const listing = await adbShell(udid, `pm list packages -u ${shellQuote(bundleId)}`, {
     timeoutMs: 15_000,
   });
   return listing.split("\n").some((line) => line.trim() === `package:${bundleId}`);
@@ -40,10 +41,11 @@ export const androidImpl: PlatformImpl<
         `Could not check whether \`adb uninstall\` removed ${bundleId}, so nothing was installed and the app may be gone. ` +
           `adb uninstall said: ${uninstall}. The check failed: ${err instanceof Error ? err.message : String(err)}`,
         {
-          error_code: FAILURE_CODES.ANDROID_REINSTALL_INSTALL_FAILED,
+          error_kind: "subprocess",
+          ...getFailureSignal(err),
+          error_code: FAILURE_CODES.ANDROID_REINSTALL_UNINSTALL_FAILED,
           failure_stage: "android_reinstall_check_uninstall",
           failure_area: "tool_server",
-          error_kind: getFailureSignal(err)?.error_kind ?? "subprocess",
         },
         { cause: err instanceof Error ? err : new Error(String(err)) }
       );
@@ -55,7 +57,7 @@ export const androidImpl: PlatformImpl<
           `An updated system app only loses its update, and its data too when the update was a newer version. ` +
           `adb uninstall said: ${uninstall}`,
         {
-          error_code: FAILURE_CODES.ANDROID_REINSTALL_INSTALL_FAILED,
+          error_code: FAILURE_CODES.ANDROID_REINSTALL_UNINSTALL_FAILED,
           failure_stage: "android_reinstall_adb_uninstall",
           failure_area: "tool_server",
           error_kind: "subprocess",

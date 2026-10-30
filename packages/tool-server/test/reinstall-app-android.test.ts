@@ -13,7 +13,7 @@ const device = {
   system: new Set<string>(),
   // Updated system apps: `adb uninstall` removes the update, says Success, and the package stays.
   updatedSystem: new Set<string>(),
-  // Hidden packages: installed, but missing from `pm list packages`.
+  // Hidden, or uninstalled for the current user only: listed by `pm list packages` only with -u.
   hidden: new Set<string>(),
   // Before API 24: a failed `adb uninstall` exits 0, and `adb shell` output ends lines with \r\n.
   legacy: false,
@@ -40,11 +40,12 @@ function fakeAdb(args: readonly string[]): AdbResult | Error {
   const [command, ...rest] = argv;
   const eol = device.legacy ? "\r\n" : "\n";
   if (command === "shell") {
-    const filter = /^pm list packages '(.+)'$/.exec(rest[0]!)?.[1];
-    if (filter === undefined) throw new Error(`unexpected shell command: ${rest[0]}`);
+    const match = /^pm list packages (-u )?'(.+)'$/.exec(rest[0]!);
+    if (!match) throw new Error(`unexpected shell command: ${rest[0]}`);
+    const [, all, filter] = match;
     if (device.pmFails) return failure(`shell ${rest[0]}`, "cmd: Can't find service: package\n");
     const lines = [...device.installed].filter(
-      (pkg) => pkg.includes(filter) && !device.hidden.has(pkg)
+      (pkg) => pkg.includes(filter!) && (all !== undefined || !device.hidden.has(pkg))
     );
     return { stdout: lines.map((pkg) => `package:${pkg}${eol}`).join(""), stderr: "" };
   }
@@ -98,7 +99,7 @@ vi.mock("../src/utils/android-binary", () => ({
 }));
 
 import type { DeviceInfo } from "@argent/registry";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { getFailureSignal } from "@argent/registry";
 import { androidImpl } from "../src/tools/reinstall-app/platforms/android";
 
 const androidDevice = { id: SERIAL, platform: "android", kind: "emulator" } as DeviceInfo;
@@ -130,7 +131,7 @@ const ran = (command: string) => device.calls.filter((argv) => argv[0] === comma
 
 function expectUninstallFailure(err: unknown) {
   expect(getFailureSignal(err)).toMatchObject({
-    error_code: FAILURE_CODES.ANDROID_REINSTALL_INSTALL_FAILED,
+    error_code: "ANDROID_REINSTALL_UNINSTALL_FAILED",
     failure_stage: "android_reinstall_adb_uninstall",
   });
   expect(ran("install")).toEqual([]);
@@ -187,6 +188,14 @@ describe("reinstall-app on Android", () => {
     expect((err as Error).message).toContain("DELETE_FAILED_INTERNAL_ERROR");
   });
 
+  it("fails without installing when the package that cannot be uninstalled is hidden", async () => {
+    device.installed.add("com.android.egg");
+    device.system.add("com.android.egg");
+    device.hidden.add("com.android.egg");
+
+    expectUninstallFailure(await rejection(reinstall("com.android.egg")));
+  });
+
   it("fails without installing when the uninstall only removes a system app's update", async () => {
     device.installed.add("com.android.chrome");
     device.system.add("com.android.chrome");
@@ -210,8 +219,11 @@ describe("reinstall-app on Android", () => {
     const err = await rejection(reinstall("com.example.app"));
 
     expect(getFailureSignal(err)).toMatchObject({
-      error_code: FAILURE_CODES.ANDROID_REINSTALL_INSTALL_FAILED,
+      error_code: "ANDROID_REINSTALL_UNINSTALL_FAILED",
       failure_stage: "android_reinstall_check_uninstall",
+      error_kind: "subprocess",
+      failure_command: "adb",
+      failure_exit_code: 1,
     });
     expect((err as Error).message).toContain("the app may be gone");
     expect(ran("install")).toEqual([]);
