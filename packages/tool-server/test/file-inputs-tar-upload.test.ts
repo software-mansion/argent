@@ -110,9 +110,9 @@ describe("resolveFileInputs — tar-upload kind", () => {
         () => undefined
       )
     ).rejects.toThrow(
-      `Path "${appDir}" is on the client, but the tool-server host has no matching ` +
-        `file at that path and the client uploaded none. The client uploads it only when ` +
-        `linked to the tool-server (argent link or ARGENT_TOOLS_URL).`
+      `Path "${appDir}" no longer matches the file the client read: its size or ` +
+        `modification time changed, and the client uploaded none. If a build is still ` +
+        `writing it, call again once the build finishes.`
     );
   });
 

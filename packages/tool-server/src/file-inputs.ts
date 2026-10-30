@@ -401,9 +401,9 @@ async function resolveOne(
         ? `Path "${wire.path}" was not found. The client sent no file for it, and the ` +
             `tool-server host has none at that path. If the file is on the client, update ` +
             `argent there: versions before 0.16 do not send it.`
-        : `Path "${wire.path}" is on the client, but the tool-server host has no matching ` +
-            `file at that path and the client uploaded none. The client uploads it only when ` +
-            `linked to the tool-server (argent link or ARGENT_TOOLS_URL).`
+        : `Path "${wire.path}" no longer matches the file the client read: its size or ` +
+            `modification time changed, and the client uploaded none. If a build is still ` +
+            `writing it, call again once the build finishes.`
     );
   }
 
