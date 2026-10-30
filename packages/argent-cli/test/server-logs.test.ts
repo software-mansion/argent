@@ -24,7 +24,6 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-/** Resolves on the first process.exit with its code and what was printed before it. */
 function captureExit(): Promise<{ code?: number; printed: string[] }> {
   const err: string[] = [];
   vi.spyOn(console, "error").mockImplementation((...args) => void err.push(args.join(" ")));
