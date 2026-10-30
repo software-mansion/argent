@@ -1629,7 +1629,8 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
   });
 
   it("treats the body's overflow as a clip once either axis of the root's overflow is set", () => {
-    for (const rootStyle of [{ overflowX: "clip" }, { overflowY: "clip" }]) {
+    const rootStyles: Record<string, string>[] = [{ overflowX: "clip" }, { overflowY: "clip" }];
+    for (const rootStyle of rootStyles) {
       const body = el({
         tag: "body",
         rect: { x: 0, y: 0, w: W, h: 50 },
