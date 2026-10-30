@@ -28,6 +28,13 @@ export const LINKED_CALL_HEADER = "x-argent-linked";
 export const E2E_DIR_CLIENT_HEADER = "x-argent-e2e-dir";
 
 /**
+ * The request header that carries the secrets an argent client sends with a
+ * call: base64 of a JSON object of secret name to value. The tool-server reads
+ * it as {@link InvokeToolOptions.clientSecrets}.
+ */
+export const CLIENT_SECRETS_HEADER = "x-argent-client-secrets";
+
+/**
  * True when a node holds (or is acquiring) a real process to tear down. ERROR
  * and TERMINATING nodes hold none — a start that threw (e.g. a tvOS UDID the
  * SimulatorServer blueprint rejects) leaves an ERROR node behind — so the stop
@@ -129,6 +136,12 @@ export interface InvokeToolOptions {
    * Absent for a direct invocation and for a sub-tool call.
    */
   legacyE2eDir?: boolean;
+  /**
+   * Secret values by name from the header `x-argent-client-secrets`, which
+   * `{{secret:NAME}}` resolves against ahead of the tool-server's own sources.
+   * Forwarded to every sub-tool call.
+   */
+  clientSecrets?: ReadonlyMap<string, string>;
   /**
    * Internal: the run-stack entries of the flow runs that enclose this call,
    * outermost first, which a sub-tool call passes on to a nested
@@ -277,6 +290,12 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * callers such as the Node client and `argent run`.
    */
   hideFromMcp?: boolean;
+  /**
+   * Sets the MCP `readOnlyHint` annotation. Only for tools that observe state
+   * without changing the device, app, files or server in a user-visible way:
+   * Claude Code runs them without a prompt in plan mode.
+   */
+  readOnly?: boolean;
   /**
    * Gates this tool behind a flag name in @argent/configuration-core's
    * FLAG_REGISTRY. Enforced in TWO places, both re-checked per request so

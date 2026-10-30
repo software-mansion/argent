@@ -54,7 +54,7 @@ npx react-native run-ios --simulator="<name>"        # iOS (or --udid <UDID>)
 npx react-native run-android --deviceId=<adb-serial> # Android
 ```
 
-**Android only**: after install, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the emulator/device can reach Metro on your host. Repeat if the device restarts or adb drops.
+**Android only**: after install, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the emulator/device can reach Metro on your host. Repeat if the device restarts or adb drops. If `list-devices` returns a `hint` about the adb server, prefix this and every other `adb` command that you run yourself, as the hint shows.
 
 **Agent checklist:**
 
@@ -232,6 +232,8 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | iOS native logs              | `npx react-native log-ios`                                                                                                               |
 | Android native logs          | `npx react-native log-android` or `adb -s <serial> logcat`                                                                               |
 | Clean + reinstall (nuclear)  | See §3.1 step 3                                                                                                                          |
+
+If `list-devices` returns a `hint` about the adb server, prefix the `adb` commands above as the hint shows.
 
 ---
 

@@ -131,6 +131,7 @@ Use when you specifically need to investigate JS CPU hotspots that are NOT tied 
 Call react-profiler-stop first. Reads directly from the stored cpuProfile.
 Returns a markdown table of the top hotspot functions with self-time, total-time, and location.
 Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
+  readOnly: true,
   zodSchema,
   // RN-only: reads a Hermes CPU profile; Chromium's V8 sample format differs.
   capability: RN_ONLY_TOOL_CAPABILITY,
