@@ -454,7 +454,7 @@ Failed e2e tests (2)
 FAIL — 4 e2e tests: 2 passed, 2 failed, 0 skipped (10.2s)
 ```
 
-When a single e2e test run fails its steps, Argent prints the first step that failed or errored, and its reason, again above the last line. When the only failure is a baseline that the CLI could not write, Argent prints `baselines not written` and the path and the reason of each such baseline there instead.
+When a single e2e test run fails its steps, Argent prints the first step that failed or errored, and its reason, again above the last line. Under the reason, Argent prints `baseline not written:` with the path and the reason of each baseline that the CLI could not write. When the only failure is such a baseline, Argent prints `baselines not written` and the path and the reason of each such baseline there instead.
 
 `--json` and `--json-stream` print no header, no outcome line, no `Failed e2e tests` section and no summary.
 
@@ -571,7 +571,7 @@ Over a link, both sources send these files with the call, and the tool-server ru
 - the snapshot baselines of each run
 - the file arguments of the `tool:` steps
 
-The client sends these files with the rules of [E2E tests over a link](#e2e-tests-over-a-link). The `project_root` argument is the project root. When a run of the call updates baselines, the client writes each new baseline into the `__baselines__/<test>/` directory of its e2e test when the run ends. When the client cannot write a baseline, the report names that baseline with the path and the reason, and the run fails. When the call sets `updateBaselines`, a `tool: e2e-execute` step in the e2e test also updates the baselines of its e2e test, unless the step sets `updateBaselines` itself.
+The client sends these files with the rules of [E2E tests over a link](#e2e-tests-over-a-link). The `project_root` argument is the project root. When a run of the call updates baselines, the client writes each new baseline into the `__baselines__/<test>/` directory of its e2e test when the run ends. When the client cannot write a baseline, the result holds `{ "path": "<path>", "error": "<reason>" }` for it in `baselineWrites`. `argent e2e run` and the MCP server then report the run as failed, with the path and the reason. When the call sets `updateBaselines`, a `tool: e2e-execute` step in the e2e test also updates the baselines of its e2e test, unless the step sets `updateBaselines` itself.
 
 Before the first step, Argent checks the e2e test and each fragment and nested e2e test that the client sends, at any depth. Argent rejects these:
 
