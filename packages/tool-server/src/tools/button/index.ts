@@ -101,8 +101,8 @@ Returns { pressed: buttonName }.
 Fails if the device backend is not reachable: the simulator-server for iOS, <flag:harmonyos>\`hdc\` for HarmonyOS, </flag:harmonyos>or \`adb\` for Android (Android presses are injected with \`adb shell input keyevent\`).`,
   zodSchema,
   capability,
-  // On a physical iPhone the first call can wait minutes for the runner to build and start, and
-  // the MCP fetch timeout's abort replays the call: the press would land once per replay.
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the press would land once per replay.
   longRunning: true,
   // Declare only the service the resolved path actually consumes. The Android
   // path uses `adb`, so a sim-server here would spawn a service the tool never

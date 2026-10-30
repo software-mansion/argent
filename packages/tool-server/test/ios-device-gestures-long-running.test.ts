@@ -1,10 +1,7 @@
 /**
- * On a physical iPhone, the first call of a session waits for the XCUITest
- * runner to build and start, which takes far longer than the MCP adapter's 30 s
- * per-attempt fetch timeout. The adapter then aborts and replays the POST
- * (packages/argent-mcp/src/tool-caller.ts), the tool-server keeps running the
- * aborted call, and each invocation sends its own gesture once the runner is
- * up. `longRunning` turns that timeout off.
+ * A physical iPhone's first call outlasts the MCP adapter's 30 s fetch timeout
+ * (packages/argent-mcp/src/tool-caller.ts), whose abort replays the POST while
+ * the aborted call keeps running, so a mutating tool must be `longRunning`.
  */
 import { describe, expect, it } from "vitest";
 import { buttonTool } from "../src/tools/button";
