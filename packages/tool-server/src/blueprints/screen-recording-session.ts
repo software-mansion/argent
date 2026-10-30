@@ -57,7 +57,6 @@ export function screenRecordingSessionRef(device: DeviceInfo): ServiceRef {
 
 export interface ScreenRecordingSessionApi {
   deviceId: string;
-  platform: "ios" | "android" | "ios-remote";
   /** True from a successful start until stop / cap / unexpected exit. */
   recordingActive: boolean;
   /**
@@ -229,7 +228,6 @@ export const screenRecordingSessionBlueprint: ServiceBlueprint<
     }
     const state: ScreenRecordingSessionApi = {
       deviceId: device.id,
-      platform: device.platform,
       recordingActive: false,
       startPending: false,
       stopPending: false,
