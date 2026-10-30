@@ -10,6 +10,8 @@ import {
   chromiumCdpRef,
   ensureCdpReachable,
 } from "../src/blueprints/chromium-cdp";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { chromiumImpl } from "../src/tools/open-url/platforms/chromium";
 import { resolveDevice } from "../src/utils/device-info";
 
 interface FakeCdp {
@@ -197,6 +199,23 @@ describe("chromiumCdpBlueprint (smoke)", () => {
       expect(shot.path).toMatch(/argent-chromium-media/);
       expect(shot.path).toMatch(/argent-screenshot-/);
       expect(shot.url).toMatch(/^file:\/\//);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("open-url fails with the classified error when Chromium rejects the navigation", async () => {
+    const s = await startFakeCdp();
+    servers.push(s);
+    s.setReply("Page.navigate", { frameId: "F", errorText: "net::ERR_NAME_NOT_RESOLVED" });
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const instance = await chromiumCdpBlueprint.factory({}, device, { device });
+
+    try {
+      const err = await chromiumImpl
+        .handler({ chromium: instance.api }, { udid: device.id, url: "http://x.invalid/" }, device)
+        .catch((e: unknown) => e);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED);
     } finally {
       await instance.dispose();
     }
