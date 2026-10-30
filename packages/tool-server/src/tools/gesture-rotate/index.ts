@@ -113,6 +113,9 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
 Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected.`,
   zodSchema,
   capability,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
     return isIosPhysicalDevice(device)
