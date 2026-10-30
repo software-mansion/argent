@@ -21,7 +21,7 @@ ArgentRunner/
     ArgentRunnerSession+Commands.swift   Target resolution, exception guard,
                                          recorded-failure detection,
                                          button / shutdown
-    ArgentRunnerSession+Gestures.swift   tap / longPress / drag / viewport
+    ArgentRunnerSession+Gestures.swift   tap / longPress / drag / touchPaths / viewport
     ArgentRunnerSession+TextEntry.swift  type / keyboardReturn / keyboardDelete
     ArgentRunnerSession+Quiescence.swift XCTest idle-wait skip + capped settle
     ArgentRunnerSession+Snapshot.swift   one-shot AX tree capture + flattening
@@ -31,6 +31,8 @@ ArgentRunner/
     CommandJournal.swift                 send-once bookkeeping for lost replies
     MainThreadGate.swift                 watchdog + busy/wedged reporting
     ArgentExceptionGuard.{h,m}           @try/@catch shim for XCTest NSExceptions
+    ArgentTouchSynthesizer.{h,m}         multi-finger event synthesis (private XCTest
+                                         classes, resolved by name at runtime)
     Assets.xcassets                      runner app icon
 ```
 
