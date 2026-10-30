@@ -15,6 +15,14 @@ export const INSTALL_GLOBAL_PACKAGE_FAILED: InstallerFailureSignal = {
   error_kind: "subprocess",
 };
 
+// Refused by the preflight; no install was attempted.
+export const INSTALL_GLOBAL_PREFIX_UNWRITABLE: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_GLOBAL_PREFIX_UNWRITABLE,
+  failure_stage: "installer_global_prefix_preflight",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
 export const INSTALL_LOCAL_PACKAGE_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_LOCAL_PACKAGE_FAILED,
   failure_stage: "installer_local_package_install",
