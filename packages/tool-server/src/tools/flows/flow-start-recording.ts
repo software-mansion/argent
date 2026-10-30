@@ -32,10 +32,8 @@ const zodSchema = z.object({
     .describe(
       'Fragments only: the app/device state assumed on entry (e.g. "Settings app open on General page"). ' +
         "For a standalone e2e test, omit this and record a `restart-app` as the first step instead; " +
-        "it is captured as the e2e test's `launch` step. restart-app has no chromium support, so a chromium " +
-        "e2e test records as a fragment; add the `launch: { chromium: <app path> }` line to the YAML " +
-        "afterward, deleting the executionPrerequisite line if you passed one, since an e2e test that starts " +
-        "with a launch must not declare it."
+        "it is captured as the e2e test's `launch` step (on chromium, `launch: { chromium: <app path> }` " +
+        "with the app's absolute path)."
     ),
 });
 

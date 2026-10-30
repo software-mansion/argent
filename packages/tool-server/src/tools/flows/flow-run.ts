@@ -109,7 +109,11 @@ import {
   CHROMIUM_CDP_NAMESPACE,
   type ChromiumCdpApi,
 } from "../../blueprints/chromium-cdp";
-import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
+import {
+  bootElectronApp,
+  forgetElectronLaunchSpec,
+  killChromiumByPortAndWait,
+} from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
@@ -679,7 +683,8 @@ async function treeSourceGate(
  * so the run still returns a structured report; a run cancelled mid-launch
  * returns the shared aborted outcome (reported as a skip).
  *
- * Chromium can't relaunch in place — see {@link runChromiumLaunch}.
+ * A Chromium launch boots instead of relaunching in place — see
+ * {@link runChromiumLaunch}.
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const env = deviceEnv(state);
@@ -740,8 +745,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 
 /**
  * Execute a `launch` step on a Chromium device. A chromium "device" IS the
- * booted process (its id is the CDP port), so there is no in-place relaunch:
- * only the run's FIRST launch can be satisfied without booting — settling the
+ * booted process (its id is the CDP port), and a launch names an app path, not
+ * an instance to relaunch: only the run's FIRST launch can be satisfied without booting — settling the
  * boot {@link resolveRunDevice} hoisted, or attaching to an instance the runner
  * does not own. Later launches boot their own ({@link bootChromiumForLaunch}).
  */
@@ -2103,7 +2108,8 @@ async function bootChromiumForFlow(
 /**
  * Tear down a Chromium instance the runner booted. Best-effort — never fail a
  * run here: dispose the CDP session (if a tool opened one), kill the process,
- * and forget its port so `list-devices` stops probing it. The kill is awaited
+ * and forget its port so `list-devices` stops probing it and restart-app does
+ * not relaunch it. The kill is awaited
  * to the process's actual exit (bounded — see {@link killChromiumByPortAndWait})
  * because every next boot of the same app would otherwise race the dying
  * instance's lock.
@@ -2118,6 +2124,7 @@ async function teardownBootedChromium(registry: Registry, booted: BootedChromium
   }
   try {
     await killChromiumByPortAndWait(booted.port, booted.pid);
+    forgetElectronLaunchSpec(booted.port);
     untrackChromiumPort(booted.port);
   } catch {
     /* one unreachable instance must not strand the others */
