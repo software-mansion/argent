@@ -199,6 +199,25 @@ describe("argent config — validation & errors", () => {
     expect(errors()).toMatch(/--scope must be/);
   });
 
+  it.each([
+    [["list", "--jsno"], "Unknown flag: --jsno"],
+    [["list", "extra"], 'unexpected extra argument "extra"'],
+    [["list", "--scope", "project"], "Unknown flag: --scope"],
+  ])("rejects %j with exit 2 instead of listing", (argv, message) => {
+    expect(() => config(argv)).toThrow(new ExitError(2));
+    expect(errors()).toContain(message);
+    expect(output()).toBe("");
+  });
+
+  it.each([[["set", "lens.agent", "claude", "--json"]], [["unset", "lens.agent", "--json"]]])(
+    "rejects --json on %j, which has no JSON output",
+    (argv) => {
+      expect(() => config(argv)).toThrow(new ExitError(2));
+      expect(errors()).toContain("Unknown flag: --json");
+      expect(output()).toBe("");
+    }
+  );
+
   it("rejects a value that fails the schema validator", () => {
     // lens.agent must be a non-blank string; a JSON number is invalid.
     expect(() => config(["set", "lens.agent", "42"])).toThrow(ExitError);

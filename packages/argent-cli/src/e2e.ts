@@ -1496,6 +1496,18 @@ export async function e2e(argv: string[], options: FlowCommandOptions): Promise<
   }
 
   if (sub === "list") {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      printHelp();
+      return;
+    }
+    try {
+      const { positionals } = parseCommandArgs(rest, {});
+      if (positionals.length > 0) throw new UsageError(`Unexpected argument "${positionals[0]}"`);
+    } catch (err) {
+      if (!(err instanceof UsageError)) throw err;
+      console.error(`Error: ${err.message}. Run \`argent e2e --help\`.`);
+      return exitAfterFlush(2);
+    }
     // Every e2e test directory in lookup order. Stdout stays bare paths, one
     // per line, so `list | xargs -n1 run` keeps working; notes on legacy and
     // shadowed entries go to stderr.

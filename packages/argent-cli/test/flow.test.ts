@@ -1402,6 +1402,32 @@ describe("argent e2e run", () => {
     expect(logs.join("\n")).toBe(".argent/e2e/linked.yaml");
   });
 
+  it.each(["--help", "-h"])("prints the help for list %s instead of listing", async (flag) => {
+    const listRoot = path.join(tempRoot, "list-help-project");
+    await fsp.mkdir(path.join(listRoot, ".argent", "e2e"), { recursive: true });
+    await fsp.writeFile(path.join(listRoot, ".argent", "e2e", "a.yaml"), "steps: []\n");
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list", flag], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toContain("Usage: argent e2e <subcommand> [options]");
+    expect(logs.join("\n")).not.toContain(".argent/e2e/a.yaml");
+  });
+
+  it.each([
+    [["--json"], "Unknown flag: --json"],
+    [["extra"], 'Unexpected argument "extra"'],
+  ])("rejects list %j with exit 2", async (args, message) => {
+    await expect(flow(["list", ...args], opts)).rejects.toThrow("process.exit:2");
+
+    expect(errs.join("\n")).toContain(message);
+    expect(logs).toEqual([]);
+  });
+
   it("prints the no-flows message when no entry in the directory is runnable", async () => {
     const listRoot = path.join(tempRoot, "list-empty-project");
     const flowsDir = path.join(listRoot, ".argent", "e2e");
