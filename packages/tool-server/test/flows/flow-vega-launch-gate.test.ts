@@ -17,6 +17,15 @@ import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flo
 import { serializeFlow } from "../../src/tools/flows/flow-utils";
 
 const VEGA = "amazon-4a27df03c9777152";
+
+function notRegistered(): FailureError {
+  return new FailureError("VVD not registered with adb yet.", {
+    error_code: FAILURE_CODES.VEGA_DEVICE_NOT_REGISTERED,
+    failure_stage: "vega_adb_register",
+    failure_area: "tool_server",
+    error_kind: "timeout",
+  });
+}
 let tmpDir: string;
 
 beforeEach(async () => {
@@ -70,7 +79,7 @@ async function runMain(): Promise<FlowRunResult> {
 }
 
 describe("flow launch gate on Vega", () => {
-  it("errors the launch step with the fetch error still standing at the deadline", async () => {
+  it("errors the launch step at once with a VVD discovery failure that will not clear", async () => {
     describeVega.mockRejectedValue(
       new FailureError("No running Vega Virtual Device found.", {
         error_code: FAILURE_CODES.VEGA_DEVICE_NOT_FOUND,
@@ -82,18 +91,27 @@ describe("flow launch gate on Vega", () => {
     const result = await runMain();
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
     expect(result.steps[0].reason).toContain(
-      "the Vega automation toolkit could not be reached for com.acme.app.main: No running Vega Virtual Device found."
+      "the Vega Virtual Device could not be reached: No running Vega Virtual Device found."
     );
+    expect(describeVega).toHaveBeenCalledTimes(1);
+  });
+
+  it("polls through a VVD still registering with adb and reports it at the deadline", async () => {
+    describeVega.mockRejectedValue(notRegistered());
+    const result = await runMain();
+    expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
+    expect(result.steps[0].reason).toContain(
+      "the Vega Virtual Device could not be reached: VVD not registered with adb yet."
+    );
+    expect(describeVega.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("keeps the relaunch advice when the toolkit answered but never served a tree", async () => {
-    describeVega
-      .mockRejectedValueOnce(new Error("VVD not registered with adb yet"))
-      .mockResolvedValue({
-        tree: { role: "root", frame: { x: 0, y: 0, width: 0, height: 0 }, children: [] },
-        source: "vega-automation",
-        hint: "relaunch the foreground app",
-      } as DescribeTreeData);
+    describeVega.mockRejectedValueOnce(notRegistered()).mockResolvedValue({
+      tree: { role: "root", frame: { x: 0, y: 0, width: 0, height: 0 }, children: [] },
+      source: "vega-automation",
+      hint: "relaunch the foreground app",
+    } as DescribeTreeData);
     const result = await runMain();
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["launch:error", "echo:skip"]);
     expect(result.steps[0].reason).toContain("never served a page source for com.acme.app.main");
