@@ -71,8 +71,12 @@ async function makeSourceVideo(file: string): Promise<void> {
     "lavfi",
     "-i",
     "testsrc=size=390x844:rate=30:duration=3",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=blue:size=390x844:rate=30:duration=3",
     "-filter_complex",
-    "[0:v][1:v][2:v]concat=n=3:v=1[out]",
+    "[0:v][1:v][2:v][3:v]concat=n=4:v=1[out]",
     "-map",
     "[out]",
     "-c:v",
@@ -130,10 +134,12 @@ describe.skipIf(!hasFfmpeg())("remote recording post-pass (real ffmpeg)", () => 
     const stopped = await run({ trimStatic: true, watermark: false });
     expect(stopped.warning).toBeUndefined();
     const seconds = await durationSeconds(stopped.outputFile);
+    // 6 s of motion plus the one-second hold on the final still; the middle
+    // still and the rest of the final one are gone.
     expect(seconds).toBeLessThan(8);
-    expect(seconds).toBeGreaterThan(5.5);
-    expect(stopped.wallClockMs).toBeGreaterThan(9_000);
-    expect(stopped.trimmedMs).toBeGreaterThan(3_000);
+    expect(seconds).toBeGreaterThan(6.5);
+    expect(stopped.wallClockMs).toBeGreaterThan(12_000);
+    expect(stopped.trimmedMs).toBeGreaterThan(5_000);
   }, 120_000);
 
   it("watermarks and trims in one pass", async () => {

@@ -34,10 +34,11 @@ Argent stamps a small Argent watermark into the corner of the video. You can tur
 
 Argent also records remote (`remote:`) simulators. The recording is made on the machine that runs the simulator, and the stop call downloads the finished mp4. A large recording therefore takes a moment to transfer.
 
-Three details differ from a local recording:
+Four details differ from a local recording:
 
 - Argent removes the still parts and stamps the watermark after the download, in a second pass over the finished video. When `ffmpeg` is not installed, Argent gives you the recording anyway and tells you that it did neither, instead of failing the recording.
-- The still parts collapse completely. A local recording keeps the first second of each still part.
+- The still parts collapse completely, except the last one, which holds for a second. A local recording keeps the first second of each still part.
+- A recording keeps at most 2 GB of video. A longer recording loses its beginning, without a warning.
 - A recording of a device in landscape plays sideways. The video keeps the portrait orientation of the screen.
 
 If the download fails, the recording stays on the remote machine until you release the machine. The error message gives the `sim-remote screen-record fetch` command that downloads it.

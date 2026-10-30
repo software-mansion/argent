@@ -78,9 +78,12 @@ const execFileAsync = promisify(execFile);
  *
  * Unlike that pump this keeps no grace period at the head of a still stretch —
  * the filter has no notion of one — so a pause collapses to about as long as
- * the encoder's own noise sustains rather than reading as a brief hold.
+ * the encoder's own noise sustains rather than reading as a brief hold. The
+ * one exception is the tail: the final still is the result the recording
+ * exists to show, so `tpad` clones the last frame for a second, matching the
+ * local path's one-second hold at the end.
  */
-const TRIM_FILTERS = `fps=${OUTPUT_FPS},mpdecimate=hi=1:lo=1:frac=1,setpts=N/${OUTPUT_FPS}/TB`;
+const TRIM_FILTERS = `fps=${OUTPUT_FPS},mpdecimate=hi=1:lo=1:frac=1,setpts=N/${OUTPUT_FPS}/TB,tpad=stop_mode=clone:stop_duration=1`;
 
 function outputPath(deviceId: string): string {
   return path.join(
