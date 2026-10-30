@@ -601,7 +601,8 @@ describe("startMcpServer screen capture after an interaction", () => {
       controller.abort("stopped in the editor");
 
       await expect(pending).rejects.toThrow("stopped in the editor");
-      await vi.waitFor(() => expect(stub.hungUp).toEqual([route]));
+      // Well inside CAPTURE_MS, whose timeout also ends a capture request.
+      await vi.waitFor(() => expect(stub.hungUp).toEqual([route]), { timeout: 300 });
     }
   );
 
