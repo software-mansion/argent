@@ -69,7 +69,11 @@ export class LogFileWriter {
   constructor(port: number) {
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
-    fs.mkdirSync(dir, { recursive: true });
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      // Unwritable ~/.argent: open() fails too and the writer runs fileless.
+    }
     pruneStaleLogs(dir);
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}-p${process.pid}.log`);
     liveLogFiles.add(this.filePath);
@@ -144,6 +148,10 @@ export class LogFileWriter {
 
   getFilePath(): string {
     return this.filePath;
+  }
+
+  hasFile(): boolean {
+    return fs.existsSync(this.filePath);
   }
 
   getStats(): LogStats {
