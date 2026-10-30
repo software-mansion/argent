@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import * as net from "node:net";
 import {
   adbCommandPrefix,
@@ -42,9 +42,7 @@ const fail = (socket: net.Socket, message: string) =>
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));
-  delete process.env.ADB_SERVER_SOCKET;
-  delete process.env.ANDROID_ADB_SERVER_ADDRESS;
-  delete process.env.ANDROID_ADB_SERVER_PORT;
+  vi.unstubAllEnvs();
 });
 
 describe("adbServerShell", () => {
@@ -58,7 +56,7 @@ describe("adbServerShell", () => {
         socket.end("mCurrentOrientation=1\n");
       }
     });
-    process.env.ANDROID_ADB_SERVER_PORT = String(port);
+    vi.stubEnv("ANDROID_ADB_SERVER_PORT", String(port));
 
     const out = await adbServerShell("emulator-5554", "dumpsys display | grep mCurrentOrientation");
 
@@ -74,7 +72,7 @@ describe("adbServerShell", () => {
       if (message.startsWith("host:transport:")) socket.write("OKAY");
       else socket.end("OKAYmRotation=3\n");
     });
-    process.env.ANDROID_ADB_SERVER_PORT = String(port);
+    vi.stubEnv("ANDROID_ADB_SERVER_PORT", String(port));
 
     expect(await adbServerShell("emulator-5554", "x")).toBe("mRotation=3\n");
   });
@@ -83,7 +81,7 @@ describe("adbServerShell", () => {
     const port = await fakeAdbServer((message, socket) => {
       if (message.startsWith("host:transport:")) fail(socket, "device 'nope' not found");
     });
-    process.env.ANDROID_ADB_SERVER_PORT = String(port);
+    vi.stubEnv("ANDROID_ADB_SERVER_PORT", String(port));
 
     await expect(adbServerShell("nope", "true")).rejects.toThrow(/device 'nope' not found/);
   });
@@ -91,14 +89,14 @@ describe("adbServerShell", () => {
   it("rejects when nothing is listening, so the caller falls back to the client", async () => {
     const port = await fakeAdbServer(() => {});
     await new Promise((r) => servers.pop()!.close(r));
-    process.env.ANDROID_ADB_SERVER_PORT = String(port);
+    vi.stubEnv("ANDROID_ADB_SERVER_PORT", String(port));
 
     await expect(adbServerShell("emulator-5554", "true")).rejects.toThrow();
   });
 
   it("rejects when the server hangs past the timeout", async () => {
     const port = await fakeAdbServer(() => {});
-    process.env.ANDROID_ADB_SERVER_PORT = String(port);
+    vi.stubEnv("ANDROID_ADB_SERVER_PORT", String(port));
 
     await expect(adbServerShell("emulator-5554", "true", { timeoutMs: 50 })).rejects.toThrow(
       /timed out/
@@ -110,7 +108,7 @@ describe("adbServerShell", () => {
       if (message.startsWith("host:transport:")) socket.write("OKAY");
       else socket.destroy();
     });
-    process.env.ANDROID_ADB_SERVER_PORT = String(port);
+    vi.stubEnv("ANDROID_ADB_SERVER_PORT", String(port));
 
     await expect(adbServerShell("emulator-5554", "true")).rejects.toThrow(/before answering/);
   });

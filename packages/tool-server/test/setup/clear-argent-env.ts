@@ -13,11 +13,37 @@
 // overrides added to src later without a second edit here. A test that
 // exercises an override sets it itself, so nothing depends on the ambient value.
 //
+// Non-prefixed overrides need an explicit list too: ADB_SERVER_SOCKET beats the
+// fixture port in adb-server.test.ts, and SDK/AVD/Xcode paths can select the
+// developer's installation instead of a fixture. Leave the rest of the host
+// environment alone, including HOME, USERPROFILE, PATH, CI and
+// ELECTRON_RUN_AS_NODE (which controls how an Electron-hosted child runs).
+// Tests that change those variables must restore them themselves.
+//
 // This runs before the test module graph is imported, so module-level env reads
 // observe the cleared state too. On a machine with no override exported the
 // loop body never runs, so no suite failure can catch this file being weakened;
 // `test/clear-argent-env.test.ts` re-imports it against planted sentinels
 // instead.
+export const CLEARED_ENV_VARS = [
+  "ADB_SERVER_SOCKET",
+  "ANDROID_ADB_SERVER_ADDRESS",
+  "ANDROID_ADB_SERVER_PORT",
+  "ANDROID_HOME",
+  "ANDROID_SDK_ROOT",
+  "LOCALAPPDATA",
+  "ANDROID_USER_HOME",
+  "ANDROID_AVD_HOME",
+  "XDG_CONFIG_HOME",
+  "ANDROID_SDK_HOME",
+  "DEVELOPER_DIR",
+  "WRAP_STDIO_DISABLED",
+];
+
+for (const name of CLEARED_ENV_VARS) {
+  delete process.env[name];
+}
+
 for (const name of Object.keys(process.env)) {
   // Upper-cased first: Windows env lookups are case-insensitive while the keys
   // enumerate with the casing they were set in, so a `set argent_host=…`
@@ -26,5 +52,3 @@ for (const name of Object.keys(process.env)) {
     delete process.env[name];
   }
 }
-
-export {};
