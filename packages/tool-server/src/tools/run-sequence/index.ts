@@ -107,7 +107,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
   gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
   button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
   keyboard: text? or key? (one per step; key e.g. "enter"), delayMs?  [all; TV: text only<flag:harmonyos>; harmony keys: enter/return, backspace/delete, space, arrow-left, arrow-right</flag:harmonyos>]
-    text may hold {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> or an argent secrets file, so a credential never enters your context
+    text may hold {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> or an argent secrets file (over a forward-secrets link, the client's first), so a credential never enters your context
   paste: text (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP, else keyboard)  [ios sim/android emu]
   rotate: orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown"  [ios/android]
   shake: count?  [ios sim/android emu]

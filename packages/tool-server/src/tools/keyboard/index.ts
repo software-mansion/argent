@@ -50,6 +50,7 @@ const zodSchema = z.object({
         "running the tool-server, from the first source that defines the name: the `ARGENT_SECRET_<NAME>` environment " +
         "variable, `.argent/secrets.env` in the project, the project's `.env.local` / `.env` (only their " +
         "`ARGENT_SECRET_`-prefixed keys), then `~/.argent/secrets.env`. Nothing else on the host is reachable. " +
+        "Over a link with the `forward-secrets` flag on, the client's own sources are checked first. " +
         "The result echoes the placeholder, never the value, and the auto-screenshot after typing is skipped. " +
         "To submit after a secret, put both steps in ONE `run-sequence`: that keeps the skip covering the Enter, " +
         "which a second bare `keyboard` call would not. " +

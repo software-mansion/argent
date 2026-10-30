@@ -67,6 +67,8 @@ When a build fails (e.g. xcodebuild exit code 65), try the simplest fix first: c
 | **App state**                     | `debugger-evaluate` to run JavaScript in the app's runtime                                                       |
 | **Native crashes / native stack** | iOS: `~/Library/Logs/DiagnosticReports/`. Android: `adb -s <serial> logcat -d`, with `-b crash` for crashes only |
 
+If `list-devices` returns a `hint` about the adb server, prefix the `adb` command above as the hint shows.
+
 For connection failures, component inspection and searching the console log file, use the `argent-metro-debugger` skill.
 
 Do not open the React Native DevMenu by default; use the argent tools instead.
