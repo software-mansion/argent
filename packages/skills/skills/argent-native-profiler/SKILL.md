@@ -32,7 +32,7 @@ After `native-profiler-analyze` surfaces findings, use `profiler-stack-query` to
 
 After presenting findings, ask the user whether to investigate further, implement fixes, or stop. After applying fixes, always re-profile the same scenario and compare with `profiler-load`. Report honestly whether the target metric improved, regressed, or stayed flat. If the fix showed no net benefit or introduced regressions elsewhere, say so and reconsider.
 
-**Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `argent-create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
+**Tip:** For reproducible before/after comparisons, record the interaction sequence as an e2e test using the `argent-create-e2e` skill before the first profiling run. Replay with `e2e-execute` on subsequent runs to eliminate interaction variance.
 
 > **Note:** The `argent-react-native-profiler` instructs to start native profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
 
@@ -57,6 +57,7 @@ You do not need to derive `app_process` manually; just make sure the app is laun
 
 Call `native-profiler-start` with `device_id` (iOS UDID or Android serial). The tool auto-detects the running app and saves the trace to `/tmp/argent-profiler-cwd/` with a timestamped filename.
 Let the user interact with the app or drive interaction via simulator tools (see `argent-device-interact` skill).
+While a profiler records, interaction tools return no automatic screenshot or element tree, so the capture does not load the app. Call `screenshot` or `describe` when you need to see the screen; interaction tools still wait for the screen to settle before they return, so add no wait of your own; on an Android emulator each screenshot during a profile takes one frame in about 100 ms and does not wake the screen capture; on a physical Android device it takes about 150–200 ms and briefly wakes the device screen capture, so take them sparingly there.
 
 ### Step 2: Stop and export
 

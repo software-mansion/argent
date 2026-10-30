@@ -158,6 +158,16 @@ const config = {
       "@docusaurus/plugin-content-docs",
       { ...docsOptions, id: product.id, path: product.dir, routeBasePath: product.routeBasePath },
     ]),
+    // Pages moved by the rename of Argent flows to Argent e2e.
+    [
+      "@docusaurus/plugin-client-redirects",
+      {
+        redirects: [
+          { from: "/docs/features/flows", to: "/docs/features/e2e" },
+          { from: "/docs/reference/flow-yaml", to: "/docs/reference/e2e-yaml" },
+        ],
+      },
+    ],
     // Renders one Open Graph card per page after the build and repoints the social image tags.
     require.resolve("./plugins/og-image"),
     // The default docs instance owns docs/, and its MDX webpack rule matches every file

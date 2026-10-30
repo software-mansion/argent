@@ -14,10 +14,9 @@
 #   - restart-app / reinstall-app
 #                        → the `vega`/`kepler` CLI
 #
-# Prereq: the workspace is already built (`npm ci` + `npm run build` on the
-# runner, bind-mounted in at /workspace), so `packages/tool-server/dist/index.js`
-# exists. `npm run build`, not a bare `tsc --build`: only the build script copies
-# the assets tsc never sees.
+# Prereq: the package bundle is already built (`npm run build -w
+# @swmansion/argent` on the runner, bind-mounted in at /workspace), so
+# `packages/argent/dist/tool-server.cjs` exists. It is the tool-server that ships.
 #
 # NOT `set -e`: gated checks are captured for a per-tool summary, then we exit
 # non-zero if any failed.
@@ -97,20 +96,16 @@ group "Environment"
 echo "node $(node -v 2>/dev/null || echo '<none>')"
 adb version 2>/dev/null | head -1 || echo "adb <none>"
 echo "vega $(vega -v 2>/dev/null | tr '\n' ' ' || echo '<none>')"
-if test -f packages/tool-server/dist/index.js; then
-  echo "tool-server dist: present"
+if test -f packages/argent/dist/tool-server.cjs; then
+  echo "tool-server bundle: present"
 else
-  echo "ERROR: packages/tool-server/dist/index.js missing — build the workspace first"; exit 1
+  echo "ERROR: packages/argent/dist/tool-server.cjs missing — build the package first"; exit 1
 fi
 endg
 
-# The CommonJS `tsc` dist requires the ESM-only `@argent/configuration-core`, so
-# on the container's Node 20 it needs `--experimental-require-module`; that flag
-# is implicit only from Node 22.12. The production esbuild bundle inlines the dep
-# and doesn't need it.
 group "Start tool-server"
 : > /tmp/tool-server.log
-setsid env ARGENT_PORT="$PORT" node --experimental-require-module packages/tool-server/dist/index.js start \
+setsid env ARGENT_PORT="$PORT" node packages/argent/dist/tool-server.cjs start \
   </dev/null >/tmp/tool-server.log 2>&1 &
 ready=""
 for _ in $(seq 1 30); do

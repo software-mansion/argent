@@ -8,6 +8,8 @@ vi.mock("../src/utils/ios-device/devicectl", () => ({
   uninstallApp: (...a: unknown[]) => uninstallApp(...a),
   installApp: (...a: unknown[]) => installApp(...a),
 }));
+// The .app path is fake; appPath validation has its own tests.
+vi.mock("../src/tools/reinstall-app/validate-app", () => ({ assertIosAppBundle: async () => {} }));
 
 import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { iosDeviceImpl } from "../src/tools/reinstall-app/platforms/ios-device";

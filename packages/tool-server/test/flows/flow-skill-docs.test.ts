@@ -19,14 +19,14 @@ import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flo
  * Keep the core skill's scope routing concise while guarding the linked
  * reference examples against parser drift.
  */
-const SKILL = path.resolve(__dirname, "../../../skills/skills/argent-create-flow/SKILL.md");
+const SKILL = path.resolve(__dirname, "../../../skills/skills/argent-create-e2e/SKILL.md");
 const FLOW_YAML = path.resolve(
   __dirname,
-  "../../../skills/skills/argent-create-flow/references/flow-yaml.md"
+  "../../../skills/skills/argent-create-e2e/references/e2e-yaml.md"
 );
 const LIVE_AUTHORING = path.resolve(
   __dirname,
-  "../../../skills/skills/argent-create-flow/references/live-authoring.md"
+  "../../../skills/skills/argent-create-e2e/references/live-authoring.md"
 );
 const SPELLED = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight"];
 /**
@@ -37,7 +37,7 @@ const SPELLED = ["zero", "one", "two", "three", "four", "five", "six", "seven", 
  */
 const RULE_5_INSERTIONS = ["`snapshot:`", "`await: { idle: true }`", "Chromium"];
 const INSERTION_COUNT_CITATIONS = [
-  path.resolve(__dirname, "../../../skills/skills/argent-qa-flows/SKILL.md"),
+  path.resolve(__dirname, "../../../skills/skills/argent-qa-e2e/SKILL.md"),
 ];
 
 /**
@@ -50,9 +50,9 @@ const WARNING_COUNT_CITATIONS = [
   LIVE_AUTHORING,
   path.resolve(
     __dirname,
-    "../../../skills/skills/argent-create-flow/references/reliability-and-recovery.md"
+    "../../../skills/skills/argent-create-e2e/references/reliability-and-recovery.md"
   ),
-  path.resolve(__dirname, "../../../skills/skills/argent-qa-flows/SKILL.md"),
+  path.resolve(__dirname, "../../../skills/skills/argent-qa-e2e/SKILL.md"),
 ];
 
 /**
@@ -71,11 +71,11 @@ function between(file: string, start: string, end: string): string {
 
 describe("create-flow selector-scope docs", () => {
   it("keeps the core skill concise and routes every relation", () => {
-    const section = between(SKILL, "### Flow-only selector scopes", "\n## Workflow");
+    const section = between(SKILL, "### YAML-only selector scopes", "\n## Workflow");
     expect(section).toContain("`within`");
     expect(section).toContain("`after`");
     expect(section).toContain("`next`");
-    expect(section).toContain("references/flow-yaml.md#relational-scopes");
+    expect(section).toContain("references/e2e-yaml.md#relational-scopes");
   });
 
   it("keeps the reference examples parsable", () => {
@@ -90,7 +90,7 @@ describe("create-flow selector-scope docs", () => {
   });
 });
 
-// The `idle` account moved out of SKILL.md into the flow-yaml reference, so
+// The `idle` account moved out of SKILL.md into the e2e-yaml reference, so
 // these read it there. They are otherwise the guards that came with the
 // warn-instead-of-fail change: the reference has to agree with what `idle`
 // does, and the numbers the prose quotes have to be the ones the parser
@@ -209,8 +209,8 @@ describe("create-flow directive-answer docs", () => {
   it("keeps directive guidance out of the command schema", () => {
     const description = commandParamDescription();
     expect(description).toContain("MCP tool to execute and record");
-    expect(description).toContain("Do not pass a flow directive or a recording tool");
-    expect(description).toContain("Call flow-add-script directly");
+    expect(description).toContain("Do not pass an e2e test directive or a recording tool");
+    expect(description).toContain("Call e2e-add-script directly");
     expect(description.split(/\s+/).length).toBeLessThan(40);
   });
 
@@ -220,7 +220,7 @@ describe("create-flow directive-answer docs", () => {
       expect(directiveCommandHint(key), key).toContain(`"${key}"`);
     }
     expect(directiveCommandHint("script")).toBe(
-      '"script" is a flow directive. Call `flow-add-script` directly.'
+      '"script" is an e2e test directive. Call `e2e-add-script` directly.'
     );
   });
 });

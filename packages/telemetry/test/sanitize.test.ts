@@ -75,6 +75,18 @@ describe("sanitize", () => {
       expect(DEVICE_KINDS).toContain("device");
     });
 
+    it("keeps alias_used on the tool lifecycle events and cli:run_fail only as a boolean", () => {
+      for (const event of ["tool:invoke", "tool:complete", "tool:fail", "cli:run_fail"] as const) {
+        expect(sanitize(event, { tool: "e2e-execute", alias_used: true })).toEqual({
+          tool: "e2e-execute",
+          alias_used: true,
+        });
+        expect(sanitize(event, { tool: "e2e-execute", alias_used: "flow-execute" })).toEqual({
+          tool: "e2e-execute",
+        });
+      }
+    });
+
     it("drops a device kind outside the enum, including the registry's `unknown`", () => {
       // Mirror of the `platform: "unknown"` rule above: `resolveDevice` never
       // produces `unknown`, so a bucket for it could only be filled by a bug.

@@ -9,6 +9,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { FLOW_FILE_NAME_PATTERN, FLOW_NAME_PATTERN } from "./file-inputs";
+import { e2eFileCandidates } from "./e2e-dirs";
+import { canonicalToolId } from "./tool-ids";
 
 /**
  * The input must arrive with any `..` segments intact (no path.resolve/join
@@ -129,7 +131,8 @@ export function collectFlowRequests(doc: unknown): {
       if (typeof step.tool === "string") {
         const args = isRecord(step.args) ? step.args : {};
         toolSteps.push({ tool: step.tool, args });
-        const target = step.tool === "flow-execute" ? nestedFlowTarget(args) : undefined;
+        const target =
+          canonicalToolId(step.tool) === "e2e-execute" ? nestedFlowTarget(args) : undefined;
         if (target !== undefined) nested.push({ target, args });
       }
       visit(step.steps, depth + 1);
@@ -279,15 +282,16 @@ export async function resolveFlowRelativeFile(
 /**
  * The flow a nested `tool: flow-execute` step names, in a form both sides of a
  * link accept, or undefined. `name`: a flow name with an absolute
- * `project_root` that has no `..` segment, and no `flow_path`; `path` is the
- * saved flow `<project_root>/.argent/flows/<name>.yaml`. `flow_path`: an
+ * `project_root` that has no `..` segment, and no `flow_path`; `paths` are the
+ * places the saved test can be, in lookup order ({@link e2eFileCandidates}),
+ * and `path` is the first of them. `flow_path`: an
  * absolute path with no `..` segment to a `<flow-name>.yaml` file, and no
  * `name`. The argent client sends the flow of a `name` step with the call,
  * and the tool-server runs a nested step over a link only in that form, so the
  * two decide with this one function.
  */
 export type NestedFlowTarget =
-  | { kind: "name"; projectRoot: string; name: string; path: string }
+  | { kind: "name"; projectRoot: string; name: string; path: string; paths: string[] }
   | { kind: "flow_path"; path: string };
 
 export function nestedFlowTarget(args: unknown): NestedFlowTarget | undefined {
@@ -296,12 +300,8 @@ export function nestedFlowTarget(args: unknown): NestedFlowTarget | undefined {
   if (flowPath === undefined) {
     if (typeof name !== "string" || !FLOW_NAME_PATTERN.test(name)) return undefined;
     if (!isResolvedAbsolute(projectRoot)) return undefined;
-    return {
-      kind: "name",
-      projectRoot,
-      name,
-      path: path.join(projectRoot, ".argent", "flows", `${name}.yaml`),
-    };
+    const paths = e2eFileCandidates(projectRoot, name);
+    return { kind: "name", projectRoot, name, path: paths[0]!, paths };
   }
   if (name !== undefined || !isResolvedAbsolute(flowPath)) return undefined;
   if (!FLOW_FILE_NAME_PATTERN.test(path.basename(flowPath))) return undefined;

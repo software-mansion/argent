@@ -1,0 +1,95 @@
+---
+sidebar_position: 7
+sidebar_label: Record and replay e2e tests
+title: Record and replay e2e tests
+sidebar_custom_props:
+  icon: repeat-2
+---
+
+An e2e test is a recorded sequence of interactions with the app. The agent records the e2e test one time. Then the agent, or a CI job, replays the e2e test as many times as you need. Each replay follows the same path. Thus a manual reproduction, a smoke test or a comparison of two builds becomes repeatable.
+
+<Video
+  src="/video/e2e.mp4"
+  width={1494}
+  height={900}
+  caption="The agent replays a recorded e2e test on an iOS simulator after a single instruction"
+/>
+
+Use an e2e test when:
+
+- you profile the app again after a fix and you need the same path both times,
+- you compare two builds on the same screens,
+- you check a regression on each branch with the same steps,
+- you worked through a long path with the agent and you want to keep it.
+
+:::info Formerly Argent flows
+
+Earlier versions of Argent called this feature Argent flows. Argent still reads the e2e tests in the old `.argent/flows/` directory. The old tool names and the `argent flow` command still work. The [E2E YAML reference](/docs/reference/e2e-yaml) gives the details.
+
+:::
+
+<a id="recording-a-flow" />
+
+## Recording an e2e test
+
+The agent records an e2e test while it operates the app. You describe the path in one instruction. The agent starts a recording, performs each step on the device and records the step. Each step runs live during the recording. Thus the agent sees the result of a step before the agent records the step.
+
+The agent adds a label between the steps. A label explains what the step does and which screen the agent expects. During a replay, Argent prints each label. Thus the report of a replay is readable.
+
+When the agent has recorded the last step, the agent finishes the recording. Argent writes the e2e test to a file in the project.
+
+`argent link` and the `ARGENT_TOOLS_URL` variable send the tool calls of the agent to a tool-server. Both are a link. Over a link, Argent writes the e2e test file into the project on the computer of the agent. This is also true when the tool-server runs on the same computer, or when its computer has a directory at the same path.
+
+Argent makes a recorded tap portable. When the tapped element has a stable text or identifier, Argent records the element instead of the coordinates. During a replay, Argent finds the element on the screen again. When the element has no stable text or identifier, Argent records the coordinates and adds a warning.
+
+<a id="the-flow-file" />
+
+## The e2e test file
+
+Argent stores each e2e test as a YAML file in the `.argent/e2e/` directory of the project. The file contains a list of steps. The file does not contain a device identifier. Thus the same e2e test runs on a different simulator or a different emulator.
+
+An e2e test has one of two shapes:
+
+| Shape               | First app step | Start state                                             |
+| ------------------- | -------------- | ------------------------------------------------------- |
+| Standalone e2e test | Launch         | Argent starts the app from scratch                      |
+| Fragment            | Any other step | The app is already in the state that the e2e test needs |
+
+A fragment declares its start state in a prerequisite. The prerequisite is a sentence, for example "The Settings screen is open". Before a replay, the agent reads the prerequisite and puts the app into that state.
+
+An e2e test can contain more than taps and text. A step can wait for an element, wait for the screen to settle, check a condition, take a screenshot and compare it to a baseline, run a different e2e test, or run a local script. See [Baselines in e2e tests](/docs/features/visual-regression#baselines-in-e2e-tests) for the screenshot comparison.
+
+Use a local script for setup or cleanup that device steps cannot do. Ask the agent to add the script at the required point in the e2e test.
+
+The file is plain text. You can commit the file, review the file in a pull request and edit a step by hand.
+
+<a id="replaying-a-flow" />
+
+## Replaying an e2e test
+
+You ask the agent to run an e2e test by its name. The agent replays each step in order on the connected device. When a step fails, Argent stops the e2e test. Argent reports the later steps as skipped. Argent also adds a screenshot of the device to the failed step. At the end, the agent receives a report with the result of each step.
+
+An e2e test also runs without an agent. The `argent e2e run` command replays an e2e test from the terminal. The command prints the result of each step and exits with a status code. Thus an e2e test runs in a CI job or in a script. The command runs one e2e test, an e2e test file in a different location, or all e2e tests in a directory. When the command runs all e2e tests in a directory, the command prints the failed e2e tests at the end. For each failed e2e test, the command also prints the reason and a command that runs only that e2e test.
+
+## Example instructions
+
+- "Record the path from the start screen to the checkout summary as an e2e test named checkout."
+- "Run the checkout e2e test and tell me which step fails."
+- "Run the login e2e test on the iOS simulator and on the Android emulator. Compare the results."
+- "Add a label before each screen change in the onboarding e2e test."
+- "Record the checkout e2e test. Before the app starts, seed the cart with `scripts/seed-cart.mjs`."
+- "Profile the app while you run the search e2e test. Then apply my fix and run the e2e test again."
+
+## Limits
+
+- A replay runs on one booted device. When more than one device is booted, name the device in the instruction. A physical iPhone is never chosen automatically, even when nothing else is booted: name it in the instruction.
+- A recorded tap with coordinates breaks when the layout changes. Give the element a stable text or identifier, then record the step again.
+- An e2e test does not reset the data of the app. When a step creates data, for example a new item, each replay creates the data again. Start the e2e test with a launch of the app or with a step that restores a known state.
+- The agent records a launch step for iOS, Android and Vega apps. For a Chromium or Electron app, add the launch step to the file by hand.
+- On Android, an e2e test resolves each selector with the Argent Android helper, an instrumentation app that Argent installs over `adb`. Argent installs the helper again when the device reports that the helper is absent, for example after a wipe. When the helper still does not start, the error message contains the error that the device reports.
+- A replay needs the same connected instrumentation as the recording. When the agent cannot read the UI tree, a step that still uses coordinates sends the tap anyway and adds a warning. A step that uses a stable identifier fails instead, because it has no coordinates to fall back on.
+- Over a link, the agent cannot record a local script, and a replay rejects an e2e test with a local script. Record and replay such an e2e test without a link.
+- Over a link, the agent cannot record a step that a replay over the same link rejects. The agent also cannot record a step that runs a different e2e test when that e2e test fails. In both cases, Argent records no step.
+- An argent client that is older than the tool-server can write the e2e test file on the computer of the tool-server. It can also record a step that a replay over the same link rejects. Keep the argent client and the tool-server at the same version. The [Tool-server API reference](/docs/reference/tool-server-api#the-x-argent-linked-header) gives the details.
+
+Argent does this with the `e2e-start-recording`, `e2e-add-step`, `e2e-add-echo`, `e2e-add-script`, `e2e-finish-recording`, `e2e-read-prerequisite` and `e2e-execute` tools, and with the `argent e2e` command. The [tools reference](/docs/reference/tools) contains all tools. The [E2E YAML reference](/docs/reference/e2e-yaml) contains the file format and the command options.

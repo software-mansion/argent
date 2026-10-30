@@ -63,6 +63,16 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
   },
   {
+    name: "harmonyos",
+    description:
+      "HarmonyOS support: list, boot and drive HarmonyOS phones and DevEco Studio emulators over `hdc`. Off by default while the platform is experimental.",
+  },
+  {
+    name: "forward-secrets",
+    description:
+      "Over `argent link` or ARGENT_TOOLS_URL, resolve each `{{secret:NAME}}` a call names on this machine and send the value with the call, so a remote tool-server can type a secret it does not hold. The linked tool-server then receives every secret of this machine that a call names, so link only one you trust with all of them. Values go only over https:// with the certificate checked, or to a loopback address. Off by default.",
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",

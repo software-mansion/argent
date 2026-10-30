@@ -1,10 +1,7 @@
 import vendors from "ci-info/vendors.json";
 
 type VendorEnv =
-  | string
-  | { env: string; includes: string }
-  | { any: string[] }
-  | Record<string, string>;
+  string | { env: string; includes: string } | { any: string[] } | Record<string, string>;
 
 interface VendorDefinition {
   env: VendorEnv | VendorEnv[];

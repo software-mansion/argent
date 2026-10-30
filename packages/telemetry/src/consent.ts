@@ -5,11 +5,7 @@ import { configFilePath } from "./paths.js";
 // Consent is evaluated on every track() so a running tool server sees opt-outs.
 export interface ConsentSource {
   source:
-    | "env_do_not_track"
-    | "env_argent_telemetry"
-    | "session_override"
-    | "config_file"
-    | "default";
+    "env_do_not_track" | "env_argent_telemetry" | "session_override" | "config_file" | "default";
   detail?: string;
 }
 

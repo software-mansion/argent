@@ -21,6 +21,7 @@ import {
   localUninstallCommand,
   isDeclaredLocally,
   isGloballyInstalled,
+  LEGACY_ARGENT_SKILL_NAMES,
   probeLocalInstall,
   resolveInstallMode,
   removeInstallRecord,
@@ -512,9 +513,13 @@ export async function uninstall(args: string[]): Promise<void> {
         ? getManagedContentTargets(ALL_ADAPTERS, projectRoot, "global")
         : emptyTargets;
 
-      const bundledSkillNames = getBundledSkillNames(SKILLS_DIR);
+      // Legacy names too: an update that dropped a renamed skill can leave its
+      // dir behind untracked.
+      const argentSkillNames = [
+        ...new Set([...getBundledSkillNames(SKILLS_DIR), ...LEGACY_ARGENT_SKILL_NAMES]),
+      ].sort();
       pruneResults.push(
-        ...cleanupBundledSkills(bundledSkillNames, [
+        ...cleanupBundledSkills(argentSkillNames, [
           ...localTargets.skillTargets,
           ...globalTargets.skillTargets,
         ])
@@ -527,7 +532,7 @@ export async function uninstall(args: string[]): Promise<void> {
         try {
           const { removedSkills, removedFile } = cleanupSkillsLockFile(
             targetPath,
-            bundledSkillNames
+            argentSkillNames
           );
           if (removedSkills.length === 0 && !removedFile) continue;
 

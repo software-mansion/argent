@@ -15,7 +15,7 @@
 // a tool's JSON Schema into a payload in flag-parser.ts, with `--args`/stdin
 // escape hatches that make no sense for a fixed command surface.
 
-export type OptionSpec =
+type OptionSpec =
   | {
       readonly kind: "boolean";
       /** Single-letter short form, e.g. `"y"` for `-y`. */

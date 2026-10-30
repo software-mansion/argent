@@ -11,12 +11,10 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";

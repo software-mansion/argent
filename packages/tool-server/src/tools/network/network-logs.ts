@@ -1,3 +1,4 @@
+import { STATUS_CODES } from "node:http";
 import { z } from "zod";
 import bytesUtil from "bytes";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
@@ -15,6 +16,14 @@ import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 const ITEMS_PER_PAGE = 50;
 
+// Each call installs the interceptor first, so it is missing only when that install failed or the
+// app's JS runtime reloaded in between.
+function notInstalled(installError: string | undefined): string {
+  return installError
+    ? `Network interceptor could not be installed in the app's JS runtime: ${installError}`
+    : "Network interceptor not installed: the app's JS runtime reloaded, which clears captured requests. Call view-network-logs again to reinstall it, then repeat the action that sends the requests.";
+}
+
 // Auto-scaled base-1024 units: a big download reads `1.4 GB`, not `1433.6 MB`.
 function formatBytes(bytes: number): string {
   return bytesUtil(bytes, { decimalPlaces: 1, unitSeparator: " " }) ?? `${bytes} B`;
@@ -25,40 +34,115 @@ interface LogEntry {
   requestId: string;
   state: string;
   request?: { url: string; method: string };
-  response?: { status: number; statusText: string; mimeType: string };
+  /** `url` is the final URL, after redirects. */
+  response?: { url?: string; status: number; statusText: string; mimeType: string };
   resourceType?: string;
   encodedDataLength?: number;
+  /** The full length, in characters, of a text body the interceptor cut without a byte size. */
+  bodyLength?: number;
   timestamp?: number;
   durationMs?: number;
   errorText?: string;
 }
 
+/**
+ * The standard reason phrase of a status ("OK", "Not Found"), or "" for a status without one. The JS
+ * runtime records whatever text the platform gives: none from React Native's XHR and fetch, a
+ * localised description from iOS for Expo ("no error"), so the tools show this phrase for all.
+ */
+export function reasonPhrase(status: number): string {
+  return STATUS_CODES[status] ?? "";
+}
+
+/**
+ * A URL in the form two URLs are compared in: without its fragment, which is never sent, and with
+ * its percent-encoding undone. The native layer can encode the URL the app gave again (iOS encodes
+ * the "%" of a URL that holds a space) or write a space in a query as "+" instead of "%20".
+ * decodeURI keeps the escapes that change what a URL means ("%2F", "%3F", "%26", "%2B").
+ */
+function comparableUrl(url: string): string {
+  let text = url;
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    text = parsed.search ? parsed.href : parsed.href.replace(/\?$/, "");
+  } catch {
+    // Compared as it is written.
+  }
+  text = text.replace(/\+/g, " ");
+  for (let i = 0; i < 4; i++) {
+    let decoded: string;
+    try {
+      decoded = decodeURI(text);
+    } catch {
+      break;
+    }
+    if (decoded === text) break;
+    text = decoded;
+  }
+  return text.replace(/%[0-9a-f]{2}/gi, (escape) => escape.toUpperCase());
+}
+
+/** Whether a response's final URL is another than the request URL, not the same one written differently. */
+export function isRedirect(requestUrl: string | undefined, finalUrl: string | undefined): boolean {
+  if (!finalUrl || requestUrl === undefined || finalUrl === requestUrl) return false;
+  return comparableUrl(finalUrl) !== comparableUrl(requestUrl);
+}
+
+// The path of a URL, or its host for the root. With `from`, the host too when it differs from that one's.
+function shortName(url: string, from?: string): string {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname === "/" ? "" : parsed.pathname;
+    let sameHost = true;
+    try {
+      sameHost = from === undefined || new URL(from).host === parsed.host;
+    } catch {
+      sameHost = false;
+    }
+    if (sameHost) return path || parsed.hostname;
+    return parsed.host + path;
+  } catch {
+    return url;
+  }
+}
+
 function formatEntry(entry: LogEntry): string {
   const method = entry.request?.method ?? "???";
   const url = entry.request?.url ?? "unknown";
-
-  let name: string;
-  try {
-    const parsed = new URL(url);
-    name = parsed.pathname === "/" ? parsed.hostname : parsed.pathname;
-  } catch {
-    name = url;
-  }
+  const name = shortName(url);
+  const finalUrl = entry.response?.url;
+  const redirect = finalUrl && isRedirect(url, finalUrl) ? `→ ${shortName(finalUrl, url)}` : "";
 
   let status: string;
   if (entry.state === "failed") {
     status = entry.errorText ?? "failed";
   } else if (entry.response) {
-    status = `${entry.response.status} ${entry.response.statusText}`;
+    // A response whose body has not completed.
+    status = [
+      entry.response.status,
+      entry.response.statusText,
+      entry.state === "pending" ? "(pending)" : "",
+    ]
+      .filter((part) => part !== "")
+      .join(" ");
   } else {
     status = "pending";
   }
 
   const type = entry.resourceType ?? "";
-  const size = entry.encodedDataLength != null ? formatBytes(entry.encodedDataLength) : "";
+  // A length in characters is close to the size in bytes, and never more than it.
+  const size =
+    entry.encodedDataLength != null
+      ? formatBytes(entry.encodedDataLength)
+      : entry.bodyLength != null
+        ? `~${formatBytes(entry.bodyLength)}`
+        : "";
   const duration = entry.durationMs != null ? `${entry.durationMs} ms` : "";
 
-  return `{id: ${entry.requestId}} "${method} ${name}" ${status} ${type} ${size} ${duration}`.trim();
+  return [`{id: ${entry.requestId}}`, `"${method} ${name}"`, status, type, size, duration, redirect]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function recordToLogEntry(r: NetworkRequestRecord, id: number): LogEntry {
@@ -85,7 +169,7 @@ function renderChromiumPage(
 ): string {
   const total = records.length;
   if (total === 0) {
-    return "No network traffic captured. Recording is active on the active tab — navigate or reload the page to populate it (requests made before the device was attached are not captured).";
+    return "No network traffic captured. Recording is active on the active tab. Navigate or reload the page to populate it (requests made before the device was attached are not captured).";
   }
   const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
   const pageIndex = pageIndexParam === "latest" ? pageCount - 1 : pageIndexParam;
@@ -124,10 +208,12 @@ export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> 
   },
   description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
+A size with "~" is estimated from the body's length in characters; on React Native, "→ <url>" is the final URL after a redirect.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-On React Native (iOS / Android / Vega) interception is injected into the JS runtime: it captures fetch() calls. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
+On React Native (iOS / Android / Vega) interception is injected into the JS runtime: it records each request once: XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module itself, such as react-native-fetch-api (found in a Metro development build). Capture starts at the first network-tool call; a reload clears it. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
+  readOnly: true,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params): Record<string, ServiceRef> => {
@@ -148,14 +234,22 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
     const api = services.inspector as NetworkInspectorApi;
 
     // Idempotent: a second install is a no-op.
-    await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+    const installError = await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).then(
+      () => undefined,
+      (err: unknown) => (err instanceof Error ? err.message : String(err))
+    );
 
     // Zero-length slice: reuses the read script's Metro filtering just to get the total.
     const countRaw = await api.cdp.evaluate(makeNetworkLogReadScript(0, 0, api.port));
-    const { total } = JSON.parse(countRaw as string) as { total: number };
+    const { total, interceptorInstalled } = JSON.parse(countRaw as string) as {
+      total: number;
+      interceptorInstalled: boolean;
+    };
+
+    if (!interceptorInstalled) return notInstalled(installError);
 
     if (total === 0) {
-      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() calls.";
+      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active: it records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module, but not requests sent before capture started (at the first network-tool call).";
     }
 
     const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
@@ -174,11 +268,18 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
       interceptorInstalled: boolean;
     };
 
-    if (!data.interceptorInstalled) {
-      return "Network interceptor not installed. Try reconnecting with network-inspector-connect.";
-    }
+    if (!data.interceptorInstalled) return notInstalled(installError);
 
-    const lines = data.entries.map(formatEntry);
+    const lines = data.entries.map((entry) =>
+      formatEntry(
+        entry.response
+          ? {
+              ...entry,
+              response: { ...entry.response, statusText: reasonPhrase(entry.response.status) },
+            }
+          : entry
+      )
+    );
 
     return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${data.total} total) ===\n\n${lines.join("\n")}`;
   },

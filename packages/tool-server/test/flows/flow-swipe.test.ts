@@ -11,12 +11,10 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
@@ -78,7 +76,7 @@ describe("swipe: parse/serialize", () => {
     ],
   ])("rejects a programmatic swipe with %s", (_description, step) => {
     expect(() => serializeFlow({ executionPrerequisite: "", steps: [step] })).toThrow(
-      /cannot serialize flow swipe: needs exactly one of direction, to, or by/i
+      /cannot serialize e2e test swipe: needs exactly one of direction, to, or by/i
     );
   });
 
@@ -90,7 +88,7 @@ describe("swipe: parse/serialize", () => {
   ])("rejects programmatic by travel with %s", (_description, by) => {
     expect(() =>
       serializeFlow({ executionPrerequisite: "", steps: [{ kind: "swipe", by }] })
-    ).toThrow(/cannot serialize flow swipe\.by/i);
+    ).toThrow(/cannot serialize e2e test swipe\.by/i);
   });
 
   it("rejects a programmatic zero axis riding beside a real one", () => {
@@ -102,7 +100,7 @@ describe("swipe: parse/serialize", () => {
         executionPrerequisite: "",
         steps: [{ kind: "swipe", by: { x: 0, y: 0.5 } }],
       })
-    ).toThrow(/cannot serialize flow swipe\.by\.x: must be a non-zero fraction/i);
+    ).toThrow(/cannot serialize e2e test swipe\.by\.x: must be a non-zero fraction/i);
   });
 
   it("rejects a programmatic by carrying a key that is not x or y", () => {
@@ -114,19 +112,19 @@ describe("swipe: parse/serialize", () => {
         executionPrerequisite: "",
         steps: [{ kind: "swipe", by: { x: 0.5, z: 9 } } as never],
       })
-    ).toThrow(/cannot serialize flow swipe\.by: accepts only x and y/i);
+    ).toThrow(/cannot serialize e2e test swipe\.by: accepts only x and y/i);
   });
 
   it.each([
     [
       "from",
       { kind: "swipe", from: { x: 0.5, y: 0.5, z: 9 }, by: { x: 0.5 } },
-      /cannot serialize flow swipe\.from: a coordinate target takes only \{ x, y \}/i,
+      /cannot serialize e2e test swipe\.from: a coordinate target takes only \{ x, y \}/i,
     ],
     [
       "to",
       { kind: "swipe", from: { x: 0.9, y: 0.5 }, to: { x: 0.1, y: 0.5, z: 9 } },
-      /cannot serialize flow swipe\.to: a coordinate target takes only \{ x, y \}/i,
+      /cannot serialize e2e test swipe\.to: a coordinate target takes only \{ x, y \}/i,
     ],
   ])(
     "rejects a programmatic swipe %s coordinate target carrying a key that is not x or y",
@@ -148,7 +146,7 @@ describe("swipe: parse/serialize", () => {
       // The selector branch of a gesture target, which the { x, y } key check
       // never sees.
       expect(() => serializeFlow({ executionPrerequisite: "", steps: [step as never] })).toThrow(
-        /cannot serialize flow selector: unknown key `junk` - allowed keys: text, textMatches, identifier, role, any, loose, within, after, next/i
+        /cannot serialize e2e test selector: unknown key `junk` - allowed keys: text, textMatches, identifier, role, any, loose, within, after, next/i
       );
     }
   );
@@ -190,7 +188,7 @@ describe("swipe: parse/serialize", () => {
         executionPrerequisite: "",
         steps: [{ kind: "swipe", direction: "left", momentum } as never],
       })
-    ).toThrow(/cannot serialize flow swipe\.momentum: must be true or false/i);
+    ).toThrow(/cannot serialize e2e test swipe\.momentum: must be true or false/i);
   });
 
   it.each([
@@ -202,7 +200,9 @@ describe("swipe: parse/serialize", () => {
     // message names `swipe.by` (the vector), not a per-axis `swipe.by.x`.
     expect(() =>
       serializeFlow({ executionPrerequisite: "", steps: [{ kind: "swipe", by: { x } }] })
-    ).toThrow(/cannot serialize flow swipe\.by: travels only .*below the minimum swipe travel/i);
+    ).toThrow(
+      /cannot serialize e2e test swipe\.by: travels only .*below the minimum swipe travel/i
+    );
   });
 
   it("rejects a programmatic diagonal by whose vector magnitude is sub-floor", () => {
@@ -213,7 +213,9 @@ describe("swipe: parse/serialize", () => {
         executionPrerequisite: "",
         steps: [{ kind: "swipe", by: { x: 0.02, y: 0.02 } }],
       })
-    ).toThrow(/cannot serialize flow swipe\.by: travels only .*below the minimum swipe travel/i);
+    ).toThrow(
+      /cannot serialize e2e test swipe\.by: travels only .*below the minimum swipe travel/i
+    );
   });
 
   it.each([
@@ -227,7 +229,9 @@ describe("swipe: parse/serialize", () => {
         executionPrerequisite: "",
         steps: [{ kind: "swipe", direction: "left", duration }],
       })
-    ).toThrow(/cannot serialize flow swipe\.duration: needs a positive number of milliseconds/i);
+    ).toThrow(
+      /cannot serialize e2e test swipe\.duration: needs a positive number of milliseconds/i
+    );
   });
 
   it.each([
@@ -245,7 +249,7 @@ describe("swipe: parse/serialize", () => {
           steps: [{ kind: "swipe", direction: "left", duration }],
         })
       ).toThrow(
-        /cannot serialize flow swipe\.duration: only \d+ms — below the minimum swipe duration of 150ms.*too few 16ms frames for the content to track the travel/i
+        /cannot serialize e2e test swipe\.duration: only \d+ms — below the minimum swipe duration of 150ms.*too few 16ms frames for the content to track the travel/i
       );
     }
   );
@@ -265,7 +269,7 @@ describe("swipe: parse/serialize", () => {
           steps: [{ kind: "swipe", direction: "left", duration }],
         })
       ).toThrow(
-        /cannot serialize flow swipe\.duration: \S+ms - above the maximum swipe duration of 10000ms.*hold a finger on the screen/i
+        /cannot serialize e2e test swipe\.duration: \S+ms - above the maximum swipe duration of 10000ms.*hold a finger on the screen/i
       );
     }
   );

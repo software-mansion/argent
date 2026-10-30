@@ -6,7 +6,17 @@ import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/io
 import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
 import { getViewport, tapAt, toPoints } from "../../utils/ios-device/runner-commands";
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
-import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice, harmonyConnectKey } from "../../utils/device-info";
+import {
+  HARMONY_INTERACTION_TIMEOUT_MS,
+  assertHarmonyDisplayReady,
+  harmonyDisplay,
+  holdUitestQueue,
+  HARMONY_DISPLAY_TIMEOUT_MS,
+  remainingBudget,
+  toDevicePoint,
+} from "../../utils/harmony-uitest";
+import { ensureDep } from "../../utils/check-deps";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -14,9 +24,19 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
-  x: z.number().describe("Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels"),
-  y: z.number().describe("Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels"),
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+    ),
+  x: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe("Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels"),
+  y: z
+    .number()
+    .min(0)
+    .max(1)
+    .describe("Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels"),
   clickCount: z
     .number()
     .int()
@@ -27,7 +47,8 @@ const zodSchema = z.object({
       "Number of taps/clicks dispatched as ONE multi-tap gesture (2 = double-tap / double-click). " +
         "The taps land inside the OS double-tap window; on Chromium each click carries an escalating " +
         "CDP clickCount so dblclick actually fires; on physical iOS 2 is the native double-tap and " +
-        "higher counts land as separate taps. Default 1."
+        "higher counts land as separate taps. <flag:harmonyos>On HarmonyOS only 2 is one gesture; 3 or more are " +
+        "separate injections a device round trip apart, which the OS reads as single taps. </flag:harmonyos>Default 1."
     ),
 });
 
@@ -70,6 +91,7 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  harmony: { device: true },
 };
 
 // Timings keep a multi-tap inside the OS double-tap window, which separate
@@ -96,6 +118,45 @@ async function tapChromium(
   }
 }
 
+/** A count of 2 uses `uitest`'s native `doubleClick`; separate clicks are a round trip apart. */
+async function tapHarmony(
+  connectKey: string,
+  x: number,
+  y: number,
+  clickCount: number,
+  signal?: AbortSignal
+): Promise<void> {
+  // One deadline for the whole multi-tap, under the MCP abort-and-replay cap.
+  const deadline = Date.now() + HARMONY_INTERACTION_TIMEOUT_MS;
+  // Prefilter without queueing; the trusted check is inside the hold.
+  const display = await harmonyDisplay(connectKey);
+  assertHarmonyDisplayReady(display, "tap");
+  await holdUitestQueue(
+    connectKey,
+    deadline,
+    async (ui) => {
+      const live = await harmonyDisplay(
+        connectKey,
+        Math.min(
+          HARMONY_DISPLAY_TIMEOUT_MS,
+          remainingBudget(connectKey, deadline, "the display re-read")
+        )
+      );
+      assertHarmonyDisplayReady(live, "tap");
+      const point = toDevicePoint(x, y, live);
+      if (clickCount === 2) {
+        await ui.touch("doubleClick", point);
+        return;
+      }
+      for (let i = 0; i < clickCount; i++) {
+        if (i > 0) await sleep(MULTI_TAP_GAP_MS);
+        await ui.touch("click", point);
+      }
+    },
+    signal
+  );
+}
+
 export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
   interaction: {
@@ -104,13 +165,13 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to tap at (${Math.round(params.x * 100)}%, ${Math.round(params.y * 100)}%): ${failureSignal.error_code}`,
   },
-  description: `Press the device screen (iOS simulator or physical device, Android emulator, or Chromium app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
+  description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
 Sends a Down event followed by an Up event at the same point. For Chromium, this dispatches a CDP mouse-press/release on the renderer.
 Set clickCount: 2 for a double-tap / double-click: the taps are dispatched as one gesture with proper click counting, which two separate tap calls cannot guarantee.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
+Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend / Chromium CDP <flag:harmonyos>/ \`hdc\` </flag:harmonyos>is not reachable for the given device.
 On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-only.
-Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker), since the native and RN-specific discovery tools don't apply. More information in \`argent-device-interact\` skill`,
+Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\`, \`native-describe-screen\`, or \`debugger-component-tree\`; Chromium uses \`describe\` (the DOM walker)<flag:harmonyos> and HarmonyOS uses \`describe\` (the \`uitest\` layout dump)</flag:harmonyos>, since the native and RN-specific discovery tools don't apply<flag:harmonyos> to either</flag:harmonyos>. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
   zodSchema,
@@ -123,9 +184,11 @@ Before tapping, determine the correct coordinates by using discovery tools. Pick
     if (isIosPhysicalDevice(device)) {
       return { iosDeviceRunner: iosDeviceRunnerRef(device) };
     }
+    // No simulator-server controller exists for HarmonyOS.
+    if (device.platform === "harmony") return {};
     return { simulatorServer: simulatorServerRef(device) };
   },
-  async execute(services, params) {
+  async execute(services, params, ctx) {
     const device = resolveDevice(params.udid);
     const timestampMs = Date.now();
     const clickCount = params.clickCount ?? 1;
@@ -148,6 +211,11 @@ Before tapping, determine the correct coordinates by using discovery tools. Pick
       // viewport read fronts it first, so the tap then finds it foreground.
       const reactivated = viewport.reactivated === true || tap.reactivated;
       return { tapped: true, timestampMs, ...(reactivated ? { reactivated: true as const } : {}) };
+    }
+    if (device.platform === "harmony") {
+      await ensureDep("hdc");
+      await tapHarmony(harmonyConnectKey(device.id), params.x, params.y, clickCount, ctx?.signal);
+      return { tapped: true, timestampMs };
     }
     const api = services.simulatorServer as SimulatorServerApi;
     let warning: string | undefined;

@@ -91,7 +91,7 @@ async function awaitWebViewPublished(
   read: () => Promise<DescribeNode>
 ): Promise<DescribeNode> {
   let tree = first;
-  for (let waited = 0; waited < WEBVIEW_PUBLISH_BUDGET_MS && hasUnreadWebView(tree); ) {
+  for (let waited = 0; waited < WEBVIEW_PUBLISH_BUDGET_MS && hasUnreadWebView(tree);) {
     await new Promise((r) => setTimeout(r, WEBVIEW_PUBLISH_STEP_MS));
     waited += WEBVIEW_PUBLISH_STEP_MS;
     tree = await read();

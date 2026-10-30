@@ -681,7 +681,7 @@ describe("listArgentSkillsInLock", () => {
       JSON.stringify({
         version: 1,
         skills: {
-          "argent-create-flow": {},
+          "argent-create-e2e": {},
           "argent-old-workflow": {}, // still in lock even if no longer bundled
           "some-other-skill": {},
           "vercel-labs/agent-skills": {},
@@ -689,7 +689,7 @@ describe("listArgentSkillsInLock", () => {
       })
     );
     // Result is sorted so callers can rely on a stable order.
-    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-flow", "argent-old-workflow"]);
+    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-e2e", "argent-old-workflow"]);
   });
 
   it("returns an empty list when the lock has no skills object", () => {
@@ -849,8 +849,7 @@ describe("isSkillsCliAvailable", () => {
     isSkillsCliAvailable();
 
     const opts = execSyncMock.mock.calls[0]![1] as
-      | { stdio?: [unknown, unknown, unknown] }
-      | undefined;
+      { stdio?: [unknown, unknown, unknown] } | undefined;
     expect(opts?.stdio).toEqual(["ignore", "ignore", "ignore"]);
   });
 

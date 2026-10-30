@@ -65,6 +65,7 @@ describe("flow script executor — the environment allowlist", () => {
     withEnv("ARGENT_AUTH_TOKEN", "tool-server-bearer-token");
     withEnv("ARGENT_PORT", "43111");
     withEnv("ARGENT_SECRET_APP_PASSWORD", "hunter2");
+    withEnv("HOME", "/argent-test-home");
     const ws = workspace();
     const script = ws.write(
       "env.mjs",
@@ -77,7 +78,23 @@ describe("flow script executor — the environment allowlist", () => {
     expect(env.ARGENT_PORT).toBeNull();
     expect(env.ARGENT_SECRET_APP_PASSWORD).toBeNull();
     expect(env.PATH).toBe(process.env.PATH);
-    expect(env.HOME).toBe(process.env.HOME);
+    expect(env.HOME).toBe("/argent-test-home");
+  });
+
+  it("passes the adb server variables, so a script's adb reaches the tool server's devices", async () => {
+    withEnv("ANDROID_ADB_SERVER_PORT", "5038");
+    withEnv("ANDROID_ADB_SERVER_ADDRESS", "10.0.0.2");
+    withEnv("ADB_SERVER_SOCKET", "tcp:10.0.0.2:5038");
+    const ws = workspace();
+    const names = ["ANDROID_ADB_SERVER_PORT", "ANDROID_ADB_SERVER_ADDRESS", "ADB_SERVER_SOCKET"];
+    const script = ws.write("env.mjs", reporter(names));
+    const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
+
+    expect(result.output?.env).toEqual({
+      ANDROID_ADB_SERVER_PORT: "5038",
+      ANDROID_ADB_SERVER_ADDRESS: "10.0.0.2",
+      ADB_SERVER_SOCKET: "tcp:10.0.0.2:5038",
+    });
   });
 
   it("copies every npm_config_ value, so a project's npm settings survive", async () => {

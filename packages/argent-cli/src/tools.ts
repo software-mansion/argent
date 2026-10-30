@@ -16,7 +16,8 @@ export async function tools(argv: string[], options: ToolsCommandOptions): Promi
   const { fetchTool, fetchTools } = createToolsClient({ paths: options.paths });
 
   async function listTools(json: boolean): Promise<void> {
-    const list = await fetchTools();
+    // A former tool id stays callable and describable but is not listed.
+    const list = (await fetchTools()).filter((tool) => tool.aliasOf === undefined);
     if (json) {
       console.log(JSON.stringify(list, null, 2));
       return;

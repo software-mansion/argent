@@ -8,22 +8,25 @@ import { androidImpl } from "./platforms/android";
 import { iosDeviceImpl } from "./platforms/ios-device";
 import { iosRemoteImpl } from "./platforms/ios-remote";
 import { vegaImpl } from "./platforms/vega";
+import { harmonyImpl } from "./platforms/harmony";
 
 const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+    .describe(
+      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+    ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier that matches the bundle at `appPath`. iOS: bundle id (used to uninstall first). Android: package name (used to uninstall first; the install itself identifies the app from the APK). Vega: interactive component app id (e.g. com.example.app.main), used to uninstall first."
+      "App identifier that matches the bundle at `appPath`. iOS: bundle id (used to uninstall first). Android: package name (used to uninstall first; the install itself identifies the app from the APK). Vega: interactive component app id (e.g. com.example.app.main), used to uninstall first.<flag:harmonyos> HarmonyOS: bundle name, which must match `app.bundleName` in the `.hap`.</flag:harmonyos>"
     ),
   appPath: z
     .string()
     .describe(
-      "Path to the app bundle. iOS: `.app` directory (e.g. ./build/.../MyApp.app). Android: `.apk` file (e.g. android/app/build/outputs/apk/debug/app-debug.apk). Vega: `.vpkg` file. Relative paths are resolved from the current working directory."
+      "Path to the app bundle. iOS: `.app` directory (e.g. ./build/.../MyApp.app). Android: `.apk` file (e.g. android/app/build/outputs/apk/debug/app-debug.apk). Vega: `.vpkg` file.<flag:harmonyos> HarmonyOS: `.hap` file.</flag:harmonyos> Relative paths are resolved from the current working directory."
     ),
 });
 
@@ -34,6 +37,7 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
+  harmony: { device: true },
 };
 
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
@@ -46,7 +50,7 @@ export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   },
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android, .vpkg for Vega).`,
+Returns { reinstalled, bundleId }. Fails before uninstalling anything if the app path does not exist, is not the platform's package (.app for iOS, .apk for Android, .vpkg for Vega<flag:harmonyos>, .hap for HarmonyOS</flag:harmonyos>), or bundleId does not match it.`,
   zodSchema,
   capability,
   fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
@@ -59,6 +63,7 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
     // No chromium branch; placeholder so the vega/ios-remote slots line up.
     Record<string, unknown>,
     ReinstallAppServices,
+    ReinstallAppServices,
     ReinstallAppServices
   >({
     toolId: "reinstall-app",
@@ -68,5 +73,6 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
     iosDevice: iosDeviceImpl,
     iosRemote: iosRemoteImpl,
     vega: vegaImpl,
+    harmony: harmonyImpl,
   }),
 };

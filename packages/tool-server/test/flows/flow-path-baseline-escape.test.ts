@@ -117,7 +117,7 @@ describe("flow_path stems that would collapse the baseline directory", () => {
     // copying it into the joined baseline dir, so a run that got this far
     // leaves the PNG in the collapsed location. Nothing may have been written.
     expect((await fs.readdir(flowDir, { recursive: true })).sort()).toEqual([basename]);
-    expect(failure?.message).toContain(`Invalid flow name "${stem}"`);
+    expect(failure?.message).toContain(`Invalid e2e test name "${stem}"`);
   });
 });
 
@@ -215,7 +215,9 @@ describe("the stem a valid flow_path derives", () => {
     // renders as "./checkout" (runDisplayName's same-stem disambiguation).
     expect(result.ok).toBe(false);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["run:pass", "run:error"]);
-    expect(result.steps[1].reason).toBe("cyclic flow reference: checkout → helper → ./checkout");
+    expect(result.steps[1].reason).toBe(
+      "cyclic e2e test reference: checkout → helper → ./checkout"
+    );
   });
 });
 

@@ -9,12 +9,7 @@ import {
 } from "@argent/registry";
 
 type EventLogValue =
-  | string
-  | number
-  | boolean
-  | null
-  | EventLogValue[]
-  | { [key: string]: EventLogValue | undefined };
+  string | number | boolean | null | EventLogValue[] | { [key: string]: EventLogValue | undefined };
 
 type EventLogRecord = { type: string; msg: string } & Record<string, EventLogValue | undefined>;
 

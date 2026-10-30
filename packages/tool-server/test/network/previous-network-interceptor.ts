@@ -1,0 +1,118 @@
+/**
+ * The interceptor that tool-servers before the JS runtime layer injected (main at 23181baaa): it
+ * wraps the global fetch only. Kept to test an install over it, after an upgrade without a reload.
+ */
+export const PREVIOUS_NETWORK_INTERCEPTOR_SCRIPT = `(function() {
+  if (globalThis.__argent_network_installed) return JSON.stringify({ installed: false, reason: 'already installed' });
+  globalThis.__argent_network_installed = true;
+
+  var log = [];
+  globalThis.__argent_network_log = log;
+  var byId = {};
+  globalThis.__argent_network_by_id = byId;
+  var nextReqId = 1;
+  var MAX_ENTRIES = 2000;
+  function genId() { return 'rn-net-' + (nextReqId++); }
+  function ts() { return Date.now() / 1000; }
+
+  function getOrCreate(reqId) {
+    if (byId[reqId]) return byId[reqId];
+    var entry = {
+      id: log.length,
+      requestId: reqId,
+      state: 'pending'
+    };
+    log.push(entry);
+    byId[reqId] = entry;
+    if (log.length > MAX_ENTRIES) {
+      var removed = log.splice(0, log.length - MAX_ENTRIES);
+      for (var i = 0; i < removed.length; i++) {
+        delete byId[removed[i].requestId];
+      }
+    }
+    return entry;
+  }
+
+  // ── Patch fetch ──
+  var origFetch = globalThis.fetch;
+  if (origFetch) {
+    globalThis.fetch = function(input, init) {
+      var reqId = genId();
+      var method = (init && init.method) ? init.method.toUpperCase() : 'GET';
+      var url = typeof input === 'string' ? input : (input && input.url ? input.url : String(input));
+      var headers = {};
+      if (init && init.headers) {
+        if (typeof init.headers.forEach === 'function') {
+          init.headers.forEach(function(v, k) { headers[k] = v; });
+        } else if (typeof init.headers === 'object') {
+          var ks = Object.keys(init.headers);
+          for (var i = 0; i < ks.length; i++) { headers[ks[i]] = String(init.headers[ks[i]]); }
+        }
+      }
+      var postData = (init && init.body && typeof init.body === 'string') ? init.body : undefined;
+      var t = ts();
+
+      var entry = getOrCreate(reqId);
+      entry.request = { url: url, method: method, headers: headers, postData: postData };
+      entry.timestamp = t;
+      entry.wallTime = t;
+      entry.resourceType = 'Fetch';
+
+      return origFetch.apply(globalThis, arguments).then(function(response) {
+        var respHeaders = {};
+        if (response.headers && typeof response.headers.forEach === 'function') {
+          response.headers.forEach(function(v, k) { respHeaders[k] = v; });
+        }
+        var contentType = respHeaders['content-type'] || '';
+        var mimeType = contentType.split(';')[0].trim();
+
+        entry.response = {
+          url: response.url || url,
+          status: response.status,
+          statusText: response.statusText || '',
+          headers: respHeaders,
+          mimeType: mimeType
+        };
+
+        // Read the cloned response as a Blob to preserve the decoded entity's
+        // byte length across text charsets and binary responses. Content-Length
+        // cannot be used here: HEAD/304 responses may advertise a body that was
+        // not sent, and compression headers describe a different measurement.
+        var sizeClone = response.clone();
+        var bodyClone = response.clone();
+        var sizePromise = typeof sizeClone.blob === 'function'
+          ? sizeClone.blob().then(function(blob) {
+              return blob && typeof blob.size === 'number' ? blob.size : undefined;
+            }).catch(function() { return undefined; })
+          : Promise.resolve(undefined);
+        var bodyPromise = bodyClone.text().catch(function() { return undefined; });
+
+        Promise.all([sizePromise, bodyPromise]).then(function(values) {
+          var byteLength = values[0];
+          var body = values[1];
+          entry.state = 'finished';
+          if (typeof byteLength === 'number') entry.encodedDataLength = byteLength;
+          entry.durationMs = Math.round((ts() - t) * 1000);
+          if (typeof body === 'string') entry.responseBody = body;
+        }).catch(function() {
+          entry.state = 'finished';
+          entry.durationMs = Math.round((ts() - t) * 1000);
+        });
+
+        return response;
+      }).catch(function(err) {
+        entry.state = 'failed';
+        entry.errorText = err ? (err.message || String(err)) : 'Network error';
+        entry.durationMs = Math.round((ts() - t) * 1000);
+        throw err;
+      });
+    };
+  }
+
+  // Note: XHR is intentionally NOT patched. In React Native, fetch() is built
+  // on top of XMLHttpRequest internally, so patching both would double-count
+  // every request. Since virtually all RN code uses fetch(), patching only
+  // fetch captures all meaningful traffic without duplicates.
+
+  return JSON.stringify({ installed: true });
+})()`;
