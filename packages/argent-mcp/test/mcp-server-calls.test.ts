@@ -290,8 +290,9 @@ describe("startMcpServer tool calls", () => {
       "/tools/describe",
     ]);
     expect(textOf(tap)).toContain("skipped while a profiler is recording");
-    expect(textOf(described)).toContain("Button 'OK'");
     expect(textOf(described)).not.toContain("profiler");
+    // The tree as plain text, not a JSON object holding it as an escaped string.
+    expect(described.content).toEqual([{ type: "text", text: "Button 'OK'" }]);
   });
 
   it("uploads a tar-upload input and returns the tool result", async () => {
@@ -441,6 +442,7 @@ describe("startMcpServer screen capture after an interaction", () => {
   // A hanging route never answers, as a read of a frozen device's tree.
   let idleHangs: boolean;
   let describeHangs: boolean;
+  let describeData: Record<string, unknown>;
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -463,9 +465,8 @@ describe("startMcpServer screen capture after an interaction", () => {
     waitResult = { success: true, elapsed: 120 };
     idleHangs = false;
     describeHangs = false;
-    const describeRoute = slow("describe", (res) =>
-      send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
-    );
+    describeData = { description: "button Done (0.1,0.2,0.3,0.1)" };
+    const describeRoute = slow("describe", (res) => send(res, 200, { data: describeData }));
     stub = await startStub({
       routes: {
         "/tools/gesture-tap": (res) => send(res, 200, { data: { tapped: true } }),
@@ -530,6 +531,22 @@ describe("startMcpServer screen capture after an interaction", () => {
     ]);
     expect(content[0]!.text).toContain('"tapped": true');
     expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  // describe tells a device its standing caveat once; an auto tree that dropped
+  // it would use the caveat up without the agent ever reading it.
+  it("keeps describe's hint in the element tree it appends", async () => {
+    describeData = {
+      description: "button Done (0.1,0.2,0.3,0.1)",
+      hint: "This simulator was not booted by argent.",
+    };
+
+    const result = await tap();
+
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)!.text).toBe(
+      "--- Elements after action (describe) ---\nbutton Done (0.1,0.2,0.3,0.1)\nHint: This simulator was not booted by argent."
+    );
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {

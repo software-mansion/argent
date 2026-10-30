@@ -90,11 +90,35 @@ export async function toMcpContent(
 }
 
 /**
+ * A string result goes out as-is: JSON-encoding it would ship a report or a
+ * tree as one quoted line of `\n` and `\"` escapes. Anything else is JSON.
  * JSON.stringify(undefined) returns undefined, which would make an invalid MCP
  * text block; coerce to "null".
  */
 function stringifyForText(value: unknown): string {
+  if (typeof value === "string") return value.length > 0 ? value : '""';
   return JSON.stringify(value ?? null, null, 2);
+}
+
+/**
+ * `describe`'s `{ description, source, should_restart?, hint? }` as plain text:
+ * the rendered tree, then the fields that qualify it. `source` is left out when
+ * the tree's `Source:` line already names it. `undefined` for any other shape
+ * (a tool-server from before the text tree), which then renders as JSON.
+ */
+export function describeResultText(result: unknown): string | undefined {
+  if (!isRecord(result) || Array.isArray(result)) return undefined;
+  const { description, source, should_restart, hint, ...extra } = result;
+  if (typeof description !== "string" || description.length === 0) return undefined;
+
+  const lines = [description.replace(/\n+$/, "")];
+  if (typeof source === "string" && !description.includes(`Source: ${source}`)) {
+    lines.push(`Source: ${source}`);
+  }
+  if (should_restart === true) lines.push("should_restart: true");
+  if (typeof hint === "string" && hint.length > 0) lines.push(`Hint: ${hint}`);
+  if (Object.keys(extra).length > 0) lines.push(JSON.stringify(extra));
+  return lines.join("\n");
 }
 
 /**

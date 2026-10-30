@@ -20,6 +20,7 @@ import {
 } from "@argent/telemetry";
 import {
   toMcpContent,
+  describeResultText,
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
@@ -216,15 +217,17 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const t1 = Date.now();
     try {
       const d = await callTool("describe", { udid }, { signal });
-      const desc = (d.result as { description?: unknown } | null)?.description;
+      // The whole result, not only `description`: describe tells each device its
+      // standing caveat (`hint`) once, so dropping it here would use it up unseen.
+      const desc = describeResultText(d.result);
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
         name: toolName,
         durationMs: Date.now() - t1,
-        chars: typeof desc === "string" ? desc.length : 0,
+        chars: desc?.length ?? 0,
       });
-      if (typeof desc !== "string" || desc.length === 0) return [];
+      if (!desc) return [];
       return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` }];
     } catch (e) {
       await spyLog({
@@ -292,6 +295,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         deviceId: getDeviceIdFromArgs(params.arguments),
       };
 
+      const describeText =
+        canonicalToolId(params.name) === "describe" ? describeResultText(result) : undefined;
       let content: ContentBlock[];
       if (
         canonicalToolId(params.name) === "e2e-execute" &&
@@ -303,6 +308,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
       } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
         content = await screenshotDiffToMcpContent(result, ctx);
+      } else if (describeText !== undefined) {
+        content = [{ type: "text" as const, text: describeText }];
       } else {
         content = await toMcpContent(result, outputHint, ctx, params.arguments);
       }

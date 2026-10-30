@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { mkdtemp, rm } from "node:fs/promises";
 import {
   toMcpContent,
+  describeResultText,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
   flowRunToMcpContent,
@@ -36,6 +37,15 @@ describe("toMcpContent", () => {
   it("returns JSON text block for plain results", async () => {
     const result = await toMcpContent({ foo: "bar" });
     expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) }]);
+  });
+
+  it("returns a string result as-is, not as a JSON-quoted line", async () => {
+    const report = 'Screen: 402x874\n\nView "Home" (tap: 0.12,0.93)';
+    expect(await toMcpContent(report)).toEqual([{ type: "text", text: report }]);
+  });
+
+  it("returns an empty string result as a visible empty string", async () => {
+    expect(await toMcpContent("")).toEqual([{ type: "text", text: '""' }]);
   });
 
   it("returns JSON text block when outputHint is not image", async () => {
@@ -937,5 +947,45 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] A" });
     expect(blocks[2]).toEqual({ type: "text", text: "[2] B" });
     expect(blocks[3]).toEqual({ type: "text", text: "[3] C" });
+  });
+});
+
+// ── describeResultText ───────────────────────────────────────────────
+
+describe("describeResultText", () => {
+  const tree = 'Source: ax-service\nMode: flat\n\n  AXButton "Done"  (0.1, 0.2, 0.3, 0.1)';
+
+  it("returns the tree as plain text, without repeating the source its header names", () => {
+    expect(describeResultText({ description: tree, source: "ax-service" })).toBe(tree);
+  });
+
+  it("names the source when the tree does not", () => {
+    expect(describeResultText({ description: "AXButton", source: "native-devtools" })).toBe(
+      "AXButton\nSource: native-devtools"
+    );
+  });
+
+  it("keeps should_restart and hint as lines after the tree", () => {
+    expect(
+      describeResultText({
+        description: tree,
+        source: "ax-service",
+        should_restart: true,
+        hint: "Restart the app.",
+      })
+    ).toBe(`${tree}\nshould_restart: true\nHint: Restart the app.`);
+  });
+
+  it("keeps unknown fields as JSON", () => {
+    expect(describeResultText({ description: tree, source: "ax-service", extra: 1 })).toBe(
+      `${tree}\n{"extra":1}`
+    );
+  });
+
+  it("returns undefined for a result without a text tree", () => {
+    expect(describeResultText({ tree: {} })).toBeUndefined();
+    expect(describeResultText({ description: "" })).toBeUndefined();
+    expect(describeResultText("text")).toBeUndefined();
+    expect(describeResultText(null)).toBeUndefined();
   });
 });
