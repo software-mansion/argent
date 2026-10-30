@@ -41,6 +41,7 @@ import {
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
+import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
 
@@ -241,11 +242,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     { name: "argent", version: getInstalledVersion() },
     {
       capabilities: { tools: {} },
-      instructions:
-        "Argent — iOS Simulator, Android Emulator, and Chromium app control for interacting, testing, profiling and debugging mobile and Chromium applications. " +
-        "Interaction tools return the screen after the action: a screenshot plus the accessibility element tree with normalized tap frames. Take coordinates from that tree; call describe (or debugger-component-tree) only when no fresh tree is available — never guess coordinates from pixels. " +
-        "Do not stop simulator servers when a task finishes: the next task reuses them. Call stop-all-simulator-servers when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services, always with devices: [...] naming the devices this session used. Never stop a Metro the user started unless they ask. " +
-        "One tool-server is shared by every agent using this argent install, so an unscoped call tears down their devices too — reserve it for a deliberate machine-wide cleanup.",
+      instructions: SERVER_INSTRUCTIONS,
     }
   );
 

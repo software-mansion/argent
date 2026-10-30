@@ -182,6 +182,14 @@ Argent's tool schemas reach each one's model. Run it by hand when you change too
 tool descriptions or the MCP server's instructions. See
 [scripts/harness-check/README.md](scripts/harness-check/README.md).
 
+### Seeing what Argent sends to agents
+
+`npm run render:agent-context` renders what the MCP server sends for your checkout: each
+tool's `tools/list` entry and the server instructions, as markdown in
+`packages/tool-server/agent-context/` (not committed). Run it when you change tool
+descriptions, tool schemas or the server instructions. See
+[packages/tool-server/src/tools/README.md](packages/tool-server/src/tools/README.md).
+
 ---
 
 ## Code style
