@@ -46,6 +46,7 @@ exploration of anything the snapshot surfaces.
 Use when you need to inspect project configuration without manually reading multiple files.
 Returns partial data if workspacePath does not exist or is not readable; missing items are represented as null or empty collections.
 Fails if the workspacePath is not an absolute path or the directory cannot be accessed.`,
+  readOnly: true,
   zodSchema,
   fileInputs,
   services: () => ({}),

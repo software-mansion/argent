@@ -391,6 +391,7 @@ after a tap/navigation to wait for the next screen, or before tapping an element
     searchHint:
       "wait await poll until visible hidden exists text appears disappears timeout element condition settle",
     longRunning: true,
+    readOnly: true,
     zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
