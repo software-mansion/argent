@@ -1255,6 +1255,26 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0]?.reason).toContain("unrecognized step kind");
   });
 
+  it("keeps a fragment's YAML error frame in the run step's reason", async () => {
+    const dir = path.join(tmpDir, ".argent", "flows", "sub\nx");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "typo.yaml"), "steps:\n  - echo: a: b\n", "utf8");
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub\nx/typo.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[0]?.reason).toMatch(/^could not load fragment "sub\\nx\/typo\.yaml": /);
+    expect(result.steps[0]?.reason).toContain("\n  - echo: a: b\n");
+  });
+
   it("bounds the reason when a run: target is in-project YAML but not a flow", async () => {
     // A mistyped run: path can select any YAML file inside the project root —
     // here a CI config whose sole top-level key happens to be `steps`. Its
@@ -1450,6 +1470,31 @@ describe("flow composition (run:)", () => {
     // author can paste back into the flow.
     expect(reason).toContain(`reference it as "sub/frag.yaml"`);
     expect(result.steps.map((s) => s.message)).not.toContain("RAN-THE-SUBDIR-FILE");
+  });
+
+  it("quotes a mis-cased target and its fix on one line", async () => {
+    const subDir = path.join(tmpDir, ".argent", "flows", "sub\nx");
+    await fs.mkdir(subDir, { recursive: true });
+    await fs.writeFile(
+      path.join(subDir, "frag.yaml"),
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "echo", message: "in frag" }] }),
+      "utf8"
+    );
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub\nx/Frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    const reason = result.steps[0]?.reason ?? "";
+    expect(reason).toMatch(/^mis-cased fragment reference "sub\\nx\/Frag\.yaml": /);
+    expect(reason).toContain(`reference it as "sub\\nx/frag.yaml"`);
   });
 
   it("asks for a rename when the on-disk spelling no run: target could reach", async () => {

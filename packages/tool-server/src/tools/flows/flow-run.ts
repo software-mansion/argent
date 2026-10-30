@@ -1311,7 +1311,9 @@ function fragmentLoadRefusal(
   target: string
 ): string | undefined {
   const retiredArg = findRetiredToolArg(registry, fragment.steps);
-  return retiredArg ? `fragment "${target}" ${retiredArgReason(retiredArg)}` : undefined;
+  return retiredArg
+    ? `fragment "${escapeInline(target)}" ${retiredArgReason(retiredArg)}`
+    : undefined;
 }
 
 /**
@@ -2552,6 +2554,9 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
+  // Reasons quote the target; their own error text stays raw (a YAML error's
+  // code frame is multi-line).
+  const shown = escapeInline(target);
   // Shared with stepFlow so the marker/error reports here and every skip path
   // there attribute the same `run:` step identically; the fragment's expanded
   // steps inherit it through the runStack entry pushed below.
@@ -2565,7 +2570,7 @@ async function execRunStep(
       status: "error",
       flow: display,
       target: stepTarget(step),
-      reason: escapeInline(reason),
+      reason,
       ...depthOf(scope),
       durationMs: Date.now() - startedAt,
     });
@@ -2580,7 +2585,7 @@ async function execRunStep(
   try {
     hop = await resolveRunTarget(state.project, scopeFlowDir(scope), target);
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
   }
   const { canonical, spelling } = hop;
 
@@ -2616,11 +2621,11 @@ async function execRunStep(
     // can paste. An on-disk ".YAML" is reachable by no run: target at all, so
     // that fork asks for the rename it really needs.
     const recovery = spelling.addressable
-      ? `reference it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
+      ? `reference it as "${escapeInline(target.slice(0, target.length - suppliedBase.length))}${spelling.actual}"`
       : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — e2e test files must be ` +
         `lowercase .yaml`;
     return fail(
-      `mis-cased fragment reference "${target}": no directory entry is named "${suppliedBase}" ` +
+      `mis-cased fragment reference "${shown}": no directory entry is named "${suppliedBase}" ` +
         `(this filesystem matched it case-insensitively to "${spelling.actual}"), so the fragment ` +
         `name keying its step reports is one nothing on disk carries and a case-sensitive ` +
         `checkout could not find the file at all — ${recovery}`
@@ -2650,12 +2655,12 @@ async function execRunStep(
     const text = await hop.read();
     if (text === null) {
       return fail(
-        `could not load fragment "${target}": ENOENT: no such file or directory, open '${canonical}'`
+        `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(canonical)}'`
       );
     }
     fragment = parseFlow(text);
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
   }
 
   // Charged to the run: step, so the fragment is refused whole rather than
