@@ -449,6 +449,7 @@ Every table states how many samples it covers and how much of that was idle.
 Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
 Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
 Fails if no CPU profile is stored; run react-profiler-stop first.`,
+  readOnly: true,
   zodSchema,
   // RN-only: reads Hermes-format CPU profiles; Chromium's V8 sample format differs.
   capability: RN_ONLY_TOOL_CAPABILITY,

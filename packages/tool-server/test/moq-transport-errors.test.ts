@@ -49,8 +49,8 @@ const TOUCH = {
   second_y: null,
 } as const;
 
-/** What a released cloud machine actually throws from `sendControl`. */
-const CLOSED = () => new Error("track is closed");
+/** What `MoqClient.sendControl` throws once its session is closed. */
+const CLOSED = () => new Error("MoQ session is closed");
 
 function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
   return {
@@ -61,7 +61,7 @@ function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
   };
 }
 
-/** A `MoqClient` whose control track is closed, as after the machine is released. */
+/** A `MoqClient` whose session is closed, as after the machine is released. */
 function closedMoqClient(): MoqClient {
   return {
     sendControl: () => Promise.reject(CLOSED()),
@@ -127,7 +127,7 @@ describe("sendCommand over a MoQ transport", () => {
     expect(String(err)).toContain("'touch'");
     expect(String(err)).toContain("NOT delivered to the device");
     // The underlying cause survives, so the log still names the real fault.
-    expect(String(err)).toContain("track is closed");
+    expect(String(err)).toContain("MoQ session is closed");
     // A dead session recovers on the same machine, so the first remedy is a
     // new session, not a new machine.
     expect(String(err)).toContain("Call stop-simulator-server for this device and retry");
@@ -200,7 +200,7 @@ describe("every send routed onto MoQ reports its own failure", () => {
     { name: "key", cmd: { cmd: "key", direction: "Down", code: 0x19 } },
   ] as const;
 
-  it.each(COMMANDS)("$name rejects when the track is closed", async ({ cmd }) => {
+  it.each(COMMANDS)("$name rejects when the session is closed", async ({ cmd }) => {
     const transport = createMoqTransport(closedMoqClient(), { pasteText: () => Promise.resolve() });
     expect(
       getFailureSignal(await sendCommand(apiWith(transport), { ...cmd }).catch((e: unknown) => e))

@@ -124,7 +124,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android<flag:harmonyos>/harmony; harmony: home/back/power only</flag:harmonyos>]
   keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only<flag:harmonyos>; harmony: enter/return, backspace/delete, space, arrow-left, arrow-right only</flag:harmonyos>)  [ios/android/chromium/vega/tv<flag:harmonyos>/harmony</flag:harmonyos>]
-                  text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file; credentials never enter agent context
+                  text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file (over a forward-secrets link, the client's first); credentials never enter agent context
   paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP; keyboard otherwise)   [ios sim/android emu]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
   shake:          { count?: number }                                                                                    [ios sim/android emu]
