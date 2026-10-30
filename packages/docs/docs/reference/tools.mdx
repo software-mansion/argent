@@ -272,12 +272,13 @@ Use `gesture-drag` to drag and `gesture-scroll` to scroll.
   - An element that another window of the app covers.
   - The content of a window tab that is not the selected tab.
   - A view with an opacity of 0, or a view that a transform moves out of the window.
-  - A hidden web view, or a web view behind a different web view at the same place.
+  - A hidden web view, or a web view behind a different web view that shows at the same place.
   - A panel that hides while the app is in the background.
 - The value of a date picker is its date in ISO 8601 format, in the time zone of the Mac.
 - The tree does not show the menu bar of the app. Use [`menu-bar`](#menu-bar).
 - A password field has the `password` flag and no value.
 - A text field without a label has its placeholder as its label.
+- An element that has no label of its own and that a separate text names has that text as its label. Examples are a field and a switch in a SwiftUI `Form`. The tree then does not show that text as a separate element.
 - When the app gives a description of the value of an element, the tree shows the description as the value. Examples are a SwiftUI `.accessibilityValue` (`2 of 5`) and the bars of a Swift Charts chart.
 - The hint also says when one of these conditions occurs:
   - The tree comes from a fallback walk, for example while the Mac is locked. This tree can miss elements, and a `hidden` check does not pass on it.
