@@ -835,7 +835,7 @@ async function scrollToVisible(
   within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
-  let prevRoom: number | undefined;
+  let prevCut: { room: number; span: number } | undefined;
   // Whether the walker's anchor is spent: a wheel there left the cut in place.
   let anchorSpent = false;
   let warning: string | undefined;
@@ -882,18 +882,30 @@ async function scrollToVisible(
     if (frame && axisFullyInside(frame, axisDirection, cut ?? container?.clipFrame ?? region)) {
       return { frame, ...warnedBy(warning) };
     }
-    // A cut the last increment left where it was: the walker cannot see every wheel
-    // taker (a page's wheel listener, a closed shadow root's scroller, a scroller
-    // that moved under the anchor), so later increments go where an uncut target's
-    // would. One that leaves it in place too is a cut its scroller cannot scroll
-    // away (it is at its end): further wheels only chain to the page.
-    const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
+    // A cut the last increment left where it was, in a window as long: the walker
+    // cannot see every wheel taker (a page's wheel listener, a closed shadow root's
+    // scroller, a scroller that moved under the anchor), so later increments go where
+    // an uncut target's would. One that leaves it in place too is a cut its scroller
+    // cannot scroll away (it is at its end): further wheels only chain to the page.
+    const at =
+      frame && axisCut
+        ? {
+            room: leadingRoom(frame, axisCut, axisDirection),
+            span: vertical ? axisCut.height : axisCut.width,
+          }
+        : undefined;
     let spentNow = false;
-    if (room !== undefined && prevRoom !== undefined && Math.abs(room - prevRoom) < 1e-4) {
+    if (
+      at &&
+      prevCut &&
+      Math.abs(at.room - prevCut.room) < 1e-4 &&
+      Math.abs(at.span - prevCut.span) < 1e-4
+    ) {
       if (anchorSpent) return { frame: frame!, ...warnedBy(warning) };
       anchorSpent = spentNow = true;
     }
-    prevRoom = room;
+    prevCut = at;
+    const room = at?.room;
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint

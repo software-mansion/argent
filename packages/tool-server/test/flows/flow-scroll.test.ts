@@ -466,6 +466,47 @@ describe("scroll-to directive", () => {
     }
   });
 
+  it("keeps the anchor for a cut whose room recurs in a window of another length", async () => {
+    // The first wheel scrolls the inner of two cutting lists until it no longer
+    // cuts the row, leaving it as far from the outer list's window start.
+    const states = [
+      n({
+        identifier: "row",
+        frame: { x: 0.6, y: 0.75, width: 0.3, height: 0.1 },
+        clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+        clipAnchors: { y: { x: 0.3, y: 0.45 } },
+      }),
+      n({
+        identifier: "row",
+        frame: { x: 0.6, y: 0.65, width: 0.3, height: 0.1 },
+        clipBounds: { x: 0, y: 0.3, width: 1, height: 0.42 },
+        clipAnchors: { y: { x: 0.2, y: 0.35 } },
+      }),
+      n({ identifier: "row", frame: { x: 0.6, y: 0.5, width: 0.3, height: 0.1 } }),
+    ];
+    let wheels = 0;
+    currentTree = () => screen([states[Math.min(wheels, 2)]]);
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      wheels++;
+    });
+    await writeFlow("regrown-cut", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "regrown-cut", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes.map((sw) => [sw.fromX, sw.fromY])).toEqual([
+      [0.3, 0.45],
+      [0.2, 0.35],
+    ]);
+  });
+
   it("stops once a cut target keeps its place in the clip while the page moves both", async () => {
     // The list cannot scroll the row's cut away, so each wheel moves the page,
     // carrying the list window and the row up together.
