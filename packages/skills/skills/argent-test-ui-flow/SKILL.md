@@ -1,6 +1,6 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running end-to-end UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
+description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
 ---
 
 ## Platform-agnostic
@@ -26,7 +26,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
 
 1. **Baseline screenshot**: Call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
-   - **React Native apps**: use `debugger-component-tree`: it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps on either platform. To use it, resolve the `argent-react-native-app-workflow` skill for setup; on Android you must also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device.
+   - **React Native apps**: use `debugger-component-tree`: it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps on either platform. To use it, resolve the `argent-react-native-app-workflow` skill for setup; on Android you must also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device, prefixed as the `list-devices` `hint` shows when it names an adb server.
    - **Standard app screens and in-app modals**: use `describe`. On iOS this returns the AX tree (falls back to native-devtools when AX is empty); on Android it returns the uiautomator tree in the same DescribeNode shape.
    - **Permission prompts / system modal overlays**: try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably. When the app raises its own permission dialog, answer it here; that's the real flow under test. To take a prompt _out_ of the flow (pre-grant/deny before launch, re-enable a permission the user already denied, or reset it so the dialog reappears), use the `argent-settings-permissions` skill during setup instead of interacting with the dialog.
    - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
@@ -67,7 +67,7 @@ Steps:
 7. screenshot → verify home screen appeared
 ```
 
-> **Credentials:** never type plaintext credentials; use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side so the value never enters agent context. It comes from the `ARGENT_SECRET_<NAME>` environment variable or an argent secrets file (`.argent/secrets.env` in the project, `~/.argent/secrets.env`, or an `ARGENT_SECRET_`-prefixed key in the project's `.env` / `.env.local`). If the name is not defined, the failure lists the available names and every path it checked; ask the user to add it to one of those files (which applies immediately) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
+> **Credentials:** never type plaintext credentials; use a `{{secret:<NAME>}}` placeholder in `keyboard`, resolved server-side so the value never enters agent context. It comes from the `ARGENT_SECRET_<NAME>` environment variable or an argent secrets file (`.argent/secrets.env` in the project, `~/.argent/secrets.env`, or an `ARGENT_SECRET_`-prefixed key in the project's `.env` / `.env.local`); over a link with `forward-secrets` on, the client's own sources come first. If the name is not defined, the failure lists the available names and every path it checked; ask the user to add it to one of those files (which applies immediately) instead of pasting the secret into the conversation. Never invent credentials or echo secret values into reports or saved files.
 
 ### Scroll and navigation
 
@@ -98,8 +98,7 @@ Steps:
 ```
 1. gesture-tap { x: 0.5, y: 0.7 } → trigger an action that fetches data
 2. screenshot → loading spinner is showing
-3. await-ui-element { condition: hidden, selector: { text: "Loading" } } → block until the fetch finishes and the spinner disappears
-4. describe / screenshot → verify the fetched content rendered
+3. await-ui-element { condition: hidden, selector: { text: "Loading" } } → block until the fetch finishes and the spinner disappears; its result carries the screenshot and element tree, so verify the fetched content rendered from it
 ```
 
 ---
@@ -110,7 +109,7 @@ Steps:
 - If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
 - If a permission dialog or modal is visible: re-run `describe` first. Stay in screenshot-driven navigation only when the overlay is not exposed reliably, then switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
 - If tap fails twice at same coordinates: stop, re-discover, report if element not found.
-- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow`'s [Diagnose a replay failure](../argent-create-flow/references/reliability-and-recovery.md#diagnose-a-replay-failure): classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full flow.
+- If a **saved e2e test** fails during `e2e-execute` replay (as opposed to live test steps above): follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure): classify the failure, inspect the actual screen, repair the smallest justified unit, then replay the full e2e test.
 
 ## Tips
 
@@ -118,7 +117,7 @@ Steps:
 - **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Permission modals**: try `describe` first. Use `screenshot` only as fallback, tap one visible button at a time, and verify with the returned screenshot before continuing.
-- **Record for replay**: If a tested flow is likely to be repeated, use the `argent-create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
+- **Record for replay**: If a tested flow is likely to be repeated, use the `argent-create-e2e` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `e2e-execute` call instead of re-running each step manually.
 
 ## Related Skills
 
@@ -130,4 +129,4 @@ Steps:
 | `argent-android-emulator-setup`    | Booting and connecting an Android emulator               |
 | `argent-react-native-app-workflow` | Starting the app, Metro, build issues                    |
 | `argent-metro-debugger`            | Console logs, JS evaluation, component inspection        |
-| `argent-create-flow`               | Record a test sequence as a replayable flow              |
+| `argent-create-e2e`                | Record a test sequence as a replayable e2e test          |

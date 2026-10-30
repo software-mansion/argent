@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 
 // The Android TV backend drives the device entirely through `adb` helpers.
 // Mock them so the factory + api run without a real device.
@@ -187,6 +187,175 @@ describe("android-tv-control — describe", () => {
     expect(res.focusable).toHaveLength(2);
     expect(res.focusable[1]?.label).toBe("Search");
     expect(res.focusable[1]?.traits).toContain("button");
+  });
+});
+
+// A registry that hands out a stub android-devtools helper: the only service
+// the TV blueprint resolves through it.
+function helperRegistry(read: () => Promise<{ xml: string }>) {
+  const getHierarchy = vi.fn(read);
+  const resolveService = vi.fn(async () => ({ getHierarchy }));
+  return { registry: { resolveService } as unknown as Registry, resolveService, getHierarchy };
+}
+
+async function makeApiWithHelper(registry: Registry): Promise<TvControlApi> {
+  const ref = androidTvControlRef(device, registry);
+  const instance = await androidTvControlBlueprint.factory({}, device, ref.options);
+  return instance.api;
+}
+
+function helperXml(windows: Array<{ type: number; nodes: string }>): string {
+  const roots = windows
+    .map(
+      (w) => `<node class="android.widget.FrameLayout" window-type="${w.type}">${w.nodes}</node>`
+    )
+    .join("");
+  return `<?xml version='1.0'?><hierarchy rotation="0">${roots}</hierarchy>`;
+}
+
+function tvNode(label: string, focused: boolean, pkg = "com.example.tv"): string {
+  return `<node class="android.widget.Button" content-desc="${label}" text="" focusable="true" focused="${focused}" enabled="true" package="${pkg}" />`;
+}
+
+describe("android-tv-control — describe through the devtools helper (#1316)", () => {
+  it("reads the hierarchy from the helper, with a fresh cache, and never runs uiautomator", async () => {
+    const { registry, resolveService, getHierarchy } = helperRegistry(async () => ({
+      xml: helperXml([{ type: 1, nodes: tvNode("Home", true) + tvNode("Search", false) }]),
+    }));
+    const api = await makeApiWithHelper(registry);
+    const res = await api.describe();
+    expect(res.focused?.label).toBe("Home");
+    expect(res.focusable.map((e) => e.label)).toEqual(["Home", "Search"]);
+    expect(resolveService).toHaveBeenCalledWith(`AndroidDevtools:${SERIAL}`, { device });
+    expect(getHierarchy).toHaveBeenCalledWith({ clearCache: true });
+    // A dump would be killed while the helper holds UiAutomation.
+    expect(mockExecOut).not.toHaveBeenCalled();
+  });
+
+  it("resolves the helper per read, so a helper that exited is respawned", async () => {
+    const { registry, resolveService } = helperRegistry(async () => ({
+      xml: helperXml([{ type: 1, nodes: tvNode("Home", true) }]),
+    }));
+    const api = await makeApiWithHelper(registry);
+    await api.describe();
+    await api.describe();
+    expect(resolveService).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to uiautomator dump when the helper fails", async () => {
+    const { registry } = helperRegistry(async () => {
+      throw new Error("adb install rejected");
+    });
+    mockExecOut.mockResolvedValue(dump([{ label: "Home", bounds: "[0,0][100,50]" }], 0));
+    const api = await makeApiWithHelper(registry);
+    const res = await api.describe();
+    expect(res.focused?.label).toBe("Home");
+    expect(mockExecOut).toHaveBeenCalledWith(
+      SERIAL,
+      expect.stringContaining("uiautomator dump"),
+      expect.anything()
+    );
+  });
+
+  it("returns the same focus view as the uiautomator dump of the same screen", async () => {
+    const nodes = [
+      { label: "Home", bounds: "[0,0][100,50]" },
+      { label: "Search", bounds: "[100,0][200,50]", cls: "android.widget.Button" },
+    ];
+    mockExecOut.mockResolvedValue(dump(nodes, 1));
+    const viaDump = await (await makeApi()).describe();
+
+    const xml = dump(nodes, 1)
+      .toString("utf-8")
+      .replace(
+        /<hierarchy rotation="0">(.*)<\/hierarchy>/,
+        `<hierarchy rotation="0"><node class="android.widget.FrameLayout" window-type="1">$1</node></hierarchy>`
+      );
+    const { registry } = helperRegistry(async () => ({ xml }));
+    const viaHelper = await (await makeApiWithHelper(registry)).describe();
+    expect(viaHelper).toEqual(viaDump);
+  });
+
+  it("reads the on-screen keyboard while it is up: the D-pad moves between its keys", async () => {
+    const { registry } = helperRegistry(async () => ({
+      xml: helperXml([
+        // Topmost first: the IME, its highlighted key focused; the field under
+        // it keeps its view focus.
+        {
+          type: 2,
+          nodes: tvNode("q", true, "com.google.android.inputmethod") + tvNode("w", false),
+        },
+        { type: 1, nodes: tvNode("Search movies", true) },
+      ]),
+    }));
+    const res = await (await makeApiWithHelper(registry)).describe();
+    expect(res.focused?.label).toBe("q");
+    expect(res.focusable.map((e) => e.label)).toEqual(["q", "w"]);
+  });
+
+  it("reads the app window when no window holds focus, not the keyboard", async () => {
+    const { registry } = helperRegistry(async () => ({
+      xml: helperXml([
+        { type: 2, nodes: tvNode("q", false, "com.google.android.inputmethod") },
+        { type: 1, nodes: tvNode("Search movies", false) },
+      ]),
+    }));
+    const res = await (await makeApiWithHelper(registry)).describe();
+    expect(res.focusable.map((e) => e.label)).toEqual(["Search movies"]);
+  });
+
+  it("skips a node the user can't see and its subtree, as the dump does", async () => {
+    const { registry } = helperRegistry(async () => ({
+      xml: helperXml([
+        {
+          type: 1,
+          nodes:
+            tvNode("Home", true) +
+            `<node class="android.widget.FrameLayout" visible-to-user="false">${tvNode("Hidden tab", false)}</node>`,
+        },
+      ]),
+    }));
+    const res = await (await makeApiWithHelper(registry)).describe();
+    expect(res.focusable.map((e) => e.label)).toEqual(["Home"]);
+  });
+
+  it("reads the topmost window holding focus when several are listed", async () => {
+    const { registry } = helperRegistry(async () => ({
+      xml: helperXml([
+        { type: 3, nodes: tvNode("Volume", false, "com.android.systemui") },
+        { type: 1, nodes: tvNode("OK", true) + tvNode("Cancel", false) },
+        // The activity under the dialog keeps its view focus.
+        { type: 1, nodes: tvNode("Play", true) },
+      ]),
+    }));
+    const res = await (await makeApiWithHelper(registry)).describe();
+    expect(res.focused?.label).toBe("OK");
+    expect(res.focusable.map((e) => e.label)).toEqual(["OK", "Cancel"]);
+  });
+});
+
+describe("android-tv-control — uiautomator capture errors", () => {
+  it("names a held UiAutomation connection, not a lock screen, when the dump is killed", async () => {
+    mockExecOut.mockResolvedValue(Buffer.from("Killed\n"));
+    const err: Error = await (await makeApi()).describe().then(
+      () => {
+        throw new Error("expected describe() to reject");
+      },
+      (e: Error) => e
+    );
+    expect(err.message).toMatch(/Killed/);
+    expect(err.message).toMatch(/UiAutomation/);
+    expect(err.message).toContain("am force-stop com.argent.androiddevtools");
+    expect(err.message).not.toMatch(/locked|secure overlay/);
+  });
+
+  it("keeps the lock-screen hint for other capture failures", async () => {
+    mockExecOut.mockResolvedValue(
+      Buffer.from("ERROR: null root node returned by UiTestAutomationBridge.")
+    );
+    await expect((await makeApi()).describe()).rejects.toThrow(
+      /could not capture the screen: ERROR: null root node.*locked/
+    );
   });
 });
 

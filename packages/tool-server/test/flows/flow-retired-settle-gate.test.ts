@@ -153,7 +153,7 @@ describe("flow-execute refuses the retired `settle` key through the real registr
 
     // The refusal is what the flow author reads, so it must locate the step and
     // carry the rename guidance whole.
-    expect(messageOf(err)).toContain('Flow "swipe-settle" step 1');
+    expect(messageOf(err)).toContain('E2E test "swipe-settle" step 1');
     expect(messageOf(err)).toContain("gesture-swipe's retired `settle` key");
     expect(messageOf(err)).toContain(RENAME_GUIDANCE);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);

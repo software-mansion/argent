@@ -91,7 +91,7 @@ async function prepare() {
     finish({
       type: "failure",
       failureType: "protocol",
-      message: `The script runner could not decode the flow output it was given: ${errorMessage(err)}`,
+      message: `The script runner could not decode the e2e test output it was given: ${errorMessage(err)}`,
     });
     return never();
   }

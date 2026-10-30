@@ -27,7 +27,7 @@ import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -908,14 +908,36 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
           : "rotate is unsupported on chromium — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead",
     };
   }
+  // HarmonyOS has no hold or arc backend; flow steps skip the capability gate,
+  // so refuse with a reason the author can act on.
+  if (env.device.platform === "harmony" && (step.kind === "long-press" || step.kind === "rotate")) {
+    return {
+      ok: false,
+      reason:
+        step.kind === "long-press"
+          ? "long-press is unsupported on HarmonyOS — `uitest uiInput` has a `longClick` verb, but it takes no hold duration and argent drives holds through `gesture-custom`, which has no HarmonyOS backend; use `tap`"
+          : "rotate is unsupported on HarmonyOS — `uinput -T -m` is the platform's only multi-contact injection and it moves each finger along ONE straight line per call, with no way to chain segments into an arc; drive the app's own rotate control with `tap`, or `pinch`, which is a straight-line gesture and does run here",
+    };
+  }
   // Physical iOS: XCTest has no two-finger coordinate API. Fail here before the auto-wait.
   if ((step.kind === "pinch" || step.kind === "rotate") && isIosPhysicalDevice(env.device)) {
     return {
       ok: false,
       reason:
         step.kind === "pinch"
-          ? "pinch is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this flow on a simulator or drive the app's zoom UI with tap steps instead"
-          : "rotate is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this flow on a simulator or drive the app's rotate controls with tap steps instead",
+          ? "pinch is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this e2e test on a simulator or drive the app's zoom UI with tap steps instead"
+          : "rotate is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this e2e test on a simulator or drive the app's rotate controls with tap steps instead",
+    };
+  }
+  // Without a flow tree source, idle can never be judged.
+  if (step.kind === "idle" && !supportsFlowTree(env.device.platform)) {
+    return {
+      ok: false,
+      indeterminate: true,
+      reason:
+        `\`await: { idle }\` cannot run on ${env.device.platform}: flows have no UI-tree source on ` +
+        `this platform, so screen stillness can never be judged. Replace this step with an explicit ` +
+        `\`wait:\`.`,
     };
   }
   switch (step.kind) {
@@ -980,14 +1002,16 @@ type GestureSettle = { aborted?: true; warning?: string };
  */
 async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
   let warning: string | undefined;
-  try {
-    await settleTree(env, { skipProvenOutage: true });
-  } catch (err) {
-    // tree-source outage — this gesture needs no frame from it, so dispatch
-    // anyway. Untyped because a settle has nothing else to throw: every read
-    // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
-    // so the walk's own unguarded recursion is unreachable on every adapter.
-    warning = unsettledGestureWarning(err);
+  if (supportsFlowTree(env.device.platform)) {
+    try {
+      await settleTree(env, { skipProvenOutage: true });
+    } catch (err) {
+      // tree-source outage — this gesture needs no frame from it, so dispatch
+      // anyway. Untyped because a settle has nothing else to throw: every read
+      // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
+      // so the walk's own unguarded recursion is unreachable on every adapter.
+      warning = unsettledGestureWarning(err);
+    }
   }
   if (env.signal?.aborted) return { aborted: true };
   return warning !== undefined ? { warning } : {};
@@ -1581,11 +1605,13 @@ async function runSwipe(
   // eats the touch and both steps still report pass. Unconditional, since
   // `momentum: false` zeroes the finger's release velocity, not the app's
   // animations.
-  try {
-    await settleTree(env);
-  } catch {
-    // Tree-source outage AFTER the gesture landed: proceed as runSnapshot's
-    // settle does rather than fail a swipe that happened.
+  if (supportsFlowTree(env.device.platform)) {
+    try {
+      await settleTree(env);
+    } catch {
+      // Tree-source outage AFTER the gesture landed: proceed as runSnapshot's
+      // settle does rather than fail a swipe that happened.
+    }
   }
   // settleTree returns undefined only on abort, which must read as the uniform
   // aborted skip, never a pass.
