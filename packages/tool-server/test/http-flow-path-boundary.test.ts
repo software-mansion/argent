@@ -6,12 +6,14 @@ import type { AddressInfo } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { PNG } from "pngjs";
-import { ArtifactStore, type Registry, type ToolContext } from "@argent/registry";
+import { ArtifactStore, e2eShadowWarning, type Registry, type ToolContext } from "@argent/registry";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 import { createRunFlowTool, type FlowRunResult } from "../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../src/tools/flows/flow-read-prerequisite";
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
+import { flowInsertEchoTool } from "../src/tools/flows/flow-insert-echo";
+import { flowFinishRecordingTool } from "../src/tools/flows/flow-finish-recording";
 import { parseFlow, serializeFlow } from "../src/tools/flows/flow-utils";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
 
@@ -81,11 +83,15 @@ function httpRegistry(steps: Registry): Registry {
     | ReturnType<typeof createRunFlowTool | typeof createFlowAddStepTool>
     | typeof flowReadPrerequisiteTool
     | typeof flowStartRecordingTool
+    | typeof flowInsertEchoTool
+    | typeof flowFinishRecordingTool
   > = {
     "flow-execute": createRunFlowTool(steps),
     "flow-read-prerequisite": flowReadPrerequisiteTool,
     "flow-start-recording": flowStartRecordingTool,
     "flow-add-step": createFlowAddStepTool(steps),
+    "flow-add-echo": flowInsertEchoTool,
+    "flow-finish-recording": flowFinishRecordingTool,
   };
   return {
     // GET /tools lists the step tools too, as one real registry does.
@@ -1112,10 +1118,9 @@ describe("flow-execute over a link, from the real argent client", () => {
   it("sends no fragment for arguments the tool-server refuses, and gets its error", async () => {
     // Each call names a flow whose run: target lies outside the project. The
     // roots taken from such arguments (the directory a bad name climbs to, a
-    // project_root with "..", the filesystem root for a relative flow_path)
-    // would reach it, so they must not be taken before the arguments pass.
+    // project_root with "..") would reach it, so they must not be taken before
+    // the arguments pass.
     await write(".argent/flows/keep.yaml", "steps:\n  - echo: keep\n");
-    await write(".argent/flows/relative.yaml", "steps:\n  - run: ../../../sib/frag.yaml\n");
     const nested = await write("e2e/root.yaml", "steps:\n  - run: ../../sib/frag.yaml\n");
     const above = path.join(tmpDir, "above.yaml");
     await fs.writeFile(above, "steps:\n  - run: sib/frag.yaml\n");
@@ -1136,7 +1141,6 @@ describe("flow-execute over a link, from the real argent client", () => {
           { flow_path: nested, project_root: `${projectRoot}/e2e/../..` },
           'project_root must not contain ".." segments',
         ],
-        [{ flow_path: ".argent/flows/relative.yaml" }, "e2e test paths must be absolute"],
         [
           { name: "keep", flow_path: above },
           "Pass exactly one e2e test source: name or flow_path.",
@@ -1167,6 +1171,103 @@ describe("flow-execute over a link, from the real argent client", () => {
       process.chdir(originalCwd);
     }
   });
+
+  it("sends a relative flow_path as the absolute path in the client's working directory", async () => {
+    await write(".argent/flows/relative.yaml", "steps:\n  - run: ../../../sib/frag.yaml\n");
+    await fs.mkdir(path.join(tmpDir, "sib"));
+    await fs.writeFile(path.join(tmpDir, "sib/frag.yaml"), "steps:\n  - echo: outside\n");
+    let wire: { path?: string; members?: { state?: string; content?: string }[] } = {};
+    const client = await toolsClient(true, "flow-execute", async (body) => {
+      wire = JSON.parse(body).flow_path;
+    });
+
+    const originalCwd = process.cwd();
+    process.chdir(projectRoot);
+    try {
+      const err = await client
+        .callTool("flow-execute", {
+          flow_path: ".argent/flows/relative.yaml",
+          project_root: projectRoot,
+          device: DEVICE,
+        })
+        .catch((e: unknown) => e);
+
+      expect(wire.path).toBe(path.join(process.cwd(), ".argent/flows/relative.yaml"));
+      // The run: target outside the project still goes out without its bytes.
+      expect(wire.members!.map((m) => [m.state, m.content])).toEqual([["refused", undefined]]);
+      expect(String(err)).toContain(
+        "run: ../../../sib/frag.yaml (../../../sib/frag.yaml is outside every root this client serves"
+      );
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it.each([false, true])(
+    "continues and finishes a recording started with a relative project_root (remote: %s)",
+    async (remote) => {
+      const client = await toolsClient(remote, "flow-finish-recording");
+      const recording = { name: "rel", project_root: "." };
+      const originalCwd = process.cwd();
+      process.chdir(projectRoot);
+      try {
+        await client.callTool("flow-start-recording", recording);
+        await client.callTool("flow-add-echo", { ...recording, message: "hi" });
+        const { data } = await client.callTool("flow-finish-recording", recording);
+
+        expect((data as { savedTo: string }).savedTo).toBe(
+          path.join(process.cwd(), ".argent/e2e/rel.yaml")
+        );
+        expect(parseFlow((data as { flowFile: string }).flowFile).steps).toEqual([
+          { kind: "echo", message: "hi" },
+        ]);
+      } finally {
+        process.chdir(originalCwd);
+      }
+    }
+  );
+
+  it.each([false, true])(
+    "replays a saved test by name with a relative project_root, warning of the legacy test it hides (remote: %s)",
+    async (remote) => {
+      await write(
+        ".argent/e2e/rel.yaml",
+        "executionPrerequisite: none\nsteps:\n  - echo: start\n  - run: frag.yaml\n"
+      );
+      await write(".argent/e2e/frag.yaml", "steps:\n  - echo: fragment\n");
+      await write(".argent/flows/rel.yaml", "steps:\n  - echo: legacy\n");
+      const client = await toolsClient(remote, "flow-execute");
+      const originalCwd = process.cwd();
+      process.chdir(projectRoot);
+      try {
+        const { data: run } = await client.callTool("flow-execute", {
+          name: "rel",
+          project_root: ".",
+          device: DEVICE,
+          prerequisiteAcknowledged: true,
+        });
+        const { data: read } = await client.callTool("flow-read-prerequisite", {
+          name: "rel",
+          project_root: ".",
+        });
+
+        expect((run as FlowRunResult).steps.map((s) => `${s.status} ${s.flow}`)).toEqual([
+          "pass rel",
+          "pass frag",
+          "pass frag",
+        ]);
+        expect((read as { executionPrerequisite: string }).executionPrerequisite).toBe("none");
+        const warning = e2eShadowWarning(
+          path.join(process.cwd(), ".argent/e2e/rel.yaml"),
+          path.join(process.cwd(), ".argent/flows/rel.yaml")
+        );
+        expect((run as { warning?: string }).warning).toBe(warning);
+        expect((read as { warning?: string }).warning).toBe(warning);
+      } finally {
+        process.chdir(originalCwd);
+      }
+    }
+  );
 
   /** A flow whose first step acts on the device, then runs `target`. */
   function tapThenRun(target: string): Promise<string> {

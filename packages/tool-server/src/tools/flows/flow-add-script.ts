@@ -15,6 +15,7 @@ import {
   parseScriptPath,
   parseScriptTimeout,
   recordingSessionState,
+  PROJECT_ROOT_INPUT,
   requireRecordingSession,
   type FlowSavedTo,
   type FlowStep,
@@ -144,6 +145,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
   // untouched, so a call that fails some other way is still re-POSTed.
   longRunning: true,
   zodSchema,
+  fileInputs: PROJECT_ROOT_INPUT,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const session = await requireRecordingSession(params.project_root, params.name);

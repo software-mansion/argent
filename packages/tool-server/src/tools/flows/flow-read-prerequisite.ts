@@ -6,7 +6,7 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from "@argent/registry";
-import { E2E_FILE_TEMPLATES, parseFlow } from "./flow-utils";
+import { E2E_FILE_TEMPLATES, PROJECT_ROOT_INPUT, parseFlow } from "./flow-utils";
 import { resolveFlowSource } from "./flow-run";
 
 const zodSchema = z
@@ -70,6 +70,7 @@ const fileInputs: FileInputSpec[] = [
     kind: "file",
     skipWhenSet: "flow_path",
   },
+  ...PROJECT_ROOT_INPUT,
 ];
 
 export const flowReadPrerequisiteTool: ToolDefinition<

@@ -17,6 +17,7 @@ import {
   SCRIPT_FILE_NAME_PATTERN,
   completeRunExtension,
   type ClientFileDirective,
+  type FileInputSpec,
   type OnDiskSpelling,
   type ToolContext,
 } from "@argent/registry";
@@ -111,6 +112,14 @@ export function flowsDirFor(root: string): string {
 export const E2E_FILE_TEMPLATES: string[] = E2E_DIRS.map(
   (dir) => `\${project_root}/${dir.split(path.sep).join("/")}/\${name}.yaml`
 );
+
+/**
+ * `project_root` of an e2e tool that names a test by it. The client resolves a
+ * relative root, so every e2e tool names the same project.
+ */
+export const PROJECT_ROOT_INPUT: FileInputSpec[] = [
+  { target: "project_root", path: "${project_root}", kind: "probe" },
+];
 
 /** The flows dir under a root that has not been validated yet. */
 function getFlowsDir(projectRoot: string): string {

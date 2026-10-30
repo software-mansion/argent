@@ -37,6 +37,7 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
+  PROJECT_ROOT_INPUT,
   flowNameCasingError,
   iosLaunchArgs,
   isBlockStep,
@@ -210,6 +211,7 @@ const fileInputs: FileInputSpec[] = [
     skipWhenSet: "flow_path",
     collect: "flow",
   },
+  ...PROJECT_ROOT_INPUT,
 ];
 
 export type StepStatus = "pass" | "fail" | "skip" | "error";
@@ -3093,15 +3095,15 @@ function errMsg(err: unknown): string {
  * reached us, so they are reported apart from the boundary gate — a caller
  * that did use the boundary must not be told to use the boundary. A host path
  * is checked as the string execute() will open; an upload's client spelling is
- * checked as the path the caller wrote, the one every message quotes.
+ * checked as the path the client sent, the one every message quotes.
  */
 function assertFlowPathShape(flowPath: string): void {
   // Reject a relative path: this string seeds canonicalFlowPath in execute(),
   // which requires an absolute input — its realpath, the read, and every root
   // anchor derived from the one canonical result would otherwise resolve
   // against the tool server's working directory, which is not the caller's.
-  // `argent flow list` prints relative paths, so this is the spelling an agent
-  // is most likely to pass back.
+  // The argent client resolves a relative flow_path before sending it; a direct
+  // HTTP caller and an older client do not.
   const windows = windowsPathRefusal("flow_path", flowPath);
   if (windows) {
     throw new FailureError(windows, {
@@ -3133,15 +3135,12 @@ function assertFlowPathShape(flowPath: string): void {
   // different files — or, when the directory chain is broken, slip through
   // canonicalFlowPath's verbatim fallback to fail later as a raw readFile
   // ENOENT on the unresolved spelling. Rejecting up front means every admitted
-  // flow_path has exactly one reading. The argent client rejects ".." segments
-  // before sending; only a direct MCP/HTTP caller can pass an unresolved
-  // flow_path.
+  // flow_path has exactly one reading.
   if (flowPath.split(/[\\/]+/).includes("..")) {
     throw new FailureError(
       `Invalid flow_path "${flowPath}": e2e test paths must not contain ".." segments — ` +
         `a ".." after a symlinked directory can name a different file than the spelling ` +
-        `suggests, and the argent client always sends fully resolved paths. Pass the fully ` +
-        `resolved absolute path to the e2e test's YAML.`,
+        `suggests. Pass the fully resolved absolute path to the e2e test's YAML.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_path_dotdot",
