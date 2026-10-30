@@ -60,6 +60,7 @@ import {
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
+import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
@@ -1516,6 +1517,20 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           {
             error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
             failure_stage: "flow_add_step_native_devtools_block",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
+        );
+      }
+      if (isDebuggerNotConnectedResult(params.command, toolResult)) {
+        // debugger-log-registry's note is consumed as it is read, so this
+        // message is the only place it can still reach the agent.
+        const note = (toolResult as { note?: unknown }).note;
+        throw new FailureError(
+          `${params.command}: debugger not connected (${toolResult.reason}) - nothing was recorded. ${toolResult.detail} ${toolResult.guidance}${typeof note === "string" ? ` ${note}` : ""}`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_NOT_CONNECTED,
+            failure_stage: "flow_add_step_debugger_not_connected",
             failure_area: "tool_server",
             error_kind: "not_found",
           }
