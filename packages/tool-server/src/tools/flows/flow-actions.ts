@@ -148,11 +148,11 @@ export interface ActionEnv {
    * frame space, for the directives that turn a UI-space direction into it
    * (`swipe: down`, `scroll-to`; see `flow-orientation.ts`) and for the
    * selector relations and picks that go by reading order (`after`, `next`,
-   * `any: true`, a `text` condition; see `ui-tree-match.ts`). Written by every
-   * read that goes through {@link readFlowTree} — the settle a swipe or a
-   * scroll round makes before it dispatches is the read that fills it, and
-   * every selector resolves against the tree of the read that just filled it
-   * — and one holder per run, shared with nested `run:` flows like
+   * `any: true`; see `ui-tree-match.ts`). Written by every read that goes
+   * through {@link readFlowTree} — the settle a swipe or a scroll round makes
+   * before it dispatches is the read that fills it, and every selector
+   * resolves against the tree of the read that just filled it — and one
+   * holder per run, shared with nested `run:` flows like
    * {@link ActionEnv.treeOutage}. Absent for a caller that builds an
    * `ActionEnv` by hand, which leaves every direction, and reading order, in
    * the frame space.
