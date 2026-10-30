@@ -17,6 +17,7 @@ import {
   LINKED_CALL_HEADER,
   canonicalToolId,
   describeParamIssues,
+  flowYamlSource,
 } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
@@ -387,7 +388,8 @@ async function forwardedSecrets(args: unknown): Promise<Map<string, string> | un
       // run, not to this terminal.
       let parsed: unknown;
       try {
-        parsed = text === undefined ? undefined : parseYaml(text.trim(), { logLevel: "error" });
+        parsed =
+          text === undefined ? undefined : parseYaml(flowYamlSource(text), { logLevel: "error" });
       } catch {
         continue;
       }

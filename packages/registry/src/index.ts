@@ -63,6 +63,7 @@ export {
   collectFlowRequests,
   completeRunExtension,
   flowMemberKey,
+  flowYamlSource,
   MAX_RUN_DEPTH,
   nestedFlowTarget,
   resolveFlowRelativeFile,

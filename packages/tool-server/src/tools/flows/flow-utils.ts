@@ -16,6 +16,7 @@ import {
   FLOW_FILE_NAME_PATTERN,
   SCRIPT_FILE_NAME_PATTERN,
   completeRunExtension,
+  flowYamlSource,
   type ClientFileDirective,
   type OnDiskSpelling,
   type ToolContext,
@@ -3741,7 +3742,7 @@ export function serializeFlow(flow: FlowFile): string {
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
   // stripped on re-parse (" \n" comes back as "\n"), and a block scalar at the
-  // document tail exposes its raw last line to parseFlow's content.trimEnd(), so
+  // document tail exposes its raw last line to parseFlow's trailing trim, so
   // parseFlow(serializeFlow(x)) was not the identity. Disabling it emits
   // multi-line values as double-quoted scalars (escape-exact both ways);
   // single-line values still serialize plain, and legacy files containing block
@@ -3775,7 +3776,7 @@ export function parseFlow(content: string): FlowFile {
   // abort a whole batch run instead of failing this file alone.
   let parsed: YamlFlowFile;
   try {
-    parsed = yamlParse(content.trimEnd()) as YamlFlowFile;
+    parsed = yamlParse(flowYamlSource(content)) as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
       `Invalid e2e test file: ${err instanceof Error ? err.message : String(err)}`,

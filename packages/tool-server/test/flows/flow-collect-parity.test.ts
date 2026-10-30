@@ -191,8 +191,8 @@ describe("the client's walk and the runner's parse name the same run: targets", 
         "  - when: { platform: ios }\n    steps:\n      - run: |-\n          sub/literal\n",
     ],
     [
-      "leading blank lines and a uniform indent",
-      "\n\n  steps:\n    - run: login\n  executionPrerequisite: logged out\n",
+      "leading blank lines and an indented first line",
+      "\n\n  steps:\n  - run: login\nexecutionPrerequisite: logged out\n",
     ],
   ])("%s", async (_form, text) => {
     // No target exists, so the client sends each one as missing and reads no further.
