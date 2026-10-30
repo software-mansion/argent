@@ -15,7 +15,7 @@
     "@argent/configuration-core": "file:../configuration-core",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.32.2"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
