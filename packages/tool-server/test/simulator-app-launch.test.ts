@@ -117,6 +117,15 @@ describe("launchSimulatorApp", () => {
     expect(launch).toHaveBeenCalledTimes(1);
   });
 
+  it("launches again once the record is deleted", async () => {
+    await run();
+    fs.rmSync(path.join(home, ".argent", "simulator-app-launch.json"));
+    launchedAppStays = true;
+
+    await expect(run()).resolves.toBe(true);
+    expect(launch).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps launching an app that stays up, without watching it again", async () => {
     launchedAppStays = true;
     await expect(run()).resolves.toBe(true);
@@ -143,6 +152,18 @@ describe("launchSimulatorApp", () => {
     let settled = false;
     const result = launchSimulatorApp(APP, launch).finally(() => (settled = true));
     await vi.advanceTimersByTimeAsync(0);
+
+    expect(settled).toBe(true);
+    await expect(result).resolves.toBe(false);
+  });
+
+  it("ends the watch within a poll of the app going away", async () => {
+    launchedAppStays = true;
+    let settled = false;
+    const result = launchSimulatorApp(APP, launch).finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(1_000);
+    appRunning = false;
+    await vi.advanceTimersByTimeAsync(250);
 
     expect(settled).toBe(true);
     await expect(result).resolves.toBe(false);

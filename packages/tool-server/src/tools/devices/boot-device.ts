@@ -192,7 +192,7 @@ type AndroidBootResult = {
 };
 
 type BootDeviceResult =
-  | { platform: "ios"; udid: string; booted: true }
+  | { platform: "ios"; udid: string; booted: true; note?: string }
   | { platform: "ios-remote"; udid: string; booted: true }
   | AndroidBootResult
   | VegaBootResult
@@ -760,7 +760,8 @@ async function bootIos(
  * own window from a `devices://device/open?id=<udid>` URL; it reports success
  * even when it cannot show the device, so a missing window goes unnoticed.
  * Without either app, or with a Simulator.app on record as crashing at launch,
- * nothing is opened; the latter returns a note saying so.
+ * nothing is opened. Returns a note once the Simulator.app is on record so,
+ * including from the launch that records it.
  */
 async function openSimulatorWindow(udid: string): Promise<string | undefined> {
   const timeout = 5_000;
