@@ -151,6 +151,7 @@ Each tool that does not support a Mac app fails with a `not supported on macos a
 - The app window can come in front of your windows while a menu that the agent opened is open. Examples are a context menu and the menu of a pop-up button. When the menu closes, the window goes back behind your windows.
 - Hover is not available. Mouse moves do not show tooltips or hover states.
 - A drag and drop works only inside the app. The agent cannot drag to another app, such as Finder, or drop from one.
+- A drag fails when the app gives the dragged data as a file promise. An example is a SwiftUI drag of a custom `Transferable` type. Argent cannot deliver a file promise inside the app.
 - Trackpad gestures are not available. The agent uses the zoom and rotate controls of the app instead of pinch and rotate.
 - On macOS 14, the agent cannot select the file format of a save panel. The app saves in the format that the panel selects when it opens.
 - Key events use the key codes of the US keyboard layout. An app that reads key codes sees the US key, also when the Mac uses a different layout.
