@@ -28,10 +28,17 @@ export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } fr
 // `argent secrets` resolve names through.
 export {
   secretSources,
+  clientSecretSource,
+  decodeClientSecrets,
+  encodeClientSecrets,
   lookupSecret,
+  lookupPlaceholderSecret,
+  placeholderNames,
+  SECRET_PLACEHOLDER_RE,
   secretNames,
   describeSecretSources,
   secretPlacementAdvice,
+  clientSecretPlacementAdvice,
   SECRET_ENV_PREFIX,
   type SecretSource,
   type SecretSourceOptions,

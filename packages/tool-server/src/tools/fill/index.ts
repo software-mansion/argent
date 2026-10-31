@@ -104,7 +104,9 @@ Fails with FILL_NO_FOCUSED_FIELD when nothing editable has focus, FILL_NOT_VERIF
     services: () => ({}),
     execute: async (services, params, options) => {
       // Resolved here, after every logging boundary, as `keyboard` does.
-      const { text, secrets } = resolveSecretPlaceholders(params.text);
+      const { text, secrets } = resolveSecretPlaceholders(params.text, {
+        clientSecrets: options?.clientSecrets,
+      });
       try {
         return await dispatch(services, { udid: params.udid, text }, options);
       } catch (err) {

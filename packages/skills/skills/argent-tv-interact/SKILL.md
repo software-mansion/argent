@@ -37,7 +37,7 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 
 - Boot the leanback AVD like any emulator; see `argent-android-emulator-setup`.
 - **`describe` may report zero focusables on a screen with visible tiles**: many `react-native-tvos` screens use RN's own focus engine, invisible to the OS accessibility tree. `describe` auto-falls-back to the full UI tree (and says so in the hint); `tv-remote` still moves focus, so drive blind + `screenshot` to confirm.
-- Dev build: `adb -s <serial> reverse tcp:8081 tcp:8081`, deep-link `<pkg>://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081`, dismiss the first dev-menu with `adb shell input keyevent KEYCODE_DPAD_CENTER` (not Back: Back exits the app).
+- Dev build: `adb -s <serial> reverse tcp:8081 tcp:8081`, deep-link `<pkg>://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A8081`, dismiss the first dev-menu with `adb shell input keyevent KEYCODE_DPAD_CENTER` (not Back: Back exits the app). If `list-devices` returns a `hint` about the adb server, prefix these `adb` commands as the hint shows.
 
 ### Fire TV (Vega / VVD)
 
