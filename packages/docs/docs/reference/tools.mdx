@@ -62,6 +62,13 @@ On an Android emulator:
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
+`list-devices` adds two fields to a device that has a service that a tool opened on the tool-server:
+
+- `inUse` is `true`.
+- `idleSeconds` is the time in seconds since a tool last used the device.
+
+All agents that use the same Argent installation share one tool-server. Thus, a different agent can be the agent that uses the device. The fields are for information only, and Argent does not refuse a device because of them. The fields do not show devices that other Argent installations or other programs use. A Vega device gets the fields only after a debugger tool or a network tool connects to it.
+
 ## Inspecting the screen
 
 | Tool                        | Description                                                                      |

@@ -2,6 +2,7 @@ import { TypedEventEmitter } from "./event-emitter";
 import {
   ServiceState,
   ServiceNode,
+  ServiceSnapshot,
   ServiceInstance,
   ServiceBlueprint,
   ToolDefinition,
@@ -43,6 +44,8 @@ export class Registry {
   private tools = new Map<string, ToolRecord>();
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
+  /** Epoch ms a tool call last used each service. Background and dependency resolves don't count. */
+  private lastUsedAt = new Map<URN, number>();
   /**
    * Injected so the registry needs no dependency on the flag store; the
    * tool-server wires the real check. The default enables every flag, so a
@@ -87,7 +90,11 @@ export class Registry {
      * Most tools declare nothing in `services()` and resolve here instead. One
      * of those can be holding just as dead a handle as a declared one.
      */
-    resolvedDuringInvocation.getStore()?.add(urn);
+    const invocation = resolvedDuringInvocation.getStore();
+    if (invocation) {
+      invocation.add(urn);
+      this.lastUsedAt.set(urn, Date.now());
+    }
     return this._resolve<T>(urn, [], options);
   }
 
@@ -177,15 +184,22 @@ export class Registry {
       let lazilyResolved = new Set<URN>();
 
       const runOnce = async (): Promise<TResult> => {
-        lazilyResolved = new Set<URN>();
+        const resolved = new Set<URN>();
+        lazilyResolved = resolved;
 
-        return resolvedDuringInvocation.run(lazilyResolved, async () => {
-          const resolvedServices: Record<string, unknown> = {};
-          for (const { alias, urn, options: resolveOptions } of refs) {
-            resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
-          }
-          return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
-        });
+        try {
+          return await resolvedDuringInvocation.run(resolved, async () => {
+            const resolvedServices: Record<string, unknown> = {};
+            for (const { alias, urn, options: resolveOptions } of refs) {
+              resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+            }
+            return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+          });
+        } finally {
+          // Also at the end, so a long call does not read as idle while it runs.
+          const now = Date.now();
+          for (const urn of resolved) this.lastUsedAt.set(urn, now);
+        }
       };
 
       let result: TResult;
@@ -255,15 +269,17 @@ export class Registry {
   }
 
   getSnapshot(): {
-    services: Map<string, { state: ServiceState; dependents: string[] }>;
+    services: Map<string, ServiceSnapshot>;
     namespaces: string[];
     tools: string[];
   } {
-    const services = new Map<string, { state: ServiceState; dependents: string[] }>();
+    const services = new Map<string, ServiceSnapshot>();
     for (const [urn, node] of this.services) {
+      const lastUsedAt = this.lastUsedAt.get(urn);
       services.set(urn, {
         state: node.state,
         dependents: [...node.dependents],
+        ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
       });
     }
     return {
