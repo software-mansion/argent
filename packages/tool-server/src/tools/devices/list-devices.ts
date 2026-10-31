@@ -7,6 +7,7 @@ import {
   consolePortFromAdbSerial,
   ADB_DEVICES_TIMEOUT_MS,
 } from "../../utils/adb";
+import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
   scanIosSimulators,
@@ -122,8 +123,9 @@ type ListDevicesResult = {
   avds: Array<{ name: string; foldable?: true }>;
   /**
    * Present only when it applies, unlike the description, which is read once
-   * per session: the rules for a provider's device when one is listed, and a
-   * retry notice when `simctl` timed out.
+   * per session: the rules for a provider's device when one is listed, a retry
+   * notice when `simctl` timed out, and how to reach the adb server when it is
+   * not adb's default.
    */
   hint?: string;
 };
@@ -142,6 +144,19 @@ const EXTERNAL_DEVICES_HINT =
 const IOS_LIST_TIMED_OUT_HINT = `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice(
   "list-devices"
 )}`;
+
+/**
+ * The agent's shell does not inherit the tool-server's environment, so its adb
+ * reaches the default server, where these serials do not exist. Given whenever
+ * the server differs, Android device or not: the agent may boot one next.
+ */
+function adbServerHint(prefix: string): string {
+  return (
+    `Argent reaches Android and Vega devices through an adb server other than adb's default, so ` +
+    `an adb command you run in your own shell does not see the serials listed here. Prefix every ` +
+    `adb command you run yourself: \`${prefix}adb -s <serial> ...\`.`
+  );
+}
 
 function sortIos(a: IosDevice, b: IosDevice): number {
   const aBooted = a.state === "Booted" ? 0 : 1;
@@ -489,9 +504,12 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     const avdsTagged = avds.map((a) =>
       foldableAvds.has(a.name) ? { ...a, foldable: true as const } : a
     );
+
+    const adbPrefix = adbCommandPrefix(process.env);
     const hints = [
       ...(ios.timedOut ? [IOS_LIST_TIMED_OUT_HINT] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
+      ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
 
     return {
