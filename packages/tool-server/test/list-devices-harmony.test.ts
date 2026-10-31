@@ -15,7 +15,10 @@ vi.mock("../src/utils/adb", async (importOriginal) => {
     listAvds: vi.fn(async () => []),
   };
 });
-vi.mock("../src/utils/ios-devices", () => ({ listIosSimulators: vi.fn(async () => []) }));
+vi.mock("../src/utils/ios-devices", () => ({
+  scanIosSimulators: vi.fn(async () => ({ simulators: [], timedOut: false })),
+  simctlListTimeoutAdvice: () => "",
+}));
 vi.mock("../src/utils/sim-remote", () => ({
   simctlListDevices: vi.fn(async () => ({ devices: {} })),
 }));

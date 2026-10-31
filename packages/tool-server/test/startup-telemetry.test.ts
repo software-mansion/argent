@@ -19,7 +19,9 @@ const registryMock = vi.hoisted(() => ({
 const httpHandleMock = vi.hoisted(() => ({
   dispose: vi.fn(),
   app: {
-    listen: vi.fn(),
+    listen: vi.fn(() => {
+      throw new Error("listen failed");
+    }),
   },
 }));
 
@@ -71,9 +73,7 @@ vi.mock("../src/utils/update-checker", () => ({
 vi.mock("../src/utils/simulator-watcher", () => ({
   startSimulatorWatcher: vi.fn(() => ({
     stop: watcherMock.stop,
-    ready: new Promise<void>((_resolve, reject) => {
-      setTimeout(() => reject(new Error("watcher failed")), 0);
-    }),
+    ready: Promise.resolve(),
   })),
 }));
 
@@ -103,10 +103,10 @@ describe("tool-server startup telemetry", () => {
       expect(telemetryMock.shutdown).toHaveBeenCalledWith(1500);
     });
 
-    // This path (watcher-ready rejection) fails the server before the listener
-    // binds, so it is a startup-phase crash: the readiness-gate `.catch` attaches
-    // the anonymous diagnostics derived from the rejection error. The rejection is
-    // a bare `new Error("watcher failed")`, so error_name is "Error", there is no
+    // A synchronous listen() throw fails the server before the listener binds, so
+    // it is a startup-phase crash: the readiness-gate `.catch` attaches the
+    // anonymous diagnostics derived from the thrown error. It is a bare
+    // `new Error("listen failed")`, so error_name is "Error", there is no
     // syscall code, and the de-identified stack yields a 16-hex fingerprint.
     expect(telemetryMock.track).toHaveBeenCalledWith("toolserver:stop", {
       reason: "crash",

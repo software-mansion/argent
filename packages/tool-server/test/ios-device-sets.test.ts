@@ -43,7 +43,7 @@ import {
   simctlPrefix,
   __resetDeviceSetCacheForTesting,
 } from "../src/utils/ios-device-sets";
-import { listIosSimulators } from "../src/utils/ios-devices";
+import { listIosSimulators, scanIosSimulators } from "../src/utils/ios-devices";
 
 const DEFAULT_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const RADON_UDID = "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB";
@@ -201,5 +201,32 @@ describe("listIosSimulators — additional-set enumeration", () => {
   it("rememberDeviceSet overrides are visible to the sync view", () => {
     rememberDeviceSet(RADON_UDID, RADON_SET);
     expect(cachedDeviceSetForUdid(RADON_UDID)).toBe(RADON_SET);
+  });
+});
+
+describe("scanIosSimulators — timeouts", () => {
+  it("reports a timeout in one set while keeping the sets that answered", async () => {
+    additionalSetsMock.mockReturnValue([RADON_SET]);
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd !== "xcrun" || args[0] !== "simctl") return { stdout: "", stderr: "" };
+      if (args[1] === "--set") return Object.assign(new Error("timed out"), { killed: true });
+      return listPayload(DEFAULT_UDID, "iPhone 17");
+    });
+
+    const scan = await scanIosSimulators();
+
+    expect(scan.simulators.map((s) => s.udid)).toEqual([DEFAULT_UDID]);
+    expect(scan.timedOut).toBe(true);
+  });
+
+  it("does not count a configured set whose directory is missing as a timeout", async () => {
+    additionalSetsMock.mockReturnValue([RADON_SET]);
+    existsSyncMock.mockImplementation((p) => p !== RADON_SET);
+    mockTwoSets();
+
+    const scan = await scanIosSimulators();
+
+    expect(scan.simulators.map((s) => s.udid)).toEqual([DEFAULT_UDID]);
+    expect(scan.timedOut).toBe(false);
   });
 });

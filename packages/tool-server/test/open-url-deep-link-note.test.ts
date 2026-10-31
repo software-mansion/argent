@@ -36,6 +36,11 @@ vi.mock("../src/utils/sim-remote", async () => {
   return { ...actual, simctlOpenUrl: (...args: unknown[]) => simctlOpenUrlMock(...args) };
 });
 
+let firstSimulatorPoll: Promise<void> = Promise.resolve();
+vi.mock("../src/utils/simulator-watcher", () => ({
+  firstSimulatorPoll: () => firstSimulatorPoll,
+}));
+
 import { httpDeepLinkNote } from "../src/tools/open-url/deep-link-note";
 import { iosImpl } from "../src/tools/open-url/platforms/ios";
 import { androidImpl } from "../src/tools/open-url/platforms/android";
@@ -104,6 +109,29 @@ describe("open-url iOS handler surfaces the caveat only for web URLs", () => {
     const res = await iosImpl.handler({}, { udid: "SIM", url: "bluesky://profile/x" }, device);
     expect(res.opened).toBe(true);
     expect(res.note).toBeUndefined();
+  });
+});
+
+describe("open-url iOS handler and the simulator watcher", () => {
+  it("opens the URL only after the watcher's first poll, which arms injection", async () => {
+    let settleFirstPoll!: () => void;
+    firstSimulatorPoll = new Promise<void>((resolve) => {
+      settleFirstPoll = resolve;
+    });
+
+    const opened = iosImpl.handler({}, { udid: "SIM", url: "bluesky://profile/x" }, device);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(execFileMock).not.toHaveBeenCalled();
+
+    settleFirstPoll();
+    await opened;
+    expect(execFileMock).toHaveBeenCalledWith("xcrun", [
+      "simctl",
+      "openurl",
+      "SIM",
+      "bluesky://profile/x",
+    ]);
+    firstSimulatorPoll = Promise.resolve();
   });
 });
 
