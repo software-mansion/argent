@@ -72,7 +72,9 @@ export function assertLaunchTargetsDevice(bundleId: string, device: DeviceInfo):
   if (parseMacosAppBundleId(device.id) === bundleId) return bundleId;
   throw new InvalidToolInputError(
     `launch names ${bundleId} but the device is ${device.id}; ` +
-      `use device ${macosAppIdFromBundleId(bundleId)}.`,
+      (isMacosBundleId(bundleId)
+        ? `use device ${macosAppIdFromBundleId(bundleId)}.`
+        : `${bundleId} is not a valid bundle id for a Mac app: use letters, digits, '.' and '-'.`),
     {
       error_code: FAILURE_CODES.MACOS_APP_BUNDLE_ID_MISMATCH,
       failure_stage: "macos_app_launch_target",
