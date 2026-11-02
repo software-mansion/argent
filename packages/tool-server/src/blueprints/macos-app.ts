@@ -164,7 +164,10 @@ const HELPER_TIMEOUT_MS = 10_000;
 /** From the spawn to the handshake, which the library sends when the app finishes launching or shows a dialog before. */
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 const RECONNECT_TIMEOUT_MS = 5_000;
-/** How long `Application.terminate` gets before argent looks for a prompt, then signals the app. */
+/**
+ * How long a busy app gets to take the quit, and how long `Application.terminate`
+ * gets before argent looks for a prompt, then signals the app.
+ */
 const TERMINATE_GRACE_MS = 5_000;
 /** Window kinds of `Window.list` that keep an app from quitting until the agent answers them. */
 const PROMPT_KINDS = ["alert", "sheet", "file-panel"];
@@ -778,13 +781,15 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     let open = new Set<unknown>();
     try {
       ch = await ensureChannel();
-      const before = await ch.request("Window.list", {}, 2_000).catch(() => null);
+      // The app runs requests one at a time and drops one that waited past its
+      // deadline: the list waits for a call in progress, the quit then gets its turn.
+      const before = await ch.request("Window.list", {}, TERMINATE_GRACE_MS).catch(() => null);
       open = new Set(shownPrompts(before).map((w) => w.number));
       await ch.request("Application.terminate", {}, 2_000);
     } catch (err) {
       // Another tool-server drives the app: quitting it would stop that agent's work.
       if (errorCode(err) === FAILURE_CODES.MACOS_APP_IN_USE) throw err;
-      // No channel or no answer: the signals stop it without the wait.
+      // No channel, or no answer even after the wait: the signals stop it.
       ch = null;
     }
     const left = ch
