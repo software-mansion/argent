@@ -5,16 +5,15 @@
  * Node WebTransport polyfill, and `Buffer` screenshots.
  */
 
-import { MoqDeviceSession, connectMoq, type KeyActionName } from "@swmansion/argent-cloud-sdk";
+import { MoqDeviceSession, connectMoq, type InputMessage } from "@swmansion/argent-cloud-sdk";
 import { installNodeWebTransport } from "@swmansion/argent-cloud-sdk/node";
 import { moqInfo, type MoqInfo } from "./sim-remote";
 
 const PUBLISH_PATH = "argent";
 
 export interface MoqClient {
-  sendControl(payload: Uint8Array): Promise<void>;
-  /** Ordered "keys" track; the latest-wins control track drops reordered Down/Up pairs. */
-  key(action: KeyActionName, code: number): Promise<void>;
+  /** The SDK picks the track; its ordered track keeps Down/Up pairs from being reordered or dropped. */
+  sendInput(message: InputMessage): Promise<void>;
   screenshot(opts?: { scale?: number }): Promise<Buffer>;
   close(): Promise<void>;
 }
@@ -34,8 +33,7 @@ async function openMoqClientFromInfo(info: MoqInfo): Promise<MoqClient> {
     closed ? Promise.reject(new Error("MoQ session is closed")) : send();
 
   return {
-    sendControl: (payload) => refuseClosed(() => session.sendControl(payload)),
-    key: (action, code) => refuseClosed(() => session.key(action, code)),
+    sendInput: (message) => refuseClosed(() => session.sendInput(message)),
     async screenshot(opts) {
       return Buffer.from(await session.screenshot({ scale: opts?.scale }));
     },

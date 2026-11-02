@@ -3,15 +3,12 @@ import { FAILURE_CODES, FailureError, wrapFailure, type FailureSignal } from "@a
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
 import { sleep } from "./timing";
-import {
-  encodeButton,
-  encodeRotate,
-  encodeTouch,
-  type ButtonName,
-  type KeyActionName,
-  type RotationName,
-  type TouchActionName,
-} from "./datachannel-proto";
+import type {
+  ButtonName,
+  KeyActionName,
+  RotationName,
+  TouchActionName,
+} from "@swmansion/argent-cloud-sdk";
 import type { MoqClient } from "./moq-client";
 import { assertAllowedSimServerEndpoint } from "./external-devices";
 import { captureOnDemandDropped } from "./profiling-devices";
@@ -935,21 +932,20 @@ export function createMoqTransport(
 
   return {
     async touch(opts) {
-      await moq.sendControl(
-        encodeTouch({
-          action: opts.type,
-          x: opts.x,
-          y: opts.y,
-          secondX: opts.secondX,
-          secondY: opts.secondY,
-        })
-      );
+      await moq.sendInput({
+        type: "touch",
+        action: opts.type,
+        x: opts.x,
+        y: opts.y,
+        secondX: opts.secondX,
+        secondY: opts.secondY,
+      });
     },
     async button(opts) {
-      await moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
+      await moq.sendInput({ type: "button", action: opts.direction, button: opts.button });
     },
     async rotate(direction) {
-      await moq.sendControl(encodeRotate(direction));
+      await moq.sendInput({ type: "rotate", direction });
     },
     async paste(text) {
       // The pasteboard fill and ⌘V pair live in the caller's `pasteText`, so
@@ -957,7 +953,7 @@ export function createMoqTransport(
       await options.pasteText(text);
     },
     async pressKey(direction, keyCode) {
-      await moq.key(direction, keyCode);
+      await moq.sendInput({ type: "key", action: direction, code: keyCode });
     },
     async screenshot(opts) {
       const scale = opts?.scale ?? getScreenshotScale();
