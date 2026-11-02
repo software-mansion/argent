@@ -209,3 +209,158 @@ describe.skipIf(process.platform === "win32")(
     });
   }
 );
+
+// A shim — pnpm's POSIX cmd-shim, or an npm/pnpm Windows .cmd — is a REGULAR
+// file, not a symlink into the package: realpath + walk-up (exercised above)
+// never crosses into it, which is #1207 (pnpm-installed `argent update`
+// reporting "Could not determine installed version"). These exercise the
+// shim-reading fallback the same end-to-end way, through the public function.
+describe.skipIf(process.platform === "win32")(
+  "update — getGloballyInstalledVersion against a shimmed install",
+  () => {
+    let tmpDir: string;
+    let originalPath: string | undefined;
+
+    const SYSTEM_PATH = `/usr/bin${path.delimiter}/bin`;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-installer-shim-test-"));
+      originalPath = process.env.PATH;
+    });
+
+    afterEach(() => {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    // Stages a package (real package.json, given name) under `root` and
+    // returns its dist/cli.js absolute path — the shim's target.
+    function stagePackage(root: string, name: string, version: string): string {
+      const pkgRoot = path.join(root, "global", "node_modules", "@swmansion", "argent");
+      const distDir = path.join(pkgRoot, "dist");
+      fs.mkdirSync(distDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pkgRoot, "package.json"),
+        JSON.stringify({ name, version, bin: { argent: "dist/cli.js" } })
+      );
+      const cliPath = path.join(distDir, "cli.js");
+      fs.writeFileSync(cliPath, "#!/usr/bin/env node\n");
+      return cliPath;
+    }
+
+    // Writes a REGULAR (non-symlink) executable file at <root>/bin/argent
+    // with the given shim text, and returns the bin dir to put on PATH.
+    function stageShim(root: string, contents: string): string {
+      const binDir = path.join(root, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const binPath = path.join(binDir, "argent");
+      fs.writeFileSync(binPath, contents);
+      fs.chmodSync(binPath, 0o755);
+      return binDir;
+    }
+
+    // The relative path a shim would embed, as forward slashes (POSIX) —
+    // callers turn it into backslashes for the Windows fixtures.
+    function relTarget(binDir: string, cliPath: string): string {
+      return path.relative(binDir, cliPath).split(path.sep).join("/");
+    }
+
+    it("resolves a pnpm POSIX shim via its cmd-shim-target trailer", () => {
+      const root = path.join(tmpDir, "install");
+      const cliPath = stagePackage(root, PACKAGE_NAME, "3.1.4");
+      const binDir = path.join(root, "bin");
+      const rel = relTarget(binDir, cliPath);
+      // Mirrors the real pnpm shim: several exec fallbacks, all pointing at
+      // the same relative target, plus the trailing cmd-shim-target comment.
+      const contents =
+        `#!/bin/sh\n` +
+        `basedir=$(dirname "$0")\n` +
+        `case \`uname\` in\n  *CYGWIN*) basedir=\`cygpath -w "$basedir"\`;;\nesac\n\n` +
+        `if [ -x "$basedir/node" ]; then\n  exec "$basedir/node"  "$basedir/${rel}" "$@"\n` +
+        `else\n  exec node  "$basedir/${rel}" "$@"\nfi\n` +
+        `# cmd-shim-target=${cliPath}\n`;
+      const binOnPath = stageShim(root, contents);
+      process.env.PATH = `${binOnPath}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBe("3.1.4");
+    });
+
+    it("resolves a POSIX sh shim with no trailer, via $basedir", () => {
+      const root = path.join(tmpDir, "install");
+      const cliPath = stagePackage(root, PACKAGE_NAME, "2.0.0");
+      const binDir = path.join(root, "bin");
+      const rel = relTarget(binDir, cliPath);
+      const contents = `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node "$basedir/${rel}" "$@"\n`;
+      const binOnPath = stageShim(root, contents);
+      process.env.PATH = `${binOnPath}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBe("2.0.0");
+    });
+
+    it("resolves a Windows .cmd shim using %dp0%\\", () => {
+      const root = path.join(tmpDir, "install");
+      const cliPath = stagePackage(root, PACKAGE_NAME, "4.5.6");
+      const binDir = path.join(root, "bin");
+      const relWin = relTarget(binDir, cliPath).split("/").join("\\");
+      const contents = `@ECHO off\r\nnode  "%dp0%\\${relWin}" %*\r\n`;
+      const binOnPath = stageShim(root, contents);
+      process.env.PATH = `${binOnPath}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBe("4.5.6");
+    });
+
+    it("resolves a Windows .cmd shim using %~dp0\\", () => {
+      const root = path.join(tmpDir, "install");
+      const cliPath = stagePackage(root, PACKAGE_NAME, "7.8.9");
+      const binDir = path.join(root, "bin");
+      const relWin = relTarget(binDir, cliPath).split("/").join("\\");
+      const contents = `@ECHO off\r\nnode  "%~dp0\\${relWin}" %*\r\n`;
+      const binOnPath = stageShim(root, contents);
+      process.env.PATH = `${binOnPath}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBe("7.8.9");
+    });
+
+    it("returns null for a shim script pointing somewhere unrelated", () => {
+      const root = path.join(tmpDir, "install");
+      // Valid $basedir shim shape, but the target isn't argent's package —
+      // nothing here should be mistaken for it.
+      const contents = `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node "$basedir/../other-tool/dist/cli.js" "$@"\n`;
+      const binOnPath = stageShim(root, contents);
+      process.env.PATH = `${binOnPath}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBeNull();
+    });
+
+    it("returns null when the shim's target package.json has the wrong name", () => {
+      const root = path.join(tmpDir, "install");
+      // Same node_modules/@swmansion/argent/ shape the marker looks for, but
+      // a spoofed package.json — must not be trusted as the real install.
+      const cliPath = stagePackage(root, "not-argent", "9.9.9");
+      const binDir = path.join(root, "bin");
+      const rel = relTarget(binDir, cliPath);
+      const contents = `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node "$basedir/${rel}" "$@"\n`;
+      const binOnPath = stageShim(root, contents);
+      process.env.PATH = `${binOnPath}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBeNull();
+    });
+
+    it("returns null for an oversized or NUL-containing bin file (not treated as a shim)", () => {
+      const root = path.join(tmpDir, "install");
+      stagePackage(root, PACKAGE_NAME, "1.0.0");
+      const binDir = path.join(root, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const binPath = path.join(binDir, "argent");
+      // A NUL byte anywhere in the file rules it out as a text shim, however
+      // small — a real binary bin (e.g. a compiled launcher) could otherwise
+      // be misread as one.
+      fs.writeFileSync(binPath, Buffer.from(`#!/bin/sh\n\0exec node "$basedir/x" "$@"\n`));
+      fs.chmodSync(binPath, 0o755);
+      process.env.PATH = `${binDir}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBeNull();
+    });
+  }
+);

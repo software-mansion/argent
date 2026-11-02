@@ -4,9 +4,11 @@ import { track } from "@argent/telemetry";
 import {
   getInstalledVersion,
   getGloballyInstalledVersion,
+  getGloballyInstalledPackageRoot,
   getLatestVersion,
   isNewerVersion,
   detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
@@ -279,9 +281,10 @@ async function runGlobal(opts: {
   // running package's: under `npx ... init` the running package is the npx
   // cache — always latest — which would mask a stale global binary. That
   // global version also becomes this run's version, since it is the install
-  // the written configs run. If it can't be read (a Windows argent.cmd wrapper
-  // hides the owning package), say so and skip the check rather than fall back
-  // to the running package's version.
+  // the written configs run. If it can't be read (an unreadable or unparseable
+  // shim hides the owning package — see getGloballyInstalledPackageRoot), say
+  // so and skip the check rather than fall back to the running package's
+  // version.
   const globalVersion = getGloballyInstalledVersion();
   version = globalVersion ?? version;
   const packageActionStartedAt = performance.now();
@@ -340,7 +343,8 @@ async function runGlobal(opts: {
       if (p.isCancel(updateChoice) || updateChoice === "skip") {
         await tel.trackPackageAction("update_skipped", packageActionStartedAt, true);
       } else if (updateChoice === "update") {
-        const pm = detectPackageManager();
+        // Update with the package manager that owns the global install (#1207).
+        const pm = detectGlobalPackageManager(getGloballyInstalledPackageRoot());
         const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
         const cmdStr = formatShellCommand(cmd);
         const updateSpinner = p.spinner();
