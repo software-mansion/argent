@@ -221,15 +221,19 @@ Before tapping, determine the correct coordinates by using discovery tools. Pick
     // The other backends would land a right-click as a plain tap.
     if (params.button === "right") {
       // gesture-custom has a backend on iOS and Android only.
-      const holdHint =
-        device.platform === "harmony" || device.platform === "chromium"
-          ? ""
-          : ` To open a context menu on a touch screen, press and hold: gesture-custom with a ` +
-            `Down, then an Up after 800 ms.`;
+      const refusal =
+        device.platform === "chromium"
+          ? `<flag:macos-apps>, which argent sends only to a Mac app</flag:macos-apps>: argent ` +
+            `does not support a right-click on a chromium app yet.`
+          : `<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>: ${device.platform} ` +
+            `${device.kind} takes no right-click.` +
+            (device.platform === "harmony"
+              ? ""
+              : ` To open a context menu on a touch screen, press and hold: gesture-custom with ` +
+                `a Down, then an Up after 800 ms.`);
       throw new InvalidToolInputError(
         renderFlagGated(
-          `gesture-tap button "right" is a mouse right-click<flag:macos-apps>, which only a Mac ` +
-            `app takes</flag:macos-apps>: ${device.platform} ${device.kind} takes no right-click.${holdHint}`,
+          `gesture-tap button "right" is a mouse right-click${refusal}`,
           isFlagEnabled
         )
       );

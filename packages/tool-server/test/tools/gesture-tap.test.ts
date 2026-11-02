@@ -141,11 +141,21 @@ describe("gesture-tap button", () => {
   });
 
   it.each([
-    ["an iOS simulator", "00000000-0000-0000-0000-0000000000AB", "ios simulator", true],
-    ["an Android emulator", "emulator-5554", "android emulator", true],
-    ["a physical iPhone", DEVICE_UDID, "ios device", true],
-    ["a Chromium app", "chromium-cdp-9222", "chromium app", false],
-  ])("refuses a right-click on %s and starts no backend", async (_name, udid, named, hold) => {
+    [
+      "an iOS simulator",
+      "00000000-0000-0000-0000-0000000000AB",
+      "ios simulator takes no right-click",
+      true,
+    ],
+    ["an Android emulator", "emulator-5554", "android emulator takes no right-click", true],
+    ["a physical iPhone", DEVICE_UDID, "ios device takes no right-click", true],
+    [
+      "a Chromium app",
+      "chromium-cdp-9222",
+      "argent does not support a right-click on a chromium app yet",
+      false,
+    ],
+  ])("refuses a right-click on %s and starts no backend", async (_name, udid, refusal, hold) => {
     expect(gestureTapTool.services!({ udid, x: 0.5, y: 0.5, button: "right" })).toEqual({});
     const { run } = runnerRig();
     const err = await gestureTapTool
@@ -159,7 +169,7 @@ describe("gesture-tap button", () => {
         () => undefined,
         (e: unknown) => e as Error
       );
-    expect(err?.message).toContain(`${named} takes no right-click`);
+    expect(err?.message).toContain(refusal);
     expect(err?.message.includes("gesture-custom")).toBe(hold);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_INPUT_INVALID);
     // Nothing reached a device: no touch, no runner command.
