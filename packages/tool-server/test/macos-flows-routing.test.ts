@@ -232,6 +232,34 @@ describe("pinch and rotate on a Mac app", () => {
   });
 });
 
+describe("a text check on a Mac app's field", () => {
+  it.each([
+    ["^$", true, ""],
+    [".+", false, 'its text was "" (wanted to match /.+/)'],
+  ])("reads an empty field as empty, not its placeholder: %s", async (pattern, ok, reason) => {
+    currentTree = () =>
+      screen([
+        n({
+          role: "AXTextField",
+          label: "Search",
+          identifier: "search",
+          frame: { x: 0.1, y: 0.2, width: 0.6, height: 0.05 },
+        }),
+      ]);
+    const result = await runSteps([
+      {
+        kind: "assert",
+        condition: "text",
+        selector: { identifier: "search" },
+        expectedText: pattern,
+        textMatch: "matches",
+      },
+    ]);
+    expect(result.ok).toBe(ok);
+    expect(result.steps[0]!.reason ?? "").toContain(reason);
+  });
+});
+
 describe("type on a Mac app", () => {
   // Reads after the focus tap: the first shows the field unfocused, the next
   // ones focused. A source that reports focus is polled until the second read;
