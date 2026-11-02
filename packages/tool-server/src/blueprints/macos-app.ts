@@ -611,11 +611,14 @@ async function helperPid(child: ReturnType<typeof spawn>, executable: string): P
 }
 
 /**
- * The launches of each app, by bundle id. They run one at a time, and call()
- * waits for the one in flight, also one that a stop-simulator-server started
- * on the service instance it disposed.
+ * The last launch of each app, by bundle id. Launches run one at a time, and
+ * call() waits for the one in flight, also one that a stop-simulator-server
+ * started on the service instance it disposed.
  */
-const lifecycles = new Map<string, Promise<unknown>>();
+const lifecycles = new Map<
+  string,
+  { key: string; run: Promise<MacosLaunchResult>; settled: Promise<unknown>; pending: boolean }
+>();
 
 function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () => void } {
   let channel: LibraryChannel | null = null;
@@ -1156,7 +1159,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       params: Record<string, unknown> = {},
       opts: { timeoutMs?: number; runLate?: boolean } = {}
     ): Promise<T> {
-      await lifecycles.get(bundleId);
+      await lifecycles.get(bundleId)?.settled;
       try {
         const ch = await ensureChannel();
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
@@ -1169,7 +1172,12 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       }
     },
     launch: (opts = {}) => {
-      const run = (lifecycles.get(bundleId) ?? Promise.resolve()).then(async () => {
+      const key = JSON.stringify(opts);
+      const last = lifecycles.get(bundleId);
+      // The MCP adapter sends a call again when its attempt times out, while the
+      // first attempt still runs: the repeat gets its result instead of a restart.
+      if (last?.pending && last.key === key) return last.run;
+      const run = (last?.settled ?? Promise.resolve()).then(async () => {
         launching = true;
         try {
           return await doLaunch(opts);
@@ -1179,21 +1187,20 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           if (disposed) closeChannel();
         }
       });
-      lifecycles.set(
-        bundleId,
-        run.catch(() => undefined)
-      );
+      const entry = { key, run, settled: run.catch(() => undefined), pending: true };
+      void entry.settled.then(() => (entry.pending = false));
+      lifecycles.set(bundleId, entry);
       return run;
     },
     async connect() {
-      await lifecycles.get(bundleId);
+      await lifecycles.get(bundleId)?.settled;
       await ensureChannel();
     },
     isConnected: () => Boolean(channel?.isOpen && channel.handshake),
     handshake: () => (channel?.isOpen ? channel.handshake : null),
     async activateNetworkInspection() {
       networkInspection = true;
-      await lifecycles.get(bundleId);
+      await lifecycles.get(bundleId)?.settled;
       // A channel that ensureChannel opens just now gets it from adopt as
       // well: the library ignores a repeat.
       (await ensureChannel()).sendControl("activateNetworkInspection");

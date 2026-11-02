@@ -157,3 +157,20 @@ describe("over HTTP", () => {
     expect(missing.body.error_code).toBe("MACOS_APP_PATH_INVALID");
   });
 });
+
+describe("Mac app launches", () => {
+  it("hand a repeat of a launch in flight with the same options that launch's result", async () => {
+    const { api, dispose } = await macosAppBlueprint.factory({}, "macos-app-com.example.repeat");
+    // The MCP adapter sends a call again when its attempt times out.
+    const first = api.launch({ takeOver: true });
+    expect(api.launch({ takeOver: true })).toBe(first);
+    const other = api.launch({ takeOver: true, args: ["-x"] });
+    expect(other).not.toBe(first);
+    await Promise.allSettled([first, other]);
+    // Once it is over, the same options start a launch of their own.
+    const later = api.launch({ takeOver: true });
+    expect(later).not.toBe(first);
+    await Promise.allSettled([later]);
+    await dispose();
+  });
+});
