@@ -104,7 +104,11 @@ function logsCmd(follow: boolean): void {
   // Delegate follow to `tail` rather than reimplementing it; Ctrl-C then exits
   // the way a terminal user expects.
   const child = spawn("tail", ["-f", LOG_FILE], { stdio: "inherit" });
-  child.on("exit", (code) => process.exit(code ?? 0));
+  // Mirror tail's exit; signal deaths use the conventional 128+signo code, as
+  // runForeground does.
+  child.on("exit", (code, signal) =>
+    process.exit(code ?? (signal ? 128 + (signalNumber(signal) ?? 0) : 0))
+  );
 }
 
 interface StartFlags {
