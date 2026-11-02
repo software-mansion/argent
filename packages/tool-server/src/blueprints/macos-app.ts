@@ -448,10 +448,11 @@ class LibraryChannel {
       try {
         if (msg.payload?.busy === true) {
           throw macosFailure(
-            `${this.bundleId} is driven by another argent tool-server: the argent library in ` +
-              `the app serves one tool-server at a time. Stop the other tool-server (another ` +
-              `argent install, for example in another worktree), or start this build under a ` +
-              `bundle id of its own to drive both.`,
+            `${this.bundleId} is driven by another client: the argent library in the app ` +
+              `serves one connection at a time, and another process holds it, most likely ` +
+              `another argent tool-server. Stop that tool-server (another argent install, for ` +
+              `example in another worktree), or start this build under a bundle id of its own ` +
+              `to drive both.`,
             FAILURE_CODES.MACOS_APP_IN_USE,
             "macos_app_handshake",
             "validation"
