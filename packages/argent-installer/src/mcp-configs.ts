@@ -1825,6 +1825,19 @@ export function getManagedContentTargets(
         addManagedTarget(targets.skillTargets, adapter.name, path.join(kiroBase, "skills"), root);
         break;
       }
+      case "Devin Desktop": {
+        // Argent writes no skills here itself, but `npx skills add` links
+        // Devin's skills/<name> into .agents/skills once Devin's config dir
+        // exists, and addAllowlist creates it. The skills CLI resolves the
+        // global dir from XDG_CONFIG_HOME on every platform, so this is not
+        // devinUserConfigPath(), which uses %APPDATA% on Windows.
+        const devinBase =
+          scope === "global"
+            ? path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"), "devin")
+            : path.join(root, ".devin");
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(devinBase, "skills"), root);
+        break;
+      }
     }
   }
 

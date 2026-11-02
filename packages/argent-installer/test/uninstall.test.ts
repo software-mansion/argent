@@ -825,6 +825,64 @@ describe("uninstall — scoped config cleanup", () => {
     expect(fs.existsSync(path.join(tmpDir, ".kiro", "steering", "user.md"))).toBe(true);
   });
 
+  // `npx skills add` detects Devin by its config dir, which the Devin Desktop
+  // allowlist step creates, then links <skillsDir>/<name> -> .agents/skills/<name>
+  // for every Argent skill (in a project, only when it already has a .devin dir).
+  function stageDevinSkillLinks(base: string, skillsDir: string): string[] {
+    const names = getBundledSkillNames(path.resolve(__dirname, "..", "..", "skills", "skills"));
+    expect(names.length).toBeGreaterThan(0);
+    fs.mkdirSync(skillsDir, { recursive: true });
+    for (const name of names) {
+      const skillDir = path.join(base, ".agents", "skills", name);
+      writeFile(path.join(skillDir, "SKILL.md"), "x");
+      fs.symlinkSync(path.relative(skillsDir, skillDir), path.join(skillsDir, name));
+    }
+    return names;
+  }
+
+  it("--global removes the Argent skill links from ~/.config/devin/skills and the emptied dir", async () => {
+    const devinDir = path.join(tmpDir, ".config", "devin");
+    stageDevinSkillLinks(tmpDir, path.join(devinDir, "skills"));
+    writeFile(
+      path.join(devinDir, "config.json"),
+      JSON.stringify({ permissions: { allow: ["mcp__argent__*"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(devinDir)).toBe(false);
+  });
+
+  it("--global keeps Devin's own config and skills in ~/.config/devin", async () => {
+    const devinDir = path.join(tmpDir, ".config", "devin");
+    stageDevinSkillLinks(tmpDir, path.join(devinDir, "skills"));
+    writeFile(path.join(devinDir, "skills", "vendor-skill", "SKILL.md"), "keep");
+    writeFile(
+      path.join(devinDir, "config.json"),
+      JSON.stringify({ theme: "dark", permissions: { allow: ["mcp__argent__*"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.readdirSync(path.join(devinDir, "skills"))).toEqual(["vendor-skill"]);
+    expect(JSON.parse(fs.readFileSync(path.join(devinDir, "config.json"), "utf8"))).toEqual({
+      theme: "dark",
+    });
+  });
+
+  it("--yes removes the Argent skill links from .devin/skills and keeps the rest of .devin", async () => {
+    stageDevinSkillLinks(projDir, path.join(projDir, ".devin", "skills"));
+    writeFile(path.join(projDir, ".devin", "notes.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(path.join(projDir, ".devin"))).toEqual(["notes.md"]);
+  });
+
   it("--global keeps the committed project entries and the local-mode record", async () => {
     stageProject({ materialized: true });
     const { projectMcp, globalCursor } = stageConfigs();
