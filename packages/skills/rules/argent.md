@@ -122,7 +122,7 @@ Prompt keywords: physical iPhone, real device, on my phone, USB, hardware
 
 MAC APPS (APPKIT, SWIFTUI, REACT-NATIVE-MACOS)
 Skill: `argent-macos-app-interact`
-When: The target `list-devices` entry has platform `"macos"`, or the user names a Mac app, a macOS app or a native desktop app. Never for an Electron app, which is `chromium`, and never for an iOS simulator. (Needs the `macos-apps` flag, off by default: ask the user to run `argent enable macos-apps`.)
+When: The target `list-devices` entry has platform `"macos"`, or the user names a Mac app, a macOS app or a native desktop app. Never for an Electron app, which is `chromium`, and never for an iOS simulator. (Needs the `macos-apps` flag. When a tool answers `the macos-apps flag is off`, tell the user to run `argent enable macos-apps`.)
 Prompt keywords: Mac app, macOS app, desktop app, AppKit, SwiftUI, react-native-macos
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING

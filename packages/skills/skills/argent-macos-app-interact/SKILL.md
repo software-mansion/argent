@@ -9,7 +9,7 @@ Read this for a Mac app. `argent-device-interact` still applies for everything n
 
 ## Contract
 
-- Needs the `macos-apps` flag. When a tool answers `the macos-apps flag is off`, or `list-devices` shows no Mac app the user expects, tell the user to run `argent enable macos-apps`. Do not change the flag yourself.
+- Needs the `macos-apps` flag. When a tool answers `the macos-apps flag is off`, tell the user to run `argent enable macos-apps`. Do not change the flag yourself.
 - One app is one device: id `macos-app-<bundle id>`, from `list-devices` (`platform: "macos"`). It lists only apps argent started that still run.
 - Start an app with `boot-device {macosAppPath: "<abs path>.app"}`, never with `launch-app`, `open` or Xcode. A Mac app id as `udid` starts it again from its last path; `force: true` quits and starts it again.
 - The `.app` must be built without starting it: `xcodebuild ... build`, then find the bundle under the build products directory (`xcodebuild -showBuildSettings` gives `BUILT_PRODUCTS_DIR`). Xcode Run and `react-native run-macos` start a copy without the argent library: `boot-device` and `launch-app` then fail with `already running ... without the argent library`. Retry `boot-device` with `force: true`: it quits that copy and starts the app with the library. That copy loses its unsaved changes, so ask the user first when they may have work open in it. `restart-app` and an e2e `launch` step quit such a copy too.
