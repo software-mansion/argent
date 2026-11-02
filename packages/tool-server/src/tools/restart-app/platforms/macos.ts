@@ -16,10 +16,10 @@ export const macosImpl: PlatformImpl<
 > = {
   handler: async (services, params, device) => {
     const bundleId = assertLaunchTargetsDevice(params.bundleId, device);
-    const { args, note } = await services.macosApp.launch({
+    const { appPath, args, note } = await services.macosApp.launch({
       takeOver: true,
       args: params.launchArgs,
     });
-    return { restarted: true, bundleId, args, ...(note ? { note } : {}) };
+    return { restarted: true, bundleId, appPath, args, ...(note ? { note } : {}) };
   },
 };

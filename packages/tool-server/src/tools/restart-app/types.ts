@@ -16,6 +16,8 @@ export type RestartAppResult =
   | {
       restarted: boolean;
       bundleId: string;
+      /** Mac apps: the `.app` the new process was started from. */
+      appPath?: string;
       /** Mac apps: the arguments the new process was started with. */
       args?: string[];
       /** Mac apps: argent quit a copy that ran without its library, or the new process showed no window in time. */

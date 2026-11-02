@@ -620,7 +620,12 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
   it("restart-app starts a new process under the same device id", async () => {
     const { pid } = await run("boot-device", { macosAppPath: appPath });
     const restarted = await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
-    expect(restarted).toEqual({ restarted: true, bundleId: BUNDLE_ID, args: [] });
+    expect(restarted).toEqual({
+      restarted: true,
+      bundleId: BUNDLE_ID,
+      appPath: fs.realpathSync(appPath),
+      args: [],
+    });
     const next = getTrackedMacosApp(BUNDLE_ID)!.pid;
     expect(next).not.toBe(pid);
     expect(pidAlive(pid)).toBe(false);
@@ -776,6 +781,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toEqual({
       restarted: true,
       bundleId: BUNDLE_ID,
+      appPath: fs.realpathSync(appPath),
       args: ARGS,
     });
     expect(await argvOf()).toEqual(ARGS);
@@ -830,6 +836,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toEqual({
       launched: true,
       bundleId: BUNDLE_ID,
+      appPath: fs.realpathSync(appPath),
       args: [],
     });
     expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
