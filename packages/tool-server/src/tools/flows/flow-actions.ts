@@ -958,11 +958,19 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
   // Only a Mac app takes a right-click; the others refuse it before the auto-wait too,
   // rather than after it with gesture-tap's own error.
   if (step.kind === "tap" && step.button === "right" && env.device.platform !== "macos") {
+    const platform = env.device.platform;
     return {
       ok: false,
       reason: renderFlagGated(
-        `tap with button: right is a mouse right-click<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>; ` +
-          `${env.device.platform} takes none. On a touch screen, open a context menu with long-press`,
+        platform === "chromium"
+          ? `tap with button: right is a mouse right-click<flag:macos-apps>, which argent sends only to a Mac app</flag:macos-apps>; ` +
+              `argent does not support it on chromium yet`
+          : `tap with button: right is a mouse right-click<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>; ` +
+              `${platform} takes none` +
+              // HarmonyOS refuses long-press too.
+              (platform === "harmony"
+                ? ""
+                : ". On a touch screen, open a context menu with long-press"),
         isFlagEnabled
       ),
     };

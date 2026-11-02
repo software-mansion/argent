@@ -306,9 +306,11 @@ describe("tap times: execution", () => {
   });
 
   it.each([
-    ["a touch device", undefined],
-    ["a Chromium app", "chromium-cdp-9222"],
-  ])("fails a right tap on %s before it reads the tree or taps", async (_name, device) => {
+    ["a touch device", undefined, /is a mouse right-click.*takes none\. .*long-press$/],
+    // HarmonyOS refuses long-press too, and Chromium is a mouse platform.
+    ["HarmonyOS", "harmony-127.0.0.1:5555", /is a mouse right-click.*harmony takes none$/],
+    ["a Chromium app", "chromium-cdp-9222", /does not support it on chromium yet$/],
+  ])("fails a right tap on %s before it reads the tree or taps", async (_name, device, reason) => {
     let reads = 0;
     currentTree = () => {
       reads++;
@@ -322,7 +324,7 @@ describe("tap times: execution", () => {
     const result = await run("right-click", device);
 
     expect(result.ok).toBe(false);
-    expect(result.steps[0]!.reason).toMatch(/is a mouse right-click.*takes none/);
+    expect(result.steps[0]!.reason).toMatch(reason);
     // Only the screenshot every failed step attaches; no tap went out.
     expect(result.calls.map((c) => c.tool)).toEqual(["screenshot"]);
     expect(reads).toBe(0);

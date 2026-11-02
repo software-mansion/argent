@@ -160,7 +160,7 @@ Each step contains one directive. A failed directive stops the e2e test.
 
 `tap`, `type` and `long-press` do not scroll. Add `scroll-to` before them when the target can be off-screen.
 
-The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a right-click, for example to open a context menu. Only a Mac app accepts it. On other platforms, the step fails before the runner reads the tree. To open a context menu on a touch screen, use `long-press`. A recorded `gesture-tap` with `button: "right"` becomes a `tap` with `button: right`.
+The `button` of a `tap` is `left` (the default) or `right`. `button: right` is a right-click, for example to open a context menu. Argent supports it only on a Mac app. On other platforms, the step fails before the runner reads the tree. To open a context menu on iOS or Android, use `long-press`. A recorded `gesture-tap` with `button: "right"` becomes a `tap` with `button: right`.
 
 A direction in `swipe` and `scroll-to` is the direction that the user sees. This is also true for a landscape UI, for example on a rotated device or an unfolded foldable. Coordinates in `tap: { x, y }` and in the `from`, `to` and `by` of `swipe` use the space of the `describe` frames. Argent does not turn them.
 
