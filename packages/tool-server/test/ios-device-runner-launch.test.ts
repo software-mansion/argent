@@ -19,7 +19,10 @@ afterAll(async () => {
  * reads on Windows — moved under tmpRoot (so the launch log lands in the
  * fixture tree, not the real ~/.argent).
  */
-async function launchWithPath(pathDir: string): Promise<Awaited<ReturnType<typeof launchRunner>>> {
+async function launchWithPath(
+  pathDir: string,
+  tunnelAddress?: string
+): Promise<Awaited<ReturnType<typeof launchRunner>>> {
   const saved = {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
@@ -31,6 +34,7 @@ async function launchWithPath(pathDir: string): Promise<Awaited<ReturnType<typeo
   try {
     return await launchRunner({
       udid: "00008120-000000000000001E",
+      tunnelAddress,
       xctestrunPath: path.join(tmpRoot, "fake.xctestrun"),
       derivedDataPath: path.join(tmpRoot, "derived"),
     });
@@ -72,6 +76,7 @@ describe("launchRunner", () => {
     await fsp.writeFile(
       path.join(stubBin, "xcodebuild"),
       '#!/bin/sh\necho "PORT=${TEST_RUNNER_ARGENT_RUNNER_PORT-unset} ARGS=$@"\n' +
+        'echo "ADDRESS=${TEST_RUNNER_ARGENT_RUNNER_ADDRESS-unset}"\n' +
         'echo "HOME=${HOME-unset} USERPROFILE=${USERPROFILE-unset}"\nexit 0\n',
       { mode: 0o755 }
     );
@@ -96,10 +101,12 @@ describe("launchRunner", () => {
     expect(launched.child.listenerCount("error")).toBe(1);
 
     // A second launch truncates the log rather than appending to it.
-    const second = await launchWithPath(stubBin);
+    const second = await launchWithPath(stubBin, "fd12::1");
     await once(second.child, "exit");
     const secondLog = await fsp.readFile(second.logPath, "utf8");
     expect(secondLog.match(/PORT=/g)).toHaveLength(1);
+    expect(secondLog).toContain("ADDRESS=fd12::1");
+    expect(log).toContain("ADDRESS=\n");
   });
 });
 

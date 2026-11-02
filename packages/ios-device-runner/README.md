@@ -47,11 +47,12 @@ build-for-testing` (signed with the user's team; see the environment
    Xcode update, a team change) rebuilds in place.
 2. Per session it launches `xcodebuild test-without-building` detached;
    testmanagerd installs and starts the runner on the device. The runner
-   binds a system-assigned loopback port and logs it as
+   binds a system-assigned port on loopback (USB) or the CoreDevice tunnel address and logs it as
    `ARGENT_RUNNER_LISTENING port=N`; the tool-server reads that line from
    the launch log before it sends the first command.
-3. Commands travel as one HTTP POST per command over usbmux (USB cable
-   only). `PROTOCOL.md` documents the contract.
+3. Commands travel as one HTTP POST per command over usbmux for USB devices,
+   or authenticated IPv6 TCP for connected CoreDevice network devices.
+   `PROTOCOL.md` documents the contract.
 
 ## Build-time configuration
 

@@ -8,7 +8,7 @@ import {
   type ServiceEvents,
   type ServiceInstance,
 } from "@argent/registry";
-import { ensureDeviceReady } from "../utils/ios-device/devicectl";
+import { ensureDeviceReady, readRunnerSessionToken } from "../utils/ios-device/devicectl";
 import {
   ensureRunnerArtifact,
   isProfileExpiredFailure,
@@ -23,7 +23,7 @@ import {
   type RunnerSigningConfig,
 } from "../utils/ios-device/runner-build";
 import * as fs from "node:fs/promises";
-import { createUsbmuxCommandSender } from "../utils/ios-device/runner-route";
+import { createRunnerCommandSender } from "../utils/ios-device/runner-route";
 import { isIosDeviceTransportError } from "../utils/ios-device/usbmux-protocol";
 import { readRunnerCrashSummary } from "../utils/ios-device/runner-crash";
 import {
@@ -163,12 +163,15 @@ const RUNNER_READY_TIMEOUT_MS = 120_000;
  */
 async function startRunner(
   udid: string,
-  artifact: RunnerArtifact
+  artifact: RunnerArtifact,
+  signing: RunnerSigningConfig,
+  tunnelAddress?: string | null
 ): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
   const launched = await launchRunner({
     udid,
     xctestrunPath: artifact.xctestrunPath,
     derivedDataPath: artifact.derivedDataPath,
+    ...(tunnelAddress ? { tunnelAddress } : {}),
   });
 
   // The factory exit listener is not attached yet. Race ready against exit so a dead child does not burn the full ready budget.
@@ -189,17 +192,31 @@ async function startRunner(
   try {
     const expiresAt = Date.now() + RUNNER_READY_TIMEOUT_MS;
 
-    // The runner binds a system-assigned loopback port on the device and logs it.
+    // The runner binds a system-assigned port on the device and logs it.
     // Nothing on the Mac can pick that port, so the client waits for the line.
     const port = await Promise.race([
       waitForRunnerListeningPort(launched.logPath, { timeoutMs: RUNNER_READY_TIMEOUT_MS }),
       exited,
     ]);
 
+    const network = tunnelAddress
+      ? {
+          address: tunnelAddress,
+          token: await Promise.race([
+            readRunnerSessionToken(
+              udid,
+              `${signing.testBundleId}.xctrunner`,
+              port,
+              Math.max(1, Math.min(20_000, expiresAt - Date.now()))
+            ),
+            exited,
+          ]),
+        }
+      : undefined;
     client = createRunnerClient({
       udid,
       port,
-      send: createUsbmuxCommandSender().sendCommand,
+      send: createRunnerCommandSender({ network }).sendCommand,
     });
 
     // The rest of the same budget goes to the first envelope.
@@ -247,7 +264,8 @@ async function startRunner(
  */
 async function buildAndStartRunner(
   udid: string,
-  signing: RunnerSigningConfig
+  signing: RunnerSigningConfig,
+  tunnelAddress?: string | null
 ): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
   let artifact: RunnerArtifact;
 
@@ -261,7 +279,7 @@ async function buildAndStartRunner(
   }
 
   try {
-    return await startRunner(udid, artifact);
+    return await startRunner(udid, artifact, signing, tunnelAddress);
   } catch (error) {
     const logText = (error as { runnerLogText?: string }).runnerLogText ?? "";
     if (!isProfileMissingDeviceFailure(logText) && !isProfileExpiredFailure(logText)) throw error;
@@ -269,7 +287,9 @@ async function buildAndStartRunner(
     // automatic signing registers it and mints a fresh profile. Retry once.
     return await startRunner(
       udid,
-      await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true })
+      await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true }),
+      signing,
+      tunnelAddress
     );
   }
 }
@@ -297,12 +317,13 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
       );
     }
 
-    await ensureDeviceReady(udid);
+    const tunnelAddress = await ensureDeviceReady(udid);
     await killStaleRunnersForDevice(udid);
 
     const { launched, client } = await buildAndStartRunner(
       udid,
-      await resolveRunnerSigningConfig()
+      await resolveRunnerSigningConfig(),
+      tunnelAddress
     );
 
     const events = new TypedEventEmitter<ServiceEvents>();

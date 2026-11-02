@@ -14,13 +14,14 @@ interface PostRunnerCommandOptions {
   socketFactory: () => Promise<net.Socket>;
   body: unknown;
   deadline: Deadline;
+  authorizationToken?: string;
 }
 
 /**
  * POST one runner command over a pre-connected socket. Resolves with the parsed JSON body.
  *
- * @param options.socketFactory opens the usbmux socket when the send starts.
- * @param options.deadline send budget, shared with the usbmux handshake.
+ * @param options.socketFactory opens the selected runner socket when the send starts.
+ * @param options.deadline send budget, shared with connection setup.
  */
 export async function postRunnerCommand(options: PostRunnerCommandOptions): Promise<unknown> {
   requireTimeRemaining(options.deadline.remainingMs(), "send runner command");
@@ -44,7 +45,19 @@ export async function postRunnerCommand(options: PostRunnerCommandOptions): Prom
     const httpTimeoutMs = options.deadline.remainingMs();
     requireTimeRemaining(httpTimeoutMs, "send runner command");
 
-    const response = await requestOverAgent(agent, socket, payload, httpTimeoutMs);
+    const response = await requestOverAgent(
+      agent,
+      socket,
+      payload,
+      httpTimeoutMs,
+      options.authorizationToken
+    );
+
+    if (response.statusCode === 401) {
+      throw new IosDeviceTransportError("protocol", "Runner session authorization failed", {
+        retryable: false,
+      });
+    }
 
     return parseRunnerResponseBody(response.statusCode, response.body);
   } finally {
@@ -57,7 +70,8 @@ async function requestOverAgent(
   agent: http.Agent,
   socket: net.Socket,
   payload: Buffer,
-  timeoutMs: number
+  timeoutMs: number,
+  authorizationToken?: string
 ): Promise<{ statusCode: number; body: Buffer }> {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
 
@@ -73,6 +87,7 @@ async function requestOverAgent(
             "Content-Type": "application/json",
             "Content-Length": payload.length,
             "Connection": "close",
+            ...(authorizationToken ? { Authorization: `Bearer ${authorizationToken}` } : {}),
           },
           agent,
           signal: timeoutSignal,
@@ -86,7 +101,7 @@ async function requestOverAgent(
       );
 
       request.once("error", reject);
-      // Resume the paused usbmux socket. The HTTP response arrives on this pipe.
+      // Resume the paused runner socket. The HTTP response arrives on this pipe.
       socket.resume();
       request.end(payload);
     });

@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { isIPv6 } from "node:net";
 import {
   FAILURE_CODES,
   subprocessFailureMetadata,
@@ -35,10 +36,12 @@ interface IosPhysicalDevice {
   /** CoreDevice pairing state, e.g. "paired". */
   pairingState: string | null;
   /**
-   * How CoreDevice currently reaches the device. "wired" while cabled, "localNetwork" once unplugged.
+   * How CoreDevice currently reaches the device: USB or a network tunnel.
    */
   transportType: string | null;
   tunnelState: string | null;
+  /** A connected CoreDevice tunnel that can carry runner traffic. */
+  tunnelAddress: string | null;
 }
 
 class IosDeviceControlError extends Error {
@@ -208,6 +211,7 @@ interface DevicectlListPayload {
         pairingState?: string;
         transportType?: string;
         tunnelState?: string;
+        tunnelIPAddress?: string;
       };
     }>;
   };
@@ -281,6 +285,7 @@ export async function listIosPhysicalDevices(): Promise<IosPhysicalDevice[]> {
       pairingState: d.connectionProperties?.pairingState ?? null,
       transportType: d.connectionProperties?.transportType ?? null,
       tunnelState: d.connectionProperties?.tunnelState ?? null,
+      tunnelAddress: coreDeviceTunnelAddress(d.connectionProperties),
     });
   }
   return out;
@@ -357,12 +362,30 @@ export async function launchApp(
 interface DeviceConnectionInfo {
   transportType: string | null;
   tunnelState: string | null;
+  tunnelAddress: string | null;
+}
+
+interface ConnectionProperties {
+  transportType?: string;
+  tunnelState?: string;
+  tunnelIPAddress?: string;
+}
+
+function coreDeviceTunnelAddress(connection: ConnectionProperties | undefined): string | null {
+  const address = connection?.tunnelIPAddress;
+  return connection?.transportType === "localNetwork" &&
+    connection.tunnelState === "connected" &&
+    typeof address === "string" &&
+    isIPv6(address) &&
+    /^f[cd]/i.test(address)
+    ? address
+    : null;
 }
 
 interface DevicectlDetailsPayload {
   result?: {
-    connectionProperties?: { transportType?: string; tunnelState?: string };
-    device?: { connectionProperties?: { transportType?: string; tunnelState?: string } };
+    connectionProperties?: ConnectionProperties;
+    device?: { connectionProperties?: ConnectionProperties };
   };
 }
 
@@ -389,11 +412,9 @@ async function deviceInfoDetails(
   return {
     transportType: conn?.transportType ?? null,
     tunnelState: conn?.tunnelState ?? null,
+    tunnelAddress: coreDeviceTunnelAddress(conn),
   };
 }
-
-const READY_MEMO_TTL_MS = 5_000;
-const readyMemo = new Map<string, number>();
 
 /** Signal for a readiness verdict devicectl answered without itself failing. */
 function readyFailureSignal(error_kind: FailureKind): FailureSignal {
@@ -407,20 +428,26 @@ function readyFailureSignal(error_kind: FailureKind): FailureSignal {
 }
 
 /**
- * Ensure the device is on USB and its CoreDevice tunnel is ready.
+ * Ensure USB or a connected CoreDevice tunnel is available.
+ * Return the tunnel address for network devices, or null for USB.
  */
-export async function ensureDeviceReady(udid: string): Promise<void> {
-  // Memoized for 5s. Callers hit this on the hot path.
-  const at = readyMemo.get(udid);
-
-  if (at != null && Date.now() - at < READY_MEMO_TTL_MS) {
-    return;
-  }
-
-  // An unplugged paired device can keep a network tunnel. usbmux still needs the cable.
+export async function ensureDeviceReady(udid: string): Promise<string | null> {
   const info = await deviceInfoDetails(udid, { timeoutSeconds: 15 });
 
-  // Older toolchains omit transportType. Only an explicit non-wired value rejects.
+  if (info.tunnelAddress) {
+    return info.tunnelAddress;
+  }
+
+  if (info.transportType === "localNetwork") {
+    throw withFailureSignal(
+      new IosDeviceControlError("The device has no connected CoreDevice IPv6 tunnel", {
+        hint: "Keep the device unlocked and connected in Xcode, then retry.",
+      }),
+      readyFailureSignal("network")
+    );
+  }
+
+  // Older toolchains omit transportType; they retain the USB path.
   if (info.transportType != null && info.transportType !== "wired") {
     throw withFailureSignal(
       new IosDeviceControlError(`Device transport is ${info.transportType}, not wired`, {
@@ -439,5 +466,55 @@ export async function ensureDeviceReady(udid: string): Promise<void> {
     );
   }
 
-  readyMemo.set(udid, Date.now());
+  return null;
+}
+
+/** Read the runner-generated secret through the paired Xcode connection, never its log. */
+export async function readRunnerSessionToken(
+  udid: string,
+  runnerBundleId: string,
+  expectedPort: number,
+  timeoutMs = DEVICECTL_TIMEOUT_MS
+): Promise<string> {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), "argent-runner-session-"));
+  const destination = path.join(folder, "session.json");
+  try {
+    await runDevicectl(
+      [
+        "device",
+        "copy",
+        "from",
+        "--device",
+        udid,
+        "--source",
+        "Documents/argent-runner-session.json",
+        "--destination",
+        destination,
+        "--domain-type",
+        "appDataContainer",
+        "--domain-identifier",
+        runnerBundleId,
+      ],
+      "read runner session",
+      { timeoutMs }
+    );
+    if ((await fs.stat(destination)).size > 4096) throw new Error("Invalid runner session");
+    let session: { port?: unknown; token?: unknown } | null;
+    try {
+      session = JSON.parse(await fs.readFile(destination, "utf8")) as typeof session;
+    } catch {
+      // JSON parse errors can include the secret input.
+      throw new Error("Invalid runner session");
+    }
+    if (
+      session?.port !== expectedPort ||
+      typeof session.token !== "string" ||
+      !/^[a-f0-9]{64}$/.test(session.token)
+    ) {
+      throw new Error("Invalid runner session");
+    }
+    return session.token;
+  } finally {
+    await fs.rm(folder, { recursive: true, force: true });
+  }
 }

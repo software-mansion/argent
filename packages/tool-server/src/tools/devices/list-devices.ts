@@ -33,7 +33,7 @@ type IosPhysicalDevice = {
   kind: "device";
   udid: string;
   name: string;
-  // connected = wired transport. paired = listed but not reachable over USB.
+  // connected = USB or a ready CoreDevice tunnel. paired = remembered but unavailable.
   state: "connected" | "paired";
   runtime: string;
   model: string | null;
@@ -326,7 +326,7 @@ Use at the start of a session to pick a target id ('udid' for iOS<flag:harmonyos
 Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', <flag:harmonyos>'harmony', </flag:harmonyos>or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
 <flag:harmonyos>HarmonyOS entries carry a 'kind': 'device' is a target connected over \`hdc\` (a phone on USB, or a booted emulator) and is what the interaction tools drive; 'emulator' is a DevEco Studio instance, running or not, and is what boot-device starts. A running emulator appears under both, exactly as a running Android AVD appears in both 'avds' and the device list. Instance state is 'running'/'stopped'; connected-target state is 'Connected'/'Offline'.
 </flag:harmonyos>Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb). Physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
-Physical iPhones appear as iOS entries with kind 'device' (no iPads); no boot-device. State 'connected' = cabled and usable; 'paired' = not reachable over USB, never auto-bound.
+Physical iPhones appear as iOS entries with kind 'device' (no iPads); no boot-device. State 'connected' = usable over USB or a connected CoreDevice tunnel; 'paired' = remembered but unavailable, never auto-bound.
 TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android TV / leanback devices on Android). These are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses (up/down/left/right/select/back/menu/home), and \`keyboard\` to type, rather than the coordinate/gesture tools.
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
 A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'. Use the \`fold\` tool to fold or unfold it.
@@ -423,7 +423,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
         kind: "device",
         udid: d.udid,
         name: d.name,
-        state: d.transportType === "wired" ? "connected" : "paired",
+        state: d.transportType === "wired" || d.tunnelAddress ? "connected" : "paired",
         runtime: d.osVersion ? `iOS ${d.osVersion} (physical device)` : "iOS (physical device)",
         model: d.model,
         developerModeEnabled: d.developerModeEnabled,

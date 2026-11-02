@@ -1,10 +1,12 @@
 import { sleep } from "../timing";
+import net from "node:net";
+import { once } from "node:events";
 import { postRunnerCommand } from "./runner-http";
 import { createDeadline, openUsbmuxRunnerSocket, type Deadline } from "./usbmux";
-import { isIosDeviceTransportError } from "./usbmux-protocol";
+import { IosDeviceTransportError, isIosDeviceTransportError } from "./usbmux-protocol";
 
 /**
- * Send a command to the runner over usbmux.
+ * Send a command to the runner over USB or an authenticated CoreDevice tunnel.
  * Mutating commands go out at most once. Read-only commands retry on retryable errors.
  */
 
@@ -29,12 +31,13 @@ export type SendRunnerCommand = (
 ) => Promise<unknown>;
 
 /**
- * Create a sender that posts commands over usbmux.
+ * Create a sender for the route selected when the runner starts.
  *
  * @param options.sendViaUsbmux test seam. Replaces the usbmux socket and HTTP send.
  */
-export function createUsbmuxCommandSender(
+export function createRunnerCommandSender(
   options: {
+    network?: { address: string; token: string };
     sendViaUsbmux?: (
       udid: string,
       port: number,
@@ -43,12 +46,21 @@ export function createUsbmuxCommandSender(
     ) => Promise<unknown>;
   } = {}
 ): { sendCommand: SendRunnerCommand } {
-  const sendViaUsbmux = options.sendViaUsbmux ?? defaultSendViaUsbmux;
+  const network = options.network;
+  const send = network
+    ? (_udid: string, port: number, body: unknown, deadline: Deadline) =>
+        postRunnerCommand({
+          socketFactory: () => openTunnelSocket(network.address, port, deadline),
+          authorizationToken: network.token,
+          body,
+          deadline,
+        })
+    : (options.sendViaUsbmux ?? defaultSendViaUsbmux);
 
   return {
     sendCommand: async (udid, port, body, sendOptions) => {
       if (!sendOptions.readOnly) {
-        return sendViaUsbmux(udid, port, body, createDeadline(sendOptions.timeoutMs));
+        return send(udid, port, body, createDeadline(sendOptions.timeoutMs));
       }
 
       let lastError: unknown;
@@ -56,7 +68,7 @@ export function createUsbmuxCommandSender(
       for (let attempt = 1; attempt <= READ_ONLY_MAX_ATTEMPTS; attempt += 1) {
         try {
           // Fresh deadline per attempt. Backoff sleeps do not spend from timeoutMs.
-          return await sendViaUsbmux(udid, port, body, createDeadline(sendOptions.timeoutMs));
+          return await send(udid, port, body, createDeadline(sendOptions.timeoutMs));
         } catch (error) {
           lastError = error;
           const retryable = isIosDeviceTransportError(error) && error.retryable;
@@ -73,6 +85,33 @@ export function createUsbmuxCommandSender(
       throw lastError;
     },
   };
+}
+
+async function openTunnelSocket(
+  address: string,
+  port: number,
+  deadline: Deadline
+): Promise<net.Socket> {
+  const timeoutMs = deadline.remainingMs();
+  if (timeoutMs <= 0) {
+    throw new IosDeviceTransportError("timeout", "CoreDevice connection deadline elapsed", {
+      retryable: true,
+    });
+  }
+  const socket = net.createConnection({ host: address, port, family: 6 });
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    await once(socket, "connect", { signal });
+    socket.pause();
+    return socket;
+  } catch (error) {
+    socket.destroy();
+    throw new IosDeviceTransportError(
+      signal.aborted ? "timeout" : "runner-not-listening",
+      "Cannot connect to the runner through the CoreDevice tunnel",
+      { retryable: true, cause: error }
+    );
+  }
 }
 
 /**

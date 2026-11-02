@@ -2,18 +2,30 @@
 
 One HTTP POST per command. The request body is a JSON object; the reply is a
 JSON **envelope**. Connections close after each exchange (`Connection:
-close`). The server listens on loopback on a system-assigned port and logs
+close`). The server listens on a system-assigned port and logs
 it once the listener is ready as `ARGENT_RUNNER_LISTENING port=N`; the
 tool-server reads that line from the xcodebuild launch log before it sends
 the first command, since nothing on the Mac can tell which device ports are
 free. Setting `ARGENT_RUNNER_PORT` in the runner's environment (xcodebuild
 forwards it from `TEST_RUNNER_ARGENT_RUNNER_PORT` on the launching process)
 pins the port instead; absent or `0` means system-assigned, which is also how
-a session run straight from Xcode comes up. The listener is reachable through
-usbmux (USB cable only); the forwarded stream terminates on the device's
-loopback, so a loopback bind covers the whole transport.
+a session run straight from Xcode comes up.
 
-The envelope is authoritative; the HTTP status is informational (200 for ok
+USB sessions bind to loopback and use usbmux. Network sessions bind only to the
+CoreDevice tunnel IPv6 address passed in `ARGENT_RUNNER_ADDRESS` (forwarded by
+Xcode from `TEST_RUNNER_ARGENT_RUNNER_ADDRESS`). The address must be in `fc00::/7`.
+The runner generates a new 64-character hexadecimal secret for each session.
+Before logging `LISTENING`, it writes `{port, token}` to
+`Documents/argent-runner-session.json` in its private app container, with mode 0600. The Mac copies the file through `devicectl` and deletes the local copy
+immediately after validation. The runner removes its file on shutdown. Neither
+the launch environment nor the launch log contains the token.
+
+Every network request requires exactly one `Authorization: Bearer <token>`
+header. Missing, duplicate, or invalid credentials return HTTP 401 with an
+`UNAUTHORIZED` envelope before command dispatch. The client does not retry an
+authorization failure. USB sessions do not require this header.
+
+For dispatched commands, the envelope is authoritative; HTTP status is informational (200 for ok
 envelopes, 500 for error envelopes). Two rejections come from the framing
 layer, before command dispatch, still shaped as `INVALID_REQUEST` envelopes:
 400 when a finished header block lacks a usable Content-Length, and 413 when
