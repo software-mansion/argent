@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { track } from "@argent/telemetry";
@@ -8,12 +10,14 @@ import {
   getGlobalSkillLockPath,
   getInstalledVersion,
   getProjectSkillLockPath,
+  LEGACY_ARGENT_SKILL_NAMES,
   listArgentSkillsInLock,
   listBundledSkills,
   npxChildEnv,
   withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
+import { ALL_ADAPTERS, getManagedContentTargets } from "./mcp-configs.js";
 
 type SkillScope = "project" | "global";
 
@@ -128,10 +132,85 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
       }
     }
 
+    for (const name of pruneLegacySkillDirs(projectRoot, spec.scope, bundled)) {
+      if (!result.pruned.includes(name)) result.pruned.push(name);
+    }
+
     results.push(result);
   }
 
   return results;
+}
+
+// A renamed skill's old dir can outlive its lock entry (or never have had one),
+// so `skills remove` never sees it. Removes it, editor links to it, and its
+// lock entry from the scope. Returns the names removed.
+export function pruneLegacySkillDirs(
+  projectRoot: string,
+  scope: SkillScope,
+  bundled: ReadonlySet<string> = new Set(listBundledSkills())
+): string[] {
+  // An empty bundled set means an unreadable skills dir, not a skill-free
+  // release; see refreshArgentSkills.
+  if (bundled.size === 0) return [];
+  const legacy = LEGACY_ARGENT_SKILL_NAMES.filter((name) => !bundled.has(name));
+  const { skillTargets } = getManagedContentTargets(
+    ALL_ADAPTERS,
+    projectRoot,
+    scope === "global" ? "global" : "local"
+  );
+  const removed = new Set<string>();
+  for (const { targetPath } of skillTargets) {
+    for (const name of legacy) {
+      const dir = path.join(targetPath, name);
+      try {
+        // lstat: an editor link into an emptied .agents/skills dangles.
+        if (!fs.lstatSync(dir, { throwIfNoEntry: false })) continue;
+        fs.rmSync(dir, { recursive: true, force: true });
+        removed.add(name);
+      } catch {
+        // non-fatal
+      }
+    }
+  }
+  const lockPath =
+    scope === "global" ? getGlobalSkillLockPath() : getProjectSkillLockPath(projectRoot);
+  for (const name of removeLockEntries(lockPath, legacy)) removed.add(name);
+  return [...removed].sort();
+}
+
+// Legacy names the scope's lock still tracks. `skills remove` them before
+// pruneLegacySkillDirs drops their lock entries: only the skills CLI knows
+// every agent dir it linked them into (Kiro, Hermes, Windsurf, ...).
+export function listTrackedLegacySkills(
+  projectRoot: string,
+  scope: SkillScope,
+  bundled: ReadonlySet<string> = new Set(listBundledSkills())
+): string[] {
+  if (bundled.size === 0) return [];
+  const lockPath =
+    scope === "global" ? getGlobalSkillLockPath() : getProjectSkillLockPath(projectRoot);
+  return listArgentSkillsInLock(lockPath).filter(
+    (name) => LEGACY_ARGENT_SKILL_NAMES.includes(name) && !bundled.has(name)
+  );
+}
+
+// Drops `names` from a skills lockfile so a committed lock cannot restore them.
+function removeLockEntries(lockPath: string, names: readonly string[]): string[] {
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+      skills?: Record<string, unknown>;
+    };
+    const skills = lock.skills;
+    if (!skills) return [];
+    const removed = names.filter((name) => name in skills);
+    if (removed.length === 0) return [];
+    for (const name of removed) delete skills[name];
+    fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
+    return removed;
+  } catch {
+    return [];
+  }
 }
 
 // Returns null when nothing happened, so the caller can skip printing an empty

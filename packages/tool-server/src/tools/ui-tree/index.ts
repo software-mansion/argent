@@ -76,6 +76,7 @@ Use when a program needs element ancestry, such as an e2e engine's scoped select
 Returns { schemaVersion, roots, truncated, alertVisible, keyboardVisible, foregroundApp, unsupportedFields }.
 Fails if the iOS ax-service predates the tree command; update argent.`,
     hideFromMcp: true,
+    readOnly: true,
     zodSchema,
     capability,
     services: () => ({}),

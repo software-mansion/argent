@@ -3,10 +3,12 @@ import {
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
+  type ServiceRef,
   type ToolCapability,
   type ToolDefinition,
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { dispatchByPlatform, type PlatformImpl } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
 import {
   fetchDisplayState,
@@ -30,6 +32,7 @@ import {
   type FoldablePanel,
   type LivePanel,
 } from "../../utils/foldable";
+import { androidImpl, type AndroidFoldResult } from "./platforms/android";
 
 const POSTURES = ["closed", "half-open", "open"] as const;
 type Posture = (typeof POSTURES)[number];
@@ -48,12 +51,14 @@ const zodSchema = z
   .object({
     udid: z
       .string()
-      .describe("Target device id from `list-devices` (a foldable iOS simulator UDID)."),
+      .describe(
+        "Target device id from `list-devices` (a foldable iOS simulator UDID or Android emulator serial)."
+      ),
     posture: z
       .enum(POSTURES)
       .optional()
       .describe(
-        "Where to move the hinge: `closed` (0°, the cover panel), `half-open` (120°) or `open` (180°, the inner panel). Exactly one of `posture` and `angle`."
+        "Where to move the hinge: `closed` (the cover panel), `half-open` or `open` (the inner panel). Exactly one of `posture` and `angle`."
       ),
     angle: z
       .number()
@@ -70,7 +75,7 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
+interface IosResult {
   /** CoreSimulator screen id of the panel the device renders to after the fold. */
   activeScreen: number;
   /** That panel, with its native pixel size: the size a `screenshot` at scale 1 has. */
@@ -91,11 +96,17 @@ interface Result {
   warning?: string;
 }
 
+type Result = IosResult | AndroidFoldResult;
+
 const capability: ToolCapability = {
   // Local simulators only. A remote (MoQ) simulator is driven on its main
   // screen and carries no hinge message; the server itself rejects a device
   // that is not foldable, with its own reason.
   apple: { simulator: true },
+  // Emulators only: the hinge is moved through the emulator console. `unknown`
+  // is let through and the handler rejects a serial with no console; it also
+  // rejects a profile with no hinge, which the capability cannot see.
+  android: { emulator: true, unknown: true },
 };
 
 /** The posture preset at exactly `angle`, if one sits there. */
@@ -187,7 +198,7 @@ function sweepStartAngle(start: SweepStart | undefined, serverAngle: number | nu
 function screenResult(
   activeScreen: number,
   panels: readonly FoldablePanel[] | undefined
-): Result["screen"] {
+): IosResult["screen"] {
   const panel = panels?.find((p) => p.screenId === activeScreen);
   return {
     id: activeScreen,
@@ -196,29 +207,9 @@ function screenResult(
   };
 }
 
-export const foldTool: ToolDefinition<Params, Result> = {
-  id: "fold",
-  interaction: {
-    startedMsg: ({ params }) => `Folding device to ${targetLabel(params)}`,
-    completedMsg: ({ params, result }) =>
-      `Folded device to ${targetLabel(params)}; it renders to screen ${result.activeScreen} (${result.screen.panel})`,
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to fold device to ${targetLabel(params)}: ${failureSignal.error_code}`,
-  },
-  description: `Move the hinge of a foldable iOS simulator (the iPhone Duo) to a \`posture\` (closed, half-open, open) or to an \`angle\` (0-180°). The tool returns when the device accepts input again, so the next tap lands.
-Use when you must see or test an app in a different posture: closed shows the cover panel, half-open and open show the inner panel. \`list-devices\` marks foldable simulators with \`foldable: true\`. To turn a device without a fold, use \`rotate\`.
-All tools use the active panel (the panel that shows the UI), also after a fold made outside argent. The coordinates and the screenshot size change with the panel. Before you tap, read the element tree in this result or run \`describe\` again. Unfolded, the UI is landscape, as on a rotated iPhone.
-A fold between two angles that are not closed or open can keep the current panel. To change panels, fold to closed or open.
-Returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAngle, warning? }. screen names the active panel and gives its size in pixels. posture is set only at 0°, 120° and 180°. warning is set when argent cannot find the active panel, or when the device did not change to the expected panel.
-Fails if the device is not foldable or is a remote simulator.`,
-  searchHint: "fold unfold hinge foldable duo posture open closed half-open panel screen",
-  zodSchema,
-  capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params, ctx) {
-    const api = services.simulatorServer as SimulatorServerApi;
+const iosImpl: PlatformImpl<{ simulatorServer: SimulatorServerApi }, Params, IosResult> = {
+  async handler(services, params, _device, ctx) {
+    const api = services.simulatorServer;
     const udid = params.udid;
     const signal = ctx?.signal
       ? AbortSignal.any([ctx.signal, AbortSignal.timeout(HINGE_REQUEST_TIMEOUT_MS)])
@@ -327,4 +318,39 @@ Fails if the device is not foldable or is a remote simulator.`,
       ...(warning ? { warning } : {}),
     };
   },
+};
+
+export const foldTool: ToolDefinition<Params, Result> = {
+  id: "fold",
+  interaction: {
+    startedMsg: ({ params }) => `Folding device to ${targetLabel(params)}`,
+    completedMsg: ({ params, result }) =>
+      "activeScreen" in result
+        ? `Folded device to ${targetLabel(params)}; it renders to screen ${result.activeScreen} (${result.screen.panel})`
+        : `Folded device to ${targetLabel(params)}; it is in device state ${result.deviceState}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to fold device to ${targetLabel(params)}: ${failureSignal.error_code}`,
+  },
+  description: `Move the hinge of a foldable iOS simulator (the iPhone Duo) or Android emulator (a Pixel Fold or generic foldable AVD) to a \`posture\` (closed, half-open, open) or to an \`angle\` (0-180°). The tool returns when the device accepts input again, so the next tap lands.
+Use when you must see or test an app in a different posture: closed shows the cover panel, half-open and open show the inner panel. \`list-devices\` marks foldable devices with \`foldable: true\`. To turn a device without a fold, use \`rotate\`.
+All tools use the active panel (the panel that shows the UI), also after a fold made outside argent. The coordinates and the screenshot size change with the panel. Before you tap, read the element tree in this result or run \`describe\` again.
+iOS: unfolded, the UI is landscape, as on a rotated iPhone. A fold between two angles that are not closed or open can keep the current panel. To change panels, fold to closed or open.
+iOS returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAngle, warning? }. screen names the active panel and gives its size in pixels. posture is set only at 0°, 120° and 180°. warning is set when argent cannot find the active panel, or when the device did not change to the expected panel.
+Android returns { posture?, deviceState, hingeAngle?, warning? }. deviceState is the state Android committed (CLOSED, HALF_OPENED, OPENED), and posture is the matching preset. A lock screen the fold raises is dismissed; warning is set when it cannot be, or when a lock screen is showing or the screen is off after the fold. On a generic foldable AVD, closed shows only the left part of the display and describe frames do not match tap coordinates; use a Pixel Fold AVD to test the cover panel.
+Fails if the device is not foldable, is a remote simulator or a physical Android device.`,
+  searchHint: "fold unfold hinge foldable duo posture open closed half-open panel screen",
+  zodSchema,
+  capability,
+  // The Android hinge is moved through `adb`, so no simulator-server is
+  // spawned for it; the server follows the new panel on its own.
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    return device.platform === "android" ? {} : { simulatorServer: simulatorServerRef(device) };
+  },
+  execute: dispatchByPlatform<{ simulatorServer: SimulatorServerApi }, unknown, Params, Result>({
+    toolId: "fold",
+    capability,
+    ios: iosImpl,
+    android: androidImpl,
+  }),
 };

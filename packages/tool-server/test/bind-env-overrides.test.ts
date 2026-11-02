@@ -43,11 +43,20 @@ vi.mock("@argent/registry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/registry")>();
   return { ...actual, attachRegistryLogger: vi.fn() };
 });
+const configMock = vi.hoisted(() => ({
+  adbServerPort: null as number | null,
+}));
+
 // Pinned off so a developer who enables the documented `tool-server-event-log`
-// flag does not have their real event log truncated by these runs.
+// flag does not have their real event log truncated by these runs, and so their
+// own `android.adbServerPort` does not reach the environment these runs share.
 vi.mock("@argent/configuration-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/configuration-core")>();
-  return { ...actual, isFlagEnabled: vi.fn(() => false) };
+  return {
+    ...actual,
+    isFlagEnabled: vi.fn(() => false),
+    getAndroidAdbServerPort: vi.fn(() => configMock.adbServerPort),
+  };
 });
 vi.mock("../src/utils/setup-registry", () => ({
   createRegistry: vi.fn(() => registryMock),
@@ -116,5 +125,51 @@ describe("tool-server bind overrides", () => {
     process.env.ARGENT_PORT = " 43123 ";
 
     expect(await startAndReadBind()).toEqual({ port: 43123, host: "0.0.0.0" });
+  });
+});
+
+describe("tool-server android.adbServerPort", () => {
+  const ADB_ENV = ["ANDROID_ADB_SERVER_PORT", "ADB_SERVER_SOCKET"] as const;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    saved = Object.fromEntries(ADB_ENV.map((name) => [name, process.env[name]]));
+    for (const name of ADB_ENV) delete process.env[name];
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+    configMock.adbServerPort = null;
+    for (const name of ADB_ENV) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  });
+
+  it("puts the configured port in the environment before serving", async () => {
+    configMock.adbServerPort = 5038;
+
+    await startAndReadBind();
+
+    expect(process.env.ANDROID_ADB_SERVER_PORT).toBe("5038");
+  });
+
+  it("leaves a port the environment already names", async () => {
+    configMock.adbServerPort = 5038;
+    process.env.ANDROID_ADB_SERVER_PORT = "6000";
+
+    await startAndReadBind();
+
+    expect(process.env.ANDROID_ADB_SERVER_PORT).toBe("6000");
+  });
+
+  it("sets nothing when the key is unset", async () => {
+    await startAndReadBind();
+
+    expect(process.env.ANDROID_ADB_SERVER_PORT).toBeUndefined();
   });
 });

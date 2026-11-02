@@ -98,6 +98,7 @@ export function parseLinkFlags(argv: string[]): LinkFlags {
   // Explicit flags refine the target.
   if (options.host !== undefined) flags.host = validateHost(options.host as string);
   if (options.port !== undefined) flags.port = validateConnectPort(options.port as string);
+  if (options.token === "") throw new StartFlagError("--token requires a value");
   if (options.token !== undefined) flags.token = options.token as string;
 
   return flags;

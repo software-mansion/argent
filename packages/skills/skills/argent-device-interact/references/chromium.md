@@ -21,4 +21,4 @@ Note: a cross-process navigation (some redirects) can swap a tab's underlying CD
 
 `chromium-storage` reads/writes Web Storage for the active page: `store=local|session`, `action=get` (one `key` or all entries), `set`, `remove`, `clear`.
 
-Both are per-origin / active-tab. Handy for seeding auth before a flow or asserting app state after one.
+Both are per-origin / active-tab. Handy for seeding auth before an e2e test or asserting app state after one.

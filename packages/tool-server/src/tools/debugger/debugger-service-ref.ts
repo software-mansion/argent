@@ -10,9 +10,10 @@ import { metroPort } from "../../utils/debugger/metro-port";
  *
  * Vega (Fire TV) works because everything in this matrix needs only
  * `Runtime.evaluate`, which the legacy Hermes inspector in its RN 0.72 fork
- * serves — the network inspector included, since it monkey-patches `fetch`
- * rather than using the CDP `Network` domain. Requires a Debug `.vpkg` + Metro
- * reachable from the device; see the argent-tv-interact skill.
+ * serves — the network inspector included, since it patches `XMLHttpRequest`
+ * (React Native's `fetch` runs over it) in the JS runtime rather than using the
+ * CDP `Network` domain. Requires a Debug `.vpkg` + Metro reachable from the
+ * device; see the argent-tv-interact skill.
  */
 export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
   apple: { simulator: true },

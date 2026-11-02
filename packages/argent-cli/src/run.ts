@@ -9,7 +9,12 @@ import {
   type MaterializedImage,
 } from "@argent/tools-client";
 import { init as telemetryInit, shutdown as telemetryShutdown, track } from "@argent/telemetry";
-import { FAILURE_CODES, type FailureCode, type FailureKind } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  canonicalToolId,
+  type FailureCode,
+  type FailureKind,
+} from "@argent/registry";
 import {
   parseFlags,
   formatSchemaUsage,
@@ -154,8 +159,12 @@ async function trackRunFailure(
     error_kind: FailureKind;
   }
 ): Promise<void> {
+  // Record the canonical id, as tool:fail does, so a call by a former id
+  // (flow-execute) counts under the tool it reached.
+  const tool = toolName ? canonicalToolId(toolName) : toolName;
   track("cli:run_fail", {
-    tool: safeToolName(toolName),
+    tool: safeToolName(tool),
+    ...(tool !== toolName ? { alias_used: true } : {}),
     duration_ms: performance.now() - startedAt,
     ...signal,
   });

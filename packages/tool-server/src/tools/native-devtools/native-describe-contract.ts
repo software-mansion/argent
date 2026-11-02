@@ -12,7 +12,7 @@ const nativeDescribePointSchema = z.object({
   y: z.number().finite(),
 });
 
-export const nativeDescribeElementSchema = z
+const nativeDescribeElementSchema = z
   .object({
     frame: nativeDescribeRectSchema,
     tapPoint: nativeDescribePointSchema,

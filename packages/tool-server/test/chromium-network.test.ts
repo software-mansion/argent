@@ -219,6 +219,7 @@ describe("view-network-logs (chromium branch)", () => {
       pageIndex: "latest",
     })) as string;
     expect(out).toMatch(/No network traffic captured/);
+    expect(out).not.toContain("\u2014");
   });
 });
 
@@ -256,6 +257,71 @@ describe("view-network-request-details (chromium branch)", () => {
     expect(details.response.body).toBe('{"ok":true}');
   });
 
+  it.each([
+    {
+      kind: "a PNG",
+      mimeType: "image/png",
+      bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a],
+      omitted: true,
+    },
+    {
+      kind: "octet-stream",
+      mimeType: "application/octet-stream",
+      bytes: [0, 1, 2, 0xff, 0xfe],
+      omitted: true,
+    },
+    { kind: "UTF-8 text", mimeType: "text/plain", bytes: [...Buffer.from("café")], omitted: false },
+  ])("returns $kind body sent as base64 as text only when it is UTF-8", async (c) => {
+    const record = rec({
+      requestId: "r3",
+      url: "https://x.test/b",
+      status: 200,
+      mimeType: c.mimeType,
+    });
+    const body = Buffer.from(c.bytes).toString("base64");
+    const send = vi.fn(async () => ({ body, base64Encoded: true }));
+    const services = {
+      chromium: { cdp: { send }, server: { network: { get: () => record } } },
+    } as never;
+
+    const details = (await networkRequestTool.execute(services, {
+      device_id: "chromium-cdp-9222",
+      port: 8081,
+      requestId: "r3",
+      includeBody: true,
+    })) as { response: { body?: string } };
+
+    expect(details.response.body).toBe(
+      c.omitted ? `[body omitted: binary ${c.mimeType}, ${c.bytes.length} bytes]` : "café"
+    );
+  });
+
+  it.each([
+    { size: 1000, cut: false, returns: "whole, as it is at the 1000-char limit" },
+    { size: 1001, cut: true, returns: "cut to 1000 chars with its size, one char past the limit" },
+  ])("returns a request body of $size chars $returns", async ({ size, cut }) => {
+    const postData = "p".repeat(size);
+    const record = rec({ requestId: "r2", method: "POST", url: "https://x.test/api", postData });
+    const services = {
+      chromium: { cdp: { send: vi.fn() }, server: { network: { get: () => record } } },
+    } as never;
+
+    const details = (await networkRequestTool.execute(services, {
+      device_id: "chromium-cdp-9222",
+      port: 8081,
+      requestId: "r2",
+      includeBody: true,
+    })) as { request: { postData?: string } };
+
+    if (cut) {
+      expect(details.request.postData).toBe(
+        `[TRUNCATED: first 1000 chars shown, full size: ${size} chars]\n${"p".repeat(1000)}...`
+      );
+    } else {
+      expect(details.request.postData).toBe(postData);
+    }
+  });
+
   it("returns an error string when the requestId is unknown", async () => {
     const services = {
       chromium: { cdp: { send: vi.fn() }, server: { network: { get: () => undefined } } },
@@ -267,5 +333,26 @@ describe("view-network-request-details (chromium branch)", () => {
       includeBody: true,
     });
     expect(out).toMatch(/not found/);
+  });
+
+  it.each(["false", "0", "true"])("rejects a string includeBody %j", (value) => {
+    const result = networkRequestTool.zodSchema!.safeParse({
+      device_id: "chromium-cdp-9222",
+      requestId: "r1",
+      includeBody: value,
+    });
+
+    expect(result.error?.issues).toMatchObject([{ code: "invalid_type", path: ["includeBody"] }]);
+  });
+
+  it.each([true, false])("accepts a boolean includeBody %j", (value) => {
+    const result = networkRequestTool.zodSchema!.safeParse({
+      device_id: "chromium-cdp-9222",
+      requestId: "r1",
+      includeBody: value,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.includeBody).toBe(value);
   });
 });

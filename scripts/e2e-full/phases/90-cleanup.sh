@@ -31,10 +31,8 @@ run_phase() {
   # shared install, pass `devices`.
   if server_running; then
     run_tool stop-all-simulator-servers '{}' >/dev/null 2>&1 && pass "$P" stop-all-simulator-servers teardown || skip "$P" stop-all-simulator-servers teardown "none running"
-    run_tool stop-metro '{}' >/dev/null 2>&1 && pass "$P" stop-metro teardown || skip "$P" stop-metro teardown "no metro"
   else
     skip "$P" stop-all-simulator-servers teardown "no reachable tool-server"
-    skip "$P" stop-metro teardown "no reachable tool-server"
   fi
 
   # Electron spawned by 40-chromium.
@@ -48,7 +46,7 @@ run_phase() {
     kill "$E2E_HTTP_PID" 2>/dev/null || true
   fi
 
-  # Metro started by the RN tier.
+  # Metro started by the RN tier, by pid: stop-metro kills whatever serves the port.
   if [ -n "${E2E_METRO_PID:-}" ] && kill -0 "$E2E_METRO_PID" 2>/dev/null; then
     kill "$E2E_METRO_PID" 2>/dev/null || true
     info "killed metro pid $E2E_METRO_PID"

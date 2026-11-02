@@ -121,6 +121,7 @@ export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>,
 Returns a markdown table of the top re-rendering components. No profiling session required; works on a live connected app.
 Use when you want a quick snapshot of render counts without a full profiling session.
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
+  readOnly: true,
   zodSchema,
   // RN-only: queries the React DevTools backend hook on the live runtime.
   capability: RN_ONLY_TOOL_CAPABILITY,

@@ -83,4 +83,26 @@ describe("invokeSubTool", () => {
     await expect(invokeSubTool(registry, ctx, "gesture-tap", {})).rejects.toThrow("boom");
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it("forwards the client's secrets to a sub-tool, with and without a recorder", async () => {
+    const clientSecrets = new Map([["APP_PASSWORD", "hunter2"]]);
+    const registry = mockRegistry();
+    const recordChildInvocation = vi.fn((_id: string) => vi.fn());
+
+    await invokeSubTool(
+      registry,
+      { artifacts: {}, clientSecrets } as unknown as ToolContext,
+      "keyboard",
+      {}
+    );
+    await invokeSubTool(
+      registry,
+      { artifacts: {}, clientSecrets, recordChildInvocation } as unknown as ToolContext,
+      "keyboard",
+      {}
+    );
+
+    expect(vi.mocked(registry.invokeTool).mock.calls[0]![2]).toEqual({ clientSecrets });
+    expect(vi.mocked(registry.invokeTool).mock.calls[1]![2]).toMatchObject({ clientSecrets });
+  });
 });

@@ -152,6 +152,12 @@ describe("getResolvedToolsUrl — precedence chain", () => {
     expect(resolved.shadowedLink).toBeUndefined();
   });
 
+  it("strips trailing slashes from ARGENT_TOOLS_URL, so `${url}/tools` has one slash", async () => {
+    process.env.ARGENT_TOOLS_URL = "http://override.example:9000/proxy//";
+    const resolved = await linkConfig.getResolvedToolsUrl();
+    expect(resolved.url).toBe("http://override.example:9000/proxy");
+  });
+
   it("env wins over link, AND reports the shadowed link so callers can warn", async () => {
     await linkConfig.writeLinkConfig(sampleConfig);
     process.env.ARGENT_TOOLS_URL = "http://override.example:9000";

@@ -57,7 +57,7 @@ const DEVICE_BIND_LIST_KEYS = ["devices"] as const;
 const DEVICE_ARG_KEYS = DEVICE_BIND_KEYS;
 
 interface RawDevice {
-  platform: FlowPlatform;
+  platform: FlowPlatform | "harmony";
   state?: string;
   udid?: string;
   serial?: string;
@@ -68,7 +68,11 @@ interface RawDevice {
 
 function deviceEntryId(d: RawDevice): string | undefined {
   // A remote row carries `udid` too (the `remote:`-prefixed id), not `serial`.
-  if (d.platform === "ios" || d.platform === "ios-remote") return d.udid;
+  // `harmony` is not auto-resolvable (`isBooted` has no arm) but may be named:
+  // coordinate steps and `snapshot` run there.
+  if (d.platform === "ios" || d.platform === "ios-remote" || d.platform === "harmony") {
+    return d.udid;
+  }
   if (d.platform === "chromium") return d.id;
   return d.serial; // android, vega
 }

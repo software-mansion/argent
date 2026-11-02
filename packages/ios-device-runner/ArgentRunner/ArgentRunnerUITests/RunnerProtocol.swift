@@ -13,6 +13,7 @@ enum CommandKind: String, Codable {
     case tap
     case longPress
     case drag
+    case touchPaths
     case type
     case keyboardReturn
     case keyboardDelete
@@ -30,8 +31,8 @@ extension CommandKind {
         switch self {
         case .status, .viewport, .snapshot, .screenshot:
             return true
-        case .tap, .longPress, .drag, .type, .keyboardReturn, .keyboardDelete,
-            .button, .shutdown:
+        case .tap, .longPress, .drag, .touchPaths, .type, .keyboardReturn,
+            .keyboardDelete, .button, .shutdown:
             return false
         }
     }
@@ -41,8 +42,8 @@ extension CommandKind {
     /// runner's own host app.
     var requiresAppBundleId: Bool {
         switch self {
-        case .viewport, .tap, .longPress, .drag, .type, .keyboardReturn,
-            .keyboardDelete, .snapshot:
+        case .viewport, .tap, .longPress, .drag, .touchPaths, .type,
+            .keyboardReturn, .keyboardDelete, .snapshot:
             return true
         case .status, .button, .screenshot, .shutdown:
             return false
@@ -73,7 +74,7 @@ extension CommandKind {
         // never reports quiescent stalls the wait until XCTest gives up and
         // synthesizes the event anyway, and a shorter budget would abandon a
         // command that still completes.
-        case .tap, .longPress, .drag: return 75
+        case .tap, .longPress, .drag, .touchPaths: return 75
         default: return 30
         }
     }
@@ -88,6 +89,20 @@ enum DeviceButton: String, Codable {
     case volumeUp
     case volumeDown
     case actionButton
+}
+
+/// One point on a finger's path: an absolute point in the app's coordinate
+/// space, and the time since the gesture started.
+struct TouchWaypoint: Codable {
+    let x: Double
+    let y: Double
+    let tMs: Double
+}
+
+/// One finger of a `touchPaths` command: it touches down at the first
+/// waypoint, moves through the rest in order, and lifts after the last.
+struct TouchFinger: Codable {
+    let points: [TouchWaypoint]
 }
 
 struct CommandRequest: Codable {
@@ -119,6 +134,8 @@ struct CommandRequest: Codable {
     /// velocity is near zero and the scroll view does not fling. Mirrors the
     /// simulator's ease-out `settle` swipe.
     let settle: Bool?
+    /// `touchPaths`: one path per finger, all played at once.
+    let fingers: [TouchFinger]?
     /// `type`: the text delivered to the focused input.
     let text: String?
     /// `button`: which hardware button to press.

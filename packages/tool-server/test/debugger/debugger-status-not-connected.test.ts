@@ -248,7 +248,7 @@ describe("debugger-status not-connected results", () => {
     expect(result.deviceName).toBe("MockDevice");
     expect(result.appName).toBe("React Native (mock)");
     expect(result.isNewDebugger).toBe(true);
-    expect(result.loadedScripts).toBeGreaterThanOrEqual(1);
+    expect(result.loadedScripts).toBe(0);
     expect(result.enabledDomains).toContain("Runtime");
     expect(result.sourceMapReady).toBe(true);
 

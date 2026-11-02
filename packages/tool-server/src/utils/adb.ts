@@ -263,7 +263,7 @@ export async function adbExecOutBinary(
   return runAdbBinary(["-s", serial, "exec-out", shellCommand], options);
 }
 
-interface AndroidDevice {
+export interface AndroidDevice {
   serial: string;
   state: string;
   isEmulator: boolean;
@@ -385,6 +385,47 @@ async function readAvdName(serial: string): Promise<string | null> {
   return modern.trim() || legacy.trim() || null;
 }
 
+export type EmulatorConsoleAvdName =
+  | { status: "ok"; avdName: string }
+  // Nothing listens on the console port: qemu has exited (adb may still list the
+  // serial for up to a second), so the port is free for the next emulator.
+  | { status: "unreachable" }
+  // Timed out or answered something else: alive but not responding (frozen,
+  // shutting down), or an unexpected console.
+  | { status: "unknown" };
+
+/**
+ * Ask an emulator's console for its AVD name (`adb -s <serial> emu avd name`).
+ *
+ * Unlike getprop, the console answers within milliseconds from the moment the
+ * serial is listed, while adb still reports it `offline`, and it tells a serial
+ * nothing is behind any more ("Connection refused") apart from one that is alive
+ * but not answering. `adb emu` connects to the console port straight from the
+ * serial, so it works whether or not the adb server still lists the device.
+ */
+export async function readEmulatorConsoleAvdName(
+  serial: string,
+  options: { timeoutMs?: number } = {}
+): Promise<EmulatorConsoleAvdName> {
+  try {
+    const { stdout } = await runAdb(["-s", serial, "emu", "avd", "name"], {
+      timeoutMs: options.timeoutMs ?? 2_000,
+    });
+    // "<name>\nOK\n" on success; "KO: …" when the console rejects the command.
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const name = lines.find((line) => line !== "OK" && !line.startsWith("KO"));
+    if (name && lines.includes("OK")) return { status: "ok", avdName: name };
+    return { status: "unknown" };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/Connection refused/i.test(message)) return { status: "unreachable" };
+    return { status: "unknown" };
+  }
+}
+
 /**
  * Detect whether an Android target is a TV (leanback) device — TV AVDs share the
  * `emulator-NNNN` serial shape with phones, so only a device capability can tell
@@ -475,10 +516,14 @@ async function resolveRuntimeKindCached(
  * Readiness goes through the cheap `adb devices` listing rather than the full
  * `listAndroidDevices` enrichment. The avdName getprop is read only for
  * `emulator-NNNN` serials, where it detects a reused console slot; a physical
- * serial is never reclaimed and has no qemu avd_name.
+ * serial is never reclaimed and has no qemu avd_name. `devicesTimeoutMs` bounds
+ * that listing, as in `listAndroidSerials`.
  */
-export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
-  const serials = await listAndroidSerials();
+export async function getAndroidRuntimeKind(
+  serial: string,
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<"mobile" | "tv" | undefined> {
+  const serials = await listAndroidSerials(options);
   const ready = serials.find((d) => d.serial === serial && d.state === "device");
   if (!ready) {
     // Gone / offline: drop any cached verdict so a future occupant of this
@@ -491,8 +536,11 @@ export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | 
 }
 
 /** True when the given Android serial is an Android TV (leanback) target. */
-export async function isAndroidTv(serial: string): Promise<boolean> {
-  return (await getAndroidRuntimeKind(serial)) === "tv";
+export async function isAndroidTv(
+  serial: string,
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<boolean> {
+  return (await getAndroidRuntimeKind(serial, options)) === "tv";
 }
 
 /**
@@ -778,6 +826,23 @@ export async function resolveAvdPath(avdName: string): Promise<string | null> {
     }
   }
   return null;
+}
+
+/**
+ * True iff the AVD's profile has a hinge (`hw.sensor.hinge` in its
+ * `config.ini`): the Pixel folds and the generic foldables. Read from disk, so
+ * it answers for a stopped AVD and costs a running one no `adb` round-trip.
+ */
+export async function isFoldableAvd(avdName: string): Promise<boolean> {
+  const { readFile } = await import("node:fs/promises");
+  const avdPath = await resolveAvdPath(avdName);
+  if (!avdPath) return false;
+  try {
+    const hinge = parseIni(await readFile(`${avdPath}/config.ini`, "utf-8"))["hw.sensor.hinge"];
+    return hinge === true || hinge === "yes" || hinge === "true";
+  } catch {
+    return false;
+  }
 }
 
 /**
