@@ -928,6 +928,15 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         "not_found"
       );
     }
+    if (!opts.appPath && tracked && !fs.existsSync(appPath)) {
+      throw macosFailure(
+        `argent last started ${bundleId} from ${appPath}, which no longer exists. Pass the ` +
+          `.app path to boot-device as macosAppPath.`,
+        FAILURE_CODES.MACOS_APP_PATH_INVALID,
+        "macos_app_launch",
+        "not_found"
+      );
+    }
     const info = await inspectMacosApp(appPath);
     if (info.bundleId !== bundleId) {
       throw refuse(

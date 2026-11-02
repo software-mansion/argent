@@ -198,6 +198,7 @@ After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 secon
 - The app runs already with the Argent library from a different bundle path, and `force` is not `true`. Argent does not return that copy and does not replace it, because the copy can belong to another agent.
 - The Argent library does not connect within 20 seconds, for example because something blocks the main thread of the app while it launches. Argent stops the app again, and the error shows the last lines of the app log.
 - The app shows no window that Argent can drive: a menu bar app without a standard window, or an app that shows only panels or borderless windows. Argent stops the app again.
+- With `udid`, the path of the last start no longer exists. The error tells you to give `macosAppPath`. This also applies to `launch-app` and `restart-app`.
 
 `force` quits a copy of the same build that runs without the Argent library, for example a copy that Xcode Run started. The unsaved changes of that copy are lost. When a forced start fails because of the bundle or because a different build runs, the app that Argent runs continues to run.
 
