@@ -292,10 +292,9 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("tap_y = frame.y + frame.height / 2");
   });
 
-  // Physical iOS: the XCUITest runner is single-finger only, so the header
-  // must not recommend gesture-pinch (agents follow it verbatim, straight into
-  // a capability reject) and must say where zoom lives instead.
-  it("omits gesture-pinch from the xcuitest-runner header and names the alternative", () => {
+  // Physical iOS plays two fingers through the runner's touch synthesizer, so
+  // the header recommends gesture-pinch there like on every other source.
+  it("recommends gesture-pinch in the xcuitest-runner header", () => {
     const root: DescribeNode = {
       role: "Application",
       frame: { x: 0, y: 0, width: 1, height: 1 },
@@ -310,11 +309,10 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "xcuitest-runner" });
     expect(out).toContain("Source: xcuitest-runner");
     expect(out).toContain("Mode: nested");
-    expect(out).not.toContain("gesture-pinch");
     expect(out).toContain(
-      "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
-        "No two-finger gestures on physical iOS."
+      "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
+    expect(out).not.toContain("No two-finger gestures");
   });
 
   // format-tree.ts is deployed shared code: the xcuitest-runner branch above
