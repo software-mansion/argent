@@ -9,15 +9,18 @@ import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 /**
  * Makes sure the app of the device runs with the argent library loaded, in
- * the background. An app argent already runs is left as it is; a copy that
- * runs without the library is never quit here.
+ * the background. A stopped app starts with `launchArgs`, else with the
+ * arguments of its last start. An app argent already runs is left as it is,
+ * and the note says when it runs with other arguments; a copy that runs
+ * without the library is never quit here.
  */
 export const macosImpl: PlatformImpl<{ macosApp: MacosAppApi }, LaunchAppParams, LaunchAppResult> =
   {
     handler: async (services, params, device) => {
       const bundleId = assertLaunchTargetsDevice(params.bundleId, device);
-      // No `args`: a stopped app starts again with the arguments of its last start.
-      const { appPath, args, alreadyRunning, note } = await services.macosApp.launch();
+      const { appPath, args, alreadyRunning, note } = await services.macosApp.launch({
+        args: params.launchArgs,
+      });
       if (!alreadyRunning) {
         return { launched: true, bundleId, appPath, args, ...(note ? { note } : {}) };
       }
@@ -27,6 +30,6 @@ export const macosImpl: PlatformImpl<{ macosApp: MacosAppApi }, LaunchAppParams,
         windows && !windows.some((w) => w.isReference === true)
           ? `The app was already running with the argent library. ${MACOS_NO_WINDOW_MESSAGE}`
           : "The app was already running with the argent library; use restart-app for a new process.";
-      return { launched: true, bundleId, appPath, args, note: shown };
+      return { launched: true, bundleId, appPath, args, note: note ? `${note} ${shown}` : shown };
     },
   };
