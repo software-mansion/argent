@@ -54,6 +54,8 @@ describe("argent server logs -f exit code", () => {
     ["SIGTERM", 143],
     ["SIGINT", 130],
     ["SIGKILL", 137],
+    ["SIGPIPE", 141],
+    ["SIGQUIT", 131],
   ] as const)("exits 128+signo when tail is killed by %s", async (signal, expected) => {
     expect(await exitCodeWhenTailExits(null, signal)).toBe(expected);
   });

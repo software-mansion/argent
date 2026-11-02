@@ -1,7 +1,7 @@
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { homedir, networkInterfaces } from "node:os";
+import { constants, homedir, networkInterfaces } from "node:os";
 import { spawn } from "node:child_process";
 import {
   killToolServer,
@@ -464,8 +464,7 @@ async function runForeground(
 }
 
 function signalNumber(signal: NodeJS.Signals): number | null {
-  const map: Record<string, number> = { SIGINT: 2, SIGTERM: 15, SIGHUP: 1, SIGKILL: 9 };
-  return map[signal] ?? null;
+  return constants.signals[signal] ?? null;
 }
 
 function printServerHelp(): void {
