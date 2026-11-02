@@ -247,8 +247,9 @@ export async function stageLibraryFor(
     `${info.bundleId} is a Debug build with the hardened runtime, signed by the team ` +
       `${teamId}, so macOS loads the argent library into it only when the same team signed ` +
       `the library. Either build it without the hardened runtime (ENABLE_HARDENED_RUNTIME = NO ` +
-      `in the Debug configuration), or sign argent's library with your own Apple Development ` +
-      `identity of team ${teamId}:\n` +
+      `in the Debug configuration), add the entitlement ` +
+      `com.apple.security.cs.disable-library-validation to the Debug build, or sign argent's ` +
+      `library with your own Apple Development identity of team ${teamId}:\n` +
       `codesign --force --sign "<identity of team ${teamId}>" ` +
       `${files.map((file) => `"${file}"`).join(" ")}\n` +
       `then start the app again. Signing uses the keychain, so the user runs this command, ` +

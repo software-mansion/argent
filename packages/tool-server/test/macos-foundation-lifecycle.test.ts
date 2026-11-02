@@ -1446,6 +1446,7 @@ describe("stageMacosLibraries", () => {
       const message = (err as Error).message;
       expect(message).toContain(`signed by the team ${TEAM}`);
       expect(message).toContain("ENABLE_HARDENED_RUNTIME = NO in the Debug configuration");
+      expect(message).toContain("com.apple.security.cs.disable-library-validation");
       expect(message).toContain(
         `codesign --force --sign "<identity of team ${TEAM}>" ` +
           `"${folder}/libArgentInjectionBootstrap.dylib" "${folder}/libNativeDevtoolsMacos.dylib"`
