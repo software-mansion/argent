@@ -4,6 +4,7 @@ import {
   MACOS_FALLBACK_HINT,
   MACOS_JUDGING_LIMITS,
   MACOS_LOCKED_HINT,
+  MACOS_MINIMIZED_HINT,
   describeMacos,
   projectMacosDescribeTree,
   readMacosTree,
@@ -627,6 +628,16 @@ describe("queryMacosTree", () => {
         ["Web.tree", { webView: 0, maxItems: max }],
       ]);
     }
+  });
+
+  it.each([
+    ["the in-app tree", {}],
+    ["the locked-Mac walk", { source: "fallback", locked: true }],
+  ])("says on %s that the only window is minimized, and nothing else", async (_name, read) => {
+    const opts = { trees: [{ ...read, windows: [], minimized: true }] };
+    expect((await bothTrees(opts)).described.hint).toBe(MACOS_MINIMIZED_HINT);
+    const data = await queryMacosTree(macosRegistry(fakeMacosLibrary(opts).api), device);
+    expect(data.hint).toBe(MACOS_MINIMIZED_HINT);
   });
 
   it.each<[string, LibraryOpts, string, string, string | RegExp]>([

@@ -192,6 +192,8 @@ export interface MacosTreeRead {
   source: Extract<DescribeSource, "macos-devtools" | "macos-fallback">;
   /** The Mac was locked during a fallback read. */
   locked: boolean;
+  /** The app's only window is minimized, so the read has no window. */
+  minimized: boolean;
   truncated: boolean;
   unreachableCount: number;
   /** One message per web view whose `Web.tree` failed; its content is missing. */
@@ -666,6 +668,7 @@ export async function readMacosTree(
     bundleId: api.bundleId,
     source: raw.source === "fallback" ? "macos-fallback" : "macos-devtools",
     locked: raw.locked === true,
+    minimized: raw.minimized === true,
     truncated: raw.truncated === true,
     unreachableCount: finite(raw.unreachableCount) ?? 0,
     webErrors,
@@ -728,6 +731,9 @@ export const MACOS_LOCKED_HINT =
 export const MACOS_FALLBACK_HINT =
   "The app's accessibility tree is not available, so this tree comes from a fallback walk " +
   "that can miss elements a custom control draws and an open context menu.";
+export const MACOS_MINIMIZED_HINT =
+  "The app window is minimized, so this tree is empty, and taps, key presses and screenshots fail. " +
+  "To restore the window, choose it in the Window menu with menu-bar.";
 
 /** `tree` with the read's source and the hints about what the read could not show. */
 export function macosTreeData(
@@ -736,7 +742,8 @@ export function macosTreeData(
   extraHints: string[] = []
 ): DescribeTreeData {
   const hints: string[] = [];
-  if (read.source === "macos-fallback") {
+  if (read.minimized) hints.push(MACOS_MINIMIZED_HINT);
+  else if (read.source === "macos-fallback") {
     hints.push(read.locked ? MACOS_LOCKED_HINT : MACOS_FALLBACK_HINT);
   }
   if (read.truncated) {

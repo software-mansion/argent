@@ -138,6 +138,7 @@ Argent does not start an Electron app or a Chromium browser as a Mac app. Argent
 | An element is not in the tree                                                    | Give the element an accessibility identifier, or make a custom view an accessibility element.                                                                                                  |
 | A call times out while the app is paused in the debugger                         | Continue the app, then ask the agent to do the step again. The input of the call that timed out does not reach the app later.                                                                  |
 | A click or typed text has no effect                                              | Make sure that the window is not minimized. A minimized window does not receive input.                                                                                                         |
+| The tree says that the app window is minimized                                   | Ask the agent to choose the window in the Window menu, or click the window in the Dock.                                                                                                        |
 | A paste fails because the element does not accept text                           | Ask the agent to click the text field first.                                                                                                                                                   |
 
 ## Limits
