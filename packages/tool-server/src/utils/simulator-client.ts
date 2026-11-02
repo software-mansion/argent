@@ -887,7 +887,7 @@ function routeViaTransport(
   switch (cmd.cmd) {
     case "touch": {
       // Call sites speak the WebSocket protocol's snake_case second_x/second_y
-      // (null when absent); the proto encoder takes optional secondX/secondY.
+      // (null when absent); the SDK's InputMessage takes optional secondX/secondY.
       const sx = (cmd.second_x ?? cmd.secondX) as number | null | undefined;
       const sy = (cmd.second_y ?? cmd.secondY) as number | null | undefined;
       return transport.touch({

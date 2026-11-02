@@ -266,7 +266,7 @@ describe("gesture-tap on a dead cloud session", () => {
 
 /**
  * The remote instance builds its own `pressKey`, so it is the one input that
- * can miss `sendCommand` entirely. It did: it called `moq.sendControl` direct,
+ * can miss `sendCommand` entirely. It did: it hit the SDK directly,
  * which left `keyboard` on a dead cloud session throwing a bare SDK error
  * while a tap on the same session reported a classified failure.
  */

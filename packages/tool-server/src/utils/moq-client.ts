@@ -11,9 +11,12 @@ import { moqInfo, type MoqInfo } from "./sim-remote";
 
 const PUBLISH_PATH = "argent";
 
+/** Screenshots need `screenshot` for reply correlation; touch snapshots are the webui's path, not a tool's. */
+type ToolInput = Exclude<InputMessage, { type: "screenshot" | "touchState" }>;
+
 export interface MoqClient {
-  /** The SDK picks the track; its ordered track keeps Down/Up pairs from being reordered or dropped. */
-  sendInput(message: InputMessage): Promise<void>;
+  /** The SDK picks the track: ordered for anything with a Down/Up pair. */
+  sendInput(message: ToolInput): Promise<void>;
   screenshot(opts?: { scale?: number }): Promise<Buffer>;
   close(): Promise<void>;
 }
