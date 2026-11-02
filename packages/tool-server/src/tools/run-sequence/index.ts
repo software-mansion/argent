@@ -105,8 +105,7 @@ export function createRunSequenceTool(
     },
     description: `Execute multiple device interaction steps in a single call (iOS simulator or physical device, Android emulator, Apple TV / Android TV, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app).
 On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, and await-ui-element steps run; others fail at their own gate.
-<flag:macos-apps>On a Mac app only gesture-tap, gesture-scroll, gesture-drag, keyboard, paste, and await-ui-element steps run; others fail at their own gate.
-</flag:macos-apps>Use when you need sequential actions and do NOT need to observe the screen between them
+Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
 One screenshot is captured automatically after the whole sequence (not per step). Call screenshot separately only for a baseline BEFORE it, or to observe an intermediate step.
@@ -118,22 +117,22 @@ a prior tap), use individual tool calls instead.
 
 Allowed tools and their args (udid is auto-injected, do NOT include it in args):
 
-  gesture-tap:    { x: number, y: number, clickCount?: number<flag:macos-apps>, button?: "left"|"right"</flag:macos-apps> }<flag:macos-apps>  (button: macos only)</flag:macos-apps>                                                        [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
-  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [chromium<flag:macos-apps>/macos</flag:macos-apps> only]
-  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }   [chromium<flag:macos-apps>/macos</flag:macos-apps> only]
+  gesture-tap: { x: number, y: number, clickCount?: number<flag:macos-apps>, button?: "left"|"right"</flag:macos-apps> }<flag:macos-apps>  (button: macos only)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
+  gesture-swipe: { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
+  gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }  [chromium<flag:macos-apps>/macos</flag:macos-apps> only]
+  gesture-drag: { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number, momentum?: boolean }  [chromium<flag:macos-apps>/macos</flag:macos-apps> only]
   gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
-  gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
+  gesture-pinch: { centerX: number, centerY: number, startDistance: number, endDistance: number, endCenterX?: number, endCenterY?: number, angle?: number, durationMs?: number }  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-rotate: { centerX: number, centerY: number, radius?: number, radiusX?: number, radiusY?: number, startAngle: number, endAngle: number, durationMs?: number }  [ios/android]
-  button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android<flag:harmonyos>/harmony; harmony: home/back/power only</flag:harmonyos>]
-  keyboard:       { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only<flag:harmonyos>; harmony: enter/return, backspace/delete, space, arrow-left, arrow-right only</flag:harmonyos>)  [ios/android/chromium/vega/tv<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
-                  text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file (over a forward-secrets link, the client's first); credentials never enter agent context
-  paste:          { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP; keyboard otherwise)   [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
-  rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
-  shake:          { count?: number }                                                                                    [ios sim/android emu]
-  fold:           { posture?: "closed"|"half-open"|"open", angle?: 0-180 }  (one of posture/angle; the next step lands on the new panel, whose coordinates are different)  [foldable ios sim/android emu]
-  tv-remote:      { button: <remote button | array of them>, repeat?: number }                                          [apple tv/android tv/vega]
-                  buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute work on Android TV and Vega; rejected on the Apple TV simulator)
+  button: { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }  [ios/android<flag:harmonyos>/harmony; harmony: home/back/power only</flag:harmonyos>]
+  keyboard: { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only<flag:harmonyos>; harmony: enter/return, backspace/delete, space, arrow-left, arrow-right only</flag:harmonyos>)  [ios/android/chromium/vega/tv<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
+    text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file (over a forward-secrets link, the client's first); credentials never enter agent context
+  paste: { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP; keyboard otherwise)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
+  rotate: { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }  [ios/android]
+  shake: { count?: number }  [ios sim/android emu]
+  fold: { posture?: "closed"|"half-open"|"open", angle?: 0-180 }  (one of posture/angle; the next step lands on the new panel, whose coordinates are different)  [foldable ios sim/android emu]
+  tv-remote: { button: <remote button | array of them>, repeat?: number }  [apple tv/android tv/vega]
+    buttons: up/down/left/right/select/back/home/menu/playPause (+ rewind/fastForward/next/previous/volumeUp/volumeDown/mute work on Android TV and Vega; rejected on the Apple TV simulator)
   await-ui-element: { condition: "exists"|"visible"|"hidden"|"text", selector: {text?,identifier?,role?}, expectedText?, timeoutMs?, pollIntervalMs? }  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
 
 Example: scroll down three times (use gesture-scroll with positive deltaY on Chromium<flag:macos-apps> or a Mac app</flag:macos-apps>):
