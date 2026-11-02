@@ -26,6 +26,7 @@ import { describeMacosForJudging } from "../flows/flow-macos-tree";
 import {
   selectorSchema,
   assertText,
+  macFieldText,
   findAll,
   isVisible,
   firstInReadingOrder,
@@ -271,8 +272,12 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
     matches,
     params.textMatch,
     undefined,
-    params.udid !== undefined && resolveDevice(params.udid).platform === "macos"
+    isMacos(params)
   );
+}
+
+function isMacos(params: Params): boolean {
+  return params.udid !== undefined && resolveDevice(params.udid).platform === "macos";
 }
 
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
@@ -306,7 +311,7 @@ function timeoutNote(
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       base = first
-        ? `element matched but its text was "${assertText(first)}" (wanted to ${wanted} "${params.expectedText}")`
+        ? `element matched but its text was "${macFieldText(first, isMacos(params)) ?? assertText(first)}" (wanted to ${wanted} "${params.expectedText}")`
         : "no element matched the selector before timeout";
       break;
     }

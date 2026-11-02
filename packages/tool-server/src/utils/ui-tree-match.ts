@@ -564,6 +564,15 @@ const MAC_TEXT_FIELD_ROLES: ReadonlySet<string> = new Set([
   "AXComboBox",
 ]);
 
+// The text a `text` check reads off a Mac app's text field: only its value, ""
+// when it is empty, also when its placeholder is its label. Undefined for any
+// other element, and for a password field, whose text argent never reads.
+export function macFieldText(node: DescribeNode, macos: boolean): string | undefined {
+  return macos && MAC_TEXT_FIELD_ROLES.has(node.role) && !node.password
+    ? (node.value ?? "")
+    : undefined;
+}
+
 // Evaluated over ALL elements matching a selector. `visible` holds if ANY match
 // is on-screen; `hidden` only if NONE is; `text` reads the first VISIBLE match
 // in reading order (the first overall if none is visible), so a stale zero-area
@@ -590,20 +599,23 @@ export function evaluateCondition(
         firstInReadingOrder(matches.filter(isVisible), orientation) ??
         firstInReadingOrder(matches, orientation);
       if (first === undefined || expectedText === undefined) return false;
+      const field = macFieldText(first, textFieldsShowText);
+      if (field !== undefined) {
+        return textMatch === "matches"
+          ? uiTreeMatchInternals.createRegExp(expectedText).test(field)
+          : textMatches(field, expectedText, textMatch);
+      }
       // An element with no text at all reads as "", so `matches: '^$'` or a
       // negative lookahead can check an empty field. Selector matching still
       // skips empty text, or `.*` would select every unlabeled view. Not an
       // iOS text field: the simulator's view tree carries no typed text, so a
-      // filled field reads "" there (an empty one reads its placeholder). A Mac
-      // app's fields report their text (`textFieldsShowText`), so one with no
-      // value reads as "" also when its placeholder names it; never a password
-      // field, whose text argent never reads.
-      const empty = !assertText(first) && !nodeText(first);
+      // filled field reads "" there (an empty one reads its placeholder). Nor a
+      // Mac app's password field, whose text argent never reads.
       if (
         textMatch === "matches" &&
-        (textFieldsShowText
-          ? !first.password && (MAC_TEXT_FIELD_ROLES.has(first.role) ? !first.value : empty)
-          : first.role !== "AXTextField" && empty) &&
+        (textFieldsShowText ? !first.password : first.role !== "AXTextField") &&
+        !assertText(first) &&
+        !nodeText(first) &&
         uiTreeMatchInternals.createRegExp(expectedText).test("")
       ) {
         return true;

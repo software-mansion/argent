@@ -18,6 +18,7 @@ import {
   frameContains,
   isVisible,
   assertText,
+  macFieldText,
   nodeText,
   treeFingerprint,
   type Selector,
@@ -1855,7 +1856,8 @@ async function waitForCondition(
         lastMatches,
         // The read `lastMatches` came from is the last one that answered, and
         // only a read that answers writes the orientation.
-        readingOrientation(env)
+        readingOrientation(env),
+        env.device.platform === "macos"
       ) + blipNote,
   };
 }
@@ -2437,7 +2439,8 @@ function assertReason(
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>,
-  orientation: UiOrientation | undefined
+  orientation: UiOrientation | undefined,
+  macos: boolean
 ): string {
   const sel = describeSelector(selector);
   switch (condition) {
@@ -2463,8 +2466,9 @@ function assertReason(
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so quote both when they differ.
-      const shown = assertText(first);
-      const own = nodeText(first);
+      const field = macFieldText(first, macos);
+      const shown = field ?? assertText(first);
+      const own = field ?? nodeText(first);
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
       return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
     }

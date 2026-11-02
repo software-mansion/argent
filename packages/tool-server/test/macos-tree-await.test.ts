@@ -100,6 +100,32 @@ describe("await-ui-element on a Mac app", () => {
     expect(lib.calls[0]!.params).toEqual({ maxNodes: 12_000 });
   });
 
+  it("reads a text field's value only, never its label", async () => {
+    // swift.field is empty and labeled "SwiftUI field"; appkit.field holds "hello".
+    const empty = await awaitElement(
+      {},
+      {
+        selector: { identifier: "swift.field" },
+        condition: "text",
+        expectedText: "SwiftUI field",
+      }
+    );
+    expect(empty.result).toMatchObject({
+      success: false,
+      note: expect.stringContaining('its text was ""'),
+    });
+    const filled = await awaitElement(
+      {},
+      {
+        selector: { identifier: "appkit.field" },
+        condition: "text",
+        expectedText: "hello",
+        textMatch: "equals",
+      }
+    );
+    expect(filled.result.success).toBe(true);
+  });
+
   // <div data-testid="status"><span>Upload done</span></div> and
   // <button data-testid="save"><span>Save</span></button>
   const web = webTree([

@@ -239,13 +239,15 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "^$", [field], "matches", undefined, true)).toBe(true);
     const secret = { ...field, password: true };
     expect(evaluateCondition("text", "^$", [secret], "matches", undefined, true)).toBe(false);
-    // Also when its placeholder names it; a filled one does not.
+    // Every check reads only its value, also when its placeholder names it.
     const named = { ...field, label: "Email" };
     expect(evaluateCondition("text", "^$", [named], "matches", undefined, true)).toBe(true);
-    expect(evaluateCondition("text", "^Email$", [named], "matches", undefined, true)).toBe(true);
+    expect(evaluateCondition("text", ".+", [named], "matches", undefined, true)).toBe(false);
+    expect(evaluateCondition("text", "Email", [named], "contains", undefined, true)).toBe(false);
     const filled = { ...named, value: "a@b.c" };
     expect(evaluateCondition("text", "^$", [filled], "matches", undefined, true)).toBe(false);
-    expect(evaluateCondition("text", "^(?!.*@)", [filled], "matches", undefined, true)).toBe(false);
+    expect(evaluateCondition("text", "^a@b\\.c$", [filled], "matches", undefined, true)).toBe(true);
+    expect(evaluateCondition("text", "A@B.C", [filled], "equals", undefined, true)).toBe(true);
   });
 
   it("a regex text condition does not read a container with hoisted text as empty", () => {
