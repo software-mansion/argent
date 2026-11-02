@@ -500,9 +500,16 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     await registry.disposeService(urn);
     for (const closed of [await pending, await stopped.call("Echo").catch((e) => e)]) {
       expect(codeOf(closed)).toBe(FAILURE_CODES.MACOS_APP_CONNECTION_CLOSED);
-      expect((closed as Error).message).toMatch(/argent closed its connection.*Retry the call/);
+      // Typing may have reached the app already: a blind retry would type it twice.
+      expect((closed as Error).message).toMatch(
+        /argent closed its connection.*check the app's state with describe before you retry/
+      );
       expect((closed as Error).message).not.toMatch(/quit or crashed/);
     }
+    // A read is safe to send again.
+    const read = await stopped.call("Window.list").catch((e) => e);
+    expect(codeOf(read)).toBe(FAILURE_CODES.MACOS_APP_CONNECTION_CLOSED);
+    expect((read as Error).message).toMatch(/Retry the call: argent connects again/);
     await expect((await macosApp()).call("Echo")).resolves.toMatchObject({ pid });
 
     // The app itself going away is still reported as such.

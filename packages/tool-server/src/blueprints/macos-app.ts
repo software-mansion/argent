@@ -307,15 +307,22 @@ function parseHandshake(
   };
 }
 
+/** Requests that only read the app, so that sending them again changes nothing. */
+const READ_METHODS = /^(Accessibility|Screenshot|ViewHierarchy)\.|^Web\.tree$|\.list$/;
+
 /**
  * Another agent's stop-simulator-server, say, during this agent's call: nothing
- * is wrong with the app, and the next call reconnects.
+ * is wrong with the app, and the next call reconnects. Input that the call sent
+ * before the close (typing sends one request per character) stays in the app.
  */
-function closedByArgentError(bundleId: string): FailureError {
+function closedByArgentError(bundleId: string, method?: string): FailureError {
   return macosFailure(
     `argent closed its connection to ${bundleId} before the call was answered ` +
       `(the device's services were stopped or the connection was replaced). ` +
-      `Retry the call: argent connects again.`,
+      (method === undefined || READ_METHODS.test(method)
+        ? `Retry the call: argent connects again.`
+        : `Part of its input may have reached the app: check the app's state with describe ` +
+          `before you retry, so that nothing is typed or clicked twice. argent connects again.`),
     FAILURE_CODES.MACOS_APP_CONNECTION_CLOSED,
     "macos_app_connection",
     "unknown"
@@ -1130,9 +1137,16 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       opts: { timeoutMs?: number; runLate?: boolean } = {}
     ): Promise<T> {
       await lifecycle;
-      const ch = await ensureChannel();
-      const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-      return (await ch.request(method, params, timeoutMs, opts.runLate)) as T;
+      try {
+        const ch = await ensureChannel();
+        const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+        return (await ch.request(method, params, timeoutMs, opts.runLate)) as T;
+      } catch (err) {
+        if (errorCode(err) === FAILURE_CODES.MACOS_APP_CONNECTION_CLOSED) {
+          throw closedByArgentError(bundleId, method);
+        }
+        throw err;
+      }
     },
     launch: (opts = {}) => {
       const run = lifecycle.then(
