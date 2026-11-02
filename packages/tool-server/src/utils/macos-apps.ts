@@ -862,7 +862,8 @@ export async function findMacosAppByBundleId(bundleId: string): Promise<string |
 /**
  * A sandbox extension token for `filePath` (`argent-macos-helper
  * issue-extension`), for a sandboxed app to consume before it reads or writes
- * a file the agent chose. For a save panel, pass the parent directory.
+ * a file the agent chose. The token covers exactly that path: for a save panel,
+ * pass the file to write, with its parent folder resolved, never the folder.
  */
 export async function issueSandboxExtension(
   filePath: string,
