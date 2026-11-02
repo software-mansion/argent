@@ -352,7 +352,7 @@ describe("raw tool steps on a Mac app", () => {
   // macOS branch picks its backend by elimination (gesture-pinch would reach
   // the simulator-server), so the runner applies the tool's own capability.
   const capabilityOf = (tool: string) =>
-    tool === "gesture-pinch"
+    tool === "gesture-pinch" || tool === "fold"
       ? { apple: { simulator: true }, android: { emulator: true } }
       : { apple: { simulator: true }, macos: { app: true } };
 
@@ -369,6 +369,20 @@ describe("raw tool steps on a Mac app", () => {
     expect(result.steps[0]?.status).toBe("error");
     expect(result.steps[0]?.reason).toContain("no trackpad gesture input");
     expect(calls.map((c) => c.tool)).not.toContain("gesture-pinch");
+  });
+
+  it("refuses a fold: step as it refuses a raw fold, without invoking the tool", async () => {
+    const { registry, calls } = makeRegistry({ capabilityOf });
+    await writeFlow("fold", {
+      executionPrerequisite: "",
+      steps: [{ kind: "fold", posture: "closed" }],
+    });
+    const result = await run(registry, "fold", { device: MAC_DEVICE });
+    expect(result.steps[0]).toMatchObject({
+      status: "fail",
+      reason: "Tool 'fold' is not supported on macos app (no macos support declared).",
+    });
+    expect(calls.map((c) => c.tool)).not.toContain("fold");
   });
 
   it("runs a tool that supports Mac apps", async () => {

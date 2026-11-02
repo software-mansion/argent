@@ -2824,6 +2824,10 @@ async function runFold(
     ...(step.angle !== undefined ? { angle: step.angle } : {}),
   });
   try {
+    // The capability refusal a raw `tool: fold` step gets (see execLeafStep).
+    if (device.platform === "macos") {
+      assertSupported("fold", registry.getTool("fold")?.capability, device);
+    }
     const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
       activeScreen?: number;
       screen?: { panel?: string; width?: number; height?: number };
