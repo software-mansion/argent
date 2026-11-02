@@ -274,6 +274,9 @@ describe("gesture-scroll on a Mac app", () => {
     expect(calls.map((c) => [c.method, c.params])).toEqual([
       ["Input.scroll", { x: 0.5, y: 0.6, deltaY: 0.5 }],
     ]);
+    calls.length = 0;
+    await invoke("gesture-scroll", { x: 0.5, y: 0.6, deltaX: -0.25 });
+    expect(calls[0]!.params).toEqual({ x: 0.5, y: 0.6, deltaX: -0.25 });
   });
 });
 
