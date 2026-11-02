@@ -70,7 +70,7 @@ export function rotatePaths(
 /**
  * Turn a Down/Move/Up train into finger paths. The first finger follows every
  * event from the Down to the Up. The second follows the events that carry
- * x2/y2: it touches down at the first of them, which may be after the Down,
+ * x2/y2: it touches down at the first of them, which the runner needs on the Down,
  * and lifts after the last, which may be before the Up. Each event waits its
  * `delayMs` (default 16) after the one before, and the Down starts at 0.
  *

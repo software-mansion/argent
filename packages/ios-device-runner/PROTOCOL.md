@@ -100,10 +100,12 @@ launch, and launching is launch-app's job, never a command side effect):
   straight drag. `fingers` is 1 to 5 paths; a path is `points`, each `{x, y,
 tMs}`: an absolute point in the app's space and the time since the gesture
   began. A finger touches down at its first point, moves through the rest in
-  order and lifts 10 ms after its last, so a first point later than 0 is a
-  finger joining late. Times must be finite, within 0 to 30 000 ms, and must
-  not decrease along a path, or the reply is `INVALID_REQUEST`. The synthesizer
-  classes are private and are resolved by name at runtime. The record is built
+  order and lifts 10 ms after its last, so a finger can lift early. It cannot
+  join late: every first point must be at 0 ms, because XCTest taps a late
+  finger's join point once before its real touch-down. Times must be finite,
+  within 0 to 30 000 ms, and must not decrease along a path, or the reply is
+  `INVALID_REQUEST`. The synthesizer classes are private and are resolved by
+  name at runtime. The record is built
   with `initWithName:displayID:interfaceOrientation:` when XCTest and the main
   screen offer a display id, and with `initWithName:interfaceOrientation:`
   otherwise. When this Xcode has neither, or a path class or selector is

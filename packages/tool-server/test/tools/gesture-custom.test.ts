@@ -152,20 +152,36 @@ describe("gesture-custom on a physical iOS device", () => {
     expect(request.fingers[1].points).toHaveLength(3);
   });
 
-  it("lets a second finger join late and lift early", async () => {
+  it("lets a second finger lift early", async () => {
     const { run, services } = runnerRig();
     await gestureCustomTool.execute(services, {
       udid: DEVICE_UDID,
       events: [
-        { type: "Down", x: 0.4, y: 0.5 },
+        { type: "Down", x: 0.4, y: 0.5, x2: 0.6, y2: 0.5 },
         { type: "Move", x: 0.4, y: 0.5, x2: 0.6, y2: 0.5, delayMs: 50 },
-        { type: "Move", x: 0.3, y: 0.5, x2: 0.7, y2: 0.5, delayMs: 50 },
-        { type: "Up", x: 0.3, y: 0.5, delayMs: 50 },
+        { type: "Move", x: 0.4, y: 0.5, delayMs: 50 },
+        { type: "Up", x: 0.4, y: 0.5, delayMs: 50 },
       ],
     });
     const [[request]] = run.mock.calls.filter(([req]) => req.command === "touchPaths");
-    expect(request.fingers[0].points.map((p: { tMs: number }) => p.tMs)).toEqual([0, 50, 100, 150]);
-    expect(request.fingers[1].points.map((p: { tMs: number }) => p.tMs)).toEqual([50, 100]);
+    expect(request.fingers[0].points.map((p) => p.tMs)).toEqual([0, 50, 100, 150]);
+    expect(request.fingers[1].points.map((p) => p.tMs)).toEqual([0, 50]);
+  });
+
+  it("refuses a second finger that joins after the Down, without standing a runner up", async () => {
+    // XCTest taps a late finger's join point once before its real touch-down.
+    const lateJoin = [
+      { type: "Down" as const, x: 0.5, y: 0.2 },
+      { type: "Move" as const, x: 0.5, y: 0.2, x2: 0.4, y2: 0.55, delayMs: 500 },
+      { type: "Up" as const, x: 0.5, y: 0.2, x2: 0.4, y2: 0.55, delayMs: 500 },
+    ];
+    expect(gestureCustomTool.services({ udid: DEVICE_UDID, events: lateJoin })).toEqual({});
+
+    const { run, services } = runnerRig();
+    await expect(
+      gestureCustomTool.execute(services, { udid: DEVICE_UDID, events: lateJoin })
+    ).rejects.toThrow(/second finger down from the start: give the Down event both x2 and y2/);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("rejects a train that is not a Down, Moves, then an Up, before touching the device", async () => {
@@ -195,11 +211,11 @@ describe("gesture-custom on a physical iOS device", () => {
       gestureCustomTool.execute(services, {
         udid: DEVICE_UDID,
         events: [
-          { type: "Down", x: 0.4, y: 0.5, x2: 0.6 },
-          { type: "Up", x: 0.4, y: 0.5, x2: 0.6, y2: 0.5 },
+          { type: "Down", x: 0.4, y: 0.5, x2: 0.6, y2: 0.5 },
+          { type: "Up", x: 0.4, y: 0.5, x2: 0.6 },
         ],
       })
-    ).rejects.toThrow("Event 0 has only one of x2 and y2; give both or neither.");
+    ).rejects.toThrow("Event 1 has only one of x2 and y2; give both or neither.");
     expect(run.mock.calls.some(([req]) => req.command === "touchPaths")).toBe(false);
   });
 

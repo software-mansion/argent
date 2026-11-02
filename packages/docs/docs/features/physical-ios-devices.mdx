@@ -65,6 +65,7 @@ Each tool that does not exist on hardware fails with a `not supported on ios dev
 - Pinches, rotations and custom gestures with a second finger or several moves need the app drawn in portrait. A portrait-only app on a phone held sideways still counts.
 - These gestures use a part of XCTest that Apple does not document. A future Xcode can remove this part. Argent then reports these gestures as unavailable. Taps, swipes, long presses and drags keep working.
 - One of these gestures uses at most two fingers and lasts at most 30 seconds.
+- Both fingers of these gestures touch down when the gesture starts. Argent cannot add a finger to a gesture in progress.
 - The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
 - The agent presses the home, volume and action buttons only. The power button and the app switcher are not available.
 - The agent types text, Enter and Backspace only. Other named keys are not available.

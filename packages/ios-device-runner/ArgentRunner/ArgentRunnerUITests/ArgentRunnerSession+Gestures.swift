@@ -132,9 +132,9 @@ extension ArgentRunnerSession {
     /// so this goes through XCTest's event synthesizer (ArgentTouchSynthesizer).
     ///
     /// Wire points are absolute screen points, the same space `tap` and `drag`
-    /// take, and times are measured from the start of the gesture. A finger
-    /// whose first waypoint is later than 0 touches down late, which is how a
-    /// second finger joins a gesture already under way.
+    /// take, and times are measured from the start of the gesture. Every finger
+    /// touches down at 0: XCTest taps a late finger's join point once before
+    /// its real touch-down, in one event record or across two.
     func performTouchPaths(_ request: CommandRequest, on app: XCUIApplication)
         -> Envelope
     {
@@ -152,6 +152,13 @@ extension ArgentRunnerSession {
                 return .failure(
                     .invalidRequest,
                     "touchPaths finger \(index) has no waypoints"
+                )
+            }
+
+            guard finger.points[0].tMs == 0 else {
+                return .failure(
+                    .invalidRequest,
+                    "touchPaths finger \(index) touches down after the gesture starts; every finger must start at 0 ms"
                 )
             }
 
