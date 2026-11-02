@@ -341,7 +341,7 @@ A prepared answer that the next panel of its kind cannot take does not answer it
 - A folder for a panel that takes only files, or for a save panel.
 - A path with an extension that matches none of the formats of a save panel.
 
-A save panel can offer more than one file format (`allowedContentTypes` in the result of `list`). Then the extension of the path must match one of the formats. On macOS 15 and later, the extension also selects the format. On macOS 14, Argent does not select the format, and the app saves in the format that the panel selects when it opens.
+The extension of the path for a save panel must match one of the file formats of the panel (`allowedContentTypes` in the result of `list`), also when the panel has only one format. When the panel has more than one format, on macOS 15 and later, the extension also selects the format. On macOS 14, Argent does not select the format, and the app saves in the format that the panel selects when it opens.
 
 Argent does not check a path for an open panel against the file types that the panel allows.
 
