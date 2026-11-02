@@ -68,6 +68,32 @@ afterEach(async () => {
 });
 
 describe("hidden timeout diagnostics", () => {
+  it.each([{ kind: "assert" as const }, { kind: "await" as const, timeout: 300 }])(
+    "does not pass `$kind: hidden` on a Mac app's fallback tree",
+    async (step) => {
+      // A full tree from the locked-Mac walk, which misses an open context menu.
+      currentFetch = () => ({
+        tree: screen([
+          n({
+            role: "AXButton",
+            label: "Save",
+            frame: { x: 0.4, y: 0.4, width: 0.2, height: 0.1 },
+          }),
+        ]),
+        source: "macos-fallback",
+      });
+      await writeFlow("fallback-hidden", {
+        executionPrerequisite: "",
+        steps: [{ ...step, condition: "hidden", selector: { text: "Copy" } }],
+      });
+
+      const result = await run("fallback-hidden");
+
+      expect(result.ok).toBe(false);
+      expect(result.steps[0].status).toBe("fail");
+    }
+  );
+
   it("does not claim the element was still visible when the final reads were blank", async () => {
     // Read 1: the spinner is visible (a trusted read — everMatched flips on).
     // Every later read is an empty tree, which the blind-read guard refuses to
