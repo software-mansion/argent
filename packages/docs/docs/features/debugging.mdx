@@ -29,7 +29,7 @@ The agent runs JavaScript in the runtime of the app. On a device, the runtime is
 
 The agent reads the current screen as a text tree of React components. The agent also inspects the component at one point of the screen. Thus the agent sees which component renders an element, and which props the component receives.
 
-On iOS, the agent also reads the native UIKit view tree. The agent searches views by class or by accessibility label. The agent finds the view at one point of the screen, and the view that receives the touch at that point. With this data the agent explains why a tap does not reach a button.
+On iOS and in a [Mac app](/docs/features/mac-apps), the agent also reads the native view tree: UIKit views on iOS, AppKit views on a Mac. The agent searches views by class or by accessibility identifier. The agent finds the view at one point of the screen, and the view that receives the tap or click at that point. With this data the agent explains why a tap does not reach a button.
 
 ## Network traffic
 
@@ -54,7 +54,7 @@ The agent reproduces a failed state. The agent restarts the app, reloads the Met
 ## Limits
 
 - Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
-- The native view tree is available on iOS only.
+- The native view tree is available on iOS and in Mac apps only.
 - The agent connects to one app at a time.
 
 Argent does this with the `debugger-*`, `native-*` and `chromium-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

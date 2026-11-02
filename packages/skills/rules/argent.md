@@ -43,10 +43,10 @@ Interaction tools (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, `launch
 Call a discovery tool yourself only when you have no fresh tree for the current screen: before the first action on a screen you have not touched yet, after waiting for something to load without `await-ui-element`, or when the last tree did not list your target. Preferred tools are, in order:
 
 - `describe` - native app-level components and safely targetable foreground apps (iOS, Android and Mac apps).
-- `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
+- `native-describe-screen` - accessibility screen description via injected native devtools (iOS and Mac apps)
 - `debugger-component-tree` - react-native specific components
 
-`native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point (iOS only).
+`native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point (iOS and Mac apps).
 
 If a **tap fails twice** at the same coordinates, **stop retrying** and re-run a discovery tool.
 
