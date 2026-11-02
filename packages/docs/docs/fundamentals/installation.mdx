@@ -91,8 +91,8 @@ After you install or update Xcode, Xcode must install its system components. Unt
 
 Argent detects this state from Xcode's files and does not call `simctl` or `devicectl`:
 
-- `list-devices` does not show the iOS simulators and devices that need these components. Its `hint` field gives the reason to the agent.
-- The tools for iOS simulators and devices return an error that tells the agent what to do.
+- `list-devices` does not show the local iOS simulators and physical iPhones that need these components. Its `hint` field gives the reason to the agent.
+- The tools for local iOS simulators and physical iPhones return an error that tells the agent what to do.
 - Argent does not look for booted simulators in the background.
 
 To install the components, do one of these steps:

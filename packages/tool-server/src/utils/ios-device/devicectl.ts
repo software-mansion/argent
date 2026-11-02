@@ -124,8 +124,6 @@ async function runDevicectl(
   action: string,
   opts: RunDevicectlOptions = {}
 ): Promise<{ stdout: string; stderr: string; json: unknown | null }> {
-  // Like `simctl`, Xcode's `devicectl` is a wrapper that can start a component
-  // install and wait for a password; refuse before spawning it.
   assertXcodeFirstLaunchDone("devicectl");
   const timeoutMs = opts.timeoutMs ?? DEVICECTL_TIMEOUT_MS;
   let jsonPath: string | null = null;

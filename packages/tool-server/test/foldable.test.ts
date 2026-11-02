@@ -30,6 +30,32 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// Whether CoreDevice's own devicectl binary is present decides between it and
+// the `xcrun devicectl` wrapper. Null leaves the host's answer.
+const coreDeviceBinary = vi.hoisted(() => ({ present: null as boolean | null }));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    existsSync: (p: string) =>
+      coreDeviceBinary.present !== null &&
+      p.endsWith("/CoreDevice.framework/Versions/A/Resources/bin/devicectl")
+        ? coreDeviceBinary.present
+        : actual.existsSync(p),
+  };
+});
+
+const xcodePending = vi.hoisted(() => ({ devicectl: false }));
+vi.mock("../src/utils/xcode-first-launch", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
+    "../src/utils/xcode-first-launch"
+  );
+  return {
+    ...actual,
+    xcodeFirstLaunchPending: (w: string) => w === "devicectl" && xcodePending.devicectl,
+  };
+});
+
 const isFoldableSimulatorMock = vi.fn(async (_udid: string) => true);
 vi.mock("../src/utils/ios-devices", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/ios-devices")>(
@@ -259,6 +285,26 @@ describe("readCoreDeviceDisplays", () => {
     const call = execFileMock.mock.calls.find(([c, a]) => isDevicectl(c, a))!;
     expect(call[1] as string[]).toContain(DUO);
     expect(call[1] as string[]).not.toContain(`ext:acme-3f2a9c:${DUO}`);
+  });
+
+  // Issue #1721: without CoreDevice's binary the fallback is Xcode's wrapper, which
+  // would start the component install and wait for a password.
+  it("does not fall back to xcrun devicectl while Xcode's component install is pending", async () => {
+    mockDevicectl([duoPayload(3)]);
+    coreDeviceBinary.present = false;
+    xcodePending.devicectl = true;
+    try {
+      const { displays, reason } = await readCoreDeviceDisplays(DUO);
+      expect(displays).toBeNull();
+      expect(reason).toMatch(/administrator password/);
+      expect(execFileMock.mock.calls.filter(([c]) => c === "xcrun")).toEqual([]);
+
+      xcodePending.devicectl = false;
+      expect((await readCoreDeviceDisplays(DUO)).displays?.activeScreen).toBe(3);
+    } finally {
+      coreDeviceBinary.present = null;
+      xcodePending.devicectl = false;
+    }
   });
 
   it("says why when CoreDevice fails, times out, or answers something else", async () => {

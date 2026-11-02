@@ -119,11 +119,12 @@ type ListDevicesResult = {
   devices: ListedDevice[];
   avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Why iOS is missing, present only while Xcode's component install is
-   * pending; rules for a provider's device, present only when one is listed;
-   * and how to reach the adb server, present only when it is not adb's default. Most
-   * installs need neither and the description is read once per session, so a
-   * provider appearing later would miss it. This is re-read per call.
+   * Why local iOS targets are missing, present only while Xcode's component
+   * install is pending; rules for a provider's device, present only when one is
+   * listed; and how to reach the adb server, present only when it is not adb's
+   * default. Most installs need none of them, and the description is read once
+   * per session, so a state that appears later would be missed. This is re-read
+   * per call.
    */
   hint?: string;
 };

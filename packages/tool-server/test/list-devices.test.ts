@@ -97,8 +97,7 @@ vi.mock("../src/utils/ios-device/devicectl", async () => {
   };
 });
 
-// Whether Xcode's component install is pending is read from the host's Xcode;
-// pin it so the result does not depend on the machine. Defaults to installed.
+// Whether Xcode's component install is pending, set per test. Defaults to installed.
 const xcodePending = vi.hoisted(() => ({ simctl: false, devicectl: false }));
 vi.mock("../src/utils/xcode-first-launch", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
@@ -279,33 +278,40 @@ describe("list-devices", () => {
    * component install and wait for a password. The listing must not call it,
    * and must say why iOS is empty instead of implying Xcode is not installed.
    */
-  it.each(["simctl", "devicectl"] as const)(
-    "lists no iOS and says why while Xcode's %s install is pending, without calling simctl",
-    async (wrapper) => {
-      xcodePending[wrapper] = true;
-      try {
-        execFileMock.mockImplementation((cmd: string, args: string[]) => {
-          if (cmd === "xcrun" && args[0] === "simctl") {
-            return { stderr: "", stdout: simctlJson() };
-          }
-          return { stderr: "", stdout: "" };
-        });
+  it("lists no simulators and says why while the simctl install is pending, without calling simctl", async () => {
+    xcodePending.simctl = true;
+    try {
+      execFileMock.mockImplementation((cmd: string, args: string[]) =>
+        cmd === "xcrun" && args[0] === "simctl"
+          ? { stderr: "", stdout: simctlJson() }
+          : { stderr: "", stdout: "" }
+      );
 
-        const result = await listDevicesTool.execute!({}, {});
+      const result = await listDevicesTool.execute!({}, {});
 
-        expect(result.hint).toContain("sudo xcodebuild -runFirstLaunch");
-        expect(result.hint).toContain("Ask the user to open Xcode once");
-        if (wrapper === "simctl") {
-          expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
-          expect(
-            execFileMock.mock.calls.filter(([cmd, args]) => cmd === "xcrun" && args[0] === "simctl")
-          ).toEqual([]);
-        }
-      } finally {
-        xcodePending[wrapper] = false;
-      }
+      expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
+      expect(
+        execFileMock.mock.calls.filter(([cmd, args]) => cmd === "xcrun" && args[0] === "simctl")
+      ).toEqual([]);
+      expect(result.hint).toContain("Ask the user to open Xcode once");
+      expect(result.hint).toContain("sudo xcodebuild -runFirstLaunch");
+    } finally {
+      xcodePending.simctl = false;
     }
-  );
+  });
+
+  it("says why physical iPhones are missing while the devicectl install is pending", async () => {
+    xcodePending.devicectl = true;
+    try {
+      execFileMock.mockImplementation(() => ({ stderr: "", stdout: "" }));
+
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(result.hint).toContain("Ask the user to open Xcode once");
+    } finally {
+      xcodePending.devicectl = false;
+    }
+  });
 
   /**
    * The agent's own adb reaches the default server, where these serials do not

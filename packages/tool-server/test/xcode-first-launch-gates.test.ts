@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
 
 const pending = vi.hoisted(() => ({ simctl: false, devicectl: false }));
 
@@ -67,6 +67,14 @@ beforeEach(() => {
 
 afterEach(() => {
   Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+});
+
+describe("the refusal", () => {
+  it("is counted apart from a missing xcrun in failure telemetry", () => {
+    expect(getFailureSignal(new XcodeFirstLaunchPendingError())?.error_code).toBe(
+      FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING
+    );
+  });
 });
 
 describe("simctl argv while Xcode's install is pending", () => {

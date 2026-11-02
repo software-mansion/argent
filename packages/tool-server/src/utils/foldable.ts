@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { externalNativeId } from "./external-devices";
 import { isFoldableSimulator } from "./ios-devices";
 import { settleWithin, sleepOrAbort } from "./timing";
+import { xcodeFirstLaunchPending } from "./xcode-first-launch";
 
 const execFileAsync = promisify(execFile);
 
@@ -286,6 +287,13 @@ export async function readCoreDeviceDisplays(udid: string): Promise<{
   const [bin, argv] = fs.existsSync(DEVICECTL_BIN)
     ? [DEVICECTL_BIN, args]
     : ["xcrun", ["devicectl", ...args]];
+  if (bin === "xcrun" && xcodeFirstLaunchPending("devicectl")) {
+    return {
+      displays: null,
+      reason:
+        "Xcode has not finished installing its components, so devicectl would wait for an administrator password",
+    };
+  }
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync(bin, argv, {

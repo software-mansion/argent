@@ -28,12 +28,19 @@ export class DependencyMissingError extends Error {
 /**
  * Xcode's `simctl`/`devicectl` wrapper would start its component install,
  * which waits forever for an administrator password. Mapped to 424 like any
- * missing dependency, with the hint as the message.
+ * missing dependency, with the hint as the message, but counted apart from a
+ * missing `xcrun` in failure telemetry.
  */
 export class XcodeFirstLaunchPendingError extends DependencyMissingError {
   constructor() {
     super(["xcrun"], XCODE_FIRST_LAUNCH_HINT);
     this.name = "XcodeFirstLaunchPendingError";
+    withFailureSignal(this, {
+      error_code: FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING,
+      failure_stage: "xcode_first_launch_check",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    });
   }
 }
 
