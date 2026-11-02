@@ -322,9 +322,12 @@ describe("the launch step on a Mac app", () => {
   });
 
   it("passes, with a warning, a launch that starts the build of another worktree of the repository", async () => {
-    // No commit is needed: an orphan worktree shares the repository without one.
+    // A commit to branch from: git 2.39, which macOS ships, has no `worktree add --orphan`.
     execFileSync("git", ["init", "-q", "main"], { cwd: tmpDir });
-    execFileSync("git", ["-C", "main", "worktree", "add", "-q", "--orphan", "-b", "b", "../b"], {
+    const commit =
+      "-c user.name=t -c user.email=t@t commit -q --allow-empty --no-verify --no-gpg-sign -m init";
+    execFileSync("git", ["-C", "main", ...commit.split(" ")], { cwd: tmpDir });
+    execFileSync("git", ["-C", "main", "worktree", "add", "-q", "-b", "b", "../b"], {
       cwd: tmpDir,
     });
     tracked.appPath = path.join(tmpDir, "b", "build", "Probe.app");

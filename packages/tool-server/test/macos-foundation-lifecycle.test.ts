@@ -1237,12 +1237,13 @@ describe.skipIf(process.platform !== "darwin")("process checks outside a UTF-8 l
 describe("otherWorktreeOfBuild", () => {
   let dir = "";
   beforeEach(() => {
-    // No commit is needed: an orphan worktree shares the repository without one.
+    // A commit to branch from: git 2.39, which macOS ships, has no `worktree add --orphan`.
     dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-wt-")));
     execFileSync("git", ["init", "-q", "main"], { cwd: dir });
-    execFileSync("git", ["-C", "main", "worktree", "add", "-q", "--orphan", "-b", "b", "../b"], {
-      cwd: dir,
-    });
+    const commit =
+      "-c user.name=t -c user.email=t@t commit -q --allow-empty --no-verify --no-gpg-sign -m init";
+    execFileSync("git", ["-C", "main", ...commit.split(" ")], { cwd: dir });
+    execFileSync("git", ["-C", "main", "worktree", "add", "-q", "-b", "b", "../b"], { cwd: dir });
     execFileSync("git", ["init", "-q", "unrelated"], { cwd: dir });
     for (const tree of ["main", "b", "unrelated"]) {
       fs.mkdirSync(path.join(dir, tree, "macos", "build", "Focus.app"), { recursive: true });
