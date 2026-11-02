@@ -1678,6 +1678,7 @@ describe("addClaudePermission / removeClaudePermission", () => {
 describe("getManagedContentTargets", () => {
   afterEach(() => {
     homedirOverride = undefined;
+    vi.unstubAllEnvs();
   });
 
   it("derives local managed paths from adapter definitions", () => {
@@ -1763,6 +1764,41 @@ describe("getManagedContentTargets", () => {
     ]);
     expect(targets.ruleTargets).toEqual([]);
     expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists .devin/skills as a Devin Desktop skill target (local)", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([".agents/skills", ".devin/skills"]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists ~/.config/devin/skills as a Devin Desktop skill target (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([
+      "~/.agents/skills",
+      "~/.config/devin/skills",
+    ]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("resolves Devin's global skills dir from XDG_CONFIG_HOME, like the skills CLI", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const xdg = path.join(tmpDir, "xdg");
+    vi.stubEnv("XDG_CONFIG_HOME", xdg);
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.targetPath)).toEqual([
+      path.join(homedirOverride, ".agents", "skills"),
+      path.join(xdg, "devin", "skills"),
+    ]);
   });
 });
 
