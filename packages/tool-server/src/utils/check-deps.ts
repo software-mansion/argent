@@ -1,29 +1,13 @@
-import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
+import type { ToolDependency } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { resolveVegaBinary } from "./vega-cli";
 import { resolveHarmonyEmulator } from "./harmony-cli";
 import { resolveHdc } from "./harmony-hdc";
 import { commandOnPath } from "./command-on-path";
+import { xcodeFirstLaunchPending } from "./xcode-first-launch";
+import { DependencyMissingError, XcodeFirstLaunchPendingError } from "./dependency-errors";
 
-/**
- * Thrown when a declared host-binary dependency (e.g. `adb`, `xcrun`) can't be
- * resolved. The HTTP dispatcher maps it to 424; `.message` is the install hint,
- * safe to bubble straight to the agent.
- */
-export class DependencyMissingError extends Error {
-  readonly missing: ToolDependency[];
-  constructor(missing: ToolDependency[], message: string) {
-    super(message);
-    this.name = "DependencyMissingError";
-    this.missing = missing;
-    withFailureSignal(this, {
-      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
-      failure_stage: "tool_dependency_preflight",
-      failure_area: "tool_server",
-      error_kind: "dependency_missing",
-    });
-  }
-}
+export { DependencyMissingError };
 
 // Short TTL: a burst of tool calls pays for at most one probe per dep, yet an
 // install mid-session recovers without a tool-server restart.
@@ -88,6 +72,13 @@ async function isAvailable(dep: ToolDependency): Promise<boolean> {
 /**
  * Probes all deps in parallel.
  *
+ * An installed `xcrun` also needs Xcode's components in place: while either
+ * wrapper would start their install, the tool is refused here rather than at
+ * its first `simctl`/`devicectl` call, which some tools catch and turn into a
+ * misleading empty result. Both are checked because a simulator branch and a
+ * physical-device branch declare the same `xcrun`, and one install run covers
+ * both.
+ *
  * @throws DependencyMissingError listing every missing dep, so the agent isn't
  * sent back for the same tool twice.
  */
@@ -95,7 +86,15 @@ export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void>
   if (deps.length === 0) return;
   const results = await Promise.all(deps.map(async (d) => [d, await isAvailable(d)] as const));
   const missing = results.filter(([, ok]) => !ok).map(([d]) => d);
-  if (missing.length === 0) return;
+  if (missing.length === 0) {
+    if (
+      deps.includes("xcrun") &&
+      (xcodeFirstLaunchPending("simctl") || xcodeFirstLaunchPending("devicectl"))
+    ) {
+      throw new XcodeFirstLaunchPendingError();
+    }
+    return;
+  }
   const message = missing.map((d) => INSTALL_HINTS[d]).join(" ");
   throw new DependencyMissingError(missing, message);
 }

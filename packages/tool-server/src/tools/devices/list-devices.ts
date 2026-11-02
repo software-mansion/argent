@@ -11,6 +11,7 @@ import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
+import { XCODE_FIRST_LAUNCH_HINT, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
 import { listHarmonyInstances, listHarmonyHdcTargets } from "../../utils/harmony-devices";
@@ -118,8 +119,9 @@ type ListDevicesResult = {
   devices: ListedDevice[];
   avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Rules for a provider's device, present only when one is listed, and how to
-   * reach the adb server, present only when it is not adb's default. Most
+   * Why iOS is missing, present only while Xcode's component install is
+   * pending; rules for a provider's device, present only when one is listed;
+   * and how to reach the adb server, present only when it is not adb's default. Most
    * installs need neither and the description is read once per session, so a
    * provider appearing later would miss it. This is re-read per call.
    */
@@ -498,7 +500,10 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     );
 
     const adbPrefix = adbCommandPrefix(process.env);
+    const xcodeInstallPending =
+      xcodeFirstLaunchPending("simctl") || xcodeFirstLaunchPending("devicectl");
     const hints = [
+      ...(xcodeInstallPending ? [XCODE_FIRST_LAUNCH_HINT] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];

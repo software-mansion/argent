@@ -12,6 +12,7 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { appendHintToMessage } from "./usbmux-protocol";
+import { assertXcodeFirstLaunchDone } from "../dependency-errors";
 
 /**
  * Wrappers around `xcrun devicectl` for discovery, app lifecycle, and connection readiness.
@@ -123,6 +124,9 @@ async function runDevicectl(
   action: string,
   opts: RunDevicectlOptions = {}
 ): Promise<{ stdout: string; stderr: string; json: unknown | null }> {
+  // Like `simctl`, Xcode's `devicectl` is a wrapper that can start a component
+  // install and wait for a password; refuse before spawning it.
+  assertXcodeFirstLaunchDone("devicectl");
   const timeoutMs = opts.timeoutMs ?? DEVICECTL_TIMEOUT_MS;
   let jsonPath: string | null = null;
   const argv = ["devicectl", ...args];

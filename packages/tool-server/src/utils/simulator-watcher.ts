@@ -13,6 +13,7 @@ import {
   type DeviceSetPath,
 } from "./ios-device-sets";
 import { execSimctl, SimctlTimeoutError } from "./simctl-exec";
+import { XcodeFirstLaunchPendingError } from "./dependency-errors";
 
 const POLL_INTERVAL_MS = 10_000;
 /** Ceiling, in ticks, on the polls skipped while `simctl` keeps timing out (5 min). */
@@ -99,6 +100,12 @@ export function startSimulatorWatcher(registry: Registry): {
    */
   let consecutiveTimeouts = 0;
   let ticksToSkip = 0;
+  /**
+   * Whether the current run of ticks refused by `simctlPrefix` (Xcode's
+   * component install pending) has been logged. Those ticks spawn nothing, so
+   * they need no backoff, only one log line per outage.
+   */
+  let firstLaunchReported = false;
 
   /**
    * Split the booted set into the simulators the watcher may drive and the ones
@@ -214,11 +221,19 @@ export function startSimulatorWatcher(registry: Registry): {
               `If Xcode was just updated, open Xcode once or run \`sudo xcodebuild -runFirstLaunch\`.\n`
           );
         }
+      } else if (err instanceof XcodeFirstLaunchPendingError && !firstLaunchReported) {
+        firstLaunchReported = true;
+        process.stderr.write(
+          `[simulator-watcher] Xcode has not finished installing its system components, so ` +
+            `simulators are not polled until it has. Open Xcode once, or run ` +
+            `\`sudo xcodebuild -runFirstLaunch\`.\n`
+        );
       }
       // xcrun unavailable or transient error — skip this tick
       return;
     }
     consecutiveTimeouts = 0;
+    firstLaunchReported = false;
 
     /**
      * Before the init pass, so a granted claim re-resolves into attach mode on

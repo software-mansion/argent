@@ -17,6 +17,7 @@ import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { getAdditionalIosDeviceSets } from "@argent/configuration-core";
 import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
+import { assertXcodeFirstLaunchDone } from "./dependency-errors";
 import {
   assertExternalCapabilitySync,
   externalClaimForAnyId,
@@ -128,8 +129,15 @@ function externalDeviceSet(udid: string): DeviceSetPath | undefined {
   return claim ? (claim.deviceSet ?? null) : undefined;
 }
 
-/** The `simctl` argv prefix for a known device set. */
+/**
+ * The `simctl` argv prefix for a known device set. Every `simctl` argv is
+ * built here, so this is also where a call is refused while Xcode's wrapper
+ * would start its component install and wait for a password.
+ *
+ * @throws XcodeFirstLaunchPendingError
+ */
 export function simctlPrefix(deviceSet: DeviceSetPath): string[] {
+  assertXcodeFirstLaunchDone("simctl");
   return deviceSet ? ["simctl", "--set", deviceSet] : ["simctl"];
 }
 

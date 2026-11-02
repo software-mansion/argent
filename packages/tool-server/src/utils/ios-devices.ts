@@ -197,10 +197,11 @@ const foldableCache = new Map<string, boolean>();
 
 async function listDeviceTypeBundlePaths(): Promise<Map<string, string>> {
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devicetypes", "--json"], {
-      timeout: 10_000,
-      killSignal: SIMCTL_KILL_SIGNAL,
-    });
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      [...simctlPrefix(null), "list", "devicetypes", "--json"],
+      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+    );
     const data = JSON.parse(stdout) as {
       devicetypes?: Array<{ identifier?: string; bundlePath?: string }>;
     };
