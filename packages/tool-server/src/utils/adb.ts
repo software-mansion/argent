@@ -516,10 +516,14 @@ async function resolveRuntimeKindCached(
  * Readiness goes through the cheap `adb devices` listing rather than the full
  * `listAndroidDevices` enrichment. The avdName getprop is read only for
  * `emulator-NNNN` serials, where it detects a reused console slot; a physical
- * serial is never reclaimed and has no qemu avd_name.
+ * serial is never reclaimed and has no qemu avd_name. `devicesTimeoutMs` bounds
+ * that listing, as in `listAndroidSerials`.
  */
-export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
-  const serials = await listAndroidSerials();
+export async function getAndroidRuntimeKind(
+  serial: string,
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<"mobile" | "tv" | undefined> {
+  const serials = await listAndroidSerials(options);
   const ready = serials.find((d) => d.serial === serial && d.state === "device");
   if (!ready) {
     // Gone / offline: drop any cached verdict so a future occupant of this
@@ -532,8 +536,11 @@ export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | 
 }
 
 /** True when the given Android serial is an Android TV (leanback) target. */
-export async function isAndroidTv(serial: string): Promise<boolean> {
-  return (await getAndroidRuntimeKind(serial)) === "tv";
+export async function isAndroidTv(
+  serial: string,
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<boolean> {
+  return (await getAndroidRuntimeKind(serial, options)) === "tv";
 }
 
 /**
