@@ -31,7 +31,7 @@ Read this for a Mac app. `argent-device-interact` still applies for everything n
 - `paste` inserts the text at the focused field. `does not accept text` means nothing editable has focus: `gesture-tap` the field, then retry.
 - `open-url`: the URL goes to the running app. A custom scheme must be one the app declares; `http` and `https` go to the app, not the browser; a `file:` URL opens that document in the app.
 - `native-*` tools: pass the device's bundle id as `bundleId`; `x`, `y` are points from the top-left of that area, not fractions.
-- `native-network-logs` (the app's `NSURLSession` requests, also react-native-macos `fetch`): the first call starts the capture and returns nothing older. Call it once, repeat the action, then call it again; for launch requests, `restart-app` after the first call. Each app start has its own log.
+- `native-network-logs` (the app's `NSURLSession` requests, also react-native-macos `fetch`): the first call starts the capture and returns nothing older. Call it once, repeat the action, then call it again. The log can miss requests that the app sends while it starts. Each app start has its own log.
 - `menu-bar`: for any menu command; the menu bar is not in `describe`. An item listed `[disabled]` cannot be chosen right now: an edit command (Copy, Select All) needs the text field clicked first; while an alert is open only its own commands work, so answer the alert first. On `A menu is open`, send `keyboard {key: "escape"}`, then choose again.
 
 ## File panels
