@@ -2470,7 +2470,8 @@ function parseLaunch(raw: unknown): Launch {
       `({ native | ${namedLaunchPlatforms()
         .filter((p) => p !== "chromium")
         .join(" | ")}: <app id>, ` +
-      `ios: { app, args }, chromium: <app path> | { path, args } })`
+      `ios${isFlagEnabled(MACOS_APPS_FLAG) ? " | macos" : ""}: { app, args }, ` +
+      `chromium: <app path> | { path, args } })`
   );
 }
 

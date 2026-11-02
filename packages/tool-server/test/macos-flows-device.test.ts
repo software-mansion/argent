@@ -110,6 +110,12 @@ describe("macos in the flow file platform lists", () => {
     }
   });
 
+  it("names macos in the launch errors", () => {
+    expect(() => parseFlow(`steps:\n  - launch: { macos: { app: ${APP}, args: "-x" } }\n`)).toThrow(
+      "ios | macos: { app, args }"
+    );
+  });
+
   it("parses and round-trips a when: platform macos guard", () => {
     const flow = parseFlow("steps:\n  - when: { platform: macos }\n    steps: [{ echo: hi }]\n");
     expect(flow.steps[0]).toMatchObject({
