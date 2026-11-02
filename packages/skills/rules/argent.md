@@ -61,7 +61,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A cabled physical iPhone (`platform: "ios"`, `kind: "device"`, `state: "connected"`) is listed first too, but it is not a running simulator: never pick it because it is there. Use it only when the user names the phone, a physical or real device, or hardware testing. With nothing else booted, boot a simulator or ask which target the user means. Mac apps appear as `platform: "macos"`, `state: "Running"`, and only once argent started them: for a Mac app the user names, start it with `boot-device` + `macosAppPath`.
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`. A cabled physical iPhone (`platform: "ios"`, `kind: "device"`, `state: "connected"`) is listed first too, but it is not a running simulator: never pick it because it is there. Use it only when the user names the phone, a physical or real device, or hardware testing. With nothing else booted, boot a simulator or ask which target the user means. Mac apps appear as `platform: "macos"`, `state: "Running"`, and only once argent started them. `list-devices` also shows the Mac apps of other sessions: never pick a running Mac app unless the user names that app or this session started it. For a Mac app the user names, start it with `boot-device` + `macosAppPath`.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 
@@ -105,7 +105,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target; do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`. Mac apps appear as `platform:"macos"`, when present load `argent-macos-app-interact`
+If the user did not specify a platform, call `list-devices` first and pick the booted target; do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-tv-interact`. Mac apps appear as `platform:"macos"`: pick one only when the user names that app or this session started it, then load `argent-macos-app-interact`
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
