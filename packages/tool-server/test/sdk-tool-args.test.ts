@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
+import { TOOL_ID_ALIASES } from "@argent/registry";
 import { renderSdkToolArgs, toType } from "../src/sdk-tool-args";
 import { EXPECTED_TOOL_COUNT } from "./helpers/catalog";
 
@@ -55,7 +56,16 @@ describe("renderSdkToolArgs", () => {
   const output = renderSdkToolArgs();
 
   it("emits every tool", () => {
-    expect(output.match(/^ {2}("[^"]+"|\w+): /gm)).toHaveLength(EXPECTED_TOOL_COUNT);
+    const aliases = Object.keys(TOOL_ID_ALIASES).length;
+    expect(output.match(/^ {2}("[^"]+"|\w+): /gm)).toHaveLength(EXPECTED_TOOL_COUNT + aliases);
+  });
+
+  it("types each former tool id as the tool it names", () => {
+    for (const [alias, id] of Object.entries(TOOL_ID_ALIASES)) {
+      expect(output).toContain(
+        `  /** @deprecated Renamed to \`${id}\`. */\n  "${alias}": ArgentToolArgs["${id}"];`
+      );
+    }
   });
 
   it("emits valid TypeScript", () => {

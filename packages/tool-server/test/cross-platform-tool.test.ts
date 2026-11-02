@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// HarmonyOS is behind the `harmonyos` flag; these cases drive it with the flag on.
+vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-flag")>()),
+  isHarmonyEnabled: () => true,
+}));
 import { dispatchByPlatform, type PlatformImpl } from "../src/utils/cross-platform-tool";
 import { __resetDepCacheForTests, __primeDepCacheForTests } from "../src/utils/check-deps";
 import { NotImplementedOnPlatformError, UnsupportedOperationError } from "../src/utils/capability";
@@ -221,5 +227,32 @@ describe("dispatchByPlatform", () => {
     // No primed cache, no ensureDeps probe — these would fail if ensureDeps fired.
     await expect(a({}, { udid: iosUdid })).resolves.toBe("ok");
     await expect(a({}, { udid: androidUdid })).resolves.toBe("ok");
+  });
+
+  // Chromium is the dispatch fallthrough.
+  it("rejects a HarmonyOS device instead of falling through to the chromium handler", async () => {
+    const chromiumHandler = vi.fn().mockResolvedValue("from-chromium");
+
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
+      toolId: "test",
+      capability: {
+        ...capabilityBoth,
+        harmony: { device: true, emulator: true },
+        chromium: { app: true },
+      },
+      ios: { handler: vi.fn() },
+      android: { handler: vi.fn() },
+      chromium: { handler: chromiumHandler },
+    });
+
+    for (const udid of ["harmony-Phone_1", "harmony-emulator-argent_phone"]) {
+      await expect(execute({}, { udid })).rejects.toBeInstanceOf(NotImplementedOnPlatformError);
+      expect(chromiumHandler).not.toHaveBeenCalled();
+    }
   });
 });

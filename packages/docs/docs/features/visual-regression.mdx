@@ -36,9 +36,11 @@ Argent writes a diff image. The image marks the pixels that became brighter, the
 
 Argent removes the status bar from the comparison. Thus the clock and the battery indicator do not make the comparison fail.
 
-## Baselines in flows
+<a id="baselines-in-flows" />
 
-A [flow](/docs/features/flows) can contain a snapshot step. The step fails when no baseline exists yet. Run the flow with `--update-baselines` to adopt the current screen as the baseline. Each later run compares the screen to the stored baseline, and the step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.
+## Baselines in e2e tests
+
+An [e2e test](/docs/features/e2e) can contain a snapshot step. The step fails when no baseline exists yet. Run the e2e test with `--update-baselines` to adopt the current screen as the baseline. Each later run compares the screen to the stored baseline, and the step fails when the difference is above a tolerance. A snapshot step can also compare one element only instead of the full screen.
 
 Thus you can keep visual checks in the repository and run them in CI.
 
@@ -47,7 +49,7 @@ Thus you can keep visual checks in the repository and run them in CI.
 - "Capture a baseline of the settings screen. Then apply my change and compare."
 - "Compare the home screen before and after the tap on the filter button."
 - "I changed the font of the headings. Make sure that nothing else on the screen changed."
-- "Add a snapshot step to the checkout flow for the summary screen."
+- "Add a snapshot step to the checkout e2e test for the summary screen."
 
 ## Limits
 
@@ -55,6 +57,6 @@ Thus you can keep visual checks in the repository and run them in CI.
 - The comparison does not replace a check of the accessibility tree, the logs or the network record. The agent uses these sources together with the comparison.
 - The two screenshots must come from the same device class and the same orientation. When the resolution differs, Argent scales one screenshot down, and small differences can come from the scaling.
 - The agent does not use the comparison to find the position of an element for a tap. The agent uses the screen description for that.
-- The comparison works on an iOS simulator, or an Android emulator or device. It does not work on Chromium, Apple TV or Vega apps. On a [physical iPhone](/docs/features/physical-ios-devices), the agent captures full-resolution screenshots and compares them on the host instead.
+- The comparison works on an iOS simulator, an Android emulator or device, or a HarmonyOS device. It does not work on Chromium, Apple TV or Vega apps. On a [physical iPhone](/docs/features/physical-ios-devices), the agent captures full-resolution screenshots and compares them on the host instead.
 
 Argent does this with the `screenshot` and `screenshot-diff` tools. The [tools reference](/docs/reference/tools) contains all tools.

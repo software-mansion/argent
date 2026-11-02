@@ -52,6 +52,8 @@ function asRun(result: FlowRunResult | { notice: string }): FlowRunResult {
 export function createFlowTestHarness(options: {
   tempDirectoryPrefix: string;
   reset?: () => void;
+  /** Where `writeFlow` saves a test: `.argent/flows` (legacy, the default) or `.argent/e2e`. */
+  dir?: "flows" | "e2e";
 }) {
   let tmpDir: string;
 
@@ -65,7 +67,7 @@ export function createFlowTestHarness(options: {
   });
 
   async function writeFlow(name: string, flow: Parameters<typeof serializeFlow>[0]): Promise<void> {
-    const dir = path.join(tmpDir, ".argent", "flows");
+    const dir = path.join(tmpDir, ".argent", options.dir ?? "flows");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, `${name}.yaml`), serializeFlow(flow), "utf8");
   }
@@ -88,5 +90,5 @@ export function createFlowTestHarness(options: {
     return Object.assign(await execute(name, calls, device), { calls });
   };
 
-  return { writeFlow, run, runWithCalls };
+  return { writeFlow, run, runWithCalls, root: () => tmpDir };
 }

@@ -1,7 +1,7 @@
 /**
- * The two headless-boot env vars, parsed in one place: `boot-device` reads
- * both, and the window-shake animation reads the iOS one, which has to agree
- * with `boot-device` or it would script a window that was never opened.
+ * The boolean boot env vars, parsed in one place: `boot-device` reads all of
+ * them, and the window-shake animation reads the iOS headless one, which has to
+ * agree with `boot-device` or it would script a window that was never opened.
  */
 
 const TRUTHY = new Set(["1", "true", "yes"]);
@@ -26,4 +26,12 @@ export function iosHeadlessFromEnv(): boolean {
  */
 export function androidHeadlessFromEnv(): boolean {
   return truthyEnv("ARGENT_EMULATOR_NO_WINDOW");
+}
+
+/**
+ * ARGENT_EMULATOR_GUEST_VULKAN: default of boot-device's `guestVulkan`, which
+ * applies on macOS hosts only.
+ */
+export function androidGuestVulkanFromEnv(): boolean {
+  return truthyEnv("ARGENT_EMULATOR_GUEST_VULKAN");
 }

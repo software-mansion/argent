@@ -13,9 +13,11 @@ The placeholder is resolved on the machine running the tool-server, from the fir
 | 3   | `<project>/.env.local`, then `<project>/.env` | only `ARGENT_SECRET_`-prefixed keys, so app config stays unreachable |
 | 4   | `~/.argent/secrets.env`                       | every key, per-user, works in any project                            |
 
+Over `argent link` or `ARGENT_TOOLS_URL` the tool-server can be another machine. With `argent enable forward-secrets` on the client, the client resolves each placeholder of a call with these same sources on its own machine and sends the values with the call; the tool-server's sources resolve only the names the client lacks.
+
 ## Rules
 
-- The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_ and every source it looked in, with paths; read that list before asking the user anything.
+- The result echoes the placeholder, never the value. An unknown name fails with the list of available secret _names_ and every source the tool-server looked in, with paths; read that list before asking the user anything. A client that forwards secrets does not add its own sources to it; `argent secrets` on the client lists those. When the failure says the required secret was not provided, the client forwards secrets and has no value for the name, so it belongs on the client's machine.
 - The auto-screenshot after the call is skipped so the typed value cannot re-enter your context as pixels. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret; submit or navigate away first, then verify the resulting screen. To submit, put the text step and the Enter step in **one `run-sequence`**. The skip covers a whole batch that contains the placeholder, but a second bare `keyboard` call gets its own screenshot of the filled field.
-- Nothing outside those sources is reachable; never ask the user to paste a secret value into the conversation. Ask them to put it in a secrets file instead: a file edit applies to the next call, while an exported env var only reaches a tool-server started afterwards.
+- Nothing outside those sources is reachable; never ask the user to paste a secret value into the conversation. Ask them to put it in a secrets file instead: a file edit applies to the next call, while an exported env var only reaches a tool-server (or, for a forwarded secret, a client) started afterwards.
 - The project sources are found by walking up from the tool-server's working directory. If a project file is not being picked up, the failure's source list shows the paths actually consulted; `~/.argent/secrets.env` needs no project and always applies.

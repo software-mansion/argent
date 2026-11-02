@@ -89,7 +89,7 @@ export async function getResolvedToolsUrl(): Promise<ResolvedToolsUrl> {
     const link = await readLinkConfig();
     const envToken = process.env[AUTH_TOKEN_ENV];
     return {
-      url: envUrl,
+      url: envUrl.replace(/\/+$/, ""),
       source: "env",
       ...(envToken ? { token: envToken } : {}),
       ...(link ? { shadowedLink: link } : {}),

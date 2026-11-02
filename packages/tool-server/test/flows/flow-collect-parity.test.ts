@@ -282,7 +282,13 @@ describe("the client's run: closure covers every resolution the runner makes", (
     expect(sent).toHaveLength(expectedMembers);
     // A flow that composes resolves at least once, so the check below bites.
     expect(resolved.length > 0).toBe(expectedMembers > 0);
-    for (const key of resolved) expect(sent).toContain(key);
+    // The runner also looks for a missing target in .argent/e2e, which has
+    // nothing here: the client sends a fallback only when it finds the file.
+    const fallback = `${path.join(tmpDir, ".argent", "e2e")}\0`;
+    for (const key of resolved) {
+      if (key.startsWith(fallback)) expect(sent).not.toContain(key);
+      else expect(sent).toContain(key);
+    }
     expect(linked).toEqual(colocated);
   });
 
@@ -302,6 +308,8 @@ describe("the client's run: closure covers every resolution the runner makes", (
     const { linked } = await runBothWays("cyc01");
 
     // A fragment named like the root shows as ./cyc01, so the two read apart.
-    expect(linked.at(-1)).toMatch(/cyclic flow reference: cyc01 → cyc02 → .* → cyc20 → \.\/cyc01$/);
+    expect(linked.at(-1)).toMatch(
+      /cyclic e2e test reference: cyc01 → cyc02 → .* → cyc20 → \.\/cyc01$/
+    );
   });
 });

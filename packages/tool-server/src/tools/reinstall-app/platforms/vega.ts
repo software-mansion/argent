@@ -2,6 +2,7 @@ import { resolve as resolvePath } from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { vegaDevice } from "../../../utils/vega-cli";
+import { assertVpkg } from "../validate-app";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 /**
@@ -15,6 +16,7 @@ export const vegaImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Re
     handler: async (_services, params) => {
       const { udid, bundleId, appPath } = params;
       const absolute = resolvePath(appPath);
+      await assertVpkg(absolute);
 
       await vegaDevice(udid, ["uninstall-app", "-a", bundleId], { timeoutMs: 60_000 }).catch(
         () => {}

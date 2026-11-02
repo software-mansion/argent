@@ -190,7 +190,10 @@ export function createArgentClient(): ArgentClient {
 
   async function listTools(options?: { signal?: AbortSignal }): Promise<ArgentTool[]> {
     const tools = await client.fetchTools({ signal: options?.signal });
-    return tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+    // A former tool id stays callable but is not listed.
+    return tools
+      .filter((tool) => tool.aliasOf === undefined)
+      .map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
   }
 
   async function callTool<T>(

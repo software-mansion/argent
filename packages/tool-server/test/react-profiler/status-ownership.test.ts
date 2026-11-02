@@ -57,6 +57,7 @@ function buildApi(opts: { sessionId: string | null; state: StubState }): ReactPr
     profileStartWallMs: null,
     sessionId: opts.sessionId,
     ownerToolServerPid: null,
+    disposed: false,
     disposeSession: () => undefined,
   };
 }

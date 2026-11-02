@@ -316,6 +316,7 @@ export function spawnToolsServer(
       stdio: ["ignore", "pipe", logFd],
       env: buildToolsServerEnv(paths, port, process.env, options),
     });
+    fs.closeSync(logFd);
 
     child.unref();
 

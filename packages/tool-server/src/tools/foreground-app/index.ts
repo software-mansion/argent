@@ -70,6 +70,7 @@ export function createForegroundAppTool(registry: Registry): ToolDefinition<Para
 Returns { bundleId, name, alertVisible }; under a system alert, bundleId is the app it covers.
 A field is unset when it is unknown.`,
     hideFromMcp: true,
+    readOnly: true,
     zodSchema,
     capability,
     services: () => ({}),

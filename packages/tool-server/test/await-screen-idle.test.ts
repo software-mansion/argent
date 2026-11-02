@@ -75,6 +75,20 @@ describe("await-screen-idle tool", () => {
     expect(result.polls).toBeGreaterThan(1);
   });
 
+  it("settles on a degraded simulator without a note", async () => {
+    // A degraded tree is live; its boot hint does not qualify a settle.
+    const ax = { ...makeSequencedAXService([content()]), degraded: true };
+    const tool = createAwaitScreenIdleTool(iosRegistry(ax));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 2000, pollIntervalMs: 10, minStableMs: 0 }
+    );
+
+    expect(result.settled).toBe(true);
+    expect(result.note).toBeUndefined();
+  });
+
   it("does not settle while the screen stays blank (times out)", async () => {
     const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService([axResponse([])])));
 

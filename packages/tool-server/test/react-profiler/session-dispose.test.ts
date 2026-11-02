@@ -3,6 +3,11 @@ import { TypedEventEmitter } from "@argent/registry";
 import { reactProfilerSessionBlueprint } from "../../src/blueprints/react-profiler-session";
 import type { JsRuntimeDebuggerApi } from "../../src/blueprints/js-runtime-debugger";
 import { STOP_FOR_TAKEOVER_SCRIPT } from "../../src/utils/react-profiler/scripts";
+import {
+  __resetProfilingDevicesForTesting,
+  isProfiling,
+  trackProfilingRun,
+} from "../../src/utils/profiling-devices";
 
 /**
  * What `ReactProfilerSession.dispose()` leaves behind IN THE APP.
@@ -128,6 +133,7 @@ describe("ReactProfilerSession dispose", () => {
       sourceMapURL: "index.map",
     });
     events.emit("disconnected", new Error("connection lost"));
+    events.emit("event", "Runtime.executionContextsCleared", {});
 
     expect(instance.api.scriptSources.size).toBe(0);
     expect(terminated).not.toHaveBeenCalled();
@@ -156,5 +162,83 @@ describe("ReactProfilerSession dispose", () => {
       "Profiler.stop",
       "Profiler.disable",
     ]);
+  });
+});
+
+describe("ReactProfilerSession on a JS reload", () => {
+  it("ends the run and the session when the runtime reloads over a connection kept open", async () => {
+    // React Native's inspector proxy keeps the debugger socket open across a
+    // reload for a page with `nativePageReloads`, so `disconnected` never
+    // fires. The run must stop counting, or every call on the device keeps
+    // `profiling: true`.
+    const sent: SentCall[] = [];
+    const api = fakeDebuggerApi(sent);
+    const instance = await reactProfilerSessionBlueprint.factory(
+      { debugger: api },
+      "8081:AAAA-1111",
+      undefined
+    );
+    instance.api.profilingActive = true;
+    trackProfilingRun("AAAA-1111", instance.api);
+    const terminated = vi.fn();
+    instance.events.on("terminated", terminated);
+    const events = cdpEventsOf(api);
+
+    events.emit("event", "Runtime.consoleAPICalled", { type: "log", args: [] });
+    events.emit("event", "Runtime.executionContextCreated", { context: { id: 1 } });
+    expect(terminated).not.toHaveBeenCalled();
+    expect(isProfiling("AAAA-1111")).toBe(true);
+
+    events.emit("event", "Runtime.executionContextDestroyed", { executionContextId: 1 });
+
+    expect(instance.api.profilingActive).toBe(false);
+    expect(isProfiling("AAAA-1111")).toBe(false);
+    // Without a cause: a reload is a normal end, and the next call makes a new session.
+    expect(terminated.mock.calls).toEqual([[]]);
+    __resetProfilingDevicesForTesting();
+  });
+
+  it("stops the Hermes sampler in the new runtime, once it exists", async () => {
+    // The sampler is process-wide and survives the reload; a Profiler.stop sent
+    // before the new runtime announces itself is refused.
+    const sent: SentCall[] = [];
+    const api = fakeDebuggerApi(sent);
+    const instance = await reactProfilerSessionBlueprint.factory(
+      { debugger: api },
+      "8081:AAAA-1111",
+      undefined
+    );
+    instance.api.profilingActive = true;
+    const events = cdpEventsOf(api);
+    // What the registry does on `terminated`.
+    instance.events.on("terminated", () => void instance.dispose());
+    sent.length = 0;
+
+    events.emit("event", "Runtime.executionContextDestroyed", { executionContextId: 1 });
+    events.emit("event", "Runtime.executionContextsCleared", {});
+    expect(sent.map((c) => c.method)).toEqual(["Profiler.disable"]);
+
+    events.emit("event", "Runtime.executionContextCreated", { context: { id: 2 } });
+    events.emit("event", "Runtime.executionContextCreated", { context: { id: 3 } });
+    expect(sent.map((c) => c.method)).toEqual(["Profiler.disable", "Profiler.stop"]);
+  });
+
+  it("sends nothing to the next runtime when no run was active, or the connection dropped", async () => {
+    for (const dropFirst of [false, true]) {
+      const sent: SentCall[] = [];
+      const api = fakeDebuggerApi(sent);
+      const instance = await reactProfilerSessionBlueprint.factory(
+        { debugger: api },
+        "8081:AAAA-1111",
+        undefined
+      );
+      instance.api.profilingActive = dropFirst;
+      const events = cdpEventsOf(api);
+      events.emit("event", "Runtime.executionContextDestroyed", { executionContextId: 1 });
+      if (dropFirst) events.emit("disconnected");
+      sent.length = 0;
+      events.emit("event", "Runtime.executionContextCreated", { context: { id: 2 } });
+      expect(sent).toEqual([]);
+    }
   });
 });

@@ -1,5 +1,5 @@
 // Hermes CPU profile (CDP Profiler.stop format)
-export interface HermesCallFrame {
+interface HermesCallFrame {
   functionName: string;
   scriptId: string;
   url: string;
@@ -34,7 +34,7 @@ interface BackendCommitData {
   changeDescriptions?: Array<[number, unknown]>;
 }
 
-export interface BackendRootData {
+interface BackendRootData {
   commitData: BackendCommitData[];
 }
 

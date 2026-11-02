@@ -13,7 +13,7 @@ description: Optimizes a React Native app by profiling first to find real bottle
 - **Fix**: apply one fix. Validate with `debugger-evaluate` before committing.
 - **Re-measure**: report whether the target metric improved, regressed, or stayed flat. Check for regressions in other areas. If no net benefit or unacceptable tradeoffs, revert.
 - **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
-- **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped; re-profile once after the batch. When the measurement involves device interaction, record it as a flow (`argent-create-flow` skill) before the first run so all subsequent cycles replay identical steps.
+- **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped; re-profile once after the batch. When the measurement involves device interaction, record it as an e2e test (`argent-create-e2e` skill) before the first run so all subsequent cycles replay identical steps.
 - **React Compiler**: if `react-profiler-analyze` reports `reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out via `react-profiler-fiber-tree` (absent `useMemoCache`).
 - **Sub-agents**: Phases 1–2 dispatch sub-agents: one per file for lint results, one per checklist item for semantic. Sub-agents CANNOT touch the device - all profiling and E2E verification must happen in the main agent.
 
@@ -47,7 +47,7 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 2. Exercise key user flows (navigate screens the user specified, or all major flows)
 3. Analyze with `react-profiler-analyze` + `native-profiler-analyze` + `profiler-combined-report`
 4. Cross-reference profiling results with Phase 1–2 findings
-5. Fix highest-impact issues. Re-profile after architectural changes; batch mechanical fixes. If a recorded flow breaks after a fix (e.g., UI layout changed), follow `argent-create-flow` skill to repair the flow rather than silently discarding it.
+5. Fix highest-impact issues. Re-profile after architectural changes; batch mechanical fixes. If a recorded e2e test breaks after a fix (e.g., UI layout changed), follow `argent-create-e2e` skill to repair the e2e test rather than silently discarding it.
 
 ### Phase 4: Verify no regressions
 

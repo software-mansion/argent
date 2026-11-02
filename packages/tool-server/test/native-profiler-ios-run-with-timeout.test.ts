@@ -10,12 +10,10 @@ vi.mock("child_process", () => ({
   // promisify(execFile) calls this callback form: (file, args, options, cb).
   execFile: (_file: string, _args: string[], ...rest: unknown[]) => {
     const options = rest.find((r) => typeof r === "object" && r !== null) as
-      | { timeout?: number; maxBuffer?: number; encoding?: string }
-      | undefined;
+      { timeout?: number; maxBuffer?: number; encoding?: string } | undefined;
     rec.calls.push({ options });
     const cb = rest.find((r) => typeof r === "function") as
-      | ((e: unknown, r: { stdout: string; stderr: string }) => void)
-      | undefined;
+      ((e: unknown, r: { stdout: string; stderr: string }) => void) | undefined;
     cb?.(null, { stdout: "", stderr: "" });
     return undefined;
   },

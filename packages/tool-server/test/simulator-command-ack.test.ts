@@ -17,15 +17,18 @@ type Reply = "ok" | "error" | "silent" | "withhold";
 async function startServer(): Promise<{
   api: SimulatorServerApi;
   received: Record<string, unknown>[];
-  setReply: (r: Reply) => void;
+  /** One reply for every command, or one picked per command name. */
+  setReply: (r: Reply | ((cmd: unknown) => Reply)) => void;
   /** Release every reply the server withheld, late and out of step. */
   flushWithheld: () => void;
   dropConnections: () => void;
+  connectionCount: () => number;
   close: () => Promise<void>;
 }> {
   const received: Record<string, unknown>[] = [];
   const sockets = new Set<WsSocket>();
-  let reply: Reply = "ok";
+  let pickReply: (cmd: unknown) => Reply = () => "ok";
+  let connectionCount = 0;
 
   const wss = await new Promise<WebSocketServer>((resolve) => {
     const s: WebSocketServer = new WebSocketServer({ port: 0, host: "127.0.0.1" }, () =>
@@ -34,14 +37,21 @@ async function startServer(): Promise<{
   });
   const withheld: (() => void)[] = [];
   wss.on("connection", (sock) => {
+    connectionCount++;
     sockets.add(sock);
     sock.on("close", () => sockets.delete(sock));
     sock.on("message", (raw) => {
       const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
       received.push(msg);
+      const reply = pickReply(msg.cmd);
       if (reply === "ok") sock.send(JSON.stringify({ id: msg.id, status: "ok" }));
       else if (reply === "error")
-        sock.send(JSON.stringify({ status: "error", message: "parse error: unknown variant" }));
+        sock.send(
+          JSON.stringify({
+            status: "error",
+            message: `parse error: unknown variant \`${String(msg.cmd)}\`, expected one of \`touch\`, \`rotate\``,
+          })
+        );
       else if (reply === "withhold")
         withheld.push(() => sock.send(JSON.stringify({ id: msg.id, status: "ok" })));
     });
@@ -57,7 +67,7 @@ async function startServer(): Promise<{
     },
     received,
     setReply: (r) => {
-      reply = r;
+      pickReply = typeof r === "function" ? r : () => r;
     },
     flushWithheld: () => {
       for (const send of withheld.splice(0)) send();
@@ -65,6 +75,7 @@ async function startServer(): Promise<{
     dropConnections: () => {
       for (const s of sockets) s.terminate();
     },
+    connectionCount: () => connectionCount,
     // `sendCommand` caches one socket per apiUrl for the life of the process,
     // so the server has to hang up before `close()` can resolve; terminating
     // also evicts the cache entry, keeping each test on its own connection.
@@ -104,6 +115,32 @@ describe("sendCommand — command acknowledgement", () => {
     const err = await sendCommand(server.api, { ...TOUCH }).catch((e: unknown) => e);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
     expect(String(err)).toContain("NOT delivered to the device");
+    await server.close();
+  });
+
+  it("rejects capture_on_demand at once on an older server, and keeps the connection", async () => {
+    const server = await startServer();
+    server.setReply("error");
+    const err = await sendCommand(server.api, { cmd: "capture_on_demand", enabled: true }).catch(
+      (e: unknown) => e
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.SIMULATOR_COMMAND_REJECTED);
+    server.setReply("ok");
+    await sendCommand(server.api, { ...TOUCH });
+    expect(server.connectionCount()).toBe(1);
+    await server.close();
+  });
+
+  it("rejects the command an older server names, not a slower one sent before it", async () => {
+    const server = await startServer();
+    server.setReply((cmd) => (cmd === "rotate" ? "withhold" : "error"));
+    const rotate = sendCommand(server.api, { cmd: "rotate", direction: "LandscapeLeft" });
+    const err = await sendCommand(server.api, { cmd: "capture_on_demand", enabled: true }).catch(
+      (e: unknown) => e
+    );
+    expect(String(err)).toContain("rejected the 'capture_on_demand' command");
+    server.flushWithheld();
+    await expect(rotate).resolves.toEqual({});
     await server.close();
   });
 

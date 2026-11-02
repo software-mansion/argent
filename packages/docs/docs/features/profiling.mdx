@@ -25,7 +25,7 @@ Argent has two profilers. The agent can run one profiler or both profilers at th
 | Native   | iOS          | Xcode Instruments         | Native CPU time, UI hangs, memory leaks                           |
 | Native   | Android      | Perfetto                  | Native CPU time, UI hangs with the jank reason, GC, memory growth |
 
-The React profiler connects to the Hermes runtime of the app through the debugger. Thus the app must run in a debuggable build. The native profiler attaches to the process of the app on the device. The native profiler does not need a special build.
+The React profiler connects to the Hermes runtime of the app through the debugger. Thus the app must run in a debuggable build. The native profiler attaches to the process of the app on the device. On iOS, the native profiler does not need a special build. On Android, the app must be a debug build or be profileable. Without this, the native profile has no CPU call stacks. To make a release build profileable, add `<profileable android:shell="true"/>` under `<application>` in `AndroidManifest.xml`.
 
 ## A profiling session
 
@@ -35,6 +35,18 @@ A profiling session has four steps. The agent does each step with one tool.
 2. You or the agent use the app. The agent can tap, swipe and type in the app with the [interaction tools](/docs/features/interacting-with-apps). This is the only part of the session that the profile contains.
 3. The agent stops the profiler. Argent collects the data and writes it to disk.
 4. The agent analyzes the data. Argent returns a report in Markdown.
+
+A screen capture uses CPU on the device. On a phone, it also raises the clock speeds and makes the app look faster than it is. Thus Argent keeps the screen capture low while a profiler records:
+
+- Argent does not add the screenshot and the element tree after each interaction. The agent can still take a screenshot or read the element tree when it must see the screen. Each interaction still waits until the screen stops changing, so they show the screen after the interaction.
+- On an Android emulator or device, Argent tells the simulator-server to capture the screen only for a screenshot. This needs a simulator-server version with on-demand screenshots.
+  - On an emulator, a screenshot takes one frame in about 100 ms. The capture does not start.
+  - On a physical device, a screenshot takes about 150 ms to 200 ms. It starts the capture for a short time.
+  - Taps and swipes do not start the capture.
+
+When two or more devices use one Metro, Argent finds the device of the React profile from a line that the app writes to the device log. Argent reads this log on Android devices and iOS simulators. On other devices, Argent keeps the screenshot and the element tree after each interaction.
+
+When no profiler records, a screenshot does not wait for the screen capture.
 
 When the agent runs both profilers, the agent can also ask for a combined report. Argent aligns the native hangs with the React commits on the wall clock. Thus the report tells you which React commit caused which hang.
 

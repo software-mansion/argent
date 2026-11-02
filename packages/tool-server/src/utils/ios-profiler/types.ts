@@ -5,7 +5,6 @@ export type {
   MemoryRssGrowth,
   Bottleneck,
   ProfilerPayload,
-  UiHangStateBreakdownEntry,
   NativeProfilerAnalyzeResult,
 } from "../profiler-shared/types";
 

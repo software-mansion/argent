@@ -213,6 +213,8 @@ module.exports = function ogImagePlugin() {
               style: {
                 width: PANEL.width,
                 height: PANEL.height,
+                // Satori defaults to content-box, which would add the padding to the panel size.
+                boxSizing: "border-box",
                 display: "flex",
                 flexDirection: "column",
                 alignItems: "center",

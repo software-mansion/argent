@@ -28,7 +28,7 @@ The first interaction with a device takes longer than the later ones:
 
 1. Argent builds the runner. A first build takes minutes. Later builds reuse a cache and take seconds.
 2. iOS asks you to trust the developer on the device: Settings > General > VPN & Device Management.
-3. An app named **ArgentRunner** appears on the home screen of the device. This app is the automation runner. Keep it installed.
+3. An app named **Argent Runner** appears on the home screen of the device. This app is the automation runner. Keep it installed.
 
 On a free Personal Team, the signature of the runner expires after about 7 days. The next interaction rebuilds and re-signs the runner.
 
@@ -40,7 +40,7 @@ Reading the screen does not change the screen. When the target app is in the bac
 
 ## What works
 
-The agent launches, restarts and reinstalls apps, passes launch arguments to an app, opens URLs, reads the accessibility tree, takes screenshots, compares screenshots for visual regressions, taps and double-taps, swipes, long-presses and drags, presses the home and volume buttons, and the action button on models that have one, types text, waits for elements, and records and replays [flows](/docs/features/flows). A flow replay never picks the phone automatically, even when no simulator is booted. Name the device in the instruction.
+The agent launches, restarts and reinstalls apps, passes launch arguments to an app, opens URLs, reads the accessibility tree, takes screenshots, compares screenshots for visual regressions, taps and double-taps, swipes, long-presses and drags, pinches, rotations and custom multi-finger paths, presses the home and volume buttons, and the action button on models that have one, types text, waits for elements, and records and replays [e2e tests](/docs/features/e2e). An e2e test replay never picks the phone automatically, even when no simulator is booted. Name the device in the instruction.
 
 A web URL opens in Safari, not in the app that owns the link. The agent names the app to hand it the URL. For any other URL scheme, the agent names the app that receives the URL.
 
@@ -62,7 +62,9 @@ Each tool that does not exist on hardware fails with a `not supported on ios dev
 
 - Argent drives iPhones only. Argent does not show iPads in the device list.
 - Argent drives the device over a USB cable only. Argent does not use Wi-Fi.
-- Two-finger gestures such as pinch and rotate are not possible. The agent uses the zoom controls of the app instead.
+- Pinches, rotations and custom gestures with a second finger or several moves need the app drawn in portrait. A portrait-only app on a phone held sideways still counts.
+- These gestures use a part of XCTest that Apple does not document. A future Xcode can remove this part. Argent then reports these gestures as unavailable. Taps, swipes, long presses and drags keep working.
+- One of these gestures uses at most two fingers and lasts at most 30 seconds.
 - The device does not rotate or shake on command. Rotate or shake the phone by hand, or test motion on a simulator.
 - The agent presses the home, volume and action buttons only. The power button and the app switcher are not available.
 - The agent types text, Enter and Backspace only. Other named keys are not available.

@@ -57,9 +57,9 @@ jobs:
     steps:
       # The host image is large (Vega SDK + emulator); reclaim runner disk first.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6 # v2.0.0
         with:
-          tool-cache: true
+          preinstalled-runtimes: true
           android: true
           dotnet: true
           haskell: true
@@ -70,16 +70,27 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "20"
 
-      # Build this branch's tool-server. The action runs it (node dist/index.js)
-      # inside the container against this bind-mounted node_modules + dist.
+      # The package bundle copies these in and fails without them.
+      - name: Download bundled binaries and assets
+        run: |
+          bash scripts/download-simulator-server.sh
+          bash scripts/download-native-binaries.sh
+          bash scripts/download-trace-processor.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build this branch's package bundle. The action runs its tool-server
+      # (packages/argent/dist/tool-server.cjs) inside the container against this
+      # bind-mounted workspace.
       - name: Build tool-server
         run: |
           npm ci
           npm run build
+          npm run build -w @swmansion/argent
 
       - name: Enable KVM
         # The VVD's QEMU needs /dev/kvm; ubuntu runners expose it but the runner

@@ -41,6 +41,7 @@ export function dispatchByPlatform<
   ChromiumServices = Record<string, unknown>,
   VegaServices = unknown,
   IosRemoteServices = IosServices,
+  HarmonyServices = unknown,
   IosDeviceServices = IosServices,
 >(opts: {
   toolId: string;
@@ -60,6 +61,8 @@ export function dispatchByPlatform<
   iosDevice?: PlatformImpl<IosDeviceServices, Params, Result>;
   chromium?: PlatformImpl<ChromiumServices, Params, Result>;
   vega?: PlatformImpl<VegaServices, Params, Result>;
+  /** Optional like `vega`: a declared but unwired `harmony` throws 501. */
+  harmony?: PlatformImpl<HarmonyServices, Params, Result>;
 }): (
   services: Record<string, unknown>,
   params: Params,
@@ -133,6 +136,21 @@ export function dispatchByPlatform<
         await ensureDeps(opts.vega.requires);
       }
       return opts.vega.handler(services as unknown as VegaServices, params, device, invokeOptions);
+    }
+    if (device.platform === "harmony") {
+      // Explicit: chromium is the fallthrough below.
+      if (!opts.harmony) {
+        throw new NotImplementedOnPlatformError({ toolId: opts.toolId, platform: "harmony" });
+      }
+      if (opts.harmony.requires?.length) {
+        await ensureDeps(opts.harmony.requires);
+      }
+      return opts.harmony.handler(
+        services as unknown as HarmonyServices,
+        params,
+        device,
+        invokeOptions
+      );
     }
     // chromium
     if (!opts.chromium) {

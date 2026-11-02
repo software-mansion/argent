@@ -1,7 +1,5 @@
 import type { ReRenderReason, HotCommitSummary, ComponentFinding } from "./output.js";
 
-export type { ReRenderReason };
-
 export interface SessionContext {
   reactCompilerEnabled: boolean;
   strictModeEnabled: boolean;

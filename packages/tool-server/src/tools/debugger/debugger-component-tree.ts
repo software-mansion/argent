@@ -797,6 +797,7 @@ Set includeSkipped=true to see a summary of all filtered components.
 Use when you need tap coordinates for a React Native UI element. Returns a compact text tree with (tap: x,y) coords. Fails if Metro debugger is not connected.`,
     alwaysLoad: true,
     searchHint: "react native component tree discovery tap coordinates",
+    readOnly: true,
     zodSchema,
     // RN-only: needs the React DevTools backend from the dev JS bundle. Chromium has
     // no equivalent — use `describe` there.

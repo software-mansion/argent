@@ -11,7 +11,8 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // distinguish "condition false" from "could not look" (blind-read guard for
 // `hidden`, dark-tail rule for every condition).
 let currentFetch: () => DescribeTreeData;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => currentFetch()),
 }));
 

@@ -27,6 +27,7 @@ export {
 export {
   createToolsClient,
   errorBodyMessage,
+  secretsTransportRefusal,
   type ToolsClient,
   type ToolMeta,
   type ToolInvocationResult,
@@ -35,6 +36,8 @@ export {
 } from "./tools-client.js";
 
 export { ToolInvocationError } from "./errors.js";
+
+export { canonicalToolId } from "@argent/registry";
 
 export {
   readLinkConfig,

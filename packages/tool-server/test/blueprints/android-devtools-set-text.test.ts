@@ -12,12 +12,16 @@ class FakeProc extends EventEmitter {
   kill = vi.fn(() => true);
 }
 
+// `am instrument` exits once the helper has answered `shutdown`.
+let lastProc: FakeProc | undefined;
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: () => {
       const proc = new FakeProc();
+      lastProc = proc;
       setImmediate(() => proc.stdout.write("INSTRUMENTATION_STATUS: port=41000\n"));
       return proc;
     },
@@ -54,6 +58,10 @@ vi.mock("../../src/utils/android-devtools-client", () => ({
     request: vi.fn(async (method: string, params?: Record<string, unknown>) => {
       requests.push({ method, params });
       if (method === "setText") return answerSetText(params ?? {});
+      if (method === "shutdown") {
+        const proc = lastProc;
+        setImmediate(() => proc?.emit("exit", 0, null));
+      }
       return { ok: true };
     }),
     close: vi.fn(),

@@ -16,7 +16,7 @@ Argent is an MCP server for mobile, TV and desktop apps. The Model Context Proto
 - inspect network traffic,
 - profile the app.
 
-The Argent MCP server works with Claude Code, Cursor, VS Code, Windsurf, Zed, Gemini CLI, Codex CLI, opencode and other MCP clients. See [Supported editors](/docs/reference/editors) for the full list.
+The Argent MCP server works with Claude Code, Cursor, VS Code, Devin Desktop, Zed, Gemini CLI, Codex CLI, opencode and other MCP clients. See [Supported editors](/docs/reference/editors) for the full list.
 
 ## Register the MCP server
 
@@ -47,7 +47,7 @@ npm install -g @swmansion/argent
 }
 ```
 
-The key of the top-level object depends on the editor. Claude Code, Cursor and Windsurf use `mcpServers`. VS Code uses `servers`. See [Supported editors](/docs/reference/editors) for the config file of each editor.
+The key of the top-level object depends on the editor. Claude Code, Cursor and Devin Desktop use `mcpServers`. VS Code uses `servers`. See [Supported editors](/docs/reference/editors) for the config file of each editor.
 
 ## How the MCP server works
 
@@ -58,8 +58,8 @@ By default, the MCP server starts a local tool-server when the editor starts the
 Over a link, the MCP server uploads files with the same rules as the `argent` CLI:
 
 - `reinstall-app` uploads the app at `appPath`.
-- `flow-execute` and `flow-read-prerequisite` upload the flow file with the call. `screenshot-diff` uploads its images with the call. The MCP server uploads a file of 32 MiB or less. For a larger file, it sends only the path, the size and the modification time. The tool-server then uses its own file at that path only if the size and the modification time are the same. The files of one call can be approximately 36 MiB in total. The tool-server refuses a call that is larger.
-- `flow-execute` also uploads the `run:` fragments and the nested flows that the flow reaches, its snapshot baselines and the file arguments of its `tool:` steps. A fragment larger than 32 MiB stops the flow before the first step. See [Remote runs](/docs/reference/flow-yaml#remote-runs).
+- `e2e-execute` and `e2e-read-prerequisite` upload the e2e test file with the call. `screenshot-diff` uploads its images with the call. The MCP server uploads a file of 32 MiB or less. For a larger file, it sends only the path, the size and the modification time. The tool-server then uses its own file at that path only if the size and the modification time are the same. The files of one call can be approximately 36 MiB in total. The tool-server refuses a call that is larger.
+- `e2e-execute` also uploads the `run:` fragments and the nested e2e tests that the e2e test reaches, its snapshot baselines and the file arguments of its `tool:` steps. A fragment larger than 32 MiB stops the e2e test before the first step. See [Remote runs](/docs/reference/e2e-yaml#remote-runs).
 - Other path parameters reach the tool-server as a path only, for example the `workspacePath` of `gather-workspace-data`.
 
 Run `argent server status` to see the state of the local tool-server. Run `argent server logs` to read its output.

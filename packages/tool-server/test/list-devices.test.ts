@@ -150,8 +150,25 @@ function simctlJson(): string {
   });
 }
 
+/**
+ * A non-default adb server adds a sentence to `hint`, so the developer's own
+ * adb variables would decide every assertion about it. Each test starts from
+ * adb's default server and sets what it exercises itself.
+ */
+const ADB_ENV = ["ADB_SERVER_SOCKET", "ANDROID_ADB_SERVER_ADDRESS", "ANDROID_ADB_SERVER_PORT"];
+let savedAdbEnv: Record<string, string | undefined>;
+
 beforeEach(() => {
   execFileMock.mockReset();
+  savedAdbEnv = Object.fromEntries(ADB_ENV.map((name) => [name, process.env[name]]));
+  for (const name of ADB_ENV) delete process.env[name];
+});
+
+afterEach(() => {
+  for (const name of ADB_ENV) {
+    if (savedAdbEnv[name] === undefined) delete process.env[name];
+    else process.env[name] = savedAdbEnv[name];
+  }
 });
 
 describe("list-devices", () => {
@@ -241,6 +258,42 @@ describe("list-devices", () => {
     const result = await listDevicesTool.execute!({}, {});
 
     expect(result.devices.length).toBeGreaterThan(0);
+    expect(result).not.toHaveProperty("hint");
+  });
+
+  /**
+   * The agent's own adb reaches the default server, where these serials do not
+   * exist. No Android device is listed: the agent may boot one next.
+   */
+  it("tells the agent how to reach a non-default adb server", async () => {
+    process.env.ANDROID_ADB_SERVER_PORT = "5038";
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.filter((d) => d.platform === "android")).toEqual([]);
+    expect(result.hint).toContain("`ANDROID_ADB_SERVER_PORT=5038 adb -s <serial> ...`");
+  });
+
+  it("says nothing about the adb server when the environment names the default one", async () => {
+    process.env.ANDROID_ADB_SERVER_PORT = "5037";
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\nemulator-5554\tdevice\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.some((d) => d.platform === "android")).toBe(true);
     expect(result).not.toHaveProperty("hint");
   });
 
@@ -746,5 +799,26 @@ describe("list-devices — external provider shadows", () => {
     /** The two rules that differ from a device argent booted itself. */
     expect(result.hint).toContain("boot-device");
     expect(result.hint).toContain("provider.workspace.path");
+    expect(result.hint).not.toContain("ANDROID_ADB_SERVER_PORT");
+  });
+
+  it("gives the provider rules and the adb server in one hint when both apply", async () => {
+    process.env.ANDROID_ADB_SERVER_PORT = "5038";
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.hint).toContain("provider.workspace.path");
+    expect(result.hint).toContain("`ANDROID_ADB_SERVER_PORT=5038 adb -s <serial> ...`");
   });
 });
