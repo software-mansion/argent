@@ -87,9 +87,12 @@ interface MacosLaunchOptions {
   appPath?: string;
   /**
    * Extra arguments for the app executable. Omitted, the app gets the
-   * arguments of its last start: launch-app and restart-app rely on that.
+   * arguments of its last start (launch-app and restart-app rely on that), or
+   * none with `noLastArgs`. Only given `args` are compared with a running app's.
    */
   args?: string[];
+  /** Omitted `args` start the app with no arguments. */
+  noLastArgs?: boolean;
   /** How long the library gets to answer after the spawn. Default 20 s. */
   handshakeTimeoutMs?: number;
   /** How long a new process gets to show its first window. Default 10 s. */
@@ -1038,7 +1041,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     fs.mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
     if (listen && !info.sandboxed) fs.rmSync(listen.path, { force: true });
     fs.writeFileSync(logPath, "");
-    const args = opts.args ?? tracked?.args ?? [];
+    const args = opts.args ?? (opts.noLastArgs ? undefined : tracked?.args) ?? [];
 
     const helper = spawn(
       artifacts.helper,

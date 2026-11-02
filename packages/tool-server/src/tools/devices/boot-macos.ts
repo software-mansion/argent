@@ -43,7 +43,8 @@ export async function bootMacosApp(
   // never reuses the arguments of an earlier start (launch-app and restart-app do).
   const { pid, appPath, sandboxed, logPath, args, alreadyRunning, note } = await app.launch({
     appPath: info?.appPath,
-    args: opts.args ?? [],
+    args: opts.args,
+    noLastArgs: true,
     takeOver: opts.force,
     force: opts.force,
   });

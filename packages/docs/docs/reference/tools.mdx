@@ -181,7 +181,7 @@ The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPa
 
 After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 seconds until the app shows a window. A dialog that the app shows while it launches also counts as a window, for example a license prompt. The agent answers this dialog with the other tools. When no window appears, the result has a `note`, because taps and screenshots need a window. The result also has a `note` in these cases:
 
-- The app runs already with other arguments than `macosAppArgs`. Argent does not start the app again. Use `force` to start the app with the new arguments.
+- The app runs already with other arguments than `macosAppArgs`. Argent does not start the app again. Use `force` to start the app with the new arguments. Without `macosAppArgs`, a running app gets no note about its arguments.
 - The app has no listening socket.
 
 `boot-device` fails in these cases:
