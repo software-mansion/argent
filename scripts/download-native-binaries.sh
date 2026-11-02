@@ -9,7 +9,8 @@ set -euo pipefail
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
 #
 # Requires:
-#   - gh CLI (no authentication needed — the repo is public)
+#   - gh CLI, logged in with `gh auth login` (the repo is public, but the
+#     `gh release view` pre-check still needs auth)
 
 REPO="software-mansion-labs/argent-private-releases"
 

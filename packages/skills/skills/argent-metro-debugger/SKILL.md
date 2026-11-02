@@ -21,7 +21,7 @@ Android emulators and physical devices do not resolve the host's `localhost` by 
 adb -s <serial> reverse tcp:8081 tcp:8081
 ```
 
-`<serial>` is the Android `serial` from `list-devices`. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
+`<serial>` is the Android `serial` from `list-devices`. If `list-devices` returns a `hint` about the adb server, prefix the command as the hint shows. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
 
 ## 2. Tool Overview
 

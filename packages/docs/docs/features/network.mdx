@@ -22,7 +22,7 @@ Argent captures traffic in four layers.
 | Layer                    | Platforms             | Content                                                                                       |
 | ------------------------ | --------------------- | --------------------------------------------------------------------------------------------- |
 | JS runtime               | iOS, Android, Vega    | The `XMLHttpRequest` calls, also from axios, and the `fetch()` calls of React Native and Expo |
-| Native `NSURLProtocol`   | iOS                   | All requests, also from native modules and background transfers                               |
+| Native `NSURLProtocol`   | iOS                   | The `URLSession` requests, also from native modules. See the Limits section                   |
 | Native OkHttp            | Android               | OkHttp requests from a debuggable app                                                         |
 | Chrome DevTools Protocol | Chromium and Electron | All request types of the active tab, also documents and assets                                |
 
@@ -126,6 +126,12 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - The JS runtime layer does not read a binary response body, for example an image, a font, a PDF file or an `application/octet-stream` body. The record gives the type and the size of the body only. For Chromium, Argent does not show a response body that is not UTF-8 text. The details give the type and the size of this body only.
 - The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
+- The `NSURLProtocol` layer records the requests of `URLSession` sessions with the default configuration or the ephemeral configuration, and of `URLSession.shared`. The layer does not record these requests:
+  - The transfers of a background `URLSession`. iOS does not use a custom `NSURLProtocol` for background sessions.
+  - The connections of `Network.framework`, for example `nw_connection`.
+  - The requests of a `WKWebView`, also the `fetch()` calls in the web page.
+  - The requests of an HTTP client that does not use `URLSession`, for example the `HttpClient` of Flutter (`dart:io`).
+- An empty native network log does not prove that the app sent no requests. The app can send requests that the `NSURLProtocol` layer does not record.
 - Native network capture can miss startup requests. It can also miss the requests of a native module, for example a module that does not use OkHttp.
 - For WebSockets, native network capture records only the connection request.
 - Native network capture reads each body from the app process that sent the request. A relaunch or an emulator snapshot load ends that process. After that, a request body or a response body is available only if the agent read it before. Argent keeps a copy of only the 64 most recent bodies that the agent read.

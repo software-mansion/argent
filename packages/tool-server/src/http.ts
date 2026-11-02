@@ -4,10 +4,11 @@ import { createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
   describeParamIssues,
@@ -778,6 +779,19 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         return;
       }
 
+      let clientSecrets: Map<string, string> | undefined;
+      const clientSecretsHeader = firstHeader(req.headers[CLIENT_SECRETS_HEADER]);
+      if (clientSecretsHeader !== undefined) {
+        try {
+          clientSecrets = decodeClientSecrets(clientSecretsHeader);
+        } catch (err) {
+          res.status(400).json({
+            error: `The ${CLIENT_SECRETS_HEADER} header ${err instanceof Error ? err.message : String(err)}.`,
+          });
+          return;
+        }
+      }
+
       // File boundary: turn client file-input wrappers back into plain
       // server-readable paths BEFORE schema validation, so the tool's zod schema
       // only ever sees the string params it declares. 422 on a file reachable
@@ -1020,6 +1034,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           ...(firstHeader(req.headers[E2E_DIR_CLIENT_HEADER]) === "1"
             ? {}
             : { legacyE2eDir: true }),
+          ...(clientSecrets ? { clientSecrets } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream

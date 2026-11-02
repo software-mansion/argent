@@ -257,6 +257,14 @@ export function getAndroidSdkRoot(options: ConfigPathOptions = {}): string | nul
   return path.resolve(value);
 }
 
+const ANDROID_ADB_SERVER_PORT_KEY = "android.adbServerPort";
+
+/** The configured adb server port, or null when unset. */
+export function getAndroidAdbServerPort(options: ConfigPathOptions = {}): number | null {
+  const value = getConfigValueByKey(ANDROID_ADB_SERVER_PORT_KEY, options);
+  return typeof value === "number" ? value : null;
+}
+
 const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
 
 /**

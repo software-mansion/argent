@@ -7,6 +7,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb";
+import { adbCommandPrefix } from "../utils/adb-server";
 import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
 import { UnsupportedOperationError } from "../utils/capability";
 import {
@@ -252,7 +253,8 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
             `uiautomator could not capture the screen: ${output}. Another UiAutomation client ` +
               `(the argent devtools helper, or a test runner such as Espresso or Appium) holds ` +
               `the accessibility connection. Stop it, for the helper with ` +
-              `\`adb shell am force-stop com.argent.androiddevtools\`, and try again.`
+              `\`${adbCommandPrefix(process.env)}adb shell am force-stop com.argent.androiddevtools\`, ` +
+              `and try again.`
           );
         }
         throw new Error(

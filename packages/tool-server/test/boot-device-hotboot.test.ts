@@ -739,7 +739,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
           stderr: "",
         };
       }
-      if (cmd === "adb" && args[0] === "-s" && args[2] === "emu") {
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "emu" && args[3] === "kill") {
         alive = false;
         killedAt = Date.now();
         return { stdout: "OK\n", stderr: "" };
@@ -790,6 +790,305 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
       }
     }
   );
+
+  // Answers for an emulator that booted fine, for the shell commands the boot
+  // pipeline sends after the serial registers.
+  function healthyShell(shellCmd: string, avdName = "Pixel_7_API_34") {
+    if (shellCmd === "getprop ro.boot.qemu.avd_name") return { stdout: `${avdName}\n`, stderr: "" };
+    if (shellCmd.startsWith("getprop sys.boot_completed")) return { stdout: "1\n", stderr: "" };
+    if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+    if (shellCmd === "pm path android")
+      return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
+    if (shellCmd.startsWith("screencap")) return { stdout: "1\n", stderr: "" };
+    return { stdout: "\n", stderr: "" };
+  }
+
+  // What `adb -s <serial> emu avd name` yields: the name, "Connection refused"
+  // once nothing listens on the console port, or a timeout while the emulator
+  // is alive but deaf (frozen, shutting down).
+  const consoleName = (avdName: string) => ({ stdout: `${avdName}\nOK\n`, stderr: "" });
+  const consoleRefused = (serial: string) =>
+    new Error(`error: could not connect to TCP port ${serial.slice(9)}: Connection refused`);
+  const consoleTimeout = () => new Error("killed=true signal=SIGKILL");
+  const qemuLine = (pid: number, avdName: string) =>
+    `${pid} /Users/me/Library/Android/sdk/emulator/qemu/darwin-aarch64/qemu-system-aarch64 -avd ${avdName} -no-snapshot-save\n`;
+
+  // One emulator per AVD, as the boot sees it through adb, its console and the
+  // process table. `shellOk` false means getprop and friends fail (dying, frozen).
+  interface FakeEmulator {
+    serial: string;
+    avdName: string;
+    state?: "device" | "offline";
+    shellOk?: boolean;
+    console?: "name" | "refused" | "timeout";
+    pid?: number;
+  }
+
+  // Wires `execFileMock` to a scenario: `emulators()` is re-evaluated on every
+  // adb/ps call so a test can change the world over (fake) time.
+  function mockEmulatorWorld(emulators: () => FakeEmulator[]) {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "emulator" && args[0] === "-list-avds")
+        return { stdout: "Pixel_7_API_34\nOther_AVD\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "version")
+        return { stdout: "Android Debug Bridge\n", stderr: "" };
+      if (args.includes("pid=,command=")) {
+        const procs = emulators().filter((e) => e.pid !== undefined);
+        return { stdout: procs.map((e) => qemuLine(e.pid!, e.avdName)).join(""), stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "devices") {
+        const lines = emulators().map((e) => `${e.serial}\t${e.state ?? "device"}\n`);
+        return { stdout: `List of devices attached\n${lines.join("")}`, stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s") {
+        const serial = args[1]!;
+        const emu = emulators().find((e) => e.serial === serial);
+        if (args[2] === "emu" && args[3] === "avd") {
+          const mode = emu?.console ?? (emu ? "name" : "refused");
+          if (mode === "name") return consoleName(emu!.avdName);
+          if (mode === "refused") return consoleRefused(serial);
+          return consoleTimeout();
+        }
+        if (args[2] === "shell") {
+          if (!emu || emu.shellOk === false) return new Error("error: closed");
+          return healthyShell(args[3] ?? "", emu.avdName);
+        }
+      }
+      return { stdout: "", stderr: "" };
+    });
+  }
+
+  // Runs the boot to completion under fake timers and reports how long it took
+  // on the fake clock. Advances past the 30 s hot and 60 s cold registration
+  // budgets so a boot that never finds its serial still settles.
+  async function bootUnderFakeTimers(extra: Record<string, unknown> = {}) {
+    const start = Date.now();
+    let settledAt = -1;
+    const tool = createBootDeviceTool(registry);
+    const settled = tool.execute!({}, { avdName: "Pixel_7_API_34", ...extra })
+      .then(
+        (r) => ({ r }),
+        (e: unknown) => ({ e })
+      )
+      .finally(() => {
+        settledAt = Date.now();
+      });
+    await vi.advanceTimersByTimeAsync(120_000);
+    return { outcome: await settled, elapsedMs: settledAt - start };
+  }
+
+  // A window closed, a crash or `adb emu kill` outside argent, where qemu has
+  // already exited: adb keeps listing the serial for a moment, as `device` with
+  // getprop failing or as `offline`, but the console port is already free.
+  it.each(["device", "offline"] as const)(
+    "boots under the freed serial when an emulator killed outside argent is still listed as %s",
+    async (dyingState) => {
+      vi.useFakeTimers();
+      try {
+        hasSnapshotMock.mockResolvedValue(true);
+        probeMock.mockResolvedValue({ loadable: true, reason: null });
+        const killedAt = Date.now();
+        let spawned = false;
+        spawnMock.mockImplementation(() => {
+          spawned = true;
+          return fakeChild();
+        });
+        mockEmulatorWorld(() => {
+          if (spawned) return [{ serial: "emulator-5554", avdName: "Pixel_7_API_34" }];
+          if (Date.now() - killedAt < 3_000) {
+            return [
+              {
+                serial: "emulator-5554",
+                avdName: "Pixel_7_API_34",
+                state: dyingState,
+                shellOk: false,
+                console: "refused",
+              },
+            ];
+          }
+          return [];
+        });
+
+        const { outcome } = await bootUnderFakeTimers();
+
+        expect(outcome).toEqual({ r: expect.objectContaining({ serial: "emulator-5554" }) });
+        expect(spawnMock).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  // The slow variant of the same kill: qemu takes seconds to exit (up to ~20 s
+  // after `adb emu kill` of a `-no-snapshot-save` emulator). adb lists it as
+  // `device`, getprop and the console time out, so adb alone cannot tell it from
+  // a frozen emulator of another AVD: the process table can.
+  it("waits for this AVD's dying process before spawning, then boots under its freed serial", async () => {
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(true);
+      probeMock.mockResolvedValue({ loadable: true, reason: null });
+      const start = Date.now();
+      let spawnedAt = -1;
+      spawnMock.mockImplementation(() => {
+        spawnedAt = Date.now();
+        return fakeChild();
+      });
+      mockEmulatorWorld(() => {
+        if (spawnedAt >= 0) return [{ serial: "emulator-5554", avdName: "Pixel_7_API_34" }];
+        const dying: FakeEmulator = {
+          serial: "emulator-5554",
+          avdName: "Pixel_7_API_34",
+          shellOk: false,
+          console: "timeout",
+          pid: 4242,
+        };
+        // qemu exits at +3 s; adb drops the serial at +4 s.
+        if (Date.now() - start >= 3_000) {
+          dying.pid = undefined;
+          dying.console = "refused";
+        }
+        return Date.now() - start < 4_000 ? [dying] : [];
+      });
+
+      const { outcome } = await bootUnderFakeTimers();
+
+      expect(outcome).toEqual({ r: expect.objectContaining({ serial: "emulator-5554" }) });
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(spawnedAt - start).toBeGreaterThanOrEqual(3_000);
+      expect(spawnedAt - start).toBeLessThan(4_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps the wait for this AVD's process by the boot deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(false);
+      const start = Date.now();
+      let spawnedAt = -1;
+      spawnMock.mockImplementation(() => {
+        spawnedAt = Date.now();
+        return fakeChild();
+      });
+      // This AVD's process never exits and never answers (frozen).
+      mockEmulatorWorld(() => [
+        {
+          serial: "emulator-5554",
+          avdName: "Pixel_7_API_34",
+          shellOk: false,
+          console: "timeout",
+          pid: 4242,
+        },
+      ]);
+      // The AVD lookup takes 12 s of the 30 s budget, so only 18 s are left for the wait.
+      execFileMock.mockImplementationOnce(() => {
+        vi.setSystemTime(Date.now() + 12_000);
+        return { stdout: "Pixel_7_API_34\n", stderr: "" };
+      });
+
+      await bootUnderFakeTimers({ bootTimeoutMs: 30_000 });
+
+      // Spawned at the boot deadline, not 30 s after the wait started.
+      expect(spawnedAt - start).toBeGreaterThanOrEqual(30_000);
+      expect(spawnedAt - start).toBeLessThan(31_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review: an unrelated frozen emulator (listed, deaf to getprop and its
+  // console) must not cost this boot anything, let alone its whole budget.
+  it("boots within a 30 s budget while an unrelated emulator never answers", async () => {
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(true);
+      probeMock.mockResolvedValue({ loadable: true, reason: null });
+      const start = Date.now();
+      let spawnedAt = -1;
+      spawnMock.mockImplementation(() => {
+        spawnedAt = Date.now();
+        return fakeChild();
+      });
+      const frozen: FakeEmulator = {
+        serial: "emulator-5554",
+        avdName: "Other_AVD",
+        shellOk: false,
+        console: "timeout",
+        pid: 4343,
+      };
+      mockEmulatorWorld(() =>
+        spawnedAt >= 0 ? [frozen, { serial: "emulator-5556", avdName: "Pixel_7_API_34" }] : [frozen]
+      );
+
+      const { outcome } = await bootUnderFakeTimers({ bootTimeoutMs: 30_000 });
+
+      expect(outcome).toEqual({ r: expect.objectContaining({ serial: "emulator-5556" }) });
+      expect(spawnedAt - start).toBeLessThan(2_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns the running AVD at once while an unrelated emulator never answers", async () => {
+    vi.useFakeTimers();
+    try {
+      mockEmulatorWorld(() => [
+        { serial: "emulator-5554", avdName: "Pixel_7_API_34" },
+        {
+          serial: "emulator-5556",
+          avdName: "Other_AVD",
+          shellOk: false,
+          console: "timeout",
+          pid: 4343,
+        },
+      ]);
+
+      const { outcome, elapsedMs } = await bootUnderFakeTimers();
+
+      expect(outcome).toEqual({ r: expect.objectContaining({ serial: "emulator-5554" }) });
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(elapsedMs).toBeLessThan(2_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review: another AVD killed and restarted at the same moment comes back on
+  // its freed serial, which was dropped from the before-spawn snapshot, and
+  // registers before ours. It must not be returned as this AVD.
+  it("does not take an unrelated emulator restarted on its freed serial for this AVD", async () => {
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(true);
+      probeMock.mockResolvedValue({ loadable: true, reason: null });
+      let spawnedAt = -1;
+      spawnMock.mockImplementation(() => {
+        spawnedAt = Date.now();
+        return fakeChild();
+      });
+      mockEmulatorWorld(() => {
+        // Before our spawn: Other_AVD's old emulator has exited, adb still lists it.
+        if (spawnedAt < 0) {
+          return [
+            { serial: "emulator-5556", avdName: "Other_AVD", shellOk: false, console: "refused" },
+          ];
+        }
+        // Other_AVD's new emulator takes the freed serial first; ours follows.
+        const world: FakeEmulator[] = [{ serial: "emulator-5556", avdName: "Other_AVD" }];
+        if (Date.now() - spawnedAt >= 1_500)
+          world.push({ serial: "emulator-5558", avdName: "Pixel_7_API_34" });
+        return world;
+      });
+
+      const { outcome } = await bootUnderFakeTimers();
+
+      expect(outcome).toEqual({ r: expect.objectContaining({ serial: "emulator-5558" }) });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("returns the already-running emulator without spawning when the AVD is live and its framebuffer is healthy", async () => {
     // adb devices reports the AVD already attached; getprop answers with the

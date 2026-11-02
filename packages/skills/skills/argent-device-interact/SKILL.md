@@ -387,7 +387,7 @@ Stops on the first error (or unmet `await-ui-element` condition) and returns par
 
 ### Android
 
-- **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` on the device before the RN app starts, or Metro won't be reachable from the device. See `argent-metro-debugger` for the full workflow. Re-run if the device restarts.
+- **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` on the device before the RN app starts, or Metro won't be reachable from the device. See `argent-metro-debugger` for the full workflow. Re-run if the device restarts. If `list-devices` returns a `hint` about the adb server, prefix the command as the hint shows.
 - **First-launch permission prompts**: `reinstall-app` on Android always installs with `-g` so runtime permissions are pre-granted on first launch; no flag to pass.
 - **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
 - **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.

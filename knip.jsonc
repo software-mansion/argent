@@ -62,6 +62,8 @@
     // scripts/e2e-full/ harness included — is outside the gate however it runs.
     ".": {
       "entry": ["scripts/ci/windows-chromium-e2e.mjs"],
+      // scripts/dev.cjs resolves ts-node from packages/tool-server, which declares it.
+      "ignoreDependencies": ["ts-node"],
     },
 
     // @swmansion/argent is a thin dispatcher whose real payload is an esbuild
