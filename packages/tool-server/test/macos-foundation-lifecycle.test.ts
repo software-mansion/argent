@@ -1483,6 +1483,7 @@ describe("code signature rules", () => {
       })
     ).toEqual({
       hardenedRuntime: true,
+      libraryValidation: false,
       sandboxed: true,
       userSelectedReadOnly: true,
       teamId: "ABCDE12345",
@@ -1499,6 +1500,9 @@ describe("code signature rules", () => {
     });
     expect(adhoc).toMatchObject({ hardenedRuntime: false, userSelectedReadOnly: false });
     expect(adhoc.teamId).toBeUndefined();
+    expect(
+      parseCodesignDisplay({ stdout: "", stderr: "flags=0x2002(adhoc,library-validation)\n" })
+    ).toMatchObject({ hardenedRuntime: false, libraryValidation: true });
     expect(parseCodesignDisplay(null)).toMatchObject({ hardenedRuntime: false, sandboxed: false });
     // Read-write wins over read-only, as a panel's own grant would.
     const both = parseCodesignDisplay({
@@ -1541,6 +1545,16 @@ describe("code signature rules", () => {
       expect(refusal).toContain("ENABLE_HARDENED_RUNTIME = NO in the Debug configuration");
       expect(refusal).toContain("com.apple.security.cs.disable-library-validation");
     }
+  });
+
+  it.each([
+    ["ad hoc", appInfo(false, [])],
+    ["disable-library-validation", appInfo(false, [DLV])],
+    ["a hardened Debug build with disable-library-validation", appInfo(true, [GTA, DLV])],
+  ])("refuses the library-validation flag at once: %s", (_label, info) => {
+    expect(hardenedRuntimeRefusal({ ...info, libraryValidation: true })).toMatch(
+      /signed with library validation .*Sign the app without that option/
+    );
   });
 
   it("points an Electron app or a Chromium browser to argent's Chromium support", () => {

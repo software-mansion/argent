@@ -548,6 +548,8 @@ export interface MacosAppInfo {
   executable: string;
   /** The `runtime` flag of the code signature. */
   hardenedRuntime: boolean;
+  /** The `library-validation` flag of the code signature (`codesign -o library`). */
+  libraryValidation: boolean;
   sandboxed: boolean;
   /** The app may only read the files a user chooses: user-selected read-only and not read-write. */
   userSelectedReadOnly: boolean;
@@ -646,7 +648,12 @@ export function parseCodesignDisplay(
   output: { stdout: string; stderr: string } | null
 ): Pick<
   MacosAppInfo,
-  "hardenedRuntime" | "sandboxed" | "userSelectedReadOnly" | "teamId" | "entitlements"
+  | "hardenedRuntime"
+  | "libraryValidation"
+  | "sandboxed"
+  | "userSelectedReadOnly"
+  | "teamId"
+  | "entitlements"
 > {
   const xml = output?.stdout ?? "";
   const stderr = output?.stderr ?? "";
@@ -656,6 +663,7 @@ export function parseCodesignDisplay(
   const entitled = (key: string) => hasTrueEntitlement(xml, `com.apple.security.${key}`);
   return {
     hardenedRuntime: flags.some((f) => f.trim() === "runtime"),
+    libraryValidation: flags.some((f) => f.trim() === "library-validation"),
     sandboxed: entitled("app-sandbox"),
     userSelectedReadOnly:
       entitled("files.user-selected.read-only") && !entitled("files.user-selected.read-write"),
@@ -779,13 +787,16 @@ export function macosVersionRefusal(darwinRelease: string): string | null {
  * developers' among them, or the Release configuration of the user's own. No
  * project setting opens that one, so the refusal asks for no rebuild.
  *
+ * The `library-validation` flag (`codesign -o library`) blocks the library
+ * with or without the hardened runtime, and `disable-library-validation` does
+ * not lift it.
+ *
  * Returns the refusal, or null when argent can go on to stage the library.
  */
 export function hardenedRuntimeRefusal(info: MacosAppInfo): string | null {
-  if (!info.hardenedRuntime) return null;
   const { getTaskAllow, disableLibraryValidation, allowDyldEnvironmentVariables } =
     info.entitlements;
-  if (!getTaskAllow && !allowDyldEnvironmentVariables) {
+  if (info.hardenedRuntime && !getTaskAllow && !allowDyldEnvironmentVariables) {
     return (
       `${info.bundleId} is a release build with the hardened runtime, so macOS does not load ` +
       `the argent library into it, and argent cannot drive it. Notarized apps, including apps ` +
@@ -793,7 +804,15 @@ export function hardenedRuntimeRefusal(info: MacosAppInfo): string | null {
       `if this app is yours, start its Debug build.`
     );
   }
-  if (disableLibraryValidation || info.teamId) return null;
+  if (info.libraryValidation) {
+    return (
+      `${info.bundleId} is signed with library validation (the codesign option ` +
+      `"--options library"), so macOS does not load the argent library into it, also with the ` +
+      `entitlement com.apple.security.cs.disable-library-validation. Sign the app ` +
+      `without that option, for example remove it from OTHER_CODE_SIGN_FLAGS.`
+    );
+  }
+  if (!info.hardenedRuntime || disableLibraryValidation || info.teamId) return null;
   return (
     `${info.bundleId} is a Debug build with the hardened runtime, so macOS does not load the ` +
     `argent library into it. Build it without the hardened runtime (ENABLE_HARDENED_RUNTIME = ` +
