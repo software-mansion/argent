@@ -64,11 +64,20 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { renderFlagGated } from "../../utils/flag-gated-text";
-import { MACOS_DESCRIBE_LIMITS, MACOS_JUDGING_LIMITS } from "../describe/platforms/macos";
+import {
+  MACOS_DESCRIBE_LIMITS,
+  MACOS_JUDGING_LIMITS,
+  MACOS_LOCKED_HINT,
+} from "../describe/platforms/macos";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
-import { getDescribeTapPoint, type DescribeFrame, type DescribeSource } from "../describe/contract";
+import {
+  getDescribeTapPoint,
+  type DescribeFrame,
+  type DescribeSource,
+  type DescribeTreeData,
+} from "../describe/contract";
 import {
   nodeAtPoint,
   deriveSelector,
@@ -111,8 +120,8 @@ const zodSchema = z.object({
 // flow-run.ts) and refuses to degrade to the fallback tree, so a selector
 // derived from the fallback deserves a caveat even when it derives cleanly.
 // Chromium/Vega have a single source — no caveat. A Mac app reads a different
-// tree while the Mac is locked ("macos-fallback"), so a step recorded on a
-// locked Mac gets the caveat.
+// tree ("macos-fallback") mostly while the Mac is locked, so a step recorded on
+// a locked Mac gets a caveat that says so.
 const REPLAY_TREE_SOURCES: Record<string, DescribeSource> = {
   ios: "native-devtools",
   android: "android-devtools",
@@ -133,13 +142,15 @@ function recordedLaunchedApp(session: RecordingSession, platform: string): strin
   return undefined;
 }
 
-function fallbackSourceWarning(source: DescribeSource, platform: string): string | undefined {
+function fallbackSourceWarning(
+  { source, hint }: DescribeTreeData,
+  platform: string
+): string | undefined {
   // Keyed by authoring platform: a remote simulator reads the same iOS full
   // hierarchy a local one does, so it earns the same caveat.
   const expected = REPLAY_TREE_SOURCES[authoringPlatform(platform)];
   if (!expected || source === expected) return undefined;
-  if (platform === "macos") {
-    // The Mac source follows the screen lock, not an outage.
+  if (platform === "macos" && hint?.includes(MACOS_LOCKED_HINT)) {
     return `selector captured while the Mac was locked (the ${source} tree, not ${expected}): a replay on an unlocked Mac reads the ${expected} tree, which may not match it`;
   }
   return `selector captured from the fallback ${source} tree (${expected} unavailable) — replay resolves against the full hierarchy, which may not match it`;
@@ -767,11 +778,12 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source, uiOrientation } = await fetchFlowTree(
+    const data = await fetchFlowTree(
       registry,
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
     );
+    const { tree, uiOrientation } = data;
     const node = nodeAtPoint(tree, point);
     if (!node) return { warning: "no element found under the tap; kept coordinates (brittle)" };
     const selector = deriveSelector(node);
@@ -817,7 +829,7 @@ async function captureTapSelector(
     }
     const warnings = [
       roleOnlySelectorWarning(selector),
-      fallbackSourceWarning(source, device.platform),
+      fallbackSourceWarning(data, device.platform),
     ].filter((w) => w !== undefined);
     return { selector, ...(warnings.length > 0 ? { warning: warnings.join("; ") } : {}) };
   } catch (err) {

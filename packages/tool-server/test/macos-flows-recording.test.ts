@@ -17,7 +17,12 @@ vi.mock("../src/tools/flows/flow-tree", async (importOriginal) => ({
 import { createFlowAddStepTool, directiveCommandHint } from "../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
 import { __resetRecordingsForTesting, parseFlow } from "../src/tools/flows/flow-utils";
-import { MACOS_DESCRIBE_LIMITS, MACOS_JUDGING_LIMITS } from "../src/tools/describe/platforms/macos";
+import {
+  MACOS_DESCRIBE_LIMITS,
+  MACOS_FALLBACK_HINT,
+  MACOS_JUDGING_LIMITS,
+  MACOS_LOCKED_HINT,
+} from "../src/tools/describe/platforms/macos";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 
 useMacosAppsFlag();
@@ -32,8 +37,8 @@ function n(partial: Partial<DescribeNode> & { frame: DescribeNode["frame"] }): D
   return { role: "AXGroup", children: [], ...partial };
 }
 
-function serve(children: DescribeNode[], source: DescribeTreeData["source"]): void {
-  currentTreeData = () => ({ tree: n({ role: "Screen", frame: FULL, children }), source });
+function serve(children: DescribeNode[], source: DescribeTreeData["source"], hint?: string): void {
+  currentTreeData = () => ({ tree: n({ role: "Screen", frame: FULL, children }), source, hint });
 }
 
 function registry(): Registry {
@@ -92,7 +97,7 @@ const BUTTON = n({
 
 describe("a tap recorded on a Mac app", () => {
   it("carries the locked-Mac caveat when the tree came from the fallback walk", async () => {
-    serve([BUTTON], "macos-fallback");
+    serve([BUTTON], "macos-fallback", MACOS_LOCKED_HINT);
     await start("locked");
 
     const result = await record("locked", "gesture-tap", { x: 0.4, y: 0.53 });
@@ -102,6 +107,18 @@ describe("a tap recorded on a Mac app", () => {
     );
     expect(result.message).not.toContain("full hierarchy");
     expect(await recordedSteps("locked")).toEqual([{ kind: "tap", selector: { text: "Save" } }]);
+  });
+
+  it("carries the generic fallback caveat when the fallback walk ran on an unlocked Mac", async () => {
+    serve([BUTTON], "macos-fallback", MACOS_FALLBACK_HINT);
+    await start("fallback");
+
+    const result = await record("fallback", "gesture-tap", { x: 0.4, y: 0.53 });
+
+    expect(result.message).toContain(
+      "selector captured from the fallback macos-fallback tree (macos-devtools unavailable)"
+    );
+    expect(result.message).not.toContain("locked");
   });
 
   it("carries no caveat from the unlocked tree", async () => {
