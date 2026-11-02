@@ -114,6 +114,9 @@ describe("macos in the flow file platform lists", () => {
     expect(() => parseFlow(`steps:\n  - launch: { macos: { app: ${APP}, args: "-x" } }\n`)).toThrow(
       "ios | macos: { app, args }"
     );
+    expect(() => parseFlow("steps:\n  - launch: { andriod: com.x }\n")).toThrow(
+      "allowed keys: native, ios, android, chromium, vega, macos)"
+    );
   });
 
   it("parses and round-trips a when: platform macos guard", () => {

@@ -1655,7 +1655,7 @@ describe("the authoring platform fold", () => {
     // The fold exists so no flow file needs a remote key. Accepting one would
     // let a flow name the host, which is the thing a flow deliberately cannot do.
     expect(() => parseFlow('steps:\n  - launch: { "ios-remote": com.acme.app }\n')).toThrow(
-      /allowed keys: native, ios, android, chromium, vega, macos\b/
+      /allowed keys: native, ios, android, chromium, vega\)/
     );
   });
 });

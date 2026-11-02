@@ -1853,13 +1853,14 @@ function rejectUnknownKeys(
   raw: unknown,
   body: Record<string, unknown>,
   allowed: readonly string[],
-  where: string
+  where: string,
+  named: readonly string[] = allowed
 ): void {
   const unknown = Object.keys(body).filter((k) => !allowed.includes(k));
   if (unknown.length === 0) return;
   badEntry(
     raw,
-    `${where} has ${describeUnknownKeys(unknown, allowed)} — allowed keys: ${allowed.join(", ")}`
+    `${where} has ${describeUnknownKeys(unknown, named)} — allowed keys: ${named.join(", ")}`
   );
 }
 
@@ -2427,7 +2428,10 @@ function parseLaunch(raw: unknown): Launch {
     const b = raw as Record<string, unknown>;
     // Name a misspelled platform key (`amdroid:`) instead of falling through
     // to the generic shape error below.
-    rejectUnknownKeys({ launch: raw }, b, LAUNCH_MAP_KEYS, "launch");
+    rejectUnknownKeys({ launch: raw }, b, LAUNCH_MAP_KEYS, "launch", [
+      "native",
+      ...namedLaunchPlatforms(),
+    ]);
     const keys = Object.keys(b);
     if (keys.length > 0) {
       const out: {
