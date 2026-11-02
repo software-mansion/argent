@@ -526,6 +526,15 @@ describe("native-* view tools on a Mac app", () => {
     }
   );
 
+  it("fails on an error in the library's result", async () => {
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ error: "no window" }) });
+    const err = await errorOf(
+      invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, identifier: "x" })
+    );
+    expect(err?.message).toMatch(/no window$/);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_FIND_VIEWS_ERROR);
+  });
+
   it.each(["native-describe-screen", "native-network-logs"])(
     "%s refuses a bundle id that is not the device's app",
     async (id) => {

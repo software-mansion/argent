@@ -115,18 +115,27 @@ describe("a tap recorded on a Mac app", () => {
   });
 
   it.each([
-    [undefined, BUNDLE],
-    [["-Flag", "1"], { macos: { app: BUNDLE, args: ["-Flag", "1"] } }],
-  ])("records restart-app with the args the restarted app got (%j)", async (args, app) => {
-    serve([], "macos-devtools");
-    await start("e2e", "");
-    const reg = registry();
-    vi.mocked(reg.invokeTool).mockResolvedValueOnce({ restarted: true, args });
+    [undefined, undefined, BUNDLE],
+    [undefined, ["-Flag", "1"], { macos: { app: BUNDLE, args: ["-Flag", "1"] } }],
+    [["-Flag", "1"], ["-Flag", "1"], { macos: { app: BUNDLE, args: ["-Flag", "1"] } }],
+  ])(
+    "records restart-app with launchArgs %j and the args the restarted app got (%j)",
+    async (launchArgs, args, app) => {
+      serve([], "macos-devtools");
+      await start("e2e", "");
+      const reg = registry();
+      vi.mocked(reg.invokeTool).mockResolvedValueOnce({ restarted: true, args });
 
-    await record("e2e", "restart-app", { bundleId: BUNDLE }, reg);
+      await record(
+        "e2e",
+        "restart-app",
+        { bundleId: BUNDLE, ...(launchArgs && { launchArgs }) },
+        reg
+      );
 
-    expect(await recordedSteps("e2e")).toEqual([{ kind: "launch", app }]);
-  });
+      expect(await recordedSteps("e2e")).toEqual([{ kind: "launch", app }]);
+    }
+  );
 
   it("refuses a tool without macOS support before it runs, as the runner does", async () => {
     serve([], "macos-devtools");
