@@ -610,11 +610,17 @@ async function helperPid(child: ReturnType<typeof spawn>, executable: string): P
   return pid;
 }
 
+/**
+ * The launches of each app, by bundle id. They run one at a time, and call()
+ * waits for the one in flight, also one that a stop-simulator-server started
+ * on the service instance it disposed.
+ */
+const lifecycles = new Map<string, Promise<unknown>>();
+
 function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () => void } {
   let channel: LibraryChannel | null = null;
   let connecting: Promise<LibraryChannel> | null = null;
-  // Launches run one at a time; call() waits for the one in flight.
-  let lifecycle: Promise<unknown> = Promise.resolve();
+  let launching = false;
   let disposed = false;
 
   // Network capture. Off until the first native-network-logs call, as on iOS;
@@ -689,7 +695,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       if (errorCode(err) === FAILURE_CODES.MACOS_APP_IN_USE) throw err;
       throw notConnected(errorMessage(err), err);
     }
-    if (disposed) {
+    // A launch in flight closes the channel at its end.
+    if (disposed && !launching) {
       ch.close();
       throw closedByArgentError(bundleId);
     }
@@ -1119,11 +1126,6 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       sandboxed: info.sandboxed,
       logPath,
     };
-    if (disposed) {
-      ch.close();
-      const note = [forceQuit, tookOver].filter(Boolean).join(" ");
-      return note ? { ...result, note } : result;
-    }
     adopt(ch);
     const { note: noWindow, refusal: noDrivableWindow } = await waitForFirstWindow(
       ch,
@@ -1154,7 +1156,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       params: Record<string, unknown> = {},
       opts: { timeoutMs?: number; runLate?: boolean } = {}
     ): Promise<T> {
-      await lifecycle;
+      await lifecycles.get(bundleId);
       try {
         const ch = await ensureChannel();
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
@@ -1167,22 +1169,31 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       }
     },
     launch: (opts = {}) => {
-      const run = lifecycle.then(
-        () => doLaunch(opts),
-        () => doLaunch(opts)
+      const run = (lifecycles.get(bundleId) ?? Promise.resolve()).then(async () => {
+        launching = true;
+        try {
+          return await doLaunch(opts);
+        } finally {
+          launching = false;
+          // stop-simulator-server came during the launch: the next instance connects anew.
+          if (disposed) closeChannel();
+        }
+      });
+      lifecycles.set(
+        bundleId,
+        run.catch(() => undefined)
       );
-      lifecycle = run.catch(() => undefined);
       return run;
     },
     async connect() {
-      await lifecycle;
+      await lifecycles.get(bundleId);
       await ensureChannel();
     },
     isConnected: () => Boolean(channel?.isOpen && channel.handshake),
     handshake: () => (channel?.isOpen ? channel.handshake : null),
     async activateNetworkInspection() {
       networkInspection = true;
-      await lifecycle;
+      await lifecycles.get(bundleId);
       // A channel that ensureChannel opens just now gets it from adopt as
       // well: the library ignores a repeat.
       (await ensureChannel()).sendControl("activateNetworkInspection");
@@ -1197,7 +1208,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     api,
     dispose: () => {
       disposed = true;
-      closeChannel();
+      // A launch in flight finishes its checks on its channel first.
+      if (!launching) closeChannel();
     },
   };
 }
