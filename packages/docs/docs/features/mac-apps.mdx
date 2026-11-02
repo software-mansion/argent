@@ -51,7 +51,7 @@ Several agents can drive several Mac apps at the same time. All builds of one pr
 
 Do not set `PRODUCT_BUNDLE_IDENTIFIER` itself on the `xcodebuild` command line. That setting also changes the bundle ids of the CocoaPods bundles in the app.
 
-If you cannot change the project, tell the agent to duplicate the `.app` bundle with a new bundle id. The agent changes the bundle id in the `Info.plist` of the duplicate and signs the duplicate again. An app with entitlements that need its team, for example iCloud, keychain sharing or app groups, does not start as a duplicate.
+If you cannot change the project, tell the agent to duplicate the `.app` bundle with a new bundle id. The agent changes the bundle id in the `Info.plist` of the duplicate and signs the duplicate again. Tell the agent to keep the entitlements in the new signature, for example with `codesign --force --sign - --preserve-metadata=entitlements <duplicate>.app`. A signature without the entitlements removes the App Sandbox. Thus a sandboxed duplicate runs without the App Sandbox. An app with entitlements that need its team, for example iCloud, keychain sharing or app groups, does not start as a duplicate.
 
 An e2e test names one bundle id in its `launch` step. To test the build of a worktree, the agent uses a duplicate of the e2e test with the bundle id of that build. When a `launch` step starts the build of another worktree, the step shows a warning. Argent gives this warning for a build inside a worktree and for a build of a worktree in the DerivedData folder of Xcode. Argent does not give this warning when the e2e test runs over a link (`argent link` or `ARGENT_TOOLS_URL`).
 

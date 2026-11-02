@@ -16,7 +16,7 @@ Read this for a Mac app. `argent-device-interact` still applies for everything n
 - Never pass `force` when the error names another build path or another tool-server; report it.
 - After a code change: rebuild, then `restart-app`.
 - A start result with a `note` that the app showed no window: taps and screenshots need one. Tell the user, and read the log file it names.
-- On a hardened-runtime refusal, report it to the user. Never sign files or change code signing yourself.
+- On a hardened-runtime refusal, report it to the user. Do not sign files or change code signing because of this refusal.
 - `launch-app` and `restart-app` take only the device's own bundle id. A different bundle id fails: use that app's device id.
 - Coordinates are fractions of the area `describe` reports: the app window, grown to hold sheets, alerts and menus past it. Take them from `describe` or from the tree appended after each action, never from a screenshot.
 - Never activate the app or drive it with `osascript`, `open` or other system tools.
