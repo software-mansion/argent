@@ -1750,6 +1750,10 @@ async function waitForCondition(
   // Whether the LAST completed read attempt was trusted — assigned on every pass
   // through the loop, so post-loop it describes the final poll.
   let lastReadTrusted: boolean;
+  // The hint of the last read when it was a `hidden` read of a Mac app's
+  // fallback walk, which is always blind: it names the cause, which the
+  // reasons below must not call an empty tree.
+  let fallbackHint: string | undefined;
   let finalPoll = false;
 
   for (;;) {
@@ -1762,6 +1766,10 @@ async function waitForCondition(
       const blind = isBlindRead(data, everMatched, step.condition);
       if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
+      fallbackHint =
+        blind && step.condition === "hidden" && data.source === "macos-fallback"
+          ? data.hint
+          : undefined;
       if (
         !blind &&
         evaluateCondition(
@@ -1811,13 +1819,16 @@ async function waitForCondition(
   //    reads still describe the window, so a transient error on the trailing
   //    poll must not flip a clean skip into a hard error. The determinate
   //    verdict stands, with the failed final read appended rather than dropped.
+  const fallbackReason = `could not confirm the element is hidden: ${fallbackHint}`;
   if (lastTrustedReadAt === undefined) {
     return {
       ok: false,
       indeterminate: true,
       reason: fetchError
         ? `could not read the UI tree: ${fetchError}`
-        : "could not evaluate the condition — every read of the UI tree was empty or degraded",
+        : fallbackHint
+          ? fallbackReason
+          : "could not evaluate the condition — every read of the UI tree was empty or degraded",
     };
   }
   if (!lastReadTrusted) {
@@ -1833,7 +1844,9 @@ async function waitForCondition(
         indeterminate: true,
         reason: fetchError
           ? `could not confirm the element is hidden — it was visible earlier, but the last UI read failed: ${fetchError}`
-          : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
+          : fallbackHint
+            ? fallbackReason
+            : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
       };
     }
     const darkTailMs = Date.now() - lastTrustedReadAt;
