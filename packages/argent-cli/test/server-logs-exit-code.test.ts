@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -29,6 +29,10 @@ process.env.HOME = realHome;
 afterEach(() => {
   vi.restoreAllMocks();
   spawn.mockReset();
+});
+
+afterAll(() => {
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 async function exitCodeWhenTailExits(
