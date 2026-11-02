@@ -127,7 +127,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   button: { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }  [ios/android<flag:harmonyos>/harmony; harmony: home/back/power only</flag:harmonyos>]
   keyboard: { text?: string, key?: string, delayMs?: number }  (text OR key per step, never both; TV: text only<flag:harmonyos>; harmony: enter/return, backspace/delete, space, arrow-left, arrow-right only</flag:harmonyos>)  [ios/android/chromium/vega/tv<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
     text supports {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> env vars or an argent secrets file (over a forward-secrets link, the client's first); credentials never enter agent context
-  paste: { text: string }  (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP; keyboard otherwise)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
+  paste: { text: string }  (device clipboard + paste shortcut<flag:macos-apps>; macos: inserted at the focused element, no clipboard, no app paste handler</flag:macos-apps>; only where a user would paste, e.g. an OTP; keyboard otherwise)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
   rotate: { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }  [ios/android]
   shake: { count?: number }  [ios sim/android emu]
   fold: { posture?: "closed"|"half-open"|"open", angle?: 0-180 }  (one of posture/angle; the next step lands on the new panel, whose coordinates are different)  [foldable ios sim/android emu]
