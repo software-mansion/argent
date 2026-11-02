@@ -462,6 +462,29 @@ describe("remote screen recording", () => {
     expect(getActiveScreenRecordings()).toHaveLength(0);
   });
 
+  it("points the next stop at the runner's copy after a teardown", async () => {
+    const instance = await screenRecordingSessionBlueprint.factory({}, remoteDevice, {
+      device: remoteDevice,
+    } as never);
+    const started = await startRemoteCapture(instance.api as ScreenRecordingSessionApi, {
+      timeLimitSeconds: 60,
+      watermark: false,
+      trimStatic: false,
+      showTouches: false,
+    });
+    await instance.dispose?.();
+
+    const err = await stopRemoteCapture(await makeSession()).catch((e: unknown) => e);
+    const message = (err as Error).message;
+    expect(message).toContain("torn down");
+    expect(message).toContain(started.outputFile);
+    expect(message).toContain(
+      `sim-remote screen-record fetch ${REMOTE_UDID.replace(/^remote:/, "")} <FILE> --recording rec-1`
+    );
+    expect(message).not.toContain("ffmpeg");
+    expect(message).not.toContain("nothing was written to");
+  });
+
   /**
    * A teardown while the runner is still starting has no recording to release
    * yet; the start that then succeeds must end it rather than hand back a
