@@ -51,6 +51,17 @@ describe("ui-tree-match", () => {
     expect(hit?.label).toBe("Login");
   });
 
+  it("nodeAtPoint keeps an element of a front layer over a smaller one behind it", () => {
+    const sheet = node({
+      label: "Sheet",
+      layer: 1,
+      frame: { x: 0, y: 0, width: 0.5, height: 0.5 },
+    });
+    const behind = node({ label: "Behind", frame: { x: 0.1, y: 0.1, width: 0.1, height: 0.1 } });
+    const tree = node({ frame: { x: 0, y: 0, width: 1, height: 1 }, children: [sheet, behind] });
+    expect(nodeAtPoint(tree, { x: 0.15, y: 0.15 })?.label).toBe("Sheet");
+  });
+
   it("nodeAtPoint returns undefined when nothing is under the point", () => {
     expect(nodeAtPoint(root, { x: 0.95, y: 0.95 })).toBeUndefined();
   });

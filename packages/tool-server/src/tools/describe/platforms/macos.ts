@@ -35,7 +35,7 @@ const WEB_TREE_CALL_TIMEOUT_MS = 12_000;
  * Measured after a SwiftUI toggle click: 7 of 30 reads at 0 ms met such an
  * element, 0 of 30 at 150 ms.
  */
-export const MACOS_UNREACHABLE_REREAD_MS = 150;
+const MACOS_UNREACHABLE_REREAD_MS = 150;
 
 /** The limits a read sends: tree nodes, and items per web view. */
 export interface MacosReadLimits {

@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DescribeNode } from "../src/tools/describe/contract";
-import {
-  MACOS_UNREACHABLE_REREAD_MS,
-  projectMacosDescribeTree,
-  readMacosTree,
-} from "../src/tools/describe/platforms/macos";
+import { projectMacosDescribeTree, readMacosTree } from "../src/tools/describe/platforms/macos";
 import { adaptMacosTreeForFlows } from "../src/tools/flows/flow-macos-tree";
 import { formatDescribeTree } from "../src/tools/describe/format-tree";
 import { createDescribeTool } from "../src/tools/describe";
@@ -108,11 +104,14 @@ describe("macOS describe adapter: projection of the probe app", () => {
         identifier: "toggle",
         value: "1",
         valueDescription: "on",
-      })
+      }),
+      axNode("AXStaticText", rect(0.6, 0.9, 0.1, 0.04), { identifier: "count", value: "1" })
     );
     const { data } = await describeFixture([tree]);
     expect(byId(data.tree, "rating")).toMatchObject({ label: "Rating", value: "2 of 5" });
     expect(byId(data.tree, "toggle")).toMatchObject({ value: "on", checked: true });
+    // Only a checkable role is checked.
+    expect(byId(data.tree, "count")!.checked).toBeUndefined();
   });
 
   it("merges the web view's items under its node, in the AX role vocabulary", async () => {
@@ -210,7 +209,7 @@ describe("macOS describe adapter: reads", () => {
     const { data, flow, lib } = await describeFixture([probeTree({ dead: true }), probeTree()]);
     const reads = lib.calls.filter((c) => c.method === "Accessibility.getTree");
     expect(reads).toHaveLength(2);
-    expect(reads[1]!.at - reads[0]!.at).toBeGreaterThanOrEqual(MACOS_UNREACHABLE_REREAD_MS - 5);
+    expect(reads[1]!.at - reads[0]!.at).toBeGreaterThanOrEqual(145);
     for (const tree of [data.tree, flow]) {
       expect(findAll(tree, { identifier: "swift.dead" })).toEqual([
         expect.objectContaining({ label: "Dead button" }),

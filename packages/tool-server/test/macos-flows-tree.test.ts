@@ -334,6 +334,17 @@ describe("macOS describe and flow trees of one read", () => {
     expect(walk(counted).find((n) => n.children.some(byId("web-button")))!.scrollHidden).toBe(3);
   });
 
+  it("counts what a dropped scroll area hides in the scroller around it", async () => {
+    const tree = probeTree();
+    const group = findWireNode(windowRoot(tree), byWireId("settings.scroll"))!.children as Json[];
+    // Below the settings pane: dropped, with the 5 rows the library left out.
+    (group[0]!.children as Json[]).push(
+      axNode("AXScrollArea", rect(0.5, 0.45, 0.2, 0.05), { scrolledOutRows: 5 })
+    );
+    const { describe } = await bothTrees({ trees: [tree] });
+    expect(walk(describe).find(byId("settings.scroll"))!.scrollHidden).toBe(5);
+  });
+
   it("lifts an open combo box list out of the scroll area it was opened in", async () => {
     const tree = probeTree();
     const items = ["Apple", "Banana", "Cherry"].map((value, i) =>
