@@ -161,6 +161,20 @@ describe("macOS describe adapter: projection of the probe app", () => {
     expect(menus.map((m) => m.children.map((c) => c.label))).toContainEqual(["Copy"]);
   });
 
+  it("puts an open popup menu and the web items of a sheet in front of the window", async () => {
+    const tree = probeTree();
+    (tree.windows as unknown[]).push({
+      kind: "sheet",
+      root: axNode("AXSheet", rect(0, 0, 1, 1), {}, [
+        axNode("AXGroup", rect(0.022, 0.538, 0.956, 0.3165), { webView: 0 }),
+      ]),
+    });
+    const { data } = await describeFixture([tree]);
+    expect(byText(data.tree, "Green")!.layer).toBe(100);
+    const buttons = findAll(data.tree, { identifier: "web-button" });
+    expect(buttons.map((n) => n.layer ?? 0)).toEqual([0, 1]);
+  });
+
   it("keeps the controls of a sheet that hangs below its window", async () => {
     const tree = probeTree();
     const root = windowRoot(tree);
