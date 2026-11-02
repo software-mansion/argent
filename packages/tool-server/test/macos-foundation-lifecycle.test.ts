@@ -840,7 +840,9 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       macosAppPath: appPath,
       macosAppArgs: ["--mode=ignore-terminate"],
     });
-    await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+    expect(await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      note: expect.stringMatching(/force-quit .*did not quit within 5 s\. Unsaved changes/),
+    });
     expect(pidAlive(pid)).toBe(false);
     expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
   }, 20_000);
@@ -857,7 +859,10 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect((err as Error).message).toMatch(/shows a prompt.*describe/);
     expect(fakeAppPids()).toEqual([pid]);
 
-    await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+    // The prompt that was open before does not stop the quit, but the agent learns of it.
+    expect(await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      note: expect.stringMatching(/force-quit .*a dialog it showed kept it from quitting/),
+    });
     expect(pidAlive(pid)).toBe(false);
     expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
   }, 30_000);

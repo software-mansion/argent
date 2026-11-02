@@ -767,9 +767,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   /**
    * Quits argent's own copy: `Application.terminate`, then the signals. An app
    * that answers with a new prompt (save changes?) is left to the agent; a
-   * dialog that was open before does not keep it from being signalled.
+   * dialog that was open before does not keep it from being signalled. Returns
+   * a note when the signals stopped it, which a clean quit does not need.
    */
-  const terminate = async (app: { pid: number; executable: string }): Promise<void> => {
+  const terminate = async (app: {
+    pid: number;
+    executable: string;
+  }): Promise<string | undefined> => {
     let ch: LibraryChannel | null;
     let open = new Set<unknown>();
     try {
@@ -806,7 +810,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         );
       }
     }
-    const { survivors } = await stopProcesses(left, app.executable, true);
+    const { signalled, survivors } = await stopProcesses(left, app.executable, true);
     closeChannel();
     if (survivors.length > 0) {
       throw macosFailure(
@@ -816,6 +820,14 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         "unknown"
       );
     }
+    if (signalled.length === 0) return undefined;
+    const reason =
+      open.size > 0
+        ? "a dialog it showed kept it from quitting"
+        : ch
+          ? `it did not quit within ${TERMINATE_GRACE_MS / 1000} s`
+          : "argent could not ask it to quit";
+    return `argent force-quit ${bundleId} (pid ${app.pid}): ${reason}. Unsaved changes in it may be lost.`;
   };
 
   const doLaunch = async (opts: MacosLaunchOptions): Promise<MacosLaunchResult> => {
@@ -973,7 +985,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
     // After every check that can refuse the start: argent's own copy and a copy
     // the user runs are quit only when argent can start the app again.
-    if (own) await terminate(own);
+    const forceQuit = own ? await terminate(own) : undefined;
     let tookOver: string | undefined;
     if (copies.same.length > 0) {
       const { signalled, survivors } = await stopProcesses(copies.same, info.executable, false);
@@ -1104,7 +1116,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     };
     if (disposed) {
       ch.close();
-      return tookOver ? { ...result, note: tookOver } : result;
+      const note = [forceQuit, tookOver].filter(Boolean).join(" ");
+      return note ? { ...result, note } : result;
     }
     adopt(ch);
     const { note: noWindow, refusal: noDrivableWindow } = await waitForFirstWindow(
@@ -1123,7 +1136,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         "unsupported"
       );
     }
-    const note = [tookOver, noWindow, listen ? undefined : noListenSocketNote(bundleId)]
+    const note = [forceQuit, tookOver, noWindow, listen ? undefined : noListenSocketNote(bundleId)]
       .filter(Boolean)
       .join(" ");
     return note ? { ...result, note } : result;
