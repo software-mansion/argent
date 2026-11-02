@@ -102,12 +102,32 @@ export function trainPaths(events: TrainEvent[], viewport: RunnerViewport): Runn
       tMs += event.delayMs ?? FRAME_MS;
     }
 
-    first.points.push({ ...toPoints(viewport, event.x, event.y), tMs });
+    stepTo(first, toPoints(viewport, event.x, event.y), tMs);
 
     if (event.x2 !== undefined && event.y2 !== undefined) {
-      second.points.push({ ...toPoints(viewport, event.x2, event.y2), tMs });
+      stepTo(second, toPoints(viewport, event.x2, event.y2), tMs);
     }
   });
 
   return second.points.length > 0 ? [first, second] : [first];
+}
+
+/** How long a finger takes to reach an event's point once that event's delay is over. */
+const STEP_MS = 1;
+
+/**
+ * Add an event's point to a finger's path. delayMs is a wait with the finger
+ * where it was, as on a simulator: the finger rests at its last point until
+ * just before the event, then moves to it. Without the rest XCTest glides the
+ * finger across the whole delay, so a hold before a move never holds and a
+ * long press followed by a drag becomes a slow drag.
+ */
+function stepTo(finger: RunnerTouchFinger, point: { x: number; y: number }, tMs: number): void {
+  const last = finger.points[finger.points.length - 1];
+
+  if (last && tMs - last.tMs > STEP_MS && (last.x !== point.x || last.y !== point.y)) {
+    finger.points.push({ x: last.x, y: last.y, tMs: tMs - STEP_MS });
+  }
+
+  finger.points.push({ ...point, tMs });
 }
