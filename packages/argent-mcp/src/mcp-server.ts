@@ -225,8 +225,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         chars: typeof desc === "string" ? desc.length : 0,
       });
       if (typeof desc !== "string" || desc.length === 0) return [];
-      // The agent reads this tree in place of describe, so it needs describe's warnings too.
-      const hintLine = typeof hint === "string" && hint ? `Hint: ${hint}\n` : "";
+      // The agent reads this tree in place of describe, so it needs describe's warnings too
+      // (the TV description already carries its hint).
+      const hintLine =
+        typeof hint === "string" && hint && !desc.includes(hint) ? `Hint: ${hint}\n` : "";
       return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${hintLine}${desc}` }];
     } catch (e) {
       await spyLog({
