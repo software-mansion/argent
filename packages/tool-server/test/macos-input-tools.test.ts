@@ -236,6 +236,21 @@ describe("gesture-drag on a Mac app", () => {
     expect(calls.at(-1)!.params).toMatchObject({ type: "up", x: 0.1 });
   });
 
+  it("still releases when the move to the release point fails", async () => {
+    vi.useFakeTimers();
+    const { invoke, calls } = harness({
+      "Input.mouse": (p) => {
+        if (p.type === "move" && p.x === 0.9) throw new Error("Input.mouse timed out");
+        return {};
+      },
+    });
+    const settled = errorOf(invoke("gesture-drag", { ...drag, durationMs: 64 }));
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await settled)?.message).toMatch(/Input.mouse timed out/);
+    expect(calls.map((c) => c.params.type)).toEqual(["down", "move", "move", "move", "move", "up"]);
+    expect(calls.at(-1)!.params).toMatchObject({ type: "up", x: 0.9 });
+  });
+
   it("moves every point on the top edge just inside the window, as a click and a scroll do", async () => {
     vi.useFakeTimers();
     const { invoke, calls } = harness();

@@ -223,10 +223,13 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
             at = p;
           },
           // Web pages and custom views follow the moves, not the release: the last move is at
-          // the release point.
+          // the release point. A move that fails must not keep the up from the app.
           up: async (p) => {
-            if (p.x !== at.x || p.y !== at.y) await macosMouse(app, { type: "move", ...p });
-            await macosMouse(app, { type: "up", ...p, clickCount: 1 });
+            try {
+              if (p.x !== at.x || p.y !== at.y) await macosMouse(app, { type: "move", ...p });
+            } finally {
+              await macosMouse(app, { type: "up", ...p, clickCount: 1 });
+            }
           },
         }
       );
