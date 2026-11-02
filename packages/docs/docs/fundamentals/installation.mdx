@@ -87,9 +87,9 @@ In local mode the committed MCP config runs the project-local copy, so the bare 
 
 ## macOS hosts after an Xcode update
 
-After you install or update Xcode, Xcode must install its system components. Until then, each `simctl` or `devicectl` call starts that install. The install waits for an administrator password, also when nobody sees the prompt.
+After you install or update Xcode, Xcode must install its system components. Until then, a `simctl` or `devicectl` call can start that install. The install waits for an administrator password, also when nobody sees the prompt.
 
-Argent detects this state from Xcode's files and does not call `simctl` or `devicectl`:
+Argent reads Xcode's files to find when a call starts the install. Argent then does not make that call:
 
 - `list-devices` does not show the local iOS simulators and physical iPhones that need these components. Its `hint` field gives the reason to the agent.
 - The tools for local iOS simulators and physical iPhones return an error that tells the agent what to do.
