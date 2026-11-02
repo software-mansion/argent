@@ -845,9 +845,12 @@ export async function findMacosAppByBundleId(bundleId: string): Promise<string |
   for (const line of stdout.split("\n")) {
     const appPath = line.trim();
     if (!appPath.endsWith(".app")) continue;
+    const contents = path.join(appPath, "Contents");
+    const executable = await plistValue(path.join(contents, "Info.plist"), "CFBundleExecutable");
+    if (!executable) continue;
     let mtimeMs: number;
     try {
-      mtimeMs = fs.statSync(path.join(appPath, "Contents", "Info.plist")).mtimeMs;
+      mtimeMs = fs.statSync(path.join(contents, "MacOS", executable)).mtimeMs;
     } catch {
       continue;
     }
