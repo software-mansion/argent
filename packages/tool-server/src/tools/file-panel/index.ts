@@ -317,6 +317,8 @@ A sandboxed app that argent started is given access to the chosen paths only. On
 Returns { panels } for list, { chosen, panel, kind, paths } for choose, { cancelled, panel } for cancel, { discarded, panel } for discard, { armed, mode, panelKind? } for stub.
 Fails if no panel appears within timeoutMs, if more than one panel is open and panel is not given, if a path is relative or does not exist (a save panel needs an existing folder), if a path for a save panel is an existing folder other than a document package the panel saves, if choose finds a panel that cannot take the path (a folder for a panel of files, a file for a panel of folders, an extension that matches none of a save panel's formats), if discard finds no Delete or Don't Save button, or if the Mac app is not running.`,
   searchHint: "file panel dialog open save choose pick file folder nsopenpanel nssavepanel mac app",
+  // timeoutMs can reach the MCP fetch timeout, whose abort replays the call.
+  longRunning: true,
   zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => {
