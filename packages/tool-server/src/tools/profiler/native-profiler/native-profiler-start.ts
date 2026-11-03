@@ -45,9 +45,8 @@ const zodSchema = z.object({
         "carry no backtrace (Instruments reports '<Call stack limit reached>'). Trade-offs: this " +
         "RESTARTS the app (current state is lost), adds memory/CPU overhead, and makes the app " +
         "noticeably slow to launch, so leave it off for pure CPU/hang profiling. Rejected up front " +
-        "when Argent records with its all-processes capture (picked on an Xcode whose `--device` " +
-        "recording is broken, or forced with ARGENT_IOS_CAPTURE=all-processes): that capture cannot " +
-        "cold-launch, and it records no leaks at all, with or without this flag."
+        "under the all-processes capture (used where Xcode's `--device` recording is broken, or " +
+        "forced with ARGENT_IOS_CAPTURE=all-processes), which cannot cold-launch and records no leaks."
     ),
 });
 
@@ -56,7 +55,7 @@ export const nativeProfilerStartTool: ToolDefinition<
   { status: "recording"; pid: number; traceFile: string }
 > = {
   id: "native-profiler-start",
-  description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory leaks; the all-processes capture records no leaks). Android: Perfetto (CPU, jank, RSS-growth weak signal).
+  description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory leaks). Android: Perfetto (CPU, jank, RSS-growth weak signal).
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
 Returns { status, pid, traceFile } confirming the recording has started.
