@@ -124,6 +124,17 @@ describe("xcodeFirstLaunchPending", () => {
     expect(xcodeFirstLaunchPending("simctl")).toBe(false);
   });
 
+  // A part one side lacks counts as 0, so 1051.49 is older than 1051.49.1: the
+  // wrapper's sort --version-sort puts it first and starts the install.
+  it("compares versions with a different number of parts", () => {
+    writeWrapper("simctl", olderRuleWrapper("1051.49.1", plistPath));
+    installFramework("1051.49");
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
+    writeWrapper("simctl", olderRuleWrapper("1051.49", plistPath));
+    installFramework("1051.49.1");
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
+  });
+
   it("is true for an exact-match wrapper whose framework is older", () => {
     writeWrapper("devicectl", exactRuleWrapper("651.32", plistPath));
     installFramework("518.33");
@@ -245,6 +256,12 @@ describe("xcodeFirstLaunchPending", () => {
 
     it("with a script that has no version check", () => {
       writeWrapper("simctl", '#!/bin/bash\nexec "/real/simctl" "$@"\n');
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
+    });
+
+    it("with a wrapper it does not recognise, also when the answer comes from its cache", () => {
+      writeWrapper("simctl", '#!/bin/bash\nexec "/real/simctl" "$@"\n');
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
       expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
