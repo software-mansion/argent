@@ -77,6 +77,8 @@ vi.mock("../src/utils/simulator-watcher", () => ({
   })),
 }));
 
+import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
+
 describe("tool-server startup telemetry", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
@@ -130,5 +132,27 @@ describe("tool-server startup telemetry", () => {
     expect(watcherMock.stop).toHaveBeenCalledOnce();
     expect(httpHandleMock.dispose).toHaveBeenCalledOnce();
     expect(registryMock.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("does not bind when a shutdown lands before the watcher is ready", async () => {
+    let settleReady: () => void = () => {};
+    vi.mocked(startSimulatorWatcher).mockReturnValueOnce({
+      stop: watcherMock.stop,
+      ready: new Promise<void>((resolve) => (settleReady = resolve)),
+    });
+    const { start } = await import("../src/index");
+
+    start();
+    process.emit("SIGTERM");
+    await vi.waitFor(() => {
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    });
+    expect(watcherMock.stop).toHaveBeenCalledOnce();
+
+    // Stopping the watcher aborts its first poll, which settles ready, so the
+    // readiness gate still opens after the shutdown has run.
+    settleReady();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(httpHandleMock.app.listen).not.toHaveBeenCalled();
   });
 });
