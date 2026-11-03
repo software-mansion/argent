@@ -57,9 +57,15 @@ export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string 
       ? "Tools that do not need `simctl`, such as taps and screenshots, still work on a " +
         "simulator that is already booted. "
       : "") +
+    `Do not run ${wrappers.map((w) => `\`xcrun ${w}\``).join(" or ")} yourself` +
+    (wrappers.includes("simctl")
+      ? ", or commands that call `simctl`, such as `npx react-native run-ios` or " +
+        "`npx expo run:ios`"
+      : "") +
+    ": each call waits for the same password. " +
     `Ask the user to open ${xcode ? "that Xcode" : "Xcode"} once and let it install the ` +
     `components, or to run \`sudo ${xcodebuild} -runFirstLaunch\`, then retry. ` +
-    "Do not run it yourself."
+    "Do not run that command yourself."
   );
 }
 
