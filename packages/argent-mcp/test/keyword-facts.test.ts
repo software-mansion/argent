@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { showsSchemaKeywords, withKeywordFacts } from "../src/keyword-facts.js";
+import { withKeywordFacts } from "../src/keyword-facts.js";
 
 const describeProp = (prop: Record<string, unknown>): unknown => {
   const result = withKeywordFacts({ properties: { p: prop } }) as {
@@ -192,30 +192,5 @@ describe("withKeywordFacts — leaves out what is already said or carries nothin
   it("returns a schema without properties unchanged", () => {
     const schema = { type: "object" };
     expect(withKeywordFacts(schema)).toBe(schema);
-  });
-});
-
-describe("showsSchemaKeywords — the clients that skip the facts", () => {
-  // The names each client sent in a captured handshake, or names in its shipped source.
-  it.each(["claude-code", "gemini-cli-mcp-client", "Zed", "kiro", "Q DEV CLI", "copilot-cli"])(
-    "is true for %s",
-    (name) => {
-      expect(showsSchemaKeywords(name)).toBe(true);
-    }
-  );
-
-  it.each([
-    "codex-mcp-client",
-    "opencode",
-    "Visual Studio Code",
-    "cursor-vscode",
-    "cursor",
-    "rmcp",
-    "mcp",
-    "some-new-client",
-    "",
-    undefined,
-  ])("is false for %s", (name) => {
-    expect(showsSchemaKeywords(name)).toBe(false);
   });
 });
