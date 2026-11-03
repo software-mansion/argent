@@ -83,7 +83,7 @@ In native network capture, the header line tells if the capture is active, waits
 Then the agent reads the details of one record by its ID. The native `NSURLProtocol` layer has no details, because each entry of its list is complete. In the other layers, the details contain these items:
 
 - The URL, the method and the status. In the JS runtime layer and in native network capture, the details also give the final URL after a redirect.
-- The headers of the request and of the response. In native network capture, the request headers are the headers sent on the wire. They include headers that the app code did not set, for example `Cookie` and `User-Agent`.
+- The headers of the request and of the response. In native network capture, the request headers are the headers sent on the wire. They include headers that the app code did not set, for example `Cookie` and `User-Agent`. The response headers are the headers that the app received. After OkHttp decodes a gzip response, these headers do not contain `Content-Encoding` and `Content-Length`.
 - In native network capture, each redirect before the final response
 - The duration and the size
 - The bodies of the request and of the response
