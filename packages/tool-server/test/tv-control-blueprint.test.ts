@@ -149,6 +149,14 @@ vi.mock("@argent/native-devtools-ios", () => ({
   tvosHidDaemonBinaryPath: () => "/fake/tvos-hid-daemon",
 }));
 
+// Whether simctl would start Xcode's component install, which refuses the ax spawn.
+const xcodePending = vi.hoisted(() => ({ simctl: false }));
+vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/xcode-first-launch")>()),
+  xcodeFirstLaunchPending: (wrapper: "simctl" | "devicectl") =>
+    wrapper === "simctl" && xcodePending.simctl,
+}));
+
 const listIosSimulatorsMock = vi.fn();
 const cacheSimulatorRuntimeKindMock = vi.fn();
 vi.mock("../src/utils/ios-devices", () => ({
@@ -180,6 +188,7 @@ beforeEach(() => {
   h.state.failHidSpawn = false;
   h.state.hidSpawnError = false;
   h.state.axConnectHook = null;
+  xcodePending.simctl = false;
   listIosSimulatorsMock.mockReset();
   cacheSimulatorRuntimeKindMock.mockReset();
   listIosSimulatorsMock.mockResolvedValue([
@@ -402,5 +411,22 @@ describe("tvControlBlueprint — target validation", () => {
     await expect(buildService()).rejects.toThrow(/no available simulator/);
     // The no-match throw is before the warm call, so nothing is cached.
     expect(cacheSimulatorRuntimeKindMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("tvControlBlueprint — a respawn refused while Xcode's install is pending", () => {
+  // The refusal comes after the old daemon was killed and its socket unlinked.
+  // Left marked alive, the daemon would never be respawned, and every describe
+  // would fail to connect until the service is disposed.
+  it("respawns the ax daemon on the first describe after the install", async () => {
+    const instance = await buildService();
+    xcodePending.simctl = true;
+    await expect(instance.api.recycleAx()).rejects.toThrow(/-runFirstLaunch/);
+
+    xcodePending.simctl = false;
+    const res = await instance.api.describe();
+    expect(res.bundleId).toBe("com.example.tvapp");
+    expect(axSpawnCount()).toBe(2);
+    await instance.dispose();
   });
 });

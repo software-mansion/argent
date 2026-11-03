@@ -334,14 +334,15 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       } catch {
         /* no stale socket to remove */
       }
-      axProc = spawnAxDaemon(udid, axSock);
-      axProc.on("exit", onAxExit);
-      axProc.on("error", onAxError);
       try {
+        axProc = spawnAxDaemon(udid, axSock);
+        axProc.on("exit", onAxExit);
+        axProc.on("error", onAxError);
         await waitForSocket(axSock, axProc, 15_000);
       } catch (err) {
         // The socket never came up (a bind that timed out, not a clean exit —
-        // `onAxExit` only fires for the latter). Mark the daemon dead so the
+        // `onAxExit` only fires for the latter), or the spawn was refused
+        // (Xcode's component install is pending). Mark the daemon dead so the
         // next `ensureAxAlive` respawns instead of connecting to a socket that
         // was unlinked and never rebound, and reap the half-spawned process.
         axExited = true;
