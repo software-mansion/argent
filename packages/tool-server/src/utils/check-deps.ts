@@ -4,8 +4,7 @@ import { resolveVegaBinary } from "./vega-cli";
 import { resolveHarmonyEmulator } from "./harmony-cli";
 import { resolveHdc } from "./harmony-hdc";
 import { commandOnPath } from "./command-on-path";
-import { xcodeFirstLaunchPending } from "./xcode-first-launch";
-import { DependencyMissingError, XcodeFirstLaunchPendingError } from "./dependency-errors";
+import { DependencyMissingError } from "./dependency-errors";
 
 export { DependencyMissingError };
 
@@ -72,13 +71,6 @@ async function isAvailable(dep: ToolDependency): Promise<boolean> {
 /**
  * Probes all deps in parallel.
  *
- * An installed `xcrun` also needs Xcode's components in place: while either
- * wrapper would start their install, the tool is refused here rather than at
- * its first `simctl`/`devicectl` call, which some tools catch and turn into a
- * misleading empty result. Both are checked because a simulator branch and a
- * physical-device branch declare the same `xcrun`, and one install run covers
- * both.
- *
  * @throws DependencyMissingError listing every missing dep, so the agent isn't
  * sent back for the same tool twice.
  */
@@ -86,15 +78,7 @@ export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void>
   if (deps.length === 0) return;
   const results = await Promise.all(deps.map(async (d) => [d, await isAvailable(d)] as const));
   const missing = results.filter(([, ok]) => !ok).map(([d]) => d);
-  if (missing.length === 0) {
-    if (
-      deps.includes("xcrun") &&
-      (xcodeFirstLaunchPending("simctl") || xcodeFirstLaunchPending("devicectl"))
-    ) {
-      throw new XcodeFirstLaunchPendingError();
-    }
-    return;
-  }
+  if (missing.length === 0) return;
   const message = missing.map((d) => INSTALL_HINTS[d]).join(" ");
   throw new DependencyMissingError(missing, message);
 }

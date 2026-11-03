@@ -40,6 +40,7 @@ import {
   ensureDeps,
 } from "../src/utils/check-deps";
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
+import { ensureIosDeps } from "../src/utils/cross-platform-tool";
 import { simctlPrefix } from "../src/utils/ios-device-sets";
 import { ensureDeviceReady, listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import { createDescribeTool } from "../src/tools/describe";
@@ -126,25 +127,25 @@ describe("an iOS tool while Xcode's install is pending", () => {
   });
 });
 
-describe("the xcrun preflight", () => {
+describe("the xcrun preflight of a local iOS branch", () => {
   beforeEach(() => __primeDepCacheForTests(["xcrun"]));
 
   it("passes once both components are installed", async () => {
-    await expect(ensureDeps(["xcrun"])).resolves.toBeUndefined();
+    await expect(ensureIosDeps(["xcrun"])).resolves.toBeUndefined();
   });
 
   it.each(["simctl", "devicectl"] as const)(
     "refuses while the %s install is pending, since both branches declare the same xcrun",
     async (wrapper) => {
       pending[wrapper] = true;
-      await expect(ensureDeps(["xcrun"])).rejects.toBeInstanceOf(XcodeFirstLaunchPendingError);
+      await expect(ensureIosDeps(["xcrun"])).rejects.toBeInstanceOf(XcodeFirstLaunchPendingError);
     }
   );
 
-  it("leaves other dependencies alone", async () => {
+  it("leaves a branch that does not run xcrun alone", async () => {
     pending.simctl = true;
-    __primeDepCacheForTests(["adb"]);
-    await expect(ensureDeps(["adb"])).resolves.toBeUndefined();
+    pending.devicectl = true;
+    await expect(ensureIosDeps([])).resolves.toBeUndefined();
   });
 
   it("names a missing xcrun before a pending install", async () => {
@@ -154,8 +155,20 @@ describe("the xcrun preflight", () => {
       const cb = args[args.length - 1] as (err: Error | null) => void;
       cb(new Error("not found"));
     });
-    const err = await ensureDeps(["xcrun"]).catch((e: unknown) => e);
+    const err = await ensureIosDeps(["xcrun"]).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(XcodeFirstLaunchPendingError);
     expect((err as Error).message).toMatch(/xcode-select --install/);
+  });
+});
+
+// Some tools check for xcrun without ever running simctl or devicectl, such as
+// native-profiler-stop, which only signals xctrace and exports its trace.
+describe("the plain dependency check", () => {
+  it("does not look at Xcode's components", async () => {
+    pending.simctl = true;
+    pending.devicectl = true;
+    __primeDepCacheForTests(["xcrun", "adb"]);
+    await expect(ensureDeps(["xcrun"])).resolves.toBeUndefined();
+    await expect(ensureDeps(["adb"])).resolves.toBeUndefined();
   });
 });

@@ -7,6 +7,7 @@ import type {
 import { isIosPhysicalDevice, resolveDevice } from "./device-info";
 import { assertSupported, NotImplementedOnPlatformError } from "./capability";
 import { ensureDeps } from "./check-deps";
+import { assertXcodeFirstLaunchDone } from "./dependency-errors";
 
 /**
  * One platform branch of a cross-platform tool. Only the resolved branch's
@@ -22,6 +23,21 @@ export interface PlatformImpl<Services, Params, Result> {
     device: DeviceInfo,
     options?: InvokeToolOptions
   ) => Promise<Result>;
+}
+
+/**
+ * `ensureDeps` for a local iOS branch. A branch that runs `xcrun` also needs
+ * Xcode's components: while a wrapper would start their install, it is refused
+ * here rather than at its first `simctl`/`devicectl` call, which some tools
+ * catch and turn into a misleading empty result. Both wrappers are checked
+ * because simulator and physical-device branches declare the same `xcrun`.
+ */
+export async function ensureIosDeps(requires: readonly ToolDependency[]): Promise<void> {
+  await ensureDeps(requires);
+  if (requires.includes("xcrun")) {
+    assertXcodeFirstLaunchDone("simctl");
+    assertXcodeFirstLaunchDone("devicectl");
+  }
 }
 
 /**
@@ -85,7 +101,7 @@ export function dispatchByPlatform<
         });
       }
       if (opts.iosDevice.requires?.length) {
-        await ensureDeps(opts.iosDevice.requires);
+        await ensureIosDeps(opts.iosDevice.requires);
       }
       return opts.iosDevice.handler(
         services as unknown as IosDeviceServices,
@@ -96,7 +112,7 @@ export function dispatchByPlatform<
     }
     if (device.platform === "ios") {
       if (opts.ios.requires?.length) {
-        await ensureDeps(opts.ios.requires);
+        await ensureIosDeps(opts.ios.requires);
       }
       return opts.ios.handler(services as unknown as IosServices, params, device, invokeOptions);
     }

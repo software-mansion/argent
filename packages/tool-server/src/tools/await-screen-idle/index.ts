@@ -13,6 +13,7 @@ import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
+import { ensureIosDeps } from "../../utils/cross-platform-tool";
 import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
@@ -160,7 +161,7 @@ panel settles instantly on its last frame, and taps land nowhere until it is wok
     async execute(services, params, ctx?: ToolContext) {
       const device = resolveDevice(params.udid);
       assertSupported(AWAIT_SCREEN_IDLE_TOOL_ID, capability, device);
-      if (device.platform === "ios") await ensureDeps(iosRequires);
+      if (device.platform === "ios") await ensureIosDeps(iosRequires);
       else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
       else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
