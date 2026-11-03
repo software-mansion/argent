@@ -63,6 +63,7 @@ set, so clean replies stay byte-identical on the wire.
 | `fromX/fromY/toX/toY` | `drag`              | Absolute start/end points.                                              |
 | `durationMs`          | `longPress`, `drag` | Press duration / movement duration.                                     |
 | `holdMs`              | `drag`              | Rest at the start point before moving (default 50 ms).                  |
+| `fingers`             | `touchPaths`        | 1 to 5 paths, one per finger: `{points: [{x, y, tMs}]}`.                |
 | `settle`              | `drag`              | Rest at the destination before lifting (~0 release velocity, no fling). |
 | `text`                | `type`              | Text for the focused input.                                             |
 | `button`              | `button`            | `home`, `volumeUp`, `volumeDown` or `actionButton`.                     |
@@ -92,6 +93,25 @@ launch, and launching is launch-app's job, never a command side effect):
   `durationMs` implies, and rests `settle`-long before lifting; a long-press
   pickup of a draggable item needs a `holdMs` of about 500 ms or more, since
   a short press never lifts it however slowly the finger then moves.
+- `touchPaths` → `{message}`: plays every finger at once, each along its own
+  timed path, as one event record through XCTest's event synthesizer
+  (`XCPointerEventPath` and `XCSynthesizedEventRecord`). This is what pinches,
+  rotations and paths with waypoints need, since XCUICoordinate draws only one
+  straight drag. `fingers` is 1 to 5 paths; a path is `points`, each `{x, y,
+tMs}`: an absolute point in the app's space and the time since the gesture
+  began. A finger touches down at its first point, moves through the rest in
+  order and lifts 10 ms after its last, so a first point later than 0 is a
+  finger joining late. Times must be finite, within 0 to 30 000 ms, and must
+  not decrease along a path, or the reply is `INVALID_REQUEST`. The synthesizer
+  classes are private and are resolved by name at runtime. The record is built
+  with `initWithName:displayID:interfaceOrientation:` when XCTest and the main
+  screen offer a display id, and with `initWithName:interfaceOrientation:`
+  otherwise. When this Xcode has neither, or a path class or selector is
+  missing, the reply is `UNSUPPORTED_OPERATION` naming why, and every other
+  command keeps working. The same code answers when the app is not drawn in
+  portrait, the only orientation checked on hardware; the check reads the
+  app's interface orientation, so a portrait-only app on a phone held sideways
+  is accepted. It has the same 75 s execution budget as the other gestures.
 - `type` → `{message}`: types into the current first responder. The runner
   probes keyboard focus first and answers `TEXT_INPUT_NOT_FOCUSED` when
   nothing has it. The probe is what makes that code real on hardware: there,
@@ -215,12 +235,12 @@ under a larger transport window (default `RUNNER_COMMAND_TIMEOUT_MS`,
 runner-client.ts; overrides in runner-commands.ts: `GESTURE_TIMEOUT_MS` and
 the `type`/`snapshot` call sites).
 
-| Command class              | Runner budget | Client window |
-| -------------------------- | ------------- | ------------- |
-| `type`                     | 55s           | 60s           |
-| `tap`, `longPress`, `drag` | 75s           | 90s           |
-| `snapshot`                 | 30s           | 45s           |
-| everything else (default)  | 30s           | 45s           |
+| Command class                            | Runner budget | Client window |
+| ---------------------------------------- | ------------- | ------------- |
+| `type`                                   | 55s           | 60s           |
+| `tap`, `longPress`, `drag`, `touchPaths` | 75s           | 90s           |
+| `snapshot`                               | 30s           | 45s           |
+| everything else (default)                | 30s           | 45s           |
 
 The invariant: every client window MUST strictly exceed the matching runner
 budget, so the client outlasts the runner's verdict. A command that blows

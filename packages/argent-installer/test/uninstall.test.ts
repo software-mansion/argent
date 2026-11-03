@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
+import { hashBundledContent } from "../src/utils.js";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -47,6 +48,26 @@ vi.mock("node:child_process", () => ({
       : childProcessMock.execFileSync(bin, ...rest),
 }));
 vi.mock("@argent/tools-client", () => toolsClientMock);
+// Lets a test stand in for a release whose agents bundle dropped a file, with
+// a retired list whose hashes match the test's own copies.
+const bundleOverride = vi.hoisted(() => ({
+  agentsDir: undefined as string | undefined,
+  retired: undefined as import("../src/utils.js").RetiredBundledPath[] | undefined,
+}));
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    get AGENTS_DIR() {
+      return bundleOverride.agentsDir ?? actual.AGENTS_DIR;
+    },
+    get RETIRED_BUNDLED_PATHS() {
+      return bundleOverride.retired
+        ? { agents: bundleOverride.retired, rules: [] }
+        : actual.RETIRED_BUNDLED_PATHS;
+    },
+  };
+});
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   outro: vi.fn(),
@@ -88,6 +109,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  bundleOverride.agentsDir = undefined;
+  bundleOverride.retired = undefined;
   process.chdir(originalCwd);
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
   else process.env.npm_config_user_agent = savedAgent;
@@ -789,6 +812,88 @@ describe("uninstall — scoped config cleanup", () => {
     expect(fs.readdirSync(path.join(projDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
   });
 
+  // An upgrade to a release that dropped the inspector, then an uninstall.
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n";
+  const CHECKLIST = "## Quality control checklist\n";
+
+  function stageRetiredAgents(base = projDir): string {
+    const bundle = path.join(tmpDir, "bundle-agents");
+    writeFile(path.join(bundle, "argent-current.md"), "current");
+    bundleOverride.agentsDir = bundle;
+    bundleOverride.retired = [
+      {
+        path: "argent-environment-inspector.md",
+        shipped: [hashBundledContent(INSPECTOR)],
+      },
+      {
+        path: "references/quality-control-checklist.md",
+        shipped: [hashBundledContent(CHECKLIST)],
+      },
+    ];
+
+    const agents = path.join(base, ".claude", "agents");
+    writeFile(path.join(agents, "argent-current.md"), "current");
+    writeFile(path.join(agents, "argent-environment-inspector.md"), INSPECTOR);
+    writeFile(path.join(agents, "references", "quality-control-checklist.md"), CHECKLIST);
+    fs.mkdirSync(path.join(base, ".git"));
+    return agents;
+  }
+
+  it("--yes removes retired agents the bundle no longer ships, and keeps the user's", async () => {
+    const agents = stageRetiredAgents();
+    writeFile(path.join(agents, "my-agent.md"), "mine");
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(agents)).toEqual(["my-agent.md"]);
+  });
+
+  it.each(["--yes", "-y"])(
+    "%s leaves a retired agent the user edited alone, unasked and unmentioned",
+    async (flag) => {
+      const agents = stageRetiredAgents();
+      const edited = path.join(agents, "references", "quality-control-checklist.md");
+      writeFile(edited, `${CHECKLIST}My own field.\n`);
+      process.chdir(projDir);
+
+      await uninstall([flag]);
+
+      const clack = await import("@clack/prompts");
+      expect(clack.confirm).not.toHaveBeenCalled();
+      expect(fs.readFileSync(edited, "utf8")).toBe(`${CHECKLIST}My own field.\n`);
+      expect(fs.existsSync(path.join(agents, "argent-environment-inspector.md"))).toBe(false);
+      const notes = vi.mocked(clack.note).mock.calls.map(([body]) => String(body));
+      expect(notes.join("\n")).not.toContain("quality-control-checklist.md");
+    }
+  );
+
+  // There the local and global .claude/agents are one dir.
+  it("--yes from the home dir removes each retired agent once", async () => {
+    const agents = stageRetiredAgents(tmpDir);
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(agents)).toBe(false);
+    const clack = await import("@clack/prompts");
+    const notes = vi
+      .mocked(clack.note)
+      .mock.calls.map(([body]) => String(body))
+      .join("\n");
+    expect(notes.split("Removed retired agent argent-environment-inspector.md")).toHaveLength(2);
+    expect(notes).not.toContain("Could not remove");
+  });
+
+  it("--yes removes the agents dir once retired and bundled agents are gone", async () => {
+    const agents = stageRetiredAgents();
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(agents)).toBe(false);
+  });
+
   it("--yes removes .kiro/ only when it is left empty", async () => {
     stageKiroSkillLinks(projDir);
     fs.mkdirSync(path.join(projDir, ".git"));
@@ -823,6 +928,64 @@ describe("uninstall — scoped config cleanup", () => {
 
     expect(fs.readdirSync(path.join(tmpDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
     expect(fs.existsSync(path.join(tmpDir, ".kiro", "steering", "user.md"))).toBe(true);
+  });
+
+  // `npx skills add` detects Devin by its config dir, which the Devin Desktop
+  // allowlist step creates, then links <skillsDir>/<name> -> .agents/skills/<name>
+  // for every Argent skill (in a project, only when it already has a .devin dir).
+  function stageDevinSkillLinks(base: string, skillsDir: string): string[] {
+    const names = getBundledSkillNames(path.resolve(__dirname, "..", "..", "skills", "skills"));
+    expect(names.length).toBeGreaterThan(0);
+    fs.mkdirSync(skillsDir, { recursive: true });
+    for (const name of names) {
+      const skillDir = path.join(base, ".agents", "skills", name);
+      writeFile(path.join(skillDir, "SKILL.md"), "x");
+      fs.symlinkSync(path.relative(skillsDir, skillDir), path.join(skillsDir, name));
+    }
+    return names;
+  }
+
+  it("--global removes the Argent skill links from ~/.config/devin/skills and the emptied dir", async () => {
+    const devinDir = path.join(tmpDir, ".config", "devin");
+    stageDevinSkillLinks(tmpDir, path.join(devinDir, "skills"));
+    writeFile(
+      path.join(devinDir, "config.json"),
+      JSON.stringify({ permissions: { allow: ["mcp__argent__*"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(devinDir)).toBe(false);
+  });
+
+  it("--global keeps Devin's own config and skills in ~/.config/devin", async () => {
+    const devinDir = path.join(tmpDir, ".config", "devin");
+    stageDevinSkillLinks(tmpDir, path.join(devinDir, "skills"));
+    writeFile(path.join(devinDir, "skills", "vendor-skill", "SKILL.md"), "keep");
+    writeFile(
+      path.join(devinDir, "config.json"),
+      JSON.stringify({ theme: "dark", permissions: { allow: ["mcp__argent__*"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.readdirSync(path.join(devinDir, "skills"))).toEqual(["vendor-skill"]);
+    expect(JSON.parse(fs.readFileSync(path.join(devinDir, "config.json"), "utf8"))).toEqual({
+      theme: "dark",
+    });
+  });
+
+  it("--yes removes the Argent skill links from .devin/skills and keeps the rest of .devin", async () => {
+    stageDevinSkillLinks(projDir, path.join(projDir, ".devin", "skills"));
+    writeFile(path.join(projDir, ".devin", "notes.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(path.join(projDir, ".devin"))).toEqual(["notes.md"]);
   });
 
   it("--global keeps the committed project entries and the local-mode record", async () => {

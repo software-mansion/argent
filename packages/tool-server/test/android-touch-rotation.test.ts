@@ -18,7 +18,6 @@ import { gestureCustomTool } from "../src/tools/gesture-custom";
 import { gesturePinchTool } from "../src/tools/gesture-pinch";
 import { gestureRotateTool } from "../src/tools/gesture-rotate";
 
-const udid = "127.0.0.1:15671";
 const api = {} as never;
 const services = { simulatorServer: api } as never;
 const readRotation = vi.mocked(readAndroidSurfaceRotation);
@@ -29,7 +28,7 @@ beforeEach(() => {
   readRotation.mockReset().mockResolvedValue(1);
 });
 
-describe("physical Android touch coordinates", () => {
+describe.each(["127.0.0.1:15671", "emulator-5554"])("Android touch coordinates on %s", (udid) => {
   // The Pixel 9a has a natural 1080x2424 display. These are the pixel
   // coordinates the screen-sharing agent's AdjustedDisplayCoordinates applies,
   // independently of the normalized transform in Argent.
@@ -183,7 +182,7 @@ describe("physical Android touch coordinates", () => {
     );
   });
 
-  it("refuses to guess when the physical device rotation cannot be read", async () => {
+  it("refuses to guess when the Android rotation cannot be read", async () => {
     readRotation.mockResolvedValue(null);
     const signal = await gestureTapTool.execute(services, { udid, x: 0.1, y: 0.8 }).then(
       () => null,
@@ -192,22 +191,23 @@ describe("physical Android touch coordinates", () => {
     expect(signal).toMatchObject({ error_code: FAILURE_CODES.ANDROID_TOUCH_ROTATION_UNAVAILABLE });
     expect(send).not.toHaveBeenCalled();
   });
+});
 
-  it.each([
-    "emulator-5554",
-    "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
-    "remote:AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
-  ])("keeps the existing backend coordinates for %s", async (id) => {
-    const touch = await createTouchSender(api, resolveDevice(id));
-    await touch("Down", 0.13, 0.79, 0.89, 0.21);
-    expect(readRotation).not.toHaveBeenCalled();
-    expect(send).toHaveBeenCalledWith(api, {
-      cmd: "touch",
-      type: "Down",
-      x: 0.13,
-      y: 0.79,
-      second_x: 0.89,
-      second_y: 0.21,
-    });
-  });
+describe("iOS touch coordinates", () => {
+  it.each(["AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", "remote:AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"])(
+    "keeps the existing backend coordinates for %s",
+    async (id) => {
+      const touch = await createTouchSender(api, resolveDevice(id));
+      await touch("Down", 0.13, 0.79, 0.89, 0.21);
+      expect(readRotation).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledWith(api, {
+        cmd: "touch",
+        type: "Down",
+        x: 0.13,
+        y: 0.79,
+        second_x: 0.89,
+        second_y: 0.21,
+      });
+    }
+  );
 });

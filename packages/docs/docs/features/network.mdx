@@ -22,7 +22,7 @@ Argent captures the traffic in three different layers.
 | Layer                    | Platforms             | Content                                                                                       |
 | ------------------------ | --------------------- | --------------------------------------------------------------------------------------------- |
 | JS runtime               | iOS, Android, Vega    | The `XMLHttpRequest` calls, also from axios, and the `fetch()` calls of React Native and Expo |
-| Native `NSURLProtocol`   | iOS                   | All requests, also from native modules and background transfers                               |
+| Native `NSURLProtocol`   | iOS                   | The `URLSession` requests, also from native modules. See the Limits section                   |
 | Chrome DevTools Protocol | Chromium and Electron | All request types of the active tab, also documents and assets                                |
 
 Each layer captures the traffic in the process of the app. Argent does not use a proxy. Thus you do not install a certificate, and you can read HTTPS traffic directly.
@@ -93,6 +93,12 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - The JS runtime layer keeps approximately the first 1 MB of each body. The JS runtime layer also removes the oldest records when their bodies contain more than 50 MB of text.
 - For Chromium, Argent reads the active tab. If you change the tab, Argent attaches to the new tab. If the page changed after the request, the body of the response can be unavailable.
 - The `NSURLProtocol` layer is available on iOS only. On Android, use the JS runtime layer.
+- The `NSURLProtocol` layer records the requests of `URLSession` sessions with the default configuration or the ephemeral configuration, and of `URLSession.shared`. The layer does not record these requests:
+  - The transfers of a background `URLSession`. iOS does not use a custom `NSURLProtocol` for background sessions.
+  - The connections of `Network.framework`, for example `nw_connection`.
+  - The requests of a `WKWebView`, also the `fetch()` calls in the web page.
+  - The requests of an HTTP client that does not use `URLSession`, for example the `HttpClient` of Flutter (`dart:io`).
+- An empty native network log does not prove that the app sent no requests. The app can send requests that the `NSURLProtocol` layer does not record.
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
 - On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a native network log as you protect other data of the app.
 

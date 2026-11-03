@@ -25,7 +25,7 @@ import {
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
+import { isIosSimulator } from "../../utils/device-info";
 import { bindDeviceArgs } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
@@ -917,16 +917,6 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
         step.kind === "long-press"
           ? "long-press is unsupported on HarmonyOS — `uitest uiInput` has a `longClick` verb, but it takes no hold duration and argent drives holds through `gesture-custom`, which has no HarmonyOS backend; use `tap`"
           : "rotate is unsupported on HarmonyOS — `uinput -T -m` is the platform's only multi-contact injection and it moves each finger along ONE straight line per call, with no way to chain segments into an arc; drive the app's own rotate control with `tap`, or `pinch`, which is a straight-line gesture and does run here",
-    };
-  }
-  // Physical iOS: XCTest has no two-finger coordinate API. Fail here before the auto-wait.
-  if ((step.kind === "pinch" || step.kind === "rotate") && isIosPhysicalDevice(env.device)) {
-    return {
-      ok: false,
-      reason:
-        step.kind === "pinch"
-          ? "pinch is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this e2e test on a simulator or drive the app's zoom UI with tap steps instead"
-          : "rotate is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this e2e test on a simulator or drive the app's rotate controls with tap steps instead",
     };
   }
   // Without a flow tree source, idle can never be judged.
