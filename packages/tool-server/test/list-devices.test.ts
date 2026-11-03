@@ -295,20 +295,48 @@ describe("list-devices", () => {
       ).toEqual([]);
       expect(result.hint).toContain("Ask the user to open Xcode once");
       expect(result.hint).toContain("sudo xcodebuild -runFirstLaunch");
+      expect(result.hint).toContain("local iOS simulators are unavailable");
+      expect(result.hint).not.toContain("physical iPhones");
     } finally {
       xcodePending.simctl = false;
     }
   });
 
-  it("says why physical iPhones are missing while the devicectl install is pending", async () => {
+  // The simulators are listed, and the tools that drive them are not refused.
+  it("lists simulators and says only physical iPhones are missing while the devicectl install is pending", async () => {
+    xcodePending.devicectl = true;
+    try {
+      execFileMock.mockImplementation((cmd: string, args: string[]) =>
+        cmd === "xcrun" && args[0] === "simctl"
+          ? { stderr: "", stdout: simctlJson() }
+          : { stderr: "", stdout: "" }
+      );
+
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(result.devices.filter((d) => d.platform === "ios").length).toBeGreaterThan(0);
+      expect(result.hint).toContain("Ask the user to open Xcode once");
+      expect(result.hint).toContain("physical iPhones are unavailable");
+      expect(result.hint).not.toContain("simulators");
+    } finally {
+      xcodePending.devicectl = false;
+    }
+  });
+
+  it("names both while both installs are pending", async () => {
+    xcodePending.simctl = true;
     xcodePending.devicectl = true;
     try {
       execFileMock.mockImplementation(() => ({ stderr: "", stdout: "" }));
 
       const result = await listDevicesTool.execute!({}, {});
 
-      expect(result.hint).toContain("Ask the user to open Xcode once");
+      expect(result.hint).toContain(
+        "`simctl` and `devicectl` wait for an administrator password on every call, so argent " +
+          "does not run them and local iOS simulators and physical iPhones are unavailable."
+      );
     } finally {
+      xcodePending.simctl = false;
       xcodePending.devicectl = false;
     }
   });

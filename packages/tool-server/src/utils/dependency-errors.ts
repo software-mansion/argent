@@ -1,6 +1,6 @@
 import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
 import {
-  XCODE_FIRST_LAUNCH_HINT,
+  xcodeFirstLaunchHint,
   xcodeFirstLaunchPending,
   type XcodeWrapper,
 } from "./xcode-first-launch";
@@ -26,14 +26,14 @@ export class DependencyMissingError extends Error {
 }
 
 /**
- * Xcode's `simctl`/`devicectl` wrapper would start its component install,
- * which waits forever for an administrator password. Mapped to 424 like any
- * missing dependency, with the hint as the message, but counted apart from a
- * missing `xcrun` in failure telemetry.
+ * `wrappers` would start Xcode's component install, which waits forever for
+ * an administrator password. Mapped to 424 like any missing dependency, with
+ * the hint as the message, but counted apart from a missing `xcrun` in failure
+ * telemetry.
  */
 export class XcodeFirstLaunchPendingError extends DependencyMissingError {
-  constructor() {
-    super(["xcrun"], XCODE_FIRST_LAUNCH_HINT);
+  constructor(wrappers: readonly XcodeWrapper[]) {
+    super(["xcrun"], xcodeFirstLaunchHint(wrappers));
     this.name = "XcodeFirstLaunchPendingError";
     withFailureSignal(this, {
       error_code: FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING,
@@ -52,5 +52,5 @@ export class XcodeFirstLaunchPendingError extends DependencyMissingError {
  * @throws XcodeFirstLaunchPendingError
  */
 export function assertXcodeFirstLaunchDone(wrapper: XcodeWrapper): void {
-  if (xcodeFirstLaunchPending(wrapper)) throw new XcodeFirstLaunchPendingError();
+  if (xcodeFirstLaunchPending(wrapper)) throw new XcodeFirstLaunchPendingError([wrapper]);
 }

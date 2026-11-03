@@ -27,16 +27,18 @@ export interface PlatformImpl<Services, Params, Result> {
 
 /**
  * `ensureDeps` for a local iOS branch. A branch that runs `xcrun` also needs
- * Xcode's components: while a wrapper would start their install, it is refused
- * here rather than at its first `simctl`/`devicectl` call, which some tools
- * catch and turn into a misleading empty result. Both wrappers are checked
- * because simulator and physical-device branches declare the same `xcrun`.
+ * Xcode's components: while the device's wrapper (`devicectl` for a physical
+ * iPhone, `simctl` for a simulator) would start their install, it is refused
+ * here rather than at its first call, which some tools catch and turn into a
+ * misleading empty result. `list-devices` leaves out the same devices.
  */
-export async function ensureIosDeps(requires: readonly ToolDependency[]): Promise<void> {
+export async function ensureIosDeps(
+  device: DeviceInfo,
+  requires: readonly ToolDependency[]
+): Promise<void> {
   await ensureDeps(requires);
   if (requires.includes("xcrun")) {
-    assertXcodeFirstLaunchDone("simctl");
-    assertXcodeFirstLaunchDone("devicectl");
+    assertXcodeFirstLaunchDone(isIosPhysicalDevice(device) ? "devicectl" : "simctl");
   }
 }
 
@@ -101,7 +103,7 @@ export function dispatchByPlatform<
         });
       }
       if (opts.iosDevice.requires?.length) {
-        await ensureIosDeps(opts.iosDevice.requires);
+        await ensureIosDeps(device, opts.iosDevice.requires);
       }
       return opts.iosDevice.handler(
         services as unknown as IosDeviceServices,
@@ -112,7 +114,7 @@ export function dispatchByPlatform<
     }
     if (device.platform === "ios") {
       if (opts.ios.requires?.length) {
-        await ensureIosDeps(opts.ios.requires);
+        await ensureIosDeps(device, opts.ios.requires);
       }
       return opts.ios.handler(services as unknown as IosServices, params, device, invokeOptions);
     }

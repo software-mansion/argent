@@ -407,7 +407,7 @@ after a tap/navigation to wait for the next screen, or before tapping an element
 
       const device = resolveDevice(params.udid);
       assertSupported(AWAIT_UI_ELEMENT_TOOL_ID, capability, device);
-      if (device.platform === "ios") await ensureIosDeps(iosRequires);
+      if (device.platform === "ios") await ensureIosDeps(device, iosRequires);
       else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
       else if (device.platform === "vega") await ensureDeps(vegaRequires);

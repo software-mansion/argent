@@ -11,7 +11,7 @@ import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
-import { XCODE_FIRST_LAUNCH_HINT, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
+import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
 import { listHarmonyInstances, listHarmonyHdcTargets } from "../../utils/harmony-devices";
@@ -501,10 +501,9 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     );
 
     const adbPrefix = adbCommandPrefix(process.env);
-    const xcodeInstallPending =
-      xcodeFirstLaunchPending("simctl") || xcodeFirstLaunchPending("devicectl");
+    const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
     const hints = [
-      ...(xcodeInstallPending ? [XCODE_FIRST_LAUNCH_HINT] : []),
+      ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
