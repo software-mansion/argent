@@ -43,7 +43,7 @@ After an action moves you to a different screen, or whenever you don't know an e
 
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Any screen: app, system dialog, Home screen    | `describe` (physical iPhone: the launched app only)                                                                            |
+| Any screen: app, system dialog, Home screen    | `describe`                                                                                                                     |
 | App-scoped UIKit properties (iOS simulator)    | `native-describe-screen` (needs `bundleId`)                                                                                    |
 | What sits at a known raw point (iOS simulator) | `native-user-interactable-view-at-point` (the view that receives touch) or `native-view-at-point` (the visually deepest view)  |
 | Final visual fallback                          | `screenshot`, only when the tools above cannot expose the control. Do not derive routine in-app navigation targets from pixels |
@@ -83,7 +83,6 @@ Gate a step that depends on a screen transition with an `await-ui-element` step 
 ## 6. Text Entry and Secrets
 
 - Tap the field first. Typing or pasting with no focused field is a silent no-op.
-- **React Native: the first tap after typing may only close the keyboard.** Inside a scroll view with the default `keyboardShouldPersistTaps="never"`, React Native uses a tap outside the focused field to dismiss the keyboard and does not pass it on (with `"handled"` or `"always"` the tap reaches the button), so a button tapped right after typing may need a second tap; check the returned tree. When the field submits on return, `{ "key": "enter" }` avoids the extra tap.
 - `paste` is **not** a faster `keyboard`. `keyboard` types the way a user types and stays the default for every text entry. Use `paste` only where a real user would paste: a 2FA / OTP code from another app, a long link or token, or testing how the app handles pasted input. That it can carry text `keyboard` can't type on a platform (multi-line text, non-ASCII on Android) is not a reason on its own.
 - **Credentials:** type them as a `{{secret:<NAME>}}` placeholder in `text` (`keyboard`, `paste`, `run-sequence` keyboard steps, e2e `type` steps), never as plaintext, and never ask the user for the value. Do **not** `describe` or `screenshot` a non-secure field you just filled with a secret: submit or navigate away first, then verify the resulting screen.
 

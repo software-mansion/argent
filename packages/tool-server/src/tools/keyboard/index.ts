@@ -108,7 +108,8 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; focus a text field with \`tv-remote\` first (e.g. a search or login box), then type into it with keyboard.
 Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
-A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.`,
+A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
+React Native: after typing, the next tap outside the field may only close the keyboard. If the screen didn't change, tap again; where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

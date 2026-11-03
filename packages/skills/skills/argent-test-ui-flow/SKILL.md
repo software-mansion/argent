@@ -5,7 +5,7 @@ description: Autonomously test an app UI (iOS or Android) by running interact-sc
 
 ## Before testing
 
-Resolve the device first: call `list-devices`, prefer a running device on the platform the user named, and don't pick a cabled phone without explicit intent. Setup: `argent-ios-simulator-setup` / `argent-android-emulator-setup`. The interaction tool names are identical on iOS and Android.
+Resolve the device first: call `list-devices`, use the platform the user named or else prefer a device that is already running, and don't pick a cabled phone without explicit intent. Setup: `argent-ios-simulator-setup` / `argent-android-emulator-setup`. The interaction tool names are identical on iOS and Android.
 
 Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. `launch-app` before anything; `describe` fails while the app is backgrounded.
 

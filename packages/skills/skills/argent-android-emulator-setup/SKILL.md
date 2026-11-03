@@ -9,8 +9,8 @@ The Android SDK (platform tools and emulator) and an AVD, created in Android Stu
 
 ## 2. Setup
 
-1. **Find a ready device**: call `list-devices`. Filter for entries with `platform: "android"`. Ready devices (`state: "device"`) come first. Pick the first with `kind: "emulator"` that is not `runtimeKind: "tv"`, unless the user named a device. If the result has a `hint` about the adb server, prefix every `adb` command that you run yourself, as the hint shows.
-2. **Boot if needed**: if no such emulator is ready, call `boot-device` with `avdName: <name>` from the same call's `avds` list.
+1. **Find a ready device**: call `list-devices`. Filter for entries with `platform: "android"`. Ready devices (`state: "device"`) come first. If the user named a device, use it. Otherwise pick the first `kind: "emulator"` that fits the task. Take a physical phone (`kind: "device"`) only when the user asks for one. If the result has a `hint` about the adb server, prefix every `adb` command that you run yourself, as the hint shows.
+2. **Boot if needed**: if no such emulator is ready, call `boot-device` with `avdName: <name>` from the same call's `avds` list. `avds` doesn't mark TV images: for a TV task, pick the AVD by its name.
 
 ## 3. Using the device
 

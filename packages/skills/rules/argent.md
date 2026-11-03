@@ -6,7 +6,7 @@ alwaysApply: true
 Argent - general rules:
 
 - do not derive tap coordinates from screenshot pixels; use inspection tools that give coordinates
-- use the platform the user named; do not pick a cabled physical phone just because it's listed without explicit intent; in a single-platform project boot that platform.
+- use the platform the user named; otherwise prefer a device `list-devices` shows already running, and don't default to iOS; in a single-platform project boot that platform.
 - if tap fails twice, stop retrying and re-run a discovery tool
 - Prefer mcp-tool calls over raw commands like `xcrun` or `adb`; use them as fallback.
 - Interaction tools return screenshot and element tree automatically.

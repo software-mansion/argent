@@ -1,6 +1,6 @@
 # Fix Reference
 
-Match profiler findings and semantic sweep results to concrete fixes. With React Compiler active, skip the first three rows.
+Match profiler findings and semantic sweep results to concrete fixes. With React Compiler active, skip the first three rows for the components it compiles; keep them for components it skips (`compilationMode: "annotation"`, `"use no memo"`, a `sources` filter).
 
 | Finding                                      | Fix                                                                           | Detail                                                                       |
 | -------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |

@@ -7,7 +7,7 @@ See [fix-reference.md](fix-reference.md) for concrete fix patterns per finding.
 
 ### Memoization
 
-Check every exported function component: is it rendered in a list, a frequently-updating parent, or a context consumer? If yes and props are stable, wrap in `React.memo`. Check context providers for unstable `value` props. If React Compiler is active, skip this item.
+Check every exported function component: is it rendered in a list, a frequently-updating parent, or a context consumer? If yes and props are stable, wrap in `React.memo`. Check context providers for unstable `value` props. If React Compiler is active, check only the components it skips (`compilationMode: "annotation"`, `"use no memo"`, a `sources` filter).
 
 ### List rendering
 
