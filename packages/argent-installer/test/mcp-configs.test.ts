@@ -13,10 +13,12 @@ import {
   removeClaudePermission,
   copyRulesAndAgents,
   findConfiguredAdapterScopes,
+  findRetiredRulesAndAgents,
   getManagedContentTargets,
   injectCodexRules,
   removeCodexRules,
 } from "../src/mcp-configs.js";
+import { hashBundledContent, type RetiredBundledPath } from "../src/utils.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Allows individual tests to redirect homedir() to a temp path so that
@@ -30,6 +32,23 @@ vi.mock("node:os", async (importOriginal) => {
   return {
     ...original,
     homedir: vi.fn(() => homedirOverride ?? original.homedir()),
+  };
+});
+
+// The real retired list matches only the bytes argent shipped, so tests stand
+// in a list that matches their own copies.
+const retiredOverride = vi.hoisted(() => ({
+  agents: undefined as RetiredBundledPath[] | undefined,
+}));
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    get RETIRED_BUNDLED_PATHS() {
+      return retiredOverride.agents
+        ? { agents: retiredOverride.agents, rules: [] }
+        : actual.RETIRED_BUNDLED_PATHS;
+    },
   };
 });
 
@@ -101,6 +120,7 @@ afterEach(() => {
   // neutralizes the home-branch of every later detection/adapter test (and
   // conversely, tests passing only thanks to the leak).
   homedirOverride = undefined;
+  retiredOverride.agents = undefined;
 });
 
 // ── isArgentManagedEntry ──────────────────────────────────────────────────────
@@ -1678,6 +1698,7 @@ describe("addClaudePermission / removeClaudePermission", () => {
 describe("getManagedContentTargets", () => {
   afterEach(() => {
     homedirOverride = undefined;
+    vi.unstubAllEnvs();
   });
 
   it("derives local managed paths from adapter definitions", () => {
@@ -1763,6 +1784,41 @@ describe("getManagedContentTargets", () => {
     ]);
     expect(targets.ruleTargets).toEqual([]);
     expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists .devin/skills as a Devin Desktop skill target (local)", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([".agents/skills", ".devin/skills"]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists ~/.config/devin/skills as a Devin Desktop skill target (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([
+      "~/.agents/skills",
+      "~/.config/devin/skills",
+    ]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("resolves Devin's global skills dir from XDG_CONFIG_HOME, like the skills CLI", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const xdg = path.join(tmpDir, "xdg");
+    vi.stubEnv("XDG_CONFIG_HOME", xdg);
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.targetPath)).toEqual([
+      path.join(homedirOverride, ".agents", "skills"),
+      path.join(xdg, "devin", "skills"),
+    ]);
   });
 });
 
@@ -1898,6 +1954,32 @@ describe("copyRulesAndAgents", () => {
     });
   });
 
+  // A release that ships no agents at all must not leave an empty
+  // .claude/agents at every target, nor claim to have copied agents.
+  it("writes and reports nothing for an agents bundle with no files", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    fs.rmSync(agentsDir, { recursive: true });
+    fs.mkdirSync(path.join(agentsDir, "references"), { recursive: true });
+
+    const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(results).toEqual([`  Copied rules to ${path.join(".claude", "rules")}`]);
+    expect(fs.existsSync(path.join(tmpDir, ".claude", "agents"))).toBe(false);
+  });
+
+  // init and update ask before removing retired files (see retired-files.ts),
+  // so the copy itself must only add.
+  it("leaves files the bundle no longer ships in place", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const retired = path.join(tmpDir, ".claude", "agents", "argent-environment-inspector.md");
+    fs.mkdirSync(path.dirname(retired), { recursive: true });
+    fs.writeFileSync(retired, "---\nname: argent-environment-inspector\n---\n");
+
+    copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(fs.existsSync(retired)).toBe(true);
+  });
+
   it("injects Codex rules into developer_instructions in config.toml (local)", () => {
     const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
     // Pre-create the config.toml so the adapter can find it
@@ -1911,6 +1993,154 @@ describe("copyRulesAndAgents", () => {
     expect(content).toContain("argent rules");
     expect(content).toContain("developer_instructions");
   });
+});
+
+// ── findRetiredRulesAndAgents ────────────────────────────────────────────────
+
+describe("findRetiredRulesAndAgents", () => {
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n\nInspects.\n";
+  const CHECKLIST = "## Quality control checklist\n\nFields.\n";
+  const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+  const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+  const opencodeAdapter = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+  let rulesDir: string;
+  let agentsDir: string;
+
+  function stageRetired(targetDir: string): void {
+    fs.mkdirSync(path.join(targetDir, "references"), { recursive: true });
+    fs.writeFileSync(path.join(targetDir, "argent-environment-inspector.md"), INSPECTOR);
+    fs.writeFileSync(path.join(targetDir, "references", "quality-control-checklist.md"), CHECKLIST);
+  }
+
+  function find(
+    adapters: typeof ALL_ADAPTERS,
+    scopes: Array<"local" | "global"> = ["local"],
+    root = tmpDir
+  ) {
+    return findRetiredRulesAndAgents(
+      scopes.map((scope) => ({ adapters, scope })),
+      root,
+      rulesDir,
+      agentsDir
+    );
+  }
+
+  beforeEach(() => {
+    // A release that ships neither retired agent.
+    rulesDir = path.join(tmpDir, "src-rules");
+    agentsDir = path.join(tmpDir, "src-agents");
+    fs.mkdirSync(rulesDir, { recursive: true });
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(rulesDir, "argent.md"), "# Rule");
+    fs.writeFileSync(path.join(agentsDir, "argent-current.md"), "# Agent");
+    retiredOverride.agents = [
+      { path: "argent-environment-inspector.md", shipped: [hashBundledContent(INSPECTOR)] },
+      { path: "references/quality-control-checklist.md", shipped: [hashBundledContent(CHECKLIST)] },
+    ];
+  });
+
+  it("finds retired agents the bundle no longer ships", () => {
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    const found = find([claudeAdapter]);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ kind: "agents", location: path.join(".claude", "agents") });
+    expect(found[0].files.map((f) => f.relativePath)).toEqual([
+      "argent-environment-inspector.md",
+      "references/quality-control-checklist.md",
+    ]);
+  });
+
+  it("finds none while the bundle still ships them", () => {
+    fs.writeFileSync(path.join(agentsDir, "argent-environment-inspector.md"), INSPECTOR);
+    fs.mkdirSync(path.join(agentsDir, "references"));
+    fs.writeFileSync(path.join(agentsDir, "references", "quality-control-checklist.md"), CHECKLIST);
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    expect(find([claudeAdapter])).toEqual([]);
+  });
+
+  it("finds them when the bundle ships no agents dir at all", () => {
+    fs.rmSync(agentsDir, { recursive: true });
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    expect(find([claudeAdapter])[0].files).toHaveLength(2);
+  });
+
+  it("skips the user's own agents, at a retired name too", () => {
+    const agents = path.join(tmpDir, ".claude", "agents");
+    fs.mkdirSync(agents, { recursive: true });
+    fs.writeFileSync(path.join(agents, "my-agent.md"), INSPECTOR);
+    fs.writeFileSync(path.join(agents, "argent-environment-inspector.md"), "name: my-inspector");
+
+    expect(find([claudeAdapter])).toEqual([]);
+  });
+
+  it("looks in every agent target, global ones included", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    for (const dir of [
+      path.join(homedirOverride, ".claude", "agents"),
+      path.join(homedirOverride, ".gemini", "agents"),
+      path.join(homedirOverride, ".config", "opencode", "agents"),
+    ]) {
+      stageRetired(dir);
+    }
+
+    const found = find([claudeAdapter, geminiAdapter, opencodeAdapter], ["global"]);
+
+    expect(found.map((f) => f.location)).toEqual([
+      path.join("~", ".claude", "agents"),
+      path.join("~", ".gemini", "agents"),
+      path.join("~", ".config", "opencode", "agents"),
+    ]);
+  });
+
+  it("lists a dir once when run from the home dir, where local and global are one", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    stageRetired(path.join(homedirOverride, ".claude", "agents"));
+
+    const found = find([claudeAdapter], ["local", "global"], homedirOverride);
+
+    expect(found).toHaveLength(1);
+    expect(found[0].files).toHaveLength(2);
+  });
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  it.skipIf(process.platform === "win32")(
+    "lists a dir once when the local target links to the global one",
+    () => {
+      homedirOverride = path.join(tmpDir, "home");
+      const global = path.join(homedirOverride, ".claude", "agents");
+      stageRetired(global);
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(global, path.join(tmpDir, ".claude", "agents"));
+
+      const found = find([claudeAdapter], ["local", "global"]);
+
+      expect(found).toHaveLength(1);
+      expect(found[0].location).toBe(`.claude/agents -> ${path.join("~", ".claude", "agents")}`);
+    }
+  );
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  it.skipIf(process.platform === "win32")(
+    "names where a linked target leads, and lists a dir two targets share once",
+    () => {
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      stageRetired(canonical);
+      for (const base of [".claude", ".gemini"]) {
+        fs.mkdirSync(path.join(tmpDir, base), { recursive: true });
+        fs.symlinkSync(path.join("..", ".agents", "agents"), path.join(tmpDir, base, "agents"));
+      }
+
+      const found = find([claudeAdapter, geminiAdapter]);
+
+      expect(found.map((f) => f.location)).toEqual([
+        `.claude/agents -> ${path.join(".agents", "agents")}`,
+      ]);
+    }
+  );
 });
 
 // ── Codex developer_instructions injection ──────────────────────────────────

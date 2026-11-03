@@ -11,7 +11,7 @@ Load `argent-create-e2e` as the authoring engine. Follow its required references
 
 **Apple TV and Android TV are out of scope.** The runner does not reject touch directives there: on Apple TV they fail at the gesture layer, and on Android TV a `tap:` can pass without doing anything. Use `argent-tv-interact` and report the limitation.
 
-**Physical iPhones** run QA e2e tests under the hardware limits listed in `argent-create-e2e`. Drive the app's own zoom UI instead of `pinch`/`rotate`, and expect a selector authored on a simulator to miss on the phone's `describe`-based runner tree.
+**Physical iPhones** run QA e2e tests under the hardware limits listed in `argent-create-e2e`. Expect a selector authored on a simulator to miss on the phone's `describe`-based runner tree.
 
 ## Definition of done
 

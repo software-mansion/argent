@@ -24,7 +24,8 @@ A forgotten recording keeps capturing until its `timeLimitSeconds` cap fires, ho
 
 ## 3. Platform notes and limits
 
-- **Recordable**: iOS simulators, Android emulators and physical Android devices. **Unsupported**: physical iPhones, tvOS simulators, Chromium apps, Vega/Fire TV, HarmonyOS and remote (`remote:`-prefixed) simulators. For a still frame use `screenshot`; for a replayable interaction script use `argent-create-e2e`.
+- **Recordable**: iOS simulators (local and remote `remote:`), Android emulators and physical Android devices. **Unsupported**: physical iPhones, tvOS simulators, Chromium apps, Vega/Fire TV and HarmonyOS. For a still frame use `screenshot`; for a replayable interaction script use `argent-create-e2e`.
 - **One size per video**: the video keeps the size of the screen at the start; a later size change is letterboxed. On a foldable simulator, start recording on the panel you need at full size.
+- **Remote (`remote:`) simulators**: the video keeps the screen's portrait orientation, so a device in landscape plays sideways.
 - **Android**: secure screens (DRM, some password fields) come out black.
 - **Watermark**: a faint Argent logo is stamped bottom-left. Turn it off with `argent disable video-watermark`; the flag is read when a recording starts.

@@ -95,7 +95,7 @@ export function createRunSequenceTool(
 Use when every step is known in advance and you do not need to see the screen between steps (e.g. scrolling several times, typing then pressing enter). If a step depends on the result of an earlier one (e.g. a menu item that appears only after a tap), make separate calls instead.
 Steps run in order. If a step fails (an error, a tool that is not allowed or not supported on the target, or an await-ui-element whose condition is not met before its timeout), the sequence stops there and later steps do NOT run. Returns { completed, total, steps } with a result or an error for each step that ran, so a stopped sequence returns partial results.
 One screenshot and element tree are captured after the whole sequence, not per step: call screenshot separately only for a baseline before it or to see an intermediate step. A \`{{secret:...}}\` in any step skips that capture, so type a secret and submit it in one sequence.
-On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, button, keyboard and await-ui-element steps run. On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
+On a physical iOS device only gesture-tap, gesture-swipe, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard and await-ui-element steps run. On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
 
 Allowed tools, their args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles are in degrees, durations in ms.
   gesture-tap: x, y, clickCount?  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos>]
