@@ -44,7 +44,7 @@ We do not use telemetry for advertising, marketing, profiling, automated decisio
 
 ### Tool and process usage
 
-- which Argent tools are invoked, and whether they succeeded or returned an error;
+- which Argent tools are invoked, whether a call used a tool's former name, and whether they succeeded or returned an error;
 - which AI coding tool is driving Argent;
 - how long a process ran in the terminal or in CI, and which Argent component emitted the event;
 - start and stop of the Argent tool-server, its uptime, the number of tools used, and the reason it stopped.
@@ -63,7 +63,7 @@ When you use the Argent Lens design-review flow (previewing and choosing between
 
 - Argent version, Node.js version, operating system, processor architecture;
 - whether the process runs in an interactive terminal and whether it runs in a CI environment;
-- whether Argent is used in connection with Android, iOS, tvOS (Apple TV), Android TV, VegaOS, or a Chromium-based target, and whether that target is a simulator or emulator, a virtual device, a physical device, or a desktop application. This category is inferred from the form of the device identifier; the identifier itself is never recorded;
+- whether Argent is used in connection with Android, iOS, tvOS (Apple TV), Android TV, VegaOS, HarmonyOS, or a Chromium-based target, and whether that target is a simulator or emulator, a virtual device, a physical device, or a desktop application. This category is inferred from the form of the device identifier; the identifier itself is never recorded;
 - when a device is supplied by an external device provider, a short label for that provider (the leading segment of the name the provider registers under), never the identifier of the device it supplies.
 
 ### Diagnostics

@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { FAILURE_CODES, FailureError, getFailureSignal, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
-// The runner boots a Chromium e2e flow's app itself. Mock the Electron
+// The runner boots a Chromium standalone flow's app itself. Mock the Electron
 // launcher so we can assert on how it's called + torn down without spawning a
 // real process, and mock the port registry so teardown touches no on-disk state.
 // Each boot lands on its own port, as the real launcher does — and the device
@@ -183,7 +183,7 @@ afterEach(async () => {
 });
 
 describe("flow-execute chromium boot", () => {
-  it("boots a fresh instance for a chromium-only e2e flow and tears it down", async () => {
+  it("boots a fresh instance for a chromium-only standalone flow and tears it down", async () => {
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");
     const registry = makeRegistry();
 
@@ -468,7 +468,7 @@ describe("flow-execute chromium boot", () => {
     expect(result.steps[0]).toMatchObject({ kind: "launch", status: "pass" });
   });
 
-  it("boots a second instance for a nested e2e flow's launch and tears both down in reverse", async () => {
+  it("boots a second instance for a nested standalone flow's launch and tears both down in reverse", async () => {
     // The chromium analog of the in-place `restart-app` native nesting gets:
     // the process IS the device, so the nested launch boots its own.
     const parent = await writeFlow(
@@ -776,7 +776,7 @@ describe("flow-execute chromium boot", () => {
     ]);
   });
 
-  it("boots for a fragment whose first step run:s a chromium e2e flow", async () => {
+  it("boots for a fragment whose first step run:s a chromium standalone flow", async () => {
     // The run begins with a launch even though the TOP-LEVEL flow doesn't: the
     // runner needs a device before step 1, so the leading `run:` chain is
     // followed to find the launch it has to boot for.
@@ -819,7 +819,7 @@ describe("flow-execute chromium boot", () => {
   it("boots past a leading run: hop that contributes nothing but echoes", async () => {
     // execRunStep inlines an echo-only fragment and carries straight on with
     // the parent's NEXT step, so the run's first executable step is still the
-    // e2e flow's launch. A walk that stopped at the hop would leave the run to
+    // standalone flow's launch. A walk that stopped at the hop would leave the run to
     // attach to whatever chromium instance happens to be up — a green launch
     // step against someone else's browser.
     const fragment = await writeFlow("steps:\n  - run: narrate\n  - run: e2e-chromium\n");
@@ -1706,8 +1706,8 @@ describe("flow-execute chromium boot", () => {
     ).rejects.toBe(raw);
   });
 
-  it("still honors the first launch when a fragment run:s an e2e flow (the common composition)", async () => {
-    // Fragment B (no leading launch) that run:s e2e flow A (launch + setup).
+  it("still honors the first launch when a fragment run:s a standalone flow (the common composition)", async () => {
+    // Fragment B (no leading launch) that run:s standalone flow A (launch + setup).
     // A's launch is the run's FIRST, so it attaches to the pinned instance
     // rather than booting. The pinned device is what suppresses the boot —
     // without one this same shape hoist-boots A's app before step 1.

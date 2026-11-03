@@ -56,7 +56,6 @@ vi.mock("@clack/prompts", async (importOriginal) => {
 });
 
 vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
-
 // A successful global update re-syncs the real skills store via `npx skills`.
 vi.mock("../src/skills.js", () => ({ reportSkillRefresh: vi.fn() }));
 
@@ -344,5 +343,55 @@ describe("install under Yarn 2+", () => {
       { bin: "yarn", args: ["add", "--dev", "@swmansion/argent"] },
       { cwd: "/fake/project" }
     );
+  });
+});
+
+describe("global install PATH check", () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.mocked(runShellCommand).mockReset();
+    vi.mocked(runShellCommand).mockResolvedValue(undefined);
+    vi.mocked(isGloballyInstalled).mockReset();
+    vi.mocked(p.log.warn).mockClear();
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new ExitCalled(code);
+    }) as never);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+  });
+
+  function globalInstall(tel: InitTelemetry): Promise<string> {
+    return runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: true,
+      version: "0.0.0",
+      tel,
+    });
+  }
+
+  it("warns and continues when the install succeeds but argent is not on PATH", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(false);
+    const tel = makeTel();
+
+    await globalInstall(tel);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(p.log.warn).toHaveBeenCalledTimes(1);
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("is not on PATH"));
+    expect(tel.trackPackageAction).toHaveBeenCalledWith("fresh_install", expect.any(Number), true);
+  });
+
+  it("does not warn when the fresh install is on PATH", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const tel = makeTel();
+
+    await globalInstall(tel);
+
+    expect(runShellCommand).toHaveBeenCalledTimes(1);
+    expect(p.log.warn).not.toHaveBeenCalled();
   });
 });

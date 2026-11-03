@@ -19,7 +19,8 @@ set -euo pipefail
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
 #
 # Requires:
-#   - gh CLI (no authentication needed — the repo is public)
+#   - gh CLI, logged in with `gh auth login` (the repo is public, but the
+#     `gh release view` pre-check still needs auth)
 
 REPO="software-mansion-labs/argent-private-releases"
 TAG="${1:-argent-main}"
@@ -38,7 +39,7 @@ else
 fi
 
 if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
-  echo "Error: release '${TAG}' not found in ${REPO}." >&2
+  echo "Error: release '${TAG}' not found in ${REPO}, or gh is not logged in (gh auth login)." >&2
   echo "Build and publish the trace-processor WASM bundle for this version first, then retry." >&2
   exit 1
 fi

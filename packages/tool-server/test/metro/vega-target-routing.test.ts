@@ -3,6 +3,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
+import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { scopeTempHome } from "../helpers/temp-home";
 
@@ -68,10 +69,30 @@ let mockPort: number;
 let registry: Registry;
 let listTargets: unknown[] = [];
 
+const debuggerEnabled = new WeakSet<WebSocket>();
+
 function handleCDPMessage(ws: WebSocket, raw: string) {
   const { id, method } = JSON.parse(raw) as { id: number; method: string };
   if (method === "Debugger.enable") {
+    debuggerEnabled.add(ws);
     ws.send(JSON.stringify({ id, result: { debuggerId: "mock" } }));
+    return;
+  }
+  if (method === "Runtime.evaluate") {
+    ws.send(
+      JSON.stringify(
+        debuggerEnabled.has(ws)
+          ? { id, result: { result: { type: "string", value: "legacy-eval-result" } } }
+          : {
+              id,
+              error: {
+                code: -32000,
+                message:
+                  "debugger can't perform eval: in RunningDetached, expected paused or running",
+              },
+            }
+      )
+    );
     return;
   }
   ws.send(JSON.stringify({ id, result: {} }));
@@ -113,6 +134,7 @@ beforeEach(() => {
   registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerTool(debuggerConnectTool);
+  registry.registerTool(debuggerEvaluateTool);
 });
 
 afterEach(async () => {
@@ -130,6 +152,17 @@ describe("Vega target routing on a legacy Metro (no logicalDeviceId)", () => {
     expect(res.deviceName).toBe("kepler-device");
     expect(res.appName).toBe("Hermes React Native");
     expect(res.isNewDebugger).toBe(false);
+  });
+
+  it("evaluates on Vega without reactNative metadata", async () => {
+    listTargets = VEGA_TARGETS;
+    await registry.invokeTool("debugger-connect", { port: mockPort, device_id: VEGA_DEVICE_ID });
+    const result = await registry.invokeTool("debugger-evaluate", {
+      port: mockPort,
+      device_id: VEGA_DEVICE_ID,
+      expression: "1 + 1",
+    });
+    expect(result).toMatchObject({ result: "legacy-eval-result" });
   });
 
   it("must NOT attach to the proxy's `don't use` page even if it is listed first", async () => {
@@ -184,4 +217,38 @@ describe("Vega target routing on a legacy Metro (no logicalDeviceId)", () => {
     expect(message).toContain("legacy inspector — no logicalDeviceId");
     expect(message).toContain("give it its own Metro port");
   });
+});
+
+// RN 0.72 uses the same legacy Hermes inspector on phones as on Vega.
+// Exercise ordinary device IDs so a Vega-only exception cannot hide this bug.
+describe("legacy Hermes evaluation on iOS/Android", () => {
+  it.each([
+    { platform: "Android", deviceId: "emulator-5554" },
+    { platform: "iOS", deviceId: "12345678-1234-1234-1234-123456789ABC" },
+  ])("evaluates on $platform without modern inspector metadata", async ({ deviceId }) => {
+    listTargets = [LEGACY_PHONE_TARGET];
+    await registry.invokeTool("debugger-connect", { port: mockPort, device_id: deviceId });
+    const result = await registry.invokeTool("debugger-evaluate", {
+      port: mockPort,
+      device_id: deviceId,
+      expression: "1 + 1",
+    });
+    expect(result).toMatchObject({ result: "legacy-eval-result" });
+  });
+
+  it.each([{}, { prefersFuseboxFrontend: false }])(
+    "still enables the legacy debugger with capabilities %j",
+    async (capabilities) => {
+      // Newer Metro versions add reactNative metadata even for legacy runtimes.
+      listTargets = [{ ...LEGACY_PHONE_TARGET, reactNative: { capabilities } }];
+      const deviceId = "emulator-5554";
+      await registry.invokeTool("debugger-connect", { port: mockPort, device_id: deviceId });
+      const result = await registry.invokeTool("debugger-evaluate", {
+        port: mockPort,
+        device_id: deviceId,
+        expression: "1 + 1",
+      });
+      expect(result).toMatchObject({ result: "legacy-eval-result" });
+    }
+  );
 });

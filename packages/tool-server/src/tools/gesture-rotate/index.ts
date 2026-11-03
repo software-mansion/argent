@@ -1,8 +1,17 @@
 import { z } from "zod";
-import { type ToolCapability, type ToolContext, type ToolDefinition } from "@argent/registry";
+import {
+  type ServiceRef,
+  type ToolCapability,
+  type ToolContext,
+  type ToolDefinition,
+} from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
-import { sendTouchEvent } from "../../utils/gesture-utils";
+import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
+import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { rotateContacts, sendTouchEvent } from "../../utils/gesture-utils";
+import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
+import { getViewport, touchPaths } from "../../utils/ios-device/runner-commands";
+import { rotatePaths } from "../../utils/ios-device/touch-paths";
 import { sleep } from "../../utils/timing";
 
 const zodSchema = z
@@ -67,10 +76,16 @@ interface Result {
    * be resolved, so the gesture went to the cover panel. Says why and what to check.
    */
   warning?: string;
+  /**
+   * Physical iOS only: the target app was backgrounded and the runner
+   * re-fronted it to run this gesture, so the foreground screen changed as a
+   * side effect. Set only when true.
+   */
+  reactivated?: true;
 }
 
 const capability: ToolCapability = {
-  apple: { simulator: true },
+  apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
@@ -94,20 +109,41 @@ export const gestureRotateTool: ToolDefinition<Params, Result> = {
 endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn. A single radius applies to both axes, so on a non-square screen it traces a physical ellipse (finger separation varies through the turn); pass radiusX+radiusY (fractions of width/height with radiusX·width = radiusY·height) for a physically circular orbit instead.
 Auto-generates interpolated frames at ~60fps.
 Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
-Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.
+Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend is not reachable for the given device, or on a physical iPhone when the app is not drawn in portrait.
 Size the orbit with radius, or with radiusX and radiusY together (the pair overrides radius); one half of the pair alone, or none of the three, is rejected.`,
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    return isIosPhysicalDevice(device)
+      ? { iosDeviceRunner: iosDeviceRunnerRef(device) }
+      : { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params, ctx?: ToolContext) {
-    const api = services.simulatorServer as SimulatorServerApi;
     const duration = params.durationMs ?? 300;
     const steps = Math.max(1, Math.round(duration / 16));
     // Refines guarantee radius is set whenever the per-axis pair is absent.
     const radiusX = params.radiusX ?? params.radius!;
     const radiusY = params.radiusY ?? params.radius!;
+    const geometry = { ...params, radiusX, radiusY };
+
+    // Hardware fingers go through the runner as two timed paths, played at once.
+    const device = resolveDevice(params.udid);
+    if (isIosPhysicalDevice(device)) {
+      const runner = services.iosDeviceRunner as IosDeviceRunnerApi;
+      const bundleId = requireCurrentIosDeviceApp(device.id);
+      const viewport = await getViewport(runner, bundleId);
+      const timestampMs = Date.now();
+      const { reactivated } = await touchPaths(
+        runner,
+        bundleId,
+        rotatePaths(geometry, viewport, duration)
+      );
+      const fronted = viewport.reactivated === true || reactivated;
+      return { rotated: true, timestampMs, ...(fronted ? { reactivated: true as const } : {}) };
+    }
+
+    const api = services.simulatorServer as SimulatorServerApi;
 
     let timestampMs = 0;
     let warning: string | undefined;
@@ -136,14 +172,10 @@ Size the orbit with radius, or with radiusX and radiusY together (the pair overr
         throw err;
       }
 
-      const t = i / steps;
-      const angleDeg = params.startAngle + (params.endAngle - params.startAngle) * t;
-      const angleRad = (angleDeg * Math.PI) / 180;
-
-      const x1 = params.centerX + radiusX * Math.cos(angleRad);
-      const y1 = params.centerY + radiusY * Math.sin(angleRad);
-      const x2 = params.centerX - radiusX * Math.cos(angleRad);
-      const y2 = params.centerY - radiusY * Math.sin(angleRad);
+      const {
+        first: { x: x1, y: y1 },
+        second: { x: x2, y: y2 },
+      } = rotateContacts(geometry, i / steps);
 
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();

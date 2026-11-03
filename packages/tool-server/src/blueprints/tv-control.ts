@@ -13,10 +13,10 @@ import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
 import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
-import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
+import type { TvControlApi, TvDescribeResponse, TvDirection } from "./tv-control-types";
 
 // Re-exported so existing importers of `tv-control` keep working.
-export type { TvControlApi, TvDescribeResponse, TvDirection, TvElement };
+export type { TvControlApi, TvDescribeResponse };
 
 export const TV_CONTROL_NAMESPACE = "TvControl";
 

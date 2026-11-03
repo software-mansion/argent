@@ -94,7 +94,7 @@ describe("a nested flow-execute reports its own verdict", () => {
     const { result, registry } = await run("flow-execute", FAILED_SUBFLOW);
 
     expect(result.steps[0].status).toBe("fail");
-    expect(result.steps[0].reason).toMatch(/flow "sub" failed/);
+    expect(result.steps[0].reason).toMatch(/e2e test "sub" failed/);
     expect(result.steps[0].reason).toMatch(/1 failed/);
     // The sub-flow's own reason is surfaced, so the CLI — which renders only
     // `reason` — says what actually went wrong rather than just "it failed".

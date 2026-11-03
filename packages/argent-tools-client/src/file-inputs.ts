@@ -8,8 +8,9 @@
  * encoding; without it, the tool-server reads the path in place.
  *
  * {@link applyClientFileDirectives} is the reverse: a `__argentClientFile`
- * directive (e.g. a recorded flow YAML) is written here, constrained to
- * `.argent/flows/*.yaml` so a misbehaving tool-server cannot write elsewhere,
+ * directive (e.g. a recorded e2e test) is written here, constrained to
+ * `.argent/e2e/*.yaml` or `.argent/flows/*.yaml` so a misbehaving tool-server
+ * cannot write elsewhere,
  * or, for a base64 snapshot baseline, to the baseline directories the client
  * itself computed for the call.
  */
@@ -34,6 +35,8 @@ import { createTarGzFile } from "@argent/archive";
 import {
   FAILURE_CODES,
   FLOW_FILE_NAME_PATTERN,
+  e2eDirProject,
+  pickE2eFile,
   type FileInputMember,
   type OnDiskSpelling,
 } from "@argent/registry";
@@ -50,6 +53,11 @@ export type FileInputKind = "file" | "directory" | "probe" | "tar-upload";
 export interface FileInputSpec {
   target: string;
   path: string;
+  /**
+   * Templates tried in order in place of `path` for a `file` input: the first
+   * whose file exists here is wrapped, or the first when none does.
+   */
+  paths?: string[];
   kind: FileInputKind;
   optional?: boolean;
   /**
@@ -112,7 +120,7 @@ export interface PrepareFileInputsOptions {
    */
   uploadEndpoint?: { url: string; token: string };
   /**
-   * Receives the `[flow-files]` lines that `ARGENT_FLOW_FILES_LOG=1` turns on,
+   * Receives the `[flow-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on,
    * one for each member a `collect` spec sends. Defaults to stderr.
    */
   log?: (line: string) => void;
@@ -167,6 +175,24 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
     return v;
   });
   return missing ? null : out;
+}
+
+/**
+ * The path a spec names for this call: its `path`, or for a `file` input
+ * with `paths`, the first of them whose file exists ({@link pickE2eFile}).
+ */
+async function specPath(
+  spec: FileInputSpec,
+  args: Record<string, unknown>
+): Promise<string | null> {
+  if (spec.kind !== "file" || !spec.paths?.length) return interpolatePath(spec.path, args);
+  const candidates: string[] = [];
+  for (const template of spec.paths) {
+    const filled = interpolatePath(template, args);
+    if (filled === null) return null;
+    candidates.push(filled);
+  }
+  return (await pickE2eFile(candidates)).path;
 }
 
 // Archives of the uploads in progress. A signal or `process.exit()` ends the
@@ -311,7 +337,7 @@ export async function uploadFile(
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
   trackArchive(tarPath);
   try {
-    await createTarGzFile(sourcePath, tarPath);
+    await createTarGzFile(await realpath(sourcePath), tarPath);
     const contentHash = await sha256File(tarPath);
     return { uploadId: await uploadTar(tarPath, endpoint, signal), contentHash };
   } finally {
@@ -383,7 +409,7 @@ export async function prepareFileInputs(
     // still diagnosed by the tool, not by the boundary.
     if (spec.skipWhenSet && record[spec.skipWhenSet] !== undefined) continue;
     if (spec.target in record && typeof record[spec.target] !== "string") continue;
-    const filePath = interpolatePath(spec.path, record);
+    const filePath = await specPath(spec, record);
     if (filePath === null) continue;
     // When the target IS a source param the interpolated path equals its
     // value; a derived target (flow_file) is wrapped only when unset.
@@ -455,7 +481,8 @@ export interface AppliedClientFiles {
 /**
  * Trust boundary: the directive path is authored by the tool-server. Flow
  * recording is the only producer of text directives, so they are confined to
- * an absolute path ending `.argent/flows/<name>.yaml`, with no `..` anywhere.
+ * an absolute path ending `.argent/e2e/<name>.yaml` or
+ * `.argent/flows/<name>.yaml`, with no `..` anywhere.
  * Widen deliberately (and equally conservatively) if another tool needs this
  * channel.
  */
@@ -465,7 +492,7 @@ function isAllowedClientFilePath(p: string): boolean {
   if (segments.includes("..")) return false;
   const file = segments[segments.length - 1] ?? "";
   if (!FLOW_FILE_NAME_PATTERN.test(file)) return false;
-  return segments[segments.length - 3] === ".argent" && segments[segments.length - 2] === "flows";
+  return e2eDirProject(segments.slice(0, -1).join("/")) !== null;
 }
 
 function isClientFileDirective(value: unknown): value is ClientFileDirective {

@@ -7,7 +7,7 @@ const variant = (name: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-const KNOWN_PLATFORMS = new Set(["ios", "ios-remote", "android", "chromium", "vega"]);
+const KNOWN_PLATFORMS = new Set(["ios", "ios-remote", "android", "chromium", "vega", "harmony"]);
 
 /**
  * Assert a Lens telemetry payload carries only privacy-safe primitives: numbers,

@@ -33,9 +33,9 @@ describe("flow param errors over HTTP", () => {
       .send({ project_root: "/tmp/does-not-matter", prerequisiteAcknowledged: true });
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toContain("needs the flow's name in `name`");
+    expect(res.body.message).toContain("needs the e2e test's name in `name`");
     expect(res.body.message).toContain(".argent/flows/<name>.yaml");
-    expect(res.body.error).toContain("needs the flow's name in `name`");
+    expect(res.body.error).toContain("needs the e2e test's name in `name`");
   });
 
   it("renders the 400 body as prose that names the caller's own keys, not raw Zod JSON", async () => {

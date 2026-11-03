@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { MaterializeContext } from "@argent/tools-client";
-import { exportFailureArtifacts, type FlowReport, type StepReport } from "../src/flow.js";
+import { exportFailureArtifacts, type FlowReport, type StepReport } from "../src/e2e.js";
 
 // Spies over the real implementations, not stubs: every test here runs against
 // a real temp filesystem. Only the three marker-window tests override anything,
@@ -377,7 +377,7 @@ describe("exportFailureArtifacts", () => {
 
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(step.artifacts?.diff).toBe(handle);
-      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unsafe flow filename"));
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("unsafe e2e test filename"));
       await expect(fs.access(outDir)).rejects.toThrow();
     } finally {
       errSpy.mockRestore();
@@ -622,7 +622,7 @@ describe("exportFailureArtifacts", () => {
         expect.stringContaining(`${occupied} already holds artifacts from ${suiteD}`)
       );
       for (const call of errSpy.mock.calls) {
-        expect(call[0]).toContain(`writing this flow's artifacts to ${dest}`);
+        expect(call[0]).toContain(`writing this e2e test's artifacts to ${dest}`);
       }
     } finally {
       errSpy.mockRestore();
@@ -940,7 +940,7 @@ describe("exportFailureArtifacts", () => {
       );
       expect(errSpy).toHaveBeenCalledWith(
         `warning: ${stemDir} already holds artifacts from ${winner.flow}; ` +
-          `writing this flow's artifacts to ${loser.dir} so neither set is overwritten`
+          `writing this e2e test's artifacts to ${loser.dir} so neither set is overwritten`
       );
     } finally {
       errSpy.mockRestore();
@@ -1039,7 +1039,7 @@ describe("exportFailureArtifacts", () => {
       expect(errSpy).toHaveBeenCalledTimes(1);
       expect(errSpy).toHaveBeenCalledWith(
         `warning: ${stemDir} already holds files from an unknown source; ` +
-          `writing this flow's artifacts to ${target} so neither set is overwritten`
+          `writing this e2e test's artifacts to ${target} so neither set is overwritten`
       );
     } finally {
       vi.mocked(fs.writeFile).mockRestore();
@@ -1187,7 +1187,7 @@ describe("exportFailureArtifacts", () => {
       expect(errSpy).toHaveBeenCalledTimes(1);
       expect(errSpy).toHaveBeenCalledWith(
         `warning: ${stemDir} already holds files from an unknown source; ` +
-          `writing this flow's artifacts to ${target} so neither set is overwritten`
+          `writing this e2e test's artifacts to ${target} so neither set is overwritten`
       );
     } finally {
       vi.mocked(fs.readFile).mockRestore();
@@ -1226,7 +1226,7 @@ describe("exportFailureArtifacts", () => {
         expect(errSpy).toHaveBeenCalledWith(
           `warning: ${stemDir} could not be claimed (EACCES: permission denied, ` +
             `open '${path.join(stemDir, ".argent-flow-source")}'); ` +
-            `writing this flow's artifacts to ${target} so neither set is overwritten`
+            `writing this e2e test's artifacts to ${target} so neither set is overwritten`
         );
       } finally {
         await fs.chmod(stemDir, 0o755);

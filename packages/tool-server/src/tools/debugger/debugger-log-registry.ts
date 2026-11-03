@@ -53,6 +53,7 @@ export function createDebuggerLogRegistryTool(
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity). Works against Hermes (iOS / Android / Vega) and V8 (Chromium).
 Use when investigating warnings, errors, or unexpected output. Call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet, but check { note }, which is present only when the stats are empty BECAUSE the previous debugger session ended: torn down (e.g. by stop-all-simulator-servers) with its log file deleted, or cut off by the app crashing with its log file kept at the path the note names. Absent that note, empty really does mean the app has logged nothing.
 When the debugger cannot be reached, this tool does not fail: it returns { status: "not_connected", reason, detail, guidance } with NO log file. Follow the guidance (do not retry in a loop). Read a log file in this state only when a { note } names one kept from before the app crashed. A "connected" result's stats may come from a session whose socket has since died. Use debugger-status, not this tool, to judge debugger health.`,
+    readOnly: true,
     zodSchema,
     capability: DEBUGGER_TOOL_CAPABILITY,
     // Resolved manually in execute so a not-connected precondition becomes a

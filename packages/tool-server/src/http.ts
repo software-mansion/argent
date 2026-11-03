@@ -4,10 +4,12 @@ import { createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  CLIENT_SECRETS_HEADER,
+  E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
   describeParamIssues,
   getFailureSignal,
@@ -50,6 +52,7 @@ import {
   isExternalId,
 } from "./utils/external-devices";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "./utils/debugger/device-alias";
+import { isProfiling } from "./utils/profiling-devices";
 import { attributeDeviceForTelemetry, type DeviceAttribution } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
@@ -64,6 +67,7 @@ import {
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
+import { renderFlagGated } from "./utils/flag-gated-text";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -191,6 +195,8 @@ type InvocationMeta = {
 // never stored or forwarded; invalid_params carries schema-declared parameter
 // NAMES only (see deriveInvalidParams), never values or user-typed keys.
 type HttpFailureMeta = {
+  /** The call named the tool by a former id; `toolId` is the current one. */
+  alias_used?: boolean;
   device_provider?: string;
   platform?: TelemetryPlatform;
   device_kind?: TelemetryDeviceKind;
@@ -267,6 +273,10 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   // `device_id` calls refine an Android TV AVD once the cache is warm.
   if (typeof (data as Record<string, unknown>).avdName === "string") {
     return { platform: "android" };
+  }
+  // HarmonyOS twin: an instance is named, not addressed.
+  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") {
+    return { platform: "harmony" };
   }
   return null;
 }
@@ -666,7 +676,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     const tools = snapshot.tools
       .map((id) => registry.getTool(id))
       .filter((def): def is NonNullable<typeof def> => isToolExposed(def))
-      .map((def) => {
+      .flatMap((def) => {
         const entry: {
           name: string;
           description: string;
@@ -677,18 +687,32 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           searchHint?: string;
           longRunning?: boolean;
           hideFromMcp?: boolean;
+          readOnly?: boolean;
+          aliasOf?: string;
         } = {
           name: def.id,
-          description: def.description ?? "",
-          inputSchema: def.inputSchema ?? { type: "object", properties: {} },
+          description: renderFlagGated(def.description ?? "", isFlagEnabled),
+          inputSchema: renderFlagGated(
+            def.inputSchema ?? { type: "object", properties: {} },
+            isFlagEnabled
+          ),
         };
-        if (def.outputHint) entry.outputHint = def.outputHint;
+        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagEnabled);
         if (def.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
         if (def.alwaysLoad) entry.alwaysLoad = true;
-        if (def.searchHint) entry.searchHint = def.searchHint;
+        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagEnabled);
         if (def.longRunning) entry.longRunning = true;
         if (def.hideFromMcp) entry.hideFromMcp = true;
-        return entry;
+        if (def.readOnly) entry.readOnly = true;
+        // A former id is listed too, so a client that calls by it finds the
+        // tool's file inputs. Hidden from MCP, so agents see one name.
+        const aliases = (def.aliases ?? []).map((alias) => ({
+          ...entry,
+          name: alias,
+          hideFromMcp: true,
+          aliasOf: def.id,
+        }));
+        return [entry, ...aliases];
       });
     res.json({ tools });
   });
@@ -720,9 +744,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
         const provider = failedDeviceArg ? externalProviderLabel(failedDeviceArg) : undefined;
         const attribution = inferDeviceAttribution(failedDeviceArg);
+        const toolId = registry.getTool(name)?.id ?? name;
         options.recordFailure(
-          name,
+          toolId,
           {
+            ...(toolId !== name ? { alias_used: true } : {}),
             ...(provider ? { device_provider: provider } : {}),
             ...attribution,
             ...(extraMeta?.invalid_params?.length
@@ -751,6 +777,19 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (!isToolExposed(def)) {
         res.status(404).json({ error: `Tool "${name}" not found` });
         return;
+      }
+
+      let clientSecrets: Map<string, string> | undefined;
+      const clientSecretsHeader = firstHeader(req.headers[CLIENT_SECRETS_HEADER]);
+      if (clientSecretsHeader !== undefined) {
+        try {
+          clientSecrets = decodeClientSecrets(clientSecretsHeader);
+        } catch (err) {
+          res.status(400).json({
+            error: `The ${CLIENT_SECRETS_HEADER} header ${err instanceof Error ? err.message : String(err)}.`,
+          });
+          return;
+        }
       }
 
       // File boundary: turn client file-input wrappers back into plain
@@ -948,8 +987,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // through the registry inherit the same ai_client / platform instead of being
       // recorded as anonymous.
       let recordChildInvocation:
-        | ((childInvocationId: string, childArgs?: unknown) => () => void)
-        | undefined;
+        ((childInvocationId: string, childArgs?: unknown) => () => void) | undefined;
       const recordInvocation = options?.recordInvocation;
       if (recordInvocation) {
         const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
@@ -991,6 +1029,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           // mark makes the recorder stricter for that caller and keeps its
           // recording in memory, sent back in client-file directives.
           ...(firstHeader(req.headers[LINKED_CALL_HEADER]) === "1" ? { linked: true } : {}),
+          // A client released before the rename writes client files only under
+          // `.argent/flows/`, so the recorder keeps its recordings there.
+          ...(firstHeader(req.headers[E2E_DIR_CLIENT_HEADER]) === "1"
+            ? {}
+            : { legacyE2eDir: true }),
+          ...(clientSecrets ? { clientSecrets } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream
@@ -1037,11 +1081,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const toolNote = takeToolNote(data);
         if (toolNote) notes.push(toolNote);
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
+        // For the MCP adapter: its post-action capture would load the app a
+        // profiler is recording on this device. Read at completion.
+        const profilingPayload =
+          deviceArg && isProfiling(canonicalDeviceId(deviceArg) ?? deviceArg)
+            ? { profiling: true }
+            : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload });
+          writeLine({ event: "result", data, ...notePayload, ...profilingPayload });
           res.end();
         } else {
-          res.json({ data, ...notePayload });
+          res.json({ data, ...notePayload, ...profilingPayload });
         }
       } catch (err: unknown) {
         /**
