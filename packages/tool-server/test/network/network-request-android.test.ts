@@ -653,16 +653,42 @@ describe("view-network-request-details: routing an android- ID", () => {
     );
   });
 
-  it("keeps a Chromium device on Chromium and any other ID on the JS layer", () => {
+  it("resolves an android- ID under a Chromium device_id, never touching Chromium", async () => {
+    serve(record());
+    const get = vi.fn();
+    const chromium = { server: { network: { get } }, cdp: { send: vi.fn() } };
+    const params = { device_id: "chromium-cdp-9222", requestId: ID, includeBody: true };
+
+    expect(networkRequestTool.services!(params)).toEqual({});
+    const out = (await networkRequestTool.execute!({ chromium }, params)) as Details;
+    expect(out.requestId).toBe(ID);
+    expect(out.response.status).toBe(200);
     expect(
-      Object.keys(
-        networkRequestTool.services!({
-          device_id: "chromium-cdp-9222",
-          requestId: ID,
-          includeBody: true,
-        })
-      )
-    ).toEqual(["chromium"]);
+      await networkRequestTool.execute!({ chromium }, { ...params, requestId: "android-1a2b-99" })
+    ).toBe(
+      "Request android-1a2b-99 not found. Use native-network-logs to list the requests the Android native layer recorded."
+    );
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Chromium request ID on Chromium and any other ID on the JS layer", async () => {
+    const params = { device_id: "chromium-cdp-9222", requestId: "1234.5", includeBody: false };
+    expect(Object.keys(networkRequestTool.services!(params))).toEqual(["chromium"]);
+    const get = vi.fn(() => ({
+      requestId: "1234.5",
+      method: "GET",
+      url: "https://x.test/",
+      status: 200,
+      statusText: "OK",
+    }));
+    const out = (await networkRequestTool.execute!(
+      { chromium: { server: { network: { get } } } },
+      params
+    )) as Details;
+    expect(get).toHaveBeenCalledWith("1234.5");
+    expect(out.requestId).toBe("1234.5");
+    expect(out.response.status).toBe(200);
+
     expect(
       networkRequestTool.services!({ device_id: SERIAL, requestId: "rn-net-4", includeBody: true })
     ).toEqual({ inspector: `NetworkInspector:8081:${SERIAL}` });

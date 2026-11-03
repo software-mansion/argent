@@ -199,22 +199,27 @@ Returns an error message string if the requestId is not found: use view-network-
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params): Record<string, ServiceRef> => {
-    const device = resolveDevice(params.device_id);
-    if (device.platform === "chromium") {
-      return { chromium: chromiumCdpRef(device) };
-    }
     /**
      * An android- ID names its record without the device, so it resolves
      * whatever spelling of the device the caller passes: a Metro
      * logicalDeviceId from a shared Metro, an ext: id, or one that classifies
-     * as another platform. It needs no debugger either.
+     * as another platform, Chromium included. It needs no debugger either.
+     * A Chromium request ID never has this shape.
      */
     if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) return {};
+    const device = resolveDevice(params.device_id);
+    if (device.platform === "chromium") {
+      return { chromium: chromiumCdpRef(device) };
+    }
     return {
       inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
     };
   },
   async execute(services, params) {
+    if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {
+      return androidNativeRequestDetails(params.requestId, params.includeBody);
+    }
+
     const device = resolveDevice(params.device_id);
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
@@ -266,10 +271,6 @@ Returns an error message string if the requestId is not found: use view-network-
         details.response = resp;
       }
       return details;
-    }
-
-    if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {
-      return androidNativeRequestDetails(params.requestId, params.includeBody);
     }
 
     const api = services.inspector as NetworkInspectorApi;
