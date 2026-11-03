@@ -295,7 +295,8 @@ describe("list-devices", () => {
       ).toEqual([]);
       expect(result.hint).toContain("Ask the user to open Xcode once");
       expect(result.hint).toContain("sudo xcodebuild -runFirstLaunch");
-      expect(result.hint).toContain("local iOS simulators are unavailable");
+      expect(result.hint).toContain("does not show local iOS simulators");
+      expect(result.hint).toContain("such as taps and screenshots, still work");
       expect(result.hint).not.toContain("physical iPhones");
     } finally {
       xcodePending.simctl = false;
@@ -316,8 +317,8 @@ describe("list-devices", () => {
 
       expect(result.devices.filter((d) => d.platform === "ios").length).toBeGreaterThan(0);
       expect(result.hint).toContain("Ask the user to open Xcode once");
-      expect(result.hint).toContain("physical iPhones are unavailable");
-      expect(result.hint).not.toContain("simulators");
+      expect(result.hint).toContain("does not show physical iPhones");
+      expect(result.hint).not.toContain("simulator");
     } finally {
       xcodePending.devicectl = false;
     }
@@ -333,7 +334,8 @@ describe("list-devices", () => {
 
       expect(result.hint).toContain(
         "`simctl` and `devicectl` wait for an administrator password on every call, so argent " +
-          "does not run them and local iOS simulators and physical iPhones are unavailable."
+          "does not run them. `list-devices` does not show local iOS simulators and physical " +
+          "iPhones, and argent refuses the tools that need `simctl` or `devicectl`."
       );
     } finally {
       xcodePending.simctl = false;

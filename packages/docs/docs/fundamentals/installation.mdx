@@ -92,7 +92,7 @@ After you install or update Xcode, Xcode must install its system components. Unt
 `simctl` controls local iOS simulators, and `devicectl` controls physical iPhones. Argent reads Xcode's files to find when a call starts the install. Argent then does not make that call:
 
 - `list-devices` does not show the devices whose tool can start the install. Its `hint` field gives the reason to the agent.
-- The tools for these devices return an error that tells the agent what to do.
+- The tools that need `simctl` or `devicectl` return an error that tells the agent what to do. Tools that do not need `simctl`, such as taps and screenshots, still work on a simulator that is already booted.
 - While `simctl` can start the install, Argent does not look for booted simulators in the background.
 
 To install the components, do one of these steps:

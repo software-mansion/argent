@@ -24,12 +24,18 @@ const WRAPPER_DEVICES: Record<XcodeWrapper, string> = {
 /** What the agent is told while `wrappers` would start the install. */
 export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string {
   const one = wrappers.length === 1;
-  const tools = wrappers.map((w) => `\`${w}\``).join(" and ");
+  const names = wrappers.map((w) => `\`${w}\``);
   const devices = wrappers.map((w) => WRAPPER_DEVICES[w]).join(" and ");
   return (
     "Xcode has not finished installing its system components since it was installed or updated. " +
-    `Until it has, Xcode's ${tools} ${one ? "waits" : "wait"} for an administrator password on ` +
-    `every call, so argent does not run ${one ? "it" : "them"} and ${devices} are unavailable. ` +
+    `Until it has, Xcode's ${names.join(" and ")} ${one ? "waits" : "wait"} for an administrator ` +
+    `password on every call, so argent does not run ${one ? "it" : "them"}. ` +
+    `\`list-devices\` does not show ${devices}, and argent refuses the tools that need ` +
+    `${names.join(" or ")}. ` +
+    (wrappers.includes("simctl")
+      ? "Tools that do not need `simctl`, such as taps and screenshots, still work on a " +
+        "simulator that is already booted. "
+      : "") +
     "Ask the user to open Xcode once and let it install the components, or to run " +
     "`sudo xcodebuild -runFirstLaunch`, then retry. Do not run it yourself."
   );

@@ -276,9 +276,7 @@ describe("the xcrun preflight of a local iOS branch", () => {
     pending.simctl = true;
     const err = await ensureIosDeps(SIMULATOR, ["xcrun"]).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(XcodeFirstLaunchPendingError);
-    expect((err as Error).message).toMatch(
-      /`simctl` waits .* local iOS simulators are unavailable/
-    );
+    expect((err as Error).message).toMatch(/`simctl` waits .* does not show local iOS simulators/);
   });
 
   it("refuses a physical iPhone only while the devicectl install is pending", async () => {
@@ -287,7 +285,7 @@ describe("the xcrun preflight of a local iOS branch", () => {
     pending.devicectl = true;
     const err = await ensureIosDeps(IPHONE, ["xcrun"]).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(XcodeFirstLaunchPendingError);
-    expect((err as Error).message).toMatch(/`devicectl` waits .* physical iPhones are unavailable/);
+    expect((err as Error).message).toMatch(/`devicectl` waits .* does not show physical iPhones/);
   });
 
   it("leaves a branch that does not run xcrun alone", async () => {
