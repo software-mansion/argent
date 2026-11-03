@@ -132,7 +132,13 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - The requests of a `WKWebView`, also the `fetch()` calls in the web page.
   - The requests of an HTTP client that does not use `URLSession`, for example the `HttpClient` of Flutter (`dart:io`).
 - An empty native network log does not prove that the app sent no requests. The app can send requests that the `NSURLProtocol` layer does not record.
-- Native network capture can miss startup requests. It can also miss the requests of a native module, for example a module that does not use OkHttp.
+- Native network capture records each OkHttp request that the app starts after Argent attaches the in-app agent. This includes the requests of an OkHttp client that the app made before the attach, for example at startup. Native network capture does not record these requests:
+  - A request that is already running when Argent attaches the in-app agent.
+  - The requests of an OkHttp copy in a different class loader, for example a separate plugin loader.
+  - In OkHttp 3, the requests of a custom subclass of `OkHttpClient`. This case is rare.
+  - The requests of an HTTP client that does not use OkHttp, for example `HttpURLConnection` or Cronet. A native module can use such a client.
+- If R8 fully minifies the OkHttp code of the app, native network capture is unavailable. The header line gives the reason. The requests of the app continue to work.
+- When native network capture records only a part of the requests of the app, the header line says so after `capture active:`.
 - For WebSockets, native network capture records only the connection request.
 - Native network capture reads each body from the app process that sent the request. A relaunch or an emulator snapshot load ends that process. After that, a request body or a response body is available only if the agent read it before. Argent keeps a copy of only the 64 most recent bodies that the agent read.
 - Native network capture can slow the app. The launch results, the e2e test reports and the profiler start results tell the agent when native network capture is on. Before you profile, ask the agent to stop native network capture for the app. Then restart the app.
