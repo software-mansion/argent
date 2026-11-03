@@ -1,4 +1,5 @@
 import type { ToolMeta } from "@argent/tools-client";
+import { withKeywordFacts } from "./keyword-facts.js";
 
 type McpTool = {
   name: string;
@@ -7,6 +8,10 @@ type McpTool = {
   annotations?: { readOnlyHint: true };
   _meta?: Record<string, unknown>;
 };
+
+interface MappingOptions {
+  keywordFacts?: boolean;
+}
 
 /**
  * The schema without its retired params (`z.never()`, serialized as an untyped
@@ -27,22 +32,25 @@ function withoutRetiredParams(schema: Record<string, unknown>): Record<string, u
  * Maps a tool-server `ToolMeta` to the MCP `tools/list` shape. `alwaysLoad` opts the
  * tool out of Claude Code's progressive tool loading; `searchHint` feeds its ToolSearch
  * BM25 ranker. `readOnly` becomes the `readOnlyHint` annotation, which lets Claude Code
- * run the tool without a prompt in plan mode.
+ * run the tool without a prompt in plan mode. With `keywordFacts`, facts stated only by
+ * schema keywords are copied into the param descriptions, for a client that may drop those
+ * keywords (see `showsSchemaKeywords`).
  */
-export function toMcpTool(t: ToolMeta): McpTool {
+export function toMcpTool(t: ToolMeta, { keywordFacts = false }: MappingOptions = {}): McpTool {
   const meta: Record<string, unknown> = {};
   if (t.alwaysLoad) meta["anthropic/alwaysLoad"] = true;
   if (t.searchHint) meta["anthropic/searchHint"] = t.searchHint;
+  const schema = withoutRetiredParams(t.inputSchema);
   return {
     name: t.name,
     description: t.description,
-    inputSchema: { type: "object", ...withoutRetiredParams(t.inputSchema) },
+    inputSchema: { type: "object", ...(keywordFacts ? withKeywordFacts(schema) : schema) },
     ...(t.readOnly ? { annotations: { readOnlyHint: true } } : {}),
     ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
   };
 }
 
 /** The MCP `tools/list` payload: every tool but those marked `hideFromMcp`. */
-export function toMcpToolList(tools: ToolMeta[]): McpTool[] {
-  return tools.filter((t) => !t.hideFromMcp).map(toMcpTool);
+export function toMcpToolList(tools: ToolMeta[], options: MappingOptions = {}): McpTool[] {
+  return tools.filter((t) => !t.hideFromMcp).map((t) => toMcpTool(t, options));
 }
