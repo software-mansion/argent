@@ -606,7 +606,7 @@ describe("view-network-request-details: headers, redirects and the final URL", (
       body: '{"json":true}',
     });
     expect(result.request.headersNote).toBe(
-      "These are the headers sent on the wire with the last request, after the hops in redirects."
+      "url and method are those of the request the app made. These headers were sent on the wire with the last request, to the final URL, after the hops in redirects."
     );
   });
 

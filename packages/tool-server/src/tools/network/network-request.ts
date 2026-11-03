@@ -439,7 +439,7 @@ async function androidNativeRequestDetails(
 function requestHeadersNote(record: AndroidNativeRecord): string | undefined {
   if (record.request.wireHeaders) {
     return record.redirects?.length
-      ? "These are the headers sent on the wire with the last request, after the hops in redirects."
+      ? "url and method are those of the request the app made. These headers were sent on the wire with the last request, to the final URL, after the hops in redirects."
       : undefined;
   }
   if (record.response?.fromCache) {
