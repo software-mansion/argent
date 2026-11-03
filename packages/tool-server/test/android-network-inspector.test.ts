@@ -2438,6 +2438,49 @@ describe("attaching and the app's lifecycle", () => {
     expect(attachCommands()).toHaveLength(2);
   });
 
+  it("keeps the wait for the agent within 5 s when adb stops answering the process check", async () => {
+    await armedInspector();
+    await agents[0]!.close();
+    device.agentOnAttach = false;
+    device.process = { pid: 5330, startTime: 133_000 };
+    // The recheck after the drop reads once and ends, as the old process is
+    // gone, so every process read below is the launch's.
+    const before = pidofReads();
+    await vi.waitFor(() => expect(pidofReads()).toBe(before + 1), { timeout: 2_000 });
+    let attachedAt = 0;
+    device.onAttach = () => {
+      attachedAt = Date.now();
+    };
+    // After the attach, a process read gets no answer: adb is killed at the
+    // timeout the call gives it, as execFile does.
+    const answer = vi.mocked(adbShell).getMockImplementation()!;
+    const reads: Array<{ at: number; timeoutMs: number | undefined }> = [];
+    vi.mocked(adbShell).mockImplementation(async (serial, command, options) => {
+      if (!attachedAt || !command.includes("for p in $(pidof")) {
+        return answer(serial, command, options);
+      }
+      device.commands.push(command);
+      const timeoutMs = options?.timeoutMs;
+      reads.push({ at: Date.now(), timeoutMs });
+      return new Promise<string>((_resolve, reject) => {
+        if (!timeoutMs) return;
+        setTimeout(() => reject(adbFailure(command, "killed")), timeoutMs).unref();
+      });
+    });
+
+    const started = performance.now();
+    const note = await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG);
+
+    expect(performance.now() - started).toBeLessThan(6_500);
+    expect(note).toContain("the agent has not connected yet");
+    expect(reads.length).toBeGreaterThan(0);
+    for (const read of reads) {
+      expect(read.timeoutMs).toBeGreaterThan(0);
+      // The wait ends ARM_WAIT_MS after the attach; slack for the steps between.
+      expect(read.at + read.timeoutMs!).toBeLessThanOrEqual(attachedAt + 5_000 + 250);
+    }
+  }, 15_000);
+
   it("forgets a pid whose attach-agent failed, says so, and the next call attaches it", async () => {
     const api = await armedInspector();
     await agents[0]!.close();

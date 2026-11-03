@@ -1748,8 +1748,12 @@ function createInspector(
       if (left <= 0) return;
       const woken = await nextArmEvent(Math.min(ARM_PROCESS_CHECK_MS, left));
       if (woken || disposed || armedFor(key)) continue;
+      // The process check gets only the time left, so a slow adb cannot hold
+      // the wait past timeoutMs. A timeout of 0 would mean no limit to adb.
+      const readTimeoutMs = deadline - Date.now();
+      if (readTimeoutMs <= 0) return;
       try {
-        const read = await readAppProcesses(serial, packageName);
+        const read = await readAppProcesses(serial, packageName, readTimeoutMs);
         if (!runningKeys(read).has(key)) return;
       } catch {
         // adb did not answer; keep waiting until the timeout.

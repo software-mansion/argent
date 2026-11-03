@@ -167,11 +167,11 @@ Only the in-app agent that Argent attached can report requests to Argent.
 
 While native network capture is on for an app, these tools tell you:
 
-| Tool                                            | What it reports                                                                                                                                                                                 |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `launch-app`, `restart-app`                     | Argent attaches the in-app agent to the new process. The `networkCapture` field tells if Argent attached it. If Argent did not attach it, the field gives the reason.                           |
-| `e2e-execute`                                   | A `launch` step uses `restart-app`. The report shows the `networkCapture` note as a `warning` on the first launch of the app, and again when the note changes. A new pid alone is not a change. |
-| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the device with native network capture on.                                                                                               |
+| Tool                                            | What it reports                                                                                                                                                                                                                         |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `launch-app`, `restart-app`                     | Argent attaches the in-app agent to the new process. The tool waits until the capture is ready, for at most 5 seconds. The `networkCapture` field tells if Argent attached it. If Argent did not attach it, the field gives the reason. |
+| `e2e-execute`                                   | A `launch` step uses `restart-app`. The report shows the `networkCapture` note as a `warning` on the first launch of the app, and again when the note changes. A new pid alone is not a change.                                         |
+| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the device with native network capture on.                                                                                                                                       |
 
 A process of the app can also start in a different way, for example from a launcher tap, from a link or after a crash. The next call of `native-network-logs` attaches the in-app agent to this process.
 

@@ -122,15 +122,20 @@ export interface AppProcesses {
  * the one whose files `run-as --user` reaches can load the agent. Each user has
  * a range of 100000 uids. The comm field of /proc/<pid>/stat can hold spaces,
  * so the start time is counted from the field after its closing parenthesis.
+ * `timeoutMs` limits the adb call.
  */
-export async function readAppProcesses(serial: string, packageName: string): Promise<AppProcesses> {
+export async function readAppProcesses(
+  serial: string,
+  packageName: string,
+  timeoutMs = 10_000
+): Promise<AppProcesses> {
   const out = await adbShell(
     serial,
     [
       'echo "user=$(am get-current-user 2>/dev/null)"',
       `for p in $(pidof ${shellQuote(packageName)}); do echo "$p $(sed 's/.*) //' /proc/$p/stat | cut -d' ' -f20) $(grep '^Uid:' /proc/$p/status)"; done`,
     ].join("; "),
-    { timeoutMs: 10_000 }
+    { timeoutMs }
   );
   let user: number | null = null;
   const processes: AppProcesses["processes"] = [];
