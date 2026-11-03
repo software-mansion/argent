@@ -147,6 +147,14 @@ const JS_LAYER_FALLBACK =
   "Use view-network-logs: the JS layer still records the app's JavaScript requests while Metro serves the app.";
 
 /**
+ * The status events whose detail goes into the log with the event. The
+ * agent's installer reports its outcome with a short reason, which is the
+ * first thing to read when capture misses requests. The details of every
+ * other event are the agent's own diagnostics and stay out of the log.
+ */
+const LOGGED_DETAIL_EVENTS = new Set(["interceptor_installed", "interceptor_failed"]);
+
+/**
  * A tag per tool-server start, so an id from before a restart rarely names
  * another request: two starts share a tag 1 time in 65536.
  */
@@ -1300,7 +1308,10 @@ function createInspector(
       }
       return;
     }
-    log(`status ${capString(event, 200)}`);
+    const detail = LOGGED_DETAIL_EVENTS.has(event)
+      ? capString(asString(payload.detail).replace(/\s+/g, " ").trim(), 300)
+      : "";
+    log(`status ${capString(event, 200)}${detail ? `: ${detail}` : ""}`);
   }
 
   function connectionClosed(conn: AgentConnection, why?: string): void {

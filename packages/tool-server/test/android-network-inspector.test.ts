@@ -1733,6 +1733,57 @@ describe("AndroidNetworkInspector against a fake agent socket", () => {
     expect(api.state()).not.toHaveProperty("capture");
   });
 
+  describe("status lines in the log", () => {
+    async function statusLines(payload: Record<string, unknown>): Promise<string[]> {
+      await armedInspector();
+      const agent = agents[0]!;
+      agent.send({ type: "Status", payload });
+      // A capture status sent after it shows that the one under test was handled.
+      agent.send({ type: "Status", payload: { event: "capture", state: "waiting" } });
+      await vi.waitFor(() => expect(stderrText()).toContain("] capture waiting"));
+      return stderrText().match(/\] status .*/g) ?? [];
+    }
+
+    it("logs the reason of the installer's success", async () => {
+      expect(
+        await statusLines({
+          event: "interceptor_installed",
+          detail: "OkHttp interceptor active after 1 attempt(s) | Fresco hooked",
+        })
+      ).toEqual([
+        "] status interceptor_installed: OkHttp interceptor active after 1 attempt(s) | Fresco hooked",
+      ]);
+    });
+
+    it("keeps the reason of the installer's failure on one capped line", async () => {
+      const detail = `Exception: java.lang.IllegalStateException: boom\n\tat a.b.C.d(C.java:1)\r\n${"x".repeat(400)}`;
+      const flat = `Exception: java.lang.IllegalStateException: boom at a.b.C.d(C.java:1) ${"x".repeat(400)}`;
+      expect(await statusLines({ event: "interceptor_failed", detail })).toEqual([
+        `] status interceptor_failed: ${flat.slice(0, 300)}…[${flat.length - 300} more chars]`,
+      ]);
+    });
+
+    it("leaves the detail of any other event out", async () => {
+      const lines = await statusLines({
+        event: "fresco_debug",
+        detail: "a diagnostic the log does not keep",
+      });
+      expect(lines).toEqual(["] status fresco_debug"]);
+      expect(stderrText()).not.toContain("a diagnostic the log does not keep");
+    });
+
+    it.each([
+      ["missing", {}],
+      ["empty", { detail: "" }],
+      ["blank", { detail: " \n\t" }],
+      ["not a string", { detail: 42 }],
+    ])("logs only the event when the installer's detail is %s", async (_, extra) => {
+      expect(await statusLines({ event: "interceptor_failed", ...extra })).toEqual([
+        "] status interceptor_failed",
+      ]);
+    });
+  });
+
   it("fetches a body and post data once per record, through the CDP writer", async () => {
     const api = await armedInspector();
     const agent = agents[0]!;
