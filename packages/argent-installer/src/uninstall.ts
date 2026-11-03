@@ -7,10 +7,12 @@ import { init as telemetryInit, track, resetLocalTelemetryState } from "@argent/
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
+  findRetiredRulesAndAgents,
   getManagedContentTargets,
   removeCodexRules,
   type ManagedContentTarget,
 } from "./mcp-configs.js";
+import { cleanupRetiredFiles, formatRetiredCleanup } from "./retired-files.js";
 import {
   AGENTS_DIR,
   detectPackageManager,
@@ -546,6 +548,24 @@ export async function uninstall(args: string[]): Promise<void> {
         }
       }
 
+      // Before the bundled content: a retired file left in place would keep its
+      // target dir from emptying. The prune prompt above already asked.
+      const retired = await cleanupRetiredFiles(
+        findRetiredRulesAndAgents(
+          [...scopesToClean].map((scope) => ({ adapters: ALL_ADAPTERS, scope })),
+          projectRoot,
+          RULES_DIR,
+          AGENTS_DIR
+        ),
+        { ask: false }
+      );
+      // removeBundledContent prunes the parent along with an emptied root.
+      for (const root of retired.removedRoots) removeDirIfEmpty(path.dirname(root));
+      const retiredLines = formatRetiredCleanup(retired);
+      pruneResults.push(...retiredLines.removed.map((line) => `${pc.green("+")} ${line}`));
+      // Shown, but not pruned content.
+      const retiredKept = retiredLines.kept.map((line) => `  ${line}`);
+
       const bundledTargets: Array<{
         sourceDir: string;
         targets: ManagedContentTarget[];
@@ -598,8 +618,9 @@ export async function uninstall(args: string[]): Promise<void> {
       }
 
       if (pruneResults.length > 0) {
-        p.note(pruneResults.join("\n"), "Pruned Argent Content");
+        p.note([...pruneResults, ...retiredKept].join("\n"), "Pruned Argent Content");
       } else {
+        if (retiredKept.length > 0) p.note(retiredKept.join("\n"), "Files Argent No Longer Ships");
         p.log.info(pc.dim("No Argent-owned skills, rules, or agents found to remove."));
       }
       hasPrunedContent = pruneResults.length > 0;
