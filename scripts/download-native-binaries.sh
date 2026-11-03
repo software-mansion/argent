@@ -265,8 +265,10 @@ if release_has_asset "${NETWORK_INSPECTOR_ASSET}"; then
     --dir "${NETWORK_INSPECTOR_TMP}"
 
   # Like the trace-processor bundle, a missing checksum or a mismatch is fatal:
-  # it means a corrupt or tampered download. `gh` succeeds when either pattern
-  # matches, so both files are checked here.
+  # it means a corrupt or incomplete download. The checksum comes from the same
+  # release as the tarball, so it proves integrity only: whoever can replace the
+  # tarball there can replace the checksum too. `gh` succeeds when either
+  # pattern matches, so both files are checked here.
   NETWORK_INSPECTOR_EXPECTED=""
   NETWORK_INSPECTOR_ACTUAL=""
   if [[ -f "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_CHECKSUM}" ]]; then
