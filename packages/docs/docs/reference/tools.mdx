@@ -138,7 +138,6 @@ Call `screenshot` or `describe` to read the screen again.
 | `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
 | `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree             |
 | `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
-| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                              |
 | `react-profiler-component-source` | Find a component's source file, line, and memoization status                 |
 | `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android              |
 | `native-profiler-stop`            | Stop native profiling and export the trace                                   |
@@ -148,6 +147,8 @@ Call `screenshot` or `describe` to read the screen again.
 | `profiler-commit-query`           | Query React commit data for iterative render investigation                   |
 | `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
+
+In the `top_functions` and `time_window` modes, `profiler-cpu-query` gives the self time of each function as a share of the sampled time. With `react_only`, it lists only the functions with a PascalCase name, which is the name format of a React component.
 
 While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
 
@@ -195,21 +196,23 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 Argent hides these tools from MCP, so the agent does not see them. Call them with the [Argent SDK](./node-client.mdx), `argent run <name>`, or a `tool:` step in an e2e test. The SDK exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
-| Tool                     | Description                                                              | Tool for the agent        |
-| ------------------------ | ------------------------------------------------------------------------ | ------------------------- |
-| `terminate-app`          | Stop an app without relaunching it                                       | `restart-app`             |
-| `ui-tree`                | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                |
-| `foreground-app`         | Get the app in front, iOS simulator and Android                          | None                      |
-| `fill`                   | Set the text of the focused text field                                   | `keyboard`                |
-| `native-describe-screen` | Read the app's native accessibility screen description                   | `describe`                |
-| `native-devtools-status` | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool |
-| `chromium-storage`       | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`       |
-| `gather-workspace-data`  | Fetch a structured snapshot of the app project's workspace               | None                      |
+| Tool                         | Description                                                              | Tool for the agent                         |
+| ---------------------------- | ------------------------------------------------------------------------ | ------------------------------------------ |
+| `terminate-app`              | Stop an app without relaunching it                                       | `restart-app`                              |
+| `ui-tree`                    | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                 |
+| `foreground-app`             | Get the app in front, iOS simulator and Android                          | None                                       |
+| `fill`                       | Set the text of the focused text field                                   | `keyboard`                                 |
+| `native-describe-screen`     | Read the app's native accessibility screen description                   | `describe`                                 |
+| `native-devtools-status`     | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                  |
+| `chromium-storage`           | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                        |
+| `react-profiler-cpu-summary` | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions` |
+| `gather-workspace-data`      | Fetch a structured snapshot of the app project's workspace               | None                                       |
 
-Two of the agent tools give the same result only in some conditions:
+Some agent tools do not always give the same result as the hidden tool:
 
 - `describe` reads the same native screen description as `native-describe-screen` when the accessibility service returns no elements.
 - Every `native-*` tool returns the same status and `message` as `native-devtools-status` when native devtools are not connected.
+- `profiler-cpu-query` measures each CPU sample with its own interval and does not list idle time as a function. Thus its times can be different from the times of `react-profiler-cpu-summary`.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
 
