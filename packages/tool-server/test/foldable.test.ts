@@ -307,6 +307,28 @@ describe("readCoreDeviceDisplays", () => {
     }
   });
 
+  // CoreDevice's own binary has no wrapper, so it cannot start the install. Right
+  // after an Xcode update CoreDevice is installed but older than expected, and
+  // panel reads must keep working through it.
+  it("keeps reading through CoreDevice's own binary while the install is pending", async () => {
+    mockDevicectl([duoPayload(3)]);
+    coreDeviceBinary.present = true;
+    xcodePending.devicectl = true;
+    try {
+      const { displays, reason } = await readCoreDeviceDisplays(DUO);
+      expect(displays?.activeScreen).toBe(3);
+      expect(reason).toBeUndefined();
+      const commands = execFileMock.mock.calls.map(([c]) => c as string);
+      expect(commands).toContainEqual(
+        expect.stringMatching(/\/CoreDevice\.framework\/Versions\/A\/Resources\/bin\/devicectl$/)
+      );
+      expect(commands).not.toContain("xcrun");
+    } finally {
+      coreDeviceBinary.present = null;
+      xcodePending.devicectl = false;
+    }
+  });
+
   it("says why when CoreDevice fails, times out, or answers something else", async () => {
     mockDevicectl([new Error("devicectl: no such device")]);
     expect((await readCoreDeviceDisplays(DUO)).reason).toBe(
