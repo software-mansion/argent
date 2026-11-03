@@ -40,7 +40,7 @@ export function nativeNetworkCaptureWarning(
   return (
     `Native network capture is on for ${apps} on this device: Argent attaches its in-app agent ` +
     `to the processes of ${one ? "that app" : "these apps"}. ${CAPTURE_COST} ` +
-    `To profile without it, stop this profile, call stop-all-simulator-servers with devices: ["${deviceId}"], then restart-app and profile again.`
+    `To profile without it, stop this profile, call native-network-logs with stop: true for ${one ? "that app" : "each of these apps"}, then restart-app and profile again.`
   );
 }
 
@@ -69,7 +69,7 @@ function logicalDeviceWarning(
     `${one ? "which" : "one of which"} may be the device this profile runs on: its device_id is a ` +
     `Metro logicalDeviceId, which does not say which device it is. Argent attaches its in-app agent ` +
     `to the processes of that app there. ${CAPTURE_COST} ` +
-    `To profile without it, stop this profile, call stop-all-simulator-servers with devices: ` +
-    `[${serials.map((serial) => `"${serial}"`).join(", ")}], then restart-app and profile again.`
+    `To profile without it, stop this profile, call native-network-logs with stop: true for ${appId} on ` +
+    `${one ? "that device" : "each of those devices"}, then restart-app and profile again.`
   );
 }

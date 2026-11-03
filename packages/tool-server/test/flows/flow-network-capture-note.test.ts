@@ -111,8 +111,8 @@ describe("flow-execute reports native network capture on Android launches", () =
   it("warns again when a later launch's note differs, and not when only the pid changes", async () => {
     const notes = [
       `native network capture is on for ${APP}, but no process of it appeared within 3 s; the next native-network-logs call attaches the agent`,
-      `native network capture is attached to ${APP} (pid 4101); stop-all-simulator-servers for this device ends it`,
-      `native network capture is attached to ${APP} (pid 4188); stop-all-simulator-servers for this device ends it`,
+      `native network capture is attached to ${APP} (pid 4101); native-network-logs with stop: true ends it`,
+      `native network capture is attached to ${APP} (pid 4188); native-network-logs with stop: true ends it`,
       `native network capture could not follow this launch: the attach failed`,
     ];
     let launches = 0;
@@ -187,7 +187,7 @@ describe("flow-execute reports native network capture on Android launches", () =
           return {
             restarted: true,
             bundleId: args.bundleId,
-            networkCapture: `native network capture is attached to ${APP} (pid ${4100 + launches}); stop-all-simulator-servers for this device ends it`,
+            networkCapture: `native network capture is attached to ${APP} (pid ${4100 + launches}); native-network-logs with stop: true ends it`,
           };
         }
         return { ok: true };

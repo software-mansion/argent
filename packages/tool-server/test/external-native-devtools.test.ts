@@ -229,8 +229,10 @@ describe("a provider that lends its native-devtools agent", () => {
     const instance = await instantiate();
     await waitForConnectedBundle(instance.api);
 
-    const { nativeNetworkLogsTool } =
+    const { createNativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
     await expect(
       nativeNetworkLogsTool.execute(

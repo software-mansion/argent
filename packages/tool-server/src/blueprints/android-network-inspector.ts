@@ -629,7 +629,7 @@ function createInspector(
       if (other) {
         throw new FailureError(
           `${packageName} on this device is already inspected through adb serial ${other.serial}, and ${serial} is another connection to the same device. ` +
-            `Use ${other.serial}, or end that capture first with stop-all-simulator-servers for ${other.serial}.`,
+            `Use ${other.serial}, or end that capture first with native-network-logs and stop: true on ${other.serial}.`,
           {
             error_code: FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_DEVICE_IN_USE,
             failure_stage: "android_network_inspector_device_identity",
@@ -1792,7 +1792,7 @@ function createInspector(
       default: {
         const { pid } = outcome.proc;
         return armedFor(processKey(outcome.proc))
-          ? `native network capture is attached to ${packageName} (pid ${pid}); stop-all-simulator-servers for this device ends it`
+          ? `native network capture is attached to ${packageName} (pid ${pid}); native-network-logs with stop: true ends it`
           : `native network capture is attaching to ${packageName} (pid ${pid}), and the agent has not connected yet; native-network-logs shows when it is armed${reason ? `; the agent says: ${reason}` : ""}`;
       }
     }

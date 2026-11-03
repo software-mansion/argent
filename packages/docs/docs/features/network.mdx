@@ -50,9 +50,9 @@ Ask the agent to start native network capture. Argent attaches an in-app agent t
 
 Native network capture follows the app. When the agent launches or restarts the app, Argent attaches the in-app agent to the new process. The launch steps of an e2e test do the same. The launch waits until the capture is ready, for at most 5 seconds. The result of the launch tells the agent if Argent attached the in-app agent. A process can also start in a different way, for example from a launcher tap, from a link, or after a crash. Argent attaches the in-app agent to this process when the agent reads the network log the next time.
 
-Native network capture stays on until `stop-all-simulator-servers` stops the services of the device. After the capture stops, restart the app to remove the in-app agent from the app.
+Native network capture stays on until the agent stops it for the app. The capture of a different app continues. `stop-all-simulator-servers` also stops it for all apps of the device. After the capture stops, restart the app to remove the in-app agent from the app.
 
-Each request has an ID such as `android-3f9a-12`. The agent uses this ID to read headers and request or response bodies. An ID is valid only in the tool-server that listed it. An ID is not valid after the capture stops or after the tool-server stops.
+Each request has an ID such as `android-3f9a-12`. The agent uses this ID to read headers and request or response bodies. An ID is valid only in the tool-server that listed it. An ID is not valid after the capture stops for the app or after the tool-server stops.
 
 Only the in-app agent that Argent attached can report requests to Argent.
 
@@ -135,7 +135,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - Native network capture can miss startup requests. It can also miss the requests of a native module, for example a module that does not use OkHttp.
 - For WebSockets, native network capture records only the connection request.
 - Native network capture reads each body from the app process that sent the request. A relaunch or an emulator snapshot load ends that process. After that, a request body or a response body is available only if the agent read it before. Argent keeps a copy of only the 64 most recent bodies that the agent read.
-- Native network capture can slow the app. The launch results, the e2e test reports and the profiler start results tell the agent when native network capture is on. Before you profile, ask the agent to stop native network capture on the device. Then restart the app.
+- Native network capture can slow the app. The launch results, the e2e test reports and the profiler start results tell the agent when native network capture is on. Before you profile, ask the agent to stop native network capture for the app. Then restart the app.
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
 - On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a network log of this layer as you protect other data of the app.
 

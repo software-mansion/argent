@@ -85,7 +85,7 @@ describe("nativeNetworkCaptureWarning", () => {
     expect(warning).toContain("can slow the app");
     expect(warning).toContain("timings");
     expect(warning).toContain(
-      `stop this profile, call stop-all-simulator-servers with devices: ["${SERIAL}"], then restart-app and profile again`
+      "stop this profile, call native-network-logs with stop: true for that app, then restart-app and profile again"
     );
   });
 
@@ -96,6 +96,7 @@ describe("nativeNetworkCaptureWarning", () => {
 
     expect(warning).toContain(`on for ${PKG}, com.example.other on this device`);
     expect(warning).toContain("to the processes of these apps");
+    expect(warning).toContain("native-network-logs with stop: true for each of these apps");
   });
 
   it("is undefined, not a throw, when the lookup fails", () => {
@@ -122,7 +123,7 @@ describe("nativeNetworkCaptureWarning", () => {
       expect(warning).toContain("logicalDeviceId");
       expect(warning).toContain("can slow the app");
       expect(warning).toContain(
-        `call stop-all-simulator-servers with devices: ["${SERIAL}", "emulator-5556"], then restart-app`
+        `native-network-logs with stop: true for ${PKG} on each of those devices, then restart-app`
       );
     });
 
@@ -284,7 +285,7 @@ describe("react-profiler-start", () => {
         `Native network capture is on for ${PKG} on ${SERIAL}, which may be the device this profile runs on`
       );
       expect(result.warning).toContain(
-        `call stop-all-simulator-servers with devices: ["${SERIAL}"], then restart-app`
+        `native-network-logs with stop: true for ${PKG} on that device, then restart-app`
       );
     });
 
