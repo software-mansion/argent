@@ -165,15 +165,14 @@ When Argent finds no device, interaction tools on the device keep the automatic 
 
 The old `flow-*` names, for example `flow-execute`, still call these tools. See [Record and replay e2e tests](/docs/features/e2e).
 
-| Tool                    | Description                                                         |
-| ----------------------- | ------------------------------------------------------------------- |
-| `e2e-start-recording`   | Start recording a new e2e test, resetting `.argent/e2e/<name>.yaml` |
-| `e2e-add-step`          | Execute a tool call and record it as a step in the open recording   |
-| `e2e-add-echo`          | Record an echo step that prints a message during replay             |
-| `e2e-add-script`        | Run a local `.mjs` file and add it to the open recording            |
-| `e2e-finish-recording`  | Finish the recording and write the e2e test to disk                 |
-| `e2e-execute`           | Run a saved e2e test                                                |
-| `e2e-read-prerequisite` | Read the execution prerequisite of an e2e test without running it   |
+| Tool                   | Description                                                         |
+| ---------------------- | ------------------------------------------------------------------- |
+| `e2e-start-recording`  | Start recording a new e2e test, resetting `.argent/e2e/<name>.yaml` |
+| `e2e-add-step`         | Execute a tool call and record it as a step in the open recording   |
+| `e2e-add-echo`         | Record an echo step that prints a message during replay             |
+| `e2e-add-script`       | Run a local `.mjs` file and add it to the open recording            |
+| `e2e-finish-recording` | Finish the recording and write the e2e test to disk                 |
+| `e2e-execute`          | Run a saved e2e test                                                |
 
 ## Design variants
 
@@ -186,27 +185,28 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 ## Workspace and maintenance
 
-| Tool             | Description                                    |
-| ---------------- | ---------------------------------------------- |
-| `update-argent`  | Apply a pending Argent update                  |
-| `dismiss-update` | Silence update reminders for a number of hours |
+| Tool            | Description                   |
+| --------------- | ----------------------------- |
+| `update-argent` | Apply a pending Argent update |
 
 ## SDK-only tools
 
 Argent hides these tools from MCP, so the agent does not see them. Call them with the [Argent SDK](./node-client.mdx), `argent run <name>`, or a `tool:` step in an e2e test. The SDK exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
-| Tool                              | Description                                                              | Tool for the agent                         |
-| --------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------ |
-| `terminate-app`                   | Stop an app without relaunching it                                       | `restart-app`                              |
-| `ui-tree`                         | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                 |
-| `foreground-app`                  | Get the app in front, iOS simulator and Android                          | None                                       |
-| `fill`                            | Set the text of the focused text field                                   | `keyboard`                                 |
-| `native-describe-screen`          | Read the app's native accessibility screen description                   | `describe`                                 |
-| `native-devtools-status`          | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                  |
-| `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                        |
-| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions` |
-| `react-profiler-component-source` | Find a component's source file, line, and memoization status             | `react-profiler-analyze`                   |
-| `gather-workspace-data`           | Fetch a structured snapshot of the app project's workspace               | None                                       |
+| Tool                              | Description                                                              | Tool for the agent                               |
+| --------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------ |
+| `terminate-app`                   | Stop an app without relaunching it                                       | `restart-app`                                    |
+| `ui-tree`                         | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                       |
+| `foreground-app`                  | Get the app in front, iOS simulator and Android                          | None                                             |
+| `fill`                            | Set the text of the focused text field                                   | `keyboard`                                       |
+| `native-describe-screen`          | Read the app's native accessibility screen description                   | `describe`                                       |
+| `native-devtools-status`          | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                        |
+| `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                              |
+| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions`       |
+| `react-profiler-component-source` | Find a component's source file, line, and memoization status             | `react-profiler-analyze`                         |
+| `e2e-read-prerequisite`           | Read the execution prerequisite of an e2e test without running it        | `e2e-execute` without `prerequisiteAcknowledged` |
+| `gather-workspace-data`           | Fetch a structured snapshot of the app project's workspace               | None                                             |
+| `dismiss-update`                  | Silence update reminders for a number of hours                           | None                                             |
 
 Some agent tools do not always give the same result as the hidden tool:
 
@@ -214,6 +214,9 @@ Some agent tools do not always give the same result as the hidden tool:
 - Every `native-*` tool returns the same status and `message` as `native-devtools-status` when native devtools are not connected.
 - `profiler-cpu-query` measures each CPU sample with its own interval and does not list idle time as a function. Thus its times can be different from the times of `react-profiler-cpu-summary`.
 - `react-profiler-analyze` gives the file and the line of each component in its report. It also shows the source of the five components with the highest total render time. For other components, the agent reads the source files.
+- `e2e-execute` without `prerequisiteAcknowledged` returns the execution prerequisite and runs no step only when the e2e test has a prerequisite. When the e2e test has no prerequisite, `e2e-execute` runs the e2e test.
+
+Argent shows the update reminder to the agent at most once in 30 minutes. `dismiss-update` silences the reminder for a number of hours that you give.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
 

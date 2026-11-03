@@ -11,6 +11,10 @@ export const dismissUpdateTool: ToolDefinition<{ hours: number }> = {
   description:
     "Clear the Argent update notification for a number of hours. Use when the user asks to postpone or silence update reminders. Returns { message } confirming the suppression duration. Fails if the suppression state cannot be persisted.",
   zodSchema,
+  // The tool-server already suppresses the update note for 30 minutes each
+  // time it shows it (http.ts), so agents need no call. `argent run` and the
+  // SDK still call it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: () => "Dismissing Argent update",
     completedMsg: () => "Dismissed Argent update",

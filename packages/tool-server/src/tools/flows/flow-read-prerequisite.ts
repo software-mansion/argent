@@ -90,6 +90,11 @@ Fails if the e2e test file does not exist.
 Address the e2e test exactly as you will address it in e2e-execute: name or e2e_test_path, one and only one; supplying both or neither is rejected.`,
   zodSchema,
   readOnly: true,
+  // e2e-execute without prerequisiteAcknowledged returns the same
+  // executionPrerequisite, from the same resolveFlowSource, before any device
+  // work. The SDK, `argent run` and e2e tool: steps still call it, by its id or
+  // its alias.
+  hideFromMcp: true,
   aliases: ["flow-read-prerequisite"],
   interaction: {
     startedMsg: () => "Reading e2e test prerequisite",

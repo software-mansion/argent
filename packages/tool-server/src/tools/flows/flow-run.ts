@@ -1478,7 +1478,7 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite."
+        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite: without it, the call runs no step and returns the prerequisite text."
       ),
   })
   .superRefine((params, ctx) => {

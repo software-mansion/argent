@@ -28,6 +28,7 @@ vi.mock("../src/utils/update-checker", () => ({
 }));
 
 import { getUpdateState, suppressUpdateNote } from "../src/utils/update-checker";
+import { dismissUpdateTool } from "../src/tools/system/dismiss-update";
 
 const mockGetUpdateState = vi.mocked(getUpdateState);
 const mockSuppressUpdateNote = vi.mocked(suppressUpdateNote);
@@ -167,7 +168,8 @@ describe("HTTP update note injection", () => {
     expect(res.body.note).toContain("update-argent");
   });
 
-  it("note mentions `dismiss-update` tool", async () => {
+  // dismiss-update is hidden from MCP; the note suppresses itself for 30 minutes.
+  it("note names no tool hidden from MCP and says when it repeats", async () => {
     mockGetUpdateState.mockReturnValue(
       mkState({
         updateAvailable: true,
@@ -181,7 +183,9 @@ describe("HTTP update note injection", () => {
 
     const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
-    expect(res.body.note).toContain("dismiss-update");
+    expect(dismissUpdateTool.hideFromMcp).toBe(true);
+    expect(res.body.note).not.toContain("dismiss-update");
+    expect(res.body.note).toContain("will not repeat for the next 30 minutes");
   });
 
   it("note instructs agent to persist the update info", async () => {
