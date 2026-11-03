@@ -599,8 +599,11 @@ const WINDOWS_1252_C1 =
 
 /**
  * windows-1252, which `latin1`, `iso-8859-1` and `us-ascii` also name.
- * Node 20's TextDecoder decodes it as ISO-8859-1, so 0x80-0x9F would come out
- * as control characters instead of quotes, dashes and the euro sign.
+ * TextDecoder decodes it as ISO-8859-1 in several Node releases the tool-server
+ * runs on, 20.20.2, 22.13.0 and 24.0.0 among them, so 0x80-0x9F would come out
+ * as control characters instead of quotes, dashes and the euro sign. Remove
+ * this only once every Node in the engines range passes
+ * `new TextDecoder("windows-1252").decode(Buffer.of(0x80)) === "€"`.
  */
 function decodeWindows1252(bytes: Buffer): string {
   return bytes
