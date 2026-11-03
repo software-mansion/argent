@@ -178,9 +178,9 @@ export function sessionScript(agentDir: string): string {
 
 /**
  * The script that runs as the app on every attach attempt, with the session
- * line on its stdin: it writes the session file (see `sessionScript`), then
- * reports whether `pid` already maps the agent and copies the agent in when it
- * does not.
+ * line on its stdin: it prints the device clock (see `sessionWrittenSince`),
+ * writes the session file (see `sessionScript`), then reports whether `pid`
+ * already maps the agent and copies the agent in when it does not.
  */
 export function attachScript(agentDir: string, pid: number): string {
   const jar = `${agentDir}/${JAR_NAME}`;
@@ -196,9 +196,21 @@ export function attachScript(agentDir: string, pid: number): string {
     "echo copied",
   ].join(" && ");
   return [
+    'echo "since=$(date +%s.%N)"',
     sessionScript(agentDir),
     `if grep -q ${AGENT_LIB_NAME} /proc/${pid}/maps; then echo loaded; else ${copy}; fi`,
   ].join(" && ");
+}
+
+/**
+ * The device time `attachScript` printed right before it wrote the session,
+ * in seconds.milliseconds like logcat's `-v epoch` times, or undefined when
+ * the output has none.
+ */
+export function sessionWrittenSince(out: string): string | undefined {
+  const match = /\bsince=(\d+)(?:\.(\d+))?/.exec(out);
+  if (!match) return undefined;
+  return `${match[1]}.${(match[2] ?? "").padEnd(3, "0").slice(0, 3)}`;
 }
 
 /**
@@ -241,20 +253,43 @@ const AGENT_LOG_LINE = new RegExp(`\\b${AGENT_LOG_TAG}\\s*(?:\\(\\s*\\d+\\))?\\s
  * itself. No `-t` count: it counts lines before the tag filter, so the
  * app's own logging could push the agent's line out of a short tail. The
  * agent logs a reason once when it changes, so the dump reads the history.
+ * `since` is the device time (seconds.milliseconds) this tool-server wrote
+ * its session at. A line from before it no longer holds, as a missing
+ * session file, unless it asks for an app restart: the agent does not try
+ * again then, so that reason stays true.
  */
-export async function readAgentReason(serial: string, pid: number): Promise<string | undefined> {
-  const out = await adbShell(serial, `logcat -d --pid=${pid} -v tag -s ${AGENT_LOG_TAG}:I`, {
+export async function readAgentReason(
+  serial: string,
+  pid: number,
+  since?: string
+): Promise<string | undefined> {
+  const out = await adbShell(serial, `logcat -d --pid=${pid} -v epoch -s ${AGENT_LOG_TAG}:I`, {
     timeoutMs: AGENT_REASON_TIMEOUT_MS,
   });
-  return lastAgentReason(out);
+  return lastAgentReason(out, since);
 }
 
-/** The last refusal or close line in logcat output of the agent's tag. */
-export function lastAgentReason(logcat: string): string | undefined {
+/**
+ * The last refusal or close line in logcat output of the agent's tag. With
+ * `since`, a line whose `-v epoch` time is earlier counts only when it asks
+ * for an app restart.
+ */
+export function lastAgentReason(logcat: string, since?: string): string | undefined {
   const lines = logcat.split("\n");
+  const from = since === undefined ? undefined : Number(since);
   for (let i = lines.length - 1; i >= 0; i--) {
-    const message = AGENT_LOG_LINE.exec(lines[i]!.trimEnd())?.[1]?.trim();
+    const line = lines[i]!.trimEnd();
+    const message = AGENT_LOG_LINE.exec(line)?.[1]?.trim();
     if (!message || !isAgentReason(message)) continue;
+    const at = /^\s*(\d+(?:\.\d+)?)\s/.exec(line)?.[1];
+    if (
+      from !== undefined &&
+      at !== undefined &&
+      Number(at) < from &&
+      !/restart the app/i.test(message)
+    ) {
+      continue;
+    }
     const clean = message.replace(/\s+/g, " ");
     return clean.length > MAX_AGENT_REASON_CHARS
       ? `${clean.slice(0, MAX_AGENT_REASON_CHARS)}…`

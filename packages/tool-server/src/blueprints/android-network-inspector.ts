@@ -50,6 +50,7 @@ import {
   processKey,
   processOfUser,
   readAgentReason,
+  sessionWrittenSince,
   readAppProcesses,
   readDeviceFacts,
   removeSessionScript,
@@ -476,7 +477,7 @@ function createInspector(
    * the note that says so, and the reason the agent last logged for not
    * connecting, which the note carries while it is the current one.
    */
-  let awaiting: { key: string; note: string; reason?: string } | null = null;
+  let awaiting: { key: string; note: string; since?: string; reason?: string } | null = null;
   const pendingSockets = new Set<net.Socket>();
   const connections: AgentConnection[] = [];
   const records: AndroidNativeRecord[] = [];
@@ -821,8 +822,9 @@ function createInspector(
     attachedProcesses.add(key);
 
     let copy: "loaded" | "copied";
+    let since: string | undefined;
     try {
-      copy = await copyIntoApp(proc.pid);
+      ({ copy, since } = await copyIntoApp(proc.pid));
     } catch (err) {
       attachedProcesses.delete(key);
       if (err instanceof InspectorStopped) throw err;
@@ -842,7 +844,7 @@ function createInspector(
       // an earlier Argent dials a port of its own and never reads the session.
       // The note has to hold for both.
       note = `pid ${proc.pid} already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app`;
-      awaiting = { key, note };
+      awaiting = { key, note, since };
       log(`pid ${proc.pid} already has the agent loaded`);
       return "loaded";
     }
@@ -875,7 +877,7 @@ function createInspector(
     }
     checkpoint();
     note = `attached to pid ${proc.pid}; waiting for the agent to connect`;
-    awaiting = { key, note };
+    awaiting = { key, note, since };
     log(`attached the agent to pid ${proc.pid}`);
     return "attached";
   }
@@ -896,7 +898,7 @@ function createInspector(
       return undefined;
     }
     try {
-      const reason = await readAgentReason(serial, proc.pid);
+      const reason = await readAgentReason(serial, proc.pid, target.since);
       if (awaiting === target) target.reason = reason;
     } catch (err) {
       log(
@@ -918,11 +920,16 @@ function createInspector(
    * an agent an earlier tool-server attached connects to this one. A process
    * that already loaded the agent is neither copied into nor attached again.
    */
-  async function copyIntoApp(pid: number): Promise<"loaded" | "copied"> {
+  async function copyIntoApp(
+    pid: number
+  ): Promise<{ copy: "loaded" | "copied"; since: string | undefined }> {
     const out = await withKeyedLock(tunnelLock, "tunnel", () =>
       runSessionScript((dir) => attachScript(dir, pid))
     );
-    return /\bloaded\b/.test(out) ? "loaded" : "copied";
+    return {
+      copy: /\bloaded\b/.test(out) ? "loaded" : "copied",
+      since: sessionWrittenSince(out),
+    };
   }
 
   /**

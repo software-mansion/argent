@@ -48,7 +48,10 @@ import {
   sessionKeys,
   type AndroidNetworkInspectorApi,
 } from "../src/blueprints/android-network-inspector";
-import { lastAgentReason } from "../src/blueprints/android-network-inspector-device";
+import {
+  lastAgentReason,
+  sessionWrittenSince,
+} from "../src/blueprints/android-network-inspector-device";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { DEVICE_OWNED_NAMESPACES, deviceIdOwningUrn } from "../src/tools/simulator/device-services";
@@ -121,6 +124,8 @@ interface FakeDevice {
   onAttach?: () => void;
   /** What `logcat` prints, or the error it fails with. */
   logcat?: string | Error;
+  /** The device clock the attach script prints before it writes the session, when set. */
+  clock?: string;
   /** The timeout each logcat read was given. */
   logcatTimeouts: Array<number | undefined>;
 }
@@ -833,15 +838,16 @@ beforeEach(() => {
     // A session-only write.
     if (!maps) return "";
     const pid = Number(maps[1]);
+    const since = device.clock && command.includes("since=") ? `since=${device.clock}\n` : "";
     const target = [device.process, ...device.processes.values()].find((p) => p?.pid === pid);
-    if (target && device.loaded.has(`${target.pid}:${target.startTime}`)) return "loaded\n";
+    if (target && device.loaded.has(`${target.pid}:${target.startTime}`)) return `${since}loaded\n`;
     if (device.stagingLost) {
       throw adbFailure(
         command,
         "cp: bad '/data/local/tmp/.argent-inspector/network-inspector.jar': No such file or directory"
       );
     }
-    return "copied\n";
+    return `${since}copied\n`;
   });
   vi.mocked(runAdb).mockImplementation(async (args) => {
     device.commands.push(args.join(" "));
@@ -3947,13 +3953,48 @@ describe("why the agent has not connected", () => {
     expect(await header(api)).toBe(
       `android-native: not armed, 0 requests (${WAITING}; the agent says: ${START_TIME_LINE})`
     );
-    expect(logcatReads()).toEqual(["logcat -d --pid=4722 -v tag -s ArgentNetworkInspector:I"]);
+    expect(logcatReads()).toEqual(["logcat -d --pid=4722 -v epoch -s ArgentNetworkInspector:I"]);
     expect(device.logcatTimeouts).toEqual([3_000]);
 
     // Once the agent connects, the note and its reason are gone.
     await FakeAgent.fromSession(dirFor(), proc());
     await vi.waitFor(() => expect(api.state().armed).toBe(true));
     expect(api.state().note).toBeUndefined();
+  });
+
+  it("drops the agent's lines from before this tool-server wrote its session, unless they ask for a restart", async () => {
+    device.clock = "1793710953.120104264";
+    const api = await attachedNotConnected();
+    const NO_SESSION =
+      "No session file at /data/user/0/com.example.demo/code_cache/.argent-inspector/session - not connecting";
+    // From an earlier capture: the session file was missing then.
+    device.logcat = `  1793710950.001  4722  4740 I ArgentNetworkInspector: ${NO_SESSION}\n`;
+    expect(await header(api)).toBe(`android-native: not armed, 0 requests (${WAITING})`);
+    expect(logcatReads()).toEqual(["logcat -d --pid=4722 -v epoch -s ArgentNetworkInspector:I"]);
+
+    // The agent gave up for good before the write: that still holds.
+    device.logcat = [
+      `  1793710949.500  4722  4740 W ArgentNetworkInspector: ${START_TIME_LINE}`,
+      `  1793710950.001  4722  4740 I ArgentNetworkInspector: ${NO_SESSION}`,
+      "",
+    ].join("\n");
+    expect(await header(api)).toBe(
+      `android-native: not armed, 0 requests (${WAITING}; the agent says: ${START_TIME_LINE})`
+    );
+
+    // A line from after the write counts, whatever it says.
+    device.logcat = `  1793710953.300  4722  4740 I ArgentNetworkInspector: ${NO_SESSION}\n`;
+    expect(await header(api)).toBe(
+      `android-native: not armed, 0 requests (${WAITING}; the agent says: ${NO_SESSION})`
+    );
+  });
+
+  it("reads the session write time the attach script printed", () => {
+    expect(sessionWrittenSince("since=1793710953.120104264\ncopied\n")).toBe("1793710953.120");
+    expect(sessionWrittenSince("since=1793710953.5\nloaded\n")).toBe("1793710953.500");
+    // A date without %N support prints no fraction.
+    expect(sessionWrittenSince("since=1793710953.%N\ncopied\n")).toBe("1793710953.000");
+    expect(sessionWrittenSince("copied\n")).toBeUndefined();
   });
 
   it("reads logcat at most once per call, and only while the agent has not connected", async () => {
@@ -4013,7 +4054,7 @@ describe("why the agent has not connected", () => {
       `native network capture is attaching to ${PKG} (pid 5320), and the agent has not connected yet; native-network-logs shows when it is armed; ` +
         "the agent says: Closing the tool-server connection: it sent a proof that did not verify"
     );
-    expect(logcatReads()).toEqual(["logcat -d --pid=5320 -v tag -s ArgentNetworkInspector:I"]);
+    expect(logcatReads()).toEqual(["logcat -d --pid=5320 -v epoch -s ArgentNetworkInspector:I"]);
     // The listing carries it too, until a read finds another.
     expect(api.state().note).toBe(
       "attached to pid 5320; waiting for the agent to connect; " +
