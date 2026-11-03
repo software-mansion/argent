@@ -57,8 +57,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Default true. Draw an on-screen marker for every tap, swipe, drag, pinch and rotate into the " +
-        "video, so it shows where each interaction landed. On a remote (`remote:`) simulator the markers " +
-        "also show in the live stream until the recording stops. Set false to record the raw screen with no overlay."
+        "video, so it shows where each interaction landed. Set false to record the raw screen with no overlay."
     ),
 });
 
@@ -71,7 +70,6 @@ export function createScreenRecordingStartTool(
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-On a remote (\`remote:\`) simulator the runner records and \`screen-recording-stop\` downloads the mp4; without ffmpeg, trimming and the watermark are skipped with a warning.
 Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local devices only), or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
     zodSchema,
     searchHint: "record video screen capture movie mp4 start filming screencast",
