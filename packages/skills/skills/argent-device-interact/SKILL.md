@@ -8,6 +8,7 @@ Each tool's own description carries its parameters, defaults, return shape and e
 ## 1. Before You Start
 
 - Get a target id from `list-devices`; if none is ready, `boot-device` one. Full setup flow: `argent-ios-simulator-setup` / `argent-ios-device-setup` / `argent-android-emulator-setup`. The same tool names drive iOS, Android and Chromium; each takes the `udid` from `list-devices`.
+- Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. Only the tools it lists exist there, and `describe` sees only the app `launch-app` registered.
 - Read the matching reference before driving these targets: `references/chromium.md` for a `chromium` target, `references/harmonyos.md` for a `harmony` target, `references/foldables.md` for a device `list-devices` marks `foldable: true` (or before calling `fold`).
 - Load a deferred tool's schema with ToolSearch before its first call (e.g. `gesture-pinch`, `gesture-rotate`, `gesture-custom`); without it, numbers go out as strings and fail validation.
 - If you delegate device tasks to sub-agents, make sure they have MCP permissions.
@@ -42,7 +43,7 @@ After an action moves you to a different screen, or whenever you don't know an e
 
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Any screen: app, system dialog, Home screen    | `describe`                                                                                                                     |
+| Any screen: app, system dialog, Home screen    | `describe` (physical iPhone: the launched app only)                                                                            |
 | App-scoped UIKit properties (iOS simulator)    | `native-describe-screen` (needs `bundleId`)                                                                                    |
 | What sits at a known raw point (iOS simulator) | `native-user-interactable-view-at-point` (the view that receives touch) or `native-view-at-point` (the visually deepest view)  |
 | Final visual fallback                          | `screenshot`, only when the tools above cannot expose the control. Do not derive routine in-app navigation targets from pixels |
@@ -53,7 +54,7 @@ For a React Native testID or component name that `describe` does not show, use `
 
 **React Native:** LogBox toasts sit over the bottom of the screen and catch taps meant for what is under them. Argent hides them when a `debugger-*` tool connects and after `debugger-reload-metro`; after `restart-app`, call a `debugger-*` tool again. After any other reload they come back: close each by tapping the right end of its `describe` frame (the X), not its middle.
 
-**System and permission dialogs:** `describe` returns a visible dialog's buttons with tap coordinates; keep using it for in-app modals too. Fall back to `screenshot` only if it does not expose the controls: then tap one obvious button (`Allow`, `OK`, `Don't Allow`, `Not Now`, `Continue`) at a time, check the returned screenshot, and go back to `describe` once the dialog is gone.
+**System and permission dialogs:** on a simulator or emulator, `describe` returns a visible dialog's buttons with tap coordinates; keep using it for in-app modals too. Fall back to `screenshot` only if it does not expose the controls: then tap one obvious button (`Allow`, `OK`, `Don't Allow`, `Not Now`, `Continue`) at a time, check the returned screenshot, and go back to `describe` once the dialog is gone.
 
 > **Prefer the dialog over the Settings tool.** When the app triggers its own permission prompt, answering it is the real user path. Use `settings-permissions` only when you can't make the change through the app: set a permission _before_ the app asks, re-enable one the user denied (iOS won't re-prompt), or reset it so the prompt reappears. See `argent-settings-permissions`.
 
