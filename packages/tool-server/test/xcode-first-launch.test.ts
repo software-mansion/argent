@@ -169,6 +169,24 @@ describe("xcodeFirstLaunchPending", () => {
     expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
+  it("accepts DEVELOPER_DIR naming any directory that holds Contents/Developer, as xcrun does", () => {
+    writeWrapper("simctl", olderRuleWrapper("1175.5", plistPath));
+    installFramework("1174.21");
+    const link = path.join(root, "Xcode-current");
+    fs.symlinkSync(path.join(root, "Xcode.app"), link);
+    for (const dir of [link, `${link}/`, `${path.join(root, "Xcode.app")}//`]) {
+      process.env.DEVELOPER_DIR = dir;
+      expect(xcodeFirstLaunchPending("simctl"), dir).toBe(true);
+    }
+  });
+
+  it("does not trim DEVELOPER_DIR, as xcrun does not", () => {
+    writeWrapper("simctl", olderRuleWrapper("1175.5", plistPath));
+    installFramework("1174.21");
+    process.env.DEVELOPER_DIR = ` ${devDir}`;
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
+  });
+
   describe("reads the Xcode that xcrun uses", () => {
     const otherDevDir = (): string => path.join(root, "Other.app", "Contents", "Developer");
 
@@ -325,6 +343,52 @@ describe("xcodeFirstLaunchPending", () => {
     execFileSync("/usr/bin/plutil", ["-convert", "binary1", plistPath]);
     expect(fs.readFileSync(plistPath).subarray(0, 8).toString("latin1")).toBe("bplist00");
     expect(xcodeFirstLaunchPending("devicectl")).toBe(true);
+  });
+});
+
+/**
+ * `xcode-select -p` honours DEVELOPER_DIR and resolves it the way `xcrun`
+ * does. Each case puts a pending wrapper only in the directory it names and a
+ * settled one in every other candidate, so the check agrees only when it reads
+ * the same directory.
+ */
+describe.skipIf(realPlatform !== "darwin")("reads the directory xcode-select names", () => {
+  const app = (): string => path.join(root, "Xcode.app");
+  const cases: [string, () => string][] = [
+    ["an app bundle", app],
+    ["an app bundle with trailing slashes", () => `${app()}//`],
+    [
+      "a symlink to an app bundle, named without .app",
+      () => {
+        fs.symlinkSync(app(), path.join(root, "Xcode-current"));
+        return path.join(root, "Xcode-current");
+      },
+    ],
+    ["a directory with both usr/bin and Contents/Developer", () => path.join(root, "Both")],
+    ["a directory whose Contents/Developer is a file", () => path.join(root, "FileDev")],
+    ["a Developer directory with a trailing slash", () => `${devDir}/`],
+    ["a relative path", () => path.relative(process.cwd(), app())],
+  ];
+
+  it.each(cases)("%s", (_name, name) => {
+    installFramework("1174.21");
+    const settled = olderRuleWrapper("1174.21", plistPath);
+    for (const dir of [devDir, app(), path.join(root, "Both"), path.join(root, "FileDev")]) {
+      writeWrapper("simctl", settled, dir);
+    }
+    writeWrapper("simctl", settled, path.join(root, "Both", "Contents", "Developer"));
+    fs.mkdirSync(path.join(root, "FileDev", "Contents"));
+    fs.writeFileSync(path.join(root, "FileDev", "Contents", "Developer"), "");
+
+    const value = name();
+    const named = execFileSync("/usr/bin/xcode-select", ["-p"], {
+      env: { ...process.env, DEVELOPER_DIR: value },
+    })
+      .toString()
+      .replace(/\n$/, "");
+    writeWrapper("simctl", olderRuleWrapper("1175.5", plistPath), path.resolve(named));
+    process.env.DEVELOPER_DIR = value;
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 });
 

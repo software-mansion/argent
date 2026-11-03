@@ -34,10 +34,12 @@ let locations = XCODE_LOCATIONS;
 /**
  * The developer directory `xcrun` would use, resolved the way `xcode-select`
  * does but without spawning it: `DEVELOPER_DIR`, then the link that
- * `xcode-select -s` writes, then the default Xcode location.
+ * `xcode-select -s` writes, then the default Xcode location. Like
+ * `xcode-select`, it uses `Contents/Developer` of any directory that has one,
+ * whatever the directory's name, and it does not trim the value.
  */
 function activeDeveloperDir(): string | null {
-  let dir = process.env.DEVELOPER_DIR?.trim() || null;
+  let dir = process.env.DEVELOPER_DIR || null;
   if (!dir) {
     try {
       dir = fs.readlinkSync(locations.selectLink);
@@ -46,7 +48,16 @@ function activeDeveloperDir(): string | null {
     }
   }
   if (!dir) return null;
-  return /\.app\/?$/.test(dir) ? path.join(dir, "Contents", "Developer") : dir;
+  const bundled = path.resolve(dir, "Contents", "Developer");
+  return isDirectory(bundled) ? bundled : path.resolve(dir);
+}
+
+function isDirectory(file: string): boolean {
+  try {
+    return fs.statSync(file).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**
