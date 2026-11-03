@@ -144,8 +144,8 @@ const JS_LAYER_FALLBACK =
   "Use view-network-logs: the JS layer still records the app's JavaScript requests while Metro serves the app.";
 
 /**
- * A tag per tool-server start, so an id from before a restart never names
- * another request.
+ * A tag per tool-server start, so an id from before a restart rarely names
+ * another request: two starts share a tag 1 time in 65536.
  */
 const RUN_TAG = randomBytes(2).toString("hex");
 
