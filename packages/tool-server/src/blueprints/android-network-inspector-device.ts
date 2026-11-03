@@ -47,7 +47,6 @@ interface DeviceFacts {
   sdk: number | null;
   /** The ABI the kernel runs natively, or null when `uname -m` names neither agent ABI. */
   kernelAbi: AgentAbi | null;
-  kernelMachine: string;
   /**
    * `ro.serialno` of a physical device, the same for every adb connection to
    * it. Null for an emulator, where it tells nothing apart: every emulator of
@@ -85,7 +84,6 @@ export async function readDeviceFacts(serial: string): Promise<DeviceFacts> {
   return {
     sdk: Number.isFinite(sdk) ? sdk : null,
     kernelAbi: machine === "aarch64" ? "arm64-v8a" : machine === "x86_64" ? "x86_64" : null,
-    kernelMachine: machine,
     hardwareKey: emulator ? null : serialNo || null,
     user: Number.isInteger(user) && user >= 0 ? user : 0,
   };
