@@ -19,10 +19,12 @@ const MAX_INLINE_HOTSPOTS = 5;
 const MAX_INLINE_HANGS = 3;
 
 /**
- * Said wherever an iOS capture with no Leaks table would otherwise read as "0 leaks":
- * the analyze report, leak_stacks, the combined report and profiler-load. It states
- * the outcome, not the cause (a template without the Leaks instrument, or a failed
- * leaks export), so it stays true whichever capture produced the trace.
+ * Said where an iOS capture with no Leaks table would otherwise read as "0 leaks":
+ * the analyze report (with a warning not to report the app as leak-free) and
+ * leak_stacks. The combined report and profiler-load print their own shorter
+ * "not recorded" instead. It states the outcome, not the cause (a template without
+ * the Leaks instrument, or a failed leaks export), so it stays true whichever
+ * capture produced the trace.
  */
 export const LEAKS_NOT_RECORDED = "No leak data was recorded, so memory leaks were not checked.";
 

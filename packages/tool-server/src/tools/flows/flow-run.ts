@@ -1494,9 +1494,10 @@ Returns a per-step report: the first failure stops the run and the rest report a
 Over a link (argent link or ARGENT_TOOLS_URL), the client uploads the e2e test with the run: fragments,
 snapshot baselines and absolute .png/.yaml file arguments its steps use, from under project_root or beside
 the e2e test file. The run fails if a step needs any other project file (a script: step, a recording tool,
-a nested e2e-execute not called by name with an absolute project_root, a directory or app argument, a
-relative path): it stops before the first step and the error lists each such step. An absolute .png/.yaml
-argument from anywhere else fails only when its step runs. Without a link, every step kind runs.`,
+a nested e2e-execute not called by name with an absolute project_root, a directory, app or output-directory
+argument, a file path built from several arguments, a relative path): it stops before the first step and the
+error lists each such step. An absolute .png/.yaml argument from anywhere else fails only when its step runs.
+Without a link, every step kind runs.`,
     zodSchema,
     aliases: ["flow-execute"],
     interaction: {

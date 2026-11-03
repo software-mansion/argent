@@ -243,7 +243,7 @@ Resolve every hit and confirm:
 
 Run `e2e-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`.
 
-Over `argent link` or `ARGENT_TOOLS_URL`, the client uploads the test and the files its steps need. `e2e-execute`'s `flow_path` parameter lists what travels and which steps a linked run rejects (`script:`, recording tools, directory, app or output-directory arguments such as `reinstall-app`'s, relative or non-`.png`/`.yaml` file arguments, file paths built from several arguments). Beyond that list:
+Over `argent link` or `ARGENT_TOOLS_URL`, the client uploads the test and the files its steps need. `e2e-execute`'s description lists what travels and which steps a linked run rejects (`script:`, recording tools, directory, app or output-directory arguments such as `reinstall-app`'s, relative or non-`.png`/`.yaml` file arguments, file paths built from several arguments). Beyond that list:
 
 - Keep every file a step needs (`run:` fragments, tests named by `tool: e2e-execute`, `.png`/`.yaml` arguments such as `screenshot-diff`'s `baselinePath`) as a real file under `project_root`, its `.argent/e2e/` or `.argent/flows/`, or beside the test file, not behind a symlink to another place. Otherwise the step reports `error` when it runs, after the earlier steps acted.
 - A `tool: e2e-execute` step works over a link only with `name` and an absolute `project_root` without a `..` segment. Spell `name` in the letter case of its file.

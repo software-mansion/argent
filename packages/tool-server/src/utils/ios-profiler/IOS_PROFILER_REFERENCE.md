@@ -166,8 +166,8 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 
 `renderNativeProfilerReport` produces a markdown document with these sections:
 
-1. **Header** — trace filename, platform, timestamp, any export warnings.
-2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks).
+1. **Header** — trace filename, platform, timestamp, any export warnings. When the trace has no leak data (the `all-processes` capture, or a leaks export that failed), a warning that memory leaks were not checked and that the app must not be reported as leak-free.
+2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks). Memory Leaks reads `not recorded` when the trace has no leak data.
 3. **CPU Hotspots** — table of dominant function, thread, weight (ms / %), sample count, `duringHang` flag, severity. Per hotspot: top 3 call chains and either burst windows or active range.
 4. **UI Hangs** — table of type / start (`MM:SS.mmm`) / duration / severity. Per hang: top app call chains during the hang window with sample counts (or top suspected functions if chain extraction was empty).
 5. **Memory Leaks** — table of object type, count, total size, responsible frame, library.
@@ -175,6 +175,8 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 7. **Next Steps** — concrete `profiler-stack-query` invocations the agent can chain into.
 
 The inline report is capped (top 5 hotspots, top 3 hangs); the full report is always written to `<trace>-report.md` for re-read.
+
+With no findings, the report is a short all clear instead. Without leak data it keeps the header warning and says only that no CPU hotspots or UI hangs were detected.
 
 ---
 
@@ -187,7 +189,7 @@ Reads the cached `parsedData` on the session — no XML re-parse. Modes:
 | `hang_stacks`      | `hang_index`                  | The hang's suspected functions, app call chains during the hang, plus all unique stacks across CPU samples whose dominant function matches a suspect.                          |
 | `function_callers` | `function_name`               | Frames immediately above (callers) and below (callees) the named frame across all samples, ranked by frequency. Effectively a poor-man's call graph for a hot native function. |
 | `thread_breakdown` | optional `thread` filter      | Per-thread weight (ms/%) and sample count. With a filter, also lists hotspots on that thread.                                                                                  |
-| `leak_stacks`      | optional `object_type` filter | Filtered, sorted memory leak table.                                                                                                                                            |
+| `leak_stacks`      | optional `object_type` filter | Filtered, sorted memory leak table, or a note that no leak data was recorded.                                                                                                  |
 
 Top-N is configurable (default 15).
 
