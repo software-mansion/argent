@@ -48,6 +48,7 @@ import {
   sessionKeys,
   type AndroidNetworkInspectorApi,
 } from "../src/blueprints/android-network-inspector";
+import { lastAgentReason } from "../src/blueprints/android-network-inspector-device";
 import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { DEVICE_OWNED_NAMESPACES, deviceIdOwningUrn } from "../src/tools/simulator/device-services";
@@ -115,6 +116,10 @@ interface FakeDevice {
   stagingLost?: boolean;
   attachError?: string;
   onAttach?: () => void;
+  /** What `logcat` prints, or the error it fails with. */
+  logcat?: string | Error;
+  /** The timeout each logcat read was given. */
+  logcatTimeouts: Array<number | undefined>;
 }
 
 let device: FakeDevice;
@@ -723,6 +728,7 @@ beforeEach(() => {
     takenBinds: 0,
     squatted: new Set(),
     pidofFailures: 0,
+    logcatTimeouts: [],
   };
   binRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-android-network-"));
   writeAgentBinaries(binRoot);
@@ -733,9 +739,14 @@ beforeEach(() => {
   const processOf = (packageName: string): Proc | null =>
     packageName === PKG ? device.process : (device.processes.get(packageName) ?? null);
 
-  vi.mocked(adbShell).mockImplementation(async (serial, command) => {
+  vi.mocked(adbShell).mockImplementation(async (serial, command, options) => {
     device.commands.push(command);
     if (device.adbDown) throw adbFailure(command, "device offline");
+    if (command.startsWith("logcat ")) {
+      device.logcatTimeouts.push(options?.timeoutMs);
+      if (device.logcat instanceof Error) throw device.logcat;
+      return device.logcat ?? "";
+    }
     if (command.startsWith('echo "sdk=')) {
       const id = device.identity.get(serial) ?? {
         serialNo: "EMULATOR36X1X9X0",
@@ -938,6 +949,11 @@ describe("the agent handshake", () => {
     expect(impostor.received).toEqual([]);
     expect(api.records(8081)).toEqual([]);
     expect(api.state().armed).toBe(false);
+    // The tool-server closed it, so it is not logged as the agent hanging up.
+    expect(stderrText()).toContain(
+      "closed an agent connection: its proof of the session secret did not verify"
+    );
+    expect(stderrText()).not.toContain("after the tool-server's proof");
   });
 
   it("closes a connection that sends anything but its proof after the hello", async () => {
@@ -959,7 +975,7 @@ describe("the agent handshake", () => {
     expect(api.state().armed).toBe(false);
   });
 
-  it("is refused by an agent whose session holds another secret", async () => {
+  it("is refused by an agent whose session holds another secret, and logs that the agent hung up on its proof", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
     expect(await api.ensureAttached(8081)).toBeNull();
@@ -969,6 +985,12 @@ describe("the agent handshake", () => {
 
     expect(stale.serverProofOk).toBe(false);
     expect(api.state().armed).toBe(false);
+    await vi.waitFor(() =>
+      expect(stderrText().match(/the agent closed its connection after .*/g)).toEqual([
+        "the agent closed its connection after the tool-server's proof: most likely it does not hold this session's secret " +
+          "(another tool-server's session, or a stale session file); its logcat lines under the tag ArgentNetworkInspector say why",
+      ])
+    );
   });
 
   it("closes a connection that has not authenticated within 5 s", async () => {
@@ -3649,5 +3671,145 @@ describe("the tools on the Android native layer", () => {
     )) as { response: { body: string } };
     expect(performance.now() - started).toBeLessThan(2_000);
     expect(details.response.body).toContain("decodes to more than 16 MiB");
+  });
+});
+
+describe("why the agent has not connected", () => {
+  const START_TIME_LINE =
+    "Could not read the process start time (java.io.IOException: Permission denied) - not connecting; restart the app to attach again";
+  const WAITING = "attached to pid 4722; waiting for the agent to connect";
+
+  function logcatReads(): string[] {
+    return device.commands.filter((c) => c.startsWith("logcat "));
+  }
+
+  async function header(api: AndroidNetworkInspectorApi): Promise<string> {
+    const result = (await nativeNetworkLogsTool.execute!(
+      { androidNetwork: api },
+      { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
+    )) as { status: string; header: string };
+    expect(result.status).toBe("ok");
+    return result.header;
+  }
+
+  async function attachedNotConnected(): Promise<AndroidNetworkInspectorApi> {
+    device.agentOnAttach = false;
+    const api = await createInspector();
+    expect(await api.ensureAttached(8081)).toBeNull();
+    // A process attached just now: its agent has had no time to log anything.
+    expect(logcatReads()).toEqual([]);
+    expect(api.state().note).toBe(WAITING);
+    return api;
+  }
+
+  it("native-network-logs shows the last reason the agent logged for not connecting", async () => {
+    const api = await attachedNotConnected();
+    device.logcat = [
+      "--------- beginning of main",
+      "I/ArgentNetworkInspector: No session file at /data/user/0/com.example.demo/code_cache/.argent-inspector/session - not connecting",
+      `W/ArgentNetworkInspector: ${START_TIME_LINE}`,
+      "I/ArgentNetworkInspector: an unrelated line",
+      "",
+    ].join("\n");
+
+    expect(await header(api)).toBe(
+      `android-native: not armed, 0 requests (${WAITING}; the agent says: ${START_TIME_LINE})`
+    );
+    expect(logcatReads()).toEqual(["logcat -d --pid=4722 -v tag -s ArgentNetworkInspector:I"]);
+    expect(device.logcatTimeouts).toEqual([3_000]);
+
+    // Once the agent connects, the note and its reason are gone.
+    await FakeAgent.fromSession(dirFor(), proc());
+    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(api.state().note).toBeUndefined();
+  });
+
+  it("reads logcat at most once per call, and only while the agent has not connected", async () => {
+    const api = await attachedNotConnected();
+    device.logcat = `W/ArgentNetworkInspector: ${START_TIME_LINE}\n`;
+    await header(api);
+    await header(api);
+    expect(logcatReads()).toHaveLength(2);
+
+    await FakeAgent.fromSession(dirFor(), proc());
+    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    await header(api);
+    expect(logcatReads()).toHaveLength(2);
+  });
+
+  it("keeps today's note when logcat holds no refusal or close line", async () => {
+    const api = await attachedNotConnected();
+    for (const output of [
+      "",
+      "--------- beginning of main\nI/ArgentNetworkInspector: an unrelated line\n",
+      // Another tag's line, worded like a refusal.
+      "W/OtherTag: The listener on port 20100 did not prove the session - closing\n",
+    ]) {
+      device.logcat = output;
+      expect(await header(api)).toBe(`android-native: not armed, 0 requests (${WAITING})`);
+    }
+  });
+
+  it("keeps today's note when the logcat read fails or times out, and the call still succeeds", async () => {
+    const api = await attachedNotConnected();
+    device.logcat = new FailureError(`adb -s ${SERIAL} shell logcat timed out after 3000ms`, {
+      error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+      failure_stage: "android_adb_command",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    });
+    expect(await header(api)).toBe(`android-native: not armed, 0 requests (${WAITING})`);
+
+    device.logcat = adbFailure("logcat", "error: closed");
+    expect(await header(api)).toBe(`android-native: not armed, 0 requests (${WAITING})`);
+    expect(logcatReads()).toHaveLength(2);
+  });
+
+  it("the launch note carries the reason when the launched process's agent does not connect", async () => {
+    // Capture is live from a call that found the app not running.
+    device.process = null;
+    device.agentOnAttach = false;
+    const api = await createInspector();
+    expect(await api.ensureAttached(8081)).toBeNull();
+    device.process = { pid: 5320, startTime: 132_000 };
+    device.logcat =
+      "W/ArgentNetworkInspector: Closing the tool-server connection: it sent a proof that did not verify\n";
+
+    const note = await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG);
+
+    expect(note).toBe(
+      `native network capture is attaching to ${PKG} (pid 5320), and the agent has not connected yet; native-network-logs shows when it is armed; ` +
+        "the agent says: Closing the tool-server connection: it sent a proof that did not verify"
+    );
+    expect(logcatReads()).toEqual(["logcat -d --pid=5320 -v tag -s ArgentNetworkInspector:I"]);
+    // The listing carries it too, until a read finds another.
+    expect(api.state().note).toBe(
+      "attached to pid 5320; waiting for the agent to connect; " +
+        "the agent says: Closing the tool-server connection: it sent a proof that did not verify"
+    );
+  }, 10_000);
+
+  it("reads the agent's line in logcat's tag, brief and threadtime formats, and caps it", () => {
+    expect(
+      lastAgentReason(
+        "W/ArgentNetworkInspector( 4722): The listener on port 20100 did not prove the session within 5000 ms - closing\r\n"
+      )
+    ).toBe("The listener on port 20100 did not prove the session within 5000 ms - closing");
+    expect(
+      lastAgentReason(
+        "11-03 10:00:00.000  4722  4750 I ArgentNetworkInspector: Invalid session file at /x/session (port missing or out of range) - not connecting\n"
+      )
+    ).toBe("Invalid session file at /x/session (port missing or out of range) - not connecting");
+    expect(
+      lastAgentReason(
+        "W/ArgentNetworkInspector: AES-GCM is not available - closing: java.security.NoSuchAlgorithmException\n"
+      )
+    ).toBe("AES-GCM is not available - closing: java.security.NoSuchAlgorithmException");
+
+    const long = lastAgentReason(
+      `I/ArgentNetworkInspector: Cannot read the session file (${"x".repeat(500)}) - not connecting\n`
+    );
+    expect(long).toHaveLength(301);
+    expect(long!.endsWith("…")).toBe(true);
   });
 });

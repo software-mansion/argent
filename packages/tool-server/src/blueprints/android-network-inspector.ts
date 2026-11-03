@@ -41,6 +41,7 @@ import { externalNativeId } from "../utils/external-devices";
 import {
   AGENT_ABIS,
   AGENT_LIB_NAME,
+  AGENT_LOG_TAG,
   DEVICE_STAGING_DIR,
   JAR_NAME,
   agentDirFor,
@@ -48,6 +49,7 @@ import {
   classifyRunAsFailure,
   processKey,
   processOfUser,
+  readAgentReason,
   readAppProcesses,
   readDeviceFacts,
   removeSessionScript,
@@ -469,6 +471,12 @@ function createInspector(
   let sessionPort = 0;
   const attachedProcesses = new Set<string>();
   let note: string | undefined;
+  /**
+   * The process attached last while its agent has not completed a handshake:
+   * the note that says so, and the reason the agent last logged for not
+   * connecting, which the note carries while it is the current one.
+   */
+  let awaiting: { key: string; note: string; reason?: string } | null = null;
   const pendingSockets = new Set<net.Socket>();
   const connections: AgentConnection[] = [];
   const records: AndroidNativeRecord[] = [];
@@ -832,6 +840,7 @@ function createInspector(
       // An agent from an earlier Argent dials a port of its own and never
       // reads the session, so this has to hold for that one too.
       note = `pid ${proc.pid} already has the agent loaded, and it should connect within a few seconds; if it does not, that agent is from an earlier Argent, and restart-app gives the app a process with the current one`;
+      awaiting = { key, note };
       log(`pid ${proc.pid} already has the agent loaded`);
       return "loaded";
     }
@@ -864,8 +873,42 @@ function createInspector(
     }
     checkpoint();
     note = `attached to pid ${proc.pid}; waiting for the agent to connect`;
+    awaiting = { key, note };
     log(`attached the agent to pid ${proc.pid}`);
     return "attached";
+  }
+
+  /**
+   * Reads why the agent in `proc` has not connected, from its logcat lines,
+   * while the note still says it is awaited: one bounded adb call. A failed
+   * read leaves the note as it was.
+   */
+  async function refreshAgentReason(proc: AppProcess): Promise<string | undefined> {
+    const key = processKey(proc);
+    const target = awaiting;
+    if (
+      target?.key !== key ||
+      note !== target.note ||
+      connections.some((c) => c.processKey === key)
+    ) {
+      return undefined;
+    }
+    try {
+      const reason = await readAgentReason(serial, proc.pid);
+      if (awaiting === target) target.reason = reason;
+    } catch (err) {
+      log(
+        `could not read the agent's logcat lines for pid ${proc.pid}: ${firstLine(adbFailureDetail(err))}`
+      );
+    }
+    return target.reason;
+  }
+
+  /** The note, with the reason the agent gave while it is the awaited process's. */
+  function shownNote(): string | undefined {
+    return note && awaiting?.reason && note === awaiting.note
+      ? `${note}; the agent says: ${awaiting.reason}`
+      : note;
   }
 
   /**
@@ -1084,7 +1127,16 @@ function createInspector(
 
     socket.on("close", () => {
       clearTimeout(authTimer);
-      pendingSockets.delete(socket);
+      // During the handshake, a socket no longer pending was pushed out by newer ones.
+      const evicted = !pendingSockets.delete(socket);
+      // The tool-server refuses by closing, which sets the phase first, so a
+      // close in the proof phase is the other side's.
+      if (phase === "proof" && !evicted && !disposed) {
+        log(
+          "the agent closed its connection after the tool-server's proof: most likely it does not hold this session's secret " +
+            `(another tool-server's session, or a stale session file); its logcat lines under the tag ${AGENT_LOG_TAG} say why`
+        );
+      }
       phase = "closed";
       cdp.close();
       if (conn) connectionClosed(conn);
@@ -1098,6 +1150,7 @@ function createInspector(
     handshake: Handshake
   ): AgentConnection {
     const key = `${handshake.pid}:${handshake.startTime}`;
+    if (awaiting?.key === key) awaiting = null;
     // An agent keeps one connection. One of its earlier connections that is
     // still open here is one it gave up on, so it closes now and can be
     // resumed.
@@ -1666,7 +1719,8 @@ function createInspector(
             note = `${packageName} is not running; launch-app or restart-app attaches the agent to its next process`;
           }
         } else {
-          await attach(current);
+          // A process attached just now gives its agent no time to log yet.
+          if ((await attach(current)) !== "attached") await refreshAgentReason(current);
           if (!ready) {
             const again = await prepare();
             if (again) return again;
@@ -1718,11 +1772,15 @@ function createInspector(
     }
     // Only an attach that went through for this process has an agent to wait for.
     if (outcome.kind === "attached") await waitForArmed(processKey(outcome.proc), ARM_WAIT_MS);
+    const reason =
+      "proc" in outcome && !armedFor(processKey(outcome.proc))
+        ? await refreshAgentReason(outcome.proc)
+        : undefined;
     if (disposed) return undefined;
-    return launchNote(outcome);
+    return launchNote(outcome, reason);
   }
 
-  function launchNote(outcome: LaunchOutcome): string {
+  function launchNote(outcome: LaunchOutcome, reason?: string): string {
     switch (outcome.kind) {
       case "blocked":
         return `native network capture cannot follow ${packageName}: ${outcome.reason}`;
@@ -1735,7 +1793,7 @@ function createInspector(
         const { pid } = outcome.proc;
         return armedFor(processKey(outcome.proc))
           ? `native network capture is attached to ${packageName} (pid ${pid}); stop-all-simulator-servers for this device ends it`
-          : `native network capture is attaching to ${packageName} (pid ${pid}), and the agent has not connected yet; native-network-logs shows when it is armed`;
+          : `native network capture is attaching to ${packageName} (pid ${pid}), and the agent has not connected yet; native-network-logs shows when it is armed${reason ? `; the agent says: ${reason}` : ""}`;
       }
     }
   }
@@ -1785,7 +1843,7 @@ function createInspector(
         ...(conn ? { process: { pid: conn.pid, startTime: conn.startTime } } : {}),
         ...(conn?.capture ? { capture: { ...conn.capture } } : {}),
         ...(conn && conn.droppedEvents > 0 ? { droppedEvents: conn.droppedEvents } : {}),
-        ...(!conn && note ? { note } : {}),
+        ...(!conn && note ? { note: shownNote() } : {}),
       };
     },
     records: (port) =>

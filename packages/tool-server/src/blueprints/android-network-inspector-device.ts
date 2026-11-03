@@ -226,3 +226,49 @@ export function classifyRunAsFailure(detail: string): RunAsFailure {
   if (/couldn't stat \/data\/(?:user\/\d+|data)\b/i.test(detail)) return "unknown_package";
   return "other";
 }
+
+/** The logcat tag the agent writes under, from the app's process. */
+export const AGENT_LOG_TAG = "ArgentNetworkInspector";
+const AGENT_REASON_TIMEOUT_MS = 3_000;
+const MAX_AGENT_REASON_CHARS = 300;
+/** A line of the agent's tag in logcat's `tag`, `brief` or `threadtime` format; group 1 is the message. */
+const AGENT_LOG_LINE = new RegExp(`\\b${AGENT_LOG_TAG}\\s*(?:\\(\\s*\\d+\\))?\\s*:\\s?(.*)$`);
+
+/**
+ * The last line the agent in process `pid` logged about not connecting or
+ * about closing a connection, or undefined when it logged none. Throws when
+ * adb fails or does not answer within a few seconds.
+ *
+ * `--pid` (Android 7.0 and later) is filtered by logd and `-s` by logcat
+ * itself. No `-t` count: it counts lines before the tag filter, so the
+ * app's own logging could push the agent's line out of a short tail. The
+ * agent logs a reason once when it changes, so the dump reads the history.
+ */
+export async function readAgentReason(serial: string, pid: number): Promise<string | undefined> {
+  const out = await adbShell(serial, `logcat -d --pid=${pid} -v tag -s ${AGENT_LOG_TAG}:I`, {
+    timeoutMs: AGENT_REASON_TIMEOUT_MS,
+  });
+  return lastAgentReason(out);
+}
+
+/** The last refusal or close line in logcat output of the agent's tag. */
+export function lastAgentReason(logcat: string): string | undefined {
+  const lines = logcat.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const message = AGENT_LOG_LINE.exec(lines[i]!.trimEnd())?.[1]?.trim();
+    if (!message || !isAgentReason(message)) continue;
+    const clean = message.replace(/\s+/g, " ");
+    return clean.length > MAX_AGENT_REASON_CHARS
+      ? `${clean.slice(0, MAX_AGENT_REASON_CHARS)}…`
+      : clean;
+  }
+  return undefined;
+}
+
+function isAgentReason(message: string): boolean {
+  return (
+    / - not connecting\b/.test(message) ||
+    / - closing\b/.test(message) ||
+    message.startsWith("Closing the tool-server connection:")
+  );
+}
