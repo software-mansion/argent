@@ -40,8 +40,11 @@ import {
   ensureDeps,
 } from "../src/utils/check-deps";
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
-import { ensureIosDeps } from "../src/utils/cross-platform-tool";
-import type { DeviceInfo } from "@argent/registry";
+import { dispatchByPlatform, ensureIosDeps } from "../src/utils/cross-platform-tool";
+import type { DeviceInfo, ToolCapability } from "@argent/registry";
+import { isFoldableDeviceType } from "../src/utils/ios-devices";
+import { createAwaitUiElementTool } from "../src/tools/await-ui-element";
+import { createAwaitScreenIdleTool } from "../src/tools/await-screen-idle";
 import { simctlPrefix } from "../src/utils/ios-device-sets";
 import { ensureDeviceReady, listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import { createDescribeTool } from "../src/tools/describe";
@@ -304,6 +307,77 @@ describe("the xcrun preflight of a local iOS branch", () => {
     const err = await ensureIosDeps(SIMULATOR, ["xcrun"]).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(XcodeFirstLaunchPendingError);
     expect((err as Error).message).toMatch(/xcode-select --install/);
+  });
+});
+
+describe("the local iOS preflight where tools call it", () => {
+  beforeEach(() => __primeDepCacheForTests(["xcrun"]));
+
+  function iosRegistry() {
+    const registry = new Registry();
+    registry.registerBlueprint(axServiceBlueprint);
+    registry.registerBlueprint(nativeDevtoolsBlueprint);
+    return registry;
+  }
+
+  // Without it, both poll for their whole timeout and then blame the simulator.
+  it("makes await-ui-element refuse a simulator at once", async () => {
+    pending.simctl = true;
+    const tool = createAwaitUiElementTool(iosRegistry());
+    const params = {
+      udid: SIMULATOR.id,
+      condition: "exists",
+      selector: { text: "Done" },
+      timeoutMs: 300,
+    };
+    await expect(tool.execute({}, params as never)).rejects.toBeInstanceOf(
+      XcodeFirstLaunchPendingError
+    );
+    expect(xcrunCalls()).toEqual([]);
+  });
+
+  it("makes await-screen-idle refuse a simulator at once", async () => {
+    pending.simctl = true;
+    const tool = createAwaitScreenIdleTool(iosRegistry());
+    await expect(
+      tool.execute({}, { udid: SIMULATOR.id, timeoutMs: 300 } as never)
+    ).rejects.toBeInstanceOf(XcodeFirstLaunchPendingError);
+    expect(xcrunCalls()).toEqual([]);
+  });
+
+  // A deeper devicectl gate refuses too, so only the handler shows the preflight ran.
+  it("refuses a physical iPhone's branch before its handler runs", async () => {
+    pending.devicectl = true;
+    const handler = vi.fn().mockResolvedValue("ran");
+    const capability: ToolCapability = { apple: { simulator: true, device: true } };
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
+      toolId: "probe",
+      capability,
+      ios: { requires: ["xcrun"], handler },
+      android: { requires: [], handler },
+      iosDevice: { requires: ["xcrun"], handler },
+    });
+
+    await expect(execute({}, { udid: IPHONE.id })).rejects.toBeInstanceOf(
+      XcodeFirstLaunchPendingError
+    );
+    expect(handler).not.toHaveBeenCalled();
+    pending.devicectl = false;
+    await expect(execute({}, { udid: IPHONE.id })).resolves.toBe("ran");
+  });
+
+  it("covers the device-type listing that tells foldables apart", async () => {
+    pending.simctl = true;
+    // A type no earlier listing knew, so neither cache can answer.
+    await expect(
+      isFoldableDeviceType("com.apple.CoreSimulator.SimDeviceType.FA1E1721-Unseen")
+    ).resolves.toBe(false);
+    expect(xcrunCalls()).toEqual([]);
   });
 });
 
