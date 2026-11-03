@@ -49,11 +49,35 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
   }
 }
 
+/**
+ * How a screenshot reaches the client. Default / unknown clients use `image-and-path`.
+ * `screenshotForm` / `autoScreenshotForm` in client-images.ts pick the form per
+ * `clientInfo.name`; see CLIENTS.md for the full matrix.
+ * - `image-and-path` (default): the image, then `Saved: <path>`.
+ * - `image`: the image alone, for a client whose model sees it (auto-screenshots only).
+ * - `path`: no image, only the path and how to open it, for a client that would send the image
+ *   to the model as base64 text.
+ */
+export type ScreenshotForm = "image-and-path" | "image" | "path";
+
+const PATH_NOTE_START = "Screenshot saved to ";
+
+/** The text that stands in for a screenshot in the `path` form. */
+export function screenshotPathNote(path: string): string {
+  return `${PATH_NOTE_START}${path}\nIt is not attached here, because this client would pass the image to the model as base64 text. To look at the screen, open that PNG with your file-read tool in Image mode.`;
+}
+
+/** True for a block that carries a screenshot, in any form. */
+export function isScreenshotBlock(block: ContentBlock): boolean {
+  return block.type === "image" || block.text.startsWith(PATH_NOTE_START);
+}
+
 export async function toMcpContent(
   result: unknown,
   outputHint?: string,
   ctx?: ContentContext,
-  args?: unknown
+  args?: unknown,
+  form: ScreenshotForm = "image-and-path"
 ): Promise<ContentBlock[]> {
   // `includeImageInContext: false` asks for the saved-path text only — no inline image.
   const suppressImage = isRecord(args) && args.includeImageInContext === false;
@@ -66,14 +90,10 @@ export async function toMcpContent(
 
     if (outputHint === "image") {
       if (images.length > 0) {
-        const saved: ContentBlock = { type: "text", text: `Saved: ${images[0]!.localPath}` };
-        if (suppressImage) return [saved];
-        const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
-        blocks.push(saved);
-        return blocks;
+        return screenshotBlocks(images, images[0]!.localPath, suppressImage, form);
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      return legacyImageContent(rewritten, suppressImage);
+      return legacyImageContent(rewritten, suppressImage, form);
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
@@ -83,7 +103,7 @@ export async function toMcpContent(
   }
 
   if (outputHint === "image") {
-    return legacyImageContent(result, suppressImage);
+    return legacyImageContent(result, suppressImage, form);
   }
 
   return [{ type: "text" as const, text: stringifyForText(result) }];
@@ -128,7 +148,8 @@ export function describeResultText(result: unknown): string | undefined {
  */
 async function legacyImageContent(
   result: unknown,
-  suppressImage: boolean
+  suppressImage: boolean,
+  form: ScreenshotForm
 ): Promise<ContentBlock[]> {
   if (result && typeof result === "object" && "url" in result) {
     const r = result as { url: string; path?: string };
@@ -137,7 +158,7 @@ async function legacyImageContent(
     }
     const buf = await fetchPngBytes(r.url);
     if (buf) {
-      return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
+      return screenshotBlocks([{ data: buf, mimeType: "image/png" }], r.path ?? "", false, form);
     }
     return [
       {
@@ -147,6 +168,19 @@ async function legacyImageContent(
     ];
   }
   return [{ type: "text", text: JSON.stringify(result, null, 2) }];
+}
+
+function screenshotBlocks(
+  images: ReadonlyArray<{ data: Buffer; mimeType: string }>,
+  path: string,
+  suppressImage: boolean,
+  form: ScreenshotForm
+): ContentBlock[] {
+  if (suppressImage) return [{ type: "text", text: `Saved: ${path}` }];
+  if (form === "path") return [{ type: "text", text: screenshotPathNote(path) }];
+  const blocks = images.map((img) => imageBlock(img.data, img.mimeType));
+  if (form === "image-and-path") blocks.push({ type: "text", text: `Saved: ${path}` });
+  return blocks;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

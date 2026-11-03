@@ -24,6 +24,7 @@ import {
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
+  isScreenshotBlock,
   type ContentContext,
   type ContentBlock,
   type FlowExecuteResult,
@@ -42,6 +43,7 @@ import {
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
+import { autoScreenshotForm, screenshotForm } from "./client-images.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
@@ -191,12 +193,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   ): Promise<ContentBlock[]> {
     try {
       const { result } = await callTool("screenshot", { udid }, { signal });
-      const blocks = await toMcpContent(result, "image", {
-        toolsUrl: TOOLS_URL,
-        authToken: AUTH_TOKEN,
-        deviceId: udid,
-      });
-      if (!blocks.some((b) => b.type === "image")) return [];
+      const blocks = await toMcpContent(
+        result,
+        "image",
+        { toolsUrl: TOOLS_URL, authToken: AUTH_TOKEN, deviceId: udid },
+        undefined,
+        autoScreenshotForm(server.getClientVersion()?.name)
+      );
+      if (!blocks.some(isScreenshotBlock)) return [];
       return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
     } catch {
       return []; /* best-effort */
@@ -311,7 +315,13 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       } else if (describeText !== undefined) {
         content = [{ type: "text" as const, text: describeText }];
       } else {
-        content = await toMcpContent(result, outputHint, ctx, params.arguments);
+        content = await toMcpContent(
+          result,
+          outputHint,
+          ctx,
+          params.arguments,
+          screenshotForm(server.getClientVersion()?.name)
+        );
       }
 
       const udid = getUdidFromArgs(params.arguments);

@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import { screenshotPathNote } from "../src/content.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -427,9 +428,16 @@ describe("startMcpServer screen capture after an interaction", () => {
         name,
         description: name,
         inputSchema: { type: "object", properties: {} },
+        ...(name === "screenshot" ? { outputHint: "image" } : {}),
       })
     ),
   };
+  // TEST_HOME is set in beforeAll.
+  const paths = () => ({
+    bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+    simulatorServerDir: "",
+    nativeDevtoolsDir: "",
+  });
   // Short, so a capture call that never answers ends the test in about a second.
   const CAPTURE_MS = 1_000;
   let stub: Stub;
@@ -491,14 +499,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     });
     vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
     vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
-    client = await connect(
-      {
-        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
-        simulatorServerDir: "",
-        nativeDevtoolsDir: "",
-      },
-      { captureTimeoutMs: CAPTURE_MS }
-    );
+    client = await connect(paths(), { captureTimeoutMs: CAPTURE_MS });
   });
 
   afterEach(async () => {
@@ -637,6 +638,58 @@ describe("startMcpServer screen capture after an interaction", () => {
     const text = textOf(result);
     expect(text).toContain("--- Screen after action ---");
     expect(text).toContain(AUTO_DESCRIBE_HEADER);
+  });
+
+  describe("per client", () => {
+    const outline = (result: Awaited<ReturnType<Client["callTool"]>>) =>
+      (result.content as Array<{ type: string; text?: string }>).map((c) =>
+        c.type === "image" ? "image" : c.text!.split("\n")[0]
+      );
+    const as = async (clientName: string) => {
+      await client.close();
+      client = await connect(paths(), { clientName, captureTimeoutMs: CAPTURE_MS });
+    };
+
+    it.each(["claude-code", "Cursor", "cursor-vscode", "codex-mcp-client", "kiro"])(
+      "leaves the Saved line out of the auto-screenshot for %s, whose model sees the image",
+      async (clientName) => {
+        await as(clientName);
+
+        expect(outline(await tap())).toEqual([
+          "{",
+          "--- Screen after action ---",
+          "image",
+          "--- Elements after action (describe) ---",
+        ]);
+      }
+    );
+
+    it("keeps the Saved line after the screenshot the agent asked for", async () => {
+      await as("claude-code");
+
+      const result = await client.callTool({ name: "screenshot", arguments: { udid: "u" } });
+
+      expect(outline(result)).toEqual(["image", "Saved: /tmp/shot.png"]);
+    });
+
+    it.each(["Q DEV CLI", "q dev cli"])(
+      "sends %s the path and how to open it instead of the image",
+      async (clientName) => {
+        await as(clientName);
+
+        const auto = await tap();
+        const asked = await client.callTool({ name: "screenshot", arguments: { udid: "u" } });
+
+        const note = screenshotPathNote("/tmp/shot.png");
+        expect(outline(auto)).toEqual([
+          "{",
+          "--- Screen after action ---",
+          note.split("\n")[0],
+          "--- Elements after action (describe) ---",
+        ]);
+        expect(asked.content).toEqual([{ type: "text", text: note }]);
+      }
+    );
   });
 });
 

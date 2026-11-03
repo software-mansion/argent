@@ -14,7 +14,9 @@ Argent sends one `tools/list` to every client, but each harness rewrites it befo
 model sees it. Codex, for example, deletes `default`, `minimum` and `maximum`, so a value
 that only such a keyword states never reaches its model. Argent copies those values into
 the param descriptions for such clients (`keyword-facts.ts`). This check shows whether that
-works, and whether anything is lost or repeated.
+works, and whether anything is lost or repeated. The full per-client matrix (keyword facts,
+screenshot forms, telemetry) is in `packages/argent-mcp/src/CLIENTS.md`.
+
 
 ## How it works
 

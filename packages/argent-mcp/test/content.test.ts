@@ -8,6 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import {
   toMcpContent,
   describeResultText,
+  screenshotPathNote,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
   flowRunToMcpContent,
@@ -119,6 +120,37 @@ describe("toMcpContent", () => {
     expect(result[1]).toEqual({ type: "text", text: "Saved: /tmp/img.png" });
 
     vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["image-and-path", ["image", "Saved: /tmp/img.png"]],
+    ["image", ["image"]],
+    ["path", [screenshotPathNote("/tmp/img.png")]],
+  ] as const)("renders a screenshot in the %s form", async (form, expected) => {
+    vi.stubGlobal("fetch", mockOk(PNG_SIGNATURE));
+
+    const result = await toMcpContent(
+      { url: "http://localhost/img.png", path: "/tmp/img.png" },
+      "image",
+      undefined,
+      undefined,
+      form
+    );
+
+    expect(result.map((b) => (b.type === "image" ? "image" : b.text))).toEqual(expected);
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the plain Saved line when the agent asked for no image, in every form", async () => {
+    const result = await toMcpContent(
+      { url: "http://localhost/img.png", path: "/tmp/img.png" },
+      "image",
+      undefined,
+      { includeImageInContext: false },
+      "path"
+    );
+
+    expect(result).toEqual([{ type: "text", text: "Saved: /tmp/img.png" }]);
   });
 
   it("uses empty string for path when not present", async () => {
@@ -259,6 +291,23 @@ describe("toMcpContent with artifact ctx", () => {
   afterEach(async () => {
     delete process.env.ARGENT_ARTIFACTS_DIR;
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("renders an image artifact as its path only in the path form", async () => {
+    const result = await toMcpContent(
+      { image: artifactHandle("img1", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE]),
+      },
+      undefined,
+      "path"
+    );
+
+    expect(result).toHaveLength(1);
+    expect((result[0] as { text: string }).text).toMatch(/^Screenshot saved to .*shot\.png\n/);
   });
 
   it("materializes an image artifact and renders image + local Saved path", async () => {

@@ -1,15 +1,17 @@
 type Schema = Record<string, unknown>;
 
 /**
+ * Per-client schema keyword handling. Defaults and the full agent matrix: CLIENTS.md.
+ *
  * The MCP `clientInfo.name` of the clients whose model sees the schema keywords, on every
  * model they were checked with: Claude Code, Gemini CLI, Zed, Kiro IDE (`kiro`) and Kiro
  * CLI (`Q DEV CLI`). VS Code's agent host (`copilot-cli`) writes the keywords into the
  * description itself. For these the copy would only repeat a fact.
  *
- * Every other client gets the copy, an unknown one included. Codex drops the keywords;
- * opencode drops them on OpenAI and Google models, and VS Code's chat on gpt-4 models.
- * Cursor, Devin and Hermes were checked on one model at most, and Devin and Hermes send
- * their SDK's default name. A repeated fact costs less than a missing one.
+ * Every other client gets the copy (the default), an unknown one included. Codex drops the
+ * keywords; opencode drops them on OpenAI and Google models, and VS Code's chat on gpt-4
+ * models. Cursor, Devin and Hermes were checked on one model at most, and Devin and Hermes
+ * send their SDK's default name. A repeated fact costs less than a missing one.
  */
 const SHOWS_KEYWORDS = [
   /^claude-code\b/,
