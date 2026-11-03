@@ -70,7 +70,6 @@ function bestRootCause(
 
 export function enrich(input: ReduceOutput): EnrichOutput {
   const { sessionContext } = input;
-  const strictMode = sessionContext.strictModeEnabled;
 
   const components = new Map<string, EnrichedComponent>();
 
@@ -78,9 +77,11 @@ export function enrich(input: ReduceOutput): EnrichOutput {
     const n = acc.n;
     if (n === 0) continue;
 
+    // React DevTools records one entry per render, Strict Mode included: its
+    // double invocation lands inside that entry's duration, not as a second
+    // entry. So `n` is the real render count and must not be halved.
     const mean = acc.sum / n;
-    const totalRenderMs = n * mean;
-    const normalizedRenderCount = strictMode ? Math.ceil(n / 2) : n;
+    const totalRenderMs = acc.sum;
 
     const dr = dominantReason(acc.reasonHistogram);
     const dp = dr === "parent" ? topParent(acc.parentFreq) : undefined;
@@ -91,7 +92,6 @@ export function enrich(input: ReduceOutput): EnrichOutput {
     const enriched: EnrichedComponent = {
       name,
       n,
-      normalizedRenderCount,
       mean,
       min: acc.min === Infinity ? 0 : acc.min,
       max: acc.max === -Infinity ? 0 : acc.max,

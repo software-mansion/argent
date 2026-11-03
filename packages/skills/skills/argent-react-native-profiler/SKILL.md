@@ -98,7 +98,7 @@ If the user does not want changes, present the report and suggest the fix withou
 
 ## 4. Caveats
 
-- **Dev builds** render ~3x slower than production (the report notes it). Prioritize render counts over durations: counts carry over to production. They are already halved when Strict Mode double-invokes renders.
+- **Dev builds** render ~3x slower than production (the report notes it). Prioritize render counts over durations: counts carry over to production. Strict Mode can double durations, but not counts.
 - **Live API data** may differ between runs (payload sizes, item counts) and shift render counts and durations independently of your fix. Note when data-dependent components vary.
 - **Run-to-run noise:** variations under ~10-15% in commit duration may be noise; only treat consistent, directional changes as signal.
 - **Profiler overhead:** if the native profile shows `JSLexer`, `JSONEmitter` or Hermes internals dominating the JS thread, that is instrumentation cost, not app work. Discount those entries.

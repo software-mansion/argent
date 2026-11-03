@@ -53,8 +53,7 @@ export interface ReduceOutput {
 // Stage 2: Enrich
 export interface EnrichedComponent {
   name: string;
-  n: number;
-  normalizedRenderCount: number;
+  n: number; // re-render count, first mounts excluded
   mean: number;
   min: number;
   max: number;

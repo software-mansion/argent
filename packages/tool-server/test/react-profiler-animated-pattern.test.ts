@@ -18,7 +18,6 @@ function slow(name: string): EnrichedComponent {
   return {
     name,
     n: 10,
-    normalizedRenderCount: 10,
     mean: 20,
     min: 5,
     max: 40,
