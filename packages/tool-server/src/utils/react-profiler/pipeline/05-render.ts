@@ -117,7 +117,7 @@ function renderAllClear(input: RenderInput, maxMs: number): string {
     ``,
     `No performance hotspots found. Consider these proactive checks:`,
     ``,
-    `- Run \`react-profiler-component-source\` on your most-rendered components to verify memoization is in place.`,
+    `- Open the source of your most-rendered components and check that memoization is in place.`,
     `- Run \`react-profiler-renders\` for a live count of mounted instances per component.`,
     `- Re-profile under heavier load (longer interaction, more data) to catch issues that don't appear in short sessions.`,
   ];

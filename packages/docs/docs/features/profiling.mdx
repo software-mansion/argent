@@ -56,7 +56,7 @@ The React report lists the hot commits. A commit is hot when it takes 16 ms or m
 
 The native report lists the CPU hotspots, the hangs and the memory leaks. Each entry has a severity indicator and a suggestion.
 
-The agent can find the source of a component in the report. Argent returns the file, the line, the memoization status, and 50 lines of source. Thus the agent can propose a fix for the component.
+The React report gives the file and the line of each component in its table. For the five components with the highest render time, the report also shows 50 lines of source and a suggestion. Thus the agent can propose a fix for the component.
 
 ## Further investigation
 

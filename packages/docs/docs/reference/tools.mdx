@@ -130,23 +130,22 @@ Call `screenshot` or `describe` to read the screen again.
 
 ## Profiling
 
-| Tool                              | Description                                                                  |
-| --------------------------------- | ---------------------------------------------------------------------------- |
-| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime |
-| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                   |
-| `react-profiler-status`           | Check the profiler session state without side effects                        |
-| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree             |
-| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
-| `react-profiler-component-source` | Find a component's source file, line, and memoization status                 |
-| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android              |
-| `native-profiler-stop`            | Stop native profiling and export the trace                                   |
-| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                      |
-| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                      |
-| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it    |
-| `profiler-commit-query`           | Query React commit data for iterative render investigation                   |
-| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
-| `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
+| Tool                        | Description                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `react-profiler-start`      | Start CPU profiling and React commit capture on the connected Hermes runtime |
+| `react-profiler-stop`       | Stop profiling and collect the CPU profile and commit tree                   |
+| `react-profiler-status`     | Check the profiler session state without side effects                        |
+| `react-profiler-analyze`    | Analyze stored profiling data into a markdown performance report             |
+| `react-profiler-renders`    | Count mounted instances of each component in the live fiber tree             |
+| `react-profiler-fiber-tree` | Inspect the React fiber tree as JSON                                         |
+| `native-profiler-start`     | Start native profiling: Instruments on iOS, Perfetto on Android              |
+| `native-profiler-stop`      | Stop native profiling and export the trace                                   |
+| `native-profiler-analyze`   | Analyze an exported native trace into a markdown report                      |
+| `profiler-combined-report`  | Cross-correlate React Profiler and native profiler data                      |
+| `profiler-load`             | Restore a previously captured session from disk so query tools can use it    |
+| `profiler-commit-query`     | Query React commit data for iterative render investigation                   |
+| `profiler-cpu-query`        | Query Hermes CPU profile data with targeted modes                            |
+| `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
 
 In the `top_functions` and `time_window` modes, `profiler-cpu-query` gives the self time of each function as a share of the sampled time. With `react_only`, it lists only the functions with a PascalCase name, which is the name format of a React component.
 
@@ -196,23 +195,25 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 Argent hides these tools from MCP, so the agent does not see them. Call them with the [Argent SDK](./node-client.mdx), `argent run <name>`, or a `tool:` step in an e2e test. The SDK exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
-| Tool                         | Description                                                              | Tool for the agent                         |
-| ---------------------------- | ------------------------------------------------------------------------ | ------------------------------------------ |
-| `terminate-app`              | Stop an app without relaunching it                                       | `restart-app`                              |
-| `ui-tree`                    | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                 |
-| `foreground-app`             | Get the app in front, iOS simulator and Android                          | None                                       |
-| `fill`                       | Set the text of the focused text field                                   | `keyboard`                                 |
-| `native-describe-screen`     | Read the app's native accessibility screen description                   | `describe`                                 |
-| `native-devtools-status`     | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                  |
-| `chromium-storage`           | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                        |
-| `react-profiler-cpu-summary` | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions` |
-| `gather-workspace-data`      | Fetch a structured snapshot of the app project's workspace               | None                                       |
+| Tool                              | Description                                                              | Tool for the agent                         |
+| --------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------ |
+| `terminate-app`                   | Stop an app without relaunching it                                       | `restart-app`                              |
+| `ui-tree`                         | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                 |
+| `foreground-app`                  | Get the app in front, iOS simulator and Android                          | None                                       |
+| `fill`                            | Set the text of the focused text field                                   | `keyboard`                                 |
+| `native-describe-screen`          | Read the app's native accessibility screen description                   | `describe`                                 |
+| `native-devtools-status`          | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                  |
+| `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                        |
+| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions` |
+| `react-profiler-component-source` | Find a component's source file, line, and memoization status             | `react-profiler-analyze`                   |
+| `gather-workspace-data`           | Fetch a structured snapshot of the app project's workspace               | None                                       |
 
 Some agent tools do not always give the same result as the hidden tool:
 
 - `describe` reads the same native screen description as `native-describe-screen` when the accessibility service returns no elements.
 - Every `native-*` tool returns the same status and `message` as `native-devtools-status` when native devtools are not connected.
 - `profiler-cpu-query` measures each CPU sample with its own interval and does not list idle time as a function. Thus its times can be different from the times of `react-profiler-cpu-summary`.
+- `react-profiler-analyze` gives the file and the line of each component in its report. It also shows the source of the five components with the highest total render time. For other components, the agent reads the source files.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
 
