@@ -70,11 +70,10 @@ extension CommandKind {
         switch self {
         // XCTest types long strings in real time, so typing needs extra room.
         case .type: return 55
-        // Gestures must outlast XCTest's ~60s pre-event idle wait where the
-        // runner cannot skip it (ArgentRunnerSession+Quiescence.swift). A screen
-        // that never reports quiescent stalls the wait until XCTest gives up and
-        // synthesizes the event anyway, and a shorter budget would abandon a
-        // command that still completes.
+        // tap, longPress and drag outlast XCTest's ~60s pre-event idle wait,
+        // which runs where the runner cannot skip it
+        // (ArgentRunnerSession+Quiescence.swift). touchPaths never waits for
+        // idle but shares the gesture budget.
         case .tap, .longPress, .drag, .touchPaths: return 75
         default: return 30
         }
@@ -118,7 +117,7 @@ struct CommandRequest: Codable {
     let y: Double?
     /// `tap`: number of taps. Defaults to 1; 2 is the native double-tap.
     /// Higher counts loop single taps on the device: there is no native N-tap
-    /// API, so they land as separate taps, not one multi-tap gesture.
+    /// API, so they are not one multi-tap gesture.
     let numberOfTaps: Int?
     /// `drag`: absolute start and end points.
     let fromX: Double?

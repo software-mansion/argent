@@ -238,12 +238,14 @@ the `type`/`snapshot` call sites).
 XCTest waits up to 60s before and after every synthesized event for the app
 to report idle, and a screen that never does (a paused
 `UIViewPropertyAnimator`, as expo-blur keeps) would stall each gesture for two
-minutes. Gestures and the three typing commands skip those waits and instead
-wait at most 2s (`preEventSettleTimeout`,
+minutes. `tap`, `longPress`, `drag` and the three typing commands skip those
+waits and instead wait at most 2s (`preEventSettleTimeout`,
 ArgentRunnerSession+Quiescence.swift) for the app to go idle before the event,
-so a command sent right after a navigation lands on the new screen. The skip
-is XCTest SPI; where it is missing, XCTest's own waits apply, which is what the
-gesture budget below is sized for.
+so a command sent right after a navigation lands on the new screen.
+`touchPaths` sends its events straight to the daemon, so it neither waits nor
+settles. The skip is XCTest SPI; where any of it is missing, XCTest's own waits
+apply, and on a screen that never goes idle they outrun the gesture budget
+below.
 
 | Command class                            | Runner budget | Client window |
 | ---------------------------------------- | ------------- | ------------- |

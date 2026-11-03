@@ -47,7 +47,7 @@ const zodSchema = z.object({
       "Number of taps/clicks dispatched as ONE multi-tap gesture (2 = double-tap / double-click). " +
         "The taps land inside the OS double-tap window; on Chromium each click carries an escalating " +
         "CDP clickCount so dblclick actually fires; on physical iOS 2 is the native double-tap and " +
-        "higher counts land as separate taps. <flag:harmonyos>On HarmonyOS only 2 is one gesture; 3 or more are " +
+        "higher counts loop single taps, which a double-tap recognizer may pair. <flag:harmonyos>On HarmonyOS only 2 is one gesture; 3 or more are " +
         "separate injections a device round trip apart, which the OS reads as single taps. </flag:harmonyos>Default 1."
     ),
 });
@@ -126,7 +126,7 @@ async function tapHarmony(
   clickCount: number,
   signal?: AbortSignal
 ): Promise<void> {
-  // One deadline for the whole multi-tap, under the MCP abort-and-replay cap.
+  // One deadline for the whole multi-tap.
   const deadline = Date.now() + HARMONY_INTERACTION_TIMEOUT_MS;
   // Prefilter without queueing; the trusted check is inside the hold.
   const display = await harmonyDisplay(connectKey);
@@ -208,7 +208,7 @@ Before tapping, determine the correct coordinates by using discovery tools. Pick
       const viewport = await getViewport(runner, bundleId);
       const point = toPoints(viewport, params.x, params.y);
       // The whole count is one runner command: a double-tap must be the native one, and any loop
-      // above 2 stays on-device (separate taps either way, but without wire round trips between them).
+      // above 2 stays on-device (single taps either way, but without wire round trips between them).
       const tap = await tapAt(runner, bundleId, point, clickCount);
       // Either leg can be the one that re-fronted a backgrounded target: the
       // viewport read fronts it first, so the tap then finds it foreground.
