@@ -194,6 +194,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       // Clear only mid-run, so a completed session's cached paths survive the disconnect.
       if (state.profilingActive) {
         clearCachedProfilerPaths(state.port, state.deviceId);
+        recordLostProfilerRun(state, "cdp_disconnected");
       }
       events.emit(
         "terminated",
@@ -225,6 +226,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       if (state.profilingActive) {
         state.profilingActive = false;
         clearCachedProfilerPaths(state.port, state.deviceId);
+        recordLostProfilerRun(state, "js_reload");
         stopSamplerInNextRuntime(cdp);
       }
       events.emit("terminated");
@@ -250,6 +252,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         // still connected — the last moment anything can reach the app.
         if (state.profilingActive) {
           state.profilingActive = false;
+          recordLostProfilerRun(state, "session_torn_down");
           await cdp
             .send("Runtime.evaluate", {
               expression: STOP_FOR_TAKEOVER_SCRIPT,
@@ -301,6 +304,7 @@ export function cacheProfilerPaths(
   deviceId: string
 ): void {
   profilerPathsCache.set(cacheKey(port, deviceId), paths);
+  lostRuns.delete(cacheKey(port, deviceId));
 }
 
 export function getCachedProfilerPaths(
@@ -312,4 +316,62 @@ export function getCachedProfilerPaths(
 
 export function clearCachedProfilerPaths(port: number, deviceId: string): void {
   profilerPathsCache.delete(cacheKey(port, deviceId));
+}
+
+/**
+ * Why this tool-server's last run on a device ended without being saved:
+ * - `js_reload`: a JS reload (Metro's `r`, a red-box Reload, debugger-reload-metro)
+ * - `cdp_disconnected`: the debugger connection dropped
+ * - `session_torn_down`: the session was disposed mid-run, e.g. by stop-all-simulator-servers
+ * - `taken_over`: another session started a run over this one
+ */
+export type LostProfilerRunCause =
+  "js_reload" | "cdp_disconnected" | "session_torn_down" | "taken_over";
+
+export interface LostProfilerRun {
+  cause: LostProfilerRunCause;
+  /** The run's `__ARGENT_PROFILER_OWNER__.sessionId`, if it had one. */
+  sessionId: string | null;
+  startedAtEpochMs: number | null;
+  lostAtEpochMs: number;
+  /** For `taken_over`: the session that replaced the run, when the app named one. */
+  takenOverBy?: string | null;
+}
+
+/**
+ * Lets react-profiler-status and react-profiler-stop tell a lost run apart
+ * from one that never started: the session node is gone by then, and so is
+ * everything it knew. Per process, like the saved-paths cache above, so a
+ * restarted tool-server knows neither. A save (`cacheProfilerPaths`) and a new
+ * start clear the entry.
+ */
+const lostRuns = new Map<string, LostProfilerRun>();
+
+/**
+ * The first cause recorded for a run wins: a CDP drop also ends in a dispose,
+ * and that dispose is not a second, different loss.
+ */
+export function recordLostProfilerRun(
+  run: Pick<ReactProfilerSessionApi, "port" | "deviceId" | "sessionId" | "profileStartWallMs">,
+  cause: LostProfilerRunCause,
+  takenOverBy?: string | null
+): void {
+  const key = cacheKey(run.port, run.deviceId);
+  const prior = lostRuns.get(key);
+  if (prior && prior.sessionId !== null && prior.sessionId === run.sessionId) return;
+  lostRuns.set(key, {
+    cause,
+    sessionId: run.sessionId,
+    startedAtEpochMs: run.profileStartWallMs,
+    lostAtEpochMs: Date.now(),
+    ...(takenOverBy !== undefined ? { takenOverBy } : {}),
+  });
+}
+
+export function getLostProfilerRun(port: number, deviceId: string): LostProfilerRun | undefined {
+  return lostRuns.get(cacheKey(port, deviceId));
+}
+
+export function clearLostProfilerRun(port: number, deviceId: string): void {
+  lostRuns.delete(cacheKey(port, deviceId));
 }

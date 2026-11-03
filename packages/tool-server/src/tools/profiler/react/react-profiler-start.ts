@@ -11,6 +11,8 @@ import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
   clearCachedProfilerPaths,
+  clearLostProfilerRun,
+  getLostProfilerRun,
 } from "../../../blueprints/react-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
 import {
@@ -79,6 +81,68 @@ type ReadStateResult =
       nowEpochMs: number;
     };
 
+/**
+ * What a start replaced, for its result:
+ * - `stale`: another session whose heartbeat went quiet for 5 minutes
+ * - `unattributed`: a running session with no owner record
+ * - `forced`: a fresh session, replaced because the caller passed force
+ * - `own_unsaved`: a run of this tool-server's that it could no longer stop
+ */
+interface TakeoverReport {
+  session_id: string | null;
+  reason: "stale" | "unattributed" | "forced" | "own_unsaved";
+  heartbeat_age_seconds?: number;
+  note: string;
+}
+
+function describeTakeover(input: {
+  owner: ProfilerSessionOwner | null;
+  mine: boolean;
+  ownRunWasActive: boolean;
+  stale: boolean;
+  nowEpochMs: number;
+}): TakeoverReport {
+  const { owner, mine, ownRunWasActive, stale, nowEpochMs } = input;
+  if (!owner) {
+    return {
+      session_id: null,
+      reason: "unattributed",
+      note: "Stopped a running profiling session that had no owner record (likely a DevTools client outside argent) and started this one.",
+    };
+  }
+  const id = owner.sessionId;
+  if (mine) {
+    return ownRunWasActive
+      ? {
+          session_id: id,
+          reason: "forced",
+          note: `Discarded this tool-server's own running recording (session ${id}) because force: true was passed.`,
+        }
+      : {
+          session_id: id,
+          reason: "own_unsaved",
+          note: `Stopped this tool-server's earlier run (session ${id}), which the app kept recording after it was lost; it was not saved.`,
+        };
+  }
+  const heartbeatAgeSeconds = Math.max(
+    0,
+    Math.round((nowEpochMs - owner.lastHeartbeatEpochMs) / 1000)
+  );
+  return stale
+    ? {
+        session_id: id,
+        reason: "stale",
+        heartbeat_age_seconds: heartbeatAgeSeconds,
+        note: `Took over session ${id} without force: its last heartbeat was ${heartbeatAgeSeconds} s ago (stale after ${DEFAULT_STALE_THRESHOLD_MS / 1000} s), so its owner was presumed gone. Its recorded data was discarded.`,
+      }
+    : {
+        session_id: id,
+        reason: "forced",
+        heartbeat_age_seconds: heartbeatAgeSeconds,
+        note: `Took over session ${id} because force: true was passed. Its recorded data was discarded.`,
+      };
+}
+
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
   try {
     return registry.getServiceState(urn);
@@ -117,7 +181,7 @@ export function createReactProfilerStartTool(
 Use when you need to profile a user interaction.
 On an iOS simulator or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } instead, without clobbering their data. BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data. mine: true is your own run: call react-profiler-stop. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     interaction: {
@@ -283,6 +347,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         }
       }
 
+      // Set when this start replaces a running session, so the result says so.
+      let tookOver: TakeoverReport | undefined;
+
       if (state.isRunning) {
         const owner: ProfilerSessionOwner | null = state.owner;
         const staleness = classifyStaleness({
@@ -291,10 +358,32 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           staleThresholdMs: DEFAULT_STALE_THRESHOLD_MS,
         });
 
-        const canTakeOverSilently = staleness.canReclaimWithoutForce || params.force === true;
+        // A run this tool-server started: the one this session tracks, or
+        // one it lost track of (a reload, a teardown) that the app kept recording.
+        const lostRun = getLostProfilerRun(api.port, api.deviceId);
+        const mine =
+          owner !== null &&
+          ((api.sessionId !== null && owner.sessionId === api.sessionId) ||
+            (lostRun !== undefined &&
+              lostRun.sessionId !== null &&
+              owner.sessionId === lostRun.sessionId));
+
+        if (mine && api.profilingActive && params.force !== true) {
+          return {
+            already_running: true,
+            mine: true,
+            owner,
+            age_seconds: staleness.ageSeconds,
+            note: "A recording started through this tool-server is still running: yours, unless another agent shares this tool-server. Call react-profiler-stop to collect it. To discard it and start over, call react-profiler-start again with { force: true }.",
+          };
+        }
+
+        const canTakeOverSilently =
+          mine || staleness.canReclaimWithoutForce || params.force === true;
         if (!canTakeOverSilently) {
           return {
             already_running: true,
+            mine: false,
             owner,
             age_seconds: staleness.ageSeconds,
             stale: staleness.stale,
@@ -304,6 +393,13 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         }
 
         await cdp.evaluate(STOP_FOR_TAKEOVER_SCRIPT).catch(ignore);
+        tookOver = describeTakeover({
+          owner,
+          mine,
+          ownRunWasActive: mine && api.profilingActive,
+          stale: staleness.stale,
+          nowEpochMs: state.nowEpochMs,
+        });
       }
 
       if (api.profilingActive) {
@@ -404,6 +500,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       const startedAtEpochMs = startResult.startedAtEpochMs ?? Date.now();
 
       clearCachedProfilerPaths(api.port, api.deviceId);
+      clearLostProfilerRun(api.port, api.deviceId);
       api.sessionPaths = null;
       api.profilingActive = true;
       api.anyCompilerOptimized = null;
@@ -421,6 +518,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         startedAtEpochMs,
         hermes_version: api.hermesVersion,
         detected_architecture: api.detectedArchitecture,
+        ...(tookOver ? { took_over: tookOver } : {}),
         ...(warning ? { warning } : {}),
         ...(isLogicalKeyedDevice(api.deviceId) && !runtimeDevice
           ? { [RESULT_NOTE_KEY]: UNKNOWN_DEVICE_NOTE }

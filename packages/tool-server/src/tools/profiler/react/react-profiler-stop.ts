@@ -6,6 +6,9 @@ import {
   type ReactProfilerSessionApi,
   type ProfilerSessionPaths,
   cacheProfilerPaths,
+  getCachedProfilerPaths,
+  getLostProfilerRun,
+  recordLostProfilerRun,
 } from "../../../blueprints/react-profiler-session";
 import type {
   HermesCpuProfile,
@@ -17,7 +20,11 @@ import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/deb
 import {
   STOP_AND_READ_SCRIPT,
   RESOLVE_FIBER_META_SCRIPT,
+  READ_STATE_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
+import { lastRunText } from "../../../utils/react-profiler/last-run";
+import type { ProfilerSessionOwner } from "../../../utils/react-profiler/session-ownership";
+import type { CDPClient } from "../../../utils/debugger/cdp-client";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
@@ -136,6 +143,32 @@ export function flattenProfilingData(
   return { commits, totalCommits: flatCommitIndex, unattributedByCommit };
 }
 
+/**
+ * Whether another session started a run over this one in the app: the new
+ * owner's session id, or null when the run there has no owner record. Returns
+ * undefined while this run still owns the app's recording, when nothing is
+ * recording, or when the state cannot be read; stop then proceeds as before.
+ */
+async function readTakeover(
+  cdp: CDPClient,
+  ownSessionId: string | null
+): Promise<string | null | undefined> {
+  if (ownSessionId === null) return undefined;
+  try {
+    const raw = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
+    if (!raw) return undefined;
+    const state = JSON.parse(raw) as {
+      isRunning?: boolean;
+      owner?: ProfilerSessionOwner | null;
+    };
+    if (state.isRunning !== true) return undefined;
+    if (state.owner?.sessionId === ownSessionId) return undefined;
+    return state.owner?.sessionId ?? null;
+  } catch {
+    return undefined;
+  }
+}
+
 const zodSchema = z.object({
   port: metroPortField,
   device_id: z
@@ -155,7 +188,7 @@ Stores the results for react-profiler-analyze or react-profiler-cpu-summary.
 Call react-profiler-start first, then exercise the app, then call this.
 Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices }.
 If some fibers' display names could not be resolved (typically modals, tooltips or animations that unmounted before stop), it also returns { unattributed_ms, unattributed_fiber_count, unattributed_commit_count }: the work missing from the per-component breakdown. Per-commit durations stay correct.
-Fails if no active profiling session exists or the CDP connection was lost during recording.`,
+Fails if no active profiling session exists, the CDP connection was lost during recording, or another session took the run over.`,
     zodSchema,
     interaction: {
       startedMsg: () => "Stopping React profiler",
@@ -166,16 +199,26 @@ Fails if no active profiling session exists or the CDP connection was lost durin
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`;
+      const port = metroPort(params);
+      const deviceId = canonicalDeviceId(params.device_id) ?? params.device_id;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${port}:${deviceId}`;
       const snapshot = registry.getSnapshot();
       const entry = snapshot.services.get(psUrn);
 
+      // What this tool-server knows about its last run here: saved, or lost and why.
+      const lastRun = lastRunText(
+        getCachedProfilerPaths(port, deviceId),
+        getLostProfilerRun(port, deviceId)
+      );
+
       if (!entry || entry.state !== ServiceState.RUNNING) {
         throw new FailureError(
-          "No active profiling session. The session may have been lost to a Metro reload, or " +
-            "torn down by a stop-all-simulator-servers — this session rides on the device's " +
-            "JS-runtime debugger, which that teardown reaps, and one tool-server serves every " +
-            "agent using this argent install. Call react-profiler-start to begin a new session.",
+          lastRun
+            ? `No active profiling session. ${lastRun} Call react-profiler-start to begin a new session.`
+            : "No active profiling session. The session may have been lost to a Metro reload, or " +
+                "torn down by a stop-all-simulator-servers — this session rides on the device's " +
+                "JS-runtime debugger, which that teardown reaps, and one tool-server serves every " +
+                "agent using this argent install. Call react-profiler-start to begin a new session.",
           {
             error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
             failure_stage: "react_profiler_stop_session_lookup",
@@ -206,6 +249,17 @@ Fails if no active profiling session exists or the CDP connection was lost durin
       // checks pass and the sampler is running; stopping a sampler that was never
       // started fails further down with a far less actionable message.
       if (!api.profilingActive) {
+        if (lastRun) {
+          throw new FailureError(
+            `No active profiling run to stop. ${lastRun} Call react-profiler-start to record a new one.`,
+            {
+              error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
+              failure_stage: "react_profiler_stop_inactive",
+              failure_area: "tool_server",
+              error_kind: "not_found",
+            }
+          );
+        }
         throw new FailureError(
           "No active profiling run to stop. Either the run ended without its data (a JS reload ends it: Metro's `r`, a red-box Reload, debugger-reload-metro), or Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
             "After a reload, call react-profiler-start again. Otherwise check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again.",
@@ -215,6 +269,35 @@ Fails if no active profiling session exists or the CDP connection was lost durin
             failure_area: "tool_server",
             // Internal session-state, not caller input — matches the session-lookup
             // site above and the native NATIVE_PROFILER_NO_ACTIVE_SESSION twin.
+            error_kind: "not_found",
+          }
+        );
+      }
+
+      // Another session may have started a run over this one (react-profiler-start
+      // with force, or once this run's heartbeat went stale). Stopping now would
+      // stop their recording and read their data as this run's.
+      const takenOverBy = await readTakeover(cdp, api.sessionId);
+      if (takenOverBy !== undefined) {
+        // This run is over: record why, and leave the app and the shared
+        // Hermes sampler to the session that owns them now.
+        recordLostProfilerRun(api, "taken_over", takenOverBy);
+        api.profilingActive = false;
+        api.sessionId = null;
+        api.ownerToolServerPid = null;
+        throw new FailureError(
+          `This profiling run was taken over by ${
+            takenOverBy
+              ? `session ${takenOverBy}`
+              : "a recording with no owner record (a DevTools client outside argent)"
+          }, which is still recording. Its data was discarded at the takeover, so there is ` +
+            "nothing to collect, and the other recording was left running. A takeover happens when " +
+            "another agent or tool-server calls react-profiler-start with force, or once a run's " +
+            "heartbeat is 5 minutes old. Ask the user before taking over with react-profiler-start { force: true }.",
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_SESSION_TAKEN_OVER,
+            failure_stage: "react_profiler_stop_taken_over",
+            failure_area: "tool_server",
             error_kind: "not_found",
           }
         );

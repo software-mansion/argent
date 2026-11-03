@@ -201,7 +201,7 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 | --------------------------------- | ---------------------------------------------------------------------------- |
 | `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime |
 | `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                   |
-| `react-profiler-status`           | Check the profiler session state without side effects                        |
+| `react-profiler-status`           | Check if a React profiler run records, was saved, was lost or taken over     |
 | `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
 | `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree             |
 | `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
@@ -225,6 +225,27 @@ When two or more devices use one Metro, `react-profiler-start` takes the `logica
 3. The device whose log contains the marker is the device of the React profile.
 
 When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
+
+One React profiler run at a time can record in an app. `react-profiler-status` returns one of these `session_status` values:
+
+| Value              | Meaning                                                                                                |
+| ------------------ | ------------------------------------------------------------------------------------------------------ |
+| `active`           | A run that this tool-server started records                                                            |
+| `saved`            | No run records. The last run stopped, and `saved_session` names its files for `react-profiler-analyze` |
+| `lost`             | The last run of this tool-server ended without its data. `lost_run.cause` gives the reason             |
+| `taken_over`       | Another session records, or another session replaced the run of this tool-server                       |
+| `not_started`      | No run records, and this tool-server has no run on record for the device                               |
+| `no_react_runtime` | Argent cannot read the React runtime of the app                                                        |
+
+The `lost_run.cause` values are `js_reload`, `cdp_disconnected`, `session_torn_down`, `taken_over`, `stop_failed` and `ended_in_app`. The tool-server keeps this record in memory only. After a restart, it shows a run that it started before as `taken_over`.
+
+A run is stale when its heartbeat is older than 5 minutes. `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` refresh the heartbeat of a run that their tool-server records. `react-profiler-start` handles a run that records:
+
+- A run that this tool-server records: `react-profiler-start` returns `already_running` with `mine: true`. Call `react-profiler-stop` to collect it.
+- A fresh run of another session: `react-profiler-start` returns `already_running` with `mine: false`. Ask the user before you pass `force: true`.
+- A stale run, a run without an owner record, or a lost run of this tool-server: `react-profiler-start` stops the run and starts a new one. It does the same for any run when you pass `force: true`. The result has `took_over` with the replaced session and the reason.
+
+When another session replaced the run, `react-profiler-stop` fails with `REACT_PROFILER_SESSION_TAKEN_OVER`. It does not stop the other recording.
 
 <a id="flows" />
 
