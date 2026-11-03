@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { expect, it } from "vitest";
 
 it.skipIf(process.platform !== "darwin")(
-  "checks the Swift server authorization and request parser",
+  "checks the Swift server tunnel binding and request parser",
   async () => {
     const folder = await fs.mkdtemp(path.join(os.tmpdir(), "argent-native-http-"));
     const exec = promisify(execFile);
@@ -23,7 +23,7 @@ it.skipIf(process.platform !== "darwin")(
         binary,
       ]);
       const { stdout } = await exec(binary);
-      expect(stdout).toContain("authorization and request framing passed");
+      expect(stdout).toContain("tunnel binding and request framing passed");
     } finally {
       await fs.rm(folder, { recursive: true, force: true });
     }

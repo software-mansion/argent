@@ -5,8 +5,7 @@ import Network
 /// carries one POSTed JSON command and receives one JSON reply, then closes.
 ///
 /// USB uses a loopback listener. A CoreDevice connection binds only the
-/// tunnel address and requires a per-launch bearer token. The paired Mac
-/// reads that token from the runner's private container through devicectl.
+/// device's tunnel IPv6 address. Access follows the transport's host-level trust.
 final class RunnerHTTPServer {
     struct Reply {
         let status: Int
@@ -35,12 +34,6 @@ final class RunnerHTTPServer {
     private let onListenerFailure: (String) -> Void
     private var listener: NWListener?
     private let tunnelAddress: String?
-    private var sessionToken: String?
-
-    private static var sessionFile: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("argent-runner-session.json")
-    }
 
     init(
         tunnelAddress: String? = nil,
@@ -70,9 +63,6 @@ final class RunnerHTTPServer {
             parameters.requiredLocalEndpoint = .hostPort(
                 host: NWEndpoint.Host(address), port: NWEndpoint.Port(rawValue: port)!
             )
-            sessionToken = (UUID().uuidString + UUID().uuidString)
-                .replacingOccurrences(of: "-", with: "").lowercased()
-            try? FileManager.default.removeItem(at: Self.sessionFile)
         } else {
             parameters.requiredInterfaceType = .loopback
         }
@@ -87,25 +77,9 @@ final class RunnerHTTPServer {
         listener.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                guard let self else { return }
-                if let token = self.sessionToken {
-                    do {
-                        let data = try JSONSerialization.data(withJSONObject: [
-                            "port": Int(self.listener?.port?.rawValue ?? 0), "token": token
-                        ])
-                        try data.write(to: Self.sessionFile, options: .atomic)
-                        try FileManager.default.setAttributes(
-                            [.posixPermissions: 0o600], ofItemAtPath: Self.sessionFile.path
-                        )
-                    } catch {
-                        self.onListenerFailure("Could not publish runner session credentials")
-                        self.stop()
-                        return
-                    }
-                }
                 NSLog(
                     "ARGENT_RUNNER_LISTENING port=%d",
-                    Int(self.listener?.port?.rawValue ?? 0)
+                    Int(self?.listener?.port?.rawValue ?? 0)
                 )
             case .failed(let error):
                 // A failed listener can never receive another command. Hand the
@@ -134,9 +108,6 @@ final class RunnerHTTPServer {
     func stop() {
         listener?.cancel()
         listener = nil
-        if sessionToken != nil {
-            try? FileManager.default.removeItem(at: Self.sessionFile)
-        }
     }
 
     /// Accumulates bytes from one connection until the buffered request is
@@ -166,7 +137,7 @@ final class RunnerHTTPServer {
                 return
             }
 
-            switch Self.requestVerdict(in: buffer, authorizationToken: self.sessionToken) {
+            switch Self.requestVerdict(in: buffer) {
             case .complete(let body):
                 self.dispatch(body) { reply in
                     self.send(reply, over: connection)
@@ -186,13 +157,6 @@ final class RunnerHTTPServer {
                             limit: Self.maxRequestBytes
                         )
                     ),
-                    over: connection
-                )
-            case .unauthorized:
-                self.send(
-                    Reply(status: 401, body: Data(
-                        #"{"ok":false,"error":{"code":"UNAUTHORIZED","message":"runner session token required"}}"#.utf8
-                    )),
                     over: connection
                 )
             }
@@ -248,12 +212,11 @@ final class RunnerHTTPServer {
         /// The declared Content-Length exceeds `maxRequestBytes`. The request
         /// is rejected before its body arrives.
         case oversized
-        case unauthorized
     }
 
     /// Classifies the buffered bytes as an incomplete, complete, malformed,
-    /// oversized, or unauthorized request.
-    static func requestVerdict(in buffer: Data, authorizationToken: String? = nil) -> RequestVerdict {
+    /// or oversized request.
+    static func requestVerdict(in buffer: Data) -> RequestVerdict {
         guard let headEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
             return .incomplete
         }
@@ -266,15 +229,10 @@ final class RunnerHTTPServer {
         )
 
         var contentLength: Int?
-        var authorization: [String] = []
 
         for line in head.split(separator: "\r\n") {
             let parts = line.split(separator: ":", maxSplits: 1)
             guard parts.count == 2 else { continue }
-
-            if parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "authorization" {
-                authorization.append(parts[1].trimmingCharacters(in: .whitespaces))
-            }
 
             if parts[0].trimmingCharacters(in: .whitespaces).lowercased()
                 == "content-length"
@@ -283,17 +241,6 @@ final class RunnerHTTPServer {
                     parts[1].trimmingCharacters(in: .whitespaces)
                 )
             }
-        }
-
-        if let authorizationToken {
-            let expected = Array("Bearer \(authorizationToken)".utf8)
-            let actual = Array((authorization.first ?? "").utf8)
-            guard authorization.count == 1, actual.count == expected.count else {
-                return .unauthorized
-            }
-            // Do not make token comparison depend on a matching prefix.
-            let difference = zip(actual, expected).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) }
-            guard difference == 0 else { return .unauthorized }
         }
 
         guard let contentLength, contentLength >= 0 else { return .malformed }

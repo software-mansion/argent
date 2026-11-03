@@ -1,4 +1,4 @@
-import { ensureDeviceReady, readRunnerSessionToken } from "../../src/utils/ios-device/devicectl";
+import { ensureDeviceReady } from "../../src/utils/ios-device/devicectl";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -22,7 +22,6 @@ import { readRunnerCrashSummary } from "../../src/utils/ios-device/runner-crash"
 
 vi.mock("../../src/utils/ios-device/devicectl", () => ({
   ensureDeviceReady: vi.fn(async () => null),
-  readRunnerSessionToken: vi.fn(async () => "a".repeat(64)),
 }));
 vi.mock("../../src/utils/ios-device/runner-build", () => ({
   ensureRunnerArtifact: vi.fn(async () => ({
@@ -544,30 +543,15 @@ describe("ios-device-runner blueprint: failure signals", () => {
 });
 
 describe("CoreDevice runner bootstrap", () => {
-  it("passes the tunnel address and reads the device-generated session after LISTENING", async () => {
+  it("passes the tunnel address and uses the runner-selected port", async () => {
     vi.mocked(ensureDeviceReady).mockResolvedValueOnce("fd12::1");
     const { api } = await createInstance();
     expect(api.udid).toBe(DEVICE_UDID);
     expect(launchRunner).toHaveBeenCalledWith(
       expect.objectContaining({ tunnelAddress: "fd12::1" })
     );
-    expect(readRunnerSessionToken).toHaveBeenCalledWith(
-      DEVICE_UDID,
-      `${SIGNING_CONFIG.testBundleId}.xctrunner`,
-      RUNNER_PORT,
-      expect.any(Number)
+    expect(createRunnerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ udid: DEVICE_UDID, port: RUNNER_PORT })
     );
-    expect(vi.mocked(waitForRunnerListeningPort).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(readRunnerSessionToken).mock.invocationCallOrder[0]!
-    );
-  });
-
-  it("kills the runner if its private session cannot be read", async () => {
-    vi.mocked(ensureDeviceReady).mockResolvedValueOnce("fd12::1");
-    vi.mocked(readRunnerSessionToken).mockRejectedValueOnce(new Error("session unavailable"));
-    const { child } = stubLaunch();
-    await expect(callFactory()).rejects.toThrow("session unavailable");
-    expect(killRunnerProcess).toHaveBeenCalledWith(child);
-    expect(createRunnerClient).not.toHaveBeenCalled();
   });
 });

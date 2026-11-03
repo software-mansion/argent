@@ -8,7 +8,7 @@ import {
   type ServiceEvents,
   type ServiceInstance,
 } from "@argent/registry";
-import { ensureDeviceReady, readRunnerSessionToken } from "../utils/ios-device/devicectl";
+import { ensureDeviceReady } from "../utils/ios-device/devicectl";
 import {
   ensureRunnerArtifact,
   isProfileExpiredFailure,
@@ -164,7 +164,6 @@ const RUNNER_READY_TIMEOUT_MS = 120_000;
 async function startRunner(
   udid: string,
   artifact: RunnerArtifact,
-  signing: RunnerSigningConfig,
   tunnelAddress?: string | null
 ): Promise<{ launched: LaunchedRunner; client: RunnerClient }> {
   const launched = await launchRunner({
@@ -199,24 +198,10 @@ async function startRunner(
       exited,
     ]);
 
-    const network = tunnelAddress
-      ? {
-          address: tunnelAddress,
-          token: await Promise.race([
-            readRunnerSessionToken(
-              udid,
-              `${signing.testBundleId}.xctrunner`,
-              port,
-              Math.max(1, Math.min(20_000, expiresAt - Date.now()))
-            ),
-            exited,
-          ]),
-        }
-      : undefined;
     client = createRunnerClient({
       udid,
       port,
-      send: createRunnerCommandSender({ network }).sendCommand,
+      send: createRunnerCommandSender({ tunnelAddress }).sendCommand,
     });
 
     // The rest of the same budget goes to the first envelope.
@@ -279,7 +264,7 @@ async function buildAndStartRunner(
   }
 
   try {
-    return await startRunner(udid, artifact, signing, tunnelAddress);
+    return await startRunner(udid, artifact, tunnelAddress);
   } catch (error) {
     const logText = (error as { runnerLogText?: string }).runnerLogText ?? "";
     if (!isProfileMissingDeviceFailure(logText) && !isProfileExpiredFailure(logText)) throw error;
@@ -288,7 +273,6 @@ async function buildAndStartRunner(
     return await startRunner(
       udid,
       await ensureRunnerArtifact(signing, { destinationUdid: udid, force: true }),
-      signing,
       tunnelAddress
     );
   }

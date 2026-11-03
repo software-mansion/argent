@@ -51,7 +51,7 @@ build-for-testing` (signed with the user's team; see the environment
    `ARGENT_RUNNER_LISTENING port=N`; the tool-server reads that line from
    the launch log before it sends the first command.
 3. Commands travel as one HTTP POST per command over usbmux for USB devices,
-   or authenticated IPv6 TCP for connected CoreDevice network devices.
+   or IPv6 TCP for connected CoreDevice network devices.
    `PROTOCOL.md` documents the contract.
 
 ## Build-time configuration

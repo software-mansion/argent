@@ -14,16 +14,9 @@ a session run straight from Xcode comes up.
 USB sessions bind to loopback and use usbmux. Network sessions bind only to the
 CoreDevice tunnel IPv6 address passed in `ARGENT_RUNNER_ADDRESS` (forwarded by
 Xcode from `TEST_RUNNER_ARGENT_RUNNER_ADDRESS`). The address must be in `fc00::/7`.
-The runner generates a new 64-character hexadecimal secret for each session.
-Before logging `LISTENING`, it writes `{port, token}` to
-`Documents/argent-runner-session.json` in its private app container, with mode 0600. The Mac copies the file through `devicectl` and deletes the local copy
-immediately after validation. The runner removes its file on shutdown. Neither
-the launch environment nor the launch log contains the token.
-
-Every network request requires exactly one `Authorization: Bearer <token>`
-header. Missing, duplicate, or invalid credentials return HTTP 401 with an
-`UNAUTHORIZED` envelope before command dispatch. The client does not retry an
-authorization failure. USB sessions do not require this header.
+Both transports use the same HTTP protocol without application-level authentication.
+Any process that can reach the runner endpoint can issue commands. Network access
+uses the private CoreDevice tunnel rather than a public device address.
 
 For dispatched commands, the envelope is authoritative; HTTP status is informational (200 for ok
 envelopes, 500 for error envelopes). Two rejections come from the framing

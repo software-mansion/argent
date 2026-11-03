@@ -62,7 +62,7 @@ On an Android emulator:
 
 Argent supports physical iPhones. Physical iPads are not supported. `list-devices` shows a physical iPhone as an iOS entry with kind `device`. The state is `connected` for USB devices and connected CoreDevice network tunnels. The state is `paired` when the device is remembered but unavailable. Argent never selects a physical device automatically. Specify its UDID.
 
-For network access, CoreDevice must report `transportType: localNetwork`, `tunnelState: connected`, and a valid IPv6 tunnel address in `fc00::/7`. Argent binds its runner to this address and requires a per-session bearer token. The Mac reads the token through the paired Xcode connection. The token does not appear in launch arguments or logs. If the tunnel address changes, stop the device session and retry. Argent reads the current address when it starts a session.
+For network access, CoreDevice must report `transportType: localNetwork`, `tunnelState: connected`, and a valid IPv6 tunnel address in `fc00::/7`. Argent binds its runner to this address. Processes that can reach the tunnel endpoint can send runner commands. If the tunnel address changes, stop the device session and retry. Argent reads the current address when it starts a session.
 
 See [Physical iOS devices](/docs/features/physical-ios-devices) for signing requirements and the app-scoped interaction contract.
 

@@ -23,8 +23,7 @@ async function listen(handler: http.RequestListener): Promise<number> {
 }
 
 describe("CoreDevice runner transport over IPv6 TCP", () => {
-  it("sends the session bearer token without opening usbmux", async () => {
-    const token = "a".repeat(64);
+  it("sends a command through the tunnel without opening usbmux", async () => {
     let authorization: string | undefined;
     let body = "";
     const port = await listen((request, response) => {
@@ -38,7 +37,7 @@ describe("CoreDevice runner transport over IPv6 TCP", () => {
       });
     });
     const sendViaUsbmux = vi.fn();
-    const sender = createRunnerCommandSender({ network: { address: "::1", token }, sendViaUsbmux });
+    const sender = createRunnerCommandSender({ tunnelAddress: "::1", sendViaUsbmux });
     await expect(
       sender.sendCommand(
         "phone",
@@ -50,41 +49,10 @@ describe("CoreDevice runner transport over IPv6 TCP", () => {
         }
       )
     ).resolves.toEqual({ ok: true, data: { ready: true } });
-    expect(authorization).toBe(`Bearer ${token}`);
+    expect(authorization).toBeUndefined();
     expect(JSON.parse(body)).toEqual({ command: "status" });
     expect(sendViaUsbmux).not.toHaveBeenCalled();
   });
-
-  it.each([true, false])(
-    "does not retry an authorization failure (readOnly=%s)",
-    async (readOnly) => {
-      let calls = 0;
-      const port = await listen((_request, response) => {
-        calls += 1;
-        response.writeHead(401);
-        response.end(JSON.stringify({ ok: false, error: { code: "UNAUTHORIZED" } }));
-      });
-      const sender = createRunnerCommandSender({
-        network: { address: "::1", token: "b".repeat(64) },
-      });
-      await expect(
-        sender.sendCommand(
-          "phone",
-          port,
-          { command: "tap" },
-          {
-            timeoutMs: 2000,
-            readOnly,
-          }
-        )
-      ).rejects.toMatchObject({
-        kind: "protocol",
-        retryable: false,
-        message: "Runner session authorization failed",
-      });
-      expect(calls).toBe(1);
-    }
-  );
 
   it("does not replay a mutation after the tunnel drops its reply", async () => {
     let calls = 0;
@@ -93,7 +61,7 @@ describe("CoreDevice runner transport over IPv6 TCP", () => {
       request.socket.destroy();
     });
     const sender = createRunnerCommandSender({
-      network: { address: "::1", token: "c".repeat(64) },
+      tunnelAddress: "::1",
     });
     await expect(
       sender.sendCommand("phone", port, { command: "tap" }, { timeoutMs: 2000 })

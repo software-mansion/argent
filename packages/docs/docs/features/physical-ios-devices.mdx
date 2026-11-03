@@ -20,7 +20,7 @@ You do not need a paid Apple Developer account. A free Personal Team works, with
 
 Apple allows one kind of process to drive arbitrary apps on real hardware: a UI test. Argent builds a small test runner, signs it with your team, and installs it on the device. The runner receives commands through USB or the CoreDevice tunnel and executes them on the device.
 
-For a network connection, Argent uses the IPv6 address that Xcode reports. The runner accepts commands only on this tunnel address. The paired Mac reads a session token to authenticate commands. Fleet services must expose a working CoreDevice tunnel to the Mac.
+For a network connection, Argent uses the IPv6 address that Xcode reports. The runner accepts commands only on this tunnel address. Fleet services must expose a working CoreDevice tunnel to the Mac.
 
 Signing is automatic. Argent reads your Apple Development certificate from the keychain of the Mac and detects the team from it. When the keychain holds certificates from several teams, the team with the newest certificate wins, and the result names the choice and the alternatives. When the keychain holds no certificate, the error tells you to sign in to Xcode and create one: Xcode > Settings > Accounts, then Manage Certificates > + > Apple Development. To select a team yourself, set the `ARGENT_IOS_TEAM_ID` [environment variable](/docs/reference/configuration#devices) in the environment of the tool-server.
 

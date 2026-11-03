@@ -14,7 +14,6 @@ interface PostRunnerCommandOptions {
   socketFactory: () => Promise<net.Socket>;
   body: unknown;
   deadline: Deadline;
-  authorizationToken?: string;
 }
 
 /**
@@ -45,19 +44,7 @@ export async function postRunnerCommand(options: PostRunnerCommandOptions): Prom
     const httpTimeoutMs = options.deadline.remainingMs();
     requireTimeRemaining(httpTimeoutMs, "send runner command");
 
-    const response = await requestOverAgent(
-      agent,
-      socket,
-      payload,
-      httpTimeoutMs,
-      options.authorizationToken
-    );
-
-    if (response.statusCode === 401) {
-      throw new IosDeviceTransportError("protocol", "Runner session authorization failed", {
-        retryable: false,
-      });
-    }
+    const response = await requestOverAgent(agent, socket, payload, httpTimeoutMs);
 
     return parseRunnerResponseBody(response.statusCode, response.body);
   } finally {
@@ -70,8 +57,7 @@ async function requestOverAgent(
   agent: http.Agent,
   socket: net.Socket,
   payload: Buffer,
-  timeoutMs: number,
-  authorizationToken?: string
+  timeoutMs: number
 ): Promise<{ statusCode: number; body: Buffer }> {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
 
@@ -87,7 +73,6 @@ async function requestOverAgent(
             "Content-Type": "application/json",
             "Content-Length": payload.length,
             "Connection": "close",
-            ...(authorizationToken ? { Authorization: `Bearer ${authorizationToken}` } : {}),
           },
           agent,
           signal: timeoutSignal,

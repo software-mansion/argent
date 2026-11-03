@@ -6,7 +6,7 @@ import { createDeadline, openUsbmuxRunnerSocket, type Deadline } from "./usbmux"
 import { IosDeviceTransportError, isIosDeviceTransportError } from "./usbmux-protocol";
 
 /**
- * Send a command to the runner over USB or an authenticated CoreDevice tunnel.
+ * Send a command to the runner over USB or a CoreDevice tunnel.
  * Mutating commands go out at most once. Read-only commands retry on retryable errors.
  */
 
@@ -37,7 +37,7 @@ export type SendRunnerCommand = (
  */
 export function createRunnerCommandSender(
   options: {
-    network?: { address: string; token: string };
+    tunnelAddress?: string | null;
     sendViaUsbmux?: (
       udid: string,
       port: number,
@@ -46,12 +46,11 @@ export function createRunnerCommandSender(
     ) => Promise<unknown>;
   } = {}
 ): { sendCommand: SendRunnerCommand } {
-  const network = options.network;
-  const send = network
+  const tunnelAddress = options.tunnelAddress;
+  const send = tunnelAddress
     ? (_udid: string, port: number, body: unknown, deadline: Deadline) =>
         postRunnerCommand({
-          socketFactory: () => openTunnelSocket(network.address, port, deadline),
-          authorizationToken: network.token,
+          socketFactory: () => openTunnelSocket(tunnelAddress, port, deadline),
           body,
           deadline,
         })
