@@ -98,7 +98,7 @@ describe("simctl argv while Xcode's install is pending", () => {
   it("is refused at the builder every simctl call goes through", () => {
     pending.simctl = true;
     expect(() => simctlPrefix(null)).toThrow(XcodeFirstLaunchPendingError);
-    expect(() => simctlPrefix("/sets/radon")).toThrow(/sudo xcodebuild -runFirstLaunch/);
+    expect(() => simctlPrefix("/sets/radon")).toThrow(/sudo \S*xcodebuild -runFirstLaunch/);
   });
 
   it("is built as before once the install is done", () => {
@@ -135,8 +135,8 @@ describe("an iOS tool while Xcode's install is pending", () => {
     // Without the preflight, describe swallows the refusal into an empty tree
     // whose hint prescribes a reboot.
     expect(res.status).toBe(424);
-    expect(res.body.error).toMatch(/open Xcode once/);
-    expect(res.body.error).toMatch(/sudo xcodebuild -runFirstLaunch/);
+    expect(res.body.error).toMatch(/open (that )?Xcode once/);
+    expect(res.body.error).toMatch(/sudo \S*xcodebuild -runFirstLaunch/);
     expect(res.body.missing).toEqual(["xcrun"]);
     expect(xcrunCalls()).toEqual([]);
   });

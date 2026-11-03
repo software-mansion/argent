@@ -21,13 +21,34 @@ const WRAPPER_DEVICES: Record<XcodeWrapper, string> = {
   devicectl: "physical iPhones",
 };
 
-/** What the agent is told while `wrappers` would start the install. */
+/** Where an Xcode app bundle keeps its developer directory. */
+const BUNDLED_DEVELOPER_DIR = path.join("/Contents", "Developer");
+
+/** `word` as one shell word, so a path with a space can be pasted into a shell. */
+function shellWord(word: string): string {
+  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * What the agent is told while `wrappers` would start the install. It names
+ * the Xcode: each Xcode installs only the components it expects, so opening
+ * another one, or a `sudo xcodebuild` that `xcode-select` points elsewhere,
+ * leaves the install pending.
+ */
 export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string {
   const one = wrappers.length === 1;
   const names = wrappers.map((w) => `\`${w}\``);
   const devices = wrappers.map((w) => WRAPPER_DEVICES[w]).join(" and ");
+  const developerDir = activeDeveloperDir();
+  const xcode = developerDir?.endsWith(BUNDLED_DEVELOPER_DIR)
+    ? developerDir.slice(0, -BUNDLED_DEVELOPER_DIR.length)
+    : developerDir;
+  const xcodebuild = developerDir
+    ? shellWord(path.join(developerDir, "usr", "bin", "xcodebuild"))
+    : "xcodebuild";
   return (
-    "Xcode has not finished installing its system components since it was installed or updated. " +
+    (xcode ? `The Xcode at ${xcode}` : "Xcode") +
+    " has not finished installing its system components since it was installed or updated. " +
     `Until it has, Xcode's ${names.join(" and ")} ${one ? "waits" : "wait"} for an administrator ` +
     `password on every call, so argent does not run ${one ? "it" : "them"}. ` +
     `\`list-devices\` does not show ${devices}, and argent refuses the tools that need ` +
@@ -36,8 +57,9 @@ export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string 
       ? "Tools that do not need `simctl`, such as taps and screenshots, still work on a " +
         "simulator that is already booted. "
       : "") +
-    "Ask the user to open Xcode once and let it install the components, or to run " +
-    "`sudo xcodebuild -runFirstLaunch`, then retry. Do not run it yourself."
+    `Ask the user to open ${xcode ? "that Xcode" : "Xcode"} once and let it install the ` +
+    `components, or to run \`sudo ${xcodebuild} -runFirstLaunch\`, then retry. ` +
+    "Do not run it yourself."
   );
 }
 

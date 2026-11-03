@@ -12,6 +12,7 @@ import * as path from "node:path";
 import {
   __resetXcodeFirstLaunchCacheForTests,
   __setXcodeLocationsForTests,
+  xcodeFirstLaunchHint,
   xcodeFirstLaunchPending,
 } from "../src/utils/xcode-first-launch";
 
@@ -352,6 +353,41 @@ describe("xcodeFirstLaunchPending", () => {
  * settled one in every other candidate, so the check agrees only when it reads
  * the same directory.
  */
+// Each Xcode installs only the components it expects, so the agent must be told
+// which one to open, and a `sudo xcodebuild` that xcode-select resolves to
+// another Xcode would leave this one pending.
+describe("xcodeFirstLaunchHint", () => {
+  const xcodebuildIn = (developerDir: string) =>
+    path.join(developerDir, "usr", "bin", "xcodebuild");
+
+  it("names the Xcode whose install is pending, and its own xcodebuild", () => {
+    const hint = xcodeFirstLaunchHint(["simctl"]);
+    expect(hint).toContain(`The Xcode at ${path.join(root, "Xcode.app")} has not finished`);
+    expect(hint).toContain("Ask the user to open that Xcode once");
+    expect(hint).toContain(`\`sudo ${xcodebuildIn(devDir)} -runFirstLaunch\``);
+  });
+
+  it("names a developer directory that is not inside an app bundle", () => {
+    const plain = path.join(root, "Developer");
+    fs.mkdirSync(plain);
+    process.env.DEVELOPER_DIR = plain;
+    const hint = xcodeFirstLaunchHint(["devicectl"]);
+    expect(hint).toContain(`The Xcode at ${plain} has not finished`);
+    expect(hint).toContain(`\`sudo ${xcodebuildIn(plain)} -runFirstLaunch\``);
+  });
+
+  it("quotes a path with a space, so the command can be pasted into a shell", () => {
+    const app = path.join(root, "Xcode Beta.app");
+    fs.mkdirSync(path.join(app, "Contents", "Developer"), { recursive: true });
+    process.env.DEVELOPER_DIR = app;
+    const hint = xcodeFirstLaunchHint(["simctl"]);
+    expect(hint).toContain(`The Xcode at ${app} has not finished`);
+    expect(hint).toContain(
+      `\`sudo '${xcodebuildIn(path.join(app, "Contents", "Developer"))}' -runFirstLaunch\``
+    );
+  });
+});
+
 describe.skipIf(realPlatform !== "darwin")("reads the directory xcode-select names", () => {
   const app = (): string => path.join(root, "Xcode.app");
   const cases: [string, () => string][] = [

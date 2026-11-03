@@ -43,7 +43,7 @@ const registry = {
 let stderrWrites: string[];
 
 function installHints(): string[] {
-  return stderrWrites.filter((line) => line.includes("sudo xcodebuild -runFirstLaunch"));
+  return stderrWrites.filter((line) => /sudo \S*xcodebuild -runFirstLaunch/.test(line));
 }
 
 beforeEach(() => {

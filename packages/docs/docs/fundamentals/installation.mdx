@@ -95,10 +95,12 @@ After you install or update Xcode, Xcode must install its system components. Unt
 - The tools that need `simctl` or `devicectl` return an error that tells the agent what to do. Tools that do not need `simctl`, such as taps and screenshots, still work on a simulator that is already booted.
 - While `simctl` can start the install, Argent does not look for booted simulators in the background.
 
+The `hint` and the error name the Xcode that must install its components. Each Xcode installs only the components that it needs. If you have more than one Xcode, use the Xcode that Argent names.
+
 To install the components, do one of these steps:
 
-- Open Xcode and let it install the components.
-- Run `sudo xcodebuild -runFirstLaunch`.
+- Open that Xcode and let it install the components.
+- Run the `xcodebuild` of that Xcode with `sudo`, for example `sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch`.
 
 Argent finds the installed components at the next tool call. You do not need to restart Argent.
 

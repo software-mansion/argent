@@ -293,8 +293,8 @@ describe("list-devices", () => {
       expect(
         execFileMock.mock.calls.filter(([cmd, args]) => cmd === "xcrun" && args[0] === "simctl")
       ).toEqual([]);
-      expect(result.hint).toContain("Ask the user to open Xcode once");
-      expect(result.hint).toContain("sudo xcodebuild -runFirstLaunch");
+      expect(result.hint).toMatch(/Ask the user to open (that )?Xcode once/);
+      expect(result.hint).toMatch(/sudo \S*xcodebuild -runFirstLaunch/);
       expect(result.hint).toContain("does not show local iOS simulators");
       expect(result.hint).toContain("such as taps and screenshots, still work");
       expect(result.hint).not.toContain("physical iPhones");
@@ -316,7 +316,7 @@ describe("list-devices", () => {
       const result = await listDevicesTool.execute!({}, {});
 
       expect(result.devices.filter((d) => d.platform === "ios").length).toBeGreaterThan(0);
-      expect(result.hint).toContain("Ask the user to open Xcode once");
+      expect(result.hint).toMatch(/Ask the user to open (that )?Xcode once/);
       expect(result.hint).toContain("does not show physical iPhones");
       expect(result.hint).not.toContain("simulator");
     } finally {
