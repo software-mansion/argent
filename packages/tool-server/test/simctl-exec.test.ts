@@ -1,6 +1,6 @@
 /**
  * execSimctl against real processes: a stub `xcrun` first on PATH stands in
- * for Xcode 27.1's simctl wrapper, a bash script that can hang in a child
+ * for Xcode's simctl wrapper, a bash script that can hang in a child
  * `xcodebuild -runFirstLaunch`. The point is that a timeout or abort reaps that
  * child too, not only the direct one.
  */
