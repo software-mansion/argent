@@ -7,6 +7,11 @@ describe("toMcpTool — MCP _meta forwarding", () => {
     description: "desc",
     inputSchema: { properties: { foo: { type: "string" } } },
   };
+  const rowsSchema = {
+    properties: {
+      top_n: { type: "integer", default: 20, exclusiveMinimum: 0, description: "Rows." },
+    },
+  };
 
   it("forwards alwaysLoad as _meta['anthropic/alwaysLoad']", () => {
     const result = toMcpTool({ ...base, alwaysLoad: true });
@@ -78,6 +83,28 @@ describe("toMcpTool — MCP _meta forwarding", () => {
     });
   });
 
+  it("with keywordFacts, copies keyword-only facts into param descriptions and keeps the keywords", () => {
+    const result = toMcpTool({ ...base, inputSchema: rowsSchema }, { keywordFacts: true });
+    expect(result.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        top_n: {
+          type: "integer",
+          default: 20,
+          exclusiveMinimum: 0,
+          description: "Rows. Default: 20. Must be greater than 0.",
+        },
+      },
+    });
+  });
+
+  it("leaves param descriptions as they are without keywordFacts", () => {
+    expect(toMcpTool({ ...base, inputSchema: rowsSchema }).inputSchema).toEqual({
+      type: "object",
+      ...rowsSchema,
+    });
+  });
+
   it("always forces inputSchema.type to 'object' and preserves other keys", () => {
     const result = toMcpTool(base);
     expect(result.inputSchema).toEqual({
@@ -97,5 +124,17 @@ describe("toMcpToolList", () => {
     ]);
     expect(list.map((t) => t.name)).toEqual(["shown", "also-shown"]);
     expect(list[0]).toEqual(toMcpTool({ name: "shown", description: "", inputSchema: schema }));
+  });
+
+  it("passes keywordFacts to every tool", () => {
+    const tool = {
+      name: "t",
+      description: "",
+      inputSchema: { properties: { n: { type: "integer", default: 3 } } },
+    };
+    expect(toMcpToolList([tool], { keywordFacts: true })).toEqual([
+      toMcpTool(tool, { keywordFacts: true }),
+    ]);
+    expect(toMcpToolList([tool])).toEqual([toMcpTool(tool)]);
   });
 });
