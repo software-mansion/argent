@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import {
   materializeArtifacts,
   isArtifactHandle,
+  renderFlowStepDetails,
+  type FlowStepDetails,
   type MaterializeContext,
 } from "@argent/tools-client";
 
@@ -185,7 +187,7 @@ export async function screenshotDiffToMcpContent(
   return blocks;
 }
 
-type FlowStepResult = {
+type FlowStepResult = FlowStepDetails & {
   index?: number;
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";
@@ -271,6 +273,19 @@ function durationSuffix(ms: unknown): string {
   return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
+/**
+ * The step's detail lines as one block, under its line and indented to the
+ * step's depth; undefined when it carries none. The `actual:` line holds the
+ * whole found text: the MCP result has only these text blocks, not the report.
+ */
+function stepDetailText(step: FlowStepResult): string | undefined {
+  const indent = `  ${stepIndent(step.depth)}`;
+  const lines = renderFlowStepDetails(step, { wholeActual: true }).map(
+    (line) => `${indent}${line}`
+  );
+  return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
 function stepLabel(step: FlowStepResult): string {
   if (step.kind === "echo") return step.message ?? "";
   if (step.tool) return step.tool;
@@ -283,10 +298,12 @@ function stepLabel(step: FlowStepResult): string {
 }
 
 /**
- * Unpack flow-execute's structured step report into MCP content blocks. Only
- * steps that carry a tool result surface their (image-bearing) content inline;
- * every other kind renders as a status line, with a `script` step's captured
- * output following it as a block of its own.
+ * Unpack flow-execute's structured step report into MCP content blocks. Each
+ * step renders as its status line, followed by these blocks in this order when
+ * the step carries them: its detail lines (`expected:`, `actual:`,
+ * `indeterminate:`, `hint:`, set only on a step that did not pass), a `script`
+ * step's captured output, a tool step's result with its images inline, and its
+ * artifacts (a snapshot's images, or the screenshot of a failed step).
  */
 export async function flowRunToMcpContent(
   result: FlowExecuteResult,
@@ -319,6 +336,8 @@ export async function flowRunToMcpContent(
       type: "text",
       text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${timing}${suffix}${warning}`,
     });
+    const details = stepDetailText(step);
+    if (details !== undefined) blocks.push({ type: "text", text: details });
 
     const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
     const scriptLogTruncated = step.scriptLogTruncated === true;

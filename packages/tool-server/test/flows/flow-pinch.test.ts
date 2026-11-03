@@ -363,7 +363,8 @@ describe("pinch: execution", () => {
 
     expect(result.ok).toBe(false);
     expect(result.steps[0]).toMatchObject({ kind: "pinch", status: "fail" });
-    expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
+    expect(result.steps[0].reason).toBe('no element matched selector text="Map"');
+    expect(result.steps[0].hint).toBe("if it is off-screen, add a scroll-to step before this one");
     expect(result.calls).toHaveLength(0);
   }, 15000);
 });

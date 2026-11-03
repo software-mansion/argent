@@ -9,8 +9,10 @@ import {
   settleTree,
   invokeOnDevice,
   waitForFrame,
-  offscreenHint,
+  selectorMiss,
   type ActionEnv,
+  type DirectiveOutcome,
+  type StepDetails,
 } from "./flow-actions";
 import {
   authoringPlatform,
@@ -40,7 +42,7 @@ export interface SnapshotArtifacts {
   diff?: ArtifactHandle;
 }
 
-interface VisualOutcome {
+interface VisualOutcome extends StepDetails, Pick<DirectiveOutcome, "indeterminate"> {
   status: "pass" | "fail" | "skip";
   reason?: string;
   /**
@@ -164,6 +166,32 @@ async function cropPngFile(
 }
 
 /**
+ * The measured diff, printed with just enough decimals to stay on the side of
+ * the tolerance the comparison put it on.
+ *
+ * Two decimals read best, but the comparison runs at full precision, so a
+ * rounded value can contradict the verdict it is printed with. A failed step
+ * prints the value twice: in its reason and as its `actual`. At two decimals, a
+ * 0.0028% diff against a `maxMismatch: 0` would fail as `diff 0.00% > 0%`, and
+ * its `expected: ≤ 0%` / `actual: 0.00%` pair would say the value found
+ * satisfies the value wanted. Any tolerance below 0.005% reads that way, and so
+ * does a real mismatch that rounds down onto the tolerance.
+ *
+ * The verdict comes from the caller, whose comparison allows float error: 7
+ * of 1000 pixels computes 0.7000000000000001%, which passes `maxMismatch: 0.7`
+ * and prints as `0.70%`. Widening stops at 8 decimals, finer than one pixel of
+ * an 8K capture. Past that the value prints in full: the shortest spelling that
+ * reads back as the same number.
+ */
+function formatMismatch(measured: number, tolerance: number, within: boolean): string {
+  for (let decimals = 2; decimals <= 8; decimals += 1) {
+    const shown = measured.toFixed(decimals);
+    if (Number(shown) <= tolerance === within) return `${shown}%`;
+  }
+  return `${String(measured)}%`;
+}
+
+/**
  * Capture the current screen and compare it to a stored baseline keyed by
  * authoring platform + resolution. A missing baseline FAILS the step — adopting
  * one is always an explicit `updateBaselines` gesture. The key is derived from the
@@ -245,9 +273,7 @@ export async function runSnapshot(
     if (frame === "aborted") {
       return { status: "skip", reason: "run aborted while resolving cropOn" };
     }
-    if (frame === undefined) {
-      return { status: "fail", reason: offscreenHint(opts.cropOn) };
-    }
+    if ("unresolved" in frame) return { status: "fail", ...selectorMiss(frame) };
     cropFrame = frame;
   }
 
@@ -428,8 +454,10 @@ export async function runSnapshot(
         status: "fail",
         reason:
           `no baseline for "${opts.name}" on this device class — expected ${baselinePath}, ` +
-          `nothing was compared. Run with updateBaselines (--update-baselines) to adopt the ` +
-          `current screen, then review and commit it`,
+          `nothing was compared`,
+        hint:
+          "run with updateBaselines (--update-baselines) to adopt the current screen, then " +
+          "review and commit it",
         snapshotKey,
         artifacts: { current: await currentArtifact() },
       };
@@ -483,12 +511,15 @@ export async function runSnapshot(
           reason:
             `baseline is ${expected.width}x${expected.height} but the ` +
             `${opts.cropOn ? "cropOn region" : "capture"} is ` +
-            `${actual.width}x${actual.height} (${key}) — nothing was compared` +
-            (opts.cropOn
-              ? `. The element's size drifted — crop a fixed-size container, or re-adopt ` +
-                `with updateBaselines`
-              : "") +
-            (posture ? `. ${posture}` : ""),
+            `${actual.width}x${actual.height} (${key}) — nothing was compared`,
+          expected: `${expected.width}x${expected.height}`,
+          actual: `${actual.width}x${actual.height}`,
+          ...(opts.cropOn && {
+            hint:
+              "the element's size drifted; crop a fixed-size container, or re-adopt with " +
+              "updateBaselines",
+          }),
+          ...(posture !== undefined && { hint: posture }),
           snapshotKey,
           artifacts: {
             baseline: await baselineArtifact(localBaseline),
@@ -500,7 +531,8 @@ export async function runSnapshot(
       // Relative slack absorbs float error (7 of 1000 pixels computes
       // 0.7000000000000001%) while staying under one pixel.
       const within = result.mismatchPercentage <= opts.maxMismatch * (1 + 1e-14);
-      const reason = `diff ${result.mismatchPercentage.toFixed(2)}% ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
+      const measured = formatMismatch(result.mismatchPercentage, opts.maxMismatch, within);
+      const reason = `diff ${measured} ${within ? "≤" : ">"} ${opts.maxMismatch}% (${key})`;
       if (within) {
         return { status: "pass", reason, ...captureWarned };
       }
@@ -520,7 +552,14 @@ export async function runSnapshot(
         });
         keepInOutputDir = result.contextDiffPath;
       }
-      return { status: "fail", reason, snapshotKey, artifacts };
+      return {
+        status: "fail",
+        reason,
+        expected: `≤ ${opts.maxMismatch}%`,
+        actual: measured,
+        snapshotKey,
+        artifacts,
+      };
     } finally {
       await cleanupDiffDir(outputDir, keepInOutputDir);
     }

@@ -566,6 +566,202 @@ describe("flowRunToMcpContent", () => {
     expect(artifactText?.text).toBe("    baseline: /tmp/b.png");
   });
 
+  it("puts a step's expected, actual and hint in one block between its line and the next step's", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "checkout",
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          target: 'text "Total"',
+          reason: "text did not match",
+          expected: "$12.00",
+          actual: "$10.00",
+          hint: "the cart may still be loading",
+        },
+        { index: 1, kind: "tap", status: "skip", target: '"Pay"' },
+      ],
+    });
+
+    expect(blocks).toEqual([
+      { type: "text", text: 'Running e2e test "checkout" (2 steps)' },
+      { type: "text", text: '[1] ✗ assert text "Total" — text did not match' },
+      {
+        type: "text",
+        text: [
+          '  expected: "$12.00"',
+          '  actual:   "$10.00"',
+          "  hint: the cart may still be loading",
+        ].join("\n"),
+      },
+      { type: "text", text: '[2] · tap "Pay"' },
+      { type: "text", text: 'E2E test "checkout" complete.' },
+    ]);
+  });
+
+  it("indents a nested step's detail block and prints a snapshot's values bare, before its artifacts", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        { index: 0, kind: "when", status: "pass", target: 'visible "Promo"' },
+        {
+          index: 1,
+          kind: "snapshot",
+          status: "fail",
+          target: '"home"',
+          reason: "diff 3.10% > 0.5%",
+          depth: 1,
+          expected: "≤ 0.5%",
+          actual: "3.10%",
+          hint: "an animation may still be running",
+          artifacts: { diff: "/tmp/d.png" },
+        },
+      ],
+    });
+
+    expect(blocks.slice(1)).toEqual([
+      { type: "text", text: '[1] ✓ when visible "Promo"' },
+      { type: "text", text: '[2] ✗   snapshot "home" — diff 3.10% > 0.5%' },
+      {
+        type: "text",
+        text: [
+          "    expected: ≤ 0.5%",
+          "    actual:   3.10%",
+          "    hint: an animation may still be running",
+        ].join("\n"),
+      },
+      { type: "text", text: "    diff: /tmp/d.png" },
+      { type: "text", text: 'E2E test "f" complete.' },
+    ]);
+  });
+
+  it("prints the whole found text, past the 300 characters the CLI line shows", async () => {
+    // The result holds only these blocks, so a cut line would hide the part of
+    // the found text after character 300, here the only difference.
+    const terms = (version: string) =>
+      `Terms: ${"lorem ipsum ".repeat(30)}version ${version} effective 2026`;
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          target: `id=terms equals "${terms("2.0")}"`,
+          reason: `element matched id="terms" but its text did not equal "${terms("2.0")}"`,
+          expected: terms("2.0"),
+          actual: terms("2.1"),
+        },
+      ],
+    });
+
+    expect(Array.from(terms("2.1")).length).toBeGreaterThan(300);
+    expect(blocks[2]).toEqual({
+      type: "text",
+      text: `  expected: "${terms("2.0")}"\n  actual:   "${terms("2.1")}"`,
+    });
+    expect(blocks.some((b) => b.type === "text" && b.text.includes("version 2.1"))).toBe(true);
+  });
+
+  it("adds no detail block for detail values that are not strings", async () => {
+    const hostile = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          expected: 12,
+          actual: null,
+          hint: { text: "x" },
+        } as unknown as FlowExecuteResult["steps"][number],
+      ],
+    });
+    expect(hostile).toEqual([
+      { type: "text", text: 'Running e2e test "f" (1 steps)' },
+      { type: "text", text: "[1] ✗ assert" },
+      { type: "text", text: 'E2E test "f" complete.' },
+    ]);
+  });
+
+  it("puts a failed tool step's detail block between its line and its result", async () => {
+    // A composed flow-execute that failed carries its inner step's values up
+    // onto the tool step, beside the inner report as its result. The inner
+    // step's hint stays in the reason: it advises on the inner step.
+    const inner = {
+      flow: "login",
+      ok: false,
+      passed: 0,
+      failed: 1,
+      steps: [
+        {
+          index: 0,
+          kind: "assert",
+          status: "fail",
+          reason: 'element matched id="title" but its text did not equal "Welcome"',
+          expected: "Welcome",
+          actual: "Sign in",
+          hint: "the login may not have finished",
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent({
+      flow: "outer",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          tool: "flow-execute",
+          status: "fail",
+          reason:
+            'flow "login" failed: 0 passed, 1 failed, 0 errored (assert: element matched id="title" but its text did not equal "Welcome"; hint: the login may not have finished)',
+          expected: "Welcome",
+          actual: "Sign in",
+          result: inner,
+        },
+      ],
+    });
+
+    expect(blocks).toEqual([
+      { type: "text", text: 'Running e2e test "outer" (1 steps)' },
+      {
+        type: "text",
+        text: '[1] ✗ flow-execute — flow "login" failed: 0 passed, 1 failed, 0 errored (assert: element matched id="title" but its text did not equal "Welcome"; hint: the login may not have finished)',
+      },
+      {
+        type: "text",
+        text: ['  expected: "Welcome"', '  actual:   "Sign in"'].join("\n"),
+      },
+      { type: "text", text: JSON.stringify(inner, null, 2) },
+      { type: "text", text: 'E2E test "outer" complete.' },
+    ]);
+  });
+
+  it("renders a real tool-server report of a failed equals check", async () => {
+    // The `result` record of `argent flow run --json-stream` on a headless
+    // Chrome, verbatim. String.raw keeps the wire's escapes as they were sent.
+    const wire = String.raw`{"flow":"l2_g1","device":"chromium-cdp-9391","executionPrerequisite":"","ok":false,"passed":0,"failed":1,"skipped":0,"errored":0,"steps":[{"index":0,"kind":"assert","flow":"l2_g1","target":"id=g1 equals \"Nope\"","status":"fail","reason":"element matched id=\"g1\" but its text did not equal \"Nope\"","expected":"Nope","actual":"Say \"hi\" C:\\x Hello there","hint":"the element's own text is \"Say \\\"hi\\\" C:\\\\x\"; the check accepts the subtree text or the own text","durationMs":1004}],"startedAt":1790002700000,"durationMs":1005}`;
+    const blocks = await flowRunToMcpContent(JSON.parse(wire) as FlowExecuteResult);
+
+    expect(blocks).toEqual([
+      { type: "text", text: 'Running e2e test "l2_g1" on chromium-cdp-9391 (1 steps)' },
+      {
+        type: "text",
+        text: '[1] ✗ assert id=g1 equals "Nope" (1.0s) — element matched id="g1" but its text did not equal "Nope"',
+      },
+      {
+        type: "text",
+        text: [
+          String.raw`  expected: "Nope"`,
+          String.raw`  actual:   "Say \"hi\" C:\\x Hello there"`,
+          String.raw`  hint: the element's own text is "Say \"hi\" C:\\x"; the check accepts the subtree text or the own text`,
+        ].join("\n"),
+      },
+      { type: "text", text: "FAIL — 0 passed, 1 failed, 0 errored, 0 skipped (1.0s)" },
+    ]);
+  });
+
   it("renders the new report shape: status glyphs, reasons, directive kinds, and summary", async () => {
     const input: FlowExecuteResult = {
       flow: "checkout",

@@ -112,6 +112,9 @@ describe("await: { idle } on a platform with no flow tree source", () => {
     expect(r.steps[0].reason).toContain("no UI-tree source");
     expect(r.steps[0].reason).toContain("`wait:`");
     expect(r.steps[0].reason).not.toContain("foreground");
+    // A re-run fails the same way, so the step is not one to run again.
+    expect(r.steps[0]).not.toHaveProperty("indeterminate");
+    expect(r.steps[0]).not.toHaveProperty("hint");
     expect(r.steps[1]).toMatchObject({ kind: "echo", status: "skip" });
   });
 
@@ -134,6 +137,21 @@ describe("await: { idle } on a platform with no flow tree source", () => {
   });
 });
 
+it("does not flag a when guard on harmony for a re-run", async () => {
+  treeError = "ui-tree matching is not supported on platform harmony";
+  const r = await run("when-harmony", "harmony-127.0.0.1:5555", [
+    {
+      kind: "when",
+      condition: { kind: "ui", condition: "visible", selector: { text: "Continue" } },
+      steps: [{ kind: "echo", message: "inside" }],
+    },
+  ]);
+
+  expect(r.steps[0]).toMatchObject({ kind: "when", status: "error" });
+  expect(r.steps[0]).not.toHaveProperty("indeterminate");
+  expect(r.steps[0]).not.toHaveProperty("hint");
+});
+
 // Besides `idle`, only `await`/`assert` report an unreadable tree as
 // `indeterminate` instead of throwing, so only they reach the platform arm.
 describe("an indeterminate selector check on a platform with no flow tree source", () => {
@@ -152,6 +170,8 @@ describe("an indeterminate selector check on a platform with no flow tree source
       expect(r.ok).toBe(false);
       expect(r.steps[0]).toMatchObject({ kind: step.kind, status: "error" });
       expect(r.steps[0].reason).toContain("could not read the UI tree");
+      expect(r.steps[0]).not.toHaveProperty("indeterminate");
+      expect(r.steps[0]).not.toHaveProperty("hint");
     });
 
     it(`scores \`${step.kind}\` a fail on a platform with a tree source`, async () => {
@@ -159,8 +179,9 @@ describe("an indeterminate selector check on a platform with no flow tree source
       const r = await run(`${step.kind}-ios`, IOS, [step]);
 
       expect(r.ok).toBe(false);
-      expect(r.steps[0]).toMatchObject({ kind: step.kind, status: "fail" });
+      expect(r.steps[0]).toMatchObject({ kind: step.kind, status: "fail", indeterminate: true });
       expect(r.steps[0].reason).toContain("could not read the UI tree");
+      expect(r.steps[0].hint).toContain("re-run");
     });
   }
 });

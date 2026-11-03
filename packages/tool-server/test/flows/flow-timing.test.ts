@@ -12,7 +12,8 @@ const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
 
 let currentTree: () => DescribeNode;
 let readMs = READ_MS;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => {
     advance(readMs);
     return { tree: currentTree(), source: "native-devtools" };
