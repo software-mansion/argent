@@ -46,7 +46,14 @@ import { simctlPrefix } from "../src/utils/ios-device-sets";
 import { ensureDeviceReady, listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import { createDescribeTool } from "../src/tools/describe";
 import { axServiceBlueprint } from "../src/blueprints/ax-service";
-import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
+import { nativeDevtoolsBlueprint, precheckNativeDevtools } from "../src/blueprints/native-devtools";
+import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
+import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
+import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
+import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-devtools-status";
+import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
+import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 
 const realPlatform = process.platform;
 const SIMULATOR: DeviceInfo = {
@@ -138,6 +145,96 @@ describe("an iOS tool while Xcode's install is pending", () => {
     const res = await request(describeApp()).post("/tools/describe").send({ udid: SIMULATOR.id });
     expect(res.body.error ?? "").not.toMatch(/runFirstLaunch/);
     expect(xcrunCalls().length).toBeGreaterThan(0);
+  });
+});
+
+describe("a native-devtools tool while Xcode's install is pending", () => {
+  // Its own UDID, so the service's unix socket is not another test file's.
+  const SIM: DeviceInfo = {
+    id: "FA1E1721-0000-4000-8000-000000000001",
+    platform: "ios",
+    kind: "simulator",
+  };
+  const BUNDLE_ID = "com.example.app";
+  const AT_POINT = { x: 10, y: 10 };
+  const TOOLS = [
+    [nativeDescribeScreenTool, {}],
+    [nativeFindViewsTool, {}],
+    [nativeFullHierarchyTool, {}],
+    [nativeNetworkLogsTool, {}],
+    [nativeDevtoolsStatusTool, {}],
+    [nativeViewAtPointTool, AT_POINT],
+    [nativeUserInteractableViewAtPointTool, AT_POINT],
+  ] as const;
+  let registry: Registry | undefined;
+
+  function nativeApp() {
+    __primeDepCacheForTests(["xcrun"]);
+    registry = new Registry();
+    registry.registerBlueprint(nativeDevtoolsBlueprint);
+    for (const [tool] of TOOLS) registry.registerTool(tool as never);
+    return createHttpApp(registry).app;
+  }
+
+  afterEach(async () => {
+    await registry?.dispose();
+    registry = undefined;
+  });
+
+  it.each(TOOLS.map(([tool, extra]) => [tool.id, extra] as const))(
+    "%s answers 424 with what to do",
+    async (id, extra) => {
+      pending.simctl = true;
+      const res = await request(nativeApp())
+        .post(`/tools/${id}`)
+        .send({ udid: SIM.id, bundleId: BUNDLE_ID, ...extra });
+
+      // Recorded as an init failure, it answered 200 init_failed, which says to reboot.
+      expect(res.status).toBe(424);
+      expect(res.body.error).toMatch(/-runFirstLaunch/);
+      expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+    }
+  );
+
+  it("works on the first call after the install, with no restart", async () => {
+    pending.simctl = true;
+    const app = nativeApp();
+    const status = () =>
+      request(app)
+        .post("/tools/native-devtools-status")
+        .send({ udid: SIM.id, bundleId: BUNDLE_ID });
+    for (let call = 0; call < 4; call++) expect((await status()).status).toBe(424);
+
+    pending.simctl = false;
+    // The shape the promisified execFile resolves with, for the app-state reads.
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (err: Error | null, out?: unknown) => void;
+      cb(null, { stdout: "", stderr: "" });
+    });
+    const res = await status();
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).not.toBe("init_failed");
+    expect(res.body.data.envSetup).toBe(true);
+  });
+
+  // Flows and debugger-component-tree reach the service without any tool preflight.
+  it("does not count a refusal as a failed start of the service", async () => {
+    pending.simctl = true;
+    const instance = await nativeDevtoolsBlueprint.factory({}, SIM, { device: SIM });
+    try {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await expect(precheckNativeDevtools(instance.api, SIM.id)).rejects.toBeInstanceOf(
+          XcodeFirstLaunchPendingError
+        );
+      }
+      expect(instance.api.getInitFailure()).toBeNull();
+
+      pending.simctl = false;
+      await expect(precheckNativeDevtools(instance.api, SIM.id)).resolves.toBeNull();
+      expect(instance.api.isEnvSetup()).toBe(true);
+    } finally {
+      await instance.dispose();
+    }
   });
 });
 

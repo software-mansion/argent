@@ -10,6 +10,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
+import { XcodeFirstLaunchPendingError } from "../utils/dependency-errors";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -352,7 +353,9 @@ export async function precheckNativeDevtools(
 
   try {
     await api.ensureEnvReady();
-  } catch {
+  } catch (err) {
+    // Not a fault of the simulator, so not recorded as one: let it say what to do.
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const failure = api.getInitFailure();
     if (failure) return buildInitFailedResult(udid, failure);
     return buildInitFailedResult(udid, {
@@ -668,6 +671,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
+      /**
+       * Refused because Xcode's component install is pending. That ends when
+       * the user installs the components, so counting it would give up for
+       * good on a simulator that then works.
+       */
+      if (err instanceof XcodeFirstLaunchPendingError) return;
       const lastError = err instanceof Error ? err.message : String(err);
       const attempts = (initFailure?.attempts ?? 0) + 1;
       const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;
