@@ -78,7 +78,7 @@ In the JS runtime layer, the text after the status is the standard reason phrase
 
 A size with `~`, for example `~1.2 MB`, is approximate. The JS runtime layer shows this size when the size in bytes of a body is not known: for a large text body, or for a binary body that the app reads as text. This size is the length of the body in characters. The size in bytes is equal to this length or larger.
 
-In native network capture, the header line tells if the capture is active, waits for the app to load OkHttp, or is unavailable. For an unavailable capture, the header line gives the reason.
+In native network capture, the header line tells if the capture is active, waits for the app to load OkHttp, or is unavailable. For an unavailable capture, the header line gives the reason. Sometimes an active capture gets only some requests of the app. Then the header line tells which requests Argent captures.
 
 Then the agent reads the details of one record by its ID. The native `NSURLProtocol` layer has no details, because each entry of its list is complete. In the other layers, the details contain these items:
 

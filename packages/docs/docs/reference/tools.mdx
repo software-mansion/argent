@@ -146,13 +146,13 @@ To capture a request:
 | `limit`    | The maximum number of requests in the list. Argent returns the most recent requests, oldest first. The default is 50.     |
 | `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                   |
 
-The result contains `header`, `armed`, `capture`, `count`, `total` and `requests`. The `capture` field and the `header` line show the state of the capture. The `capture` field is absent when `armed` is `false`. These are the states:
+The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `total` and `requests`. The `capture` field and the `header` line show the state of the capture. The `capture` field is absent when `armed` is `false`. The `captureDetail` field contains the detail that the in-app agent sent with the state. The `header` line shows this detail too. These are the states:
 
-| State       | Meaning                                                                              |
-| ----------- | ------------------------------------------------------------------------------------ |
-| active      | Argent captures the OkHttp requests of the app.                                      |
-| waiting     | The app did not load OkHttp yet. The capture starts when the app loads it.           |
-| unavailable | The in-app agent cannot capture in this process. The `header` line gives the reason. |
+| State       | Meaning                                                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| active      | Argent captures the OkHttp requests of the app. If Argent captures only some requests, the `header` line gives the reason. |
+| waiting     | The app did not load OkHttp yet. The capture starts when the app loads it.                                                 |
+| unavailable | The in-app agent cannot capture in this process. The `header` line gives the reason.                                       |
 
 Each request has an ID with the format `android-<4 hex digits>-<number>`, for example `android-3f9a-12`. An ID is valid only in the tool-server that listed it. An ID is not valid after `stop-all-simulator-servers` stops the capture, or after the tool-server stops. Give the ID to `view-network-request-details` together with an id of the same device. This needs no debugger connection. The details contain these items:
 

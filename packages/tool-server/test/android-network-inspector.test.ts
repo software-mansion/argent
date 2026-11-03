@@ -3423,11 +3423,80 @@ describe("the tools on the Android native layer", () => {
     const result = (await nativeNetworkLogsTool.execute!(
       { androidNetwork: api },
       { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
-    )) as { header: string; capture: string };
+    )) as { header: string; capture: string; captureDetail?: string };
     expect(result.capture).toBe("unavailable");
+    expect(result.captureDetail).toBe("no OkHttp in this process");
     expect(result.header).toBe(
       "android-native: armed, 0 requests (pid 4722; capture unavailable: no OkHttp in this process; use view-network-logs)"
     );
+  });
+
+  it("native-network-logs keeps its default text for a waiting capture without a detail", async () => {
+    device.agentOptions = { capture: { state: "waiting" } };
+    const api = await armedInspector();
+    const result = await nativeNetworkLogsTool.execute!(
+      { androidNetwork: api },
+      { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
+    );
+    expect(result).toMatchObject({
+      capture: "waiting",
+      header:
+        "android-native: armed, 0 requests (pid 4722; capture waiting: the app has not loaded OkHttp yet, and capture starts when it does)",
+    });
+    expect(result).not.toHaveProperty("captureDetail");
+  });
+
+  it("native-network-logs shows the detail of an active capture in its header and result", async () => {
+    device.agentOptions = {
+      capture: {
+        state: "active",
+        detail: "only the OkHttp clients the app builds from now on are captured",
+      },
+    };
+    const api = await armedInspector();
+    const read = () =>
+      nativeNetworkLogsTool.execute!(
+        { androidNetwork: api },
+        { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
+      );
+
+    expect(await read()).toMatchObject({
+      header:
+        "android-native: armed, 0 requests (pid 4722; capture active: only the OkHttp clients the app builds from now on are captured)",
+      capture: "active",
+      captureDetail: "only the OkHttp clients the app builds from now on are captured",
+    });
+
+    // A later status replaces the detail, and an active status without one
+    // brings back the plain header.
+    const agent = agents[0]!;
+    agent.send({
+      type: "Status",
+      payload: {
+        event: "capture",
+        state: "active",
+        detail: "only some of the OkHttp clients of the app are captured",
+      },
+    });
+    await vi.waitFor(() =>
+      expect(api.state().capture?.detail).toBe(
+        "only some of the OkHttp clients of the app are captured"
+      )
+    );
+    expect(await read()).toMatchObject({
+      header:
+        "android-native: armed, 0 requests (pid 4722; capture active: only some of the OkHttp clients of the app are captured)",
+      captureDetail: "only some of the OkHttp clients of the app are captured",
+    });
+
+    agent.send({ type: "Status", payload: { event: "capture", state: "active" } });
+    await vi.waitFor(() => expect(api.state().capture).toEqual({ state: "active" }));
+    const plain = await read();
+    expect(plain).toMatchObject({
+      header: "android-native: armed, 0 requests (pid 4722; capture active)",
+      capture: "active",
+    });
+    expect(plain).not.toHaveProperty("captureDetail");
   });
 
   it("native-network-logs says why an unarmed layer is empty, and passes not_attachable through", async () => {

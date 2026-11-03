@@ -64,6 +64,8 @@ interface AndroidNativeListing {
   header: string;
   armed: boolean;
   capture?: AndroidCaptureState;
+  /** The detail the in-app agent sent with the capture state, for example why only some requests are captured. */
+  captureDetail?: string;
   count: number;
   total: number;
   requests: AndroidNativeRequestLine[];
@@ -95,7 +97,7 @@ On iOS: returns { status, count, events } where each event contains URL, method,
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
 A not-running app comes back as one of those statuses rather than a failure. An app that is not connected does too, except on a device whose devtools agent argent attached to rather than armed itself: there it fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\`, since no restart of ours can complete a handshake we do not own. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), while a missing host dependency is not.
 On Android: needs a debuggable build. The first call starts capture and usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need: earlier requests are not captured.
-Returns { status, header, armed, capture, count, total, requests }. Pass a request's ID (android-3f9a-12) to view-network-request-details for its headers, redirects and bodies.
+Returns { status, header, armed, capture, captureDetail, count, total, requests }. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing. Pass a request's ID (android-3f9a-12) to view-network-request-details for its headers, redirects and bodies.
 Capture can slow the app. It stays on, and launch-app and restart-app attach it to each new process, until stop-all-simulator-servers stops this device's services; restart-app then starts the app without it.
 When status is not_attachable, use view-network-logs and do not retry.`,
   zodSchema,
@@ -169,6 +171,7 @@ async function listAndroidNative(
       (detail.length > 0 ? ` (${detail.join("; ")})` : ""),
     armed: state.armed,
     ...(state.capture ? { capture: state.capture.state } : {}),
+    ...(state.capture?.detail ? { captureDetail: state.capture.detail } : {}),
     count: requests.length,
     total: all.length,
     requests,
@@ -180,7 +183,12 @@ function headerDetail(state: AndroidNetworkInspectorState, callNote?: string): s
   const parts: string[] = [];
   if (state.process) parts.push(`pid ${state.process.pid}`);
   const capture = state.capture;
-  if (capture?.state === "active") parts.push("capture active");
+  // An active capture can still cover only part of the app's requests, and the
+  // agent then says so in its detail. Show it, or an empty list reads as "the
+  // app sent nothing".
+  if (capture?.state === "active") {
+    parts.push(`capture active${capture.detail ? `: ${capture.detail}` : ""}`);
+  }
   if (capture?.state === "waiting") {
     parts.push(
       `capture waiting: ${capture.detail ?? "the app has not loaded OkHttp yet, and capture starts when it does"}`
