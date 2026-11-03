@@ -82,6 +82,11 @@ Returns { status: "init_failed", message, attempts } instead when the simulator'
 Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   readOnly: true,
+  // Every native-* feature tool runs the same precheck and returns the same
+  // status and `message` (buildAppStateMessage) when the app is not connected,
+  // so agents need no separate status call. The SDK and the e2e-full suite
+  // still call it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `Checking native inspection for ${params.bundleId}`,
     completedMsg: ({ params }) => `Checked native inspection for ${params.bundleId}`,

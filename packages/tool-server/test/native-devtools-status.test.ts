@@ -91,6 +91,13 @@ function makeNativeApi(options: {
 }
 
 describe("native-devtools-status tool", () => {
+  // Agents get the same status from every native-* tool and the same screen read
+  // from describe's fallback; the SDK still calls both directly.
+  it("is hidden from MCP, as is native-describe-screen", () => {
+    expect(nativeDevtoolsStatusTool.hideFromMcp).toBe(true);
+    expect(nativeDescribeScreenTool.hideFromMcp).toBe(true);
+  });
+
   it("reports a running uninjected app as needing restart", async () => {
     const { api, ensureEnvReady } = makeNativeApi({ appRunning: true, connected: false });
 

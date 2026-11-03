@@ -6,4 +6,4 @@ A Chromium (CDP) target is an Electron app or a Chromium-family browser (Chrome/
 
 - Scroll with `gesture-scroll` and drag with `gesture-drag`; `gesture-swipe` is touch-only.
 - Tabs and windows: `chromium-tabs`. Every other tool acts on the **active** tab, so `select` before driving a different one. A cross-process navigation (some redirects) can swap a tab's CDP target; `list` again to pick it up under a fresh id.
-- Cookies, HttpOnly included: `chromium-cookies`. Web Storage: `chromium-storage`. Use them to seed auth before an e2e test or assert app state after one.
+- Cookies, HttpOnly included: `chromium-cookies`. Web Storage: `debugger-evaluate`, e.g. `localStorage.getItem("token")`. Use them to seed auth before an e2e test or assert app state after one.

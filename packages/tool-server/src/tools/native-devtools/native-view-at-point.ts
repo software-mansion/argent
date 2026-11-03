@@ -17,7 +17,7 @@ const zodSchema = z.object({
   x: z
     .number()
     .describe(
-      "Raw X coordinate in points, on the portrait axes of the screen (the axes of native-describe-screen frames). NOT normalized [0,1] tap space."
+      "Raw X coordinate in points, on the portrait axes of the screen. NOT normalized [0,1] tap space."
     ),
   y: z
     .number()
