@@ -2322,10 +2322,11 @@ describe("attaching and the app's lifecycle", () => {
     const api = await createInspector();
     expect(await api.ensureAttached(8081)).toBeNull();
     expect(attachCommands()).toHaveLength(1);
-    // True whether the loaded agent is this Argent's (it connects) or an
-    // earlier one's (it dials a port of its own and never does).
+    // True whether the loaded agent is free (it connects), held by another
+    // tool-server (it stays there until that connection ends) or from an
+    // earlier Argent (it dials a port of its own and never connects).
     expect(api.state().note).toBe(
-      "pid 4722 already has the agent loaded, and it should connect within a few seconds; if it does not, that agent is from an earlier Argent, and restart-app gives the app a process with the current one"
+      "pid 4722 already has the agent loaded, and it should connect within a few seconds. If it does not, another Argent tool-server is capturing this app or the agent is from an earlier Argent; restart-app gives the app a new process with this tool-server's agent, but it ends the other tool-server's capture of the app"
     );
     const next = session();
     expect(next.secret).not.toBe(first.secret);
