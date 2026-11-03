@@ -957,8 +957,9 @@ export async function analyzeNativeProfilerIos(
   // No leaks export means no leak data, not zero leaks: a trace whose template
   // has the Leaks instrument exports an empty table when nothing leaked. The
   // all-processes fallback records the built-in Time Profiler template, which
-  // has none.
-  const leaksRecorded = api.exportedFiles.leaks != null;
+  // has none. A leaks file that stop wrote but is now gone or unreadable is no
+  // leak data either.
+  const leaksRecorded = api.exportedFiles.leaks != null && !leaksMissing;
 
   api.parsedData = {
     cpuSamples,

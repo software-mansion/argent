@@ -108,6 +108,17 @@ describe("iOS reports when no leak data was recorded", () => {
     expect(api.parsedData?.leaksRecorded).toBe(true);
   });
 
+  it("analyze treats a leaks export that vanished before analyze as not recorded", async () => {
+    // Stop reported the file, but it is gone by the time analyze runs.
+    const api = await buildIosSession(path.join(dir, "raw_leaks.xml"));
+    const res = await analyzeNativeProfilerIos(api);
+
+    expect(api.parsedData?.leaksRecorded).toBe(false);
+    expect(res.exportErrors.leaks).toContain("no leak data could be analyzed");
+    expect(res.report).toContain(LEAKS_NOT_RECORDED);
+    expect(res.report).not.toContain("memory issues detected");
+  });
+
   it("the full report flags leaks as not recorded in the header and summary", async () => {
     const payload: ProfilerPayload = {
       metadata: { traceFile: null, platform: "iOS", timestamp: "2026-10-30T00:00:00Z" },
