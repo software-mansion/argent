@@ -54,6 +54,8 @@ import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-netwo
 import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-devtools-status";
 import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
+import { nativeProfilerSessionBlueprint } from "../src/blueprints/native-profiler-session";
+import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
 
 const realPlatform = process.platform;
 const SIMULATOR: DeviceInfo = {
@@ -234,6 +236,28 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       expect(instance.api.isEnvSetup()).toBe(true);
     } finally {
       await instance.dispose();
+    }
+  });
+});
+
+describe("native-profiler-start while Xcode's install is pending", () => {
+  it("answers 424 and is counted as the pending install, not a process-list failure", async () => {
+    pending.simctl = true;
+    __primeDepCacheForTests(["xcrun"]);
+    const registry = new Registry();
+    registry.registerBlueprint(nativeProfilerSessionBlueprint);
+    registry.registerTool(nativeProfilerStartTool as never);
+    try {
+      const res = await request(createHttpApp(registry).app)
+        .post("/tools/native-profiler-start")
+        .send({ device_id: SIMULATOR.id });
+
+      expect(res.status).toBe(424);
+      expect(res.body.error).toMatch(/-runFirstLaunch/);
+      expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(xcrunCalls()).toEqual([]);
+    } finally {
+      await registry.dispose();
     }
   });
 });

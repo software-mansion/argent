@@ -7,6 +7,7 @@ import {
 import { resolveDevice } from "../../../utils/device-info";
 import { assertSupported } from "../../../utils/capability";
 import { ensureDeps } from "../../../utils/check-deps";
+import { ensureIosDeps } from "../../../utils/cross-platform-tool";
 import { startNativeProfilerIos } from "./platforms/ios";
 import { startNativeProfilerAndroid } from "./platforms/android";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
@@ -88,7 +89,7 @@ Fails if no app is running on the device, or the profiler cannot attach to the p
     // synthetic platform with a fake udid that fails the iOS-UDID regex.
     let started: Awaited<ReturnType<typeof startNativeProfilerAndroid>>;
     if (api.platform === "ios") {
-      await ensureDeps(["xcrun"]);
+      await ensureIosDeps(device, ["xcrun"]);
       started = await startNativeProfilerIos(api, params);
     } else {
       await ensureDeps(["adb"]);
