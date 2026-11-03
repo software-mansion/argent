@@ -5,7 +5,7 @@ import XCTest
 /// UIViewPropertyAnimator (expo-blur), stalls each gesture for two minutes,
 /// past its watchdog budget. The runner skips those waits and runs XCTest's
 /// idle check itself under a short cap. Every API here is XCTest SPI, probed
-/// before use: without the skip, the event runs with XCTest's own waits.
+/// before use: when any is missing, the event runs with XCTest's own waits.
 extension ArgentRunnerSession {
     /// The longest a gesture waits for the app to go idle before its event.
     /// Covers a navigation transition, so a gesture sent right after the one
@@ -32,7 +32,9 @@ extension ArgentRunnerSession {
     func skippingQuiescence(of app: XCUIApplication, _ body: () -> Void) {
         let selector = Self.performWithInteractionOptions
 
-        guard app.responds(to: selector) else {
+        guard app.responds(to: selector),
+            awaitQuiescence(of: app, timeout: Self.preEventSettleTimeout)
+        else {
             body()
             return
         }
@@ -42,21 +44,29 @@ extension ArgentRunnerSession {
         ) -> Void
         let perform = unsafeBitCast(app.method(for: selector), to: Perform.self)
 
-        awaitQuiescence(of: app, timeout: Self.preEventSettleTimeout)
-
+        // XCTest restores the prior options only when the block returns, and
+        // every XCUIApplication for this bundle id shares them, so an
+        // exception must not unwind through it.
+        var exception: NSException?
         withoutActuallyEscaping(body) { body in
-            perform(app, selector, Self.skipQuiescenceOptions, body)
+            perform(app, selector, Self.skipQuiescenceOptions) {
+                exception = ArgentExceptionGuard.exception(from: body)
+            }
         }
+        exception?.raise()
     }
 
     /// XCTest's own idle check (event loop and animations), under `timeout`.
-    private func awaitQuiescence(of app: XCUIApplication, timeout: TimeInterval) {
+    /// False when any SPI it needs is missing.
+    private func awaitQuiescence(of app: XCUIApplication, timeout: TimeInterval)
+        -> Bool
+    {
         guard
             let impl = Self.object(app, Self.applicationImpl),
             let process = Self.object(impl, Self.currentProcess),
             process.responds(to: Self.initiateQuiescenceChecks)
         else {
-            return
+            return false
         }
 
         typealias Initiate = @convention(c) (NSObject, Selector, Bool) -> Void
@@ -70,10 +80,11 @@ extension ArgentRunnerSession {
             let expectation = Self.object(process, Self.makeQuiescenceExpectation)
                 as? XCTestExpectation
         else {
-            return
+            return false
         }
 
         _ = XCTWaiter.wait(for: [expectation], timeout: timeout)
+        return true
     }
 
     /// The object a zero-argument getter returns, or nil when `target` lacks it.
