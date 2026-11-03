@@ -128,16 +128,15 @@ export interface RetiredBundledPath {
   path: string;
   /** sha256 of every version argent shipped, CRLF read as LF. */
   shipped: readonly string[];
-  /** Text every shipped version contains: with it, a copy that matches no
-   * hash is argent's, edited; without it, the file is the user's own. */
-  marker: string;
 }
 
 // Files earlier argent versions copied into agents/ and rules/ targets. When a
 // change deletes a file from packages/skills/agents or packages/skills/rules,
 // add it here in the same change, with the hash of each version in its git
 // history. Once the bundle no longer ships it, init, update and uninstall
-// offer to remove it from every target argent manages.
+// offer to remove it from every target argent manages. Only a copy that
+// matches one of these hashes goes: any other file at that path may hold the
+// user's work, so it stays.
 export const RETIRED_BUNDLED_PATHS: Readonly<
   Record<"agents" | "rules", readonly RetiredBundledPath[]>
 > = {
@@ -149,7 +148,6 @@ export const RETIRED_BUNDLED_PATHS: Readonly<
         "50f8d1442677a7def3117cc8652f26dd5c1e2271ae0c7c9814c5bb17dfdd7858",
         "10f998fef549503cf341e1775ff6aacafbf361c1d7ec32c554a9c42343a6998a",
       ],
-      marker: "name: environment-inspector",
     },
     {
       path: "argent-environment-inspector.md",
@@ -161,7 +159,6 @@ export const RETIRED_BUNDLED_PATHS: Readonly<
         "96cb2e5025755448186cd9d29e85ce3db3cedb3dbfd2e6c89e734c76aa7fbdff",
         "9eff92cf887390fb3ffb68e7de5789e703049795a24d5f268332af488d155531",
       ],
-      marker: "name: argent-environment-inspector",
     },
     {
       path: "references/quality-control-checklist.md",
@@ -171,7 +168,6 @@ export const RETIRED_BUNDLED_PATHS: Readonly<
         "f1c76c1d51aa5a88371061a2bd5f46264ea2082aa4e1c2bca517d901b836c753",
         "84ecf5920fbca4460484a241a8ad1411fe8d6c3d0c9c25f80096a5a28f219f8a",
       ],
-      marker: "## Quality control checklist",
     },
   ],
   rules: [],
@@ -495,8 +491,6 @@ function copyTree(src: string, dest: string): void {
 export interface RetiredFile {
   /** Relative to the target dir, "/"-separated. */
   relativePath: string;
-  /** Differs from every version argent shipped, so it may hold user changes. */
-  edited: boolean;
   /** Hash when found: removal skips the file if it has changed since. */
   sha256: string;
 }
@@ -513,22 +507,22 @@ function readRetiredFile(targetDir: string, relativePath: string): string | null
 }
 
 // The retired files in `targetDir` that the bundle in `bundleDir` no longer
-// ships: copies of a version argent shipped, and copies of one edited since.
-// A file at a retired path without the marker is the user's own, so it is not
-// listed. Reads through links the way copyDir writes through them.
+// ships, each a copy of a version argent shipped. A file at a retired path that
+// matches none is not listed: it may be an edited copy or the user's own, and
+// nothing tells the two apart. Reads through links the way copyDir writes
+// through them.
 export function findRetiredFiles(
   retired: readonly RetiredBundledPath[],
   bundleDir: string,
   targetDir: string
 ): RetiredFile[] {
   const found: RetiredFile[] = [];
-  for (const { path: relativePath, shipped, marker } of retired) {
+  for (const { path: relativePath, shipped } of retired) {
     if (fs.existsSync(path.join(bundleDir, ...relativePath.split("/")))) continue;
     const content = readRetiredFile(targetDir, relativePath);
     if (content === null) continue;
     const sha256 = hashBundledContent(content);
-    if (shipped.includes(sha256)) found.push({ relativePath, edited: false, sha256 });
-    else if (content.includes(marker)) found.push({ relativePath, edited: true, sha256 });
+    if (shipped.includes(sha256)) found.push({ relativePath, sha256 });
   }
   return found;
 }

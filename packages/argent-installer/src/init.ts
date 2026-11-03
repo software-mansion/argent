@@ -289,9 +289,8 @@ export async function init(args: string[]): Promise<void> {
 
     await reportRetiredFiles(
       findRetiredRulesAndAgents(
-        writtenAdapters,
+        [{ adapters: writtenAdapters, scope: normalizedScope }],
         effectiveRoot,
-        normalizedScope,
         RULES_DIR,
         AGENTS_DIR
       ),

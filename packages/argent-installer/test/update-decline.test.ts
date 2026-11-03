@@ -432,7 +432,6 @@ describe("update — retired agents", () => {
       {
         path: "argent-environment-inspector.md",
         shipped: [hashBundledContent(INSPECTOR)],
-        marker: "name: argent-environment-inspector",
       },
     ];
     fs.writeFileSync(
@@ -468,6 +467,23 @@ describe("update — retired agents", () => {
       );
     }
   );
+
+  // There Claude Code's local and global agents dir are one.
+  it("--yes from the home dir, configured in both scopes, removes the agent once", async () => {
+    const inspector = stage();
+    fs.writeFileSync(
+      path.join(tmpDir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { argent: { command: "argent", args: ["mcp"] } } })
+    );
+    process.chdir(tmpDir);
+
+    await update(["--yes"]);
+
+    expect(fs.existsSync(inspector)).toBe(false);
+    const body = notes().join("\n");
+    expect(body.split("Removed retired agent argent-environment-inspector.md")).toHaveLength(2);
+    expect(body).not.toContain("Could not remove");
+  });
 
   it("asks first when interactive, and keeps the file on no", async () => {
     const inspector = stage();

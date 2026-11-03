@@ -1917,23 +1917,26 @@ export interface RetiredTargetFiles {
 }
 
 // Copying only adds files, so one an older version wrote and this one dropped
-// stays, and editors keep loading it. Same targets as copyRulesAndAgents.
+// stays, and editors keep loading it. Same targets as copyRulesAndAgents, for
+// each scan's adapters and scope.
 export function findRetiredRulesAndAgents(
-  adapters: McpConfigAdapter[],
+  scans: ReadonlyArray<{ adapters: McpConfigAdapter[]; scope: ManagedContentScope }>,
   root: string,
-  scope: ManagedContentScope,
   rulesDir: string,
   agentsDir: string
 ): RetiredTargetFiles[] {
-  const { ruleTargets, agentTargets } = getManagedContentTargets(adapters, root, scope);
-  const scans = [
-    ...ruleTargets.map((target) => ({ kind: "rules" as const, target, bundleDir: rulesDir })),
-    ...agentTargets.map((target) => ({ kind: "agents" as const, target, bundleDir: agentsDir })),
-  ];
+  const targets = scans.flatMap(({ adapters, scope }) => {
+    const { ruleTargets, agentTargets } = getManagedContentTargets(adapters, root, scope);
+    return [
+      ...ruleTargets.map((target) => ({ kind: "rules" as const, target, bundleDir: rulesDir })),
+      ...agentTargets.map((target) => ({ kind: "agents" as const, target, bundleDir: agentsDir })),
+    ];
+  });
   const found: RetiredTargetFiles[] = [];
-  // Targets linked to one canonical dir share its files: list them once.
+  // Targets that are one dir share its files: list them once. That is a link to
+  // a canonical dir, or the local and global target when root is the home dir.
   const seen = new Set<string>();
-  for (const { kind, target, bundleDir } of scans) {
+  for (const { kind, target, bundleDir } of targets) {
     const dir = resolveLinkedDestination(target.targetPath);
     if (seen.has(`${kind}:${realpathOrSelf(dir)}`)) continue;
     seen.add(`${kind}:${realpathOrSelf(dir)}`);

@@ -816,7 +816,7 @@ describe("uninstall — scoped config cleanup", () => {
   const INSPECTOR = "---\nname: argent-environment-inspector\n---\n";
   const CHECKLIST = "## Quality control checklist\n";
 
-  function stageRetiredAgents(): string {
+  function stageRetiredAgents(base = projDir): string {
     const bundle = path.join(tmpDir, "bundle-agents");
     writeFile(path.join(bundle, "argent-current.md"), "current");
     bundleOverride.agentsDir = bundle;
@@ -824,20 +824,18 @@ describe("uninstall — scoped config cleanup", () => {
       {
         path: "argent-environment-inspector.md",
         shipped: [hashBundledContent(INSPECTOR)],
-        marker: "name: argent-environment-inspector",
       },
       {
         path: "references/quality-control-checklist.md",
         shipped: [hashBundledContent(CHECKLIST)],
-        marker: "## Quality control checklist",
       },
     ];
 
-    const agents = path.join(projDir, ".claude", "agents");
+    const agents = path.join(base, ".claude", "agents");
     writeFile(path.join(agents, "argent-current.md"), "current");
     writeFile(path.join(agents, "argent-environment-inspector.md"), INSPECTOR);
     writeFile(path.join(agents, "references", "quality-control-checklist.md"), CHECKLIST);
-    fs.mkdirSync(path.join(projDir, ".git"));
+    fs.mkdirSync(path.join(base, ".git"));
     return agents;
   }
 
@@ -852,7 +850,7 @@ describe("uninstall — scoped config cleanup", () => {
   });
 
   it.each(["--yes", "-y"])(
-    "%s keeps a retired agent the user edited, unasked, and says so",
+    "%s leaves a retired agent the user edited alone, unasked and unmentioned",
     async (flag) => {
       const agents = stageRetiredAgents();
       const edited = path.join(agents, "references", "quality-control-checklist.md");
@@ -863,12 +861,29 @@ describe("uninstall — scoped config cleanup", () => {
 
       const clack = await import("@clack/prompts");
       expect(clack.confirm).not.toHaveBeenCalled();
-      expect(fs.existsSync(edited)).toBe(true);
+      expect(fs.readFileSync(edited, "utf8")).toBe(`${CHECKLIST}My own field.\n`);
       expect(fs.existsSync(path.join(agents, "argent-environment-inspector.md"))).toBe(false);
       const notes = vi.mocked(clack.note).mock.calls.map(([body]) => String(body));
-      expect(notes.some((body) => body.includes("Kept, as they were edited"))).toBe(true);
+      expect(notes.join("\n")).not.toContain("quality-control-checklist.md");
     }
   );
+
+  // There the local and global .claude/agents are one dir.
+  it("--yes from the home dir removes each retired agent once", async () => {
+    const agents = stageRetiredAgents(tmpDir);
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(agents)).toBe(false);
+    const clack = await import("@clack/prompts");
+    const notes = vi
+      .mocked(clack.note)
+      .mock.calls.map(([body]) => String(body))
+      .join("\n");
+    expect(notes.split("Removed retired agent argent-environment-inspector.md")).toHaveLength(2);
+    expect(notes).not.toContain("Could not remove");
+  });
 
   it("--yes removes the agents dir once retired and bundled agents are gone", async () => {
     const agents = stageRetiredAgents();

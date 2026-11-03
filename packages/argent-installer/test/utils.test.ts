@@ -373,18 +373,17 @@ describe("copyDir", () => {
 
 describe("RETIRED_BUNDLED_PATHS", () => {
   // A retired file the bundle still ships has to be listed as it ships now, or
-  // installs of this version would read their own copy as an edited one.
-  it("lists the hash and marker of every retired file the bundle still ships", () => {
+  // copies of this version would stay once the bundle drops it.
+  it("lists the hash of every retired file the bundle still ships", () => {
     for (const [kind, dir] of [
       ["agents", AGENTS_DIR],
       ["rules", RULES_DIR],
     ] as const) {
-      for (const { path: relativePath, shipped, marker } of RETIRED_BUNDLED_PATHS[kind]) {
+      for (const { path: relativePath, shipped } of RETIRED_BUNDLED_PATHS[kind]) {
         const file = path.join(dir, ...relativePath.split("/"));
         if (!fs.existsSync(file)) continue;
         const content = fs.readFileSync(file, "utf8");
         expect(shipped, relativePath).toContain(hashBundledContent(content));
-        expect(content, relativePath).toContain(marker);
       }
     }
   });
@@ -397,12 +396,10 @@ describe("findRetiredFiles / removeRetiredFiles", () => {
     {
       path: "argent-environment-inspector.md",
       shipped: [hashBundledContent(INSPECTOR)],
-      marker: "name: argent-environment-inspector",
     },
     {
       path: "references/quality-control-checklist.md",
       shipped: [hashBundledContent(CHECKLIST)],
-      marker: "## Quality control checklist",
     },
   ];
   let bundle: string;
@@ -429,39 +426,29 @@ describe("findRetiredFiles / removeRetiredFiles", () => {
     target = path.join(tmpDir, ".claude", "agents");
   });
 
-  it("finds unedited copies of retired files the bundle no longer ships", () => {
+  it("finds copies of retired files the bundle no longer ships", () => {
     stageRetired(target);
 
     expect(findRetiredFiles(retired, bundle, target)).toEqual([
-      {
-        relativePath: "argent-environment-inspector.md",
-        edited: false,
-        sha256: hashBundledContent(INSPECTOR),
-      },
+      { relativePath: "argent-environment-inspector.md", sha256: hashBundledContent(INSPECTOR) },
       {
         relativePath: "references/quality-control-checklist.md",
-        edited: false,
         sha256: hashBundledContent(CHECKLIST),
       },
     ]);
   });
 
-  it("reads a copy with CRLF line endings as unedited", () => {
+  it("reads a copy with CRLF line endings as the version shipped", () => {
     put(path.join(target, "argent-environment-inspector.md"), INSPECTOR.replace(/\n/g, "\r\n"));
 
-    expect(findRetiredFiles(retired, bundle, target)).toMatchObject([{ edited: false }]);
-  });
-
-  it("marks a copy edited when it matches no shipped version but keeps the marker", () => {
-    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}My own step.\n`);
-
     expect(findRetiredFiles(retired, bundle, target)).toMatchObject([
-      { relativePath: "argent-environment-inspector.md", edited: true },
+      { relativePath: "argent-environment-inspector.md" },
     ]);
   });
 
-  it("does not list a file at a retired path that lacks the marker", () => {
-    put(path.join(target, "argent-environment-inspector.md"), "---\nname: my-inspector\n---\n");
+  // An edited copy and the user's own file look alike: both may hold their work.
+  it("does not list a file at a retired path that matches no shipped version", () => {
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}My own step.\n`);
     put(path.join(target, "references", "quality-control-checklist.md"), "# My own checklist\n");
 
     expect(findRetiredFiles(retired, bundle, target)).toEqual([]);

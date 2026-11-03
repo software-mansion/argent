@@ -549,12 +549,15 @@ export async function uninstall(args: string[]): Promise<void> {
       }
 
       // Before the bundled content: a retired file left in place would keep its
-      // target dir from emptying. The prune prompt above covers unedited copies.
+      // target dir from emptying. The prune prompt above already asked.
       const retired = await cleanupRetiredFiles(
-        [...scopesToClean].flatMap((scope) =>
-          findRetiredRulesAndAgents(ALL_ADAPTERS, projectRoot, scope, RULES_DIR, AGENTS_DIR)
+        findRetiredRulesAndAgents(
+          [...scopesToClean].map((scope) => ({ adapters: ALL_ADAPTERS, scope })),
+          projectRoot,
+          RULES_DIR,
+          AGENTS_DIR
         ),
-        { interactive: !nonInteractive, confirmUnedited: false }
+        { ask: false }
       );
       // removeBundledContent prunes the parent along with an emptied root.
       for (const root of retired.removedRoots) removeDirIfEmpty(path.dirname(root));

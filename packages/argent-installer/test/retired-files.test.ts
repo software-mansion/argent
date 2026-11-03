@@ -27,12 +27,10 @@ const RETIRED = [
   {
     path: "argent-environment-inspector.md",
     shipped: [hashBundledContent(INSPECTOR)],
-    marker: "name: argent-environment-inspector",
   },
   {
     path: "references/quality-control-checklist.md",
     shipped: [hashBundledContent(CHECKLIST)],
-    marker: "## Quality control checklist",
   },
 ];
 
@@ -70,80 +68,68 @@ afterEach(() => {
 });
 
 describe("cleanupRetiredFiles", () => {
-  it("under --yes removes unedited copies without asking, and keeps edited ones", async () => {
-    const result = await cleanupRetiredFiles(stage(), {
-      interactive: false,
-      confirmUnedited: true,
-    });
+  it("removes without asking when told not to ask, as under --yes", async () => {
+    const result = await cleanupRetiredFiles(stage(), { ask: false });
 
     expect(prompts.confirm).not.toHaveBeenCalled();
     expect(fs.existsSync(inspector())).toBe(false);
-    expect(fs.existsSync(checklist())).toBe(true);
     expect(formatRetiredCleanup(result)).toEqual({
       removed: ["Removed retired agent argent-environment-inspector.md from .claude/agents"],
-      kept: [
-        "Kept, as they were edited. Delete them if no longer needed:",
-        `  ${path.join(".claude/agents", "references", "quality-control-checklist.md")}`,
-      ],
+      kept: [],
     });
   });
 
-  it("lists the unedited copies and asks before removing them", async () => {
+  it("leaves an edited copy alone and does not mention it", async () => {
+    const found = stage();
+
+    expect(found[0].files.map((f) => f.relativePath)).toEqual(["argent-environment-inspector.md"]);
+    prompts.confirm.mockResolvedValueOnce(true);
+    await cleanupRetiredFiles(found, { ask: true });
+
+    expect(prompts.warn).toHaveBeenCalledWith(expect.not.stringContaining("quality-control"));
+    expect(fs.existsSync(inspector())).toBe(false);
+    expect(fs.readFileSync(checklist(), "utf8")).toBe(`${CHECKLIST}My own field.\n`);
+  });
+
+  it("lists the copies and asks before removing them", async () => {
     writeFile(inspector(), INSPECTOR);
     prompts.confirm.mockResolvedValueOnce(true);
 
-    const result = await cleanupRetiredFiles(find(), { interactive: true, confirmUnedited: true });
+    const result = await cleanupRetiredFiles(find(), { ask: true });
 
     expect(prompts.warn).toHaveBeenCalledWith(
       expect.stringContaining(path.join(".claude/agents", "argent-environment-inspector.md"))
     );
+    expect(prompts.confirm).toHaveBeenCalledTimes(1);
     expect(prompts.confirm).toHaveBeenCalledWith({ message: "Remove them?", initialValue: true });
     expect(fs.existsSync(inspector())).toBe(false);
     // The target held nothing else, so it went too.
     expect(result.removedRoots).toEqual([agents]);
   });
 
-  it("keeps unedited copies the user declines", async () => {
+  it("keeps the copies the user declines", async () => {
     writeFile(inspector(), INSPECTOR);
     prompts.confirm.mockResolvedValueOnce(false);
 
-    const result = await cleanupRetiredFiles(find(), { interactive: true, confirmUnedited: true });
+    const result = await cleanupRetiredFiles(find(), { ask: true });
 
     expect(fs.existsSync(inspector())).toBe(true);
-    expect(result.declined).toEqual([
-      path.join(".claude/agents", "argent-environment-inspector.md"),
-    ]);
-  });
-
-  it("asks about edited copies on their own, defaulting to keep them", async () => {
-    prompts.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(true);
-
-    await cleanupRetiredFiles(stage(), { interactive: true, confirmUnedited: true });
-
-    expect(prompts.confirm).toHaveBeenLastCalledWith({
-      message: "Remove them too?",
-      initialValue: false,
+    expect(formatRetiredCleanup(result)).toEqual({
+      removed: [],
+      kept: [
+        "Kept, as you chose (rename one to keep it for good):",
+        `  ${path.join(".claude/agents", "argent-environment-inspector.md")}`,
+      ],
     });
-    expect(fs.existsSync(inspector())).toBe(false);
-    expect(fs.existsSync(checklist())).toBe(false);
   });
 
   it("reads a cancelled prompt as no", async () => {
+    writeFile(inspector(), INSPECTOR);
     prompts.confirm.mockResolvedValue(Symbol("cancel"));
 
-    await cleanupRetiredFiles(stage(), { interactive: true, confirmUnedited: true });
+    await cleanupRetiredFiles(find(), { ask: true });
 
     expect(fs.existsSync(inspector())).toBe(true);
-    expect(fs.existsSync(checklist())).toBe(true);
-  });
-
-  it("does not ask about unedited copies when the caller already has", async () => {
-    writeFile(inspector(), INSPECTOR);
-
-    await cleanupRetiredFiles(find(), { interactive: true, confirmUnedited: false });
-
-    expect(prompts.confirm).not.toHaveBeenCalled();
-    expect(fs.existsSync(inspector())).toBe(false);
   });
 
   it("keeps a file the user changed while the prompt was open", async () => {
@@ -153,7 +139,7 @@ describe("cleanupRetiredFiles", () => {
       return true;
     });
 
-    const result = await cleanupRetiredFiles(find(), { interactive: true, confirmUnedited: true });
+    const result = await cleanupRetiredFiles(find(), { ask: true });
 
     expect(fs.existsSync(inspector())).toBe(true);
     expect(result.failed).toEqual([path.join(".claude/agents", "argent-environment-inspector.md")]);

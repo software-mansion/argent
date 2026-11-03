@@ -820,16 +820,15 @@ export async function update(args: string[]): Promise<void> {
       }
 
       await reportRetiredFiles(
-        [
-          ...findRetiredRulesAndAgents(
-            globalAdapters,
-            projectRoot,
-            "global",
-            RULES_DIR,
-            AGENTS_DIR
-          ),
-          ...findRetiredRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
-        ],
+        findRetiredRulesAndAgents(
+          [
+            { adapters: globalAdapters, scope: "global" },
+            { adapters: localAdapters, scope: "local" },
+          ],
+          projectRoot,
+          RULES_DIR,
+          AGENTS_DIR
+        ),
         !nonInteractive
       );
 
