@@ -16,7 +16,7 @@ extension ArgentRunnerSession {
         "_performWithInteractionOptions:block:"
     )
     /// Bit 1 skips the pre-event wait, bit 2 the post-event one.
-    private static let skipQuiescenceOptions: UInt = 0b11
+    private static let skipQuiescenceOptions: UInt32 = 0b11
 
     private static let applicationImpl = NSSelectorFromString("applicationImpl")
     private static let currentProcess = NSSelectorFromString("currentProcess")
@@ -38,7 +38,7 @@ extension ArgentRunnerSession {
         }
 
         typealias Perform = @convention(c) (
-            NSObject, Selector, UInt, @convention(block) () -> Void
+            NSObject, Selector, UInt32, @convention(block) () -> Void
         ) -> Void
         let perform = unsafeBitCast(app.method(for: selector), to: Perform.self)
 
