@@ -7,6 +7,7 @@ import type { NativeProfilerSessionApi } from "../../../../blueprints/native-pro
 import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
+import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import {
   listenForDarwinNotification,
@@ -229,7 +230,9 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
   let runningUserApps: { info: AppInfo; pid: number }[];
   try {
     runningUserApps = enumerateRunningUserApps(udid);
-  } catch {
+  } catch (err) {
+    // A refused `simctl` says nothing about the app, so this is not "it isn't running yet".
+    if (err instanceof Error && err.cause instanceof XcodeFirstLaunchPendingError) throw err;
     return { executable: name, pid: null };
   }
   const matched = runningUserApps.find(

@@ -93,17 +93,18 @@ Argent reads Xcode's files to find if a `simctl` call starts the install. If it 
 
 - Argent does not look for booted simulators in the background.
 - `list-devices` does not show local iOS simulators. Its `hint` field gives the reason to the agent.
+- The tools that need `simctl` fail. Most of them return an error that gives the same reason to the agent.
 
-Other Argent tools that call `simctl` can still start the install. An `xcrun simctl` command that the agent or you run also starts it. Commands that call `simctl`, for example `npx react-native run-ios`, also start it.
+Argent stops only its own calls. An `xcrun simctl` command that the agent or you run still starts the install. Commands that call `simctl`, for example `npx react-native run-ios`, also start it.
 
-The `hint` field names the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
+The `hint` field and the error name the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
 
 To install the components, do one of these steps:
 
 - Open that Xcode and let it install the components.
 - Run the `xcodebuild` of that Xcode with `sudo`, for example `sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch`.
 
-Argent finds the installed components at the next `list-devices` call. You do not need to restart Argent.
+Argent finds the installed components at the next tool call. You do not need to restart Argent.
 
 ## Linux hosts running Android emulators
 

@@ -259,8 +259,12 @@ export function startSimulatorWatcher(registry: Registry): {
 
     for (const [udid, service] of trackedServices) {
       if (!booted.has(udid)) continue;
-      const failure = service.getInitFailure();
-      if (failure && !failure.givenUp) {
+      /**
+       * Not only after a recorded failure: a setup refused while Xcode's install
+       * was pending records none, and nothing else arms the simulator for an app
+       * launched outside argent.
+       */
+      if (!service.isEnvSetup() && !service.getInitFailure()?.givenUp) {
         pendingAttempts.push(service.ensureEnvReady().catch(() => {}));
       }
     }
