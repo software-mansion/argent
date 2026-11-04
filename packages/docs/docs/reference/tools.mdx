@@ -67,7 +67,7 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 - `inUse` is `true`.
 - `idleSeconds` is the time in seconds since a tool last used the device. It is `0` while a tool call is using the device.
 
-All agents that use the same Argent installation share one tool-server. Thus, a different agent can be the agent that uses the device. The fields are for information only, and Argent does not refuse a device because of them. The fields do not show devices that other Argent installations or other programs use. Tools that only run a platform command, such as `reinstall-app`, do not count as use. A HarmonyOS device never gets the fields. A Vega device gets the fields only after a debugger tool or a network tool connects to it.
+All agents that use the same Argent installation share one tool-server. Thus, a different agent can be the agent that uses the device. The fields are for information only, and Argent does not refuse a device because of them. The fields do not show devices that other Argent installations or other programs use. Tools that only run a platform command, such as `reinstall-app`, do not count as use. A HarmonyOS device never gets the fields. On a Vega device, only debugger tools and network tools count as use.
 
 ## Inspecting the screen
 

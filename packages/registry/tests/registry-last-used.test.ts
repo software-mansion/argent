@@ -70,6 +70,28 @@ describe("Registry -- lastUsedAt", () => {
     expect(duringCall).toBe(1_010_000);
   });
 
+  it("keeps a service a dispatched step used in use until the dispatching call ends", async () => {
+    const registry = new Registry();
+    registry.registerBlueprint(createMockBlueprint("Sim"));
+    registry.registerTool(createMockToolDef("tap", () => ({ sim: "Sim:dev-1" })));
+    let betweenSteps: number | undefined;
+    registry.registerTool({
+      id: "run-sequence",
+      services: () => ({}),
+      execute: async () => {
+        await registry.invokeTool("tap");
+        vi.setSystemTime(1_005_000);
+        betweenSteps = lastUsedAt(registry, "Sim:dev-1");
+        vi.setSystemTime(1_008_000);
+      },
+    });
+
+    await registry.invokeTool("run-sequence");
+
+    expect(betweenSteps).toBe(1_005_000);
+    expect(lastUsedAt(registry, "Sim:dev-1")).toBe(1_008_000);
+  });
+
   it("restamps a service when the call that used it finishes, even when the call fails", async () => {
     const registry = new Registry();
     registry.registerBlueprint(createMockBlueprint("Sim"));
@@ -114,6 +136,23 @@ describe("Registry -- lastUsedAt", () => {
 
     expect(registry.getSnapshot().services.get("Devtools:dev-1")?.state).toBe(ServiceState.RUNNING);
     expect(lastUsedAt(registry, "Devtools:dev-1")).toBeUndefined();
+  });
+
+  it("forgets the stamp of a service that crashed", async () => {
+    const registry = new Registry();
+    const { blueprint, emitters } = createStaticBlueprint("sim");
+    registry.registerBlueprint(blueprint);
+    registry.registerTool(createMockToolDef("tap", () => ({ sim: staticUrn("sim") })));
+
+    await registry.invokeTool("tap");
+    emitters[0]!.emit("terminated", new Error("simulator-server exited"));
+    await vi.waitFor(() =>
+      expect(registry.getSnapshot().services.get(staticUrn("sim"))?.state).toBe(ServiceState.ERROR)
+    );
+    await registry.resolveService(staticUrn("sim"));
+
+    expect(registry.getSnapshot().services.get(staticUrn("sim"))?.state).toBe(ServiceState.RUNNING);
+    expect(lastUsedAt(registry, staticUrn("sim"))).toBeUndefined();
   });
 
   it("leaves no stamp on a service whose start failed in a tool call", async () => {

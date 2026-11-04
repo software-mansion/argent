@@ -590,8 +590,11 @@ describe("list-devices", () => {
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       return { stdout: "", stderr: "" };
     });
+    // An unlisted device's service makes usage matching walk every id, the null serial included.
+    const registry = registryWithTap();
+    await registry.invokeTool("tap", { urn: "SimulatorServer:emulator-5580" });
 
-    const result = await listDevicesTool.execute!({}, {});
+    const result = await createListDevicesTool(registry).execute!({}, {});
     const vega = result.devices.filter((d) => d.platform === "vega") as Array<{
       kind: string;
       state: string;
@@ -606,6 +609,7 @@ describe("list-devices", () => {
       serial: null,
       vvdImage: "tv",
     });
+    expect(vega[0]).not.toHaveProperty("inUse");
   });
 
   it("derives physical iOS state from transportType alone and sorts connected first", async () => {
@@ -889,7 +893,7 @@ describe("list-devices — external provider shadows", () => {
     expect(iPad[0]).not.toHaveProperty("external");
   });
 
-  it("marks a claimed simulator in use when a tool drove it by its raw udid", async () => {
+  it("marks a claimed simulator in use by the latest tool call under either of its ids", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "xcrun" && args[0] === "simctl") {
         return { stderr: "", stdout: simctlJson() };
@@ -901,16 +905,25 @@ describe("list-devices — external provider shadows", () => {
 
       return { stderr: "", stdout: "" };
     });
-    const registry = registryWithTap();
-    await registry.invokeTool("tap", { urn: `SimulatorServer:${CLAIMED_UDID}` });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    try {
+      const registry = registryWithTap();
+      await registry.invokeTool("tap", { urn: `SimulatorServer:ext:acme-3f2a9c:${CLAIMED_UDID}` });
+      vi.setSystemTime(1_020_000);
+      await registry.invokeTool("tap", { urn: `SimulatorServer:${CLAIMED_UDID}` });
+      vi.setSystemTime(1_025_000);
 
-    const result = await createListDevicesTool(registry).execute!({}, {});
+      const result = await createListDevicesTool(registry).execute!({}, {});
 
-    const claimed = result.devices.filter(
-      (device) => "udid" in device && (device.udid as string).includes(CLAIMED_UDID)
-    );
-    expect(claimed).toHaveLength(1);
-    expect(claimed[0]).toMatchObject({ external: true, inUse: true, idleSeconds: 0 });
+      const claimed = result.devices.filter(
+        (device) => "udid" in device && (device.udid as string).includes(CLAIMED_UDID)
+      );
+      expect(claimed).toHaveLength(1);
+      expect(claimed[0]).toMatchObject({ external: true, inUse: true, idleSeconds: 5 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /** The rules ride on the result, so they cost nothing until one is listed. */

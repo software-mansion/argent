@@ -40,6 +40,13 @@ type ZodIssue = z.core.$ZodIssue;
  */
 const resolvedDuringInvocation = new AsyncLocalStorage<Set<URN>>();
 
+/**
+ * The use sets of the running tool call and of every call that dispatched it
+ * (run-sequence, flow steps), so a device a step used stays in use until the
+ * outermost call ends.
+ */
+const usedByCallChain = new AsyncLocalStorage<readonly Set<URN>[]>();
+
 export class Registry {
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
@@ -51,7 +58,7 @@ export class Registry {
    * resolves don't count, and the entry goes when the service stops being live.
    */
   private lastUsedAt = new Map<URN, number>();
-  /** The services each in-flight tool call has resolved so far. */
+  /** The services each in-flight tool call, or a call it dispatched, has resolved so far. */
   private inFlightCalls = new Set<ReadonlySet<URN>>();
   /**
    * Injected so the registry needs no dependency on the flag store; the
@@ -98,6 +105,7 @@ export class Registry {
      * of those can be holding just as dead a handle as a declared one.
      */
     resolvedDuringInvocation.getStore()?.add(urn);
+    for (const used of usedByCallChain.getStore() ?? []) used.add(urn);
     return this._resolve<T>(urn, [], options);
   }
 
@@ -201,20 +209,23 @@ export class Registry {
       const runOnce = async (): Promise<TResult> => {
         const resolved = new Set<URN>();
         lazilyResolved = resolved;
-        this.inFlightCalls.add(resolved);
+        const used = new Set<URN>();
+        this.inFlightCalls.add(used);
 
         try {
-          return await resolvedDuringInvocation.run(resolved, async () => {
-            const resolvedServices: Record<string, unknown> = {};
-            for (const { alias, urn, options: resolveOptions } of refs) {
-              resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
-            }
-            return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
-          });
+          return await usedByCallChain.run([used, ...(usedByCallChain.getStore() ?? [])], () =>
+            resolvedDuringInvocation.run(resolved, async () => {
+              const resolvedServices: Record<string, unknown> = {};
+              for (const { alias, urn, options: resolveOptions } of refs) {
+                resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+              }
+              return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+            })
+          );
         } finally {
-          this.inFlightCalls.delete(resolved);
+          this.inFlightCalls.delete(used);
           const now = Date.now();
-          for (const urn of resolved) {
+          for (const urn of used) {
             const node = this.services.get(urn);
             if (node && isLiveServiceState(node.state)) this.lastUsedAt.set(urn, now);
           }
