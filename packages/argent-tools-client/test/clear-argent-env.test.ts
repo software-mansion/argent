@@ -51,8 +51,7 @@ describe("clear-argent-env suite guard", () => {
   it("sweeps the prefix whatever case it was exported in", async () => {
     // Windows resolves process.env case-insensitively but enumerates the keys
     // with the casing they were set in, so a literal `startsWith("ARGENT_")`
-    // leaves `set argent_host=…` readable as ARGENT_HOST — the one override
-    // this file's comment names as changing an outcome.
+    // leaves `set argent_host=…` readable as ARGENT_HOST.
     process.env[MIXED_CASE_PROBE] = "ambient";
 
     await rerunSetup();
