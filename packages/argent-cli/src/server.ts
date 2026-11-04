@@ -2,7 +2,7 @@ import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.j
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { constants, homedir, networkInterfaces } from "node:os";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   killToolServer,
   findFreePort,
@@ -101,14 +101,29 @@ function logsCmd(follow: boolean): void {
     process.stdout.write(fs.readFileSync(LOG_FILE, "utf8"));
     return;
   }
+  const cannotFollow = (err: Error) => {
+    console.error(
+      `argent server logs: cannot run \`tail\` to follow the log (${err.message}). ` +
+        "Run `argent server logs` without -f to print it."
+    );
+    process.exit(1);
+  };
   // Delegate follow to `tail` rather than reimplementing it; Ctrl-C then exits
   // the way a terminal user expects.
-  const child = spawn("tail", ["-f", LOG_FILE], { stdio: "inherit" });
+  let child: ChildProcess;
+  try {
+    child = spawn("tail", ["-f", LOG_FILE], { stdio: "inherit" });
+  } catch (err) {
+    // Only ENOENT, EACCES, EAGAIN, EMFILE and ENFILE arrive as `error`; Node
+    // throws the rest (e.g. ENOEXEC, ELOOP) from spawn() itself.
+    return cannotFollow(err as Error);
+  }
   // Mirror tail's exit; signal deaths use the conventional 128+signo code, as
   // runForeground does.
   child.on("exit", (code, signal) =>
     process.exit(code ?? (signal ? 128 + (signalNumber(signal) ?? 0) : 0))
   );
+  child.on("error", cannotFollow);
 }
 
 interface StartFlags {
