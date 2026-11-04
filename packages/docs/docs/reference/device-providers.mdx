@@ -83,6 +83,14 @@ Argent ignores an unknown token. Thus a provider can declare a capability of a n
 
 Argent uses `native-devtools` on iOS only. `argent providers check` reports an error for an Android device that declares this token.
 
+### Lend the native agent of the provider
+
+A provider that already injects its own native agent can lend that agent to Argent. The provider grants `native-devtools` and sets `nativeDevtools.socketPath` on the device. Argent then connects to that socket. Argent does not inject its own agent.
+
+The socket uses the same newline-delimited JSON messages as the agent of Argent. Send a `Control` message that names the `bundleId` of the app immediately after you accept the connection. Argent waits a maximum of 2 seconds for this message before it sends a call. If the message does not arrive in this time, calls fail as "not connected" until the message arrives.
+
+If the provider closes the connection, the next call connects again.
+
 ### One grant, both names of the device
 
 A device has two names. The first name is the `ext:` id. The second name is the real udid or serial. The agent sees both names, because the `ext:` id contains the real name.

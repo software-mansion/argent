@@ -19,6 +19,12 @@ const execFileAsync = promisify(execFile);
 
 const POLL_INTERVAL_MS = 10_000;
 
+/**
+ * Most polls to sit out after a lent simulator's attach keeps failing, about
+ * five minutes. Each failure in a row doubles the wait up to this.
+ */
+const MAX_ATTACH_BACKOFF_POLLS = 30;
+
 async function getBootedUdidsInSet(deviceSet: DeviceSetPath): Promise<Set<string>> {
   const { stdout } = await execFileAsync("xcrun", [
     ...simctlPrefix(deviceSet),
@@ -62,7 +68,7 @@ async function initUdid(
   registry: Registry,
   udid: string,
   trackedServices: Map<string, NativeDevtoolsApi>
-): Promise<void> {
+): Promise<boolean> {
   // tvOS sims are also platform "ios" (classified by UDID shape) and
   // native-devtools covers them: its ensureEnv picks the TVOSSIMULATOR dylib
   // slice.
@@ -70,8 +76,10 @@ async function initUdid(
   try {
     const service = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
     trackedServices.set(udid, service);
+    return true;
   } catch {
     // Factory tolerates env-init failure; a throw here is structural.
+    return false;
   }
 }
 
@@ -84,6 +92,15 @@ export function startSimulatorWatcher(registry: Registry): {
    * Skipped UDIDs, so the reason is logged once per boot rather than per tick.
    */
   const reportedSkips = new Set<string>();
+
+  /**
+   * Lent simulators whose attach failed, with the failures in a row and the
+   * polls left to sit out. A provider that accepts and then hangs up or one
+   * that stopped listening, would otherwise be dialled on every poll and log a
+   * service error each time. The watcher only warms the connection up and a
+   * tool call still attaches on its own, so waiting longer costs nothing.
+   */
+  const attachBackoff = new Map<string, { failures: number; pollsLeft: number }>();
 
   /**
    * Split the booted set into the simulators the watcher may drive and the ones
@@ -198,10 +215,40 @@ export function startSimulatorWatcher(registry: Registry): {
      */
     await handBackClaimed(claimed);
 
-    const newUdids = [...booted].filter((udid) => !trackedServices.has(udid));
-    const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
-      initUdid(registry, udid, trackedServices)
-    );
+    for (const udid of attachBackoff.keys()) {
+      if (!booted.has(udid) || !claimed.has(udid)) attachBackoff.delete(udid);
+    }
+
+    const newUdids = [...booted].filter((udid) => {
+      if (trackedServices.has(udid)) return false;
+
+      const backoff = attachBackoff.get(udid);
+
+      if (backoff && backoff.pollsLeft > 0) {
+        backoff.pollsLeft -= 1;
+        return false;
+      }
+
+      return true;
+    });
+
+    const pendingAttempts: Promise<unknown>[] = newUdids.map(async (udid) => {
+      const attached = await initUdid(registry, udid, trackedServices);
+
+      if (!claimed.has(udid)) return;
+
+      if (attached) {
+        attachBackoff.delete(udid);
+        return;
+      }
+
+      const failures = (attachBackoff.get(udid)?.failures ?? 0) + 1;
+
+      attachBackoff.set(udid, {
+        failures,
+        pollsLeft: Math.min(2 ** (failures - 1), MAX_ATTACH_BACKOFF_POLLS),
+      });
+    });
 
     for (const [udid, service] of trackedServices) {
       if (!booted.has(udid)) continue;

@@ -333,6 +333,93 @@ describe("simulator-watcher against a provider's simulator", () => {
     });
   });
 
+  /**
+   * A provider that accepts and then hangs up, or that stopped listening,
+   * fails every attach. The watcher only warms the connection up, so it backs
+   * off instead of dialling the provider and logging a service error each
+   * poll. A tool call still attaches on its own.
+   */
+  describe("a lent simulator whose attach keeps failing", () => {
+    function makeFailingRegistry(): {
+      registry: Registry;
+      resolveService: ReturnType<typeof vi.fn>;
+      succeed: () => void;
+    } {
+      let failing = true;
+      const api = makeApi();
+      const resolveService = vi.fn(async (urn: string) => {
+        if (failing && urn.endsWith(CLAIMED_UDID)) throw new Error("attach lost");
+        return api;
+      });
+
+      return {
+        registry: { resolveService, disposeService: vi.fn(async () => {}) } as unknown as Registry,
+        resolveService,
+        succeed: () => {
+          failing = false;
+        },
+      };
+    }
+
+    const claimedAttempts = (resolveService: ReturnType<typeof vi.fn>) =>
+      resolvedUdids(resolveService).filter((udid) => udid === CLAIMED_UDID).length;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      publishDescriptor({ capabilities: ["simctl", "native-devtools"] });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("waits longer between attempts after each failure", async () => {
+      const { registry, resolveService } = makeFailingRegistry();
+
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      const attempts = [claimedAttempts(resolveService)];
+      for (let poll = 1; poll <= 10; poll++) {
+        await vi.advanceTimersByTimeAsync(10_000);
+        attempts.push(claimedAttempts(resolveService));
+      }
+      stop();
+
+      /** Tried at polls 0, 2, 5 and 10: one, two and four polls sat out. */
+      expect(attempts).toEqual([1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4]);
+    });
+
+    it("attaches at the next due attempt once the provider serves again", async () => {
+      const { registry, resolveService, succeed } = makeFailingRegistry();
+
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(claimedAttempts(resolveService)).toBe(2);
+
+      succeed();
+      await vi.advanceTimersByTimeAsync(30_000);
+      stop();
+
+      /** Attached on poll 5 and tracked after that, so not resolved again. */
+      expect(claimedAttempts(resolveService)).toBe(3);
+    });
+
+    it("keeps retrying argent's own simulator on every poll", async () => {
+      const { registry, resolveService } = makeFailingRegistry();
+      resolveService.mockImplementation(async () => {
+        throw new Error("bind failed");
+      });
+
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      await vi.advanceTimersByTimeAsync(30_000);
+      stop();
+
+      expect(resolvedUdids(resolveService).filter((udid) => udid === OWN_UDID)).toHaveLength(4);
+    });
+  });
+
   /** The claim is only as live as the process behind it. */
   it("ignores a claim whose provider process is gone", async () => {
     publishDescriptor({ capabilities: ["simctl"], pid: DEAD_PID });

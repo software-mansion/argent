@@ -62,10 +62,17 @@ export interface ServiceBlueprint<T = unknown, C = unknown> {
   namespace: string;
   getURN(context: C): URN;
   getDependencies?(context: C): Record<string, string>;
+  /**
+   * `signal` aborts when the service is torn down before the factory resolves,
+   * e.g. on tool-server shutdown. A factory that waits on something outside the
+   * process should stop waiting then and release what it holds, because the
+   * registry has no instance to dispose yet.
+   */
   factory(
     deps: Record<string, unknown>,
     context: C,
-    options?: Record<string, unknown>
+    options?: Record<string, unknown>,
+    signal?: AbortSignal
   ): Promise<ServiceInstance<T>>;
   /**
    * Whether an error thrown by a tool that used this instance means the instance
@@ -85,6 +92,8 @@ export interface ServiceNode<T = unknown> {
   blueprint: ServiceBlueprint<T, unknown>;
   state: ServiceState;
   instance: ServiceInstance<T> | null;
+  /** Aborts the factory in flight; set only while the node is STARTING. */
+  initAbort: AbortController | null;
   initPromise: Promise<T> | null;
   dependents: Set<string>;
 }
