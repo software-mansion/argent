@@ -162,6 +162,17 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(await recordedSteps()).toHaveLength(0);
   });
 
+  it("refuses a misplaced selector before parsing args", async () => {
+    const res = (await record({
+      command: "screenshot",
+      args: "{not json",
+      selector: { identifier: "save-final" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/applies to a recorded `gesture-tap`/);
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
   it("refuses a selector on a tap carrying delayMs, naming delayMs", async () => {
     const res = (await record({
       command: "gesture-tap",

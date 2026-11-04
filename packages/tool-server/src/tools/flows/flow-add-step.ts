@@ -1393,6 +1393,20 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         : undefined;
       if (nested) return recordNothing(session, nested);
 
+      // Refused, not dropped: only the tap path records a selector.
+      if (params.selector && command !== "gesture-tap") {
+        return recordNothing(
+          session,
+          `\`selector\` applies to a recorded \`gesture-tap\`, not to \`${params.command}\`.`
+        );
+      }
+      if (params.selector && params.delayMs !== undefined) {
+        return recordNothing(
+          session,
+          "A `gesture-tap` recorded with `delayMs` keeps its coordinates, so `selector` would be dropped. Record the tap without `delayMs`."
+        );
+      }
+
       let args: Record<string, unknown>;
       try {
         args = params.args ? JSON.parse(params.args) : {};
@@ -1453,20 +1467,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         typeof args.udid === "string" &&
         typeof args.x === "number" &&
         typeof args.y === "number";
-
-      // Refused, not dropped: only the tap path records a selector.
-      if (params.selector && params.command !== "gesture-tap") {
-        return recordNothing(
-          session,
-          `\`selector\` applies to a recorded \`gesture-tap\`, not to \`${params.command}\`.`
-        );
-      }
-      if (params.selector && params.delayMs !== undefined) {
-        return recordNothing(
-          session,
-          "A `gesture-tap` recorded with `delayMs` keeps its coordinates, so `selector` would be dropped. Record the tap without `delayMs`."
-        );
-      }
 
       let captured: TapCapture | undefined;
       if (isTap) {
