@@ -208,12 +208,12 @@ type BootDeviceResult =
 
 function bootTarget(params: BootDeviceParams): string {
   return (
-    params.udid ??
-    params.avdName ??
-    params.vvdImage ??
-    params.harmonyInstance ??
-    params.electronAppPath ??
-    params.browser ??
+    params.udid ||
+    params.avdName ||
+    params.vvdImage ||
+    params.harmonyInstance ||
+    params.electronAppPath ||
+    params.browser ||
     "device"
   );
 }

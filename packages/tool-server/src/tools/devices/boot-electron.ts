@@ -284,18 +284,13 @@ const ANTI_THROTTLING_ARGS = [
   "--disable-renderer-backgrounding",
 ];
 
-function portInUseError(port: number, label: string): FailureError {
-  return new FailureError(
-    `${label} boot: port ${port} is already in use on 127.0.0.1. If an app or browser with ` +
-      `remote debugging holds it, drive that one as chromium-cdp-${port}; otherwise omit ` +
-      `\`electronPort\` to get a free port.`,
-    {
-      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
-      failure_stage: "electron_port_in_use",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    }
-  );
+function portInUseError(message: string): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
+    failure_stage: "electron_port_in_use",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
 }
 
 /** Fixed ports with a boot in progress, whose child may not have bound yet. */
@@ -312,7 +307,10 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   if (port === undefined) return bootOnce(options, label);
   if (bootingPorts.has(port)) {
     options.onProcessGone?.();
-    throw portInUseError(port, label);
+    throw portInUseError(
+      `${label} boot: another boot on port ${port} is still starting. Retry once it ` +
+        `finishes, or omit \`electronPort\` to get a free port.`
+    );
   }
   bootingPorts.add(port);
   try {
@@ -327,7 +325,11 @@ async function bootOnce(options: BootElectronOptions, label: string): Promise<El
   let launcher: { command: string; args: string[] };
   try {
     if (options.port !== undefined && (await isLoopbackPortAnswering(options.port))) {
-      throw portInUseError(options.port, label);
+      throw portInUseError(
+        `${label} boot: port ${options.port} is already in use on 127.0.0.1. If an app or ` +
+          `browser with remote debugging holds it, drive that one as ` +
+          `chromium-cdp-${options.port}; otherwise omit \`electronPort\` to get a free port.`
+      );
     }
     port = options.port ?? (await pickFreePort());
     launcher = resolveLauncher(options.appPath);

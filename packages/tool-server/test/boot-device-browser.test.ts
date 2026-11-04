@@ -42,6 +42,9 @@ describe("boot-device browser", () => {
     expect(tool.interaction!.startedMsg!({ params: { browser: "edge" } } as never)).toBe(
       "Starting edge"
     );
+    expect(tool.interaction!.startedMsg!({ params: { udid: "", browser: "edge" } } as never)).toBe(
+      "Starting edge"
+    );
   });
 
   it("rejects a browser outside the supported set at the schema", () => {

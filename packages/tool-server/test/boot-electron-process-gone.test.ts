@@ -181,7 +181,9 @@ describe("bootElectronApp onProcessGone / label", () => {
     }).catch((e: unknown) => e);
 
     expect(getFailureSignal(second)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
-    expect((second as Error).message).toMatch(/^Browser boot: port 1 is already in use/);
+    expect((second as Error).message).toMatch(
+      /^Browser boot: another boot on port 1 is still starting/
+    );
     expect(gone).toHaveBeenCalledTimes(1);
     await first;
     expect(spawnMock).toHaveBeenCalledTimes(1);
