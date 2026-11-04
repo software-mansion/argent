@@ -597,6 +597,37 @@ describe("prepareFileInputs — relative paths", () => {
     expect(out.project_root!.path).toBe("C:\\work\\app");
   });
 
+  it.each(["~/app", "~", "$HOME/app", "${HOME}/app", "%USERPROFILE%\\app", "file:///work/app"])(
+    "sends %s as written, for the tool-server to refuse",
+    async (projectRoot) => {
+      const specs: FileInputSpec[] = [
+        { target: "project_root", path: "${project_root}", kind: "probe" },
+      ];
+
+      const out = (await prepareFileInputs(
+        specs,
+        { project_root: projectRoot },
+        { includeContent: false }
+      )) as Record<string, FileInputWire>;
+
+      expect(out.project_root!.path).toBe(projectRoot);
+    }
+  );
+
+  it.each(["app~", "a$/b", "50%/app"])("resolves the relative path %s", async (projectRoot) => {
+    const specs: FileInputSpec[] = [
+      { target: "project_root", path: "${project_root}", kind: "probe" },
+    ];
+
+    const out = (await prepareFileInputs(
+      specs,
+      { project_root: projectRoot },
+      { includeContent: false }
+    )) as Record<string, FileInputWire>;
+
+    expect(out.project_root!.path).toBe(path.join(cwd, projectRoot));
+  });
+
   it.each([
     ["..\\proj\\app.apk", "C:\\work\\app\\..\\proj\\app.apk"],
     ["C:..\\proj\\app.apk", "C:\\work\\app\\..\\proj\\app.apk"],

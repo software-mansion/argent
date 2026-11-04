@@ -214,6 +214,8 @@ The client resolves a relative path in these arguments against its working direc
 
 The `e2e-*` tools refuse an `e2e_test_path` or a `project_root` with a `..` segment, also a relative one.
 
+The client does not expand `~`, a `$` or `%` variable, or a `file:` URL. It sends such a path as written, and the `e2e-*` tools refuse it.
+
 The working directory of `argent run` is the directory of the shell. The working directory of the [Argent SDK](/docs/reference/node-client) is `process.cwd()` of the program. The working directory of the MCP server is the directory where the editor starts `argent mcp`.
 
 Other arguments get to the tool-server as written. The working directory of the tool-server is the directory of the client that started it. Give an absolute path in other arguments that name a file or a directory.
