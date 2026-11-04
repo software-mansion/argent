@@ -88,6 +88,7 @@ Then the agent reads the details of one record by its ID. The native `NSURLProto
 - The duration and the size
 - The bodies of the request and of the response
 - For Chromium, the initiator of the request
+- For Chromium, each earlier hop of a redirected request, with its method, URL, status and Location. The status, the headers and the body describe the final hop.
 
 For the JS runtime layer, native network capture and the Chrome DevTools Protocol layer, Argent replaces the values of secret headers with `[REDACTED]`. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word. The native `NSURLProtocol` layer does not replace these values. See the Limits section.
 
