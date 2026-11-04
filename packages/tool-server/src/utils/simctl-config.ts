@@ -11,9 +11,10 @@ export const SIMCTL_SPAWN_TIMEOUT_MS = 10_000;
  * `SIGTERM`, so the promise never settles and the timeout never fires. Mirrors
  * `ADB_KILL_SIGNAL` in `adb.ts`.
  *
- * Killing the direct child suffices while `simctl` is a single-process XPC
- * client whose real work runs under the simulator's `launchd_sim`. Since Xcode
- * 27.1 it is a bash wrapper that can hang in a child `xcodebuild
- * -runFirstLaunch`, which a direct-child kill orphans; `execSimctl` in
- * `simctl-exec.ts` kills the whole process group instead. */
+ * Killing the direct child suffices for the real `simctl`, a single-process
+ * XPC client whose work runs under the simulator's `launchd_sim`. But `xcrun
+ * simctl` first runs Xcode's bash wrapper (seen in 26.6 and 27.2), which can
+ * hang in a child `xcodebuild -runFirstLaunch` that a direct-child kill
+ * orphans; `execSimctl` in `simctl-exec.ts` kills the whole process group
+ * instead. */
 export const SIMCTL_KILL_SIGNAL = "SIGKILL" as const;
