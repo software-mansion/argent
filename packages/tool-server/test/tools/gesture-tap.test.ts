@@ -78,16 +78,18 @@ describe("gesture-tap", () => {
     }
   });
 
-  it("physical iOS: a count above 2 still rides one runner command, documented as separate taps", async () => {
+  it("physical iOS: a count above 2 still rides one runner command, documented as looped single taps", async () => {
     // Hardware has no N-tap API, so the runner loops single taps; the tool
-    // sends the count through unchanged and the description says the taps
-    // land separately rather than refusing the request.
+    // sends the count through unchanged and the description says how the
+    // taps land rather than refusing the request.
     const { run, services } = runnerRig();
     await gestureTapTool.execute(services, { udid: DEVICE_UDID, x: 0.5, y: 0.5, clickCount: 3 });
     const taps = run.mock.calls.filter(([req]) => req.command === "tap");
     expect(taps).toHaveLength(1);
     expect(taps[0][0]).toMatchObject({ numberOfTaps: 3 });
-    expect(gestureTapTool.zodSchema!.shape.clickCount.description).toContain("separate taps");
+    expect(gestureTapTool.zodSchema!.shape.clickCount.description).toContain(
+      "higher counts loop single taps, which a double-tap recognizer may pair"
+    );
   });
 
   it("physical iOS: a single tap keeps its pre-numberOfTaps wire shape", async () => {

@@ -80,7 +80,10 @@ vi.mock("../src/utils/debugger/discovery", () => ({
         description: "",
         deviceName: "iPhone 16 Pro",
         id: "1",
-        reactNative: { capabilities: {}, logicalDeviceId: "logical-1" },
+        reactNative: {
+          capabilities: { prefersFuseboxFrontend: true },
+          logicalDeviceId: "logical-1",
+        },
         title: "com.example.app",
         webSocketDebuggerUrl: METRO_TARGET_URL,
       },
@@ -206,12 +209,21 @@ describe("a provider that re-serves its own debugger connection", () => {
     await instance.dispose();
   });
 
-  it("still configures a session it opened itself", async () => {
+  it("uses Runtime without enabling Debugger on a Metro session it opened itself", async () => {
     publishDescriptor();
 
     const instance = await instantiate();
 
-    expect(sent.methods).toEqual(expect.arrayContaining(GLOBAL_STATE_METHODS));
+    expect(sent.methods).toEqual(
+      expect.arrayContaining([
+        "Runtime.enable",
+        "FuseboxClient.setClientMetadata",
+        "Runtime.runIfWaitingForDebugger",
+      ])
+    );
+    expect(sent.methods).not.toContain("Debugger.enable");
+    expect(sent.methods).not.toContain("Debugger.setPauseOnExceptions");
+    expect(sent.methods).not.toContain("Debugger.setAsyncCallStackDepth");
 
     await instance.dispose();
   });

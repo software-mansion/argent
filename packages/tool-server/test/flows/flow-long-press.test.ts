@@ -11,12 +11,10 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
@@ -113,7 +111,7 @@ describe("long-press: parse/serialize", () => {
         steps: [{ kind: "long-press", selector: { text: "Row 3", loose: true }, duration: 15_000 }],
       })
     ).toThrow(
-      /Cannot serialize flow long-press\.duration: 15000ms - above the maximum long-press duration of 10000ms/
+      /Cannot serialize e2e test long-press\.duration: 15000ms - above the maximum long-press duration of 10000ms/
     );
   });
 
@@ -146,7 +144,9 @@ describe("long-press: parse/serialize", () => {
         executionPrerequisite: "",
         steps: [{ kind: "long-press", selector: { text: "Row 3", loose: true }, duration }],
       })
-    ).toThrow("Cannot serialize flow long-press.duration: needs a positive number of milliseconds");
+    ).toThrow(
+      "Cannot serialize e2e test long-press.duration: needs a positive number of milliseconds"
+    );
   });
 
   it("parses the options form with the usual selector sugar", () => {
@@ -322,4 +322,25 @@ describe("long-press: execution", () => {
     expect(result.steps[0].reason).toMatch(/add a scroll-to step/i);
     expect(result.calls).toHaveLength(0);
   }, 15000);
+
+  it("rejects a coordinate long-press on HarmonyOS instead of dispatching gesture-custom", async () => {
+    // `invokeTool` skips the capability gate, so the flow must refuse this itself.
+    const calls: Array<{ tool: string; args: Record<string, unknown> }> = [];
+    await writeFlow("press-harmony", {
+      executionPrerequisite: "",
+      steps: [{ kind: "long-press", x: 0.5, y: 0.5 }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(calls)).execute(
+        {},
+        { name: "press-harmony", project_root: tmpDir, device: "harmony-127.0.0.1:5555" }
+      )
+    );
+
+    expect(result.steps[0]).toMatchObject({ kind: "long-press", status: "fail" });
+    expect(result.steps[0].reason).toMatch(/long-press is unsupported on HarmonyOS/);
+    expect(result.steps[0].reason).not.toMatch(/does not support platform/);
+    expect(calls).toHaveLength(0);
+  });
 });

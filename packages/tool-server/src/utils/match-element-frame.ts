@@ -139,9 +139,9 @@ export async function captureElementFrame(
   const budgetMs = opts.budgetMs ?? CAPTURE_BUDGET_MS;
   try {
     const device = resolveDevice(udid);
-    // Chromium (CDP) has no adb/sim-server describe path; skipping beats shelling
-    // adb against a serial that does not exist.
-    if (device.platform === "chromium") return null;
+    // Chromium (CDP) and HarmonyOS (hdc/`uitest`) have no adb/sim-server describe
+    // path; skipping beats shelling adb against a serial that does not exist.
+    if (device.platform === "chromium" || device.platform === "harmony") return null;
     // Resolved once so describeIos doesn't re-shell `xcrun` per attempt.
     const isTvOs = device.platform === "ios" && (await isTvOsSimulator(device.id));
     let bestPartial: NormalizedFrame | null = null;

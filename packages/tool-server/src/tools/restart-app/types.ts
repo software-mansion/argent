@@ -13,10 +13,10 @@ export interface RestartAppParams {
 }
 
 export type RestartAppResult =
-  | { restarted: boolean; bundleId: string }
-  | NativeDevtoolsInitFailedResult;
+  { restarted: boolean; bundleId: string } | NativeDevtoolsInitFailedResult;
 
 export interface RestartAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
 export type RestartAppVegaServices = Record<string, never>;
+export type RestartAppHarmonyServices = Record<string, never>;
