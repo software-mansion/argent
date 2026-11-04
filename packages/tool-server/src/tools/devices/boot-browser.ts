@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
+import { browserWebSocketUrl } from "../../chromium-server/cdp-session";
+import { CDPClient } from "../../utils/debugger/cdp-client";
+import { pidIsAlive } from "../../utils/process-kill";
+import { bootElectronApp, killChromiumByPort, type ElectronBootResult } from "./boot-electron";
 
 export const BROWSER_NAMES = ["chrome", "chromium", "edge", "brave"] as const;
 export type BrowserName = (typeof BROWSER_NAMES)[number];
@@ -65,6 +68,75 @@ function findBrowserExecutable(browser: BrowserName): string | null {
   return browserExecutableCandidates(browser).find(isExecutableFile) ?? null;
 }
 
+const PROFILE_PREFIX = "argent-browser-";
+/** Holds the browser's pid, so a later boot can tell a leftover profile from a live one. */
+const PID_FILE = "argent-browser.pid";
+
+/**
+ * The snap a Linux launcher runs, if any. A snap sees a private /tmp, so a
+ * profile there would land where neither we nor our cleanup can reach it.
+ */
+export function snapName(executable: string): string | null {
+  try {
+    // /snap/bin/<app> is a symlink to the snap launcher; the snap is the name before any dot.
+    if (path.basename(fs.realpathSync(executable)) === "snap") {
+      return path.basename(executable).split(".")[0]!;
+    }
+    // Ubuntu's chromium-browser is a script that execs /snap/bin/chromium.
+    const head = Buffer.alloc(4096);
+    const fd = fs.openSync(executable, "r");
+    let text: string;
+    try {
+      text = head.subarray(0, fs.readSync(fd, head, 0, head.length, 0)).toString("latin1");
+    } finally {
+      fs.closeSync(fd);
+    }
+    return text.startsWith("#!") ? (/\/snap\/bin\/([\w-]+)/.exec(text)?.[1] ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Deletes profiles whose browser is gone, e.g. left by a tool-server that exited first. */
+function removeStaleProfiles(root: string): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(root).filter((n) => n.startsWith(PROFILE_PREFIX));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const dir = path.join(root, name);
+    let pid: number;
+    try {
+      pid = Number(fs.readFileSync(path.join(dir, PID_FILE), "utf8"));
+    } catch {
+      continue; // still booting, or not ours
+    }
+    if (!pidIsAlive(pid)) {
+      fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => {});
+    }
+  }
+}
+
+/**
+ * Whether the browser answering on 127.0.0.1:`port` runs on `profileDir`. A
+ * browser that loses 127.0.0.1 to one booting at the same moment in another
+ * process binds [::1] instead, and our readiness probe reaches the other one.
+ */
+async function answersOnProfile(port: number, profileDir: string): Promise<boolean> {
+  const browser = new CDPClient(await browserWebSocketUrl(port), { sendOrigin: false });
+  await browser.connect();
+  try {
+    const { commandLine } = (await browser.send("SystemInfo.getInfo")) as { commandLine?: string };
+    // Empty where the browser does not report it. The random dir name is matched
+    // rather than the path, which Windows may quote.
+    return !commandLine || commandLine.includes(path.basename(profileDir));
+  } finally {
+    await browser.disconnect().catch(() => {});
+  }
+}
+
 interface BootBrowserOptions {
   browser: BrowserName;
   port?: number;
@@ -104,8 +176,12 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
   // Chromium reads every non-flag argument as a start URL, and headless mode
   // exits on more than one, so about:blank is only the default.
   const hasStartUrl = extraArgs.some((a) => !a.startsWith("-"));
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-browser-"));
-  return bootElectronApp({
+  const snap = snapName(executable);
+  const root = snap ? path.join(os.homedir(), "snap", snap, "common") : os.tmpdir();
+  fs.mkdirSync(root, { recursive: true });
+  removeStaleProfiles(root);
+  const profileDir = fs.mkdtempSync(path.join(root, PROFILE_PREFIX));
+  const result = await bootElectronApp({
     appPath: executable,
     port: options.port,
     label: "Browser",
@@ -120,4 +196,29 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
       fs.rm(profileDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
     },
   });
+  try {
+    fs.writeFileSync(path.join(profileDir, PID_FILE), String(result.pid));
+  } catch {
+    // The browser already exited, and its profile went with it.
+  }
+
+  const ours = await answersOnProfile(result.port, profileDir).catch((err: unknown) => {
+    killChromiumByPort(result.port);
+    throw err;
+  });
+  if (!ours) {
+    // The port stays tracked: the browser holding it is still a device.
+    killChromiumByPort(result.port);
+    throw new FailureError(
+      `Browser boot: another browser took port ${result.port} on 127.0.0.1 while this one ` +
+        `started. Retry, or omit \`electronPort\` to get a free port.`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
+        failure_stage: "browser_port_taken",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  return result;
 }

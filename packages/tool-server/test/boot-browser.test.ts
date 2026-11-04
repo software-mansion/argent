@@ -3,9 +3,30 @@ import * as fs from "node:fs";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
 const bootElectronAppMock = vi.fn();
+const killMock = vi.fn();
 vi.mock("../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (opts: unknown) => bootElectronAppMock(opts),
+  killChromiumByPort: (port: number) => killMock(port),
 }));
+
+// SystemInfo.getInfo on the browser that answers the booted port.
+const cdpSend = vi.fn();
+vi.mock("../src/chromium-server/cdp-session", () => ({
+  browserWebSocketUrl: async () => "ws://127.0.0.1/devtools/browser/x",
+}));
+vi.mock("../src/utils/debugger/cdp-client", () => ({
+  CDPClient: class {
+    connect = async () => {};
+    disconnect = async () => {};
+    send = (method: string) => cdpSend(method);
+  },
+}));
+
+const fakeHome = vi.hoisted(() => ({ dir: "" }));
+vi.mock("node:os", async () => {
+  const actual = await vi.importActual<typeof import("node:os")>("node:os");
+  return { ...actual, homedir: () => fakeHome.dir || actual.homedir() };
+});
 
 // Paths present on the fake host and what each one is. Only the temp dir (the
 // profiles) reaches the real filesystem, so a browser installed on the machine
@@ -33,7 +54,13 @@ vi.mock("node:fs", async () => {
   };
 });
 
-import { bootBrowser, browserExecutableCandidates } from "../src/tools/devices/boot-browser";
+import * as os from "node:os";
+import * as path from "node:path";
+import {
+  bootBrowser,
+  browserExecutableCandidates,
+  snapName,
+} from "../src/tools/devices/boot-browser";
 
 describe("browserExecutableCandidates", () => {
   it("looks in /Applications then ~/Applications on macOS", () => {
@@ -94,7 +121,12 @@ describe("bootBrowser", () => {
   beforeEach(() => {
     installed.clear();
     bootElectronAppMock.mockReset();
-    bootElectronAppMock.mockResolvedValue({ platform: "chromium" });
+    bootElectronAppMock.mockResolvedValue({ platform: "chromium", port: 9333, pid: process.pid });
+    killMock.mockReset();
+    cdpSend.mockReset();
+    cdpSend.mockImplementation(async () => ({
+      commandLine: `chrome ${bootElectronAppMock.mock.lastCall![0].extraArgs.join(" ")}`,
+    }));
   });
   afterEach(() => {
     for (const call of bootElectronAppMock.mock.calls) {
@@ -169,6 +201,64 @@ describe("bootBrowser", () => {
     await vi.waitFor(() => expect(fs.existsSync(dirA)).toBe(false));
   });
 
+  it("records the browser's pid in its profile", async () => {
+    installed.set(chrome!, "exec");
+    await bootBrowser({ browser: "chrome" });
+    const dir = profileDirOf(bootElectronAppMock.mock.calls[0]![0].extraArgs)!;
+    expect(fs.readFileSync(path.join(dir, "argent-browser.pid"), "utf8")).toBe(String(process.pid));
+  });
+
+  it("deletes only leftover profiles whose browser is gone", async () => {
+    const make = (name: string, pid?: string) => {
+      const dir = path.join(os.tmpdir(), name);
+      fs.mkdirSync(dir, { recursive: true });
+      if (pid !== undefined) fs.writeFileSync(path.join(dir, "argent-browser.pid"), pid);
+      return dir;
+    };
+    const tag = `${process.pid}-${Date.now()}`;
+    const dead = make(`argent-browser-dead-${tag}`, "2147483646");
+    const live = make(`argent-browser-live-${tag}`, String(process.pid));
+    const booting = make(`argent-browser-booting-${tag}`);
+    const foreign = make(`other-dead-${tag}`, "2147483646");
+    try {
+      installed.set(chrome!, "exec");
+      await bootBrowser({ browser: "chrome" });
+      await vi.waitFor(() => expect(fs.existsSync(dead)).toBe(false));
+      expect([live, booting, foreign].filter((d) => fs.existsSync(d))).toEqual([
+        live,
+        booting,
+        foreign,
+      ]);
+    } finally {
+      for (const d of [dead, live, booting, foreign])
+        fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("kills its browser and fails when another browser answers the port", async () => {
+    installed.set(chrome!, "exec");
+    cdpSend.mockResolvedValue({ commandLine: "chrome --user-data-dir=/elsewhere" });
+    const err = await bootBrowser({ browser: "chrome", port: 9333 }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
+    expect((err as Error).message).toContain("another browser took port 9333 on 127.0.0.1");
+    expect(killMock).toHaveBeenCalledWith(9333);
+  });
+
+  it("accepts a browser that reports no command line", async () => {
+    installed.set(chrome!, "exec");
+    cdpSend.mockResolvedValue({ commandLine: "" });
+    await expect(bootBrowser({ browser: "chrome" })).resolves.toMatchObject({ port: 9333 });
+    expect(killMock).not.toHaveBeenCalled();
+  });
+
+  it("kills its browser when the identity check itself fails", async () => {
+    installed.set(chrome!, "exec");
+    cdpSend.mockRejectedValue(new Error("socket hang up"));
+    await expect(bootBrowser({ browser: "chrome" })).rejects.toThrow("socket hang up");
+    expect(killMock).toHaveBeenCalledWith(9333);
+  });
+
   it("fails naming the browsers that are installed when the requested one is not", async () => {
     installed.set(edge, "exec");
     const err = await bootBrowser({ browser: "brave" }).catch((e: unknown) => e);
@@ -210,5 +300,73 @@ describe("bootBrowser", () => {
         "(looked in nothing: PROGRAMFILES, PROGRAMFILES(X86) and LOCALAPPDATA are unset)"
       );
     });
+  });
+});
+
+describe("snapName", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "snapname-"));
+    fs.writeFileSync(path.join(dir, "snap"), "\x7fELF");
+  });
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = (name: string, content: string) => {
+    fs.writeFileSync(path.join(dir, name), content);
+    return path.join(dir, name);
+  };
+  const link = (name: string) => {
+    fs.symlinkSync(path.join(dir, "snap"), path.join(dir, name));
+    return path.join(dir, name);
+  };
+
+  it("names the snap a /snap/bin symlink runs", () => {
+    expect(snapName(link("chromium"))).toBe("chromium");
+    expect(snapName(link("chromium.chromedriver"))).toBe("chromium");
+  });
+
+  it("names the snap a wrapper script execs", () => {
+    expect(snapName(file("chromium-browser", '#!/bin/sh\nexec /snap/bin/chromium "$@"\n'))).toBe(
+      "chromium"
+    );
+  });
+
+  it("is null for a script or binary that is not a snap", () => {
+    expect(snapName(file("google-chrome", '#!/bin/bash\nexec -a "$0" "$HERE/chrome" "$@"\n'))).toBe(
+      null
+    );
+    expect(snapName(file("chrome", "\x7fELF /snap/bin/chromium"))).toBe(null);
+    expect(snapName(path.join(dir, "missing"))).toBe(null);
+  });
+});
+
+describe("bootBrowser with a snap browser", () => {
+  const platform = process.platform;
+  const env = { ...process.env };
+  let bin: string;
+  beforeEach(() => {
+    fakeHome.dir = fs.mkdtempSync(path.join(os.tmpdir(), "snaphome-"));
+    bin = path.join(fakeHome.dir, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "snap"), "\x7fELF", { mode: 0o755 });
+    fs.symlinkSync(path.join(bin, "snap"), path.join(bin, "chromium"));
+    Object.defineProperty(process, "platform", { value: "linux" });
+    process.env = { ...env, PATH: bin };
+    bootElectronAppMock.mockReset();
+    bootElectronAppMock.mockResolvedValue({ platform: "chromium", port: 9333, pid: process.pid });
+    cdpSend.mockImplementation(async () => ({ commandLine: "" }));
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: platform });
+    process.env = env;
+    fs.rmSync(fakeHome.dir, { recursive: true, force: true });
+    fakeHome.dir = "";
+  });
+
+  it("keeps the profile in the snap's own dir, which the snap and we both see", async () => {
+    await bootBrowser({ browser: "chromium" });
+    const args: string[] = bootElectronAppMock.mock.calls[0]![0].extraArgs;
+    const dir = args[0]!.slice("--user-data-dir=".length);
+    expect(path.dirname(dir)).toBe(path.join(fakeHome.dir, "snap", "chromium", "common"));
+    expect(fs.statSync(dir).isDirectory()).toBe(true);
   });
 });
