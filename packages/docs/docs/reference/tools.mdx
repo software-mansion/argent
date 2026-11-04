@@ -322,13 +322,13 @@ The app can add its own controls to a panel, for example a format pop-up. `descr
 | `panelKind` | For `stub` with `stubMode` `answer`: `open` or `save`, the kind of panel that receives the answer. When it is absent, see the rules below                                           |
 | `timeoutMs` | For `choose`, `cancel` and `discard`: how long to wait for the panel after the click that opens it. Default `5000`, maximum `30000`                                                 |
 
-| Action    | Result                                                                                                                                                                                          |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list`    | `{ panels }`. Each panel has its `number`, its `kind` (`open` or `save`), its title, its folder and its options. `discardButton` is the title of its Delete or Don't Save button, if it has one |
-| `choose`  | `{ chosen, panel, kind, paths }`. The panel closes, and the app receives the paths                                                                                                              |
-| `cancel`  | `{ cancelled, panel }`                                                                                                                                                                          |
-| `discard` | `{ discarded, panel }`. The app closes the new document without saving it                                                                                                                       |
-| `stub`    | `{ armed, mode, panelKind }`, without `panelKind` for `stubMode` `cancel` and `off`. The next panel of that kind that the app opens gets the prepared answer and does not appear                |
+| Action    | Result                                                                                                                                                                                                                                                            |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`    | `{ panels }`. Each panel has its `number`, its `kind` (`open` or `save`), its title, its folder and its options. `discardButton` is the title of its Delete or Don't Save button, if it has one. `stubRefused` tells why the panel did not take a prepared answer |
+| `choose`  | `{ chosen, panel, kind, paths }`. The panel closes, and the app receives the paths                                                                                                                                                                                |
+| `cancel`  | `{ cancelled, panel }`                                                                                                                                                                                                                                            |
+| `discard` | `{ discarded, panel }`. The app closes the new document without saving it                                                                                                                                                                                         |
+| `stub`    | `{ armed, mode, panelKind }`, without `panelKind` for `stubMode` `cancel` and `off`. The next panel of that kind that the app opens gets the prepared answer and does not appear                                                                                  |
 
 A prepared answer stays until the next panel of its kind opens, until a `stub` with `stubMode` `off`, or until the tool-server disconnects from the app. A panel of the other kind opens as usual. For example, an app can ask to save the changes before it opens a file. Then the save panel opens, and the open panel after it receives the prepared answer. A prepared cancel (`stubMode` `cancel`) goes to the next panel of either kind.
 
@@ -339,13 +339,18 @@ For `stub` without `panelKind`, Argent finds the kind of panel for the answer fr
 
 Argent gives a sandboxed app access to each chosen path, and only when a panel takes the answer, as a panel does. For a save panel, this is the file, not its folder.
 
-A prepared answer that the next panel of its kind cannot take does not answer it, and the panel opens as usual. Examples:
+A prepared answer that the next panel of its kind cannot take does not answer it, and the panel opens as usual. `stubRefused` in the result of `list` tells why. Examples:
 
 - Several paths for a panel with a single selection.
 - A folder for a panel that takes only files, or for a save panel.
-- A path with an extension that matches none of the formats of a save panel.
+- A path with an extension that a save panel refuses.
 
-The extension of the path for a save panel must match one of the file formats of the panel (`allowedContentTypes` in the result of `list`), also when the panel has only one format. When the panel has more than one format, on macOS 15 and later, the extension also selects the format. On macOS 14, Argent does not select the format, and the app saves in the format that the panel selects when it opens.
+A save panel with file formats (`allowedContentTypes` in the result of `list`) refuses a path when the extension matches none of the formats, also when the panel has only one format. It takes the path in these conditions:
+
+- macOS has no registered type for the extension.
+- A format is `public.data` or `public.item`: the panel saves any file, also a file with no extension.
+
+When the panel has more than one format, on macOS 15 and later, the extension also selects the format. On macOS 14, Argent does not select the format, and the app saves in the format that the panel selects when it opens.
 
 Argent does not check a path for an open panel against the file types that the panel allows.
 
@@ -362,7 +367,7 @@ Argent does not check a path for an open panel against the file types that the p
 - With `choose`, the panel cannot take the path:
   - A folder for a panel that takes only files. A document package counts as a file.
   - A file for a panel that takes only folders.
-  - A path with an extension that matches none of the formats of a save panel.
+  - A path with an extension that a save panel refuses.
 
 ### `menu-bar`
 
