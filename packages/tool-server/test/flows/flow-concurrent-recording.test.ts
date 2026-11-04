@@ -127,7 +127,7 @@ const registry = createMockRegistry();
 const addStepTool = createFlowAddStepTool(registry);
 
 const flowPath = (root: string, name: string): string =>
-  path.join(root, ".argent", "flows", `${name}.yaml`);
+  path.join(root, ".argent", "e2e", `${name}.yaml`);
 
 function start(root: string, name: string, executionPrerequisite?: string) {
   return flowStartRecordingTool.execute({}, { name, project_root: root, executionPrerequisite });
@@ -406,7 +406,7 @@ describe("two recording keys that resolve to one file", () => {
     const rootB = await makeRoot("symdir-b");
     for (const root of [rootA, rootB]) {
       await fs.mkdir(path.join(root, ".argent"), { recursive: true });
-      await fs.symlink(vault, path.join(root, ".argent", "flows"));
+      await fs.symlink(vault, path.join(root, ".argent", "e2e"));
     }
 
     await start(rootA, "checkout");
@@ -458,7 +458,7 @@ describe("two recording keys that resolve to one file", () => {
     // never started — the two share an error code and want different fixes.
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_recording_key_aliased");
     const message = formatErrorForAgent(err);
-    expect(message).toContain("re-address it exactly as you passed it to flow-start-recording");
+    expect(message).toContain("re-address it exactly as you passed it to e2e-start-recording");
     expect(message).toContain("the take is intact and still recording");
     // The claim that made this a false alarm.
     expect(message).not.toMatch(/truncated this one/);
@@ -573,7 +573,7 @@ describe("addressing an unknown recording key", () => {
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
     const message = (err as Error).message;
-    expect(message).toContain('No active recording for flow "never-started"');
+    expect(message).toContain('No active recording for e2e test "never-started"');
     expect(message).toContain(rootA);
     // This project's live keys are named so the agent can self-correct…
     expect(message).toContain('Active recordings: "alpha" (plus 1 in other projects)');
@@ -922,7 +922,7 @@ describe("flow-file writes as seen by a concurrent reader", () => {
     await expect(start(root, "alpha")).rejects.toThrow();
 
     // The failure must not leave a scratch file in the user's committed
-    // .argent/flows/ — nothing else ever sweeps it.
+    // .argent/e2e/ — nothing else ever sweeps it.
     const entries = await fs.readdir(path.dirname(target));
     expect(entries.filter((e) => e.endsWith(".tmp"))).toEqual([]);
     // And it must not register a session for a file that was never written:
@@ -1004,7 +1004,7 @@ describe("flow-file writes as seen by a concurrent reader", () => {
   });
 
   it("classifies a project_root that is a FILE as a flow write failure, not a registry one", async () => {
-    // The tool description promises it "fails if the .argent/flows/ directory
+    // The tool description promises it "fails if the .argent/e2e/ directory
     // cannot be created OR the flow file cannot be written". With the mkdir
     // outside the wrapping only the second half kept that promise: this
     // surfaced as a bare ENOTDIR under REGISTRY_TOOL_EXECUTION_FAILED, with no
@@ -1018,7 +1018,7 @@ describe("flow-file writes as seen by a concurrent reader", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_WRITE_FAILED);
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_dir_create");
     const message = formatErrorForAgent(err);
-    expect(message).toContain(path.join(notADir, ".argent", "flows"));
+    expect(message).toContain(path.join(notADir, ".argent", "e2e"));
     expect(message).toContain("project_root");
     // The kernel's own errno is worth keeping.
     expect(message).toContain("ENOTDIR");
@@ -1345,7 +1345,7 @@ describe("a restart that lands while a step is still running", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING);
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_session_superseded");
     expect((err as Error).message).toContain("restarted while this step was running");
-    expect((err as Error).message).toContain("Nothing was added to the flow file");
+    expect((err as Error).message).toContain("Nothing was added to the e2e test file");
     // The recovery advice must not send the agent back to flow-start-recording:
     // it truncates, so on this branch it would wipe the live take that just took
     // the key (and take it back again). A fresh name is the only safe recovery.
@@ -1395,7 +1395,7 @@ describe("a restart that lands while a step is still running", () => {
 
     const err = await captureFailure(echoing);
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_session_superseded");
-    expect((err as Error).message).toContain("Nothing was added to the flow file");
+    expect((err as Error).message).toContain("Nothing was added to the e2e test file");
     expect((err as Error).message).toContain("fresh name");
     expect((err as Error).message).not.toContain("already ran on the device");
   });
@@ -1418,7 +1418,7 @@ describe("a restart that lands while a step is still running", () => {
 
     const err = await captureFailure(recording);
     expect(getFailureSignal(err)?.failure_stage).toBe("flow_session_superseded");
-    expect((err as Error).message).toContain("Nothing was added to the flow file");
+    expect((err as Error).message).toContain("Nothing was added to the e2e test file");
     expect((err as Error).message).toContain("the script already ran");
     expect((err as Error).message).not.toContain("already ran on the device");
     expect((err as Error).message).toContain("fresh name");
@@ -1450,9 +1450,9 @@ describe("a restart that lands while a step is still running", () => {
 
     const result = (await recording) as { status: string; stepCount: number; message: string };
     expect(result.status).toBe("fail");
-    expect(result.message).not.toContain("the flow is exactly as it was");
+    expect(result.message).not.toContain("the e2e test is exactly as it was");
     expect(result.message).toContain('Recording "alpha" was replaced');
-    expect(result.message).toContain("Use a new flow name");
+    expect(result.message).toContain("Use a new e2e test name");
     // The replacement take owns the file and holds no steps; the count that
     // comes back is this take's own, and the message says which it is.
     expect(result.stepCount).toBe(2);
@@ -1480,8 +1480,8 @@ describe("a restart that lands while a step is still running", () => {
     const result = (await recording) as { status: string; stepCount: number; message: string };
     expect(result.status).toBe("fail");
     expect(result.message).toContain('Recording "alpha" ended');
-    expect(result.message).toContain("Use a new flow name");
-    expect(result.message).not.toContain("the flow is exactly as it was");
+    expect(result.message).toContain("Use a new e2e test name");
+    expect(result.message).not.toContain("the e2e test is exactly as it was");
   });
 
   it("truncates and re-registers only once the flow's lock is free", async () => {
@@ -1993,9 +1993,9 @@ describe("recording a flow-execute step while several projects are in play", () 
     });
 
     expect(res.message).toContain('could not resolve "helper" as a sibling fragment');
-    expect(res.message).toContain("kept the raw flow-execute step");
+    expect(res.message).toContain("kept the raw e2e-execute step");
     expect(await readSteps(recordingRoot, "wrapper")).toEqual([
-      { kind: "tool", name: "flow-execute", args: { name: "helper", project_root: executedRoot } },
+      { kind: "tool", name: "e2e-execute", args: { name: "helper", project_root: executedRoot } },
     ]);
   });
 
@@ -2010,7 +2010,7 @@ describe("recording a flow-execute step while several projects are in play", () 
     // dir, so the two cannot be shown to be one file. The raw step, which
     // replays via name + project_root, is then the only honest record.
     await writeSavedFlow(recordingRoot, "helper", fragment);
-    await fs.mkdir(path.join(executedRoot, ".argent", "flows"), { recursive: true });
+    await fs.mkdir(path.join(executedRoot, ".argent", "e2e"), { recursive: true });
 
     await start(recordingRoot, "wrapper");
     const res = await addRawStep(recordingRoot, "wrapper", "flow-execute", {
@@ -2019,9 +2019,9 @@ describe("recording a flow-execute step while several projects are in play", () 
       udid: IOS_DEVICE,
     });
 
-    expect(res.message).toContain("could not verify which file the live flow-execute ran");
+    expect(res.message).toContain("could not verify which file the live e2e-execute ran");
     expect(await readSteps(recordingRoot, "wrapper")).toEqual([
-      { kind: "tool", name: "flow-execute", args: { name: "helper", project_root: executedRoot } },
+      { kind: "tool", name: "e2e-execute", args: { name: "helper", project_root: executedRoot } },
     ]);
   });
 
@@ -2048,10 +2048,10 @@ describe("recording a flow-execute step while several projects are in play", () 
       udid: IOS_DEVICE,
     });
 
-    expect(res.message).toContain("not the file the live flow-execute ran");
+    expect(res.message).toContain("not the file the live e2e-execute ran");
     expect(res.message).toContain(executedRoot);
     expect(await readSteps(recordingRoot, "wrapper")).toEqual([
-      { kind: "tool", name: "flow-execute", args: { name: "helper", project_root: executedRoot } },
+      { kind: "tool", name: "e2e-execute", args: { name: "helper", project_root: executedRoot } },
     ]);
 
     // Same project on both sides is the unambiguous case: the file that ran and
@@ -2062,7 +2062,7 @@ describe("recording a flow-execute step while several projects are in play", () 
       project_root: recordingRoot,
       udid: IOS_DEVICE,
     });
-    expect(same.message).toBe('Step added to "quiet" flow');
+    expect(same.message).toBe('Step added to "quiet" e2e test');
     expect(await readSteps(recordingRoot, "quiet")).toEqual([{ kind: "run", flow: "helper.yaml" }]);
   });
 });

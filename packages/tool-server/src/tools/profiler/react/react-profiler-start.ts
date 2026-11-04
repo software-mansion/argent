@@ -26,7 +26,10 @@ import {
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
-import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
+import { canonicalDeviceId, isLogicalKeyedDevice } from "../../../utils/debugger/device-alias";
+import { findRuntimeDevice } from "../../../utils/debugger/runtime-device";
+import { trackProfilingRun } from "../../../utils/profiling-devices";
+import { RESULT_NOTE_KEY } from "../../screenshot/dropped-geometry";
 import {
   bootstrapFailureMessage,
   type BootstrapResult,
@@ -54,6 +57,15 @@ export const NO_RENDERERS_ATTACHED_ERROR =
   "React DevTools hook is present but no React renderer has registered yet. " +
   "The hook is loaded but no fiber renderer has attached — typically because the app has not committed its first render, or the DevTools backend has not been bootstrapped on a bridgeless React Native dev build. " +
   "Fix: ensure the app has rendered (interact with it once, then retry); if it stays empty, call react-profiler-start first — it will attempt to attach the DevTools backend automatically.";
+
+/**
+ * Rides the start's envelope when the run cannot be tied to a device, so the
+ * agent knows its interactions are still captured.
+ */
+const UNKNOWN_DEVICE_NOTE =
+  "Two or more devices share this Metro, and Argent could not tell which of them runs this app. " +
+  "So taps and swipes on that device still return a screenshot and an element tree, and the " +
+  "capture loads the app while the profiler records. To avoid this, run the app on its own Metro port.";
 
 const zodSchema = z.object({
   port: metroPortField,
@@ -212,8 +224,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // Bootstrap it ourselves via react-devtools-core before giving up.
       if (!("rendererInterfaceFound" in state) || !state.rendererInterfaceFound) {
         const bootstrapJson = (await cdp.evaluate(BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT)) as
-          | string
-          | undefined;
+          string | undefined;
         if (!bootstrapJson) {
           throw new FailureError(
             "Failed to attach React DevTools backend (no value returned from runtime).",
@@ -300,6 +311,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         api.profilingActive = false;
       }
 
+      // A session keyed by Metro's logicalDeviceId (two or more devices on one
+      // Metro) is not what the tools that drive the device name: they pass its
+      // serial or UDID. Find that id so their calls see the run. Before the
+      // start, so nothing is awaited between the start and the registration.
+      const runtimeDevice = isLogicalKeyedDevice(api.deviceId)
+        ? await findRuntimeDevice(cdp)
+        : undefined;
+
       const sessionId = crypto.randomUUID();
       const ownerPayload: ProfilerSessionOwner = {
         sessionId,
@@ -313,8 +332,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       await cdp.send("Profiler.start", { interval: params.sample_interval_us });
 
       const startJson = (await cdp.evaluate(buildStartScript(JSON.stringify(ownerPayload)))) as
-        | string
-        | undefined;
+        string | undefined;
       if (!startJson) {
         throw new FailureError("Failed to start React profiler (no value returned from runtime).", {
           error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
@@ -361,6 +379,28 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         );
       }
 
+      // A teardown that landed while the start awaited the app (another agent's
+      // `stop-all-simulator-servers`, a CDP drop) disposed this session. It saw
+      // no run, so it stopped none: stop the one just started, if the app is
+      // still reachable, and register nothing. A run registered on the
+      // disposed session could never be stopped.
+      if (api.disposed) {
+        await cdp.evaluate(STOP_FOR_TAKEOVER_SCRIPT).catch(ignore);
+        await cdp.send("Profiler.stop").catch(ignore);
+        throw new FailureError(
+          `The React profiler session for ${api.deviceId} was torn down while the profiler was ` +
+            `starting, so nothing is recorded. One tool-server serves every agent using this ` +
+            `argent install, so another agent may have run stop-all-simulator-servers. Call ` +
+            `react-profiler-start again.`,
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_SESSION_TORN_DOWN,
+            failure_stage: "react_profiler_start_session_torn_down",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
+        );
+      }
+
       const startedAtEpochMs = startResult.startedAtEpochMs ?? Date.now();
 
       clearCachedProfilerPaths(api.port, api.deviceId);
@@ -372,12 +412,17 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.profileStartWallMs = startedAtEpochMs;
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
+      trackProfilingRun(api.deviceId, api);
+      if (runtimeDevice) trackProfilingRun(runtimeDevice, api);
 
       return {
         started_at: new Date(startedAtEpochMs).toISOString(),
         startedAtEpochMs,
         hermes_version: api.hermesVersion,
         detected_architecture: api.detectedArchitecture,
+        ...(isLogicalKeyedDevice(api.deviceId) && !runtimeDevice
+          ? { [RESULT_NOTE_KEY]: UNKNOWN_DEVICE_NOTE }
+          : {}),
       };
     },
   };

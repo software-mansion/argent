@@ -27,12 +27,12 @@ import { summarizeStep } from "./flow-step-definitions";
 const OUTPUT_RENDER_LIMIT_BYTES = 64 * 1024;
 
 const zodSchema = z.object({
-  name: z.string().describe("Flow name passed to flow-start-recording."),
-  project_root: z.string().describe("Absolute project root passed to flow-start-recording."),
+  name: z.string().describe("E2E test name passed to e2e-start-recording."),
+  project_root: z.string().describe("Absolute project root passed to e2e-start-recording."),
   path: z
     .string()
     .describe(
-      'Path to the .mjs file, relative to the flow YAML. For example: "../../scripts/seed-order.mjs".'
+      'Path to the .mjs file, relative to the e2e test YAML. For example: "../../scripts/seed-order.mjs".'
     ),
   timeout: z
     .number()
@@ -122,17 +122,18 @@ function renderOutput(output: Record<string, unknown>): {
 }
 
 export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAddScriptResult> = {
-  id: "flow-add-script",
+  id: "e2e-add-script",
+  aliases: ["flow-add-script"],
   interaction: {
-    startedMsg: ({ params }) => `Running script for flow ${params.name}`,
+    startedMsg: ({ params }) => `Running script for e2e test ${params.name}`,
     completedMsg: ({ params, result }) =>
       result.status === "pass"
-        ? `Added script step to flow ${params.name}`
-        : `Script for flow ${params.name} failed; nothing recorded`,
+        ? `Added script step to e2e test ${params.name}`
+        : `Script for e2e test ${params.name} failed; nothing recorded`,
     failedMsg: ({ params, failureSignal }) =>
-      `Failed to add script step to flow ${params.name}: ${failureSignal.error_code}`,
+      `Failed to add script step to e2e test ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Run a local .mjs file and record it as a \`script:\` step in an active flow. Use when the user requests a local script in the flow, and only then. Pass the same \`name\` and \`project_root\` as \`flow-start-recording\`, and call it where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such a flow with no link.`,
+  description: `Run a local .mjs file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Pass the same \`name\` and \`project_root\` as \`e2e-start-recording\`, and call it where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
   // A script's default limit is 30s and its host cap five minutes, against the
   // MCP adapter's 30s per-request fetch budget. Without this the adapter aborts
   // a slow call and RETRIES it, re-running a script whose whole purpose is a
@@ -151,9 +152,9 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     // one must not run or record one either.
     if (isLinkedRecorderCall(session, ctx)) {
       throw new FailureError(
-        `Cannot add a script step to flow "${params.name}": the recording is over a link ` +
-          `(argent link or ARGENT_TOOLS_URL), and a flow cannot run script steps over a link. ` +
-          `Nothing ran and no step was recorded. To record a script step, record the flow on ` +
+        `Cannot add a script step to e2e test "${params.name}": the recording is over a link ` +
+          `(argent link or ARGENT_TOOLS_URL), and an e2e test cannot run script steps over a link. ` +
+          `Nothing ran and no step was recorded. To record a script step, record the e2e test on ` +
           `the computer that runs the tool-server, with no link and no ARGENT_TOOLS_URL.`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -227,7 +228,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
           ...common,
           message:
             `Script "${step.path}" ${lead}; no step was recorded. ${lost} ${leftBehind} ` +
-            `Use a new flow name because flow-start-recording overwrites the existing file. ` +
+            `Use a new e2e test name because e2e-start-recording overwrites the existing file. ` +
             `stepCount is from the ended recording.`,
           stepCount: session.flow.steps.length,
         };
@@ -274,7 +275,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
     const rendered = result?.output ? renderOutput(result.output) : undefined;
     return {
       ...common,
-      message: `Added script step to "${params.name}" flow.`,
+      message: `Added script step to "${params.name}" e2e test.`,
       ...(rendered ?? {}),
       stepCount,
       recorded: summarizeStep(step, stepCount),

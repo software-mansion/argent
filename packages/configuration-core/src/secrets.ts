@@ -61,8 +61,8 @@ type FileExposure = "dedicated" | "shared";
 export interface SecretSource {
   /** Where this source came from, for diagnostics — never its values. */
   label: string;
-  /** The environment is always present; a file may not be. */
-  kind: "env" | "file";
+  /** The environment and a client's secrets are always present; a file may not be. */
+  kind: "env" | "file" | "client";
   /** False only for a file that is not there. */
   present: boolean;
   /** The secret names it defines, sorted. */
@@ -190,6 +190,45 @@ export function secretSources(options: SecretSourceOptions = {}): SecretSource[]
   return sources;
 }
 
+/**
+ * The secrets an argent client sent with one call, as the first source of the
+ * tool-server's chain for that call. See `argent enable forward-secrets`.
+ */
+export function clientSecretSource(values: ReadonlyMap<string, string>): SecretSource {
+  return {
+    label: "secrets the argent client sent with this call",
+    kind: "client",
+    present: true,
+    names: [...values.keys()].sort(),
+    values: new Map(values),
+  };
+}
+
+/** The wire form of `CLIENT_SECRETS_HEADER`: base64 of a JSON name-to-value object. */
+export function encodeClientSecrets(values: ReadonlyMap<string, string>): string {
+  return Buffer.from(JSON.stringify(Object.fromEntries(values)), "utf8").toString("base64");
+}
+
+/** Inverse of {@link encodeClientSecrets}; throws on anything it would not produce. */
+export function decodeClientSecrets(header: string): Map<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(header, "base64").toString("utf8"));
+  } catch {
+    throw new Error("is not base64-encoded JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("is not a JSON object");
+  }
+  const values = new Map<string, string>();
+  for (const [name, value] of Object.entries(parsed)) {
+    if (!SECRET_NAME_RE.test(name)) throw new Error(`names an invalid secret "${name}"`);
+    if (typeof value !== "string") throw new Error(`has a non-string value for ${name}`);
+    values.set(name, value);
+  }
+  return values;
+}
+
 /** The value of `name` in the first source that defines it, else undefined. */
 export function lookupSecret(name: string, sources: SecretSource[]): string | undefined {
   for (const source of sources) {
@@ -197,6 +236,38 @@ export function lookupSecret(name: string, sources: SecretSource[]): string | un
     if (value !== undefined) return value;
   }
   return undefined;
+}
+
+/** A `{{secret:NAME}}` placeholder; group 1 is NAME. */
+export const SECRET_PLACEHOLDER_RE = /\{\{secret:([A-Za-z_][A-Za-z0-9_]*)\}\}/g;
+
+/** Every NAME of a `{{secret:NAME}}` in `text`, in order, repeats included. */
+export function placeholderNames(text: string): string[] {
+  return Array.from(text.matchAll(SECRET_PLACEHOLDER_RE), (match) => match[1]!);
+}
+
+/**
+ * A placeholder name redundantly repeating the env prefix in any casing —
+ * `{{secret:ARGENT_SECRET_APP_PASSWORD}}` for `{{secret:APP_PASSWORD}}` —
+ * accepted as a fallback because agents paste the full variable name. The
+ * exact name is tried first, which keeps a literal
+ * `ARGENT_SECRET_ARGENT_SECRET_X` var reachable.
+ */
+const REDUNDANT_PREFIX_RE = /^argent_secret_/i;
+
+/**
+ * The secret a placeholder's `rawName` resolves to, with the name it resolved
+ * under; `name` is `rawName` with any redundant prefix dropped when nothing
+ * resolves.
+ */
+export function lookupPlaceholderSecret(
+  rawName: string,
+  sources: SecretSource[]
+): { name: string; value: string | undefined } {
+  const value = lookupSecret(rawName, sources);
+  if (value !== undefined || !REDUNDANT_PREFIX_RE.test(rawName)) return { name: rawName, value };
+  const name = rawName.replace(REDUNDANT_PREFIX_RE, "");
+  return { name, value: lookupSecret(name, sources) };
 }
 
 /** Every name any source defines, deduplicated and sorted. Names only, never values. */
@@ -219,7 +290,7 @@ export function describeSecretSources(sources: SecretSource[]): string {
       if (!source.present) state = "not found";
       else if (source.needsPrefix) {
         state = `found, but no ${SECRET_ENV_PREFIX}* keys — only prefixed keys are exposed from a file the app shares`;
-      } else state = source.kind === "env" ? count : `found, ${count}`;
+      } else state = source.kind === "file" ? `found, ${count}` : count;
       return `  ${i + 1}. ${source.label} — ${state}`;
     })
     .join("\n");
@@ -236,6 +307,22 @@ export function secretPlacementAdvice(name: string, options: SecretSourceOptions
     `To make it available, ask the user to add \`${name}=…\` to ${globalFile} ` +
     `(or to \`.argent/${SECRETS_FILE_NAME}\` in the project), add \`${SECRET_ENV_PREFIX}${name}=…\` ` +
     `to the project's .env / .env.local, or export ${SECRET_ENV_PREFIX}${name} in the tool-server's ` +
-    `environment — never ask the user for the secret value itself.`
+    `environment — never ask the user for the secret value itself. If this tool-server is reached ` +
+    `through \`argent link\` or ARGENT_TOOLS_URL, the user can instead define it on the client's machine ` +
+    `and run \`argent enable forward-secrets\` there; \`argent secrets\` there lists the sources the ` +
+    `client reads, which this list leaves out.`
+  );
+}
+
+/**
+ * Where to define a secret that a client with `forward-secrets` on sent no
+ * value for: on that client's machine, whose paths this host cannot know.
+ */
+export function clientSecretPlacementAdvice(name: string): string {
+  return (
+    `To make it available, ask the user to add \`${name}=…\` to ~/.argent/${SECRETS_FILE_NAME} on the ` +
+    `client's machine (or to \`.argent/${SECRETS_FILE_NAME}\` in the project the client runs in), or ` +
+    `to export ${SECRET_ENV_PREFIX}${name} before the client starts; \`argent secrets\` there lists ` +
+    `the sources the client reads — never ask the user for the secret value itself.`
   );
 }

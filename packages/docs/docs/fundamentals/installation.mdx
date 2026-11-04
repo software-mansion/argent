@@ -13,6 +13,7 @@ sidebar_custom_props:
 - **iOS / tvOS**: macOS with **Xcode** installed. Apple TV uses tvOS simulators, and Xcode downloads the tvOS runtime on demand.
 - **Android / Android TV**: **Android SDK Platform Tools** (`adb`) on `PATH`, plus the **Android Emulator** package to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
 - **Fire TV (Vega)**: the **Vega SDK** (`vega` CLI) on `PATH`, plus **Android SDK Platform Tools** (`adb`) on `PATH`. Most Vega tools, including UI inspection and screenshots, run over `adb`.
+- **HarmonyOS**: **DevEco Studio**, which ships `hdc` (the device connector) and the `Emulator` manager. Argent looks for both in `$DEVECO_STUDIO_HOME` first, then in `/Applications/DevEco-Studio.app` on macOS. Argent also finds `hdc` on `PATH`, for hosts that installed the OpenHarmony command-line tools without the IDE. A phone needs only `hdc`. Run `argent enable harmonyos` to turn on HarmonyOS support.
 - **Electron / Chromium**: nothing extra to control an already running app. Launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you.
 
 ## Run `init` in your project
@@ -57,10 +58,10 @@ argent init
 
 ## Install from a GitHub release
 
-Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.28.0.tgz`. It is the same file npm serves. Download it and install it globally:
+Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.31.0.tgz`. It is the same file npm serves. Download it and install it globally:
 
 ```bash
-npm install -g ./swmansion-argent-0.28.0.tgz
+npm install -g ./swmansion-argent-0.31.0.tgz
 argent init
 ```
 

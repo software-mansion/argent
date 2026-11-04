@@ -272,6 +272,82 @@ export async function proxyStop(udid: string, port: number): Promise<void> {
   }
 }
 
+// The runner may first have to spawn simulator-server (up to 30 s) before it
+// starts the recording; past the default, the CLI is killed while the runner
+// goes on recording.
+const RECORDING_START_TIMEOUT_MS = 90_000;
+
+/**
+ * Start recording the remote simulator's screen, and return the recording's
+ * id. Returns as soon as the runner has begun recording — the recording then
+ * runs unattended until `screenRecordStop`, which is what lets it span other
+ * tool calls.
+ *
+ * `showTouches` draws the touch visualizer into the capture; it stays on in
+ * the live stream until the stop turns it off. How much the runner buffers is
+ * its own business, so nothing here sizes it.
+ */
+export async function screenRecordStart(
+  udid: string,
+  opts: { showTouches: boolean }
+): Promise<string> {
+  const args = ["screen-record", "start", stripRemotePrefix(udid)];
+  if (opts.showTouches) args.push("--show-touches");
+  const { stdout } = await run(args, { timeoutMs: RECORDING_START_TIMEOUT_MS });
+  const id = stdout.trim();
+  if (!id) throw new Error(`sim-remote ${args.join(" ")} printed no recording id`);
+  return id;
+}
+
+/** Whether `err` is the runner refusing a start because one is already recording. */
+export function isAlreadyRecordingError(err: unknown): boolean {
+  return /already recording/i.test(err instanceof Error ? err.message : String(err));
+}
+
+// Nothing is downloaded, but the runner still muxes the whole recording before
+// it answers, which it allows up to two minutes.
+const RECORDING_STOP_TIMEOUT_MS = 150_000;
+// The whole video crosses the control connection, so a download gets its own
+// budget rather than the default: a long capture of a high-resolution device
+// is hundreds of megabytes.
+const RECORDING_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Stop the recording. The runner keeps the mp4 under the id the start printed,
+ * for `screenRecordFetch`: ending and downloading are separate because only
+ * the download can be retried.
+ */
+export async function screenRecordStop(udid: string): Promise<void> {
+  await run(["screen-record", "stop", stripRemotePrefix(udid)], {
+    timeoutMs: RECORDING_STOP_TIMEOUT_MS,
+  });
+}
+
+/**
+ * Download a recording the runner kept from a stop, overwriting `outputFile`.
+ * It keeps the latest recordings of a simulator until the machine is
+ * released, so a download that broke off is repeated here instead of costing
+ * the recording.
+ */
+export async function screenRecordFetch(
+  udid: string,
+  recording: string,
+  outputFile: string
+): Promise<void> {
+  await run(
+    [
+      "screen-record",
+      "fetch",
+      stripRemotePrefix(udid),
+      outputFile,
+      "--recording",
+      recording,
+      "--force",
+    ],
+    { timeoutMs: RECORDING_DOWNLOAD_TIMEOUT_MS }
+  );
+}
+
 export interface MoqInfo {
   url: string;
   fingerprint: string;

@@ -63,7 +63,7 @@ const SCHEDULED_DELAY_MS = 10_000;
 const EXPORT_TIMEOUT_MS = 1_500;
 
 /** One analytics event, ready to become a single OTLP log record. */
-export interface EmitRecord {
+interface EmitRecord {
   distinctId: string;
   event: string;
   properties: Record<string, unknown>;
