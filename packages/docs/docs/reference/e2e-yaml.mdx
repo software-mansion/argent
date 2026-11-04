@@ -253,6 +253,7 @@ Argent reads text from these elements also when they are empty, so `'^$'` never 
 | Android  | A field with a hint                                                      | The hint                                   |
 | Android  | An element with a content description                                    | The content description                    |
 | iOS      | An element with an accessibility label                                   | The accessibility label                    |
+| iOS      | On a physical iPhone, an element with a value, such as a switch          | The value                                  |
 | Chromium | A password `input`                                                       | `[password]`                               |
 | Chromium | An element with an `aria-label` or `aria-labelledby` label that has text | The label                                  |
 | Chromium | An `input` or `textarea` with a `placeholder`                            | The placeholder                            |
@@ -263,22 +264,22 @@ Argent reads text from these elements also when they are empty, so `'^$'` never 
 
 An element that matches more than one row can read a different text, for example the content description and then the hint.
 
-`matches` never reads an iOS text field as empty, on a simulator or on a physical iPhone. So `'^$'` never passes on an iOS text field. On a simulator, Argent cannot read the typed text of an iOS text field. A filled field reads only its accessibility label, or no text when it has no label. So a pattern that can match an empty string, such as `'^(?!.*@)'`, never passes on a filled field without a label there. A container with its own `id` around a filled field can read as empty there. In an app on the old React Native architecture, Argent identifies a `<Text>` as a text field too.
+`matches` never reads an iOS text field as empty, on a simulator or on a physical iPhone. So `'^$'` never passes on an iOS text field. On a simulator, Argent cannot read the typed text of an iOS text field. A filled field reads only its accessibility label, or no text when it has no label. So a pattern that can match an empty string, such as `'^(?!.*@)'`, never passes on a filled field without a label there. A container with its own `id` around a filled field can read as empty there. On a simulator, Argent identifies every `UITextView` as a text field, also one that only displays text, and in an app on the old React Native architecture, every `<Text>`.
 
 When an element holds text, Argent reads it like this:
 
-- A password field on Android or Chromium reads `[password]`.
+- A password field on Android or Chromium reads `[password]`, also when it has a label.
 - A Chromium `input` or `textarea` with an `aria-label`, `aria-labelledby` or `placeholder` reads that label or placeholder, not the typed text.
 - A Chromium element other than an `input` or `textarea`, with an `aria-label`, `aria-labelledby` or `title`, reads that label or title, and then its text.
 - An Android element with a content description reads the description, and then its text.
-- An iOS element with an accessibility label reads only the label on a simulator. On a physical iPhone, it reads the label and then its value.
+- An iOS element with an accessibility label reads the label and no value on a simulator. On a physical iPhone, it reads the label and then its value.
 
 `'^$'` can pass on these filled Chromium elements:
 
 - A `select`, also when it shows a selected option.
 - A `number`, date or time `input` with text that is not a complete value, for example `-`.
 - A `submit` or `reset` `input` with no `value`.
-- An `input` or `textarea` with an empty label. An `aria-label` that holds only spaces, or a single `aria-labelledby` target that has no text, gives an element an empty label. Argent then ignores the `placeholder`, `title` and typed text of an `input` or `textarea`, and the `title` of other elements. An empty `aria-label` has no effect.
+- An `input` or `textarea` with an empty label. An `aria-label` that holds only spaces, or a single `aria-labelledby` target that has no text, gives an element an empty label. Argent then ignores the `placeholder`, `title` and typed text of an `input` or `textarea`, the `alt` of an `img`, and the `title` of other elements. So `'^$'` also passes on an `img` with an `alt` and an empty label. An empty `aria-label` has no effect.
 
 A Chromium `textarea` also reads its default text. The default text does not change when the user types. React is an exception: for a `textarea` with a `value` prop, React sets the default text to the typed text.
 

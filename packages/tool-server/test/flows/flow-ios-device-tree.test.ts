@@ -271,4 +271,23 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
     // Siblings outside the scroller are never clipped by it.
     expect(findAll(tree, { text: "Continue" })).toHaveLength(1);
   });
+
+  // reference/e2e-yaml.mdx documents that '^$' never passes on an element with a value on a physical iPhone.
+  it("reads an unlabelled element's value, so '^$' fails on a switch", async () => {
+    const tree = await flowTree([
+      node({ index: 0, depth: 0, type: "Application" }),
+      node({
+        index: 1,
+        depth: 1,
+        parentIndex: 0,
+        type: "Switch",
+        identifier: "notifications",
+        value: "1",
+        rect: { x: 16, y: 120, width: 51, height: 31 },
+      }),
+    ]);
+    const sw = findAll(tree, { identifier: "notifications" });
+    expect(assertText(sw[0]!)).toBe("1");
+    expect(evaluateCondition("text", "^$", sw, "matches")).toBe(false);
+  });
 });

@@ -877,6 +877,24 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "logo")).toMatchObject({ label: "Logo" });
   });
 
+  it("reads a blank aria-label as an empty label that hides a placeholder and an alt, and ignores an empty one", () => {
+    const img = el({
+      tag: "img",
+      attrs: { "id": "logo", "aria-label": " " },
+      rect: BOX,
+    }) as MockElement & Record<string, unknown>;
+    Object.setPrototypeOf(img, MockHTMLImageElement.prototype);
+    img.alt = "Logo";
+    const { tree } = run([
+      inputEl({ placeholder: "Email", attrs: { "id": "blank", "aria-label": "   " }, rect: BOX }),
+      inputEl({ placeholder: "Email", attrs: { "id": "empty", "aria-label": "" }, rect: BOX }),
+      img,
+    ]);
+    expect(findById(tree, "blank")!.label).toBeUndefined();
+    expect(findById(tree, "logo")!.label).toBeUndefined();
+    expect(findById(tree, "empty")).toMatchObject({ label: "Email" });
+  });
+
   // ---- input focus (the flow type directive's focus wait reads this) ----
   it("marks the document's activeElement as focused, excluding the body", () => {
     const focusedInput = el({ tag: "input", attrs: { id: "focused-input" }, rect: BOX });

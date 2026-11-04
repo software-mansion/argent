@@ -122,18 +122,21 @@ describe("adaptChromiumTreeForFlows", () => {
     expect(assertText(pw[0]!)).not.toContain("hunter2");
   });
 
-  it("reads an empty password input as [password], so '^$' fails on it", () => {
+  it("reads an empty password input as [password], also when labelled, so '^$' fails on it", () => {
     // The walker gives an empty, unlabelled password input no text at all.
+    const frame = { x: 0.1, y: 0.1, width: 0.5, height: 0.04 };
     const tree = adaptChromiumTreeForFlows(
       el({
         role: "html",
         children: [
+          el({ role: "input", identifier: "pw", password: true, clickable: true, frame }),
           el({
             role: "input",
-            identifier: "pw",
+            identifier: "pw-labelled",
+            label: "Password",
             password: true,
             clickable: true,
-            frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.04 },
+            frame,
           }),
         ],
       })
@@ -141,6 +144,7 @@ describe("adaptChromiumTreeForFlows", () => {
     const pw = findAll(tree, { identifier: "pw" });
     expect(pw[0]!.label).toBe("[password]");
     expect(evaluateCondition("text", "^$", pw, "matches")).toBe(false);
+    expect(assertText(findAll(tree, { identifier: "pw-labelled" })[0]!)).toBe("[password]");
   });
 
   // reference/e2e-yaml.mdx documents that a container reads none of an identified child's text.
