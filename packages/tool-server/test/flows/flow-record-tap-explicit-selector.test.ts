@@ -6,7 +6,8 @@ import type { Registry } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
 
 let currentTreeData: () => DescribeTreeData;
-vi.mock("../../src/tools/flows/flow-tree", () => ({
+vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/tools/flows/flow-tree")>()),
   fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => currentTreeData()),
 }));
 
@@ -110,12 +111,12 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     [
       "matches nothing",
       { identifier: "no-such-id" },
-      /`selector` id="no-such-id" matches no element in the tree a replay reads/,
+      /`selector` \{"identifier":"no-such-id"\} matches no element in the tree a replay reads/,
     ],
     [
       "resolves away from the tapped point",
       { text: "Elsewhere" },
-      /`selector` text="Elsewhere" resolves, in the tree a replay reads, to an element centred at \(0\.3, 0\.15\)/,
+      /`selector` \{"text":"Elsewhere"\} resolves, in the tree a replay reads, to an element centred at \(0\.3, 0\.15\)/,
     ],
   ])("refuses a supplied selector that %s, running nothing", async (_, selector, reason) => {
     setTree([
@@ -219,8 +220,11 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     })) as { message: string };
 
     expect(res.message).toMatch(
-      /`selector` id="settings-card" resolves, in the tree a replay reads, to an element centred at \(0\.5, 0\.45\)/
+      /`selector` \{"identifier":"settings-card"\} resolves, in the tree a replay reads, to an element centred at \(0\.5, 0\.45\)/
     );
+    // Info sits at that centre, so tapping there would not tap the card either.
+    expect(res.message).toMatch(/A smaller element sits at that centre/);
+    expect(res.message).not.toMatch(/record the tap at/);
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
   });
@@ -242,7 +246,9 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
       selector: { identifier: "row-1" },
     })) as { message: string };
 
-    expect(res.message).toMatch(/`selector` id="row-1" resolves, in the tree a replay reads/);
+    expect(res.message).toMatch(
+      /`selector` \{"identifier":"row-1"\} resolves, in the tree a replay reads/
+    );
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
   });
@@ -268,6 +274,42 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
       selector: { text: "Settings" },
     });
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
+  });
+
+  // "Go" is centred at x 0.40265; the badge starts at 0.4027, so the centre
+  // rounded to 0.403 would land on the badge and be refused again.
+  it("names a centre that a re-recorded tap there passes", async () => {
+    setTree([
+      n({ frame: { x: 0.1, y: 0.5, width: 0.6053, height: 0.1 }, label: "Go" }),
+      n({ frame: { x: 0.4027, y: 0.52, width: 0.05, height: 0.06 }, identifier: "badge" }),
+    ]);
+    const refused = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.42, y: 0.55 }),
+      selector: { text: "Go" },
+    })) as { message: string };
+    const named = /record the tap at \(([\d.]+), ([\d.]+)\)/.exec(refused.message);
+    if (!named) throw new Error(`no centre named: ${refused.message}`);
+
+    await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: Number(named[1]), y: Number(named[2]) }),
+      selector: { text: "Go" },
+    });
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Go" } }]);
+  });
+
+  it("refuses a selector on a platform with no runner tree, naming the platform", async () => {
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: "harmony-127.0.0.1:5555", ...ON_ROW }),
+      selector: { text: "Settings" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/this platform's e2e runner has no UI tree/);
+    expect(res.message).not.toMatch(/Restore the tree/);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
   });
 
   // The element here has an id and text, so the warning must not claim otherwise.

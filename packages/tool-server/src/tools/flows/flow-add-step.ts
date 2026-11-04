@@ -65,7 +65,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
-import { getDescribeTapPoint, type DescribeSource } from "../describe/contract";
+import { getDescribeTapPoint, type DescribeFrame, type DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
   deriveSelector,
@@ -709,6 +709,13 @@ async function captureTapSelector(
 ): Promise<TapCapture> {
   try {
     const device = resolveDevice(udid);
+    if (supplied && !supportsFlowTree(device.platform)) {
+      return {
+        rejected:
+          "cannot be recorded here: this platform's e2e runner has no UI tree to resolve it " +
+          "against. Omit it to record the tap as coordinates.",
+      };
+    }
     const launched = recordedLaunchedApp(session, device.platform);
     const { tree, source, uiOrientation } = await fetchFlowTree(
       registry,
@@ -728,7 +735,8 @@ async function captureTapSelector(
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Ranked in the
     // reading order replay will rank in: the UI's, on a landscape UI.
-    const shown = describeSelector(selector);
+    // Quoted as the caller spells it (`identifier`, not the YAML `id`).
+    const shown = supplied ? JSON.stringify(supplied) : describeSelector(selector);
     const resolved = selectorToFrame(tree, selector, uiOrientation);
     if (supplied) {
       if (!resolved) {
@@ -739,19 +747,32 @@ async function captureTapSelector(
         };
       }
       // Replay taps the resolved frame's centre, so the innermost element there
-      // must be the one under this tap. Containment cannot stand in for that:
-      // the tree is flat, so a row's label and a switch inside it look alike.
+      // must be the one tapped. Not containment: in this flat tree a row's
+      // label and a switch inside the row look alike.
       const replayPoint = getDescribeTapPoint(resolved);
       const tapped = nodeAtPoint(tree, point);
-      if (!tapped || nodeAtPoint(tree, replayPoint) !== tapped) {
+      const replayed = nodeAtPoint(tree, replayPoint);
+      if (!tapped || replayed !== tapped) {
+        // Rounded only when the rounded point still hits the same node.
         const round3 = (n: number): number => Math.round(n * 1000) / 1000;
-        const at = `(${round3(replayPoint.x)}, ${round3(replayPoint.y)})`;
+        const rounded = { x: round3(replayPoint.x), y: round3(replayPoint.y) };
+        const named = nodeAtPoint(tree, rounded) === replayed ? rounded : replayPoint;
+        const at = `(${named.x}, ${named.y})`;
+        // A smaller element at the centre takes any tap there.
+        const sameFrame = (f: DescribeFrame | undefined): boolean =>
+          f !== undefined &&
+          f.x === resolved.x &&
+          f.y === resolved.y &&
+          f.width === resolved.width &&
+          f.height === resolved.height;
+        const retap = sameFrame(replayed?.frame)
+          ? `To tap that element, record the tap at ${at}. Otherwise pass`
+          : `A smaller element sits at that centre, so a tap there misses the match too. Pass`;
         return {
           rejected:
             `${shown} resolves, in the tree a replay reads, to an element centred at ${at}, ` +
-            `and a replay taps there, not on the element under this tap. To tap that ` +
-            `element, record the tap at ${at}. Otherwise pass a selector for the tapped ` +
-            `element, or omit it.`,
+            `and a replay taps there, not on the element under this tap. ${retap} a selector ` +
+            `for the tapped element, or omit it.`,
         };
       }
     } else {
