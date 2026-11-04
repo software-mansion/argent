@@ -6,7 +6,7 @@ import { buildChromiumFillScript } from "../src/tools/fill/chromium";
  * only what the script reads: the focused element (through an open shadow
  * root or a frame), its kind, `select()`, the document selection and
  * `execCommand`, which stores line breaks as LF outside an input and fires
- * `input` through the window's capture listeners, `createElement` for a
+ * `input` through the window's capture listeners, `createElementNS` for a
  * detached input that applies the HTML value sanitization of number and email
  * inputs, and the window's native value setters and Event.
  */
@@ -79,13 +79,17 @@ function makePage(options: PageOptions = {}): Page {
       removeAllRanges: () => (doc.selected = null),
       addRange: (range: { node: unknown }) => (doc.selected = range.node),
     }),
-    createElement: () => {
+    // Any other namespace makes a plain element, which has no sanitization.
+    createElementNS: (ns: string) => {
       const probe = { type: "text", multiple: false, sanitized: "" };
+      if (ns !== "http://www.w3.org/1999/xhtml") return probe;
       return Object.defineProperty(probe, "value", {
         get: () => probe.sanitized,
         set: (v: string) => (probe.sanitized = sanitize(probe.type, probe.multiple, v)),
       });
     },
+    // As in an HTML document; a test of another document type replaces it.
+    createElement: (name: string) => doc.createElementNS("http://www.w3.org/1999/xhtml", name),
     createRange: () => ({
       node: null as unknown,
       selectNodeContents(node: unknown) {
@@ -254,6 +258,33 @@ describe("fill page script", () => {
     expect(input._value).toBe("new");
     expect(page.events).toEqual(["input", "change"]);
     expect(page.win.listeners.size).toBe(0);
+  });
+
+  it("refuses a number input's invalid text in a document without editing commands, as SVG", async () => {
+    const page = makePage();
+    page.doc.execCommand = () => {
+      throw new Error("execCommand is only supported on HTML documents");
+    };
+    // An SVG document's createElement makes an element in no namespace.
+    page.doc.createElement = () => page.doc.createElementNS(null, "input");
+    const input = control(page, "INPUT", { type: "number", _value: "42" });
+    page.doc.activeElement = input;
+    await expect(runScript(page, "abc")).resolves.toEqual({
+      status: "unsupported",
+      detail: "a number input holds only a valid number",
+    });
+    expect(input._value).toBe("42");
+  });
+
+  it("listens in a frame's own window, keeping its rewrite on a retry", async () => {
+    const page = makePage();
+    const frame = makePage({ rewrite: (t) => t.replace("ąę", "xn--2da4b") });
+    const input = control(frame, "INPUT", { type: "email", _value: "a@xn--2da4b.pl" });
+    frame.doc.activeElement = input;
+    page.doc.activeElement = { tagName: "IFRAME", contentWindow: frame.win, contentDocument: frame.doc };
+    await expect(runScript(page, "a@ąę.pl")).resolves.toEqual({ status: "ok", verified: false });
+    expect(input._value).toBe("a@xn--2da4b.pl");
+    expect(frame.events).toEqual([]);
   });
 
   it.each([

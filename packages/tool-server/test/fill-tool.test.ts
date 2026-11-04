@@ -396,6 +396,7 @@ describe("fill: Chromium", () => {
       failure_stage: "fill_chromium_timeout",
     });
     expect(err.message).toContain("may still change when the page resumes");
+    expect(err.message).toContain("restart the app");
   });
 
   function connectError(code: FailureCode) {

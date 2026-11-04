@@ -83,9 +83,10 @@ export function buildChromiumFillScript(text: string): string {
     }
     // A number input holds only a valid number and an email input drops the
     // whitespace around an address, typed or set. A detached input of the
-    // same type applies the browser's own sanitization.
+    // same type applies the browser's own sanitization; outside an HTML
+    // document only the XHTML namespace makes it an input.
     if (type === "number" || type === "email") {
-      const probe = doc.createElement("input");
+      const probe = doc.createElementNS("http://www.w3.org/1999/xhtml", "input");
       probe.type = type;
       probe.multiple = el.multiple === true;
       probe.value = text;
@@ -120,7 +121,8 @@ export function buildChromiumFillScript(text: string): string {
 
     const before = read();
     // The browser fires input synchronously for an edit it performed. The
-    // window's capture phase sees it before a page listener can stop it.
+    // window's capture phase sees it unless a page listener added there
+    // earlier stops it.
     let edited = false;
     const onInput = () => { edited = true; };
     win.addEventListener("input", onInput, true);

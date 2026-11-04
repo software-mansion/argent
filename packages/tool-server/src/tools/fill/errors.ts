@@ -78,8 +78,9 @@ export function pageNotAnsweringError(stage: string): FailureError {
 /** Same code as {@link notVerifiedError}: a web page that started the fill and did not finish it in time. */
 export function pageNotFinishedError(stage: string): FailureError {
   return new FailureError(
-    "The page did not finish the fill in time; it may have opened a JavaScript dialog. The field " +
-      "may have changed, and may still change when the page resumes: read it before retrying.",
+    "The page did not finish the fill in time; it may have opened a JavaScript dialog or crashed. " +
+      "The field may have changed, and may still change when the page resumes: read it before " +
+      "retrying. If the page does not answer and no dialog is open, restart the app.",
     {
       error_code: FAILURE_CODES.FILL_NOT_VERIFIED,
       failure_stage: stage,
