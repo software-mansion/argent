@@ -297,7 +297,8 @@ describe("list-devices", () => {
       expect(result.hint).toMatch(/sudo \S*xcodebuild -runFirstLaunch/);
       expect(result.hint).toContain("does not show local iOS simulators");
       expect(result.hint).toContain(
-        "such as taps and screenshots, still work on an iPhone or iPad simulator"
+        "Tools that do not need `simctl`, such as taps and screenshots, still work on an iPhone or " +
+          "iPad simulator that is already booted."
       );
       // The agent's own simctl, or a build that calls it, would wait for the password too.
       expect(result.hint).not.toContain("physical iPhones");
@@ -354,6 +355,14 @@ describe("list-devices", () => {
         "`simctl` and `devicectl` wait for an administrator password on every call, so argent " +
           "does not run them. `list-devices` does not show local iOS simulators and physical " +
           "iPhones, and argent refuses the tools that need `simctl` or `devicectl`."
+      );
+      expect(result.hint).toContain(
+        "Tools that do not need `simctl`, such as taps and screenshots, still work on an iPhone or " +
+          "iPad simulator that is already booted."
+      );
+      expect(result.hint).toContain(
+        "Tools that only talk to the runner on the iPhone, such as taps, screenshots and " +
+          "`keyboard`, still work while the runner is up."
       );
       expect(result.hint).toContain(
         "Do not run `xcrun simctl` or `xcrun devicectl` yourself, or commands that call them, " +

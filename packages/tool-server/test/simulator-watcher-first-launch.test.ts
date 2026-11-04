@@ -116,7 +116,10 @@ describe("simulator-watcher while Xcode's component install is pending", () => {
 
     expect(execSimctlMock).not.toHaveBeenCalled();
     expect(installHints()).toHaveLength(1);
-    expect(installHints()[0]).toContain(`To install them, open ${FAKE_INSTALL}.`);
+    expect(installHints()[0]).toBe(
+      "[simulator-watcher] Xcode has not finished installing its system components, so " +
+        `simulators are not polled until it has. To install them, open ${FAKE_INSTALL}.\n`
+    );
     stop();
   });
 

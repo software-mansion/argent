@@ -800,8 +800,10 @@ describe("flow iOS full-hierarchy source", () => {
       pinned: false,
       probeAnswered: false,
     }).catch((err) => err);
-    expect(error.message).toContain("Xcode's component install is pending");
-    expect(error.message).toContain("list-devices");
+    expect(error.message).toBe(
+      "com.example.app is not connected, and Xcode's component install is pending, so argent " +
+        "cannot read its view hierarchy. Call list-devices for what to do."
+    );
     expect(error.message).not.toContain("restart");
   });
 

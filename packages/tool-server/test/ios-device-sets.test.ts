@@ -200,13 +200,34 @@ describe("deviceSetForUdid - while Xcode's component install is pending", () => 
 });
 
 describe("deviceSetForUdid - a simctl failure that is not the refusal", () => {
-  it("answers false even when the device directory exists", async () => {
+  beforeEach(() => {
     additionalSetsMock.mockReturnValue([RADON_SET]);
+  });
+
+  it("answers false even when the device directory exists", async () => {
     existsSyncMock.mockReturnValue(true);
     execFileMock.mockReturnValue(new Error("simctl exited 1"));
 
     expect(await deviceSetForUdid(RADON_UDID)).toBeNull();
     expect(cachedDeviceSetForUdid(RADON_UDID)).toBeNull();
+  });
+
+  it("still finds a device in an additional set when the default set listing fails", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) =>
+      cmd === "xcrun" && args[1] === "--set"
+        ? listPayload(RADON_UDID, "iPhone Air")
+        : new Error("simctl exited 1")
+    );
+
+    expect(await deviceSetForUdid(RADON_UDID)).toBe(RADON_SET);
+  });
+
+  it("remembers nothing, so a listing finds the real set once simctl recovers", async () => {
+    execFileMock.mockReturnValue(new Error("simctl exited 1"));
+    expect(await deviceSetForUdid(RADON_UDID)).toBeNull();
+
+    mockTwoSets();
+    expect(await deviceSetForUdid(RADON_UDID)).toBe(RADON_SET);
   });
 });
 
