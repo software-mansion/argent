@@ -183,6 +183,55 @@ describe("uninstall — telemetry consent preservation", () => {
     );
   });
 
+  describe("a global install the launcher's package manager does not own", () => {
+    let globalPkg: string;
+    beforeEach(() => {
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+      globalPkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+      writeFile(
+        path.join(globalPkg, "package.json"),
+        JSON.stringify({ name: "@swmansion/argent" })
+      );
+      writeFile(path.join(globalPkg, "bin", "argent"), "#!/usr/bin/env node\n");
+      childProcessMock.which.mockImplementation(() => path.join(globalPkg, "bin", "argent") + "\n");
+      process.chdir(tmpDir);
+    });
+
+    it("reports a failure when the uninstall exits 0 and leaves the package", async () => {
+      const clack = await import("@clack/prompts");
+
+      await uninstall(["--yes"]);
+
+      expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+        `global uninstall failed: Error: ${fs.realpathSync(globalPkg)} is still installed. ` +
+          "Remove it with the package manager that installed it."
+      );
+      expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
+      expect(vi.mocked(clack.outro)).not.toHaveBeenCalled();
+      expect(telemetryMock.track).toHaveBeenCalledWith(
+        "installation:cli_uninstall_complete",
+        expect.objectContaining({
+          error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+          has_uninstalled_package: false,
+        })
+      );
+      expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+    });
+
+    it("reports success when the uninstall removes the package", async () => {
+      const clack = await import("@clack/prompts");
+      childProcessMock.execFileSync.mockImplementation((bin: string) => {
+        if (bin === "npm") fs.rmSync(globalPkg, { recursive: true, force: true });
+        return undefined;
+      });
+
+      await uninstall(["--yes"]);
+
+      expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+      expect(vi.mocked(clack.outro)).toHaveBeenCalled();
+    });
+  });
+
   it("removes a local devDependency with the project's yarn when launched from Yarn 2+", async () => {
     process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
     fs.writeFileSync(

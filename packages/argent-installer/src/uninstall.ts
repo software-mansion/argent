@@ -725,6 +725,17 @@ export async function uninstall(args: string[]): Promise<void> {
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
+        // The command comes from the launcher, not the install's owner: npm
+        // exits 0 on a package Yarn classic or pnpm installed and leaves it.
+        if (
+          removable.kind === "global" &&
+          removable.installDir &&
+          fs.existsSync(path.join(removable.installDir, "package.json"))
+        ) {
+          throw new Error(
+            `${removable.installDir} is still installed. Remove it with the package manager that installed it.`
+          );
+        }
         p.log.success(`Removed ${removable.kind} package.`);
         hasUninstalledPackage = true;
         if (removable.kind === "global") hasUninstalledGlobalPackage = true;
