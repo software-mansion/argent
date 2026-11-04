@@ -405,6 +405,8 @@ function webNode(item: WireWebItem): MacosNode {
   const role = webRole(item);
   const field = item.tag === "input" || item.tag === "textarea" || item.tag === "select";
   const password = field && item.type === "password";
+  // The `value` attribute of these says nothing about their state; `checked` does.
+  const noValue = password || item.type === "checkbox" || item.type === "radio";
   const node = newNode(
     {
       role,
@@ -413,7 +415,7 @@ function webNode(item: WireWebItem): MacosNode {
       // text: that is the value cut at 80 characters, the options of a select,
       // or for a password the secret.
       label: cap(field ? item.label || item.placeholder : item.label || contentName(item)),
-      value: field && !password ? cap(item.value ?? undefined) : undefined,
+      value: field && !noValue ? cap(item.value ?? undefined) : undefined,
       password,
       clickable: MACOS_CLICKABLE_ROLES.has(role),
       checkable: CHECKABLE_ROLES.has(role),
