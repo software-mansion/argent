@@ -11,7 +11,7 @@ import { moqInfo, type MoqInfo } from "./sim-remote";
 
 const PUBLISH_PATH = "argent";
 
-/** Screenshots need `screenshot` for reply correlation; touch snapshots are the webui's path, not a tool's. */
+/** Screenshot has its own reply-correlating channel; touch snapshots are the webui's path. */
 type ToolInput = Exclude<InputMessage, { type: "screenshot" | "touchState" }>;
 
 export interface MoqClient {

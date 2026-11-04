@@ -199,12 +199,7 @@ describe("sendCommand over a MoQ transport", () => {
   });
 });
 
-/**
- * The SDK owns track selection: its ordered track keeps a Down/Up pair from
- * being reordered or dropped, which the latest-wins control track did to taps
- * and letters alike. The transport therefore hands over typed messages and
- * never encodes a frame itself.
- */
+/** The SDK owns track selection, so the transport hands over typed messages and never encodes a frame. */
 describe("every input reaches the SDK as an InputMessage", () => {
   it("maps touch, button, rotate and key commands", async () => {
     const { transport, sent } = recordingTransport();
@@ -265,9 +260,8 @@ describe("gesture-tap on a dead cloud session", () => {
 });
 
 /**
- * The remote instance builds its own `pressKey`, so it is the one input that
- * can miss `sendCommand` entirely. It did: it hit the SDK directly,
- * which left `keyboard` on a dead cloud session throwing a bare SDK error
+ * The remote instance builds its own `pressKey`, so it can miss `sendCommand`.
+ * It did once: a dead cloud session threw a bare SDK error from `keyboard`
  * while a tap on the same session reported a classified failure.
  */
 describe("the remote instance routes its keys like every other input", () => {
