@@ -28,6 +28,13 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
+// Yarn 2+ has no `yarn global`; npm installs for it.
+export function detectGlobalPackageManager(): PackageManager {
+  const pm = detectPackageManager();
+  const agent = process.env.npm_config_user_agent ?? "";
+  return pm === "yarn" && !agent.startsWith("yarn/1.") ? "npm" : pm;
+}
+
 function asKnownPm(name: unknown): PackageManager | null {
   return name === "npm" || name === "yarn" || name === "pnpm" || name === "bun" ? name : null;
 }
