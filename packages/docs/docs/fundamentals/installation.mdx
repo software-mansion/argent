@@ -85,6 +85,26 @@ Add `--no-telemetry` to also commit a telemetry opt-out for the repository. Loca
 In local mode the committed MCP config runs the project-local copy, so the bare `argent` command is **not** on teammates' `PATH`. Note that `npm install` builds Argent's native dependencies (`tree-sitter`) on each machine. These are prebuilt for macOS, Linux x64 and Windows x64; other targets compile from source and need a C/C++ toolchain.
 :::
 
+## macOS hosts after an Xcode update
+
+After you install or update Xcode, Xcode must install its system components. Until then, a `simctl` call can start that install. The install waits for an administrator password, also when nobody sees the prompt.
+
+Argent reads Xcode's files to find if a `simctl` call starts the install. If it does:
+
+- Argent does not look for booted simulators in the background.
+- `list-devices` does not show local iOS simulators. Its `hint` field gives the reason to the agent.
+
+Other Argent tools that call `simctl` can still start the install. An `xcrun simctl` command that the agent or you run also starts it. Commands that call `simctl`, for example `npx react-native run-ios`, also start it.
+
+The `hint` field names the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
+
+To install the components, do one of these steps:
+
+- Open that Xcode and let it install the components.
+- Run the `xcodebuild` of that Xcode with `sudo`, for example `sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch`.
+
+Argent finds the installed components at the next `list-devices` call. You do not need to restart Argent.
+
 ## Linux hosts running Android emulators
 
 Argent runs Android emulators on Linux, but a few host-side knobs matter:

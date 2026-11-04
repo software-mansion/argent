@@ -13,6 +13,7 @@ import {
   type DeviceSetPath,
 } from "./ios-device-sets";
 import { execSimctl, SimctlTimeoutError } from "./simctl-exec";
+import { xcodeFirstLaunchPending, xcodeInstallInstruction } from "./xcode-first-launch";
 
 const POLL_INTERVAL_MS = 10_000;
 /** Ceiling, in ticks, on the polls skipped while `simctl` keeps timing out (5 min). */
@@ -99,6 +100,31 @@ export function startSimulatorWatcher(registry: Registry): {
    */
   let consecutiveTimeouts = 0;
   let ticksToSkip = 0;
+  /** Whether the current wait for Xcode's component install has been logged. */
+  let firstLaunchReported = false;
+
+  /**
+   * True while `simctl` would start Xcode's component install, so this tick must
+   * not call it. A tick like that spawns nothing and restarts no `xcodebuild`, so
+   * it is no timeout: it also drops any backoff, or the first poll after the
+   * install would wait out what is left of it.
+   */
+  function simctlWouldStartInstall(): boolean {
+    if (!xcodeFirstLaunchPending()) {
+      firstLaunchReported = false;
+      return false;
+    }
+    consecutiveTimeouts = 0;
+    ticksToSkip = 0;
+    if (!firstLaunchReported) {
+      firstLaunchReported = true;
+      process.stderr.write(
+        `[simulator-watcher] Xcode has not finished installing its system components, so ` +
+          `simulators are not polled until it has. To install them, ${xcodeInstallInstruction()}.\n`
+      );
+    }
+    return true;
+  }
 
   /**
    * Split the booted set into the simulators the watcher may drive and the ones
@@ -255,9 +281,10 @@ export function startSimulatorWatcher(registry: Registry): {
   }
 
   // Awaited: the server does not bind until ensureEnv has been attempted for
-  // every booted simulator, so launch-app cannot race it.
+  // every booted simulator, so launch-app cannot race it. While Xcode's install
+  // is pending nothing is attempted, and this resolves at once.
   // The simctl call is bounded, so this resolves even when simctl hangs.
-  const ready = poll(true);
+  const ready = simctlWouldStartInstall() ? Promise.resolve() : poll(true);
 
   // A tick that lands while the previous poll is still running, or inside the
   // backoff after a timeout, is skipped, so a slow simctl never has more than one
@@ -265,6 +292,7 @@ export function startSimulatorWatcher(registry: Registry): {
   let inFlight: Promise<void> | null = ready.catch(() => {}).finally(() => (inFlight = null));
   const interval = setInterval(() => {
     if (inFlight) return;
+    if (simctlWouldStartInstall()) return;
     if (ticksToSkip > 0) {
       ticksToSkip -= 1;
       return;
