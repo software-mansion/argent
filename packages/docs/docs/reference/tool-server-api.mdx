@@ -35,6 +35,7 @@ The `GET /tools` entry of a tool lists its file inputs in `fileInputs`. The `e2e
       "skipWhenSet": "e2e_test_path",
       "collect": "flow"
     },
+    { "target": "project_root", "path": "${project_root}", "kind": "probe" },
     {
       "target": "flow_path",
       "path": "${flow_path}",
@@ -42,8 +43,7 @@ The `GET /tools` entry of a tool lists its file inputs in `fileInputs`. The `e2e
       "optional": true,
       "unwrapWhenSet": "name",
       "collect": "flow"
-    },
-    { "target": "project_root", "path": "${project_root}", "kind": "probe" }
+    }
   ]
 }
 ```
