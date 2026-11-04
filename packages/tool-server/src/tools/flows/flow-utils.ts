@@ -798,9 +798,20 @@ function isFoldPosture(value: unknown): value is FoldPosture {
   return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
 }
 
+const RUNTIME_KINDS = ["mobile", "tv"] as const;
+export type FlowRuntimeKind = (typeof RUNTIME_KINDS)[number];
+
+/** The targets a flow supports. The keys are ANDed; `ios` covers a remote simulator. */
+export type FlowRequires = {
+  platform?: WhenPlatform[];
+  runtimeKind?: FlowRuntimeKind;
+};
+
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
+  /** Absent when the flow runs on any target. */
+  requires?: FlowRequires;
   steps: FlowStep[];
 };
 
@@ -1076,6 +1087,7 @@ type YamlStep =
 type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
 type YamlFlowFile = {
+  requires?: { platform?: WhenPlatform | WhenPlatform[]; runtimeKind?: FlowRuntimeKind };
   executionPrerequisite?: string;
   steps: YamlStep[];
 };
@@ -2340,6 +2352,46 @@ export function authoringPlatform(platform: string): string {
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
+
+const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
+
+function parseRequires(raw: unknown): FlowRequires {
+  const bad = (detail: string): never => badEntry({ requires: raw }, detail);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    bad(`requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
+  }
+  const b = raw as Record<string, unknown>;
+  rejectUnknownKeys({ requires: raw }, b, REQUIRES_KEYS, "requires");
+
+  const out: FlowRequires = {};
+  if (b.platform !== undefined) {
+    const list: unknown[] = Array.isArray(b.platform) ? b.platform : [b.platform];
+    const oneOf = `one of ${LAUNCH_PLATFORMS.join(", ")}`;
+    if (list.length === 0) bad(`requires.platform must name at least ${oneOf}`);
+    const platforms: WhenPlatform[] = [];
+    for (const p of list) {
+      if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
+        bad(`requires.platform must be ${oneOf} (or a list of them)`);
+      }
+      platforms.push(p as WhenPlatform);
+    }
+    out.platform = platforms;
+  }
+  if (b.runtimeKind !== undefined) {
+    const kind = b.runtimeKind;
+    if (typeof kind !== "string" || !(RUNTIME_KINDS as readonly string[]).includes(kind)) {
+      bad(`requires.runtimeKind must be one of ${RUNTIME_KINDS.join(", ")}`);
+    }
+    out.runtimeKind = kind as FlowRuntimeKind;
+  }
+  if (out.platform === undefined && out.runtimeKind === undefined) {
+    bad(
+      `requires must declare at least one of ${REQUIRES_KEYS.join(", ")} ` +
+        `(omit the block for a flow that runs on any target)`
+    );
+  }
+  return out;
+}
 
 /**
  * YAML reads an unquoted `5` or `true` as a number or boolean, not a string.
@@ -3741,9 +3793,19 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   return badEntry(raw, "unrecognized step kind");
 }
 
+function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["requires"] {
+  return {
+    ...(platform ? { platform: platform.length === 1 ? platform[0] : platform } : {}),
+    ...(runtimeKind ? { runtimeKind } : {}),
+  };
+}
+
 /** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
-  const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
+  const doc: YamlFlowFile = {
+    ...(flow.requires ? { requires: requiresToYaml(flow.requires) } : {}),
+    steps: flow.steps.map(toYamlStep),
+  };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
@@ -3810,9 +3872,8 @@ export function parseFlow(content: string): FlowFile {
     });
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys, so
-  // a misspelled `executionPrerequisite` must not silently become "".
-  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  // Same strictness as step bodies: a misspelled top-level key must not be silently dropped.
+  const topKeys: readonly string[] = ["executionPrerequisite", "requires", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
@@ -3834,6 +3895,7 @@ export function parseFlow(content: string): FlowFile {
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
+    ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
     steps,
   };
   validateFlow(flow);

@@ -40,6 +40,18 @@ steps: []
 
 E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
+A test that only makes sense on some targets declares a top-level `requires:` block. Declare one key or both; a target must meet each one. `platform` is one of `ios`, `android`, `chromium`, `vega` or a list of them (`ios` also covers a remote simulator). `runtimeKind` is `tv` (Apple TV, Android TV, Fire TV) or `mobile` (other iOS, Android and Chromium targets). HarmonyOS has no runtime kind, so a HarmonyOS test must not declare `runtimeKind`. Without the block the test runs on any target. Add it when the scenario is platform-specific (a platform-only screen, an OS settings flow) or TV-specific (focus and remote navigation).
+
+```yaml
+requires:
+  platform: [ios, android]
+  runtimeKind: tv
+steps:
+  - launch: com.example.tvapp
+```
+
+Requirements narrow device auto-detection, so an iOS-only test picks the booted simulator when an emulator is booted too. A run on a target the block excludes fails with `FLOW_REQUIREMENTS_UNMET`, and a directory run skips that test. A device whose runtime kind cannot be read fails the run instead of skipping it. A `run:` fragment whose `requires:` the run device does not meet fails its `run:` step.
+
 The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly: an auto-detected device would retarget the teardown at a device the test never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup test there or pass `device`. A step that recorded no scope is narrowed onto the run's device **only when the run resolved one**. A cleanup test whose only step is that teardown needs no device, so with none or several booted it resolves none, replays as the machine-wide sweep, and still reports a pass. Record the scope, or pass `device` at replay, whenever the sweep must stay confined.
 
 ## Selectors
