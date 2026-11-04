@@ -230,6 +230,24 @@ describe("uninstall — telemetry consent preservation", () => {
       expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
       expect(vi.mocked(clack.outro)).toHaveBeenCalled();
     });
+
+    it("reports success for a linked install whose source checkout stays", async () => {
+      const clack = await import("@clack/prompts");
+      const link = path.join(tmpDir, "prefix", "bin", "argent");
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(path.join(globalPkg, "bin", "argent"), link);
+      childProcessMock.which.mockImplementation(() => link + "\n");
+      childProcessMock.execFileSync.mockImplementation((bin: string) => {
+        if (bin === "npm") fs.rmSync(link);
+        return undefined;
+      });
+
+      await uninstall(["--yes"]);
+
+      expect(fs.existsSync(path.join(globalPkg, "package.json"))).toBe(true);
+      expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+      expect(vi.mocked(clack.outro)).toHaveBeenCalled();
+    });
   });
 
   it("removes a local devDependency with the project's yarn when launched from Yarn 2+", async () => {
