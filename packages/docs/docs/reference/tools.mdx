@@ -38,6 +38,12 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 - `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS).
 - `bundleId` does not match the bundle id in the `.app`, the package name in the `.apk` or the bundle name in the `.hap`. On a remote simulator, Argent does not compare the bundle id.
 
+On Android, Argent also checks the device after the uninstall. If the package is still on the device, the tool fails and does not install the `.apk`. These packages stay after the uninstall:
+
+- A system app. The app data stays on the device.
+- An app that is an active device admin. The app data stays on the device.
+- An updated system app. The uninstall removes only the update. If the update has a newer version than the system app, Android also removes the app data.
+
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
 - Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. The panel that shows the UI is the active panel.
