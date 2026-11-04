@@ -106,7 +106,7 @@ type Point = { x: number; y: number };
 async function runPointerDrag(
   from: Point,
   to: Point,
-  opts: { durationMs?: number; momentum?: boolean; signal?: AbortSignal },
+  opts: { durationMs?: number; momentum?: boolean; signal?: AbortSignal; paceFromPress?: boolean },
   pointer: Record<"down" | "move" | "up", (point: Point) => Promise<void>>
 ): Promise<void> {
   const durationMs = opts.durationMs ?? 300;
@@ -116,7 +116,7 @@ async function runPointerDrag(
   // Pace every frame off one run-start deadline so each dispatch round-trip
   // (~8-10ms) counts toward its own frame and the press→release span tracks
   // durationMs - apps threshold a flick against a drag on exactly that number.
-  const t0 = Date.now();
+  let t0 = Date.now();
   // Last dispatched position, so an abort releases where the pointer is.
   let last = from;
   // The button is down for the whole span, so check the abort once per frame.
@@ -152,6 +152,7 @@ async function runPointerDrag(
   if (opts.signal?.aborted) throw abortError(0);
   await pointer.down(from);
   buttonDown = true;
+  if (opts.paceFromPress) t0 = Date.now();
   try {
     for (let i = 1; i < steps; i++) {
       if (opts.signal?.aborted) await releaseAndAbort(i);
@@ -215,10 +216,17 @@ Pass momentum:false for a momentum-free drag that decelerates into the release, 
       await runPointerDrag(
         at,
         { x: params.toX, y: params.toY },
-        { ...opts, durationMs: params.durationMs ?? (longPress ? MACOS_LONG_PRESS_MS : undefined) },
+        {
+          ...opts,
+          durationMs: params.durationMs ?? (longPress ? MACOS_LONG_PRESS_MS : undefined),
+          // An app's first press after launch answers hundreds of ms late, which a hold must not lose.
+          paceFromPress: longPress,
+        },
         {
           down: (p) => macosMouse(app, { type: "down", ...p, clickCount: 1 }),
           move: async (p) => {
+            // A resting mouse sends no dragged events, and a drag event cancels some apps' hold.
+            if (longPress) return;
             await macosMouse(app, { type: "move", ...p });
             at = p;
           },

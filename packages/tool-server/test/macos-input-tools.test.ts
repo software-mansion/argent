@@ -185,7 +185,8 @@ describe("gesture-drag on a Mac app", () => {
     expect(calls.map((c) => c.params.type)).not.toContain("up");
     await vi.advanceTimersByTimeAsync(10 + MACOS_CLICK_SETTLE_MS);
     await run;
-    expect(calls.at(-1)!.params).toMatchObject({ type: "up", x: 0.5, y: 0.5 });
+    expect(calls.map((c) => c.params.type)).toEqual(["down", "up"]);
+    expect(calls.at(-1)!.params).toMatchObject({ x: 0.5, y: 0.5 });
   });
 
   it("eases out for momentum: false, with at least eight samples", async () => {
