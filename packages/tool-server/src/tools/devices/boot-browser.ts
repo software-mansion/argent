@@ -204,7 +204,7 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
   try {
     fs.writeFileSync(path.join(profileDir, PID_FILE), String(result.pid));
   } catch {
-    // The browser already exited, and its profile went with it.
+    // Not worth failing a running browser over: only the later sweep needs the file.
   }
 
   const ours = await answersOnProfile(result.port, profileDir).catch((err: unknown) => {
