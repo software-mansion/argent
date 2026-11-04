@@ -60,6 +60,7 @@ import {
   assertHarmonyEnabled,
   classifyDevice,
   harmonyInstanceName,
+  isAndroidEmulatorSerial,
   stripRemotePrefix,
   harmonyDeviceId,
   harmonyEmulatorId,
@@ -2200,6 +2201,30 @@ function bootHarmony(params: {
   return tracked;
 }
 
+/** The capability gate admits these ids for the other parameters, so they can arrive as a `udid`. */
+const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
+  android: "Boot an Android emulator by passing `avdName` (an AVD name from `list-devices`).",
+  chromium: "Boot an Electron app by passing `electronAppPath`.",
+  vega: "Boot a Vega (Fire TV) Virtual Device by passing `vvdImage`.",
+};
+
+/**
+ * `classifyDevice` calls every unrecognised id `android`; only an `emulator-`
+ * serial is known to be one. Off macOS, `undefined` leaves `bootIos` to say
+ * that no simulator can boot there.
+ */
+function nonIosUdidHint(
+  udid: string,
+  platform: "android" | "chromium" | "vega"
+): string | undefined {
+  if (platform !== "android" || isAndroidEmulatorSerial(udid)) return NON_IOS_UDID_HINT[platform];
+  if (process.platform !== "darwin") return undefined;
+  return (
+    "Copy it exactly. " +
+    "An Android emulator boots through `avdName`; a connected Android phone needs no boot."
+  );
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
@@ -2242,7 +2267,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
       const hasElectron = Boolean(params.electronAppPath);
       const provided = [hasUdid, hasAvd, hasVega, hasHarmony, hasElectron].filter(Boolean).length;
       if (provided !== 1) {
-        throw new FailureError(
+        throw new InvalidToolInputError(
           renderFlagGated(
             "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), <flag:harmonyos>`harmonyInstance` (HarmonyOS), </flag:harmonyos>or `electronAppPath` (Electron).",
             isFlagEnabled
@@ -2250,8 +2275,6 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
           {
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
             failure_stage: "boot_device_target_selection",
-            failure_area: "tool_server",
-            error_kind: "validation",
           }
         );
       }
@@ -2295,6 +2318,17 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
             bootTimeoutMs: params.bootTimeoutMs ?? HARMONY_BOOT_TIMEOUT_MS,
             force: params.force,
           });
+        }
+        const hint = platform === "ios" ? undefined : nonIosUdidHint(params.udid!, platform);
+        if (hint) {
+          throw new InvalidToolInputError(
+            `\`udid\` takes an iOS simulator UDID from \`list-devices\`; \`${params.udid}\` is not one. ` +
+              hint,
+            {
+              error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+              failure_stage: "boot_device_target_selection",
+            }
+          );
         }
         return bootIos(params.udid!, registry, params.force, params.headless);
       }
