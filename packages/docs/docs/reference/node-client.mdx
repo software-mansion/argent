@@ -34,6 +34,8 @@ The client connects to the tool-server of the installed package. When no tool-se
 
 When `argent link` or `ARGENT_TOOLS_URL` names a remote tool-server, the client uses that tool-server.
 
+The client resolves a relative path in some arguments, for example `appPath` of `reinstall-app`, against `process.cwd()` of the program. See [Relative paths](/docs/reference/tools#relative-paths).
+
 ## API
 
 | Member                            | Description                                                                                                                                                       |

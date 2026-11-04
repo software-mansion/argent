@@ -15,6 +15,7 @@ import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recor
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 import { parseFlow } from "../../src/tools/flows/flow-utils";
+import { RECORDING_TOOL_IDS } from "../../src/tools/flows/flow-add-step";
 
 const ALIASES = Object.entries(TOOL_ID_ALIASES);
 
@@ -58,6 +59,19 @@ function runShape(result: FlowRunResult) {
     steps: result.steps.map((s) => [s.kind, s.status, s.tool]),
   };
 }
+
+describe("the recording tools", () => {
+  it("each declare project_root as a probe file input, so the client resolves a relative root", () => {
+    const registry = createRegistry();
+    const declaring = [...RECORDING_TOOL_IDS].filter((id) =>
+      registry
+        .getTool(id)!
+        .fileInputs?.some((spec) => spec.target === "project_root" && spec.kind === "probe")
+    );
+
+    expect(declaring).toEqual([...RECORDING_TOOL_IDS]);
+  });
+});
 
 describe("the former flow-* tool ids", () => {
   it("are the aliases the tools declare, each resolving to its e2e-* tool", () => {

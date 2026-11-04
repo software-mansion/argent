@@ -143,9 +143,10 @@ describe("the former param names in GET /tools", () => {
       expect(specs.map((s) => [s.target, s.path])).toEqual([
         ["e2e_test_path", "${e2e_test_path}"],
         ["e2e_test_file", "${project_root}/.argent/flows/${name}.yaml"],
+        ["project_root", "${project_root}"],
         ["flow_path", "${flow_path}"],
       ]);
-      const [current, , former] = specs;
+      const [current, , , former] = specs;
       expect({ ...former, target: current!.target, path: current!.path }).toEqual(current);
     }
   );
