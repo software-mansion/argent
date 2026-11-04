@@ -39,7 +39,7 @@ describe("boot-device browser", () => {
   });
 
   it("rejects a browser outside the supported set at the schema", () => {
-    expect(tool.zodSchema.safeParse({ browser: "firefox" }).success).toBe(false);
-    expect(tool.zodSchema.safeParse({ browser: "brave" }).success).toBe(true);
+    expect(tool.zodSchema!.safeParse({ browser: "firefox" }).success).toBe(false);
+    expect(tool.zodSchema!.safeParse({ browser: "brave" }).success).toBe(true);
   });
 });

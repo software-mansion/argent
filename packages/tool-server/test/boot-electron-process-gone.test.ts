@@ -88,7 +88,9 @@ describe("bootElectronApp onProcessGone / label", () => {
         onProcessGone: gone,
       }).catch((e: unknown) => e);
       await vi.advanceTimersByTimeAsync(1000);
-      expect(((await settled) as Error).message).toMatch(/^Browser boot: spawn returned without a pid/);
+      expect(((await settled) as Error).message).toMatch(
+        /^Browser boot: spawn returned without a pid/
+      );
       expect(gone).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

@@ -2,6 +2,10 @@
 
 Everything in the related SKILL.md still applies; this page covers what differs.
 
+## Web apps
+
+To test a web app, `boot-device` with `browser: "chrome"` (or `chromium`, `edge`, `brave`; a missing one fails naming the installed ones), then `open-url` to the app's URL. Each boot starts a separate browser on a throwaway profile, so no cookies or logins carry over from the user's own browser or a previous boot; seed them with `chromium-cookies` / `chromium-storage`. On a host without a display, add `electronArgs: ["--headless=new"]`.
+
 ## Multi-tab / windows
 
 A Chromium device may have several tabs / BrowserWindows. Use `chromium-tabs` to `list` them (stable ids `t1`, `t2`, …, optional labels), open a `new` one, `select` which is active, or `close` one.

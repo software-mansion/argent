@@ -41,14 +41,14 @@ describe("browserExecutableCandidates", () => {
   });
 
   it("searches every PATH entry for each command name on Linux", () => {
-    expect(browserExecutableCandidates("chromium", "linux", { PATH: "/usr/bin:/snap/bin" })).toEqual(
-      [
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/snap/bin/chromium",
-        "/snap/bin/chromium-browser",
-      ]
-    );
+    expect(
+      browserExecutableCandidates("chromium", "linux", { PATH: "/usr/bin:/snap/bin" })
+    ).toEqual([
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/snap/bin/chromium",
+      "/snap/bin/chromium-browser",
+    ]);
   });
 });
 
