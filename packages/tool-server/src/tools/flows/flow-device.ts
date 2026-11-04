@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { invokeSubTool } from "../../utils/sub-invoke";
+import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { blockSteps, type FlowStep, type SelectablePlatform } from "./flow-utils";
 
 /**
@@ -120,6 +121,17 @@ function connectedIosDeviceHint(devices: RawDevice[], platform?: FlowPlatform): 
   );
 }
 
+/**
+ * Why `list-devices` left iOS devices out while Xcode's component install is
+ * pending, which the caller cannot see from the list. Silent when the run was
+ * scoped to another platform.
+ */
+function pendingInstallHint(platform?: FlowPlatform): string {
+  if (platform && platform !== "ios") return "";
+  const pending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
+  return pending.length > 0 ? ` ${xcodeFirstLaunchHint(pending)}` : "";
+}
+
 function describeDevice(d: RawDevice): string {
   return `${deviceEntryId(d) ?? "?"} (${d.platform}${d.state ? `, ${d.state}` : ""})`;
 }
@@ -147,9 +159,8 @@ export async function resolveFlowDevice(
 ): Promise<DeviceInfo> {
   if (opts.device) return resolveDevice(opts.device);
 
-  const { devices, hint } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
+  const { devices } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
     devices: RawDevice[];
-    hint?: string;
   };
   const booted = devices.filter(isBooted);
   const scoped = opts.platform ? booted.filter((d) => d.platform === opts.platform) : booted;
@@ -164,9 +175,7 @@ export async function resolveFlowDevice(
       : "No booted device found.";
     throw deviceResolutionError(
       `${what} Pass a device id or platform explicitly.${connectedIosDeviceHint(devices, opts.platform)}` +
-        // Why `list-devices` left devices out (e.g. Xcode's install is pending), which
-        // the caller cannot see from the list. It is about iOS, so not for another platform.
-        (hint && (!opts.platform || opts.platform === "ios") ? ` ${hint}` : ""),
+        pendingInstallHint(opts.platform),
       devices
     );
   }
