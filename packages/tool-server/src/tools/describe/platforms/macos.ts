@@ -440,7 +440,8 @@ interface TreeBuild {
 
 // The `layer` of a root by its window kind (an alert over the sheets of the
 // windows), one more in each sheet or popover attached over it (an alert over a
-// sheet over the window), and MENU_LAYER in an open menu, which lies over everything.
+// sheet over the window), and MENU_LAYER in an open menu or combo box list, which
+// lies over everything.
 const MENU_LAYER = 100;
 const KIND_LAYERS = new Map([
   ["menu", MENU_LAYER],
@@ -495,21 +496,19 @@ function axNode(
     return node;
   }
   for (const child of Array.isArray(r.children) ? r.children : []) {
-    const converted = isRecord(child)
-      ? axNode(
-          child,
-          build,
-          ATTACHED_ROLES.has(str(child.role) ?? "") ? layer + 1 : layer,
-          inScrollBar || role === "AXScrollBar"
-        )
-      : null;
+    if (!isRecord(child)) continue;
+    const childRole = str(child.role) ?? "";
+    const comboList = role === "AXComboBox" && childRole === "AXScrollArea";
+    const converted = axNode(
+      child,
+      build,
+      comboList ? MENU_LAYER : ATTACHED_ROLES.has(childRole) ? layer + 1 : layer,
+      inScrollBar || role === "AXScrollBar"
+    );
     // An open menu is a child of the button that opened it, and an open combo
     // box list a child of its combo box, but they float over the window: lifted
     // to the top, so no scroll area they sit in clips them.
-    if (
-      converted?.d.role === "AXMenu" ||
-      (role === "AXComboBox" && converted?.d.role === "AXScrollArea")
-    ) {
+    if (converted?.d.role === "AXMenu" || (comboList && converted)) {
       build.menus.push(converted);
     } else if (converted) node.children.push(converted);
   }

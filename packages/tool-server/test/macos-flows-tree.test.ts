@@ -362,7 +362,7 @@ describe("macOS describe and flow trees of one read", () => {
     expect(
       walk(walk(describe).find(byId("settings.scroll"))!).find(byText("Cherry"))
     ).toBeUndefined();
-    expect(leaf(flow, byText("Cherry"))).toMatchObject({ role: "AXTextField" });
+    expect(leaf(flow, byText("Cherry"))).toMatchObject({ role: "AXTextField", layer: 100 });
   });
 
   it("lifts an open menu out of the scroll area it was opened in", async () => {
