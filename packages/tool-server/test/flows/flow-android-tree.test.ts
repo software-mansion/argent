@@ -299,7 +299,7 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(evaluateCondition("text", "Row 50", feed)).toBe(false);
   });
 
-  // reference/e2e-yaml.mdx documents these reads.
+  // Documented in reference/e2e-yaml.mdx.
   it("reads an empty password or described field as text, so '^$' fails, and a described field's description before its text", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
@@ -326,7 +326,7 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     );
   });
 
-  // reference/e2e-yaml.mdx documents that a container reads none of an identified child's or a password field's text.
+  // Documented in reference/e2e-yaml.mdx.
   it("reads a container whose text is all in identified or password children as empty, so '^$' passes", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">

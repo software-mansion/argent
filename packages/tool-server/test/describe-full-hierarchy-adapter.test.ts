@@ -99,7 +99,7 @@ describe("describe full-hierarchy adapter", () => {
     expect(tree.children).toHaveLength(5);
   });
 
-  // reference/e2e-yaml.mdx documents that '^$' never passes on an iOS text field.
+  // Documented in reference/e2e-yaml.mdx.
   it("never passes '^$' on an empty single-line or multiline text field", () => {
     const view = (className: string, identifier: string, y: number) => ({
       className,

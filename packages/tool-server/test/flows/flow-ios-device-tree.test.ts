@@ -272,7 +272,7 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
     expect(findAll(tree, { text: "Continue" })).toHaveLength(1);
   });
 
-  // reference/e2e-yaml.mdx documents that '^$' never passes on an element with a value on a physical iPhone.
+  // Documented in reference/e2e-yaml.mdx.
   it("reads an unlabelled element's value, so '^$' fails on a switch", async () => {
     const tree = await flowTree([
       node({ index: 0, depth: 0, type: "Application" }),
@@ -291,7 +291,7 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
     expect(evaluateCondition("text", "^$", sw, "matches")).toBe(false);
   });
 
-  // reference/e2e-yaml.mdx documents that '^$' never passes on an iOS text field.
+  // Documented in reference/e2e-yaml.mdx.
   it("never passes '^$' on an empty, unlabelled text, secure, search field or text view", async () => {
     const tree = await flowTree([
       node({ index: 0, depth: 0, type: "Application" }),

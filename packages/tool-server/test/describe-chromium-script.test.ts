@@ -813,7 +813,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "txt")!.label).toBe("typed text");
   });
 
-  // reference/e2e-yaml.mdx documents these reads.
+  // Documented in reference/e2e-yaml.mdx.
   it("reads a field's aria-label, aria-labelledby or placeholder in place of its value, and an element's title", () => {
     const labelEl = el({ text: "Email", attrs: { id: "lbl" }, rect: BOX }) as MockElement &
       Record<string, unknown>;
