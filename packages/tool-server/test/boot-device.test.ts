@@ -45,13 +45,19 @@ vi.mock("node:fs", async () => {
 // boot-device's dispatch (state probe → pre-boot if shutdown → boot →
 // ensureAutomationEnabled fallback → native-devtools → open) without pulling
 // plist/kickstart internals into the exec-call sequence.
-const listIosSimulatorsMock = vi.fn();
+const scannedSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
 const isEntitlementBypassActiveMock = vi.fn();
 
-vi.mock("../src/utils/ios-devices", () => ({
-  listIosSimulators: (...args: unknown[]) => listIosSimulatorsMock(...args),
+let scanTimedOut = false;
+
+vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
+  scanIosSimulators: async () => ({
+    simulators: await scannedSimulatorsMock(),
+    timedOut: scanTimedOut,
+  }),
 }));
 
 vi.mock("../src/blueprints/ax-service", () => ({
@@ -103,7 +109,8 @@ describe("boot-device — iOS path", () => {
       });
     // Default state: 11111111 + 33333333 Shutdown (happy path), 22222222
     // Booted (kickstart-fallback path). Individual tests override.
-    listIosSimulatorsMock.mockReset().mockResolvedValue([
+    scanTimedOut = false;
+    scannedSimulatorsMock.mockReset().mockResolvedValue([
       { udid: "11111111-1111-1111-1111-111111111111", state: "Shutdown" },
       { udid: "22222222-2222-2222-2222-222222222222", state: "Booted" },
       { udid: "33333333-3333-3333-3333-333333333333", state: "Shutdown" },
@@ -386,10 +393,10 @@ describe("boot-device — iOS path", () => {
   });
 
   it("still runs the fallback ensureAutomationEnabled when the state probe fails", async () => {
-    // listIosSimulators returns [] on xcrun failure / unknown udid; boot must
-    // not block on the probe — fall through to ensureAutomationEnabled which
-    // writes prefs best-effort.
-    listIosSimulatorsMock.mockResolvedValueOnce([]);
+    // The scan lists nothing on an unknown udid or an xcrun failure other than
+    // a timeout; boot must not block on the probe — fall through to
+    // ensureAutomationEnabled which writes prefs best-effort.
+    scannedSimulatorsMock.mockResolvedValueOnce([]);
 
     const resolveService = vi.fn(async () => ({
       getInitFailure: () => null,
@@ -403,6 +410,40 @@ describe("boot-device — iOS path", () => {
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
     expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
       "44444444-4444-4444-4444-444444444444"
+    );
+  });
+
+  it("refuses to boot when the state probe times out without finding the simulator", async () => {
+    scannedSimulatorsMock.mockResolvedValueOnce([]);
+    scanTimedOut = true;
+
+    const resolveService = vi.fn();
+    const tool = createBootDeviceTool({ resolveService } as unknown as Registry);
+
+    const err = await tool.execute!({}, { udid: "44444444-4444-4444-4444-444444444444" }).catch(
+      (e: unknown) => e
+    );
+
+    expect(getFailureSignal(err)?.error_code).toBe("BOOT_IOS_SIMCTL_LIST_TIMEOUT");
+    expect((err as Error).message).toContain("call boot-device again shortly");
+    expect(mockExecFile).not.toHaveBeenCalled();
+    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
+    expect(resolveService).not.toHaveBeenCalled();
+  });
+
+  it("boots when another device set timed out but the simulator was found", async () => {
+    scanTimedOut = true;
+
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const tool = createBootDeviceTool({ resolveService } as unknown as Registry);
+
+    await tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111" });
+
+    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
+      "11111111-1111-1111-1111-111111111111"
     );
   });
 
@@ -572,7 +613,7 @@ describe("boot-device — iOS path", () => {
   const TV_UDID = "77777777-7777-7777-7777-777777777777";
 
   it("disposes the cached TvControl service when a tvOS sim is booted from Shutdown", async () => {
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
     const resolveService = vi.fn(async () => ({
@@ -589,7 +630,7 @@ describe("boot-device — iOS path", () => {
   });
 
   it("disposes the cached TvControl service on a tvOS force reboot", async () => {
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
     ]);
     const resolveService = vi.fn(async () => ({
@@ -623,7 +664,7 @@ describe("boot-device — iOS path", () => {
 
   it("swallows ServiceNotFoundError when no TvControl service is cached (fresh tvOS boot)", async () => {
     const { ServiceNotFoundError } = await import("@argent/registry");
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
     const resolveService = vi.fn(async () => ({
@@ -651,7 +692,7 @@ describe("boot-device — iOS path", () => {
   // boot-device must drop the cached NativeDevtools service on a boot transition
   // (alongside TvControl) so the resolveService rebuild re-runs ensureEnv.
   it("disposes the cached NativeDevtools service when a tvOS sim is booted from Shutdown", async () => {
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
     const resolveService = vi.fn(async () => ({
@@ -668,7 +709,7 @@ describe("boot-device — iOS path", () => {
   });
 
   it("disposes the cached NativeDevtools service on a tvOS force reboot", async () => {
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
     ]);
     const resolveService = vi.fn(async () => ({
@@ -687,7 +728,7 @@ describe("boot-device — iOS path", () => {
   it("disposes the stale NativeDevtools service BEFORE re-resolving it on reboot", async () => {
     // The rebuild only re-runs ensureEnv if the dispose happens first; assert
     // the order so a future refactor can't silently resolve the stale instance.
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
     const resolveService = vi.fn(async (_urn: string) => ({
@@ -713,7 +754,7 @@ describe("boot-device — iOS path", () => {
 
   it("swallows ServiceNotFoundError when no NativeDevtools service is cached (fresh tvOS boot)", async () => {
     const { ServiceNotFoundError } = await import("@argent/registry");
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
     const resolveService = vi.fn(async () => ({
@@ -892,7 +933,8 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
       getCallback(args)(null, "", "");
       return {} as never;
     });
-    listIosSimulatorsMock.mockReset().mockResolvedValue([]);
+    scanTimedOut = false;
+    scannedSimulatorsMock.mockReset().mockResolvedValue([]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);

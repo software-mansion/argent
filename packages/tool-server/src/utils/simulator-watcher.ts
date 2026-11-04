@@ -18,6 +18,24 @@ const POLL_INTERVAL_MS = 10_000;
 /** Ceiling, in ticks, on the polls skipped while `simctl` keeps timing out (5 min). */
 const MAX_BACKOFF_TICKS = 29;
 
+/**
+ * Cap on {@link firstSimulatorPoll}, from startup, so a tool call never waits on
+ * the watcher for longer.
+ */
+const FIRST_POLL_WAIT_MS = 15_000;
+
+let firstPollSettled: Promise<void> = Promise.resolve();
+
+/**
+ * Settles once the first poll has attempted injection for every simulator booted
+ * at startup, or {@link FIRST_POLL_WAIT_MS} after startup. A tool that can launch
+ * an app without arming injection itself waits on this, so the app is not
+ * started uninjected. Settled when no watcher runs.
+ */
+export function firstSimulatorPoll(): Promise<void> {
+  return firstPollSettled;
+}
+
 async function getBootedUdidsInSet(
   deviceSet: DeviceSetPath,
   signal: AbortSignal
@@ -254,10 +272,13 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // Awaited: the server does not bind until ensureEnv has been attempted for
-  // every booted simulator, so launch-app cannot race it.
+  // Settles once ensureEnv has been attempted for every simulator booted at start.
   // The simctl call is bounded, so this resolves even when simctl hangs.
   const ready = poll(true);
+  firstPollSettled = Promise.race([
+    ready.catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
+  ]);
 
   // A tick that lands while the previous poll is still running, or inside the
   // backoff after a timeout, is skipped, so a slow simctl never has more than one

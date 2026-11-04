@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { firstSimulatorPoll } from "../../../utils/simulator-watcher";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 import { httpDeepLinkNote } from "../deep-link-note";
 
@@ -11,6 +12,8 @@ const execFileAsync = promisify(execFile);
 export const iosImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult> = {
   requires: ["xcrun"],
   handler: async (_services, params) => {
+    // The URL can cold-launch its app, which must not beat injection.
+    await firstSimulatorPoll();
     try {
       await execFileAsync(
         "xcrun",
