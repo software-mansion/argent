@@ -105,9 +105,9 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
   runtime_unresponsive:
     "The app accepted the debugger connection but did not answer within the " +
     "timeout — it is likely frozen. Do not retry in a loop (each attempt waits out " +
-    "the full timeout). Restart the app (for an Electron app, boot-device with " +
-    "electronAppPath and force: true; for a browser, boot-device with browser starts " +
-    "a fresh one under a new id), then retry once.",
+    "the full timeout). Restart the app (for an Electron app, quit the frozen instance, " +
+    "then boot-device with electronAppPath; for a browser, boot-device with browser " +
+    "starts a fresh one under a new id), then retry once.",
 };
 
 export function buildNotConnected(

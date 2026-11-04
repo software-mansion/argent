@@ -121,6 +121,15 @@ describe("bootElectronApp onProcessGone / label", () => {
     expect((unlabelled as Error).message).toMatch(/^Electron boot: failed to spawn/);
   });
 
+  it("fires on a boot that picks its own port", async () => {
+    const gone = vi.fn();
+    await bootElectronApp({
+      appPath: path.join(path.dirname(appBinary), "missing"),
+      onProcessGone: gone,
+    }).catch(() => {});
+    expect(gone).toHaveBeenCalledTimes(1);
+  });
+
   it("fires when boot fails before spawning", async () => {
     const gone = vi.fn();
     const err = await bootElectronApp({

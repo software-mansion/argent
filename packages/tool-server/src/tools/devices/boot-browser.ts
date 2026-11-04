@@ -78,9 +78,15 @@ const PID_FILE = "argent-browser.pid";
  */
 export function snapName(executable: string): string | null {
   try {
-    // /snap/bin/<app> is a symlink to the snap launcher; the snap is the name before any dot.
+    // /snap/bin/<app> links to the snap launcher, possibly through an alias; the
+    // snap is the app name before any dot.
+    // realpath first: it throws on a symlink loop, which the walk would follow forever.
     if (path.basename(fs.realpathSync(executable)) === "snap") {
-      return path.basename(executable).split(".")[0]!;
+      for (let p = executable; fs.lstatSync(p).isSymbolicLink();) {
+        const target = path.resolve(path.dirname(p), fs.readlinkSync(p));
+        if (path.basename(target) === "snap") return path.basename(p).split(".")[0]!;
+        p = target;
+      }
     }
     // Ubuntu's chromium-browser is a script that execs /snap/bin/chromium.
     const head = Buffer.alloc(4096);
@@ -129,9 +135,8 @@ async function answersOnProfile(port: number, profileDir: string): Promise<boole
   await browser.connect();
   try {
     const { commandLine } = (await browser.send("SystemInfo.getInfo")) as { commandLine?: string };
-    // Empty where the browser does not report it. The random dir name is matched
-    // rather than the path, which Windows may quote.
-    return !commandLine || commandLine.includes(path.basename(profileDir));
+    // The random dir name is matched rather than the path, which Windows may quote.
+    return commandLine?.includes(path.basename(profileDir)) ?? false;
   } finally {
     await browser.disconnect().catch(() => {});
   }
@@ -211,7 +216,10 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     killChromiumByPort(result.port);
     throw new FailureError(
       `Browser boot: another browser took port ${result.port} on 127.0.0.1 while this one ` +
-        `started. Retry, or omit \`electronPort\` to get a free port.`,
+        `started. ` +
+        (options.port === undefined
+          ? "Retry."
+          : "Pass another `electronPort`, or omit it to get a free port."),
       {
         error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
         failure_stage: "browser_port_taken",

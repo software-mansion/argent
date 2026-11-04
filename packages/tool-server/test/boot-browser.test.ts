@@ -71,6 +71,12 @@ describe("browserExecutableCandidates", () => {
     expect(browserExecutableCandidates("brave", "darwin", {}, "/Users/u")[0]).toBe(
       "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
     );
+    expect(browserExecutableCandidates("chromium", "darwin", {}, "/Users/u")[0]).toBe(
+      "/Applications/Chromium.app/Contents/MacOS/Chromium"
+    );
+    expect(browserExecutableCandidates("edge", "darwin", {}, "/Users/u")[0]).toBe(
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+    );
   });
 
   it("looks under Program Files, Program Files (x86) and LocalAppData on Windows, skipping unset roots", () => {
@@ -90,6 +96,13 @@ describe("browserExecutableCandidates", () => {
         "PROGRAMFILES(X86)": "",
       })
     ).toEqual(["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"]);
+    const local = { LOCALAPPDATA: "C:\\L" };
+    expect(browserExecutableCandidates("chromium", "win32", local)).toEqual([
+      "C:\\L\\Chromium\\Application\\chrome.exe",
+    ]);
+    expect(browserExecutableCandidates("brave", "win32", local)).toEqual([
+      "C:\\L\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+    ]);
   });
 
   it("searches every non-empty PATH entry for each command name on Linux", () => {
@@ -235,21 +248,33 @@ describe("bootBrowser", () => {
     }
   });
 
-  it("kills its browser and fails when another browser answers the port", async () => {
+  it("kills its browser and fails when another argent browser answers the port", async () => {
     installed.set(chrome!, "exec");
-    cdpSend.mockResolvedValue({ commandLine: "chrome --user-data-dir=/elsewhere" });
+    const other = path.join(os.tmpdir(), "argent-browser-OTHER1");
+    cdpSend.mockResolvedValue({ commandLine: `chrome --user-data-dir=${other}` });
     const err = await bootBrowser({ browser: "chrome", port: 9333 }).catch((e: unknown) => e);
 
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
-    expect((err as Error).message).toContain("another browser took port 9333 on 127.0.0.1");
+    expect((err as Error).message).toBe(
+      "Browser boot: another browser took port 9333 on 127.0.0.1 while this one started. " +
+        "Pass another `electronPort`, or omit it to get a free port."
+    );
     expect(killMock).toHaveBeenCalledWith(9333);
   });
 
-  it("accepts a browser that reports no command line", async () => {
+  it("says to retry when the lost port was picked for the caller", async () => {
     installed.set(chrome!, "exec");
-    cdpSend.mockResolvedValue({ commandLine: "" });
-    await expect(bootBrowser({ browser: "chrome" })).resolves.toMatchObject({ port: 9333 });
-    expect(killMock).not.toHaveBeenCalled();
+    cdpSend.mockResolvedValue({ commandLine: "chrome --user-data-dir=/elsewhere" });
+    const err = await bootBrowser({ browser: "chrome" }).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/while this one started\. Retry\.$/);
+  });
+
+  it("treats a browser that reports no command line as not ours", async () => {
+    installed.set(chrome!, "exec");
+    cdpSend.mockResolvedValue({});
+    const err = await bootBrowser({ browser: "chrome" }).catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
+    expect(killMock).toHaveBeenCalledWith(9333);
   });
 
   it("kills its browser when the identity check itself fails", async () => {
@@ -324,6 +349,12 @@ describe("snapName", () => {
     expect(snapName(link("chromium.chromedriver"))).toBe("chromium");
   });
 
+  it("names the snap behind an alias, not the alias", () => {
+    link("brave");
+    fs.symlinkSync("brave", path.join(dir, "brave-browser"));
+    expect(snapName(path.join(dir, "brave-browser"))).toBe("brave");
+  });
+
   it("names the snap a wrapper script execs", () => {
     expect(snapName(file("chromium-browser", '#!/bin/sh\nexec /snap/bin/chromium "$@"\n'))).toBe(
       "chromium"
@@ -336,6 +367,9 @@ describe("snapName", () => {
     );
     expect(snapName(file("chrome", "\x7fELF /snap/bin/chromium"))).toBe(null);
     expect(snapName(path.join(dir, "missing"))).toBe(null);
+    fs.symlinkSync("loop-b", path.join(dir, "loop-a"));
+    fs.symlinkSync("loop-a", path.join(dir, "loop-b"));
+    expect(snapName(path.join(dir, "loop-a"))).toBe(null);
   });
 });
 
@@ -353,7 +387,9 @@ describe("bootBrowser with a snap browser", () => {
     process.env = { ...env, PATH: bin };
     bootElectronAppMock.mockReset();
     bootElectronAppMock.mockResolvedValue({ platform: "chromium", port: 9333, pid: process.pid });
-    cdpSend.mockImplementation(async () => ({ commandLine: "" }));
+    cdpSend.mockImplementation(async () => ({
+      commandLine: `chromium ${bootElectronAppMock.mock.lastCall![0].extraArgs.join(" ")}`,
+    }));
   });
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: platform });
