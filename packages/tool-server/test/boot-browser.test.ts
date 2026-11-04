@@ -151,10 +151,9 @@ describe("bootBrowser", () => {
     expect(bootElectronAppMock.mock.calls[0]![0].appPath).toBe(chromeFallback);
 
     if (process.platform === "win32") return; // no execute bit there
-    bootElectronAppMock.mockClear();
     installed.set(chrome!, "noexec");
     await bootBrowser({ browser: "chrome" });
-    expect(bootElectronAppMock.mock.calls[0]![0].appPath).toBe(chromeFallback);
+    expect(bootElectronAppMock.mock.calls[1]![0].appPath).toBe(chromeFallback);
   });
 
   it("gives every launch its own profile and deletes it once the process is gone", async () => {

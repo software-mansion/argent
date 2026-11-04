@@ -125,6 +125,7 @@ describe("bootElectronApp onProcessGone / label", () => {
     expect(getFailureSignal(err)?.error_code).toBe(
       FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID
     );
+    expect((err as Error).message).toMatch(/^Electron boot: path does not exist/);
     expect(gone).toHaveBeenCalledTimes(1);
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -157,6 +158,28 @@ describe("bootElectronApp onProcessGone / label", () => {
     );
   });
 
+  it("refuses a second boot on a fixed port while the first is still starting", async () => {
+    const child = makeFakeChild(12345);
+    spawnMock.mockReturnValue(child);
+    const first = bootElectronApp({
+      appPath: appBinary,
+      port: UNREACHABLE_CDP_PORT,
+      readyTimeoutMs: 200,
+    }).catch((e: unknown) => e);
+    const gone = vi.fn();
+    const second = await bootElectronApp({
+      appPath: appBinary,
+      port: UNREACHABLE_CDP_PORT,
+      label: "Browser",
+      onProcessGone: gone,
+    }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(second)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
+    expect(gone).toHaveBeenCalledTimes(1);
+    await first;
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a fixed port something already answers on, without spawning", async () => {
     const holder = net.createServer();
     await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));
@@ -173,7 +196,7 @@ describe("bootElectronApp onProcessGone / label", () => {
       expect((err as Error).message).toContain(
         `Browser boot: port ${port} is already in use on 127.0.0.1.`
       );
-      expect((err as Error).message).toContain(`chromium-cdp-${port}`);
+      expect((err as Error).message).toContain(`drive that one as chromium-cdp-${port};`);
       expect(spawnMock).not.toHaveBeenCalled();
       expect(gone).toHaveBeenCalledTimes(1);
     } finally {

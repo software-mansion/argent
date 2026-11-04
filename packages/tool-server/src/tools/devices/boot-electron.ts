@@ -284,17 +284,11 @@ const ANTI_THROTTLING_ARGS = [
   "--disable-renderer-backgrounding",
 ];
 
-/**
- * Refuse a caller-chosen port that already answers: the new instance cannot
- * bind it yet keeps running, and readiness would accept the existing listener,
- * so boot would report a device that is really the other process.
- */
-async function assertPortFree(port: number, label: string): Promise<void> {
-  if (!(await isLoopbackPortAnswering(port))) return;
-  throw new FailureError(
+function portInUseError(port: number, label: string): FailureError {
+  return new FailureError(
     `${label} boot: port ${port} is already in use on 127.0.0.1. If an app or browser with ` +
-      `remote debugging holds it, drive that one as chromium-cdp-${port} (list-devices lists it); ` +
-      `otherwise omit \`electronPort\` to get a free port.`,
+      `remote debugging holds it, drive that one as chromium-cdp-${port}; otherwise omit ` +
+      `\`electronPort\` to get a free port.`,
     {
       error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
       failure_stage: "electron_port_in_use",
@@ -304,12 +298,37 @@ async function assertPortFree(port: number, label: string): Promise<void> {
   );
 }
 
+/** Fixed ports with a boot in progress, whose child may not have bound yet. */
+const bootingPorts = new Set<number>();
+
+/**
+ * Refuses a caller-chosen port that is taken: the new instance cannot bind it
+ * yet keeps running, and readiness would accept the existing listener, so boot
+ * would report a device that is really the other process.
+ */
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
+  const port = options.port;
+  if (port === undefined) return bootOnce(options);
+  if (bootingPorts.has(port)) {
+    options.onProcessGone?.();
+    throw portInUseError(port, options.label ?? "Electron");
+  }
+  bootingPorts.add(port);
+  try {
+    return await bootOnce(options);
+  } finally {
+    bootingPorts.delete(port);
+  }
+}
+
+async function bootOnce(options: BootElectronOptions): Promise<ElectronBootResult> {
   const label = options.label ?? "Electron";
   let port: number;
   let launcher: { command: string; args: string[] };
   try {
-    if (options.port !== undefined) await assertPortFree(options.port, label);
+    if (options.port !== undefined && (await isLoopbackPortAnswering(options.port))) {
+      throw portInUseError(options.port, label);
+    }
     port = options.port ?? (await pickFreePort());
     launcher = resolveLauncher(options.appPath);
   } catch (err) {

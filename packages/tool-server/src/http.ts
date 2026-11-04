@@ -279,10 +279,11 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
     return { platform: "harmony" };
   }
   // Electron apps and browsers boot as Chromium devices.
-  const { electronAppPath, browser } = data as Record<string, unknown>;
+  const { electronAppPath, browser, vvdImage } = data as Record<string, unknown>;
   if (typeof electronAppPath === "string" || typeof browser === "string") {
     return { platform: "chromium" };
   }
+  if (typeof vvdImage === "string") return { platform: "vega" };
   return null;
 }
 

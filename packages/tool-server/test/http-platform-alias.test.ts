@@ -49,6 +49,7 @@ describe("http platform inference and the device alias", () => {
   it("attributes an Electron or browser boot to chromium before it has a port", () => {
     expect(platformFromArgs({ browser: "chrome" })).toBe("chromium");
     expect(platformFromArgs({ electronAppPath: "/apps/Foo.app" })).toBe("chromium");
+    expect(platformFromArgs({ vvdImage: "tv" })).toBe("vega");
   });
 
   it("derives the device kind from the aliased id, not the opaque handle", () => {

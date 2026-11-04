@@ -138,7 +138,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to the `hdc` connect key it registered under, since the emulator manager never reports one: without it the instance is left alone and the payload names the instance rather than a key (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos> Ignored for Electron and browsers, which always spawn a fresh process."
+      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to the `hdc` connect key it registered under, since the emulator manager never reports one: without it the instance is left alone and the payload names the instance rather than a key (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos> Ignored for Electron and browsers, which always spawn a fresh process; a fixed `electronPort` that is still taken fails the boot."
     ),
   sound: z
     .boolean()

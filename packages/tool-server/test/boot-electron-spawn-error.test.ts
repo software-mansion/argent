@@ -124,6 +124,7 @@ describe("bootElectronApp — spawn error handling", () => {
     // Without an `error` listener, an emitted error escapes as an uncaught
     // exception and crashes the tool-server.
     expect(child.listenerCount("error")).toBeGreaterThan(0);
+    await promise.catch(() => {});
   });
 
   it("strips ELECTRON_RUN_AS_NODE from the spawned electron env (GUI boot, not Node mode)", async () => {
@@ -259,6 +260,7 @@ describe("bootElectronApp — spawn error handling", () => {
       port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 100,
     }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(1000);
 
     const signal = getFailureSignal(await settled);
