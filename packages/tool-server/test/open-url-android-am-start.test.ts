@@ -16,8 +16,7 @@ vi.mock("node:child_process", async () => {
       const out = execFileMock(cmd, args) as { stdout: string; stderr: string };
       // As adb does: with ADB_TRACE in its environment it traces the command to stderr.
       const env = (typeof opts === "object" && opts && "env" in opts ? opts.env : process.env) as
-        | NodeJS.ProcessEnv
-        | undefined;
+        NodeJS.ProcessEnv | undefined;
       const trace = env?.ADB_TRACE
         ? `D adb : adb_client.cpp:355 adb_connect: service: shell,v2,raw:${args.at(-1)}\n`
         : "";
