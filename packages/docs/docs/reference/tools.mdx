@@ -349,6 +349,7 @@ A save panel with file formats (`allowedContentTypes` in the result of `list`) r
 
 - macOS has no registered type for the extension.
 - A format is `public.data` or `public.item`: the panel saves any file, also a file with no extension.
+- The app lets the user save with other extensions (`allowsOtherFileTypes`): the panel also takes a file with no extension.
 
 When the panel has more than one format, on macOS 15 and later, the extension also selects the format. On macOS 14, Argent does not select the format, and the app saves in the format that the panel selects when it opens.
 
