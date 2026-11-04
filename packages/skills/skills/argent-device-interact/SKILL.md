@@ -70,7 +70,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Fold device       | `fold`              | Foldable simulator/emulator: closed / half-open / open, or angle  |
 | Shake device      | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu    |
 | Wait for UI       | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text     |
-| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree stops changing                |
+| Wait for idle     | `await-screen-idle` | Block until a non-empty screen tree holds for `minStableMs`       |
 
 ## 5. Finding Tap Targets
 
@@ -241,7 +241,7 @@ The tool's own description carries the conditions, selector matching, defaults a
 - To disambiguate a loose selector, pin the `role` to a text role like `StaticText`; that skips a same-named button.
 - On a `text` timeout the `note` quotes the text of the element the check actually read, so you can see which match it landed on.
 
-### await-screen-idle: Block until the screen stops changing
+### await-screen-idle: Block until the screen content holds
 
 Use after launch/navigation and before a raw tap, when an early-painted element may still be moving:
 
@@ -249,7 +249,7 @@ Use after launch/navigation and before a raw tap, when an early-painted element 
 { "udid": "<UDID>", "timeoutMs": 3000, "minStableMs": 250 }
 ```
 
-On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to stop changing. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
+On local iOS, Android, and Chromium, the tool waits for a non-empty `describe` tree to hold unchanged for `minStableMs`. Continue only when `settled: true`. Pair it with a destination-specific `await-ui-element`; stillness does not identify a screen.
 
 Use it only for live diagnosis. Do not record it or put it in `run-sequence`. E2E tests use `await: { idle: true }`, which also compares pixels. This live tool can return during a presentation-layer animation.
 
