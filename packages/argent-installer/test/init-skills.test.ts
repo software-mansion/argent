@@ -24,7 +24,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   return { ...actual, isOnline: vi.fn(async () => true) };
 });
 
-import { runSkillsStep } from "../src/init-skills.js";
+import { runSkillsStep, skillsSummaryLine } from "../src/init-skills.js";
 
 const originalPackage = process.env.npm_config_package;
 const originalHome = process.env.HOME;
@@ -79,7 +79,7 @@ describe("runSkillsStep", () => {
     // Set by `npx --package @swmansion/argent -- argent init`.
     process.env.npm_config_package = "@swmansion/argent@latest";
 
-    const method = await runSkillsStep({
+    const { method } = await runSkillsStep({
       nonInteractive: true,
       fromTar: null,
       version: "unknown",
@@ -220,5 +220,35 @@ describe("runSkillsStep", () => {
     });
 
     expect(fs.existsSync(legacy)).toBe(true);
+  });
+});
+
+describe("skills outcome in the init summary", () => {
+  const run = () =>
+    runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+    });
+
+  it("reports failure when the skills CLI cannot run", async () => {
+    exitCode = 1;
+    const { method, outcome } = await run();
+    expect(method).toBe("default");
+    expect(outcome).toBe("failure");
+    expect(skillsSummaryLine(outcome)).toContain("NOT installed");
+    expect(skillsSummaryLine(outcome)).not.toMatch(/Skills.* installed$/);
+  });
+
+  it("reports success when the skills CLI exits 0", async () => {
+    const { outcome } = await run();
+    expect(outcome).toBe("success");
+    expect(skillsSummaryLine(outcome)).toMatch(/installed$/);
+    expect(skillsSummaryLine(outcome)).not.toContain("NOT");
+  });
+
+  it("says instructions were printed for the manual method", () => {
+    expect(skillsSummaryLine("skipped")).toMatch(/instructions printed$/);
   });
 });

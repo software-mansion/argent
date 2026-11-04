@@ -17,6 +17,15 @@ import { listTrackedLegacySkills, pruneLegacySkillDirs } from "./skills.js";
 import type { Scope } from "./init-scope.js";
 
 export type SkillsMethod = "default" | "interactive" | "manual";
+export type SkillOutcome = "success" | "failure" | "skipped";
+
+// The Skills line of the `argent init` summary.
+export function skillsSummaryLine(outcome: SkillOutcome): string {
+  if (outcome === "failure") {
+    return `${pc.yellow("Skills")} NOT installed, see the error above`;
+  }
+  return `${pc.green("Skills")} ${outcome === "skipped" ? "instructions printed" : "installed"}`;
+}
 
 // Step 2. Emits the skill_install telemetry event itself (it owns all the
 // inputs). Throws InitCancelled("skills") on a cancelled method prompt.
@@ -26,7 +35,7 @@ export async function runSkillsStep(args: {
   version: string;
   scope: Scope;
   customRoot?: string;
-}): Promise<SkillsMethod> {
+}): Promise<{ method: SkillsMethod; outcome: SkillOutcome }> {
   const { nonInteractive, fromTar, version, scope, customRoot } = args;
 
   p.log.step(pc.bold("Step 2: Skills Installation"));
@@ -80,7 +89,7 @@ export async function runSkillsStep(args: {
   const useGitHubSource = online && !fromTar && version !== "unknown";
   const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
 
-  let skillOutcome: "success" | "failure" | "skipped";
+  let skillOutcome: SkillOutcome;
 
   if (skillsMethod === "manual") {
     p.note(
@@ -183,7 +192,7 @@ export async function runSkillsStep(args: {
     outcome: skillOutcome,
   });
 
-  return skillsMethod;
+  return { method: skillsMethod, outcome: skillOutcome };
 }
 
 function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
