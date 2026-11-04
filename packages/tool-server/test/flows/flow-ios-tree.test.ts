@@ -7,6 +7,7 @@ import {
   type Registry,
 } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../../src/blueprints/native-devtools";
+import { XcodeFirstLaunchPendingError } from "../../src/utils/dependency-errors";
 import type { DescribeNode } from "../../src/tools/describe/contract";
 import {
   MAX_LISTED_APPS,
@@ -674,6 +675,15 @@ describe("flow iOS full-hierarchy source", () => {
   });
   const notFrontmost = { applicationState: "background", isFrontmostCandidate: false } as const;
 
+  const pendingInstallApi = (): NativeDevtoolsApi =>
+    ({
+      listConnectedBundleIds: () => [] as string[],
+      appConnectionState: vi.fn(async () => {
+        throw new XcodeFirstLaunchPendingError(["simctl"]);
+      }),
+      getAppState: vi.fn(),
+    }) as unknown as NativeDevtoolsApi;
+
   const targetingFailures = (
     appCount: number
   ): { branch: string; api: NativeDevtoolsApi; launched?: string }[] => {
@@ -774,8 +784,26 @@ describe("flow iOS full-hierarchy source", () => {
       // mid-read, and a bundle the dylib may not load into.
       launchGone("connected"),
       launchGone("not_running", "com.apple.Preferences", "non-injectable bundle"),
+      {
+        branch: "launched app not connected: install pending",
+        api: pendingInstallApi(),
+        launched: ids[0],
+      },
     ];
   };
+
+  // A relaunch is refused too, so sending the agent to restart-app and then the
+  // tool-server only hides the reason.
+  it("names the pending install, not a restart, when that is why the app cannot be measured", async () => {
+    const error = await queryFullHierarchyTree(registryFor(pendingInstallApi()), DEVICE, {
+      bundleId: "com.example.app",
+      pinned: false,
+      probeAnswered: false,
+    }).catch((err) => err);
+    expect(error.message).toContain("Xcode's component install is pending");
+    expect(error.message).toContain("list-devices");
+    expect(error.message).not.toContain("restart");
+  });
 
   it("keeps every targeting reason short enough to repeat per step", async () => {
     // The recorder embeds this reason in the warning for each captured tap, and a

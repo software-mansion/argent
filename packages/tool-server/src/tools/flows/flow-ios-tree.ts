@@ -9,6 +9,7 @@ import {
 } from "../../blueprints/native-devtools";
 import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
 import { stripRemotePrefix } from "../../utils/device-info";
+import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 import { simctlTargetForUdid } from "../../utils/ios-device-sets";
 import { nodeText } from "../../utils/ui-tree-match";
 import { describeIosDevice } from "../describe/platforms/ios-device";
@@ -337,7 +338,19 @@ async function unreadableHierarchyReason(
       `argent installs.`
     );
   }
-  const state = await nativeApi.appConnectionState(bundleId).catch(() => "indeterminate" as const);
+  const state = await nativeApi
+    .appConnectionState(bundleId)
+    .catch((err: unknown) =>
+      err instanceof XcodeFirstLaunchPendingError ? err : ("indeterminate" as const)
+    );
+  if (state instanceof XcodeFirstLaunchPendingError) {
+    // A relaunch is refused too, so naming one would only send the agent round.
+    // Short, because this reason repeats per step: list-devices has the full hint.
+    return (
+      `${bundleId} is not connected, and Xcode's component install is pending, so argent ` +
+      `cannot read its view hierarchy. Call list-devices for what to do.`
+    );
+  }
   if (state === "connected") {
     // `appConnectionState` re-reads the live connections map after its env
     // re-apply and process probe, several simctl round-trips after the empty

@@ -372,7 +372,10 @@ export async function precheckNativeDevtools(
   // other consumer rather than letting a raw `Invalid device: <udid>` out: a
   // failure recorded by that re-apply means the sim itself is gone
   // (init_failed's case), anything else leaves the connection unmeasured.
-  const state = await api.appConnectionState(bundleId).catch(() => {
+  const state = await api.appConnectionState(bundleId).catch((err: unknown) => {
+    // On an armed service `ensureEnvReady` above runs no simctl, so this is where
+    // the refusal lands. A connected app answers before it needs simctl.
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const failure = api.getInitFailure();
     return failure ? buildInitFailedResult(udid, failure) : ("indeterminate" as const);
   });

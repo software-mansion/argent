@@ -4,6 +4,8 @@
  * and wait for an administrator password. The refusal must reach the agent as a
  * 424 that says what to do.
  */
+import * as net from "node:net";
+import * as readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
@@ -49,7 +51,12 @@ import { simctlPrefix } from "../src/utils/ios-device-sets";
 import { ensureDeviceReady, listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import { createDescribeTool } from "../src/tools/describe";
 import { axServiceBlueprint } from "../src/blueprints/ax-service";
-import { nativeDevtoolsBlueprint, precheckNativeDevtools } from "../src/blueprints/native-devtools";
+import {
+  nativeDevtoolsBlueprint,
+  nativeDevtoolsRef,
+  precheckNativeDevtools,
+  type NativeDevtoolsApi,
+} from "../src/blueprints/native-devtools";
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
 import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
@@ -171,6 +178,10 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     [nativeViewAtPointTool, AT_POINT],
     [nativeUserInteractableViewAtPointTool, AT_POINT],
   ] as const;
+  // `native-devtools-status` runs the 2-arg precheck, so it has its own path to the refusal.
+  const PRECHECKED_READS = TOOLS.filter(([tool]) => tool !== nativeDevtoolsStatusTool).map(
+    ([tool, extra]) => [tool.id, extra] as const
+  );
   let registry: Registry | undefined;
 
   function nativeApp() {
@@ -179,6 +190,14 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     registry.registerBlueprint(nativeDevtoolsBlueprint);
     for (const [tool] of TOOLS) registry.registerTool(tool as never);
     return createHttpApp(registry).app;
+  }
+
+  // The shape the promisified execFile resolves with, for the app-state reads.
+  function answerWithEmptyOutput() {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (err: Error | null, out?: unknown) => void;
+      cb(null, { stdout: "", stderr: "" });
+    });
   }
 
   afterEach(async () => {
@@ -211,11 +230,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     for (let call = 0; call < 4; call++) expect((await status()).status).toBe(424);
 
     pending.simctl = false;
-    // The shape the promisified execFile resolves with, for the app-state reads.
-    execFileMock.mockImplementation((...args: unknown[]) => {
-      const cb = args[args.length - 1] as (err: Error | null, out?: unknown) => void;
-      cb(null, { stdout: "", stderr: "" });
-    });
+    answerWithEmptyOutput();
     const res = await status();
     expect(res.status).toBe(200);
     expect(res.body.data.status).not.toBe("init_failed");
@@ -240,6 +255,86 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     } finally {
       await instance.dispose();
     }
+  });
+
+  // `ensureEnvReady` latches once the simulator is armed, so the first simctl call
+  // left for an unconnected app is the env re-apply inside `appConnectionState`.
+  it.each(PRECHECKED_READS)(
+    "%s answers 424 on a service that armed the simulator before the install went pending",
+    async (id, extra) => {
+      answerWithEmptyOutput();
+      const app = nativeApp();
+      const call = () =>
+        request(app)
+          .post(`/tools/${id}`)
+          .send({ udid: SIM.id, bundleId: BUNDLE_ID, ...extra });
+      expect((await call()).body.data.status).toBe("restart_required");
+
+      pending.simctl = true;
+      execFileMock.mockClear();
+      const res = await call();
+
+      // Read as an unmeasured app, it answered 200 restart_required, which says to
+      // restart the app and then the tool-server.
+      expect(res.status).toBe(424);
+      expect(res.body.error).toMatch(/-runFirstLaunch/);
+      expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(xcrunCalls()).toEqual([]);
+    }
+  );
+
+  // A failed re-apply stays on record, and the reboot it prescribes cannot help here.
+  it("answers the refusal rather than a failure recorded earlier", async () => {
+    answerWithEmptyOutput();
+    const instance = await nativeDevtoolsBlueprint.factory({}, SIM, { device: SIM });
+    try {
+      execFileMock.mockImplementation((...args: unknown[]) => {
+        const cb = args[args.length - 1] as (err: Error | null) => void;
+        cb(new Error("Invalid device"));
+      });
+      await expect(instance.api.reverifyEnv()).rejects.toThrow("Invalid device");
+      expect(instance.api.getInitFailure()).not.toBeNull();
+
+      pending.simctl = true;
+      await expect(precheckNativeDevtools(instance.api, SIM.id, BUNDLE_ID)).rejects.toBeInstanceOf(
+        XcodeFirstLaunchPendingError
+      );
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  // The app answers these over its own socket, so a refusal here would take away
+  // reads that do not need simctl.
+  it.each(PRECHECKED_READS)("%s keeps serving an app that is connected", async (id, extra) => {
+    const device: DeviceInfo = { ...SIM, id: "FA1E1722-0000-4000-8000-000000000002" };
+    answerWithEmptyOutput();
+    const app = nativeApp();
+    const ref = nativeDevtoolsRef(device);
+    const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+    expect(api.isEnvSetup()).toBe(true);
+
+    const agent = net.createConnection(api.socketPath, () => {
+      agent.write(JSON.stringify({ type: "Control", payload: { bundleId: BUNDLE_ID } }) + "\n");
+    });
+    readline.createInterface({ input: agent }).on("line", (line) => {
+      const { type, payload } = JSON.parse(line);
+      if (type !== "ViewInspector") return;
+      const result = { screenFrame: { x: 0, y: 0, width: 1, height: 1 }, elements: [] };
+      agent.write(JSON.stringify({ type, payload: { id: payload.id, result } }) + "\n");
+    });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE_ID)).toBe(true));
+
+    pending.simctl = true;
+    execFileMock.mockClear();
+    await expect(precheckNativeDevtools(api, device.id, BUNDLE_ID)).resolves.toBeNull();
+    const res = await request(app)
+      .post(`/tools/${id}`)
+      .send({ udid: device.id, bundleId: BUNDLE_ID, ...extra });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe("ok");
+    expect(xcrunCalls()).toEqual([]);
   });
 });
 
