@@ -42,6 +42,8 @@ const capability: ToolCapability = {
 
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
+  // 210s worst case on Android, past the 30s MCP fetch timeout.
+  longRunning: true,
   interaction: {
     startedMsg: ({ params }) => `Reinstalling ${params.bundleId}`,
     completedMsg: ({ params }) => `Reinstalled ${params.bundleId}`,

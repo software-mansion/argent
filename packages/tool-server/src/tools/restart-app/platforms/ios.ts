@@ -14,6 +14,7 @@ import {
 import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -48,14 +49,18 @@ export function makeIosImpl(
         if (blocked) return blocked;
       }
       try {
-        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]));
+        await execFileAsync("xcrun", await simctlArgsForUdid(udid, ["terminate", udid, bundleId]), {
+          timeout: 15_000,
+          killSignal: SIMCTL_KILL_SIGNAL,
+        });
       } catch {
         // App may not be running
       }
       try {
         await execFileAsync(
           "xcrun",
-          await simctlArgsForUdid(udid, ["launch", udid, bundleId, ...(params.launchArgs ?? [])])
+          await simctlArgsForUdid(udid, ["launch", udid, bundleId, ...(params.launchArgs ?? [])]),
+          { timeout: 30_000, killSignal: SIMCTL_KILL_SIGNAL }
         );
       } catch (err) {
         throw new FailureError(
