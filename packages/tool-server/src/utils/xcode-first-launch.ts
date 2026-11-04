@@ -29,6 +29,27 @@ function shellWord(word: string): string {
   return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
 }
 
+/** The Xcode argent uses, and the shell word for its own `xcodebuild`. */
+function activeXcode(): { xcode: string | null; xcodebuild: string } {
+  const developerDir = activeDeveloperDir();
+  const xcode = developerDir?.endsWith(BUNDLED_DEVELOPER_DIR)
+    ? developerDir.slice(0, -BUNDLED_DEVELOPER_DIR.length)
+    : developerDir;
+  const xcodebuild = developerDir
+    ? shellWord(path.join(developerDir, "usr", "bin", "xcodebuild"))
+    : "xcodebuild";
+  return { xcode, xcodebuild };
+}
+
+/** How to finish the install, for a log line: names the same Xcode and command as the hint. */
+export function xcodeInstallInstruction(): string {
+  const { xcode, xcodebuild } = activeXcode();
+  return (
+    `open ${xcode ? `the Xcode at ${xcode}` : "Xcode"} once, ` +
+    `or run \`sudo ${xcodebuild} -runFirstLaunch\``
+  );
+}
+
 /**
  * What the agent is told while `wrappers` would start the install. It names
  * the Xcode: each Xcode installs only the components it expects, so opening
@@ -39,13 +60,7 @@ export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string 
   const one = wrappers.length === 1;
   const names = wrappers.map((w) => `\`${w}\``);
   const devices = wrappers.map((w) => WRAPPER_DEVICES[w]).join(" and ");
-  const developerDir = activeDeveloperDir();
-  const xcode = developerDir?.endsWith(BUNDLED_DEVELOPER_DIR)
-    ? developerDir.slice(0, -BUNDLED_DEVELOPER_DIR.length)
-    : developerDir;
-  const xcodebuild = developerDir
-    ? shellWord(path.join(developerDir, "usr", "bin", "xcodebuild"))
-    : "xcodebuild";
+  const { xcode, xcodebuild } = activeXcode();
   return (
     (xcode ? `The Xcode at ${xcode}` : "Xcode") +
     " has not finished installing its system components since it was installed or updated. " +

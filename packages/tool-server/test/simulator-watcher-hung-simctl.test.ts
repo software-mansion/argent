@@ -33,9 +33,16 @@ const registry = {
   disposeService: vi.fn(async () => {}),
 } as unknown as Registry;
 
+const FAKE_APP = "/Applications/Xcode-beta.app";
+const FAKE_INSTALL =
+  `the Xcode at ${FAKE_APP} once, ` +
+  `or run \`sudo ${FAKE_APP}/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch\``;
+const realDeveloperDir = process.env.DEVELOPER_DIR;
+
 let stderrWrites: string[];
 
 beforeEach(() => {
+  process.env.DEVELOPER_DIR = `${FAKE_APP}/Contents/Developer`;
   execSimctlMock.mockReset();
   additionalSets.length = 0;
   stderrWrites = [];
@@ -47,6 +54,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (realDeveloperDir === undefined) delete process.env.DEVELOPER_DIR;
+  else process.env.DEVELOPER_DIR = realDeveloperDir;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -100,6 +109,7 @@ describe("simulator-watcher with a hung simctl", () => {
 
     const hints = stderrWrites.filter((w) => w.includes("xcodebuild -runFirstLaunch"));
     expect(hints).toHaveLength(1);
+    expect(hints[0]).toContain(`If Xcode was just updated, open ${FAKE_INSTALL}.`);
   });
 
   it("logs the hint again after simctl recovers and hangs anew", async () => {

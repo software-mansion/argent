@@ -14,6 +14,7 @@ import {
 } from "./ios-device-sets";
 import { execSimctl, SimctlTimeoutError } from "./simctl-exec";
 import { XcodeFirstLaunchPendingError } from "./dependency-errors";
+import { xcodeInstallInstruction } from "./xcode-first-launch";
 
 const POLL_INTERVAL_MS = 10_000;
 /** Ceiling, in ticks, on the polls skipped while `simctl` keeps timing out (5 min). */
@@ -218,15 +219,14 @@ export function startSimulatorWatcher(registry: Registry): {
         if (consecutiveTimeouts === 1) {
           process.stderr.write(
             `[simulator-watcher] ${err.message}; retrying with backoff until it does. ` +
-              `If Xcode was just updated, open Xcode once or run \`sudo xcodebuild -runFirstLaunch\`.\n`
+              `If Xcode was just updated, ${xcodeInstallInstruction()}.\n`
           );
         }
       } else if (err instanceof XcodeFirstLaunchPendingError && !firstLaunchReported) {
         firstLaunchReported = true;
         process.stderr.write(
           `[simulator-watcher] Xcode has not finished installing its system components, so ` +
-            `simulators are not polled until it has. Open Xcode once, or run ` +
-            `\`sudo xcodebuild -runFirstLaunch\`.\n`
+            `simulators are not polled until it has. To install them, ${xcodeInstallInstruction()}.\n`
         );
       }
       // xcrun unavailable or transient error — skip this tick

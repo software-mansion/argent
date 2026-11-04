@@ -14,6 +14,7 @@ import {
   __setXcodeLocationsForTests,
   xcodeFirstLaunchHint,
   xcodeFirstLaunchPending,
+  xcodeInstallInstruction,
 } from "../src/utils/xcode-first-launch";
 
 // The suite-wide stub pins the answer; this file tests the real check.
@@ -401,6 +402,26 @@ describe("xcodeFirstLaunchHint", () => {
     expect(hint).toContain(`The Xcode at ${app} has not finished`);
     expect(hint).toContain(
       `\`sudo '${xcodebuildIn(path.join(app, "Contents", "Developer"))}' -runFirstLaunch\``
+    );
+  });
+});
+
+describe("xcodeInstallInstruction", () => {
+  it("names the Xcode app and its own xcodebuild", () => {
+    expect(xcodeInstallInstruction()).toBe(
+      `open the Xcode at ${path.join(root, "Xcode.app")} once, ` +
+        `or run \`sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch\``
+    );
+  });
+
+  it("falls back to the bare command when no developer directory resolves", () => {
+    delete process.env.DEVELOPER_DIR;
+    __setXcodeLocationsForTests({
+      selectLink: path.join(root, "no-such-link"),
+      defaultDeveloperDir: path.join(root, "no-such-dir"),
+    });
+    expect(xcodeInstallInstruction()).toBe(
+      "open Xcode once, or run `sudo xcodebuild -runFirstLaunch`"
     );
   });
 });

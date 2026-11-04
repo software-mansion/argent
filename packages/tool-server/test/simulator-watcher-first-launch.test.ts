@@ -75,13 +75,20 @@ const registry = {
   disposeService: vi.fn(async () => {}),
 } as unknown as Registry;
 
+const FAKE_APP = "/Applications/Xcode-beta.app";
+const FAKE_INSTALL =
+  `the Xcode at ${FAKE_APP} once, ` +
+  `or run \`sudo ${FAKE_APP}/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch\``;
+const realDeveloperDir = process.env.DEVELOPER_DIR;
+
 let stderrWrites: string[];
 
 function installHints(): string[] {
-  return stderrWrites.filter((line) => /sudo \S*xcodebuild -runFirstLaunch/.test(line));
+  return stderrWrites.filter((line) => line.includes("-runFirstLaunch"));
 }
 
 beforeEach(() => {
+  process.env.DEVELOPER_DIR = `${FAKE_APP}/Contents/Developer`;
   pending.simctl = false;
   execSimctlMock.mockReset();
   execSimctlMock.mockResolvedValue('{"devices":{}}');
@@ -94,6 +101,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (realDeveloperDir === undefined) delete process.env.DEVELOPER_DIR;
+  else process.env.DEVELOPER_DIR = realDeveloperDir;
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -107,6 +116,7 @@ describe("simulator-watcher while Xcode's component install is pending", () => {
 
     expect(execSimctlMock).not.toHaveBeenCalled();
     expect(installHints()).toHaveLength(1);
+    expect(installHints()[0]).toContain(`To install them, open ${FAKE_INSTALL}.`);
     stop();
   });
 
