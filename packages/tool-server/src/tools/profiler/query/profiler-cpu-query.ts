@@ -381,7 +381,8 @@ export function renderComponentCpu(
   const childToParent = index.childToParent ?? buildChildToParent(index.nodeMap);
 
   for (const window of commitWindows.values()) {
-    const { hotspots } = queryCpuWindow(index, window.start, window.end, 50);
+    // Every node: a name's outer frame can rank below the cut while its nested one does not.
+    const { hotspots } = queryCpuWindow(index, window.start, window.end, Infinity);
     // Rows are per call-tree node. Self time adds; inclusive time sums only
     // the outermost of a name's nodes (`members`), since recursion nests them.
     const perWindow = new Map<

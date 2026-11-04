@@ -102,3 +102,38 @@ describe("renderComponentCpu — one function as several call-tree nodes", () =>
     expect(total).toBeCloseTo(7, 5);
   });
 });
+
+describe("renderComponentCpu — a window with more call-tree nodes than one hotspot page", () => {
+  it("still sees the outer frame of a recursion that ranks below 50 other nodes", () => {
+    // root → walk (1 sample) → walk (3 samples), beside 50 busier siblings (2 samples
+    // each), so the outer walk ranks 52nd by self time.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    const mk = (id: number, name: string, children: number[]): HermesProfileNode => ({
+      id,
+      hitCount: 0,
+      callFrame: frame(name),
+      children,
+    });
+    const siblings = Array.from({ length: 50 }, (_, i) => 10 + i);
+    nodeMap.set(1, mk(1, "(root)", [2, ...siblings]));
+    nodeMap.set(2, mk(2, "walk", [3]));
+    nodeMap.set(3, mk(3, "walk", []));
+    for (const id of siblings) nodeMap.set(id, mk(id, `f${id}`, []));
+    const sampleNodeIds = [2, 3, 3, 3, ...siblings.flatMap((id) => [id, id])];
+    const n = sampleNodeIds.length;
+    const index: CpuSampleIndex = {
+      timestampsMs: Float64Array.from({ length: n }, (_, i) => i + 1),
+      intervalStartsMs: Float64Array.from({ length: n }, (_, i) => i),
+      sampleNodeIds,
+      nodeMap,
+      durationMs: n,
+    };
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: n, componentName: "Login" }],
+    };
+    const { self, total } = readRow(renderComponentCpu(index, commit, "Login", 10), "walk");
+    // The outer frame's 1 + the inner frame's 3, not the inner frame alone.
+    expect(self).toBeCloseTo(4, 5);
+    expect(total).toBeCloseTo(4, 5);
+  });
+});
