@@ -27,10 +27,10 @@ const FIRST_POLL_WAIT_MS = 15_000;
 let firstPollSettled: Promise<void> = Promise.resolve();
 
 /**
- * Settles once the first poll has attempted injection for every simulator booted
- * at startup, or {@link FIRST_POLL_WAIT_MS} after startup. A tool that can launch
- * an app without arming injection itself waits on this, so the app is not
- * started uninjected. Settled when no watcher runs.
+ * Settles once a poll has read the booted simulators and attempted injection for
+ * each, or {@link FIRST_POLL_WAIT_MS} after startup. A tool that can launch an
+ * app without arming injection itself waits on this, so the app is not started
+ * uninjected. Settled when no watcher runs.
  */
 export function firstSimulatorPoll(): Promise<void> {
   return firstPollSettled;
@@ -117,6 +117,12 @@ export function startSimulatorWatcher(registry: Registry): {
    */
   let consecutiveTimeouts = 0;
   let ticksToSkip = 0;
+  let markArmed!: () => void;
+  const armed = new Promise<void>((resolve) => (markArmed = resolve));
+  firstPollSettled = Promise.race([
+    armed,
+    new Promise<void>((resolve) => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
+  ]);
 
   /**
    * Split the booted set into the simulators the watcher may drive and the ones
@@ -257,8 +263,9 @@ export function startSimulatorWatcher(registry: Registry): {
       }
     }
 
-    if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
-    else pendingAttempts.forEach((p) => p.catch(() => {}));
+    // Neither attempt kind rejects: initUdid and the ensureEnvReady retry catch.
+    const attempted = Promise.all(pendingAttempts).then(markArmed);
+    if (shouldBlockUntilSettled) await attempted;
 
     /**
      * Shut down, so there is no environment left to hand anywhere, launchd took
@@ -272,13 +279,9 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // Settles once ensureEnv has been attempted for every simulator booted at start.
-  // The simctl call is bounded, so this resolves even when simctl hangs.
+  // Settles once ensureEnv has been attempted for every simulator booted at
+  // start, or once the bounded simctl call fails.
   const ready = poll(true);
-  firstPollSettled = Promise.race([
-    ready.catch(() => {}),
-    new Promise<void>((resolve) => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
-  ]);
 
   // A tick that lands while the previous poll is still running, or inside the
   // backoff after a timeout, is skipped, so a slow simctl never has more than one

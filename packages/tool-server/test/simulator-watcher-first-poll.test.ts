@@ -63,6 +63,25 @@ describe("firstSimulatorPoll", () => {
     expect(await isSettled(firstSimulatorPoll())).toBe(true);
   });
 
+  it("keeps waiting past a first poll whose simctl failed, until a poll arms", async () => {
+    vi.useFakeTimers();
+    simctlMock.mockImplementationOnce(() => {
+      throw new Error("CoreSimulatorService connection interrupted");
+    });
+    listsBooted();
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+
+    ({ stop } = startSimulatorWatcher({ resolveService } as unknown as Registry));
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(resolveService).not.toHaveBeenCalled();
+    expect(await isSettled(firstSimulatorPoll())).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(resolveService).toHaveBeenCalledWith(`NativeDevtools:${UDID}`, expect.anything());
+    expect(await isSettled(firstSimulatorPoll())).toBe(true);
+  });
+
   it("stops waiting 15s after startup when the first poll never settles", async () => {
     vi.useFakeTimers();
     listsBooted();
