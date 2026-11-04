@@ -38,6 +38,12 @@ describe("boot-device browser", () => {
     expect(bootBrowserMock).not.toHaveBeenCalled();
   });
 
+  it("names the browser in its progress messages", () => {
+    expect(tool.interaction!.startedMsg!({ params: { browser: "edge" } } as never)).toBe(
+      "Starting edge"
+    );
+  });
+
   it("rejects a browser outside the supported set at the schema", () => {
     expect(tool.zodSchema!.safeParse({ browser: "firefox" }).success).toBe(false);
     expect(tool.zodSchema!.safeParse({ browser: "brave" }).success).toBe(true);

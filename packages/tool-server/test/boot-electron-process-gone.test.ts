@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { scopeTempHome } from "./helpers/temp-home";
 
 // Node's fetch refuses port 1 before dialing, so readiness never succeeds.
@@ -87,6 +89,7 @@ describe("bootElectronApp onProcessGone / label", () => {
         label: "Browser",
         onProcessGone: gone,
       }).catch((e: unknown) => e);
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
       await vi.advanceTimersByTimeAsync(1000);
       expect(((await settled) as Error).message).toMatch(
         /^Browser boot: spawn returned without a pid/
@@ -105,9 +108,76 @@ describe("bootElectronApp onProcessGone / label", () => {
     const err = await bootElectronApp({
       appPath: appBinary,
       port: UNREACHABLE_CDP_PORT,
+      label: "Browser",
       onProcessGone: gone,
     }).catch((e: unknown) => e);
     expect(gone).toHaveBeenCalledTimes(1);
-    expect((err as Error).message).toMatch(/^Electron boot: failed to spawn/);
+    expect((err as Error).message).toMatch(/^Browser boot: failed to spawn/);
+  });
+
+  it("fires when boot fails before spawning", async () => {
+    const gone = vi.fn();
+    const err = await bootElectronApp({
+      appPath: path.join(path.dirname(appBinary), "missing"),
+      port: UNREACHABLE_CDP_PORT,
+      onProcessGone: gone,
+    }).catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID
+    );
+    expect(gone).toHaveBeenCalledTimes(1);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("names the label when the spawn errors or the child exits before CDP is ready", async () => {
+    const failed = makeFakeChild(12345);
+    spawnMock.mockReturnValue(failed);
+    const spawnErr = bootElectronApp({
+      appPath: appBinary,
+      port: UNREACHABLE_CDP_PORT,
+      label: "Browser",
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    failed.emit("error", Object.assign(new Error("spawn EACCES"), { code: "EACCES" }));
+    expect(((await spawnErr) as Error).message).toMatch(
+      /^Browser boot: failed to launch .* \(EACCES\)/
+    );
+
+    const exited = makeFakeChild(12346);
+    spawnMock.mockReturnValue(exited);
+    const exitErr = bootElectronApp({
+      appPath: appBinary,
+      port: UNREACHABLE_CDP_PORT,
+      label: "Browser",
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2));
+    exited.emit("exit", 13, null);
+    expect(((await exitErr) as Error).message).toMatch(
+      /^Browser boot: child process exited with code 13 before CDP was ready/
+    );
+  });
+
+  it("refuses a fixed port something already answers on, without spawning", async () => {
+    const holder = net.createServer();
+    await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));
+    const { port } = holder.address() as net.AddressInfo;
+    const gone = vi.fn();
+    try {
+      const err = await bootElectronApp({
+        appPath: appBinary,
+        port,
+        label: "Browser",
+        onProcessGone: gone,
+      }).catch((e: unknown) => e);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
+      expect((err as Error).message).toContain(
+        `Browser boot: port ${port} is already in use on 127.0.0.1.`
+      );
+      expect((err as Error).message).toContain(`chromium-cdp-${port}`);
+      expect(spawnMock).not.toHaveBeenCalled();
+      expect(gone).toHaveBeenCalledTimes(1);
+    } finally {
+      holder.close();
+    }
   });
 });

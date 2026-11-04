@@ -142,6 +142,15 @@ jobs:
           BOOT_JSON: '{"electronAppPath":"${{ github.workspace }}/packages/tool-server/test/fixtures/electron-smoke-app","electronPort":19222,"electronArgs":["--no-sandbox"]}'
           DEVICE_ID: chromium-cdp-19222
 
+      - name: Boot + drive the runner's Chrome
+        # The runner image ships Google Chrome on PATH. The start URL paints a
+        # gradient so the screenshot clears the blank-framebuffer floor.
+        run: bash scripts/e2e/drive-device.sh
+        env:
+          BOOT_JSON: '{"browser":"chrome","electronPort":19223,"electronArgs":["--no-sandbox","data:text/html,<body style=margin:0;height:100vh;background:conic-gradient(red,yellow,lime,aqua,blue,magenta,red)>"]}'
+          DEVICE_ID: chromium-cdp-19223
+          ARTIFACT_DIR: ${{ runner.temp }}/browser
+
       - if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -149,6 +158,8 @@ jobs:
           path: |
             ${{ runner.temp }}/smoke-shot.png
             ${{ runner.temp }}/smoke-shot.json
+            ${{ runner.temp }}/browser/smoke-shot.png
+            ${{ runner.temp }}/browser/smoke-shot.json
             /tmp/xvfb.log
             ~/.argent/tool-server.log
           if-no-files-found: warn

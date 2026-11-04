@@ -51,8 +51,18 @@ export function browserExecutableCandidates(
   return dirs.flatMap((dir) => LINUX_COMMANDS[browser].map((cmd) => path.join(dir, cmd)));
 }
 
+function isExecutableFile(p: string): boolean {
+  try {
+    if (!fs.statSync(p).isFile()) return false;
+    if (process.platform !== "win32") fs.accessSync(p, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function findBrowserExecutable(browser: BrowserName): string | null {
-  return browserExecutableCandidates(browser).find((p) => fs.existsSync(p)) ?? null;
+  return browserExecutableCandidates(browser).find(isExecutableFile) ?? null;
 }
 
 interface BootBrowserOptions {
@@ -73,7 +83,10 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     const installed = BROWSER_NAMES.filter((b) => findBrowserExecutable(b));
     throw new FailureError(
       `Browser boot: ${options.browser} is not installed (looked in ${
-        browserExecutableCandidates(options.browser).join(", ") || "an empty PATH"
+        browserExecutableCandidates(options.browser).join(", ") ||
+        (process.platform === "win32"
+          ? "nothing: PROGRAMFILES, PROGRAMFILES(X86) and LOCALAPPDATA are unset"
+          : "nothing: PATH is empty")
       }). ` +
         (installed.length
           ? `Installed: ${installed.join(", ")}; pass one of those as \`browser\`.`
@@ -87,6 +100,10 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     );
   }
 
+  const extraArgs = options.extraArgs ?? [];
+  // Chromium reads every non-flag argument as a start URL, and headless mode
+  // exits on more than one, so about:blank is only the default.
+  const hasStartUrl = extraArgs.some((a) => !a.startsWith("-"));
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-browser-"));
   return bootElectronApp({
     appPath: executable,
@@ -96,8 +113,8 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
       `--user-data-dir=${profileDir}`,
       "--no-first-run",
       "--no-default-browser-check",
-      ...(options.extraArgs ?? []),
-      "about:blank",
+      ...extraArgs,
+      ...(hasStartUrl ? [] : ["about:blank"]),
     ],
     onProcessGone: () => {
       fs.rm(profileDir, { recursive: true, force: true, maxRetries: 3 }, () => {});

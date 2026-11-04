@@ -6,7 +6,7 @@ import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
 import { chromiumIdFromPort } from "../../utils/device-info";
 import { trackChromiumPort } from "../../utils/chromium-discovery";
 import { electronGuiChildEnv } from "../../utils/electron-env";
-import { pickFreePort } from "../../utils/free-port";
+import { isLoopbackPortAnswering, pickFreePort } from "../../utils/free-port";
 import { scheduleGroupSigkill, signalGroup } from "../../utils/process-kill";
 
 // An Electron app boots as a Chromium/CDP runtime, so the device id, platform
@@ -284,10 +284,38 @@ const ANTI_THROTTLING_ARGS = [
   "--disable-renderer-backgrounding",
 ];
 
+/**
+ * Refuse a caller-chosen port that already answers: the new instance cannot
+ * bind it yet keeps running, and readiness would accept the existing listener,
+ * so boot would report a device that is really the other process.
+ */
+async function assertPortFree(port: number, label: string): Promise<void> {
+  if (!(await isLoopbackPortAnswering(port))) return;
+  throw new FailureError(
+    `${label} boot: port ${port} is already in use on 127.0.0.1. If an app or browser with ` +
+      `remote debugging holds it, drive that one as chromium-cdp-${port} (list-devices lists it); ` +
+      `otherwise omit \`electronPort\` to get a free port.`,
+    {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
+      failure_stage: "electron_port_in_use",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
   const label = options.label ?? "Electron";
-  const port = options.port ?? (await pickFreePort());
-  const launcher = resolveLauncher(options.appPath);
+  let port: number;
+  let launcher: { command: string; args: string[] };
+  try {
+    if (options.port !== undefined) await assertPortFree(options.port, label);
+    port = options.port ?? (await pickFreePort());
+    launcher = resolveLauncher(options.appPath);
+  } catch (err) {
+    options.onProcessGone?.();
+    throw err;
+  }
   const extra = sanitizeExtraArgs(options.extraArgs ?? []);
 
   const args = [

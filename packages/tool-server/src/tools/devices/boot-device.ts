@@ -156,7 +156,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron/browsers, which have no equivalent GUI step."
+      'iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which have no equivalent GUI step, and on browsers, which take `electronArgs: ["--headless=new"]` instead.'
     ),
   electronAppPath: z
     .string()
@@ -168,7 +168,7 @@ const zodSchema = z.object({
     .enum(BROWSER_NAMES)
     .optional()
     .describe(
-      "Web: installed Chromium-family browser to launch on `about:blank` with a fresh, throwaway profile; navigate with `open-url`. Fails naming the installed ones if it is missing. `electronPort` and `electronArgs` apply (e.g. `--headless=new` for a host without a display). Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>`electronAppPath`, or `browser`."
+      "Web: installed Chromium-family browser to launch with a fresh, throwaway profile, on `about:blank` unless `electronArgs` carries a start URL; navigate with `open-url`. Fails naming the installed ones if it is missing. `electronPort` and `electronArgs` apply (e.g. `--headless=new` for a host without a display). Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>`electronAppPath`, or `browser`."
     ),
   electronPort: z
     .number()
