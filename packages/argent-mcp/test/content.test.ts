@@ -419,6 +419,17 @@ describe("flowRunToMcpContent", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("names the same-named test a run's test hides, under the header", async () => {
+    const warning =
+      "/p/.argent/flows/f.yaml is not used: /p/.argent/e2e/f.yaml has the same name and is read first.";
+    const blocks = await flowRunToMcpContent({ flow: "f", steps: [], warning });
+
+    expect(blocks.slice(0, 2)).toEqual([
+      { type: "text", text: 'Running e2e test "f" (0 steps)' },
+      { type: "text", text: `⚠ ${warning}` },
+    ]);
+  });
+
   it("names each baseline a run over a link returned but could not write", async () => {
     const blocks = await flowRunToMcpContent({
       flow: "f",
@@ -432,17 +443,34 @@ describe("flowRunToMcpContent", () => {
     });
   });
 
+  it("names the e2e test from e2eTest, falling back to the flow an older tool-server sends", async () => {
+    const texts = async (input: FlowExecuteResult) =>
+      (await flowRunToMcpContent(input)).map((b) => (b.type === "text" ? b.text : ""));
+    expect(await texts({ e2eTest: "new", flow: "old", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ e2eTest: "new", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ flow: "old", steps: [] })).toEqual([
+      'Running e2e test "old" (0 steps)',
+      'E2E test "old" complete.',
+    ]);
+  });
+
   it("produces header and footer text blocks", async () => {
     const input: FlowExecuteResult = { flow: "test", steps: [] };
     const blocks = await flowRunToMcpContent(input);
 
     expect(blocks[0]).toEqual({
       type: "text",
-      text: 'Running flow "test" (0 steps)',
+      text: 'Running e2e test "test" (0 steps)',
     });
     expect(blocks[blocks.length - 1]).toEqual({
       type: "text",
-      text: 'Flow "test" complete.',
+      text: 'E2E test "test" complete.',
     });
   });
 
@@ -646,7 +674,7 @@ describe("flowRunToMcpContent", () => {
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text);
 
-    expect(texts[0]).toBe('Running flow "checkout" on SIM (4 steps)');
+    expect(texts[0]).toBe('Running e2e test "checkout" on SIM (4 steps)');
     expect(texts[1]).toBe("[1] ✓ tap");
     expect(texts[2]).toBe("[2] ✓ assert");
     expect(texts[3]).toBe("[3] ✗ snapshot — diff 3.10% > 0.5% (home)");
@@ -989,7 +1017,7 @@ describe("flowRunToMcpContent", () => {
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text);
 
-    expect(texts[0]).toContain("Running flow");
+    expect(texts[0]).toContain("Running e2e test");
     expect(texts[1]).toBe("[1] Start");
     expect(texts[2]).toBe("[2] gesture-tap");
     // [3] is JSON result

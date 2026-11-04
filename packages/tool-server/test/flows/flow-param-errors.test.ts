@@ -46,7 +46,7 @@ describe("flow-execute parameter handling", () => {
         project_root: tmpDir,
         prerequisiteAcknowledged: true,
       })
-    ).rejects.toThrow(/needs the flow's name in `name`.*\.argent\/flows\/<name>\.yaml/s);
+    ).rejects.toThrow(/needs the e2e test's name in `name`.*\.argent\/flows\/<name>\.yaml/s);
   });
 
   it("classifies a source-less call as a client-input VALIDATION error, not an internal fault", async () => {
@@ -170,25 +170,25 @@ describe("flow-read-prerequisite parameter handling", () => {
       };
 
       expect(Object.keys(schema.properties), tool.id).toEqual(
-        expect.arrayContaining(["name", "flow_path"])
+        expect.arrayContaining(["name", "e2e_test_path"])
       );
       expect(schema.required ?? [], tool.id).not.toContain("name");
-      expect(schema.required ?? [], tool.id).not.toContain("flow_path");
+      expect(schema.required ?? [], tool.id).not.toContain("e2e_test_path");
     }
   });
 
   it("names the parameter it needs when no flow source is present", async () => {
     await expect(
       prereqRegistry().invokeTool("flow-read-prerequisite", { project_root: tmpDir })
-    ).rejects.toThrow(/needs the flow's name in `name`.*\.argent\/flows\/<name>\.yaml/s);
+    ).rejects.toThrow(/needs the e2e test's name in `name`.*\.argent\/flows\/<name>\.yaml/s);
   });
 
-  it("anchors the exactly-one-source rule at the ROOT, not on flow_path", async () => {
+  it("anchors the exactly-one-source rule at the ROOT, not on e2e_test_path", async () => {
     for (const tool of [createRunFlowTool(new Registry()), flowReadPrerequisiteTool]) {
       const parsed = tool.zodSchema!.safeParse({ project_root: tmpDir });
       expect(parsed.success, tool.id).toBe(false);
       const sourceIssues = parsed.error!.issues.filter((i) =>
-        i.message.includes("Pass exactly one flow source")
+        i.message.includes("Pass exactly one e2e test source")
       );
       expect(sourceIssues, tool.id).toHaveLength(1);
       expect(sourceIssues[0].path, tool.id).toEqual([]);
@@ -200,13 +200,13 @@ describe("flow-read-prerequisite parameter handling", () => {
     try {
       await prereqRegistry().invokeTool("flow-read-prerequisite", {
         name: "a",
-        flow_path: path.join(tmpDir, "b.yaml"),
+        e2e_test_path: path.join(tmpDir, "b.yaml"),
         project_root: tmpDir,
       });
     } catch (err) {
       message = (err as Error).message;
     }
-    expect(message).toContain("Pass exactly one flow source: name or flow_path.");
-    expect(message).not.toContain("needs the flow's name");
+    expect(message).toContain("Pass exactly one e2e test source: name or e2e_test_path.");
+    expect(message).not.toContain("needs the e2e test's name");
   });
 });

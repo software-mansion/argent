@@ -43,7 +43,7 @@ export function chromiumCdpRef(device: DeviceInfo): {
 // `ChromiumServer` is the source of truth, but the blueprint keeps publishing
 // the original `ChromiumCdpApi` shape too so tools can migrate one at a time.
 
-export interface MouseEventArgs {
+interface MouseEventArgs {
   type: "mousePressed" | "mouseReleased" | "mouseMoved";
   /** CSS pixels relative to the page viewport. */
   x: number;
@@ -52,7 +52,7 @@ export interface MouseEventArgs {
   clickCount?: number;
 }
 
-export interface KeyEventArgs {
+interface KeyEventArgs {
   type: "keyDown" | "keyUp" | "rawKeyDown" | "char";
   /** Browser-style key value, e.g. "a", "Enter", "ArrowLeft". */
   key?: string;
@@ -63,14 +63,14 @@ export interface KeyEventArgs {
   modifiers?: number;
 }
 
-export interface ViewportSize {
+interface ViewportSize {
   width: number;
   height: number;
   /** Renderer-reported `window.devicePixelRatio`. */
   devicePixelRatio: number;
 }
 
-export interface ChromiumAxNode {
+interface ChromiumAxNode {
   nodeId: string;
   role?: string;
   name?: string;

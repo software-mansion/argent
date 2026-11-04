@@ -29,6 +29,25 @@ describe("canonicalizeAiClient", () => {
     });
   });
 
+  describe("Devin Desktop (renamed Windsurf)", () => {
+    // Its bundled Devin agent sends rmcp's default clientInfo.name; the extension
+    // host's WINDSURF_IDE_TYPE is the only thing that marks it as Windsurf.
+    it("maps rmcp → windsurf when spawned by Devin Desktop", () => {
+      expect(canonicalizeAiClient("rmcp", { WINDSURF_IDE_TYPE: "windsurf" })).toBe("windsurf");
+    });
+
+    it("leaves rmcp without the Devin Desktop env unmapped (standalone Devin CLI)", () => {
+      expect(canonicalizeAiClient("rmcp")).toBeUndefined();
+      expect(canonicalizeAiClient("rmcp", {})).toBeUndefined();
+    });
+
+    it("never lets the Windsurf env override a recognized client name", () => {
+      expect(canonicalizeAiClient("claude-code", { WINDSURF_IDE_TYPE: "windsurf" })).toBe(
+        "claude_code"
+      );
+    });
+  });
+
   it("returns undefined for unrecognized clients (caller decides on `other`)", () => {
     // `other` is a caller decision (raw clientInfo.name we couldn't map), not a
     // value canonicalize should ever produce from an unknown string.

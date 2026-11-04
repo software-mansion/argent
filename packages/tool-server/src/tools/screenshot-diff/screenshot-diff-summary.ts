@@ -17,11 +17,7 @@ type TextSummaryChange = TextChange & {
  * gate matching `includes("status: unchanged")` would read it as a plain pass.
  */
 type SummaryStatus =
-  | "unchanged"
-  | "changed"
-  | "resized_no_change"
-  | "dimension_mismatch"
-  | "unknown";
+  "unchanged" | "changed" | "resized_no_change" | "dimension_mismatch" | "unknown";
 type CoordinateSpace = { imageSize: Size } | undefined;
 
 export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput): string {

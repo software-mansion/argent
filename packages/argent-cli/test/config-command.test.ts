@@ -340,3 +340,30 @@ describe("argent config — unset leaves no empty parent behind", () => {
     expect(fs.readFileSync(file, "utf8")).toBe('{"ios":{}}');
   });
 });
+
+describe("argent config — a key the tool-server reads only at start", () => {
+  it("says a set or unset of android.adbServerPort needs a tool-server restart", () => {
+    config(["set", "android.adbServerPort", "5038"]);
+    expect(errors()).toContain("only when it starts");
+    expect(errors()).toContain("argent server stop");
+
+    errSpy.mockClear();
+    config(["unset", "android.adbServerPort"]);
+    expect(errors()).toContain("argent server stop");
+  });
+
+  it("says nothing when the write did not happen", () => {
+    expect(() => config(["set", "android.adbServerPort", "0"])).toThrow(ExitError);
+    expect(errors()).not.toContain("argent server stop");
+
+    errSpy.mockClear();
+    config(["unset", "android.adbServerPort"]);
+    expect(errors()).toBe("");
+  });
+
+  it("says nothing for a key that applies without a restart", () => {
+    config(["set", "android.sdkRoot", "/opt/android-sdk"]);
+    config(["unset", "android.sdkRoot"]);
+    expect(errors()).toBe("");
+  });
+});

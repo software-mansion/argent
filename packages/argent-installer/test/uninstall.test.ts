@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
+import { hashBundledContent } from "../src/utils.js";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -47,6 +48,26 @@ vi.mock("node:child_process", () => ({
       : childProcessMock.execFileSync(bin, ...rest),
 }));
 vi.mock("@argent/tools-client", () => toolsClientMock);
+// Lets a test stand in for a release whose agents bundle dropped a file, with
+// a retired list whose hashes match the test's own copies.
+const bundleOverride = vi.hoisted(() => ({
+  agentsDir: undefined as string | undefined,
+  retired: undefined as import("../src/utils.js").RetiredBundledPath[] | undefined,
+}));
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    get AGENTS_DIR() {
+      return bundleOverride.agentsDir ?? actual.AGENTS_DIR;
+    },
+    get RETIRED_BUNDLED_PATHS() {
+      return bundleOverride.retired
+        ? { agents: bundleOverride.retired, rules: [] }
+        : actual.RETIRED_BUNDLED_PATHS;
+    },
+  };
+});
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   outro: vi.fn(),
@@ -88,6 +109,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  bundleOverride.agentsDir = undefined;
+  bundleOverride.retired = undefined;
   process.chdir(originalCwd);
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
   else process.env.npm_config_user_agent = savedAgent;
@@ -288,8 +311,8 @@ describe("uninstall — skills cleanup helpers", () => {
     const skillsDir = path.join(tmpDir, "skills");
 
     writeFile(
-      path.join(skillsDir, "argent-create-flow", "SKILL.md"),
-      ["---", "name: argent-create-flow", "description: test", "---", "", "body"].join("\n")
+      path.join(skillsDir, "argent-create-e2e", "SKILL.md"),
+      ["---", "name: argent-create-e2e", "description: test", "---", "", "body"].join("\n")
     );
     writeFile(
       path.join(skillsDir, "argent-react-native-optimization", "SKILL.md"),
@@ -305,7 +328,7 @@ describe("uninstall — skills cleanup helpers", () => {
     writeFile(path.join(skillsDir, "references", "guide.md"));
 
     expect(getBundledSkillNames(skillsDir)).toEqual([
-      "argent-create-flow",
+      "argent-create-e2e",
       "argent-react-native-optimization",
     ]);
   });
@@ -331,28 +354,28 @@ describe("uninstall — skills cleanup helpers", () => {
 
   it("removes installed skill entries by current skill names only", () => {
     const targetDir = path.join(tmpDir, ".claude", "skills");
-    const storeDir = path.join(tmpDir, ".agents", "skills", "argent-create-flow");
+    const storeDir = path.join(tmpDir, ".agents", "skills", "argent-create-e2e");
 
     writeFile(path.join(storeDir, "SKILL.md"), "skill");
     fs.mkdirSync(targetDir, { recursive: true });
     fs.symlinkSync(
-      path.relative(targetDir, path.join(tmpDir, ".agents", "skills", "argent-create-flow")),
-      path.join(targetDir, "argent-create-flow")
+      path.relative(targetDir, path.join(tmpDir, ".agents", "skills", "argent-create-e2e")),
+      path.join(targetDir, "argent-create-e2e")
     );
     writeFile(path.join(targetDir, "argent-react-native-optimization", "SKILL.md"), "argent");
     writeFile(path.join(targetDir, "react-native-optimization", "SKILL.md"), "unrelated");
     writeFile(path.join(targetDir, "vendor-skill", "SKILL.md"), "vendor");
 
     const result = removeBundledSkillInstalls(
-      ["argent-create-flow", "argent-react-native-optimization"],
+      ["argent-create-e2e", "argent-react-native-optimization"],
       targetDir
     );
 
     expect(result.removedPaths.sort()).toEqual([
-      "argent-create-flow",
+      "argent-create-e2e",
       "argent-react-native-optimization",
     ]);
-    expect(fs.existsSync(path.join(targetDir, "argent-create-flow"))).toBe(false);
+    expect(fs.existsSync(path.join(targetDir, "argent-create-e2e"))).toBe(false);
     expect(fs.existsSync(path.join(targetDir, "argent-react-native-optimization"))).toBe(false);
     expect(fs.existsSync(path.join(targetDir, "react-native-optimization"))).toBe(true);
     expect(fs.existsSync(path.join(targetDir, "vendor-skill"))).toBe(true);
@@ -365,7 +388,7 @@ describe("uninstall — skills cleanup helpers", () => {
     // time it reaches .claude/skills every Argent link is dangling.
     const targetDir = path.join(tmpDir, ".claude", "skills");
     const storeDir = path.join(tmpDir, ".agents", "skills");
-    const skillNames = ["argent-create-flow", "argent-react-native-optimization"];
+    const skillNames = ["argent-create-e2e", "argent-react-native-optimization"];
 
     fs.mkdirSync(targetDir, { recursive: true });
     for (const skillName of skillNames) {
@@ -399,13 +422,13 @@ describe("uninstall — skills cleanup helpers", () => {
     const targetDir = path.join(tmpDir, ".claude", "skills");
     fs.mkdirSync(targetDir, { recursive: true });
     fs.symlinkSync(
-      path.join("..", "..", ".agents", "skills", "argent-create-flow"),
-      path.join(targetDir, "argent-create-flow")
+      path.join("..", "..", ".agents", "skills", "argent-create-e2e"),
+      path.join(targetDir, "argent-create-e2e")
     );
 
-    const result = removeBundledSkillInstalls(["argent-create-flow"], targetDir);
+    const result = removeBundledSkillInstalls(["argent-create-e2e"], targetDir);
 
-    expect(result).toEqual({ removedPaths: ["argent-create-flow"], removedRoot: true });
+    expect(result).toEqual({ removedPaths: ["argent-create-e2e"], removedRoot: true });
     expect(fs.existsSync(targetDir)).toBe(false);
   });
 
@@ -417,7 +440,7 @@ describe("uninstall — skills cleanup helpers", () => {
         {
           version: 1,
           skills: {
-            "argent-create-flow": { source: "argent" },
+            "argent-create-e2e": { source: "argent" },
             "argent-react-native-optimization": { source: "argent" },
             "react-native-optimization": { source: "vendor" },
             "vendor-skill": { source: "vendor" },
@@ -429,12 +452,12 @@ describe("uninstall — skills cleanup helpers", () => {
     );
 
     const result = cleanupSkillsLockFile(lockPath, [
-      "argent-create-flow",
+      "argent-create-e2e",
       "argent-react-native-optimization",
     ]);
 
     expect(result).toEqual({
-      removedSkills: ["argent-create-flow", "argent-react-native-optimization"],
+      removedSkills: ["argent-create-e2e", "argent-react-native-optimization"],
       removedFile: false,
     });
 
@@ -453,7 +476,7 @@ describe("uninstall — skills cleanup helpers", () => {
         {
           version: 1,
           skills: {
-            "argent-create-flow": { source: "argent" },
+            "argent-create-e2e": { source: "argent" },
           },
         },
         null,
@@ -461,10 +484,10 @@ describe("uninstall — skills cleanup helpers", () => {
       )
     );
 
-    const result = cleanupSkillsLockFile(lockPath, ["argent-create-flow"]);
+    const result = cleanupSkillsLockFile(lockPath, ["argent-create-e2e"]);
 
     expect(result).toEqual({
-      removedSkills: ["argent-create-flow"],
+      removedSkills: ["argent-create-e2e"],
       removedFile: true,
     });
     expect(fs.existsSync(lockPath)).toBe(false);
@@ -635,6 +658,31 @@ describe("uninstall — local (committable) mode package removal", () => {
     expect(telemetryMock.resetLocalTelemetryState).toHaveBeenCalledWith();
   });
 
+  it("prunes legacy skill dirs that are no longer bundled", async () => {
+    stageLocalProject();
+    const store = path.join(tmpDir, ".agents", "skills");
+    writeFile(path.join(store, "argent-create-flow", "SKILL.md"));
+    writeFile(path.join(store, "my-skill", "SKILL.md"));
+    const editor = path.join(tmpDir, ".claude", "skills");
+    fs.mkdirSync(editor, { recursive: true });
+    fs.symlinkSync(path.join(store, "argent-qa-flows"), path.join(editor, "argent-qa-flows"));
+    writeFile(
+      path.join(tmpDir, "skills-lock.json"),
+      JSON.stringify({ version: 1, skills: { "argent-qa-flows": {}, "my-skill": {} } })
+    );
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(store, "argent-create-flow"))).toBe(false);
+    expect(fs.lstatSync(path.join(editor, "argent-qa-flows"), { throwIfNoEntry: false })).toBe(
+      undefined
+    );
+    expect(fs.existsSync(path.join(store, "my-skill"))).toBe(true);
+    const lock = JSON.parse(fs.readFileSync(path.join(tmpDir, "skills-lock.json"), "utf8"));
+    expect(lock.skills).toEqual({ "my-skill": {} });
+  });
+
   it("--local skips the package removal when the project never opted into argent", async () => {
     // Resolvable copy with no committed record or manifest declaration (hoisted
     // transitive dep / workspace symlink) — removal would rewrite files the user
@@ -735,6 +783,209 @@ describe("uninstall — scoped config cleanup", () => {
 
     const calls = childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>;
     expect(calls.some(([, args]) => args.includes("-g"))).toBe(false);
+  });
+
+  // `npx skills add` links .kiro/skills/<name> -> ../../.agents/skills/<name>
+  // for every Argent skill when it detects Kiro.
+  function stageKiroSkillLinks(base: string): string[] {
+    const names = getBundledSkillNames(path.resolve(__dirname, "..", "..", "skills", "skills"));
+    expect(names.length).toBeGreaterThan(0);
+    fs.mkdirSync(path.join(base, ".kiro", "skills"), { recursive: true });
+    for (const name of names) {
+      writeFile(path.join(base, ".agents", "skills", name, "SKILL.md"), "x");
+      fs.symlinkSync(
+        path.join("..", "..", ".agents", "skills", name),
+        path.join(base, ".kiro", "skills", name)
+      );
+    }
+    return names;
+  }
+
+  it("--yes removes the Argent skill links from .kiro/skills and keeps other entries", async () => {
+    stageKiroSkillLinks(projDir);
+    writeFile(path.join(projDir, ".kiro", "skills", "vendor-skill", "SKILL.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(path.join(projDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
+  });
+
+  // An upgrade to a release that dropped the inspector, then an uninstall.
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n";
+  const CHECKLIST = "## Quality control checklist\n";
+
+  function stageRetiredAgents(base = projDir): string {
+    const bundle = path.join(tmpDir, "bundle-agents");
+    writeFile(path.join(bundle, "argent-current.md"), "current");
+    bundleOverride.agentsDir = bundle;
+    bundleOverride.retired = [
+      {
+        path: "argent-environment-inspector.md",
+        shipped: [hashBundledContent(INSPECTOR)],
+      },
+      {
+        path: "references/quality-control-checklist.md",
+        shipped: [hashBundledContent(CHECKLIST)],
+      },
+    ];
+
+    const agents = path.join(base, ".claude", "agents");
+    writeFile(path.join(agents, "argent-current.md"), "current");
+    writeFile(path.join(agents, "argent-environment-inspector.md"), INSPECTOR);
+    writeFile(path.join(agents, "references", "quality-control-checklist.md"), CHECKLIST);
+    fs.mkdirSync(path.join(base, ".git"));
+    return agents;
+  }
+
+  it("--yes removes retired agents the bundle no longer ships, and keeps the user's", async () => {
+    const agents = stageRetiredAgents();
+    writeFile(path.join(agents, "my-agent.md"), "mine");
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(agents)).toEqual(["my-agent.md"]);
+  });
+
+  it.each(["--yes", "-y"])(
+    "%s leaves a retired agent the user edited alone, unasked and unmentioned",
+    async (flag) => {
+      const agents = stageRetiredAgents();
+      const edited = path.join(agents, "references", "quality-control-checklist.md");
+      writeFile(edited, `${CHECKLIST}My own field.\n`);
+      process.chdir(projDir);
+
+      await uninstall([flag]);
+
+      const clack = await import("@clack/prompts");
+      expect(clack.confirm).not.toHaveBeenCalled();
+      expect(fs.readFileSync(edited, "utf8")).toBe(`${CHECKLIST}My own field.\n`);
+      expect(fs.existsSync(path.join(agents, "argent-environment-inspector.md"))).toBe(false);
+      const notes = vi.mocked(clack.note).mock.calls.map(([body]) => String(body));
+      expect(notes.join("\n")).not.toContain("quality-control-checklist.md");
+    }
+  );
+
+  // There the local and global .claude/agents are one dir.
+  it("--yes from the home dir removes each retired agent once", async () => {
+    const agents = stageRetiredAgents(tmpDir);
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(agents)).toBe(false);
+    const clack = await import("@clack/prompts");
+    const notes = vi
+      .mocked(clack.note)
+      .mock.calls.map(([body]) => String(body))
+      .join("\n");
+    expect(notes.split("Removed retired agent argent-environment-inspector.md")).toHaveLength(2);
+    expect(notes).not.toContain("Could not remove");
+  });
+
+  it("--yes removes the agents dir once retired and bundled agents are gone", async () => {
+    const agents = stageRetiredAgents();
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(agents)).toBe(false);
+  });
+
+  it("--yes removes .kiro/ only when it is left empty", async () => {
+    stageKiroSkillLinks(projDir);
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(projDir, ".kiro", "skills"))).toBe(false);
+    expect(fs.existsSync(path.join(projDir, ".kiro"))).toBe(false);
+  });
+
+  it("--yes keeps .kiro/ when it still holds other Kiro files", async () => {
+    stageKiroSkillLinks(projDir);
+    writeFile(path.join(projDir, ".kiro", "steering", "product.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.existsSync(path.join(projDir, ".kiro", "skills"))).toBe(false);
+    expect(fs.readdirSync(path.join(projDir, ".kiro"))).toEqual(["steering"]);
+    expect(fs.existsSync(path.join(projDir, ".kiro", "steering", "product.md"))).toBe(true);
+  });
+
+  it("--global removes the Argent skill links from ~/.kiro/skills and keeps other entries", async () => {
+    stageKiroSkillLinks(tmpDir);
+    writeFile(path.join(tmpDir, ".kiro", "skills", "vendor-skill", "SKILL.md"), "keep");
+    writeFile(path.join(tmpDir, ".kiro", "steering", "user.md"), "keep");
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.readdirSync(path.join(tmpDir, ".kiro", "skills"))).toEqual(["vendor-skill"]);
+    expect(fs.existsSync(path.join(tmpDir, ".kiro", "steering", "user.md"))).toBe(true);
+  });
+
+  // `npx skills add` detects Devin by its config dir, which the Devin Desktop
+  // allowlist step creates, then links <skillsDir>/<name> -> .agents/skills/<name>
+  // for every Argent skill (in a project, only when it already has a .devin dir).
+  function stageDevinSkillLinks(base: string, skillsDir: string): string[] {
+    const names = getBundledSkillNames(path.resolve(__dirname, "..", "..", "skills", "skills"));
+    expect(names.length).toBeGreaterThan(0);
+    fs.mkdirSync(skillsDir, { recursive: true });
+    for (const name of names) {
+      const skillDir = path.join(base, ".agents", "skills", name);
+      writeFile(path.join(skillDir, "SKILL.md"), "x");
+      fs.symlinkSync(path.relative(skillsDir, skillDir), path.join(skillsDir, name));
+    }
+    return names;
+  }
+
+  it("--global removes the Argent skill links from ~/.config/devin/skills and the emptied dir", async () => {
+    const devinDir = path.join(tmpDir, ".config", "devin");
+    stageDevinSkillLinks(tmpDir, path.join(devinDir, "skills"));
+    writeFile(
+      path.join(devinDir, "config.json"),
+      JSON.stringify({ permissions: { allow: ["mcp__argent__*"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(devinDir)).toBe(false);
+  });
+
+  it("--global keeps Devin's own config and skills in ~/.config/devin", async () => {
+    const devinDir = path.join(tmpDir, ".config", "devin");
+    stageDevinSkillLinks(tmpDir, path.join(devinDir, "skills"));
+    writeFile(path.join(devinDir, "skills", "vendor-skill", "SKILL.md"), "keep");
+    writeFile(
+      path.join(devinDir, "config.json"),
+      JSON.stringify({ theme: "dark", permissions: { allow: ["mcp__argent__*"] } })
+    );
+    process.chdir(projDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.readdirSync(path.join(devinDir, "skills"))).toEqual(["vendor-skill"]);
+    expect(JSON.parse(fs.readFileSync(path.join(devinDir, "config.json"), "utf8"))).toEqual({
+      theme: "dark",
+    });
+  });
+
+  it("--yes removes the Argent skill links from .devin/skills and keeps the rest of .devin", async () => {
+    stageDevinSkillLinks(projDir, path.join(projDir, ".devin", "skills"));
+    writeFile(path.join(projDir, ".devin", "notes.md"), "keep");
+    fs.mkdirSync(path.join(projDir, ".git"));
+    process.chdir(projDir);
+
+    await uninstall(["--yes"]);
+
+    expect(fs.readdirSync(path.join(projDir, ".devin"))).toEqual(["notes.md"]);
   });
 
   it("--global keeps the committed project entries and the local-mode record", async () => {

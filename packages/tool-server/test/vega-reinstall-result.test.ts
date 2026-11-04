@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // output and assert success/failure detection deterministically.
 const vegaDevice = vi.fn();
 vi.mock("../src/utils/vega-cli", () => ({ vegaDevice: (...a: unknown[]) => vegaDevice(...a) }));
+// The .vpkg path is fake; appPath validation has its own tests.
+vi.mock("../src/tools/reinstall-app/validate-app", () => ({ assertVpkg: async () => {} }));
 
 import type { DeviceInfo } from "@argent/registry";
 import { vegaImpl } from "../src/tools/reinstall-app/platforms/vega";

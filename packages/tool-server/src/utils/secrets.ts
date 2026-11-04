@@ -1,11 +1,14 @@
 import { FAILURE_CODES } from "@argent/registry";
 import { InvalidToolInputError } from "./capability";
 import {
+  clientSecretPlacementAdvice,
+  clientSecretSource,
   describeSecretSources,
-  lookupSecret,
+  lookupPlaceholderSecret,
   secretNames,
   secretPlacementAdvice,
   secretSources,
+  SECRET_PLACEHOLDER_RE,
   type SecretSource,
   type SecretSourceOptions,
 } from "@argent/configuration-core";
@@ -28,8 +31,6 @@ export type { SecretSourceOptions };
 /** Copied in packages/argent-mcp/src/auto-capture.ts, which cannot depend on this package. */
 export const SECRET_PLACEHOLDER_MARKER = "{{secret:";
 
-const PLACEHOLDER_RE = /\{\{secret:([A-Za-z_][A-Za-z0-9_]*)\}\}/g;
-
 /** Names (never values) of all secrets currently exposed to argent. */
 export function availableSecretNames(options: SecretSourceOptions = {}): string[] {
   return secretNames(secretSources(options));
@@ -43,44 +44,41 @@ interface ResolvedSecretText {
 }
 
 /**
- * A placeholder name redundantly repeating the env prefix in any casing —
- * `{{secret:ARGENT_SECRET_APP_PASSWORD}}` for `{{secret:APP_PASSWORD}}` —
- * accepted as a fallback because agents paste the full variable name. The
- * exact name is tried first, which keeps a literal
- * `ARGENT_SECRET_ARGENT_SECRET_X` var reachable.
- */
-const REDUNDANT_PREFIX_RE = /^argent_secret_/i;
-
-/**
  * Replace every `{{secret:NAME}}` in `text` with its value. An unknown name
  * rejects with the *names* of available secrets and the sources consulted —
  * never a value — so an agent can self-correct.
  *
  * The source chain is built lazily and once per call: text with no placeholder
  * never touches the filesystem, and several placeholders resolve against one
- * snapshot.
+ * snapshot. `clientSecrets` (a tool's `ctx.clientSecrets`) lead the chain.
  */
 export function resolveSecretPlaceholders(
   text: string,
-  options: SecretSourceOptions = {}
+  options: SecretSourceOptions & { clientSecrets?: ReadonlyMap<string, string> } = {}
 ): ResolvedSecretText {
   const secrets: Array<{ name: string; value: string }> = [];
   let sources: SecretSource[] | undefined;
-  const resolved = text.replace(PLACEHOLDER_RE, (_placeholder, rawName: string) => {
-    sources ??= secretSources(options);
-    let name = rawName;
-    let value = lookupSecret(name, sources);
-    if (value === undefined && REDUNDANT_PREFIX_RE.test(name)) {
-      name = name.replace(REDUNDANT_PREFIX_RE, "");
-      value = lookupSecret(name, sources);
-    }
+  const resolved = text.replace(SECRET_PLACEHOLDER_RE, (_placeholder, rawName: string) => {
+    sources ??= [
+      ...(options.clientSecrets ? [clientSecretSource(options.clientSecrets)] : []),
+      ...secretSources(options),
+    ];
+    const { name, value } = lookupPlaceholderSecret(rawName, sources);
     if (value === undefined) {
       const names = secretNames(sources);
+      // Only a client that forwards sends `clientSecrets`, an empty map included.
+      const where = options.clientSecrets
+        ? `the required secret ${name} was not provided: the argent client forwards its ` +
+          `secrets to this tool-server and has no value for it, and no source on the machine ` +
+          `running the tool-server defines it either`
+        : `no source on the machine running the tool-server defines ${name}`;
       throw new InvalidToolInputError(
-        `Unknown secret "${rawName}" — no source on the machine running the tool-server defines ` +
-          `${name}. Available secrets: ${names.length ? names.join(", ") : "(none)"}.\n` +
+        `Unknown secret "${rawName}" — ${where}. ` +
+          `Available secrets: ${names.length ? names.join(", ") : "(none)"}.\n` +
           `Sources consulted, first match wins:\n${describeSecretSources(sources)}\n` +
-          secretPlacementAdvice(name, options),
+          (options.clientSecrets
+            ? clientSecretPlacementAdvice(name)
+            : secretPlacementAdvice(name, options)),
         {
           error_code: FAILURE_CODES.SECRET_PLACEHOLDER_UNKNOWN,
           failure_stage: "secret_placeholder_resolution",
@@ -246,7 +244,12 @@ export function redactSecretsFromError(
   err: unknown,
   secrets: ReadonlyArray<{ name: string; value: string }>
 ): unknown {
-  const scrub = (s: string) => scrubSecretValues(s, secrets);
+  // A shell-quoted command line carries each `'` of a value as `'\''`.
+  const forms = secrets.flatMap((secret) => {
+    const quoted = secret.value.replaceAll("'", "'\\''");
+    return quoted === secret.value ? [secret] : [secret, { name: secret.name, value: quoted }];
+  });
+  const scrub = (s: string) => scrubSecretValues(s, forms);
   if (err instanceof Error) {
     err.message = scrub(err.message);
     if (err.stack) err.stack = scrub(err.stack);

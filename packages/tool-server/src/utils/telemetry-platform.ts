@@ -58,6 +58,8 @@ function telemetryDeviceKind(
   nativeId: string
 ): TelemetryDeviceKind | undefined {
   if (device.kind === "unknown") return undefined;
+  // A `harmony-<connectKey>` id may be a phone or a booted emulator.
+  if (device.platform === "harmony" && device.kind === "device") return undefined;
   // Every other kind is already a positive shape match in `resolveDevice`:
   // simulator (UUID / `remote:`), device on iOS (`isIosPhysicalUdid`), emulator
   // (`emulator-`), vvd (`amazon-`), app (`chromium-cdp-`).
