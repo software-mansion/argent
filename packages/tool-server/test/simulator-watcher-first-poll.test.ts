@@ -1,20 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const execFileMock = vi.fn();
+const simctlMock = vi.fn();
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+vi.mock("../src/utils/simctl-exec", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/simctl-exec")>(
+    "../src/utils/simctl-exec"
+  );
   return {
     ...actual,
-    execFile: (
-      cmd: string,
-      args: readonly string[],
-      opts: unknown,
-      cb?: (err: Error | null, out: { stdout: string; stderr: string }) => void
-    ) => {
-      const callback = typeof opts === "function" ? opts : cb!;
-      callback(null, execFileMock(cmd, args));
-    },
+    execSimctl: async (args: readonly string[]) => simctlMock("xcrun", args).stdout,
   };
 });
 
@@ -24,7 +18,7 @@ import { firstSimulatorPoll, startSimulatorWatcher } from "../src/utils/simulato
 const UDID = "11111111-1111-1111-1111-111111111111";
 
 function listsBooted(): void {
-  execFileMock.mockReturnValue({
+  simctlMock.mockReturnValue({
     stdout: JSON.stringify({
       devices: { "com.apple.CoreSimulator.SimRuntime.iOS-18-5": [{ udid: UDID, state: "Booted" }] },
     }),
@@ -45,7 +39,7 @@ afterEach(() => {
   stop?.();
   stop = undefined;
   vi.useRealTimers();
-  execFileMock.mockReset();
+  simctlMock.mockReset();
 });
 
 describe("firstSimulatorPoll", () => {

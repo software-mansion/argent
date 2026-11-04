@@ -32,6 +32,14 @@ vi.mock("../src/utils/ios-devices", async () => {
   return { ...actual, isTvOsSimulator: vi.fn(async () => false) };
 });
 
+// The bundle check reads a real .app on disk; reinstall-app-validate.test.ts covers it.
+vi.mock("../src/tools/reinstall-app/validate-app", async () => {
+  const actual = await vi.importActual<typeof import("../src/tools/reinstall-app/validate-app")>(
+    "../src/tools/reinstall-app/validate-app"
+  );
+  return { ...actual, assertIosAppBundle: vi.fn(async () => {}) };
+});
+
 vi.mock("../src/blueprints/native-devtools", async () => {
   const actual = await vi.importActual<typeof import("../src/blueprints/native-devtools")>(
     "../src/blueprints/native-devtools"

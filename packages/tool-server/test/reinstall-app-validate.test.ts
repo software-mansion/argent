@@ -12,8 +12,10 @@ vi.mock("node:child_process", () => ({
   execFile: (
     cmd: string,
     args: string[],
-    cb: (err: Error | null, out?: { stdout: string; stderr: string }) => void
+    opts: unknown,
+    callback?: (err: Error | null, out?: { stdout: string; stderr: string }) => void
   ) => {
+    const cb = (typeof opts === "function" ? opts : callback) as NonNullable<typeof callback>;
     execFileCalls.push({ cmd, args });
     if (cmd === "plutil") {
       if (plistBundleId) cb(null, { stdout: `${plistBundleId}\n`, stderr: "" });
