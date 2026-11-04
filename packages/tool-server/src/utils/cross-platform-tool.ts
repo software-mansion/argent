@@ -26,19 +26,21 @@ export interface PlatformImpl<Services, Params, Result> {
 }
 
 /**
- * `ensureDeps` for a local iOS branch. A branch that runs `xcrun` also needs
- * Xcode's components: while the device's wrapper (`devicectl` for a physical
- * iPhone, `simctl` for a simulator) would start their install, it is refused
- * here rather than at its first call, which some tools catch and turn into a
- * misleading empty result. `list-devices` leaves out the same devices.
+ * `ensureDeps` for a local iOS branch. A simulator branch that runs `xcrun` also
+ * needs Xcode's components: while `simctl` would start their install, it is
+ * refused here rather than at its first call, which some tools catch and turn
+ * into a misleading empty result. `list-devices` leaves out the same simulators.
+ *
+ * A physical iPhone only gets the `xcrun` check. Many of its tools only talk to
+ * the runner on the device, so `devicectl` is refused where it is called.
  */
 export async function ensureIosDeps(
   device: DeviceInfo,
   requires: readonly ToolDependency[]
 ): Promise<void> {
   await ensureDeps(requires);
-  if (requires.includes("xcrun")) {
-    assertXcodeFirstLaunchDone(isIosPhysicalDevice(device) ? "devicectl" : "simctl");
+  if (requires.includes("xcrun") && !isIosPhysicalDevice(device)) {
+    assertXcodeFirstLaunchDone("simctl");
   }
 }
 

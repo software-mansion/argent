@@ -1,5 +1,6 @@
 import type { DescribeTreeData } from "../tools/describe/contract";
 import { settleWithin, sleepOrAbort } from "./timing";
+import { XcodeFirstLaunchPendingError } from "./dependency-errors";
 
 /**
  * Shared `describe`-tree polling loop for the wait tools (`await-ui-element`,
@@ -87,6 +88,10 @@ export async function pollDescribeTree<R>(
       break;
     }
     if (settled.type === "error") {
+      // Waiting cannot end this one, and a timeout result would hide what to do.
+      for (let err: unknown = settled.cause; err instanceof Error; err = err.cause) {
+        if (err instanceof XcodeFirstLaunchPendingError) throw err;
+      }
       lastError = settled.error;
     } else {
       lastData = settled.value;

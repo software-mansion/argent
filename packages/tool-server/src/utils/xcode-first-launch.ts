@@ -57,6 +57,10 @@ export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string 
       ? "Tools that do not need `simctl`, such as taps and screenshots, still work on a " +
         "simulator that is already booted. "
       : "") +
+    (wrappers.includes("devicectl")
+      ? "Tools that only talk to the runner on the iPhone, such as taps, screenshots and " +
+        "`keyboard`, still work while the runner is up. "
+      : "") +
     `Do not run ${wrappers.map((w) => `\`xcrun ${w}\``).join(" or ")} yourself` +
     (wrappers.includes("simctl")
       ? ", or commands that call `simctl`, such as `npx react-native run-ios` or " +

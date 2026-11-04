@@ -303,6 +303,7 @@ describe("list-devices", () => {
           "`npx react-native run-ios` or `npx expo run:ios`"
       );
       expect(result.hint).not.toContain("physical iPhones");
+      expect(result.hint).not.toContain("the runner");
     } finally {
       xcodePending.simctl = false;
     }
@@ -324,6 +325,10 @@ describe("list-devices", () => {
       expect(result.hint).toMatch(/Ask the user to open (that )?Xcode once/);
       expect(result.hint).toContain("does not show physical iPhones");
       expect(result.hint).toContain("Do not run `xcrun devicectl` yourself: each call waits");
+      expect(result.hint).toContain(
+        "Tools that only talk to the runner on the iPhone, such as taps, screenshots and " +
+          "`keyboard`, still work while the runner is up."
+      );
       expect(result.hint).not.toContain("simulator");
       expect(result.hint).not.toContain("run-ios");
     } finally {
