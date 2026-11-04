@@ -12,6 +12,7 @@ import {
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
+import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -138,9 +139,12 @@ Fails if the simulator server is not running for the given UDID.`,
     // recording) an out-of-band reboot that wiped DYLD_INSERT_LIBRARIES — which
     // is why envSetup / nextLaunchWillBeInjected are read after it rather than
     // off a latch stamped before.
-    const measured = await api
-      .appConnectionState(params.bundleId)
-      .catch(() => "indeterminate" as const);
+    const measured = await api.appConnectionState(params.bundleId).catch((err: unknown) => {
+      // The refusal is not an unmeasured app, and the failure fallback below would
+      // read it as a dead simulator and prescribe a reboot.
+      if (err instanceof XcodeFirstLaunchPendingError) throw err;
+      return "indeterminate" as const;
+    });
     const connected = measured === "connected";
 
     // Running-ness comes out of the same measurement rather than a second

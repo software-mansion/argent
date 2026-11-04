@@ -327,6 +327,53 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     }
   });
 
+  // `native-devtools-status` measures the app itself, and its fallback prefers a recorded failure.
+  it("native-devtools-status answers the refusal rather than a failure recorded earlier", async () => {
+    answerWithEmptyOutput();
+    const app = nativeApp();
+    const ref = nativeDevtoolsRef(SIM);
+    const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+    expect(api.isEnvSetup()).toBe(true);
+
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (err: Error | null) => void;
+      cb(new Error("Invalid device"));
+    });
+    await expect(api.reverifyEnv()).rejects.toThrow("Invalid device");
+    expect(api.getInitFailure()).not.toBeNull();
+
+    pending.simctl = true;
+    const res = await request(app)
+      .post("/tools/native-devtools-status")
+      .send({ udid: SIM.id, bundleId: BUNDLE_ID });
+
+    expect(res.status).toBe(424);
+    expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+  });
+
+  it("native-devtools-status keeps answering for an app that is connected", async () => {
+    const device: DeviceInfo = { ...SIM, id: "FA1E1722-0000-4000-8000-000000000003" };
+    answerWithEmptyOutput();
+    const app = nativeApp();
+    const ref = nativeDevtoolsRef(device);
+    const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+    const agent = net.createConnection(api.socketPath, () => {
+      agent.write(JSON.stringify({ type: "Control", payload: { bundleId: BUNDLE_ID } }) + "\n");
+    });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE_ID)).toBe(true));
+
+    pending.simctl = true;
+    execFileMock.mockClear();
+    const res = await request(app)
+      .post("/tools/native-devtools-status")
+      .send({ udid: device.id, bundleId: BUNDLE_ID });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.connected).toBe(true);
+    expect(xcrunCalls()).toEqual([]);
+    agent.destroy();
+  });
+
   // The app answers these over its own socket, so a refusal here would take away
   // reads that do not need simctl.
   it.each(PRECHECKED_READS)("%s keeps serving an app that is connected", async (id, extra) => {
