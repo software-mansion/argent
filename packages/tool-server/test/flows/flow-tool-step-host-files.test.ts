@@ -125,7 +125,7 @@ describe("a tool: step with e2e_test_path, without a link", () => {
     );
   });
 
-  it("hands a e2e_test_path with any extension to the tool's own checks", async () => {
+  it("hands an e2e_test_path with any extension to the tool's own checks", async () => {
     const yml = path.join(flowsDir, "elsewhere", "frag.yml");
     await fs.copyFile(path.join(flowsDir, "elsewhere", "frag.yaml"), yml);
     const result = await runOuter(
