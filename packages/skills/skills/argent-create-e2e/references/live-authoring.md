@@ -43,7 +43,7 @@ Obey these lifecycle rules:
 3. Give concurrent recordings separate devices. Their files are isolated, but their live device actions are not.
 4. Treat `e2e-start-recording` as destructive. It always truncates the named YAML, including a finished or committed test. `restarted` reports only a displaced live take.
 5. If a call says the recording is inactive, do not restart under that name. The completed take can still be on disk. Copy it aside or record under a fresh name.
-6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. A failed `e2e-add-script` call appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `e2e-start-recording` and `e2e-finish-recording` return the whole YAML as `flowFile`. A step call returns `recorded` (one summary line for the step it appended) plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `e2e-finish-recording` returns `flowFile` regardless.
+6. Inspect `toolResult`, `message`, and `recorded` after each call. A call that errors records nothing, but a call that returns normally while reporting an unmet condition **does** append the step, and `message` says the step was added either way. A failed `e2e-add-script` call appends nothing. `await-ui-element` is the case that turns up in practice (see [Live waits and checks](#live-waits-and-checks)). Only `e2e-start-recording` and `e2e-finish-recording` return the whole YAML as `e2eTestFile`. A step call returns `recorded` (one summary line for the step it appended) plus a running `stepCount`. Read `recorded`: the recorder does not always store the tool call you made, and that line is where a rewrite shows up. To see the whole file mid-recording, read it at `savedTo`. A `savedTo` that comes back `null` means the write failed on your side. The step is still in the recording, so continue: the next step rewrites the whole file, and `e2e-finish-recording` returns `e2eTestFile` regardless.
 7. Edit or reorder the YAML only after `e2e-finish-recording`. A recording over a link, also to 127.0.0.1, overwrites edits made during the recording.
 
 ## Start in the correct order
@@ -268,7 +268,7 @@ Resolve every hit and confirm:
 
 Run `e2e-execute` on the complete YAML with the absolute project root. For a fragment, verify its prerequisite before setting `prerequisiteAcknowledged: true`.
 
-`e2e-execute` takes exactly one test source: `name`, for a test saved under `.argent/e2e/` (or the legacy `.argent/flows/`), or `flow_path`, an absolute path to any test `.yaml`.
+`e2e-execute` takes exactly one test source: `name`, for a test saved under `.argent/e2e/` (or the legacy `.argent/flows/`), or `e2e_test_path`, an absolute path to any test `.yaml`.
 
 Over `argent link` or `ARGENT_TOOLS_URL`, the client sends the test file, its `run:` fragments, the tests that its `tool: e2e-execute` steps name, the snapshot baselines of each run and the file arguments of its `tool:` steps with the call. These steps work over a link:
 
@@ -283,7 +283,7 @@ These steps do not work over a link, in the test or in a fragment or test that i
 - a `tool:` step that takes a directory, an app or an output directory, such as `reinstall-app`, `gather-workspace-data`, or `screenshot-diff` with `outputDir`
 - a `tool:` step with a relative file path, or a file other than `.png` or `.yaml`
 - a `tool:` step whose tool builds the file path from several arguments, such as `e2e-read-prerequisite` with `name`
-- a `tool: e2e-execute` step with `flow_path`, or with `name` and a relative `project_root` or one with a `..` segment
+- a `tool: e2e-execute` step with `e2e_test_path`, or with `name` and a relative `project_root` or one with a `..` segment
 - a `tool:` step that records an e2e test
 
 The tool-server checks the test, its fragments and the tests that it runs before the first step. The error lists each step that does not work over a link, and each `run:` or `tool: e2e-execute` step whose test the client could not send, with the reason. A fragment or a test that does not exist fails its step when the step runs. Run a test that needs these steps with no link and no `ARGENT_TOOLS_URL`, on the computer that runs the tool-server.

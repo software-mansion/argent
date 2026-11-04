@@ -2,6 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  canonicalToolArgs,
   canonicalToolId,
   e2eFileCandidates,
   e2eRunFallbackDirs,
@@ -791,7 +792,7 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     rewriteCondition:
       "when the target resolves as a sibling e2e test in this recording's folder, on the computer " +
       "that has the project; a `name` that does not is kept as a raw `tool: e2e-execute` step, " +
-      "and a `flow_path` that is not a sibling is refused outright and records nothing",
+      "and an `e2e_test_path` that is not a sibling is refused outright and records nothing",
   },
   type: { tool: "keyboard", rewritten: false },
   await: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
@@ -924,16 +925,16 @@ export function directiveCommandHint(command: string): string | undefined {
 const RUN_TARGET_COMMAND = "e2e-execute";
 
 /**
- * Rewrite a nested `flow-execute` target from `flow_path` to the equivalent
+ * Rewrite a nested `flow-execute` target from `e2e_test_path` to the equivalent
  * `name`, in place — or reject the call before anything runs.
  *
  * `flow-add-step` forwards the nested call's arguments as opaque JSON, so a
- * `flow_path` inside them never crosses flow-execute's file-input boundary and
+ * `e2e_test_path` inside them never crosses flow-execute's file-input boundary and
  * `resolveFlowSource` would reject it outright. A sibling of the recording, or
  * a test in the project's other e2e test directory, is the one target with a
  * boundary-verified equivalent: the same file the `name` + `project_root` pair
  * already resolves to, beside a directory flow-start-recording established
- * through its own boundary. Every other flow_path is refused here —
+ * through its own boundary. Every other e2e_test_path is refused here —
  * a raw `tool:` step has no boundary to resolve a path through at replay either.
  * The on-disk spelling is the answer of `project`, on the client over a link;
  * a linked call whose client sent no files has no answer to give, and is
@@ -945,13 +946,13 @@ async function rewriteSiblingFlowPath(
   project: ProjectAccess,
   linked: boolean
 ): Promise<void> {
-  const flowPath = args.flow_path;
+  const flowPath = args.e2e_test_path;
   // A call naming both sources — or neither — is flow-execute's schema to judge.
   if (typeof flowPath !== "string" || args.name !== undefined) return;
 
   const invalid = (detail: string): FailureError =>
     new FailureError(
-      `Cannot record an e2e-execute of flow_path "${flowPath}": ${detail}. flow_path carries no ` +
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. e2e_test_path carries no ` +
         `file-input resolution through e2e-add-step's opaque args — pass name + project_root ` +
         `for an e2e test saved beside the recording, or add a \`run: <relative path>.yaml\` step to ` +
         `the e2e test YAML by hand for a cross-directory target.`,
@@ -1048,7 +1049,7 @@ async function rewriteSiblingFlowPath(
   // link without the files of its step, and it sends no nested flow either.
   if (linked && project.mode === "host") {
     throw new FailureError(
-      `Cannot record an e2e-execute of flow_path "${flowPath}": the argent client sent no ` +
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": the argent client sent no ` +
         `files with this call, so the recorder cannot check that the file is a sibling of the ` +
         `recording. Update the argent CLI or MCP adapter on the client.`,
       {
@@ -1064,10 +1065,10 @@ async function rewriteSiblingFlowPath(
     ({ spelling } = await project.resolveFlowFile(flowDir, suppliedBase));
   } catch (err) {
     if (path.resolve(flowDir) === path.resolve(flowsDir)) throw err;
-    // An argent client older than this tool-server sends a flow_path for this
+    // An argent client older than this tool-server sends an e2e_test_path for this
     // check only beside the recording.
     throw invalid(
-      `over a link, this argent client sends a flow_path only for an e2e test beside the ` +
+      `over a link, this argent client sends an e2e_test_path only for an e2e test beside the ` +
         `recording; update the argent CLI or MCP adapter on the client ` +
         `(${err instanceof Error ? err.message : String(err)})`
     );
@@ -1075,12 +1076,12 @@ async function rewriteSiblingFlowPath(
   if (spelling.state !== "listed") {
     // Hint the real spelling only when this same ladder would accept it (a
     // stem-case slip like Sibling.yaml); an invalid real name (sibling.YAML)
-    // needs a rename, not a flow_path the extension arm will refuse.
+    // needs a rename, not an e2e_test_path the extension arm will refuse.
     const recovery =
       spelling.state === "absent"
         ? `pass the basename exactly as it appears on disk`
         : spelling.addressable
-          ? `pass flow_path with the on-disk basename "${spelling.actual}"`
+          ? `pass e2e_test_path with the on-disk basename "${spelling.actual}"`
           : `rename "${spelling.actual}" to "${suppliedBase}" to record it — e2e test files must be lowercase .yaml`;
     throw invalid(
       `the file must be named as it appears on disk — no directory entry is named ` +
@@ -1100,7 +1101,7 @@ async function rewriteSiblingFlowPath(
     }
   }
 
-  delete args.flow_path;
+  delete args.e2e_test_path;
   args.name = stem;
 }
 
@@ -1124,11 +1125,11 @@ async function rewriteSiblingFlowPath(
  * only when the target can't be resolved as a sibling, or the sibling is not
  * the file the live sub-invoke executed. `project` resolves the recording,
  * its sibling and the executed file where the project is: on this host, or
- * on the client over a link. A `flow_path` target reaches here as its sibling
+ * on the client over a link. An `e2e_test_path` target reaches here as its sibling
  * `name` or not at all — see {@link rewriteSiblingFlowPath}.
  *
  * "Resolved as a sibling" is the same two-part identity {@link
- * rewriteSiblingFlowPath} demands of a flow_path, asked of the name route: the
+ * rewriteSiblingFlowPath} demands of an e2e_test_path, asked of the name route: the
  * call's own `project_root` must resolve `name` to the very file `run:` will
  * resolve beside the recording's real file — compared canonically, since those
  * two anchors reach it by different spellings — and that directory must list
@@ -1284,7 +1285,7 @@ function replayRefusal(
         ? " Over a link, a nested e2e-execute runs only when the argent client sends the e2e test " +
           "it names with the call. Update the argent CLI or MCP adapter on the client."
         : " Over a link, a nested e2e-execute runs only when it names its e2e test with a test " +
-          "name in name, has an absolute project_root with no .. segment, and has no flow_path.";
+          "name in name, has an absolute project_root with no .. segment, and has no e2e_test_path.";
   } else if (issue.fixes.length === 0) {
     hint =
       " A replay without a link runs this step. To keep it, add it to the YAML by hand after " +
@@ -1390,6 +1391,11 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // miss can be re-rendered against the keys the author wrote. Shallow is
       // enough: `rewriteSiblingFlowPath` only deletes and adds top-level keys.
       const authoredArgs = { ...args };
+      try {
+        args = canonicalToolArgs(command, args);
+      } catch {
+        // Both names of one param: the step's own tool refuses the call.
+      }
 
       // Over a link the project is on the client, and the recorder records only
       // what a replay over the same link runs. One predicate decides "over a
@@ -1401,7 +1407,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         ? new ClientProjectAccess(stepFiles)
         : new HostProjectAccess();
 
-      // A nested flow-execute must never carry a raw flow_path into the live
+      // A nested flow-execute must never carry a raw e2e_test_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
       if (command === RUN_TARGET_COMMAND) {
         await rewriteSiblingFlowPath(session, args, project, linked);
