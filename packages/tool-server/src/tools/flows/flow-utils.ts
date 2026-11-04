@@ -1076,6 +1076,7 @@ type YamlStep =
 type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
 type YamlFlowFile = {
+  version?: number;
   executionPrerequisite?: string;
   steps: YamlStep[];
 };
@@ -3741,9 +3742,15 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   return badEntry(raw, "unrecognized step kind");
 }
 
+/**
+ * The e2e file format version this build writes and the newest it reads. A file
+ * without `version` is version 1.
+ */
+export const FLOW_FILE_VERSION = 1;
+
 /** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
-  const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
+  const doc: YamlFlowFile = { version: FLOW_FILE_VERSION, steps: flow.steps.map(toYamlStep) };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
@@ -3810,14 +3817,38 @@ export function parseFlow(content: string): FlowFile {
     });
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys, so
-  // a misspelled `executionPrerequisite` must not silently become "".
-  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  // Same strictness as step bodies: a misspelled `executionPrerequisite` must
+  // not silently become "".
+  const topKeys: readonly string[] = ["version", "executionPrerequisite", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
       `Invalid e2e test file: ${describeUnknownKeys(unknownTop, topKeys)} — ` +
         `allowed top-level keys: ${topKeys.join(", ")}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+
+  const version: unknown = parsed.version ?? 1;
+  if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
+    throw new FailureError(
+      `Invalid e2e test file: version must be a positive integer, got ${JSON.stringify(version)}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  if (version > FLOW_FILE_VERSION) {
+    throw new FailureError(
+      `Invalid e2e test file: it is version ${version}, but this Argent reads up to version ${FLOW_FILE_VERSION}. Update Argent to run it.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_file_parse",

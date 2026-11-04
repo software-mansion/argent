@@ -50,12 +50,15 @@ steps:
   - await: { idle: true }
 ```
 
-The file has two top-level keys:
+The file has three top-level keys:
 
-| Key                     | Required | Description                                                             |
-| ----------------------- | -------- | ----------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                       |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it |
+| Key                     | Required | Description                                                                                        |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                  |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                            |
+| `version`               | no       | The file format version. The value is `1`. Argent writes it. A file without `version` is version 1 |
+
+Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
 
 An e2e test has one of two shapes:
 

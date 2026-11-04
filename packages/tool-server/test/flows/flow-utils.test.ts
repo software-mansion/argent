@@ -31,6 +31,10 @@ import {
 // ── serializeFlow ────────────────────────────────────────────────────
 
 describe("serializeFlow", () => {
+  it("writes the format version as the first key", async () => {
+    expect(serializeFlow({ executionPrerequisite: "", steps: [] })).toBe("version: 1\nsteps: []\n");
+  });
+
   it("serializes an empty flow with prerequisite", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "App on home screen",
@@ -953,6 +957,30 @@ describe("parseFlow", () => {
     it("suggests the directive key for a misspelled step kind", async () => {
       expect(() => parseFlow("steps:\n  - snapshoot: home\n")).toThrow(
         /unrecognized step kind \(did you mean `snapshot`\?\)/
+      );
+    });
+
+    it("reads a file without version, and one with version 1, the same", async () => {
+      const body = "steps:\n  - echo: hi\n";
+      expect(parseFlow(`version: 1\n${body}`)).toEqual(parseFlow(body));
+    });
+
+    it("refuses a file from a newer format version and says to update", async () => {
+      let err: unknown;
+      try {
+        parseFlow("version: 2\nsteps:\n  - echo: hi\n");
+      } catch (e) {
+        err = e;
+      }
+      expect((err as Error).message).toBe(
+        "Invalid e2e test file: it is version 2, but this Argent reads up to version 1. Update Argent to run it."
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+    });
+
+    it.each([["0"], ["1.5"], ['"1"']])("rejects version: %s", async (v) => {
+      expect(() => parseFlow(`version: ${v}\nsteps: []\n`)).toThrow(
+        /version must be a positive integer/
       );
     });
 
