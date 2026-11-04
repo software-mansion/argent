@@ -347,7 +347,6 @@ A prepared answer that the next panel of its kind cannot take does not answer it
 
 A save panel with file formats (`allowedContentTypes` in the result of `list`) refuses a path when the extension matches none of the formats, also when the panel has only one format. It takes the path in these conditions:
 
-- macOS has no registered type for the extension.
 - A format is `public.data` or `public.item`: the panel saves any file, also a file with no extension.
 - The app lets the user save with other extensions (`allowsOtherFileTypes`): the panel also takes a file with no extension.
 
