@@ -307,22 +307,22 @@ const bootingPorts = new Set<number>();
  * would report a device that is really the other process.
  */
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
+  const label = options.label ?? "Electron";
   const port = options.port;
-  if (port === undefined) return bootOnce(options);
+  if (port === undefined) return bootOnce(options, label);
   if (bootingPorts.has(port)) {
     options.onProcessGone?.();
-    throw portInUseError(port, options.label ?? "Electron");
+    throw portInUseError(port, label);
   }
   bootingPorts.add(port);
   try {
-    return await bootOnce(options);
+    return await bootOnce(options, label);
   } finally {
     bootingPorts.delete(port);
   }
 }
 
-async function bootOnce(options: BootElectronOptions): Promise<ElectronBootResult> {
-  const label = options.label ?? "Electron";
+async function bootOnce(options: BootElectronOptions, label: string): Promise<ElectronBootResult> {
   let port: number;
   let launcher: { command: string; args: string[] };
   try {

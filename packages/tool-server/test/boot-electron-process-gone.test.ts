@@ -113,6 +113,12 @@ describe("bootElectronApp onProcessGone / label", () => {
     }).catch((e: unknown) => e);
     expect(gone).toHaveBeenCalledTimes(1);
     expect((err as Error).message).toMatch(/^Browser boot: failed to spawn/);
+
+    const unlabelled = await bootElectronApp({
+      appPath: appBinary,
+      port: UNREACHABLE_CDP_PORT,
+    }).catch((e: unknown) => e);
+    expect((unlabelled as Error).message).toMatch(/^Electron boot: failed to spawn/);
   });
 
   it("fires when boot fails before spawning", async () => {
@@ -175,6 +181,7 @@ describe("bootElectronApp onProcessGone / label", () => {
     }).catch((e: unknown) => e);
 
     expect(getFailureSignal(second)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
+    expect((second as Error).message).toMatch(/^Browser boot: port 1 is already in use/);
     expect(gone).toHaveBeenCalledTimes(1);
     await first;
     expect(spawnMock).toHaveBeenCalledTimes(1);
