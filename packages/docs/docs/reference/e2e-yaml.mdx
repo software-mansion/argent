@@ -264,7 +264,7 @@ Argent reads text from these elements also when they are empty, so `'^$'` never 
 
 An element that matches more than one row can read a different text, for example the content description and then the hint.
 
-`matches` never reads an iOS text field as empty, on a simulator or on a physical iPhone. So `'^$'` never passes on an iOS text field. On a simulator, Argent cannot read the typed text of an iOS text field. A filled field reads only its accessibility label, or no text when it has no label. So a pattern that can match an empty string, such as `'^(?!.*@)'`, never passes on a filled field without a label there. A container with its own `id` around a filled field can read as empty there. On a simulator, Argent identifies every `UITextView` as a text field, also one that only displays text, and in an app on the old React Native architecture, every `<Text>`.
+`matches` never reads an iOS text field as empty, on a simulator or on a physical iPhone. So `'^$'` never passes on an iOS text field. On a simulator, Argent cannot read the typed text of an iOS text field. A filled field reads only its accessibility label, or no text when it has no label. So a pattern that can match an empty string, such as `'^(?!.*@)'`, never passes on a filled field without a label there. A container with its own `id` around a filled field can read as empty there. On a simulator, Argent identifies every `UITextView` as a text field, also one that only displays text, and in an app on the old React Native architecture, every `<Text>`. On the new architecture, each `<Text>` holds an empty text field with the same frame, which a selector with `any: true` can pick instead of the `<Text>`.
 
 When an element holds text, Argent reads it like this:
 
