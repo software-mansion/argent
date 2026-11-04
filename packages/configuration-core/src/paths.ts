@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolveProjectRoot, type FlagScope } from "./flags.js";
@@ -27,6 +28,27 @@ export function resolveHomeDir(options: ConfigPathOptions = {}): string {
   return process.platform === "win32"
     ? (nonEmpty(process.env.USERPROFILE) ?? os.homedir())
     : (nonEmpty(process.env.HOME) ?? os.homedir());
+}
+
+/**
+ * Whether `dir` is the home directory, by canonical path: project roots walked up
+ * from `process.cwd()` are physical, while HOME may run through a symlink or
+ * differ from the on-disk case.
+ */
+export function isHomeDir(dir: string, options: ConfigPathOptions = {}): boolean {
+  return canonicalPath(dir) === canonicalPath(resolveHomeDir(options));
+}
+
+/**
+ * `p` with symlinks resolved and, on case-insensitive filesystems, in its on-disk
+ * case; `path.resolve(p)` when it doesn't exist.
+ */
+export function canonicalPath(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
 }
 
 export function argentHomeDir(): string {
