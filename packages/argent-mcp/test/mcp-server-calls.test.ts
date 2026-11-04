@@ -12,7 +12,8 @@ import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capt
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
-// the listing, a tool call that must upload, an error answer and the note.
+// the listing, a tool call that must upload, an error answer, the note and
+// the auto-describe block.
 //
 // HOME is redirected before the import: the tools client builds its state and
 // link paths from homedir() at module load, and the local cases write their
@@ -441,6 +442,7 @@ describe("startMcpServer screen capture after an interaction", () => {
   // A hanging route never answers, as a read of a frozen device's tree.
   let idleHangs: boolean;
   let describeHangs: boolean;
+  let describeData: Record<string, unknown>;
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -463,9 +465,8 @@ describe("startMcpServer screen capture after an interaction", () => {
     waitResult = { success: true, elapsed: 120 };
     idleHangs = false;
     describeHangs = false;
-    const describeRoute = slow("describe", (res) =>
-      send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
-    );
+    describeData = { description: "button Done (0.1,0.2,0.3,0.1)" };
+    const describeRoute = slow("describe", (res) => send(res, 200, { data: describeData }));
     stub = await startStub({
       routes: {
         "/tools/gesture-tap": (res) => send(res, 200, { data: { tapped: true } }),
@@ -530,6 +531,18 @@ describe("startMcpServer screen capture after an interaction", () => {
     ]);
     expect(content[0]!.text).toContain('"tapped": true');
     expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  it("appends describe's hint to the element tree after an action", async () => {
+    describeData = { description: "ROOT  AXGroup", hint: "call restart-app" };
+
+    const result = await tap();
+
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)).toEqual({
+      type: "text",
+      text: "--- Elements after action (describe) ---\nROOT  AXGroup\n\ncall restart-app",
+    });
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {

@@ -35,7 +35,7 @@ import {
   getAutoScreenshotDelayMs,
   autoDescribeEnabled,
   shouldAutoDescribe,
-  AUTO_DESCRIBE_HEADER,
+  renderAutoDescribe,
   CAPTURE_TIMEOUT_MS,
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
@@ -216,16 +216,15 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const t1 = Date.now();
     try {
       const d = await callTool("describe", { udid }, { signal });
-      const desc = (d.result as { description?: unknown } | null)?.description;
+      const block = renderAutoDescribe(d.result);
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
         name: toolName,
         durationMs: Date.now() - t1,
-        chars: typeof desc === "string" ? desc.length : 0,
+        chars: block?.length ?? 0,
       });
-      if (typeof desc !== "string" || desc.length === 0) return [];
-      return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` }];
+      return block ? [{ type: "text" as const, text: block }] : [];
     } catch (e) {
       await spyLog({
         ts: new Date().toISOString(),
