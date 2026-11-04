@@ -379,9 +379,13 @@ export function unresolvedPanelNote(
 ): string {
   return (
     `The panel this foldable simulator renders to could not be resolved (${reason}), so ${what} ` +
-    `${screenLabel(MAIN_SCREEN_ID, panels)}. Check that the simulator is booted and responsive: ` +
-    `\`describe\` starts the accessibility service, and \`xcrun devicectl device info displays ` +
-    `--device ${externalNativeId(udid)}\` shows what CoreDevice answers.`
+    `${screenLabel(MAIN_SCREEN_ID, panels)}. ` +
+    // Both commands below are refused or would wait for a password while the install is pending.
+    (xcodeFirstLaunchPending("simctl") || xcodeFirstLaunchPending("devicectl")
+      ? "Call list-devices for what to do."
+      : `Check that the simulator is booted and responsive: ` +
+        `\`describe\` starts the accessibility service, and \`xcrun devicectl device info displays ` +
+        `--device ${externalNativeId(udid)}\` shows what CoreDevice answers.`)
   );
 }
 

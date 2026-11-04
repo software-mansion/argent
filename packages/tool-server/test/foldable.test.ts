@@ -45,14 +45,14 @@ vi.mock("node:fs", async () => {
   };
 });
 
-const xcodePending = vi.hoisted(() => ({ devicectl: false }));
+const xcodePending = vi.hoisted(() => ({ simctl: false, devicectl: false }));
 vi.mock("../src/utils/xcode-first-launch", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
     "../src/utils/xcode-first-launch"
   );
   return {
     ...actual,
-    xcodeFirstLaunchPending: (w: string) => w === "devicectl" && xcodePending.devicectl,
+    xcodeFirstLaunchPending: (w: string) => xcodePending[w as "simctl" | "devicectl"],
   };
 });
 
@@ -403,6 +403,22 @@ describe("resolveLivePanel", () => {
     expect(note).toContain("this touch went to screen 1 (cover panel, 1398x2034)");
     expect(note).toContain(`xcrun devicectl device info displays --device ${DUO}`);
   });
+
+  it.each(["simctl", "devicectl"] as const)(
+    "sends the agent to list-devices instead of a command while %s is pending",
+    (wrapper) => {
+      xcodePending[wrapper] = true;
+      try {
+        const note = unresolvedPanelNote(DUO, "CoreDevice failed", "this touch went to", PANELS);
+        expect(note).toContain("could not be resolved (CoreDevice failed)");
+        expect(note).toMatch(/\. Call list-devices for what to do\.$/);
+        expect(note).not.toContain("devicectl");
+        expect(note).not.toContain("describe");
+      } finally {
+        xcodePending[wrapper] = false;
+      }
+    }
+  );
 
   it("remembers nothing: every call asks again", async () => {
     livePanelMock.mockResolvedValueOnce(1).mockResolvedValueOnce(3);
