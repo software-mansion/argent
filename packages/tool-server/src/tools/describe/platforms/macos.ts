@@ -409,8 +409,9 @@ function webNode(item: WireWebItem): MacosNode {
   const control = item.tag === "input" || item.tag === "textarea" || item.tag === "select";
   const field = control || ARIA_TEXT_ROLES.has(item.role);
   const password = control && item.type === "password";
-  // The `value` attribute of these says nothing about their state; `checked` does.
-  const noValue = password || item.type === "checkbox" || item.type === "radio";
+  // The default `value` of a checkbox or a radio, whatever its state; `checked` tells that.
+  const noValue =
+    password || ((item.type === "checkbox" || item.type === "radio") && item.value === "on");
   const node = newNode(
     {
       role,

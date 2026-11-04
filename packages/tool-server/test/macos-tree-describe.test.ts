@@ -128,7 +128,7 @@ describe("macOS describe adapter: projection of the probe app", () => {
     expect(byId(webView, "web-input")).toMatchObject({ role: "AXTextField", label: "Type here" });
     expect(byId(webView, "web-input")!.value).toBeUndefined();
     expect(byId(webView, "web-check")).toMatchObject({ role: "AXCheckBox", checked: true });
-    // Its `value` attribute says nothing about its state.
+    // The default `value` says nothing about its state.
     expect(byId(webView, "web-check")!.value).toBeUndefined();
     expect(byId(webView, "web-link")).toMatchObject({ role: "AXLink", label: "Docs" });
     expect(byText(webView, "Close banner")).toMatchObject({ role: "AXButton", clickable: true });

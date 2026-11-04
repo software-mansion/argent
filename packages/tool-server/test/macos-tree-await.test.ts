@@ -144,6 +144,23 @@ describe("await-ui-element on a Mac app", () => {
     expect(await check("empty", "Notes")).toBe(false);
   });
 
+  it("selects a web radio by the value its page set", async () => {
+    const web = webTree([
+      {
+        tag: "input",
+        type: "radio",
+        testid: "plan",
+        value: "Monthly",
+        normalizedFrame: rect(0.1, 0.6, 0.02, 0.02),
+      },
+    ]);
+    const { result } = await awaitElement(
+      { web },
+      { selector: { text: "Monthly" }, condition: "visible", timeoutMs: 100 }
+    );
+    expect(result.success).toBe(true);
+  });
+
   // <div data-testid="status"><span>Upload done</span></div> and
   // <button data-testid="save"><span>Save</span></button>
   const web = webTree([
