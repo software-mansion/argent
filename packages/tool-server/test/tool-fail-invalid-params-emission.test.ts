@@ -5,8 +5,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
  * callback wired in src/index.ts picks meta fields EXPLICITLY (it does not
  * spread), so a new meta field silently vanishes unless it is forwarded. This
  * asserts the `tool:fail` event actually EMITTED via track() carries
- * invalid_params — not just that the HTTP layer put it on the meta object
- * (test/http-dep-gate.test.ts covers that half).
+ * invalid_params and invalid_param_issues — not just that the HTTP layer put
+ * them on the meta object (test/http-dep-gate.test.ts covers that half).
  */
 
 const telemetryMock = vi.hoisted(() => ({
@@ -80,7 +80,7 @@ const ZOD_SIGNAL = {
   error_kind: "validation",
 } as const;
 
-describe("tool:fail emission carries invalid_params", () => {
+describe("tool:fail emission carries invalid_params and invalid_param_issues", () => {
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {

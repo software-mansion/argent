@@ -148,6 +148,32 @@ describe("http dependency gate", () => {
     expect(JSON.stringify(recordFailure.mock.calls)).not.toContain("secret_user_key");
   });
 
+  it("records every issue code a multi-code rejection raises", async () => {
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "union-thing",
+      zodSchema: z.object({ button: z.union([z.enum(["up"]), z.array(z.enum(["up"]))]) }),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app).post("/tools/union-thing").send({ button: 7 });
+    expect(res.status).toBe(400);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "union-thing",
+      {
+        invalid_params: ["button"],
+        invalid_param_issues: ["invalid_type", "invalid_union", "invalid_value"],
+      },
+      expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
+      expect.any(Number)
+    );
+  });
+
   it("invokes the tool normally when declared deps are present", async () => {
     stubProbe([]);
     const registry = new Registry();
