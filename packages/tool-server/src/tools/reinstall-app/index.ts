@@ -42,7 +42,7 @@ const capability: ToolCapability = {
 
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
-  // 210s worst case on Android, past the 30s MCP fetch timeout.
+  // 225s worst case on Android, past the 30s MCP fetch timeout.
   longRunning: true,
   interaction: {
     startedMsg: ({ params }) => `Reinstalling ${params.bundleId}`,
@@ -52,7 +52,7 @@ export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   },
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails before uninstalling anything if the app path does not exist, is not the platform's package (.app for iOS, .apk for Android, .vpkg for Vega<flag:harmonyos>, .hap for HarmonyOS</flag:harmonyos>), or bundleId does not match it.`,
+Returns { reinstalled, bundleId }. Fails before uninstalling anything if the app path does not exist, is not the platform's package (.app for iOS, .apk for Android, .vpkg for Vega<flag:harmonyos>, .hap for HarmonyOS</flag:harmonyos>), or bundleId does not match it. On Android it also fails, without installing, when bundleId is still on the device after the uninstall.`,
   zodSchema,
   capability,
   fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
