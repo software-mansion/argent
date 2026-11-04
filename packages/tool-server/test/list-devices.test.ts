@@ -296,7 +296,9 @@ describe("list-devices", () => {
       expect(result.hint).toMatch(/Ask the user to open (that )?Xcode once/);
       expect(result.hint).toMatch(/sudo \S*xcodebuild -runFirstLaunch/);
       expect(result.hint).toContain("does not show local iOS simulators");
-      expect(result.hint).toContain("such as taps and screenshots, still work");
+      expect(result.hint).toContain(
+        "such as taps and screenshots, still work on an iPhone or iPad simulator"
+      );
       // The agent's own simctl, or a build that calls it, would wait for the password too.
       expect(result.hint).toContain(
         "Do not run `xcrun simctl` yourself, or commands that call `simctl`, such as " +

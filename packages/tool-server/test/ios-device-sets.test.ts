@@ -3,6 +3,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const execFileMock = vi.fn();
 const additionalSetsMock = vi.fn<() => string[]>(() => []);
 const existsSyncMock = vi.fn<(p: string) => boolean>(() => true);
+const pending = vi.hoisted(() => ({ simctl: false }));
+
+vi.mock("../src/utils/xcode-first-launch", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
+    "../src/utils/xcode-first-launch"
+  );
+  return {
+    ...actual,
+    xcodeFirstLaunchPending: (wrapper: "simctl" | "devicectl") =>
+      wrapper === "simctl" && pending.simctl,
+  };
+});
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -75,6 +87,7 @@ function mockTwoSets(): void {
 }
 
 beforeEach(() => {
+  pending.simctl = false;
   execFileMock.mockReset();
   additionalSetsMock.mockReset().mockReturnValue([]);
   existsSyncMock.mockReset().mockReturnValue(true);
@@ -154,6 +167,46 @@ describe("deviceSetForUdid — lazy probe with additional sets", () => {
     mockTwoSets();
     await deviceSetForUdid(RADON_UDID);
     expect(execFileMock.mock.calls.every((c) => !(c[1] as string[]).includes("--set"))).toBe(true);
+  });
+});
+
+describe("deviceSetForUdid - while Xcode's component install is pending", () => {
+  const deviceDirectory = (udid: string): string => `${RADON_SET}/${udid}`;
+
+  beforeEach(() => {
+    pending.simctl = true;
+    additionalSetsMock.mockReturnValue([RADON_SET]);
+  });
+
+  it("finds a device in an additional set from its directory, without simctl, and caches it", async () => {
+    existsSyncMock.mockImplementation((p) => p === RADON_SET || p === deviceDirectory(RADON_UDID));
+
+    expect(await deviceSetForUdid(RADON_UDID)).toBe(RADON_SET);
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(cachedDeviceSetForUdid(RADON_UDID)).toBe(RADON_SET);
+  });
+
+  it("resolves a device in no additional set to the default set without caching it", async () => {
+    existsSyncMock.mockImplementation((p) => p === RADON_SET);
+
+    expect(await deviceSetForUdid(RADON_UDID)).toBeNull();
+    expect(execFileMock).not.toHaveBeenCalled();
+
+    // The install is done, so a listing finds it.
+    pending.simctl = false;
+    mockTwoSets();
+    expect(await deviceSetForUdid(RADON_UDID)).toBe(RADON_SET);
+  });
+});
+
+describe("deviceSetForUdid - a simctl failure that is not the refusal", () => {
+  it("answers false even when the device directory exists", async () => {
+    additionalSetsMock.mockReturnValue([RADON_SET]);
+    existsSyncMock.mockReturnValue(true);
+    execFileMock.mockReturnValue(new Error("simctl exited 1"));
+
+    expect(await deviceSetForUdid(RADON_UDID)).toBeNull();
+    expect(cachedDeviceSetForUdid(RADON_UDID)).toBeNull();
   });
 });
 

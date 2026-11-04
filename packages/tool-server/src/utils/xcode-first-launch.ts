@@ -69,8 +69,8 @@ export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string 
     `\`list-devices\` does not show ${devices}, and argent refuses the tools that need ` +
     `${names.join(" or ")}. ` +
     (wrappers.includes("simctl")
-      ? "Tools that do not need `simctl`, such as taps and screenshots, still work on a " +
-        "simulator that is already booted. "
+      ? "Tools that do not need `simctl`, such as taps and screenshots, still work on an " +
+        "iPhone or iPad simulator that is already booted. "
       : "") +
     (wrappers.includes("devicectl")
       ? "Tools that only talk to the runner on the iPhone, such as taps, screenshots and " +

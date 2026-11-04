@@ -12,12 +12,13 @@
 // never pay for the feature.
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { getAdditionalIosDeviceSets } from "@argent/configuration-core";
 import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
-import { assertXcodeFirstLaunchDone } from "./dependency-errors";
+import { assertXcodeFirstLaunchDone, XcodeFirstLaunchPendingError } from "./dependency-errors";
 import {
   assertExternalCapabilitySync,
   externalClaimForAnyId,
@@ -72,7 +73,13 @@ async function setContainsUdid(deviceSet: DeviceSetPath, udid: string): Promise<
     return Object.values(data.devices ?? {}).some((devices) =>
       devices.some((d) => d.udid === udid)
     );
-  } catch {
+  } catch (err) {
+    // simctl is refused while Xcode's install is pending. A set keeps each device
+    // in a directory named by its UDID, so that answers for an additional set. The
+    // default set is left to the caller's fallback.
+    if (err instanceof XcodeFirstLaunchPendingError) {
+      return deviceSet !== null && fs.existsSync(path.join(deviceSet, udid));
+    }
     return false;
   }
 }
