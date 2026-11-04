@@ -24,7 +24,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   return { ...actual, isOnline: vi.fn(async () => true) };
 });
 
-import { runSkillsStep, skillsSummaryLine } from "../src/init-skills.js";
+import { readyHeadline, runSkillsStep, skillsSummaryLine } from "../src/init-skills.js";
 
 const originalPackage = process.env.npm_config_package;
 const originalHome = process.env.HOME;
@@ -250,5 +250,16 @@ describe("skills outcome in the init summary", () => {
 
   it("says instructions were printed for the manual method", () => {
     expect(skillsSummaryLine("skipped")).toMatch(/instructions printed$/);
+  });
+
+  it("does not call Argent ready when no skills were installed", () => {
+    for (const outcome of ["failure", "skipped"] as const) {
+      expect(readyHeadline(outcome)).toContain("not ready yet");
+      expect(readyHeadline(outcome)).not.toContain("Argent is ready!");
+    }
+  });
+
+  it("calls Argent ready when the skills are installed", () => {
+    expect(readyHeadline("success")).toContain("Argent is ready!");
   });
 });
