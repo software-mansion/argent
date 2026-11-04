@@ -3746,7 +3746,7 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
  * The e2e file format version this build writes and the newest it reads. A file
  * without `version` is version 1.
  */
-export const FLOW_FILE_VERSION = 1;
+const FLOW_FILE_VERSION = 1;
 
 /** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
 export function serializeFlow(flow: FlowFile): string {
