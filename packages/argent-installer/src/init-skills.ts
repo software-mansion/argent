@@ -27,6 +27,14 @@ export function skillsSummaryLine(outcome: SkillOutcome): string {
   return `${pc.green("Skills")} ${outcome === "skipped" ? "instructions printed" : "installed"}`;
 }
 
+// The headline of the closing `argent init` note. A skills step that installed
+// nothing must not read as ready, whether it failed or only printed instructions.
+export function readyHeadline(outcome: SkillOutcome): string {
+  return outcome === "success"
+    ? pc.green("Argent is ready!")
+    : pc.yellow("Skills were not installed, so Argent is not ready yet.");
+}
+
 // Step 2. Emits the skill_install telemetry event itself (it owns all the
 // inputs). Throws InitCancelled("skills") on a cancelled method prompt.
 export async function runSkillsStep(args: {
