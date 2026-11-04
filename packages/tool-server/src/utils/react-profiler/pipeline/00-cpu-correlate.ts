@@ -183,6 +183,7 @@ export function queryCpuWindow(
 
     entries.push({
       name,
+      nodeId,
       selfMs: Math.round(ms * 100) / 100,
       totalMs: Math.round((totalMsByNode.get(nodeId) ?? ms) * 100) / 100,
       url: node.callFrame.url || undefined,
@@ -202,7 +203,7 @@ export function queryCpuWindow(
   };
 }
 
-function buildChildToParent(nodeMap: Map<number, HermesProfileNode>): Map<number, number> {
+export function buildChildToParent(nodeMap: Map<number, HermesProfileNode>): Map<number, number> {
   const childToParent = new Map<number, number>();
   for (const node of nodeMap.values()) {
     for (const childId of node.children ?? []) childToParent.set(childId, node.id);
