@@ -147,8 +147,9 @@ export async function resolveFlowDevice(
 ): Promise<DeviceInfo> {
   if (opts.device) return resolveDevice(opts.device);
 
-  const { devices } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
+  const { devices, hint } = (await invokeSubTool(registry, ctx, "list-devices", {})) as {
     devices: RawDevice[];
+    hint?: string;
   };
   const booted = devices.filter(isBooted);
   const scoped = opts.platform ? booted.filter((d) => d.platform === opts.platform) : booted;
@@ -162,7 +163,10 @@ export async function resolveFlowDevice(
       ? `No booted ${opts.platform} device found.`
       : "No booted device found.";
     throw deviceResolutionError(
-      `${what} Pass a device id or platform explicitly.${connectedIosDeviceHint(devices, opts.platform)}`,
+      `${what} Pass a device id or platform explicitly.${connectedIosDeviceHint(devices, opts.platform)}` +
+        // Why `list-devices` left devices out (e.g. Xcode's install is pending), which
+        // the caller cannot see from the list. It is about iOS, so not for another platform.
+        (hint && (!opts.platform || opts.platform === "ios") ? ` ${hint}` : ""),
       devices
     );
   }

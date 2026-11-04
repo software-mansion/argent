@@ -45,3 +45,53 @@ describe("flow device resolution — ids of devices no flow auto-resolves", () =
     );
   });
 });
+
+describe("flow device resolution - why list-devices left devices out", () => {
+  const HINT = "Xcode has not finished installing its system components.";
+  const BOOTED_ANDROID = { platform: "android", serial: "emulator-5554", state: "device" };
+  const BOOTED_ANDROID_2 = { platform: "android", serial: "emulator-5556", state: "device" };
+
+  it("adds the hint to the error when no platform was given", async () => {
+    invokeSubTool.mockResolvedValue({ devices: [], hint: HINT });
+
+    await expect(resolveFlowDevice({} as Registry, undefined, {})).rejects.toThrow(
+      `No booted device found. Pass a device id or platform explicitly. ${HINT} Available devices: none.`
+    );
+  });
+
+  it("adds the hint when the run is scoped to ios", async () => {
+    invokeSubTool.mockResolvedValue({ devices: [], hint: HINT });
+
+    await expect(resolveFlowDevice({} as Registry, undefined, { platform: "ios" })).rejects.toThrow(
+      `No booted ios device found. Pass a device id or platform explicitly. ${HINT} Available devices: none.`
+    );
+  });
+
+  it("leaves it out when the run is scoped to another platform", async () => {
+    invokeSubTool.mockResolvedValue({ devices: [], hint: HINT });
+
+    await expect(
+      resolveFlowDevice({} as Registry, undefined, { platform: "android" })
+    ).rejects.toThrow(
+      "No booted android device found. Pass a device id or platform explicitly. Available devices: none."
+    );
+  });
+
+  it("leaves the message as it was when list-devices has no hint", async () => {
+    invokeSubTool.mockResolvedValue({ devices: [] });
+
+    await expect(resolveFlowDevice({} as Registry, undefined, {})).rejects.toThrow(
+      "No booted device found. Pass a device id or platform explicitly. Available devices: none."
+    );
+  });
+
+  it("leaves the ambiguity message alone", async () => {
+    invokeSubTool.mockResolvedValue({ devices: [BOOTED_ANDROID, BOOTED_ANDROID_2], hint: HINT });
+
+    const error = await resolveFlowDevice({} as Registry, undefined, {}).catch((e: Error) => e);
+    expect((error as Error).message).toBe(
+      "2 booted devices matched — pass --device or --platform to disambiguate. " +
+        "Available devices: emulator-5554 (android, device), emulator-5556 (android, device)."
+    );
+  });
+});
