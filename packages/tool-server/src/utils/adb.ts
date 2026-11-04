@@ -183,6 +183,17 @@ export function adbArgv(args: string[]): string[] {
 }
 
 /**
+ * With `ADB_TRACE` set, adb writes its own trace to stderr, and that trace
+ * repeats the command, so a caller judging the command by its stderr would
+ * match its own arguments.
+ */
+function envWithoutAdbTrace(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.ADB_TRACE;
+  return env;
+}
+
+/**
  * Run `adb` directly. Callers that target a single device must pass `-s <serial>`
  * themselves via `args` — `runAdb` does not inject it, so a serial-less call
  * will hit whichever device `ANDROID_SERIAL` / the default heuristic picks.
@@ -207,6 +218,7 @@ export async function runAdb(
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf-8",
+      env: envWithoutAdbTrace(),
     });
     return { stdout, stderr };
   } catch (err) {

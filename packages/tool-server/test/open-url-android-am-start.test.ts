@@ -13,7 +13,15 @@ vi.mock("node:child_process", async () => {
       cb?: (err: Error | null, out: { stdout: string; stderr: string }) => void
     ) => {
       const callback = typeof opts === "function" ? opts : cb!;
-      callback(null, execFileMock(cmd, args));
+      const out = execFileMock(cmd, args) as { stdout: string; stderr: string };
+      // As adb does: with ADB_TRACE in its environment it traces the command to stderr.
+      const env = (typeof opts === "object" && opts && "env" in opts ? opts.env : process.env) as
+        | NodeJS.ProcessEnv
+        | undefined;
+      const trace = env?.ADB_TRACE
+        ? `D adb : adb_client.cpp:355 adb_connect: service: shell,v2,raw:${args.at(-1)}\n`
+        : "";
+      callback(null, { stdout: out.stdout, stderr: trace + out.stderr });
     },
   };
 });
@@ -70,6 +78,19 @@ describe("open-url on Android judges am start by both of adb's streams", () => {
     execFileMock.mockReturnValue({ stdout: UNRESOLVED.stdout + UNRESOLVED.stderr, stderr: "" });
 
     await expect(openUrl("nosuchscheme://x")).rejects.toThrow(/unable to resolve Intent/);
+  });
+
+  it("succeeds for a URL that names a failure word when ADB_TRACE is set", async () => {
+    vi.stubEnv("ADB_TRACE", "all");
+    try {
+      execFileMock.mockReturnValue(OPENED_DENIED_HOST);
+
+      await expect(openUrl("https://denied.example.com/x")).resolves.toMatchObject({
+        opened: true,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("succeeds for a URL that names a failure word, since only am's verdict is matched", async () => {
