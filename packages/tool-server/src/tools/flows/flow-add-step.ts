@@ -928,14 +928,12 @@ const RUN_TARGET_COMMAND = "e2e-execute";
  * Rewrite a nested `flow-execute` target from `e2e_test_path` to the equivalent
  * `name`, in place — or reject the call before anything runs.
  *
- * `flow-add-step` forwards the nested call's arguments as opaque JSON, so a
- * `e2e_test_path` inside them never crosses flow-execute's file-input boundary and
- * `resolveFlowSource` would reject it outright. A sibling of the recording, or
- * a test in the project's other e2e test directory, is the one target with a
- * boundary-verified equivalent: the same file the `name` + `project_root` pair
- * already resolves to, beside a directory flow-start-recording established
- * through its own boundary. Every other e2e_test_path is refused here —
- * a raw `tool:` step has no boundary to resolve a path through at replay either.
+ * The recorder keeps a nested `e2e_test_path` only as the `name` it equals. A
+ * sibling of the recording, or a test in the project's other e2e test
+ * directory, is the one target with such a name: the same file the `name` +
+ * `project_root` pair already resolves to, beside a directory
+ * flow-start-recording established through its own boundary. Every other
+ * e2e_test_path is refused here.
  * The on-disk spelling is the answer of `project`, on the client over a link;
  * a linked call whose client sent no files has no answer to give, and is
  * refused.
@@ -952,10 +950,10 @@ async function rewriteSiblingFlowPath(
 
   const invalid = (detail: string): FailureError =>
     new FailureError(
-      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. e2e_test_path carries no ` +
-        `file-input resolution through e2e-add-step's opaque args — pass name + project_root ` +
-        `for an e2e test saved beside the recording, or add a \`run: <relative path>.yaml\` step to ` +
-        `the e2e test YAML by hand for a cross-directory target.`,
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. The recorder keeps ` +
+        `an e2e_test_path only as the name it equals — pass name + project_root for an e2e test saved ` +
+        `beside the recording, or add a \`run: <relative path>.yaml\` step to the e2e test YAML ` +
+        `by hand for a cross-directory target.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_add_step_flow_path",
@@ -1004,7 +1002,7 @@ async function rewriteSiblingFlowPath(
   ) {
     throw invalid(
       `it is not in the recording's e2e test directory ("${flowsDir}") or the project's other ` +
-        `e2e test directory, and a raw tool: step has no boundary to resolve a path through at replay`
+        `e2e test directory`
     );
   }
   // basename leaves a suffix in place when stripping it would leave nothing, and
@@ -1407,8 +1405,6 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         ? new ClientProjectAccess(stepFiles)
         : new HostProjectAccess();
 
-      // A nested flow-execute must never carry a raw e2e_test_path into the live
-      // invoke — it has no boundary metadata there and would be rejected.
       if (command === RUN_TARGET_COMMAND) {
         await rewriteSiblingFlowPath(session, args, project, linked);
       }

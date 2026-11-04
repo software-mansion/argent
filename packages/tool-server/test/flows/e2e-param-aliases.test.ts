@@ -252,17 +252,16 @@ describe("a `tool: e2e-execute` step in saved YAML", () => {
         project_root: root,
         device: DEVICE,
       })) as FlowRunResult;
-      outcomes.push(result.steps.map((s) => [s.tool, s.status, s.reason]));
+      outcomes.push(
+        result.steps.map((s) => [
+          s.tool,
+          s.status,
+          (s.result as FlowRunResult | undefined)?.steps.map((inner) => inner.message),
+        ])
+      );
     }
 
-    // A raw step has no file-input boundary to resolve a path through.
-    expect(outcomes[0]).toEqual([
-      [
-        "e2e-execute",
-        "error",
-        expect.stringContaining("must be supplied through the e2e_test_path file-input boundary"),
-      ],
-    ]);
+    expect(outcomes[0]).toEqual([["e2e-execute", "pass", ["from the child"]]]);
     expect(outcomes[1]).toEqual(outcomes[0]);
   });
 
