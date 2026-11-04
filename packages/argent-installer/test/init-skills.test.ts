@@ -207,6 +207,45 @@ describe("runSkillsStep", () => {
     expect(fs.existsSync(legacy)).toBe(false);
   });
 
+  it("runs project-scope `npx skills add` from the resolved project root, not a subdirectory (#1467)", async () => {
+    const root = path.join(tmpDir, "repo");
+    const subdir = path.join(root, "packages", "app");
+    mkdirs(path.join(root, ".git"), subdir);
+    vi.spyOn(process, "cwd").mockReturnValue(subdir);
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "local",
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [, , opts] = spawnMock.mock.calls[0]! as [string, string[], { cwd?: string }];
+    expect(opts.cwd).toBe(root);
+  });
+
+  it("prunes legacy skills at the project root when init runs from a subdirectory (#1467)", async () => {
+    const root = path.join(tmpDir, "repo");
+    const subdir = path.join(root, "packages", "app");
+    mkdirs(path.join(root, ".git"), subdir);
+    vi.spyOn(process, "cwd").mockReturnValue(subdir);
+    const legacy = path.join(root, ".claude", "skills", "argent-create-flow");
+    mkdirs(legacy);
+    const lockPath = path.join(root, "skills-lock.json");
+    writeLock(lockPath, ["argent-create-flow", "argent-create-e2e"]);
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "local",
+    });
+
+    expect(fs.existsSync(legacy)).toBe(false);
+    expect(lockNames(lockPath)).toEqual(["argent-create-e2e"]);
+  });
+
   it("keeps legacy skills when `npx skills add` fails", async () => {
     exitCode = 1;
     const legacy = path.join(process.env.HOME!, ".agents", "skills", "argent-create-flow");

@@ -10,6 +10,7 @@ import {
   isOnline,
   isSkillsCliAvailable,
   npxChildEnv,
+  resolveProjectRoot,
   withNpmForce,
 } from "./utils.js";
 import { InitCancelled } from "./init-args.js";
@@ -28,6 +29,17 @@ export async function runSkillsStep(args: {
   customRoot?: string;
 }): Promise<SkillsMethod> {
   const { nonInteractive, fromTar, version, scope, customRoot } = args;
+
+  // Project-scope `skills` commands act on their cwd, so pin them to the
+  // resolved project root — the same root every other init step writes to.
+  // Without this, `init` run from a project subdirectory installs the skills
+  // (and skills-lock.json) into that subdirectory instead (#1467).
+  const skillsCwd =
+    scope === "custom"
+      ? customRoot
+      : scope === "local"
+        ? resolveProjectRoot(process.cwd())
+        : undefined;
 
   p.log.step(pc.bold("Step 2: Skills Installation"));
   p.log.warn(pc.yellow("Skills installation is required for Argent to function properly."));
@@ -91,10 +103,10 @@ export async function runSkillsStep(args: {
         `To install manually, copy them to your editor's skills directory:`,
         ``,
         `  ${pc.dim("# Claude Code")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.claude/skills/" : `${scope === "custom" ? customRoot! : "."}/.claude/skills/`}`,
+        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.claude/skills/" : `${skillsCwd!}/.claude/skills/`}`,
         ``,
         `  ${pc.dim("# Cursor")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
+        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${skillsCwd!}/.cursor/skills/`}`,
         ``,
         `  ${pc.dim("# Or use npx skills directly:")}`,
         `  npx skills add ${skillsSource}`,
@@ -126,7 +138,6 @@ export async function runSkillsStep(args: {
     }
 
     try {
-      const skillsCwd = scope === "custom" ? customRoot : undefined;
       await runNpxSkills(npxArgs, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
