@@ -281,7 +281,11 @@ describe("fill page script", () => {
     const frame = makePage({ rewrite: (t) => t.replace("ąę", "xn--2da4b") });
     const input = control(frame, "INPUT", { type: "email", _value: "a@xn--2da4b.pl" });
     frame.doc.activeElement = input;
-    page.doc.activeElement = { tagName: "IFRAME", contentWindow: frame.win, contentDocument: frame.doc };
+    page.doc.activeElement = {
+      tagName: "IFRAME",
+      contentWindow: frame.win,
+      contentDocument: frame.doc,
+    };
     await expect(runScript(page, "a@ąę.pl")).resolves.toEqual({ status: "ok", verified: false });
     expect(input._value).toBe("a@xn--2da4b.pl");
     expect(frame.events).toEqual([]);
