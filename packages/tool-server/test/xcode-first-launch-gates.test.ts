@@ -1,8 +1,8 @@
 /**
  * Issue #1523: while Xcode's component install is pending, no `simctl` call may
  * reach its wrapper, since each one would start the install and leave another
- * administrator-password request behind. The refusal must reach the agent as a
- * 424 that says what to do.
+ * administrator-password request behind. The same holds for `devicectl`. The
+ * refusal must reach the agent as a 424 that says what to do.
  */
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -20,14 +20,17 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 
-const pending = vi.hoisted(() => ({ value: false }));
+const pending = vi.hoisted(() => ({ simctl: false, devicectl: false }));
 const additionalSets = vi.hoisted(() => ({ value: [] as string[] }));
 
 vi.mock("../src/utils/xcode-first-launch", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
     "../src/utils/xcode-first-launch"
   );
-  return { ...actual, xcodeFirstLaunchPending: () => pending.value };
+  return {
+    ...actual,
+    xcodeFirstLaunchPending: (wrapper: "simctl" | "devicectl") => pending[wrapper],
+  };
 });
 
 // The suite-wide setup file replaces this module, and it is one of the call sites here.
@@ -69,6 +72,7 @@ import {
   simctlArgsForUdid,
   simctlPrefix,
 } from "../src/utils/ios-device-sets";
+import { ensureDeviceReady, listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
 import { createDescribeTool } from "../src/tools/describe";
 import { createForegroundAppTool } from "../src/tools/foreground-app";
 import { createUiTreeTool } from "../src/tools/ui-tree";
@@ -88,6 +92,16 @@ import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 import { nativeProfilerSessionBlueprint } from "../src/blueprints/native-profiler-session";
 import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
+import { iosDeviceRunnerBlueprint } from "../src/blueprints/ios-device-runner";
+import {
+  clearCurrentIosDeviceApp,
+  requireCurrentIosDeviceApp,
+  setCurrentIosDeviceApp,
+} from "../src/utils/ios-device/app-session";
+import { createKeyboardTool } from "../src/tools/keyboard";
+import { createFillTool } from "../src/tools/fill";
+import { createScreenshotTool } from "../src/tools/screenshot";
+import { gestureTapTool } from "../src/tools/gesture-tap";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { openUrlTool } from "../src/tools/open-url";
@@ -103,13 +117,15 @@ const SIMULATOR: DeviceInfo = {
   platform: "ios",
   kind: "simulator",
 };
+const IPHONE: DeviceInfo = { id: "00008110-000978540290401E", platform: "ios", kind: "device" };
 
 function xcrunCalls(): unknown[][] {
   return execFileMock.mock.calls.filter(([cmd]) => cmd === "xcrun");
 }
 
 beforeEach(() => {
-  pending.value = false;
+  pending.simctl = false;
+  pending.devicectl = false;
   additionalSets.value = [];
   execFileMock.mockReset();
   execFileMock.mockImplementation((...args: unknown[]) => {
@@ -128,7 +144,7 @@ afterEach(() => {
 
 describe("the refusal", () => {
   it("is counted apart from a missing xcrun in failure telemetry", () => {
-    expect(getFailureSignal(new XcodeFirstLaunchPendingError())).toMatchObject({
+    expect(getFailureSignal(new XcodeFirstLaunchPendingError("simctl"))).toMatchObject({
       error_code: FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING,
       failure_stage: "xcode_first_launch_check",
       error_kind: "dependency_missing",
@@ -138,7 +154,7 @@ describe("the refusal", () => {
 
 describe("simctl argv while Xcode's install is pending", () => {
   it("is refused at the builder every simctl call goes through", () => {
-    pending.value = true;
+    pending.simctl = true;
     expect(() => simctlPrefix(null)).toThrow(XcodeFirstLaunchPendingError);
     expect(() => simctlPrefix("/sets/radon")).toThrow(/-runFirstLaunch/);
   });
@@ -153,14 +169,14 @@ describe("simctl argv while Xcode's install is pending", () => {
     const radon = fs.mkdtempSync(path.join(os.tmpdir(), "argent-first-launch-"));
     additionalSets.value = [radon];
     try {
-      pending.value = true;
+      pending.simctl = true;
       await expect(simctlArgsForUdid(SIMULATOR.id, ["boot", SIMULATOR.id])).rejects.toBeInstanceOf(
         XcodeFirstLaunchPendingError
       );
       expect(cachedDeviceSetForUdid(SIMULATOR.id)).toBeNull();
       expect(xcrunCalls()).toEqual([]);
 
-      pending.value = false;
+      pending.simctl = false;
       execFileMock.mockImplementation((...args: unknown[]) => {
         const argv = args[1] as string[];
         const devices = argv[1] === "--set" ? [{ udid: SIMULATOR.id }] : [];
@@ -183,6 +199,21 @@ describe("simctl argv while Xcode's install is pending", () => {
   });
 });
 
+describe("devicectl while Xcode's install is pending", () => {
+  it("is refused before anything is spawned, and listing reads as no iPhones", async () => {
+    pending.devicectl = true;
+    await expect(ensureDeviceReady(IPHONE.id)).rejects.toBeInstanceOf(XcodeFirstLaunchPendingError);
+    await expect(listIosPhysicalDevices()).resolves.toEqual([]);
+    expect(xcrunCalls()).toEqual([]);
+  });
+
+  it("is not refused while only simctl would start the install", async () => {
+    pending.simctl = true;
+    await expect(listIosPhysicalDevices()).resolves.toEqual([]);
+    expect(xcrunCalls()).toHaveLength(1);
+  });
+});
+
 describe("an iOS tool while Xcode's install is pending", () => {
   function describeApp() {
     __primeDepCacheForTests(["xcrun"]);
@@ -194,7 +225,7 @@ describe("an iOS tool while Xcode's install is pending", () => {
   }
 
   it("answers 424 with what to do, and spawns no xcrun", async () => {
-    pending.value = true;
+    pending.simctl = true;
     const res = await request(describeApp()).post("/tools/describe").send({ udid: SIMULATOR.id });
 
     // Swallowed, this is an empty tree whose hint prescribes a reboot.
@@ -203,6 +234,16 @@ describe("an iOS tool while Xcode's install is pending", () => {
     expect(res.body.error).toMatch(/-runFirstLaunch/);
     expect(res.body.missing).toEqual(["xcrun"]);
     expect(xcrunCalls()).toEqual([]);
+  });
+
+  // list-devices still lists simulators then, so they must stay usable.
+  it("is not refused for a simulator while only the devicectl install is pending", async () => {
+    pending.devicectl = true;
+    const res = await request(describeApp()).post("/tools/describe").send({ udid: SIMULATOR.id });
+    expect(res.body.error ?? "").not.toMatch(/runFirstLaunch/);
+    expect(xcrunCalls().length).toBeGreaterThan(0);
+    // This one really starts the ax-service, whose listener leaves its socket behind.
+    fs.rmSync(`/tmp/ax-${SIMULATOR.id.slice(0, 8)}.sock`, { force: true });
   });
 });
 
@@ -231,7 +272,7 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
       const cb = args[args.length - 1] as (err: Error | null, out?: unknown) => void;
       cb(null, { stdout: args[0] === "plutil" ? BUNDLE_ID : "", stderr: "" });
     });
-    pending.value = true;
+    pending.simctl = true;
   });
 
   afterEach(() => {
@@ -313,7 +354,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
   it.each(TOOLS.map(([tool, extra]) => [tool.id, extra] as const))(
     "%s answers 424 with what to do",
     async (id, extra) => {
-      pending.value = true;
+      pending.simctl = true;
       const res = await request(nativeApp())
         .post(`/tools/${id}`)
         .send({ udid: SIM.id, bundleId: BUNDLE_ID, ...extra });
@@ -326,7 +367,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
   );
 
   it("works on the first call after the install, with no restart", async () => {
-    pending.value = true;
+    pending.simctl = true;
     const app = nativeApp();
     const status = () =>
       request(app)
@@ -334,7 +375,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
         .send({ udid: SIM.id, bundleId: BUNDLE_ID });
     for (let call = 0; call < 4; call++) expect((await status()).status).toBe(424);
 
-    pending.value = false;
+    pending.simctl = false;
     answerWithEmptyOutput();
     const res = await status();
     expect(res.status).toBe(200);
@@ -343,7 +384,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
   });
 
   it("does not count a refusal as a failed start of the service", async () => {
-    pending.value = true;
+    pending.simctl = true;
     const instance = await nativeDevtoolsBlueprint.factory({}, SIM, { device: SIM });
     try {
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -353,7 +394,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       }
       expect(instance.api.getInitFailure()).toBeNull();
 
-      pending.value = false;
+      pending.simctl = false;
       await expect(precheckNativeDevtools(instance.api, SIM.id)).resolves.toBeNull();
       expect(instance.api.isEnvSetup()).toBe(true);
     } finally {
@@ -374,7 +415,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
           .send({ udid: SIM.id, bundleId: BUNDLE_ID, ...extra });
       expect((await call()).body.data.status).toBe("restart_required");
 
-      pending.value = true;
+      pending.simctl = true;
       execFileMock.mockClear();
       const res = await call();
 
@@ -399,7 +440,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       await expect(instance.api.reverifyEnv()).rejects.toThrow("Invalid device");
       expect(instance.api.getInitFailure()).not.toBeNull();
 
-      pending.value = true;
+      pending.simctl = true;
       await expect(precheckNativeDevtools(instance.api, SIM.id, BUNDLE_ID)).rejects.toBeInstanceOf(
         XcodeFirstLaunchPendingError
       );
@@ -429,7 +470,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       await expect(api.reverifyEnv()).rejects.toThrow("Invalid device");
       expect(api.getInitFailure()).not.toBeNull();
 
-      pending.value = true;
+      pending.simctl = true;
       const res = await request(app)
         .post("/tools/native-devtools-status")
         .send({ udid: SIM.id, bundleId });
@@ -450,7 +491,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     });
     await vi.waitFor(() => expect(api.isConnected(BUNDLE_ID)).toBe(true));
 
-    pending.value = true;
+    pending.simctl = true;
     execFileMock.mockClear();
     const res = await request(app)
       .post("/tools/native-devtools-status")
@@ -483,7 +524,7 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     });
     await vi.waitFor(() => expect(api.isConnected(BUNDLE_ID)).toBe(true));
 
-    pending.value = true;
+    pending.simctl = true;
     execFileMock.mockClear();
     await expect(precheckNativeDevtools(api, device.id, BUNDLE_ID)).resolves.toBeNull();
     const res = await request(app)
@@ -501,7 +542,7 @@ describe("native-profiler-start while Xcode's install is pending", () => {
     ["detecting the app", {}],
     ["given an app_process, rather than saying to launch the app", { app_process: "Probe" }],
   ])("answers 424 %s", async (_case, params) => {
-    pending.value = true;
+    pending.simctl = true;
     __primeDepCacheForTests(["xcrun"]);
     const registry = new Registry();
     registry.registerBlueprint(nativeProfilerSessionBlueprint);
@@ -520,7 +561,7 @@ describe("native-profiler-start while Xcode's install is pending", () => {
   });
 
   it("still answers that a recording is running, which needs no simctl", async () => {
-    pending.value = true;
+    pending.simctl = true;
     __primeDepCacheForTests(["xcrun"]);
     const { api } = await nativeProfilerSessionBlueprint.factory({}, SIMULATOR, {
       device: SIMULATOR,
@@ -555,7 +596,7 @@ describe("the wait tools while Xcode's install is pending", () => {
   const NEVER = 60_000;
 
   it("makes await-ui-element answer at once, not at its timeout", async () => {
-    pending.value = true;
+    pending.simctl = true;
     const tool = createAwaitUiElementTool(iosRegistry());
     const params = {
       udid: SIMULATOR.id,
@@ -568,7 +609,7 @@ describe("the wait tools while Xcode's install is pending", () => {
   });
 
   it("makes await-screen-idle answer at once, not at its timeout", async () => {
-    pending.value = true;
+    pending.simctl = true;
     const tool = createAwaitScreenIdleTool(iosRegistry());
     await expect(
       tool.execute({}, { udid: SIMULATOR.id, timeoutMs: NEVER } as never)
@@ -577,7 +618,7 @@ describe("the wait tools while Xcode's install is pending", () => {
   });
 
   it("covers the device-type listing that tells foldables apart", async () => {
-    pending.value = true;
+    pending.simctl = true;
     // A type no earlier listing knew, so neither cache can answer.
     await expect(
       isFoldableDeviceType("com.apple.CoreSimulator.SimDeviceType.FA1E1523-Unseen")
@@ -642,7 +683,7 @@ describe("a warm session while Xcode's install is pending", () => {
     ],
     ["await-screen-idle", { minStableMs: 0, timeoutMs: 2_000 }, { settled: true }],
   ])("%s answers without a refusal or a simctl call", async (id, params, answer) => {
-    pending.value = true;
+    pending.simctl = true;
     const app = warmApp(async () => ({ alertVisible: false, elements: [BUTTON] }));
     const res = await request(app)
       .post(`/tools/${id}`)
@@ -655,7 +696,7 @@ describe("a warm session while Xcode's install is pending", () => {
 
   // An empty accessibility read falls back to measuring the app, which needs simctl.
   it("describe answers the refusal when the fallback's measurement is refused", async () => {
-    pending.value = true;
+    pending.simctl = true;
     const app = warmApp(async () => ({ alertVisible: false, elements: [] }));
     const res = await request(app)
       .post("/tools/describe")
@@ -673,7 +714,7 @@ describe("the ax-service factory while Xcode's install is pending", () => {
   const factory = () => axServiceBlueprint.factory({}, SIMULATOR, { device: SIMULATOR });
 
   it("is refused before it listens", async () => {
-    pending.value = true;
+    pending.simctl = true;
     const listen = vi.spyOn(net.Server.prototype, "listen");
     try {
       await expect(factory()).rejects.toBeInstanceOf(XcodeFirstLaunchPendingError);
@@ -685,11 +726,199 @@ describe("the ax-service factory while Xcode's install is pending", () => {
   });
 });
 
-// Some tools check for xcrun without ever running simctl, such as
+describe("a physical iPhone while the devicectl install is pending", () => {
+  const BUNDLE_ID = "com.example.app";
+  const REFUSAL_CODE = FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING;
+  const rect = { x: 0, y: 0, width: 390, height: 844 };
+  const blank = { identifier: null, value: null, enabled: true, focused: null, selected: null };
+  // What the runner answers for a snapshot: an app with one button.
+  const SCREEN = [
+    { ...blank, index: 0, depth: 0, parentIndex: null, type: "Application", label: null, rect },
+    { ...blank, index: 1, depth: 1, parentIndex: 0, type: "Button", label: "Done", rect },
+  ];
+  let registry: Registry | undefined;
+
+  function appWith(register: (registry: Registry) => void) {
+    registry = new Registry();
+    register(registry);
+    return createHttpApp(registry).app;
+  }
+
+  beforeEach(() => {
+    pending.devicectl = true;
+    __primeDepCacheForTests(["xcrun"]);
+    setCurrentIosDeviceApp(IPHONE.id, BUNDLE_ID);
+  });
+
+  afterEach(async () => {
+    clearCurrentIosDeviceApp(IPHONE.id);
+    await registry?.dispose();
+    registry = undefined;
+  });
+
+  describe("with the runner up", () => {
+    // The runner is already running, so nothing here starts it through devicectl.
+    function runnerUp() {
+      const run = vi.fn(async ({ command }: { command: string }) =>
+        command === "snapshot" ? { nodes: SCREEN } : {}
+      );
+      const app = appWith((registry) => {
+        registry.registerBlueprint({
+          ...iosDeviceRunnerBlueprint,
+          factory: async () => ({
+            api: { udid: IPHONE.id, run },
+            events: new TypedEventEmitter<ServiceEvents>(),
+            dispose: async () => {},
+          }),
+        });
+        registry.registerTool(createKeyboardTool(registry) as never);
+        registry.registerTool(createDescribeTool(registry) as never);
+        registry.registerTool(createFillTool(registry) as never);
+        registry.registerTool(createAwaitUiElementTool(registry) as never);
+        registry.registerTool(createAwaitScreenIdleTool(registry) as never);
+      });
+      return { app, run };
+    }
+
+    it.each([
+      ["keyboard", { text: "hi" }, { typed: "hi", keys: 2 }],
+      ["describe", {}, { description: expect.stringContaining("Done") }],
+      ["fill", { text: "hi" }, { verified: false }],
+      [
+        "await-ui-element",
+        { condition: "exists", selector: { text: "Done" }, timeoutMs: 5_000 },
+        { success: true },
+      ],
+      ["await-screen-idle", { minStableMs: 0, timeoutMs: 5_000 }, { settled: true }],
+    ])("%s keeps working, since it only talks to the runner", async (id, params, answer) => {
+      const { app, run } = runnerUp();
+      const res = await request(app)
+        .post(`/tools/${id}`)
+        .send({ udid: IPHONE.id, ...params });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject(answer);
+      expect(run).toHaveBeenCalled();
+      expect(xcrunCalls()).toEqual([]);
+    });
+  });
+
+  // An app is registered on the phone here, so these get as far as starting the
+  // runner. That needs devicectl, and the refusal comes out of the service factory.
+  describe("starting the runner", () => {
+    it.each([
+      ["gesture-tap", { x: 0.5, y: 0.5 }],
+      ["screenshot", {}],
+      ["keyboard", { text: "hi" }],
+      ["describe", {}],
+      ["fill", { text: "hi" }],
+      // Waiting cannot end the refusal, so these answer at once, not at their timeout.
+      ["await-ui-element", { condition: "exists", selector: { text: "Done" }, timeoutMs: 5_000 }],
+      ["await-screen-idle", { minStableMs: 0, timeoutMs: 5_000 }],
+    ])("%s answers the refusal and is counted as the pending install", async (id, params) => {
+      const app = appWith((registry) => {
+        registry.registerBlueprint(iosDeviceRunnerBlueprint);
+        registry.registerTool(gestureTapTool as never);
+        registry.registerTool(createScreenshotTool(registry) as never);
+        registry.registerTool(createKeyboardTool(registry) as never);
+        registry.registerTool(createDescribeTool(registry) as never);
+        registry.registerTool(createFillTool(registry) as never);
+        registry.registerTool(createAwaitUiElementTool(registry) as never);
+        registry.registerTool(createAwaitScreenIdleTool(registry) as never);
+      });
+      const res = await request(app)
+        .post(`/tools/${id}`)
+        .send({ udid: IPHONE.id, ...params });
+
+      expect(res.status).toBe(424);
+      expect(res.body.error).toMatch(/-runFirstLaunch/);
+      expect(res.body.error_code).toBe(REFUSAL_CODE);
+      expect(res.body.missing).toEqual(["xcrun"]);
+      expect(xcrunCalls()).toEqual([]);
+    });
+  });
+
+  describe("a tool that needs devicectl", () => {
+    let appPath: string;
+
+    function appWithDevicectlTools() {
+      return appWith((registry) => {
+        registry.registerTool(createLaunchAppTool(registry) as never);
+        registry.registerTool(openUrlTool as never);
+        registry.registerTool(createRestartAppTool(registry) as never);
+        registry.registerTool(reinstallAppTool as never);
+      });
+    }
+
+    const TOOLS = [
+      ["launch-app", () => ({ bundleId: BUNDLE_ID })],
+      ["open-url", () => ({ url: "https://example.com" })],
+      ["restart-app", () => ({ bundleId: BUNDLE_ID })],
+      ["reinstall-app", () => ({ bundleId: BUNDLE_ID, appPath })],
+    ] as const;
+
+    function expectRefusal(res: request.Response) {
+      expect(res.status).toBe(424);
+      expect(res.body.error).toMatch(/`devicectl` waits .* does not show physical iPhones/);
+      expect(res.body.error).toMatch(/-runFirstLaunch/);
+      expect(res.body.error_code).toBe(REFUSAL_CODE);
+      expect(xcrunCalls()).toEqual([]);
+    }
+
+    beforeEach(() => {
+      // reinstall-app reads the bundle id of a real .app before it touches the device.
+      appPath = path.join(
+        fs.mkdtempSync(path.join(os.tmpdir(), "argent-first-launch-")),
+        "App.app"
+      );
+      fs.mkdirSync(appPath);
+      fs.writeFileSync(path.join(appPath, "Info.plist"), "");
+      execFileMock.mockImplementation((...args: unknown[]) => {
+        const cb = args[args.length - 1] as (err: Error | null, out?: unknown) => void;
+        cb(null, { stdout: args[0] === "plutil" ? BUNDLE_ID : "", stderr: "" });
+      });
+    });
+
+    afterEach(() => {
+      fs.rmSync(path.dirname(appPath), { recursive: true, force: true });
+    });
+
+    it.each(TOOLS)("%s answers the refusal and spawns no xcrun", async (id, params) => {
+      const res = await request(appWithDevicectlTools())
+        .post(`/tools/${id}`)
+        .send({ udid: IPHONE.id, ...params() });
+      expectRefusal(res);
+    });
+
+    // Right after another call the readiness check answers from its memo, so the
+    // next devicectl call is the one that refuses. For reinstall-app that is the
+    // uninstall, whose catch must not read the refusal as a missing app.
+    it.each(TOOLS)("%s answers the refusal when the device was just ready", async (id, params) => {
+      const udid = "00008110-00097854029000AA";
+      pending.devicectl = false;
+      await ensureDeviceReady(udid);
+      pending.devicectl = true;
+      setCurrentIosDeviceApp(udid, BUNDLE_ID);
+      execFileMock.mockClear();
+
+      const res = await request(appWithDevicectlTools())
+        .post(`/tools/${id}`)
+        .send({ udid, ...params() });
+
+      expectRefusal(res);
+      // reinstall-app forgets the app once the uninstall has run, so it did not.
+      expect(requireCurrentIosDeviceApp(udid)).toBe(BUNDLE_ID);
+      clearCurrentIosDeviceApp(udid);
+    });
+  });
+});
+
+// Some tools check for xcrun without ever running simctl or devicectl, such as
 // native-profiler-stop, which only signals xctrace and exports its trace.
 describe("the plain dependency check", () => {
   it("does not look at Xcode's components", async () => {
-    pending.value = true;
+    pending.simctl = true;
+    pending.devicectl = true;
     __primeDepCacheForTests(["xcrun", "adb"]);
     await expect(ensureDeps(["xcrun"])).resolves.toBeUndefined();
     await expect(ensureDeps(["adb"])).resolves.toBeUndefined();

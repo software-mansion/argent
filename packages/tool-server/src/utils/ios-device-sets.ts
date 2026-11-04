@@ -137,7 +137,7 @@ function externalDeviceSet(udid: string): DeviceSetPath | undefined {
  * @throws XcodeFirstLaunchPendingError
  */
 export function simctlPrefix(deviceSet: DeviceSetPath): string[] {
-  assertXcodeFirstLaunchDone();
+  assertXcodeFirstLaunchDone("simctl");
   return deviceSet ? ["simctl", "--set", deviceSet] : ["simctl"];
 }
 

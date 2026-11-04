@@ -1,9 +1,9 @@
 /**
- * Issue #1721: Xcode's `simctl` wrapper starts a component install that waits
- * for an administrator password when the framework it wraps is older than it
- * expects. Xcode 26's wrapper also starts it when the framework is missing. The
- * check reads the same two files the wrapper does, so it can say so without
- * starting anything.
+ * Issue #1721: Xcode's `simctl` and `devicectl` wrappers start a component install
+ * that waits for an administrator password when the framework they wrap is older
+ * than they expect. `devicectl` and Xcode 26's `simctl` also start it when the
+ * framework is missing. The check reads the same two files the wrapper does, so it
+ * can say so without starting anything.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -15,10 +15,17 @@ import {
   xcodeFirstLaunchHint,
   xcodeFirstLaunchPending,
   xcodeInstallInstruction,
+  type XcodeWrapper,
 } from "../src/utils/xcode-first-launch";
 
 // The suite-wide stub pins the answer; this file tests the real check.
 vi.unmock("../src/utils/xcode-first-launch");
+
+// Passes through, so a test can see the `plutil` reads of a plist.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
 
 const realPlatform = process.platform;
 const realDeveloperDir = process.env.DEVELOPER_DIR;
@@ -40,7 +47,7 @@ function olderRuleWrapper(expected: string, plist: string): string {
   ].join("\n");
 }
 
-/** The wrapper shape of Xcode 26: runs the install on any mismatch. */
+/** The shape of Xcode 26's `simctl` and of `devicectl`: runs the install on any mismatch. */
 function exactRuleWrapper(expected: string, plist: string): string {
   return [
     "#!/bin/bash",
@@ -54,9 +61,9 @@ function exactRuleWrapper(expected: string, plist: string): string {
   ].join("\n");
 }
 
-function writeWrapper(text: string, dir = devDir): void {
+function writeWrapper(text: string, dir = devDir, wrapper: XcodeWrapper = "simctl"): void {
   fs.mkdirSync(path.join(dir, "usr", "bin"), { recursive: true });
-  fs.writeFileSync(path.join(dir, "usr", "bin", "simctl"), text);
+  fs.writeFileSync(path.join(dir, "usr", "bin", wrapper), text);
 }
 
 function installFramework(version: string): void {
@@ -88,37 +95,37 @@ describe("xcodeFirstLaunchPending", () => {
   it("is false when the installed framework is the expected version", () => {
     writeWrapper(olderRuleWrapper("1174.21", plistPath));
     installFramework("1174.21");
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
   });
 
   it("is true after an Xcode update leaves the framework older than the wrapper expects", () => {
     writeWrapper(olderRuleWrapper("1175.5", plistPath));
     installFramework("1174.21");
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
   it("is true for a missing framework where the wrapper's != check runs the install", () => {
     writeWrapper(exactRuleWrapper("1051.55", plistPath));
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
   it("is false for a missing framework where the wrapper's older-than check does not run it", () => {
     // PlistBuddy prints an error instead of a version, which sorts after any version.
     writeWrapper(olderRuleWrapper("1174.21", plistPath));
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
   });
 
   it("compares numerically and ignores trailing .0 parts, as the wrapper does", () => {
     writeWrapper(olderRuleWrapper("1174.21.0", plistPath));
     installFramework("1174.21");
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     writeWrapper(olderRuleWrapper("1174.21", plistPath));
     installFramework("1174.21.0");
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     installFramework("1174.3");
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
     installFramework("1174.100");
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
   });
 
   // A part one side lacks counts as 0, so 1051.49 is older than 1051.49.1: the
@@ -126,40 +133,40 @@ describe("xcodeFirstLaunchPending", () => {
   it("compares versions with a different number of parts", () => {
     writeWrapper(olderRuleWrapper("1051.49.1", plistPath));
     installFramework("1051.49");
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
     writeWrapper(olderRuleWrapper("1051.49", plistPath));
     installFramework("1051.49.1");
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
   });
 
   it("is true for an exact-match wrapper whose framework is older", () => {
     writeWrapper(exactRuleWrapper("1051.55", plistPath));
     installFramework("1051.49");
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
   it("is false for an exact-match wrapper whose framework is newer, so an older Xcode stays usable", () => {
     writeWrapper(exactRuleWrapper("1051.55", plistPath));
     installFramework("1174.21");
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
   });
 
   // Point updates usually keep the length, so neither file changes size.
   it("sees a version change of the same length on the next call, in either file", () => {
     writeWrapper(olderRuleWrapper("1010.17", plistPath));
     installFramework("1010.15");
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
     installFramework("1010.17");
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     writeWrapper(olderRuleWrapper("1010.19", plistPath));
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
   it("accepts DEVELOPER_DIR naming the app bundle rather than its Developer directory", () => {
     writeWrapper(olderRuleWrapper("1175.5", plistPath));
     installFramework("1174.21");
     process.env.DEVELOPER_DIR = path.join(root, "Xcode.app");
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
   it("accepts DEVELOPER_DIR naming any directory that holds Contents/Developer, as xcrun does", () => {
@@ -169,7 +176,7 @@ describe("xcodeFirstLaunchPending", () => {
     fs.symlinkSync(path.join(root, "Xcode.app"), link);
     for (const dir of [link, `${link}/`, `${path.join(root, "Xcode.app")}//`]) {
       process.env.DEVELOPER_DIR = dir;
-      expect(xcodeFirstLaunchPending(), dir).toBe(true);
+      expect(xcodeFirstLaunchPending("simctl"), dir).toBe(true);
     }
   });
 
@@ -177,7 +184,7 @@ describe("xcodeFirstLaunchPending", () => {
     writeWrapper(olderRuleWrapper("1175.5", plistPath));
     installFramework("1174.21");
     process.env.DEVELOPER_DIR = root;
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
   it("prefers Contents/Developer, then Xcode.app inside it, then DEVELOPER_DIR itself", () => {
@@ -192,11 +199,11 @@ describe("xcodeFirstLaunchPending", () => {
     writeWrapper(unsettled, own);
     writeWrapper(settled, inside);
     writeWrapper(settled, holder);
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
 
     fs.rmSync(path.join(holder, "Contents"), { recursive: true });
     writeWrapper(unsettled, inside);
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
   it("passes over a Contents/Developer that is a file, as xcrun does", () => {
@@ -206,14 +213,14 @@ describe("xcodeFirstLaunchPending", () => {
     fs.writeFileSync(path.join(holder, "Contents", "Developer"), "");
     installFramework("1174.21");
     process.env.DEVELOPER_DIR = holder;
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 
   it("does not trim DEVELOPER_DIR, as xcrun does not", () => {
     writeWrapper(olderRuleWrapper("1175.5", plistPath));
     installFramework("1174.21");
     process.env.DEVELOPER_DIR = ` ${devDir}`;
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
   });
 
   describe("reads the Xcode that xcrun uses", () => {
@@ -230,14 +237,14 @@ describe("xcodeFirstLaunchPending", () => {
       const link = path.join(root, "xcode_select_link");
       fs.symlinkSync(path.join(root, "Xcode.app"), link);
       __setXcodeLocationsForTests({ selectLink: link, defaultDeveloperDir: otherDevDir() });
-      expect(xcodeFirstLaunchPending()).toBe(true);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(true);
     });
 
     it("the one xcode-select -s chose, named by its Developer directory", () => {
       const link = path.join(root, "xcode_select_link");
       fs.symlinkSync(devDir, link);
       __setXcodeLocationsForTests({ selectLink: link, defaultDeveloperDir: otherDevDir() });
-      expect(xcodeFirstLaunchPending()).toBe(true);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(true);
     });
 
     it("the default Xcode when nothing was chosen", () => {
@@ -245,7 +252,7 @@ describe("xcodeFirstLaunchPending", () => {
         selectLink: path.join(root, "no-link"),
         defaultDeveloperDir: devDir,
       });
-      expect(xcodeFirstLaunchPending()).toBe(true);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(true);
     });
 
     it("none when there is no Xcode at all", () => {
@@ -253,7 +260,7 @@ describe("xcodeFirstLaunchPending", () => {
         selectLink: path.join(root, "no-link"),
         defaultDeveloperDir: path.join(root, "no-xcode"),
       });
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("DEVELOPER_DIR before the one xcode-select -s chose", () => {
@@ -261,7 +268,7 @@ describe("xcodeFirstLaunchPending", () => {
       fs.symlinkSync(devDir, link);
       __setXcodeLocationsForTests({ selectLink: link, defaultDeveloperDir: devDir });
       process.env.DEVELOPER_DIR = otherDevDir();
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     // An empty value would otherwise resolve to the server's working directory,
@@ -271,28 +278,28 @@ describe("xcodeFirstLaunchPending", () => {
       fs.symlinkSync(devDir, link);
       __setXcodeLocationsForTests({ selectLink: link, defaultDeveloperDir: otherDevDir() });
       process.env.DEVELOPER_DIR = "";
-      expect(xcodeFirstLaunchPending()).toBe(true);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(true);
     });
   });
 
   describe("reads as not pending when it cannot tell", () => {
     it("with no wrapper at the developer directory", () => {
       installFramework("1");
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("with a script that has no version check", () => {
       writeWrapper('#!/bin/bash\nexec "/real/simctl" "$@"\n');
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("with a framework plist it cannot read a version from", () => {
       writeWrapper(olderRuleWrapper("1175.5", plistPath));
       fs.writeFileSync(plistPath, "<plist><dict></dict></plist>");
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
       // Only the != check tells this apart from a missing framework.
       writeWrapper(exactRuleWrapper("1175.5", plistPath));
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("with a version check that only tells the user to run the install", () => {
@@ -303,7 +310,7 @@ describe("xcodeFirstLaunchPending", () => {
         )
       );
       installFramework("1174.21");
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     // The whole call, so only its place at the start of a line tells them apart.
@@ -315,7 +322,7 @@ describe("xcodeFirstLaunchPending", () => {
         )
       );
       installFramework("1174.21");
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("with a version check of a shape it does not know", () => {
@@ -326,7 +333,7 @@ describe("xcodeFirstLaunchPending", () => {
         )
       );
       installFramework("1174.21");
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("with a plist path built from a shell variable", () => {
@@ -336,19 +343,19 @@ describe("xcodeFirstLaunchPending", () => {
         .replace("#!/bin/bash\n", `#!/bin/bash\nINFO_PLIST="${plistPath}"\n`);
       writeWrapper(wrapper);
       installFramework("1051.55");
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("with a relative plist path", () => {
       // With the != check a path read literally would look missing, which reads as pending.
       writeWrapper(exactRuleWrapper("1051.55", "relative/Info.plist"));
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("with an expected version built from a shell variable", () => {
       // With the != check a value read literally plus a missing framework reads as pending.
       writeWrapper(exactRuleWrapper("${FRAMEWORK_VERSION}", plistPath));
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it.each(['# EXPECTED_VERSION="1175.5"', 'EXPECTED_VERSION="1175.5" # was 1174.21'])(
@@ -358,23 +365,23 @@ describe("xcodeFirstLaunchPending", () => {
           olderRuleWrapper("1175.5", plistPath).replace('EXPECTED_VERSION="1175.5"', line)
         );
         installFramework("1174.21");
-        expect(xcodeFirstLaunchPending()).toBe(false);
+        expect(xcodeFirstLaunchPending("simctl")).toBe(false);
       }
     );
 
     it("with a framework plist that exists but cannot be read", () => {
       writeWrapper(olderRuleWrapper("1175.5", plistPath));
       fs.mkdirSync(plistPath);
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
       // Only the != check tells this apart from a missing framework.
       writeWrapper(exactRuleWrapper("1175.5", plistPath));
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("with a version that is not purely numeric", () => {
       writeWrapper(olderRuleWrapper("1175.5", plistPath));
       installFramework("1174.21b");
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     // Number() reads each of these as a number that would make the framework older.
@@ -396,15 +403,94 @@ describe("xcodeFirstLaunchPending", () => {
     ])("with installed version %j and expected version %j", (installed, expected) => {
       writeWrapper(olderRuleWrapper(expected, plistPath));
       installFramework(installed);
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
 
     it("off macOS", () => {
       writeWrapper(olderRuleWrapper("1175.5", plistPath));
       installFramework("1174.21");
       Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-      expect(xcodeFirstLaunchPending()).toBe(false);
+      expect(xcodeFirstLaunchPending("simctl")).toBe(false);
     });
+  });
+});
+
+describe("xcodeFirstLaunchPending for devicectl", () => {
+  const writeDevicectl = (expected: string): void =>
+    writeWrapper(exactRuleWrapper(expected, plistPath), devDir, "devicectl");
+  const plutilReads = () =>
+    vi.mocked(execFileSync).mock.calls.filter(([, args]) => args?.includes("-extract"));
+
+  beforeEach(() => {
+    vi.mocked(execFileSync).mockClear();
+  });
+
+  it("reads the devicectl wrapper, not simctl's", () => {
+    const simctlPlist = path.join(root, "CoreSimulator.plist");
+    fs.writeFileSync(
+      simctlPlist,
+      "<plist><dict><key>CFBundleVersion</key><string>1174.21</string></dict></plist>"
+    );
+    writeWrapper(olderRuleWrapper("1174.21", simctlPlist));
+    writeDevicectl("651.32");
+    installFramework("651.31");
+    expect(xcodeFirstLaunchPending("devicectl")).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
+
+    writeWrapper(olderRuleWrapper("1175", simctlPlist));
+    installFramework("651.32");
+    expect(xcodeFirstLaunchPending("devicectl")).toBe(false);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
+  });
+
+  it("is true for a missing framework, since its != check runs the install", () => {
+    writeDevicectl("651.32");
+    expect(xcodeFirstLaunchPending("devicectl")).toBe(true);
+  });
+
+  it("is false with no devicectl wrapper", () => {
+    installFramework("651.31");
+    expect(xcodeFirstLaunchPending("devicectl")).toBe(false);
+  });
+
+  it.skipIf(realPlatform !== "darwin")("reads a binary plist, as CoreDevice ships", () => {
+    writeDevicectl("651.32");
+    installFramework("651.31");
+    execFileSync("/usr/bin/plutil", ["-convert", "binary1", plistPath]);
+    expect(fs.readFileSync(plistPath).subarray(0, 8).toString()).toBe("bplist00");
+    expect(xcodeFirstLaunchPending("devicectl")).toBe(true);
+
+    writeDevicectl("651.31");
+    expect(xcodeFirstLaunchPending("devicectl")).toBe(false);
+  });
+
+  it("reads as not pending when plutil cannot read a version either", () => {
+    writeDevicectl("651.32");
+    fs.writeFileSync(plistPath, "bplist00 not really");
+    expect(xcodeFirstLaunchPending("devicectl")).toBe(false);
+    expect(plutilReads()).toHaveLength(1);
+  });
+
+  // The read blocks the event loop, and SIGTERM does not end a plutil that ignores it.
+  it("bounds the plutil read at 1 s, with a kill that cannot be ignored", () => {
+    writeDevicectl("651.32");
+    fs.writeFileSync(plistPath, "bplist00 not really");
+    xcodeFirstLaunchPending("devicectl");
+    expect(plutilReads()[0]?.[2]).toMatchObject({ timeout: 1_000, killSignal: "SIGKILL" });
+  });
+
+  it("spawns nothing when the plist is XML", () => {
+    writeDevicectl("651.32");
+    installFramework("651.31");
+    expect(xcodeFirstLaunchPending("devicectl")).toBe(true);
+    expect(plutilReads()).toEqual([]);
+  });
+
+  it("spawns nothing for simctl, even on a plist only plutil could read", () => {
+    writeWrapper(olderRuleWrapper("1174.21", plistPath));
+    fs.writeFileSync(plistPath, "bplist00 not really");
+    expect(xcodeFirstLaunchPending("simctl")).toBe(false);
+    expect(plutilReads()).toEqual([]);
   });
 });
 
@@ -415,7 +501,7 @@ describe("xcodeFirstLaunchHint", () => {
     path.join(developerDir, "usr", "bin", "xcodebuild");
 
   it("says which Xcode, why simulators are missing, and what to ask the user", () => {
-    expect(xcodeFirstLaunchHint()).toBe(
+    expect(xcodeFirstLaunchHint(["simctl"])).toBe(
       `The Xcode at ${path.join(root, "Xcode.app")} has not finished installing its system ` +
         "components since it was installed or updated. Until it has, Xcode's `simctl` waits for " +
         "an administrator password on every call, so `list-devices` does not show local iOS " +
@@ -426,11 +512,35 @@ describe("xcodeFirstLaunchHint", () => {
     );
   });
 
+  it("says physical iPhones are what is missing for devicectl", () => {
+    expect(xcodeFirstLaunchHint(["devicectl"])).toBe(
+      `The Xcode at ${path.join(root, "Xcode.app")} has not finished installing its system ` +
+        "components since it was installed or updated. Until it has, Xcode's `devicectl` waits " +
+        "for an administrator password on every call, so `list-devices` does not show physical " +
+        "iPhones. Tools that need `devicectl` fail until then. Ask the user to " +
+        "open that Xcode once and let it install the components, or " +
+        `to run \`sudo ${xcodebuildIn(devDir)} -runFirstLaunch\`, then retry. Do not run that ` +
+        "command or `xcrun devicectl` yourself."
+    );
+  });
+
+  it("covers both when both are pending", () => {
+    expect(xcodeFirstLaunchHint(["simctl", "devicectl"])).toBe(
+      `The Xcode at ${path.join(root, "Xcode.app")} has not finished installing its system ` +
+        "components since it was installed or updated. Until it has, Xcode's `simctl` and " +
+        "`devicectl` wait for an administrator password on every call, so `list-devices` does " +
+        "not show local iOS simulators or physical iPhones. Tools that need `simctl` or " +
+        "`devicectl` fail until then. Ask the user to open that Xcode once and let it " +
+        `install the components, or to run \`sudo ${xcodebuildIn(devDir)} -runFirstLaunch\`, ` +
+        "then retry. Do not run that command, `xcrun simctl` or `xcrun devicectl` yourself."
+    );
+  });
+
   it("names a developer directory that is not inside an app bundle", () => {
     const plain = path.join(root, "Developer");
     fs.mkdirSync(plain);
     process.env.DEVELOPER_DIR = plain;
-    const hint = xcodeFirstLaunchHint();
+    const hint = xcodeFirstLaunchHint(["simctl"]);
     expect(hint).toContain(`The Xcode at ${plain} has not finished`);
     expect(hint).toContain(`\`sudo ${xcodebuildIn(plain)} -runFirstLaunch\``);
   });
@@ -438,7 +548,7 @@ describe("xcodeFirstLaunchHint", () => {
   it("names the Xcode inside the folder DEVELOPER_DIR names", () => {
     fs.mkdirSync(devDir, { recursive: true });
     process.env.DEVELOPER_DIR = root;
-    const hint = xcodeFirstLaunchHint();
+    const hint = xcodeFirstLaunchHint(["simctl"]);
     expect(hint).toContain(`The Xcode at ${path.join(root, "Xcode.app")} has not finished`);
     expect(hint).toContain(`\`sudo ${xcodebuildIn(devDir)} -runFirstLaunch\``);
   });
@@ -447,7 +557,7 @@ describe("xcodeFirstLaunchHint", () => {
     const app = path.join(root, "Xcode Beta.app");
     fs.mkdirSync(path.join(app, "Contents", "Developer"), { recursive: true });
     process.env.DEVELOPER_DIR = app;
-    const hint = xcodeFirstLaunchHint();
+    const hint = xcodeFirstLaunchHint(["simctl"]);
     expect(hint).toContain(`The Xcode at ${app} has not finished`);
     expect(hint).toContain(
       `\`sudo '${xcodebuildIn(path.join(app, "Contents", "Developer"))}' -runFirstLaunch\``
@@ -459,7 +569,7 @@ describe("xcodeFirstLaunchHint", () => {
     const developer = path.join(app, "Contents", "Developer");
     fs.mkdirSync(developer, { recursive: true });
     process.env.DEVELOPER_DIR = app;
-    expect(xcodeFirstLaunchHint()).toContain(
+    expect(xcodeFirstLaunchHint(["simctl"])).toContain(
       `\`sudo '${xcodebuildIn(developer).replace("'", "'\\''")}' -runFirstLaunch\``
     );
   });
@@ -470,7 +580,7 @@ describe("xcodeFirstLaunchHint", () => {
       selectLink: path.join(root, "no-such-link"),
       defaultDeveloperDir: path.join(root, "no-such-dir"),
     });
-    const hint = xcodeFirstLaunchHint();
+    const hint = xcodeFirstLaunchHint(["simctl"]);
     expect(hint).toContain("Xcode has not finished");
     expect(hint).toContain("open Xcode once");
     expect(hint).toContain("`sudo xcodebuild -runFirstLaunch`");
@@ -567,7 +677,7 @@ describe.skipIf(realPlatform !== "darwin")("reads the directory xcode-select nam
       .replace(/\n$/, "");
     writeWrapper(olderRuleWrapper("1175.5", plistPath), path.resolve(named));
     process.env.DEVELOPER_DIR = value;
-    expect(xcodeFirstLaunchPending()).toBe(true);
+    expect(xcodeFirstLaunchPending("simctl")).toBe(true);
   });
 });
 
@@ -582,7 +692,11 @@ const realWrappers =
     ? fs
         .readdirSync("/Applications")
         .filter((name) => /^Xcode.*\.app$/.test(name))
-        .map((app) => path.join("/Applications", app, "Contents/Developer/usr/bin/simctl"))
+        .flatMap((app) =>
+          (["simctl", "devicectl"] as const).map((wrapper) =>
+            path.join("/Applications", app, "Contents/Developer/usr/bin", wrapper)
+          )
+        )
         .filter((file) => fs.existsSync(file) && fs.readFileSync(file).includes("-runFirstLaunch"))
     : [];
 
@@ -594,7 +708,8 @@ describe.skipIf(realWrappers.length === 0)("agrees with the wrappers installed o
     expect(expected, "EXPECTED_VERSION").toBeDefined();
     expect(realPlist, "plist path").toBeDefined();
     const pointed = text.split(realPlist!).join(plistPath);
-    writeWrapper(pointed);
+    const wrapper = path.basename(file) as XcodeWrapper;
+    writeWrapper(pointed, devDir, wrapper);
 
     // The probe derives DEVELOPER_DIR from its own path, so even an install call
     // that escaped the replacement would name an xcodebuild that does not exist.
@@ -619,11 +734,11 @@ describe.skipIf(realWrappers.length === 0)("agrees with the wrappers installed o
     ] as const) {
       if (version === null) fs.rmSync(plistPath, { force: true });
       else installFramework(version);
-      expect(xcodeFirstLaunchPending(), state).toBe(wrapperInstalls());
+      expect(xcodeFirstLaunchPending(wrapper), state).toBe(wrapperInstalls());
     }
 
     // A newer framework does not read as pending even where the wrapper runs the install.
     installFramework("999999");
-    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(xcodeFirstLaunchPending(wrapper)).toBe(false);
   });
 });
