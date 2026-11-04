@@ -138,14 +138,14 @@ To capture a request:
 3. Do the action that sends the request again.
 4. Call `native-network-logs` again to read the list of requests.
 
-| Parameter  | Effect on Android                                                                                                         |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `udid`     | The serial of the device                                                                                                  |
-| `bundleId` | The package name of the app                                                                                               |
-| `port`     | The Metro port. Argent removes the Metro traffic on this port from the list. The default is the Metro port of the device. |
-| `limit`    | The maximum number of requests in the list. Argent returns the most recent requests, oldest first. The default is 50.     |
-| `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                   |
-| `stop`     | Stop native network capture for this app. The capture of a different app continues.                                       |
+| Parameter  | Effect on Android                                                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`     | The serial of the device                                                                                                               |
+| `bundleId` | The package name of the app                                                                                                            |
+| `port`     | The Metro port. Argent removes the traffic to this port on a local address from the list. The default is the Metro port of the device. |
+| `limit`    | The maximum number of requests in the list. Argent returns the most recent requests, oldest first. The default is 50.                  |
+| `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                                |
+| `stop`     | Stop native network capture for this app. The capture of a different app continues.                                                    |
 
 The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `total` and `requests`. The `capture` field and the `header` line show the state of the capture. The `capture` field is absent when `armed` is `false`. The `captureDetail` field contains the detail that the in-app agent sent with the state. The `header` line shows this detail too. These are the states:
 
