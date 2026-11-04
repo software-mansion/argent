@@ -62,6 +62,9 @@ export const nativeProfilerStartTool: ToolDefinition<
   { status: "recording"; pid: number; traceFile: string }
 > = {
   id: "native-profiler-start",
+  // ~47s worst case on iOS, past the 30s MCP fetch timeout; a replay would
+  // start a second xctrace.
+  longRunning: true,
   interaction: {
     startedMsg: () => "Starting native profiler",
     completedMsg: () => "Started native profiler",
