@@ -1,6 +1,7 @@
 import { TypedEventEmitter } from "./event-emitter";
 import {
   ServiceState,
+  isLiveServiceState,
   ServiceNode,
   ServiceSnapshot,
   ServiceInstance,
@@ -45,8 +46,13 @@ export class Registry {
   private tools = new Map<string, ToolRecord>();
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
-  /** Epoch ms a tool call last used each service. Background and dependency resolves don't count. */
+  /**
+   * Epoch ms a tool call last used each live service. Background and dependency
+   * resolves don't count, and the entry goes when the service stops being live.
+   */
   private lastUsedAt = new Map<URN, number>();
+  /** The services each in-flight tool call has resolved so far. */
+  private inFlightCalls = new Set<ReadonlySet<URN>>();
   /**
    * Injected so the registry needs no dependency on the flag store; the
    * tool-server wires the real check. The default enables every flag, so a
@@ -91,11 +97,7 @@ export class Registry {
      * Most tools declare nothing in `services()` and resolve here instead. One
      * of those can be holding just as dead a handle as a declared one.
      */
-    const invocation = resolvedDuringInvocation.getStore();
-    if (invocation) {
-      invocation.add(urn);
-      this.lastUsedAt.set(urn, Date.now());
-    }
+    resolvedDuringInvocation.getStore()?.add(urn);
     return this._resolve<T>(urn, [], options);
   }
 
@@ -199,6 +201,7 @@ export class Registry {
       const runOnce = async (): Promise<TResult> => {
         const resolved = new Set<URN>();
         lazilyResolved = resolved;
+        this.inFlightCalls.add(resolved);
 
         try {
           return await resolvedDuringInvocation.run(resolved, async () => {
@@ -209,9 +212,13 @@ export class Registry {
             return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
           });
         } finally {
-          // Also at the end, so a long call does not read as idle while it runs.
+          this.inFlightCalls.delete(resolved);
           const now = Date.now();
-          for (const urn of resolved) this.lastUsedAt.set(urn, now);
+          for (const urn of resolved) {
+            const node = this.services.get(urn);
+            if (node && isLiveServiceState(node.state)) this.lastUsedAt.set(urn, now);
+            else this.lastUsedAt.delete(urn);
+          }
         }
       };
 
@@ -286,9 +293,12 @@ export class Registry {
     namespaces: string[];
     tools: string[];
   } {
+    const now = Date.now();
+    const inUse = new Set<URN>();
+    for (const call of this.inFlightCalls) for (const urn of call) inUse.add(urn);
     const services = new Map<string, ServiceSnapshot>();
     for (const [urn, node] of this.services) {
-      const lastUsedAt = this.lastUsedAt.get(urn);
+      const lastUsedAt = inUse.has(urn) ? now : this.lastUsedAt.get(urn);
       services.set(urn, {
         state: node.state,
         dependents: [...node.dependents],
@@ -455,6 +465,7 @@ export class Registry {
   private _transition(node: ServiceNode, to: ServiceState, cause?: Error): void {
     const from = node.state;
     node.state = to;
+    if (!isLiveServiceState(to)) this.lastUsedAt.delete(node.urn);
     this.events.emit("serviceStateChange", node.urn, from, to);
     if (to === ServiceState.ERROR) {
       const err = cause

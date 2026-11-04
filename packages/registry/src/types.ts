@@ -92,7 +92,10 @@ export interface ServiceNode<T = unknown> {
 export interface ServiceSnapshot {
   state: ServiceState;
   dependents: string[];
-  /** Epoch ms a tool call last used this service; absent if none has. */
+  /**
+   * Epoch ms a tool call last used this service, or now while one is using it;
+   * absent if none has since the service last started.
+   */
   lastUsedAt?: number;
 }
 

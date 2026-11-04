@@ -21,7 +21,11 @@ import {
   filterVvdShadowsFromAndroid,
   type VegaDevice,
 } from "../../utils/vega-devices";
-import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
+import {
+  externalNativeId,
+  listExternalDevices,
+  type ExternalDevice,
+} from "../../utils/external-devices";
 import { lastDeviceUse } from "../simulator/device-services";
 type IosDevice = IosSimulator & { platform: "ios" };
 
@@ -311,24 +315,29 @@ function externalShadowIds(external: readonly ExternalDevice[]): Set<string> {
   return new Set(external.map((device) => device.nativeId));
 }
 
-/** The id interaction tools take for this entry; a stopped VVD has none. */
-function listedDeviceId(d: ListedDevice): string | null {
-  if ("id" in d) return d.id;
-  return "udid" in d ? d.udid : d.serial;
+/**
+ * The ids interaction tools accept for this entry; a stopped VVD has none. A
+ * provider's device also answers to its raw udid / serial, which list-devices
+ * hides but a caller may still have been handed.
+ */
+function listedDeviceIds(d: ListedDevice): string[] {
+  if ("external" in d) return [d.id, externalNativeId(d.id)];
+  const id = "id" in d ? d.id : "udid" in d ? d.udid : d.serial;
+  return id === null ? [] : [id];
 }
 
 function withUsage(
   devices: readonly ListedDevice[],
   registry: Registry
 ): Array<ListedDevice & DeviceUsage> {
-  const ids = devices.map(listedDeviceId).filter((id): id is string => id !== null);
-  const lastUse = lastDeviceUse(registry.getSnapshot().services, ids);
+  const lastUse = lastDeviceUse(registry.getSnapshot().services, devices.flatMap(listedDeviceIds));
   const now = Date.now();
   return devices.map((d) => {
-    const id = listedDeviceId(d);
-    const usedAt = id === null ? undefined : lastUse.get(id);
-    if (usedAt === undefined) return d;
-    return { ...d, inUse: true, idleSeconds: Math.floor((now - usedAt) / 1000) };
+    const used = listedDeviceIds(d).flatMap((id) => lastUse.get(id) ?? []);
+    if (used.length === 0) return d;
+    // A wall clock stepped back since the stamp would otherwise go negative.
+    const idleSeconds = Math.max(0, Math.floor((now - Math.max(...used)) / 1000));
+    return { ...d, inUse: true, idleSeconds };
   });
 }
 
@@ -358,7 +367,7 @@ TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
 A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'. Use the \`fold\` tool to fold or unfold it.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
-'inUse: true' marks a device with a live session on this tool-server, which every agent on this argent install shares, so it may be yours or another agent's; 'idleSeconds' is the time since a tool last used it, and a large value suggests a forgotten session. Informational only; blind to other argent installs, other programs, and Vega until a debugger or network tool attaches.
+'inUse: true' marks a device with a live session on this tool-server, which every agent on this argent install shares, so it may be yours or another agent's; 'idleSeconds' is the time since a tool last used it, and a large value suggests a forgotten session. Informational only; blind to other argent installs, other programs, tools that only run a platform command (e.g. reinstall-app), <flag:harmonyos>HarmonyOS, </flag:harmonyos>and Vega until a debugger or network tool attaches.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
     alwaysLoad: true,
     searchHint:

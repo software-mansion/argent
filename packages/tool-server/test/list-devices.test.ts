@@ -105,6 +105,7 @@ import type { AddressInfo } from "node:net";
 import { Registry, TypedEventEmitter } from "@argent/registry";
 import { createListDevicesTool } from "../src/tools/devices/list-devices";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
+import { discoverChromiumDevices } from "../src/utils/chromium-discovery";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -113,6 +114,28 @@ import { __resetVegaBinaryCacheForTests } from "../src/utils/vega-cli";
 import { listVvdImages } from "../src/utils/vega-sdk";
 
 const listDevicesTool = createListDevicesTool(new Registry());
+
+/** A registry where `tap` resolves `SimulatorServer:<device_id>`, like the interaction tools. */
+function registryWithTap(): Registry {
+  const registry = new Registry();
+  for (const namespace of ["SimulatorServer", "NativeDevtools", "ChromiumCdp"]) {
+    registry.registerBlueprint({
+      namespace,
+      getURN: (id: string) => `${namespace}:${id}`,
+      factory: async () => ({
+        api: {},
+        dispose: async () => {},
+        events: new TypedEventEmitter(),
+      }),
+    });
+  }
+  registry.registerTool({
+    id: "tap",
+    services: (params: { urn: string }) => ({ service: params.urn }),
+    execute: async () => ({}),
+  });
+  return registry;
+}
 
 function simctlJson(): string {
   return JSON.stringify({
@@ -657,36 +680,37 @@ describe("list-devices", () => {
     expect(byName("iPhone 16")).toBeLessThan(byName("Office iPhone"));
   });
 
-  it("annotates a device a tool is driving with inUse and the seconds since that tool call", async () => {
+  it("annotates each device a tool is driving with inUse and the seconds since that tool call", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };
       if (cmd === "adb" && args[0] === "devices") {
-        return { stderr: "", stdout: "List of devices attached\nemulator-5554\tdevice\n" };
+        return {
+          stderr: "",
+          stdout: "List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\n",
+        };
       }
       return { stderr: "", stdout: "" };
     });
+    vi.mocked(discoverChromiumDevices).mockResolvedValueOnce([
+      {
+        platform: "chromium",
+        id: "chromium-cdp-9222",
+        port: 9222,
+        title: "App",
+        url: "about:blank",
+        browser: null,
+        state: "Running",
+      } as Awaited<ReturnType<typeof discoverChromiumDevices>>[number],
+    ]);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(1_000_000);
     try {
-      const registry = new Registry();
-      for (const namespace of ["SimulatorServer", "NativeDevtools"]) {
-        registry.registerBlueprint({
-          namespace,
-          getURN: (id: string) => `${namespace}:${id}`,
-          factory: async () => ({
-            api: {},
-            dispose: async () => {},
-            events: new TypedEventEmitter(),
-          }),
-        });
-      }
+      const registry = registryWithTap();
       // Agents pass UDIDs in whatever case they were given.
-      registry.registerTool({
-        id: "tap",
-        services: () => ({ sim: "SimulatorServer:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" }),
-        execute: async () => ({}),
-      });
-      await registry.invokeTool("tap");
+      await registry.invokeTool("tap", { urn: "SimulatorServer:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" });
+      vi.setSystemTime(1_010_000);
+      await registry.invokeTool("tap", { urn: "SimulatorServer:emulator-5554" });
+      await registry.invokeTool("tap", { urn: "ChromiumCdp:chromium-cdp-9222" });
       // The simulator watcher's own attach, made outside any tool call.
       await registry.resolveService("NativeDevtools:BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB");
       vi.setSystemTime(1_042_900);
@@ -694,16 +718,43 @@ describe("list-devices", () => {
       const result = await createListDevicesTool(registry).execute!({}, {});
 
       const byId = (id: string) =>
-        result.devices.find((d) => ("udid" in d ? d.udid : "serial" in d ? d.serial : null) === id);
+        result.devices.find(
+          (d) => ("id" in d ? d.id : "udid" in d ? d.udid : "serial" in d ? d.serial : null) === id
+        );
       expect(byId("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")).toMatchObject({
         inUse: true,
         idleSeconds: 42,
       });
-      for (const id of ["BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", "emulator-5554"]) {
+      for (const id of ["emulator-5554", "chromium-cdp-9222"]) {
+        expect(byId(id)).toMatchObject({ inUse: true, idleSeconds: 32 });
+      }
+      for (const id of ["BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", "emulator-5556"]) {
         expect(byId(id)).toBeDefined();
         expect(byId(id)).not.toHaveProperty("inUse");
         expect(byId(id)).not.toHaveProperty("idleSeconds");
       }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports idleSeconds 0, not a negative value, after the wall clock steps back", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };
+      return { stderr: "", stdout: "" };
+    });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    try {
+      const registry = registryWithTap();
+      await registry.invokeTool("tap", { urn: "SimulatorServer:AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+      vi.setSystemTime(998_000);
+
+      const result = await createListDevicesTool(registry).execute!({}, {});
+
+      expect(
+        result.devices.find((d) => "udid" in d && d.udid === "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")
+      ).toMatchObject({ inUse: true, idleSeconds: 0 });
     } finally {
       vi.useRealTimers();
     }
@@ -832,6 +883,30 @@ describe("list-devices — external provider shadows", () => {
 
     expect(iPad).toHaveLength(1);
     expect(iPad[0]).not.toHaveProperty("external");
+  });
+
+  it("marks a claimed simulator in use when a tool drove it by its raw udid", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+    const registry = registryWithTap();
+    await registry.invokeTool("tap", { urn: `SimulatorServer:${CLAIMED_UDID}` });
+
+    const result = await createListDevicesTool(registry).execute!({}, {});
+
+    const claimed = result.devices.filter(
+      (device) => "udid" in device && (device.udid as string).includes(CLAIMED_UDID)
+    );
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]).toMatchObject({ external: true, inUse: true, idleSeconds: 0 });
   });
 
   /** The rules ride on the result, so they cost nothing until one is listed. */
