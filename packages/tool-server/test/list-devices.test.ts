@@ -304,6 +304,7 @@ describe("list-devices", () => {
       );
       expect(result.hint).not.toContain("physical iPhones");
       expect(result.hint).not.toContain("the runner");
+      expect(result.hint).not.toContain("--device");
     } finally {
       xcodePending.simctl = false;
     }
@@ -324,13 +325,16 @@ describe("list-devices", () => {
       expect(result.devices.filter((d) => d.platform === "ios").length).toBeGreaterThan(0);
       expect(result.hint).toMatch(/Ask the user to open (that )?Xcode once/);
       expect(result.hint).toContain("does not show physical iPhones");
-      expect(result.hint).toContain("Do not run `xcrun devicectl` yourself: each call waits");
+      expect(result.hint).toContain(
+        "Do not run `xcrun devicectl` yourself, or commands that call `devicectl`, such as " +
+          "`npx react-native run-ios --device` or `npx expo run:ios --device`: each call waits " +
+          "for the same password."
+      );
       expect(result.hint).toContain(
         "Tools that only talk to the runner on the iPhone, such as taps, screenshots and " +
           "`keyboard`, still work while the runner is up."
       );
       expect(result.hint).not.toContain("simulator");
-      expect(result.hint).not.toContain("run-ios");
     } finally {
       xcodePending.devicectl = false;
     }
@@ -348,6 +352,11 @@ describe("list-devices", () => {
         "`simctl` and `devicectl` wait for an administrator password on every call, so argent " +
           "does not run them. `list-devices` does not show local iOS simulators and physical " +
           "iPhones, and argent refuses the tools that need `simctl` or `devicectl`."
+      );
+      expect(result.hint).toContain(
+        "Do not run `xcrun simctl` or `xcrun devicectl` yourself, or commands that call them, " +
+          "such as `npx react-native run-ios` or `npx expo run:ios`, with or without " +
+          "`--device`: each call waits for the same password."
       );
     } finally {
       xcodePending.simctl = false;
