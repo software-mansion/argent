@@ -188,50 +188,13 @@ describe("screenshotDiffTool", () => {
     });
   });
 
-  it("falls back to the default scale when the full-resolution capture fails (Android framebuffer mismatch)", async () => {
-    const dir = await makeTempDir("argent-screenshot-diff-fallback-");
-    const baselinePath = path.join(dir, "baseline.png");
-    const capturedPath = path.join(dir, "captured.png");
-    await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
-    await writePng(capturedPath, 2, 2, { r: 0, g: 0, b: 0 });
-    // Full-res (scale 1.0) fails the way the Android simulator-server does;
-    // the default-scale retry (no scale arg) succeeds.
-    const captureScreenshot = vi.fn(
-      async (_api: unknown, _rotation: unknown, _signal: unknown, scale?: number) => {
-        if (scale === 1.0) {
-          throw new Error("Screenshot failed: wrong data size, expected 7853760 got 17627328.");
-        }
-        return { url: "http://localhost/current.png", path: capturedPath };
-      }
-    );
-
-    const result = await executeScreenshotDiffTool(
-      { simulatorServer: { apiUrl: "http://localhost:4949" } },
-      { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      { artifacts: new ArtifactStore() },
-      captureScreenshot as never
-    );
-
-    // Full-res attempted first, then a default-scale retry without an explicit scale.
-    expect(captureScreenshot).toHaveBeenCalledTimes(2);
-    expect(captureScreenshot.mock.calls[0]![3]).toBe(1.0);
-    expect(captureScreenshot.mock.calls[1]![3]).toBeUndefined();
-    const liveCaptures = (await fs.readdir(dir)).filter((name) =>
-      /^current-[a-f0-9]{8}\.live\.png$/.test(name)
-    );
-    expect(liveCaptures).toHaveLength(1);
-    expect(result.diffPath).toBeTruthy();
-  });
-
-  it("propagates the error when both the full-res capture and the fallback fail", async () => {
-    const dir = await makeTempDir("argent-screenshot-diff-bothfail-");
+  it("surfaces a failed full-resolution capture instead of retrying at another scale", async () => {
+    const dir = await makeTempDir("argent-screenshot-diff-capturefail-");
     const baselinePath = path.join(dir, "baseline.png");
     await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
-    const captureScreenshot = vi.fn(
-      async (_api: unknown, _rotation: unknown, _signal: unknown, scale?: number) => {
-        throw new Error(scale === 1.0 ? "full-res failed" : "device offline");
-      }
-    );
+    const captureScreenshot = vi.fn(async () => {
+      throw new Error("Screenshot failed: wrong data size, expected 7853760 got 17627328.");
+    });
 
     await expect(
       executeScreenshotDiffTool(
@@ -240,8 +203,39 @@ describe("screenshotDiffTool", () => {
         {},
         captureScreenshot as never
       )
-    ).rejects.toThrow("device offline");
-    expect(captureScreenshot).toHaveBeenCalledTimes(2);
+    ).rejects.toThrow("wrong data size");
+    expect(captureScreenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("states the identical-dimensions requirement and labels diffPath by input size", async () => {
+    const { captureBaseline, captureCurrent } = screenshotDiffTool.zodSchema!.shape;
+    expect(captureBaseline.description).toContain("live at full resolution");
+    expect(captureCurrent.description).toContain("live at full resolution");
+    expect(screenshotDiffTool.description).toContain(
+      "Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model, orientation and foldable posture."
+    );
+    expect(screenshotDiffTool.description).toContain("diffPath is the diff image at input size");
+
+    const dir = await makeTempDir("argent-screenshot-diff-dimensions-");
+    const baselinePath = path.join(dir, "baseline.png");
+    const capturedPath = path.join(dir, "captured.png");
+    await writePng(baselinePath, 8, 8, { r: 0, g: 0, b: 0 });
+    await writePng(capturedPath, 8, 8, { r: 0, g: 0, b: 0 });
+    const captureScreenshot = vi.fn(async () => ({
+      url: "http://localhost/current.png",
+      path: capturedPath,
+    }));
+
+    const { summary } = await executeScreenshotDiffTool(
+      { simulatorServer: { apiUrl: "http://localhost:4949" } },
+      { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
+      { artifacts: new ArtifactStore() },
+      captureScreenshot as never
+    );
+
+    expect(summary.split("\n")).toContain(
+      "- diff_images: see diffPath (input size) and contextDiffPath in this result"
+    );
   });
 
   it("uses a fresh hashed filename for each live capture so concurrent diffs do not collide", async () => {

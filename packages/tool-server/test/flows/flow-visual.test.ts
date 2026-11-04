@@ -32,8 +32,6 @@ const h = vi.hoisted(() => ({
   diffCurrentPath: "",
   /** Set by the differ mock: the top-mask policy it was passed. */
   diffTopMask: "" as "" | NonNullable<DiffPngFilesOptions["topMask"]>,
-  /** Set by the differ mock: the normalizeSizes option it was passed. */
-  diffNormalizeSizes: undefined as boolean | undefined,
   /** What the waitForFrame mock resolves a cropOn selector to. */
   cropFrame: undefined as
     undefined | "aborted" | { x: number; y: number; width: number; height: number },
@@ -63,7 +61,6 @@ vi.mock("../../src/tools/screenshot-diff/screenshot-diff", () => ({
     h.outputDir = options.outputDir;
     h.diffCurrentPath = options.currentPath;
     h.diffTopMask = options.topMask ?? "status-bar";
-    h.diffNormalizeSizes = options.normalizeSizes;
     // The real differ bails before writing anything on a dimension mismatch.
     if (h.dimensionMismatch) {
       return { mismatchPercentage: 0, dimensionMismatch: h.dimensionMismatch };
@@ -178,7 +175,6 @@ beforeEach(async () => {
   h.outputDir = "";
   h.diffCurrentPath = "";
   h.diffTopMask = "";
-  h.diffNormalizeSizes = undefined;
   h.cropFrame = undefined;
   h.cropFrameError = null;
   h.dimensionMismatch = null;
@@ -253,8 +249,6 @@ describe("runSnapshot baselines", () => {
     expect(r.status).toBe("pass");
     expect(r.reason).toContain("diff 0.00%");
     expect(h.diffTopMask).toBe("status-bar");
-    // Full-screen keeps the differ's default scale normalization (NOT false).
-    expect(h.diffNormalizeSizes).toBeUndefined();
     // A clean pass carries no artifacts — there is nothing to look at, and
     // handles would make renderers fetch two full-res PNGs just to print paths.
     expect(r.artifacts).toBeUndefined();
@@ -264,8 +258,6 @@ describe("runSnapshot baselines", () => {
   it("fails a dimension-mismatch bail instead of passing its 0% mismatch", async () => {
     await fs.mkdir(path.dirname(baselinePath()), { recursive: true });
     await writeFakePng(baselinePath());
-    // Full-screen keeps scale normalization, so the real differ only bails on a
-    // genuinely different aspect ratio — e.g. a rotated baseline vs the capture.
     h.dimensionMismatch = {
       expected: { width: 844, height: 390 },
       actual: { width: 390, height: 844 },
@@ -486,7 +478,6 @@ describe("runSnapshot diff-dir cleanup", () => {
 
   it("removes the scratch dir on a dimension-mismatch bail", async () => {
     await seedBaseline();
-    // Aspect ratios must genuinely differ for a full-screen bail (see above).
     h.dimensionMismatch = {
       expected: { width: 844, height: 390 },
       actual: { width: 390, height: 844 },
@@ -545,8 +536,6 @@ describe("runSnapshot cropOn", () => {
     // Crops are never top-masked — the top of a crop is element content, not
     // the full screen's status bar.
     expect(h.diffTopMask).toBe("none");
-    // Crop dims carry meaning — the differ must hard-fail any size drift.
-    expect(h.diffNormalizeSizes).toBe(false);
     // …and the unregistered crop did not outlive the call.
     await expect(fs.access(path.dirname(h.diffCurrentPath))).rejects.toThrow();
   });

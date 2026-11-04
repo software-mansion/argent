@@ -114,123 +114,46 @@ describe("diffPngFiles", () => {
     expect(result.contextDiffPath).toBeUndefined();
   });
 
-  it("compares same-aspect screenshots of different resolutions instead of failing", async () => {
+  it.each([
+    // The same screen at two screenshot scales.
+    { baseline: { width: 10, height: 20 }, current: { width: 20, height: 40 } },
+    // Full-resolution iPhone 16 vs iPhone 16 Pro: 0.29% apart in aspect ratio.
+    { baseline: { width: 1179, height: 2556 }, current: { width: 1206, height: 2622 } },
+    // Pixel 9 vs Pixel 7: same width, 24 rows taller.
+    { baseline: { width: 1080, height: 2424 }, current: { width: 1080, height: 2400 } },
+    // Same height, different width.
+    { baseline: { width: 1080, height: 2400 }, current: { width: 1440, height: 2400 } },
+  ])(
+    "reports $baseline.width x $baseline.height vs $current.width x $current.height as a dimension mismatch without comparing",
+    async ({ baseline, current }) => {
+      const dir = await makeTempDir();
+      const baselinePath = path.join(dir, "baseline.png");
+      const currentPath = path.join(dir, "current.png");
+      await writePng(baselinePath, baseline.width, baseline.height, { r: 30, g: 60, b: 90 });
+      await writePng(currentPath, current.width, current.height, { r: 30, g: 60, b: 90 });
+
+      const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+      expect(result).toMatchObject({
+        differentPixels: 0,
+        mismatchPercentage: 0,
+        dimensionMismatch: { expected: baseline, actual: current },
+      });
+      const lines = result.summary.split("\n");
+      expect(lines).toContain("- status: dimension_mismatch");
+      expect(lines).toContain(
+        "  - only images of identical dimensions are compared; capture both on the same device model, in the same orientation, at the same screenshot scale (live captures use scale: 1.0)"
+      );
+      expect(result.diffPath).toBeUndefined();
+      expect(result.contextDiffPath).toBeUndefined();
+      expect(analyzeScreenshotTextChangesMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it("compares equal-dimension images", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");
     const currentPath = path.join(dir, "current.png");
-    // Same aspect ratio (0.5), different scale: a 0.3x-style saved baseline vs a
-    // full-res live capture. These must be normalized and compared, not rejected.
-    await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
-    await writePng(currentPath, 20, 40, { r: 30, g: 60, b: 90 });
-
-    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
-
-    expect(result.dimensionMismatch).toBeUndefined();
-    expect(result.summary).not.toContain("dimension_mismatch");
-    // …but the rescale is now disclosed rather than absorbed silently.
-    expect(result.sizeNormalization).toBeDefined();
-    expect(result.imageSize).toEqual({ width: 10, height: 20 });
-    expect(result.diffPath).toBe(path.join(dir, "current-diff.png"));
-    const diff = PNG.sync.read(await fs.readFile(result.diffPath!));
-    expect(diff.width).toBe(10);
-    expect(diff.height).toBe(20);
-  });
-
-  it("does not call a rescaled comparison `unchanged` (issue #617)", async () => {
-    const dir = await makeTempDir();
-    const baselinePath = path.join(dir, "baseline.png");
-    const currentPath = path.join(dir, "current.png");
-    // A solid fill downscales to the identical colour under Lanczos3, so this is
-    // a genuine zero-diff — the false green exactly as reported: same aspect,
-    // different resolution, nothing said about it.
-    await writePng(baselinePath, 20, 40, { r: 30, g: 60, b: 90 });
-    await writePng(currentPath, 10, 20, { r: 30, g: 60, b: 90 });
-
-    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
-
-    expect(result.differentPixels).toBe(0);
-    expect(result.dimensionMismatch).toBeUndefined();
-    expect(result.sizeNormalization).toEqual({
-      baseline: { width: 20, height: 40 },
-      current: { width: 10, height: 20 },
-      comparedAt: { width: 10, height: 20 },
-    });
-    // A gate reading the status must not see a plain pass.
-    expect(result.summary).toContain("- status: resized_no_change");
-    expect(result.summary).not.toContain("- status: unchanged");
-    expect(result.summary).toContain(
-      "- size_normalized: baseline=20x40 current=10x20 compared_at=10x20"
-    );
-  });
-
-  it("still reports a real difference as `changed` when sizes were normalized", async () => {
-    const dir = await makeTempDir();
-    const baselinePath = path.join(dir, "baseline.png");
-    const currentPath = path.join(dir, "current.png");
-    // The caveat must never soften an actual regression into a caveat status —
-    // this pins the ordering inside screenshotDiffStatus.
-    await writePng(baselinePath, 20, 40, { r: 20, g: 20, b: 20 });
-    await writePng(currentPath, 10, 20, { r: 20, g: 20, b: 20 }, [
-      // Clear of the ignored top band (ceil(20 * 0.06) = 2 rows).
-      ...rectPixels(2, 12, 4, 4, { r: 255, g: 0, b: 0 }),
-    ]);
-
-    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
-
-    expect(result.differentPixels).toBeGreaterThan(0);
-    expect(result.summary).toContain("- status: changed");
-    // …and the rescale is still disclosed, so the figures can be read correctly.
-    expect(result.summary).toContain("- size_normalized:");
-  });
-
-  it("says nothing about normalization when the sizes already matched", async () => {
-    const dir = await makeTempDir();
-    const baselinePath = path.join(dir, "baseline.png");
-    const currentPath = path.join(dir, "current.png");
-    await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
-    await writePng(currentPath, 10, 20, { r: 30, g: 60, b: 90 });
-
-    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
-
-    expect(result.sizeNormalization).toBeUndefined();
-    expect(result.summary).not.toContain("size_normalized");
-    expect(result.summary).toContain("- status: unchanged");
-  });
-
-  it("hard-fails same-aspect resolution differences when normalizeSizes is false", async () => {
-    const dir = await makeTempDir();
-    const baselinePath = path.join(dir, "baseline.png");
-    const currentPath = path.join(dir, "current.png");
-    // Exactly 2x with the same aspect ratio — the default path (test above)
-    // resamples and compares; normalizeSizes: false must bail instead, since
-    // for images whose dimensions carry meaning the drift IS the failure.
-    await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
-    await writePng(currentPath, 20, 40, { r: 30, g: 60, b: 90 });
-
-    const result = await diffPngFiles({
-      baselinePath,
-      currentPath,
-      outputDir: dir,
-      normalizeSizes: false,
-    });
-
-    expect(result).toMatchObject({
-      mismatchPercentage: 0,
-      dimensionMismatch: {
-        expected: { width: 10, height: 20 },
-        actual: { width: 20, height: 40 },
-      },
-    });
-    expect(result.diffPath).toBeUndefined();
-    expect(result.contextDiffPath).toBeUndefined();
-  });
-
-  it("compares equal-dimension images normally under normalizeSizes: false", async () => {
-    const dir = await makeTempDir();
-    const baselinePath = path.join(dir, "baseline.png");
-    const currentPath = path.join(dir, "current.png");
-    // The pass path every matching cropOn comparison takes: identical
-    // dimensions must flow through to a normal pixel compare, not a bail.
     await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
     await writePng(currentPath, 10, 20, { r: 30, g: 60, b: 90 }, [
       ...rectPixels(2, 10, 3, 2, { r: 255, g: 0, b: 0 }),
@@ -241,7 +164,6 @@ describe("diffPngFiles", () => {
       currentPath,
       outputDir: dir,
       topMask: "none",
-      normalizeSizes: false,
     });
 
     expect(result.dimensionMismatch).toBeUndefined();
@@ -482,57 +404,6 @@ describe("diffPngFiles", () => {
       expect.objectContaining({ textChangeMinConfidence: 0.7, ignoreTopPixels: 2 })
     );
   });
-
-  // diffPngFiles normalizes two same-aspect, different-resolution screenshots to a
-  // common size, then hands the OCR/font pass BOTH the normalized images and each
-  // image's decoded->normalized region scale, so the rescaled text bounds and the
-  // pixels they crop share the pixel-diff coordinate space. normalizeToCommonSize
-  // only ever downscales the LARGER image and returns the smaller one untouched, so
-  // for any one fixture only the downscaled side's wiring is load-bearing: its
-  // normalized image and region scale differ from the raw decoded ones, so reverting
-  // baselineImage/currentImage (or the matching region scale) to the decoded value
-  // would surface the raw size and fail here. The untouched side's assertions hold
-  // for both the decoded and normalized value, so we exercise BOTH directions to pin
-  // both sides. Without this wiring the OCR pass would be handed the raw images and
-  // no region scales -- the mismatch #442 fixed.
-  it.each([
-    {
-      larger: "baseline",
-      baseline: { width: 480, height: 240 },
-      current: { width: 240, height: 120 },
-      baselineRegionScale: { x: 0.5, y: 0.5 },
-      currentRegionScale: { x: 1, y: 1 },
-    },
-    {
-      larger: "current",
-      baseline: { width: 240, height: 120 },
-      current: { width: 480, height: 240 },
-      baselineRegionScale: { x: 1, y: 1 },
-      currentRegionScale: { x: 0.5, y: 0.5 },
-    },
-  ])(
-    "hands OCR the normalized images and decoded->normalized region scales when the $larger image is downscaled (diffPngFiles wiring)",
-    async ({ baseline, current, baselineRegionScale, currentRegionScale }) => {
-      const dir = await makeTempDir();
-      const baselinePath = path.join(dir, "baseline.png");
-      const currentPath = path.join(dir, "current.png");
-      await writePng(baselinePath, baseline.width, baseline.height, { r: 0, g: 0, b: 0 });
-      await writePng(currentPath, current.width, current.height, { r: 0, g: 0, b: 0 });
-
-      await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
-
-      // Both images are normalized to the common 240x120 size; each region scale
-      // maps that image's OCR bounds from its decoded size into the shared space.
-      expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          baselineImage: expect.objectContaining({ width: 240, height: 120 }),
-          currentImage: expect.objectContaining({ width: 240, height: 120 }),
-          baselineRegionScale,
-          currentRegionScale,
-        })
-      );
-    }
-  );
 
   // diffPngFiles always calls the OCR/font pass, but tells it whether the pixel diff
   // found any changes via hasPixelDiff; the pass uses that to skip text analysis when

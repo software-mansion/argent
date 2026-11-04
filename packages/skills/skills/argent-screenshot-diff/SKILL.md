@@ -29,6 +29,8 @@ Use normal downscaled `screenshot` calls for UI context and state checks. Use fu
 { "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
 ```
 
+The two images must have identical dimensions: any size difference returns `dimension_mismatch` and nothing is compared. Capture the baseline at the same scale and in the same orientation, and keep one baseline per device model, because two models with the same resolution are compared as one screen.
+
 Capture the stable baseline before the relevant interaction or before editing whenever feasible. Compare it to the post-change or post-interaction screen after the app reloads, rebuilds, or reaches the state under test.
 
 ## 4. Parameters
