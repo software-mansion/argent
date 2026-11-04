@@ -40,6 +40,7 @@ import {
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
+import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
@@ -247,11 +248,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
-      const tools = toMcpToolList(await fetchTools());
+      // The handshake precedes tools/list, so the client is known by now.
+      const keywordFacts = !showsSchemaKeywords(server.getClientVersion()?.name);
+      const tools = toMcpToolList(await fetchTools(), { keywordFacts });
       await spyLog({
         ts: new Date().toISOString(),
         event: "list_tools",
         count: tools.length,
+        keywordFacts,
       });
       return { tools };
     } catch (err) {
@@ -293,7 +297,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         canonicalToolId(params.name) === "e2e-execute" &&
         result &&
         typeof result === "object" &&
-        "flow" in result &&
+        ("e2eTest" in result || "flow" in result) &&
         "steps" in result
       ) {
         content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);

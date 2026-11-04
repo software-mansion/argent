@@ -15,6 +15,7 @@ import {
   E2E_DIR_CLIENT_HEADER,
   LEGACY_E2E_DIRS,
   LINKED_CALL_HEADER,
+  canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
 } from "@argent/registry";
@@ -32,6 +33,7 @@ import {
   collectStepMembers,
   e2eShadowWarningFor,
   filesLogEnabled,
+  formerParamsForOlderServer,
   nameToE2ePathForOlderServer,
   stepForOlderServer,
 } from "./flow-files.js";
@@ -111,7 +113,7 @@ export interface CreateToolsClientOptions {
   ) => Promise<Response>;
   /**
    * Receives each diagnostic line of the client, without a trailing newline:
-   * the `[flow-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on, and each
+   * the `[e2e-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on, and each
    * snapshot baseline a run returned that could not be written here.
    * Defaults to writing the line to stderr; `argent flow run --json` turns it
    * into a JSON record, since its stderr carries one JSON object per line.
@@ -278,7 +280,7 @@ function findTool(tools: readonly ToolMeta[], name: string): ToolMeta | null {
  * with the call, so a call the tool-server would refuse must not send them
  * first. Presence only: a present but invalid
  * value is the tool-server's call. A target that the client derives from other
- * arguments (`flow_file` from `name`) is left to the tool-server.
+ * arguments (`e2e_test_file` from `name`) is left to the tool-server.
  */
 function assertRequiredPresent(meta: ToolMeta, args: unknown): void {
   const record = typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
@@ -498,14 +500,15 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
     // File boundary, outbound: wrap args the tool declares as file paths so the
     // server can read them in place (local) or from inlined content (routed).
-    let finalArgs = args;
+    let finalArgs = canonicalToolArgs(name, args);
     const tools = await fetchTools({ signal: opts?.signal });
     const meta = findTool(tools, name);
     // An older tool-server reads saved tests only from `.argent/flows/`, and
     // lists its tools by their `flow-*` ids only.
     const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));
     if (meta) {
-      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, args);
+      finalArgs = await nameToE2ePathForOlderServer(meta.name, meta.fileInputs, finalArgs);
+      finalArgs = formerParamsForOlderServer(meta, finalArgs);
     }
     if (olderServer && canonicalToolId(meta.name) === "e2e-add-step") {
       finalArgs = await stepForOlderServer(finalArgs, (tool) => findTool(tools, tool)?.name);
@@ -544,7 +547,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         // A recorded flow YAML is written here too; only baselines are logged.
         for (const file of applied.written) {
           if (baselineDirs.includes(path.dirname(file))) {
-            diagnose(`[flow-files] baseline ${file}: written`);
+            diagnose(`[e2e-files] baseline ${file}: written`);
           }
         }
       }

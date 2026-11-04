@@ -102,14 +102,18 @@ describe("gesture-custom on a physical iOS device", () => {
         {
           points: [
             { x: 156, y: 422, tMs: 0 },
+            { x: 156, y: 422, tMs: 99 },
             { x: 117, y: 422, tMs: 100 },
+            { x: 117, y: 422, tMs: 199 },
             { x: 78, y: 422, tMs: 200 },
           ],
         },
         {
           points: [
             { x: 234, y: 422, tMs: 0 },
+            { x: 234, y: 422, tMs: 99 },
             { x: 273, y: 422, tMs: 100 },
+            { x: 273, y: 422, tMs: 199 },
             { x: 312, y: 422, tMs: 200 },
           ],
         },
@@ -130,7 +134,9 @@ describe("gesture-custom on a physical iOS device", () => {
       {
         points: [
           { x: 195, y: 590.8, tMs: 0 },
+          { x: 195, y: 590.8, tMs: 15 },
           { x: 195, y: 422, tMs: 16 },
+          { x: 195, y: 422, tMs: 31 },
           { x: 195, y: 253.2, tMs: 32 },
         ],
       },
@@ -148,8 +154,10 @@ describe("gesture-custom on a physical iOS device", () => {
       ],
     });
     const [[request]] = run.mock.calls.filter(([req]) => req.command === "touchPaths");
-    expect(request.fingers[0].points.map((p: { tMs: number }) => p.tMs)).toEqual([0, 100, 200]);
-    expect(request.fingers[1].points).toHaveLength(3);
+    expect(request.fingers[0].points.map((p: { tMs: number }) => p.tMs)).toEqual([
+      0, 99, 100, 199, 200,
+    ]);
+    expect(request.fingers[1].points).toHaveLength(5);
   });
 
   it("lets a second finger join late and lift early", async () => {
@@ -164,8 +172,10 @@ describe("gesture-custom on a physical iOS device", () => {
       ],
     });
     const [[request]] = run.mock.calls.filter(([req]) => req.command === "touchPaths");
-    expect(request.fingers[0].points.map((p: { tMs: number }) => p.tMs)).toEqual([0, 50, 100, 150]);
-    expect(request.fingers[1].points.map((p: { tMs: number }) => p.tMs)).toEqual([50, 100]);
+    expect(request.fingers[0].points.map((p: { tMs: number }) => p.tMs)).toEqual([
+      0, 50, 99, 100, 150,
+    ]);
+    expect(request.fingers[1].points.map((p: { tMs: number }) => p.tMs)).toEqual([50, 99, 100]);
   });
 
   it("rejects a train that is not a Down, Moves, then an Up, before touching the device", async () => {

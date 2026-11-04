@@ -20,9 +20,8 @@ const REMOTE_TMP = "/data/local/tmp";
 export const UITEST_TIMEOUT_MS = 20_000;
 
 /**
- * Whole-call ceiling for one interaction, under the MCP client's 30s
- * abort-and-replay, which would otherwise re-inject a tap the caller thinks
- * never happened.
+ * Whole-call ceiling for one interaction, bounding how long it holds the
+ * device's `uitest` queue.
  */
 export const HARMONY_INTERACTION_TIMEOUT_MS = 20_000;
 
