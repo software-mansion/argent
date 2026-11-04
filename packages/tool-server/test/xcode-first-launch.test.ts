@@ -1,8 +1,9 @@
 /**
  * Issue #1721: Xcode's `simctl`/`devicectl` wrappers start a component install
  * that waits for an administrator password when the framework they wrap is
- * missing or older than they expect. The check reads the same two files the
- * wrapper does, so it can say so without starting anything.
+ * older than they expect. `devicectl` and Xcode 26's `simctl` also start it when
+ * the framework is missing. The check reads the same two files the wrapper does,
+ * so it can say so without starting anything.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -26,7 +27,7 @@ let root: string;
 let devDir: string;
 let plistPath: string;
 
-/** The `simctl` wrapper shape of Xcode 27: runs the install when the framework is missing or older. */
+/** The `simctl` wrapper shape of Xcode 27: runs the install when the framework is older, not when it is missing. */
 function olderRuleWrapper(expected: string, plist: string): string {
   return [
     "#!/bin/bash",
