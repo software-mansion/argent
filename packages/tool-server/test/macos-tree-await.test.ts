@@ -126,6 +126,24 @@ describe("await-ui-element on a Mac app", () => {
     expect(filled.result.success).toBe(true);
   });
 
+  it("reads a web ARIA field's text as its value, never its label", async () => {
+    const at = { normalizedFrame: rect(0.1, 0.6, 0.4, 0.05) };
+    const web = webTree([
+      { ...at, role: "textbox", testid: "full", label: "Notes", text: "hello  there" },
+      { ...at, role: "textbox", testid: "empty", label: "Notes" },
+    ]);
+    const check = async (identifier: string, expectedText: string) =>
+      (
+        await awaitElement(
+          { web },
+          { selector: { identifier }, condition: "text", expectedText, timeoutMs: 100 }
+        )
+      ).result.success;
+    expect(await check("full", "hello there")).toBe(true);
+    expect(await check("full", "Notes")).toBe(false);
+    expect(await check("empty", "Notes")).toBe(false);
+  });
+
   // <div data-testid="status"><span>Upload done</span></div> and
   // <button data-testid="save"><span>Save</span></button>
   const web = webTree([

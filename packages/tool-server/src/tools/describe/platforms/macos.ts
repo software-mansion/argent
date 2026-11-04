@@ -304,6 +304,9 @@ const INTERACTIVE_ARIA_ROLES: Record<string, string> = {
   slider: "AXSlider",
 };
 
+// Elements that keep a field's text in their content, not in a `value`.
+const ARIA_TEXT_ROLES: ReadonlySet<string> = new Set(["textbox", "searchbox", "combobox"]);
+
 const STRUCTURAL_ARIA_ROLES: Record<string, string> = {
   heading: "AXHeading",
   img: "AXImage",
@@ -403,8 +406,9 @@ function contentName(item: WireWebItem): string {
 
 function webNode(item: WireWebItem): MacosNode {
   const role = webRole(item);
-  const field = item.tag === "input" || item.tag === "textarea" || item.tag === "select";
-  const password = field && item.type === "password";
+  const control = item.tag === "input" || item.tag === "textarea" || item.tag === "select";
+  const field = control || ARIA_TEXT_ROLES.has(item.role);
+  const password = control && item.type === "password";
   // The `value` attribute of these says nothing about their state; `checked` does.
   const noValue = password || item.type === "checkbox" || item.type === "radio";
   const node = newNode(
@@ -415,7 +419,13 @@ function webNode(item: WireWebItem): MacosNode {
       // text: that is the value cut at 80 characters, the options of a select,
       // or for a password the secret.
       label: cap(field ? item.label || item.placeholder : item.label || contentName(item)),
-      value: field && !noValue ? cap(item.value ?? undefined) : undefined,
+      value: control
+        ? noValue
+          ? undefined
+          : cap(item.value ?? undefined)
+        : field
+          ? capText(item.fullText)
+          : undefined,
       password,
       clickable: MACOS_CLICKABLE_ROLES.has(role),
       checkable: CHECKABLE_ROLES.has(role),
@@ -513,6 +523,14 @@ function axNode(
     if (converted?.d.role === "AXMenu" || (comboList && converted)) {
       build.menus.push(converted);
     } else if (converted) node.children.push(converted);
+  }
+  // An NSTokenField's value has one U+FFFC per token; its children hold the tokens.
+  if (role === "AXTextField" && node.d.value?.includes("\uFFFC")) {
+    const tokens = node.children.flatMap((c) => (c.d.role === role && c.d.value) || []);
+    if (tokens.length > 0) {
+      const typed = node.d.value.replaceAll("\uFFFC", "");
+      node.d.value = cap([...tokens, typed].filter(Boolean).join(", "));
+    }
   }
   return node;
 }

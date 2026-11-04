@@ -162,6 +162,21 @@ describe("macOS describe adapter: projection of the probe app", () => {
     expect(menus.map((m) => m.children.map((c) => c.label))).toContainEqual(["Copy"]);
   });
 
+  it("reads a token field's value from its tokens", async () => {
+    const tree = probeTree();
+    const token = (value: string) => axNode("AXTextField", rect(0.1, 0.1, 0.05, 0.02), { value });
+    (windowRoot(tree).children as Array<unknown>).push(
+      axNode(
+        "AXTextField",
+        rect(0.1, 0.1, 0.2, 0.03),
+        { identifier: "tokens", value: "\uFFFC\uFFFCpart" },
+        [token("tok1"), token("tok2")]
+      )
+    );
+    const { data } = await describeFixture([tree]);
+    expect(byId(data.tree, "tokens")!.value).toBe("tok1, tok2, part");
+  });
+
   it("puts an open popup menu and the web items of a sheet in front of the window", async () => {
     const tree = probeTree();
     (tree.windows as unknown[]).push({
