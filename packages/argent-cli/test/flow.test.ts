@@ -1490,6 +1490,53 @@ describe("argent e2e run", () => {
     );
   });
 
+  it.skipIf(!canDenyRead).each([
+    [".argent/e2e", ".argent/e2e"],
+    [".argent/flows", ".argent/flows"],
+    ["the .argent directory", ".argent"],
+  ])("fails when %s cannot be read instead of calling it absent", async (_, locked) => {
+    const listRoot = path.join(tempRoot, `list-unreadable-${locked.replace(/\W/g, "")}`);
+    for (const dir of [".argent/e2e", ".argent/flows"]) {
+      await fsp.mkdir(path.join(listRoot, dir), { recursive: true });
+      await fsp.writeFile(path.join(listRoot, dir, "checkout.yaml"), "steps: []\n");
+    }
+    const lockedDir = path.join(listRoot, locked);
+    await fsp.chmod(lockedDir, 0o000);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await expect(flow(["list"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+      // Restore before afterAll's rm walks the tree (see there).
+      await fsp.chmod(lockedDir, 0o700);
+    }
+
+    const runRoot = await fsp.realpath(listRoot);
+    const first = locked === ".argent/flows" ? ".argent/flows" : ".argent/e2e";
+    expect(errs).toEqual([`Could not read e2e test directory: ${path.join(runRoot, first)}`]);
+    expect(logs).toEqual([]);
+  });
+
+  it("fails when an e2e test directory path is a file", async () => {
+    const listRoot = path.join(tempRoot, "list-notdir-project");
+    await fsp.mkdir(path.join(listRoot, ".argent"), { recursive: true });
+    await fsp.writeFile(path.join(listRoot, ".argent", "e2e"), "not a directory\n");
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await expect(flow(["list"], opts)).rejects.toThrow("process.exit:2");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const runRoot = await fsp.realpath(listRoot);
+    expect(errs).toEqual([
+      `Could not read e2e test directory: ${path.join(runRoot, ".argent", "e2e")}`,
+    ]);
+    expect(logs).toEqual([]);
+  });
+
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({

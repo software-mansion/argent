@@ -1542,8 +1542,10 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
         // ordering must be a pure function of the set of paths, never of the
         // walk order.
         rels = (await collectRunnableFlowPaths(path.join(process.cwd(), dir))).sort();
-      } catch {
-        continue;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        console.error(`Could not read e2e test directory: ${path.join(process.cwd(), dir)}`);
+        return exitAfterFlush(2);
       }
       anyDir = true;
       for (const rel of rels) {
