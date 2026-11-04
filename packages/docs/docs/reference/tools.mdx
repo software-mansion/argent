@@ -185,8 +185,8 @@ The old `flow-*` names, for example `flow-execute`, still call these tools. See 
 `e2e-add-step` records a `gesture-tap` as a `tap` step with a selector. Argent derives the selector from the tapped element: the identifier first, then the text, then the role. To record a different selector, pass `selector` with an `identifier`, a `text` or a `role`. Argent checks the selector against the tree that a replay reads. The tool runs nothing and records no step when one of these checks fails:
 
 - Argent cannot read the tree.
-- The selector matches no element, or it matches an element that does not cover the tapped point.
-- The center of the matched element, where a replay taps, is on a different element than the tapped point.
+- The selector matches no element.
+- A replay taps the center of the matched element. The innermost element at that center is not the innermost element at the tapped point. The message gives the center, so that the agent can record the tap there.
 - The command is not `gesture-tap`, or the call also has `delayMs`.
 
 ## Design variants

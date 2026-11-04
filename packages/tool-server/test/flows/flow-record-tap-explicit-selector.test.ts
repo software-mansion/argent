@@ -115,7 +115,7 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     [
       "resolves away from the tapped point",
       { text: "Elsewhere" },
-      /`selector` text="Elsewhere" resolves to a different element in the tree a replay reads/,
+      /`selector` text="Elsewhere" resolves, in the tree a replay reads, to an element centred at \(0\.3, 0\.15\)/,
     ],
   ])("refuses a supplied selector that %s, running nothing", async (_, selector, reason) => {
     setTree([
@@ -145,7 +145,7 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     })) as { message: string };
 
     expect(res.message).toMatch(
-      /`selector` could not be checked \(helper down\)\. Omit it to record the tap with its coordinates\./
+      /`selector` could not be checked \(helper down\)\. Restore the tree, then record the tap again\./
     );
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
@@ -219,25 +219,55 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     })) as { message: string };
 
     expect(res.message).toMatch(
-      /`selector` id="settings-card" resolves to an element whose centre, where a replay taps, is on a different element than the tap/
+      /`selector` id="settings-card" resolves, in the tree a replay reads, to an element centred at \(0\.5, 0\.45\)/
     );
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
   });
 
-  it("accepts a container selector whose centre is on a child of the tapped element", async () => {
+  // Nothing smaller sits at the row's centre, so a replay taps the row itself,
+  // not the Delete button the tap hit.
+  it("refuses a container selector when the tap hit a control inside it", async () => {
     setTree([
-      n({ frame: { x: 0, y: 0.4, width: 1, height: 0.1 }, identifier: "row-container" }),
-      n({ frame: { x: 0.3, y: 0.42, width: 0.4, height: 0.06 }, label: "Wi-Fi" }),
+      n({ frame: { x: 0, y: 0.4, width: 1, height: 0.1 }, identifier: "row-1" }),
+      n({
+        role: "AXButton",
+        frame: { x: 0.85, y: 0.42, width: 0.1, height: 0.06 },
+        label: "Delete",
+      }),
     ]);
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.9, y: 0.45 }),
+      selector: { identifier: "row-1" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/`selector` id="row-1" resolves, in the tree a replay reads/);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  // The text is its own leaf, narrower than the row (a raw iOS view tree, or an
+  // Android TextView), so a tap at the row's centre misses it.
+  it("names the replay point for a text leaf inside the tapped row, and records a tap there", async () => {
+    setTree([
+      n({ frame: { x: 0, y: 0.3, width: 1, height: 0.06 }, identifier: "row-3" }),
+      n({ frame: { x: 0.05, y: 0.31, width: 0.2, height: 0.04 }, label: "Settings" }),
+    ]);
+    const refused = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.33 }),
+      selector: { text: "Settings" },
+    })) as { message: string };
+    expect(refused.message).toMatch(/record the tap at \(0\.15, 0\.33\)/);
+    expect(await recordedSteps()).toHaveLength(0);
+
     await record({
       command: "gesture-tap",
-      args: JSON.stringify({ udid: DEVICE, x: 0.1, y: 0.45 }),
-      selector: { identifier: "row-container" },
+      args: JSON.stringify({ udid: DEVICE, x: 0.15, y: 0.33 }),
+      selector: { text: "Settings" },
     });
-    expect(await recordedSteps()).toEqual([
-      { kind: "tap", selector: { identifier: "row-container" } },
-    ]);
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Settings" } }]);
   });
 
   // The element here has an id and text, so the warning must not claim otherwise.
