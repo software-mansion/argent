@@ -707,7 +707,9 @@ describe("list-devices", () => {
     try {
       const registry = registryWithTap();
       // Agents pass UDIDs in whatever case they were given.
-      await registry.invokeTool("tap", { urn: "SimulatorServer:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" });
+      await registry.invokeTool("tap", {
+        urn: "SimulatorServer:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      });
       vi.setSystemTime(1_010_000);
       await registry.invokeTool("tap", { urn: "SimulatorServer:emulator-5554" });
       await registry.invokeTool("tap", { urn: "ChromiumCdp:chromium-cdp-9222" });
@@ -747,7 +749,9 @@ describe("list-devices", () => {
     vi.setSystemTime(1_000_000);
     try {
       const registry = registryWithTap();
-      await registry.invokeTool("tap", { urn: "SimulatorServer:AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+      await registry.invokeTool("tap", {
+        urn: "SimulatorServer:AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+      });
       vi.setSystemTime(998_000);
 
       const result = await createListDevicesTool(registry).execute!({}, {});

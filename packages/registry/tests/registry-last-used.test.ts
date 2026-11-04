@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Registry } from "../src/registry";
 import { ServiceState } from "../src/types";
-import { createMockBlueprint, createMockToolDef, createStaticBlueprint, staticUrn } from "./helpers";
+import {
+  createMockBlueprint,
+  createMockToolDef,
+  createStaticBlueprint,
+  staticUrn,
+} from "./helpers";
 
 function lastUsedAt(registry: Registry, urn: string): number | undefined {
   return registry.getSnapshot().services.get(urn)?.lastUsedAt;

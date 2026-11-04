@@ -335,7 +335,6 @@ function withUsage(
   return devices.map((d) => {
     const used = listedDeviceIds(d).flatMap((id) => lastUse.get(id) ?? []);
     if (used.length === 0) return d;
-    // A wall clock stepped back since the stamp would otherwise go negative.
     const idleSeconds = Math.max(0, Math.floor((now - Math.max(...used)) / 1000));
     return { ...d, inUse: true, idleSeconds };
   });

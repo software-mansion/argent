@@ -217,7 +217,6 @@ export class Registry {
           for (const urn of resolved) {
             const node = this.services.get(urn);
             if (node && isLiveServiceState(node.state)) this.lastUsedAt.set(urn, now);
-            else this.lastUsedAt.delete(urn);
           }
         }
       };
