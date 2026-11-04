@@ -76,13 +76,12 @@ export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string 
       ? "Tools that only talk to the runner on the iPhone, such as taps, screenshots and " +
         "`keyboard`, still work while the runner is up. "
       : "") +
-    (one
-      ? `Do not run \`xcrun ${wrappers[0]}\` yourself, or commands that call \`${wrappers[0]}\`, such as ` +
-        (wrappers[0] === "simctl"
-          ? "`npx react-native run-ios` or `npx expo run:ios`"
-          : "`npx react-native run-ios --device` or `npx expo run:ios --device`")
-      : "Do not run `xcrun simctl` or `xcrun devicectl` yourself, or commands that call them, " +
-        "such as `npx react-native run-ios` or `npx expo run:ios`, with or without `--device`") +
+    (wrappers.length === 1 && wrappers[0] === "devicectl"
+      ? "Do not run `xcrun devicectl` yourself, or commands that call `devicectl`, such as " +
+        "`npx react-native run-ios --device` or `npx expo run:ios --device`"
+      : `Do not run ${wrappers.map((w) => `\`xcrun ${w}\``).join(" or ")} yourself, or commands ` +
+        `that call ${one ? "`simctl`" : "them"}, such as \`npx react-native run-ios\` or ` +
+        "`npx expo run:ios`, with or without `--device`") +
     ": each call waits for the same password. " +
     `Ask the user to open ${xcode ? "that Xcode" : "Xcode"} once and let it install the ` +
     `components, or to run \`sudo ${xcodebuild} -runFirstLaunch\`, then retry. ` +

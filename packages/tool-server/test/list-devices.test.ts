@@ -300,13 +300,13 @@ describe("list-devices", () => {
         "such as taps and screenshots, still work on an iPhone or iPad simulator"
       );
       // The agent's own simctl, or a build that calls it, would wait for the password too.
-      expect(result.hint).toContain(
-        "Do not run `xcrun simctl` yourself, or commands that call `simctl`, such as " +
-          "`npx react-native run-ios` or `npx expo run:ios`"
-      );
       expect(result.hint).not.toContain("physical iPhones");
       expect(result.hint).not.toContain("the runner");
-      expect(result.hint).not.toContain("--device");
+      expect(result.hint).toContain(
+        "Do not run `xcrun simctl` yourself, or commands that call `simctl`, such as " +
+          "`npx react-native run-ios` or `npx expo run:ios`, with or without `--device`: each " +
+          "call waits for the same password."
+      );
     } finally {
       xcodePending.simctl = false;
     }
