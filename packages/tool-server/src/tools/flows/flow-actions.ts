@@ -10,7 +10,7 @@ import {
 import { isBlindRead } from "../describe/blind-read";
 import { nativeDirection, uiPointToNative, uiVectorToNative } from "./flow-orientation";
 import {
-  selectorToFrame,
+  selectorToNode,
   findAll,
   evaluateCondition,
   firstInReadingOrder,
@@ -427,17 +427,25 @@ function flowFindAll(
   return fallback;
 }
 
-/** Identifier-first-then-text frame resolution for a (possibly loose) selector. */
+/** Identifier-first-then-text resolution for a (possibly loose) selector. */
+function flowSelectorToNode(
+  tree: DescribeNode,
+  sel: FlowSelector,
+  orientation: UiOrientation | undefined
+): DescribeNode | undefined {
+  for (const s of selectorAlternatives(sel)) {
+    const node = selectorToNode(tree, s, orientation);
+    if (node) return node;
+  }
+  return undefined;
+}
+
 function flowSelectorToFrame(
   tree: DescribeNode,
   sel: FlowSelector,
   orientation: UiOrientation | undefined
 ): DescribeFrame | undefined {
-  for (const s of selectorAlternatives(sel)) {
-    const frame = selectorToFrame(tree, s, orientation);
-    if (frame) return frame;
-  }
-  return undefined;
+  return flowSelectorToNode(tree, sel, orientation)?.frame;
 }
 
 /**
@@ -713,26 +721,50 @@ interface ScrollResolve {
 }
 
 /**
- * Dispatch one momentum-free scroll increment anchored at the center of
- * `region`. The anchor (the touch-down / wheel point) is what selects the scroll
+ * How far `frame`'s edge opposite the reveal sits inside `clip`: the most a
+ * scroll toward `direction` can move it before that edge is cut.
+ */
+function leadingRoom(
+  frame: DescribeFrame,
+  clip: DescribeFrame,
+  direction: ScrollDirection
+): number {
+  switch (direction) {
+    case "down":
+      return frame.y - clip.y;
+    case "up":
+      return clip.y + clip.height - (frame.y + frame.height);
+    case "right":
+      return frame.x - clip.x;
+    case "left":
+      return clip.x + clip.width - (frame.x + frame.width);
+  }
+}
+
+/**
+ * Dispatch one momentum-free scroll increment anchored at `anchor`, else at the
+ * center of `region`. The anchor (the touch-down / wheel point) is what selects the scroll
  * container — the OS routes the gesture to the innermost scroller hit-tested
  * there — so anchoring inside a `within` region is how nested scrollers are
  * disambiguated. The travel is half the region along the axis (only the end
  * point is clamped, so the down stays at the anchor and keeps latching to the
  * right container), sized to the clip window rather than the screen so
- * consecutive views of a small container's content still overlap. Touch
+ * consecutive views of a small container's content still overlap, and at most
+ * `limit`. Touch
  * platforms use a `momentum: false` swipe (no fling); Chromium uses wheel
  * events.
  */
 async function scrollIncrement(
   env: ActionEnv,
   direction: ScrollDirection,
-  region: DescribeFrame
+  region: DescribeFrame,
+  limit = Infinity,
+  anchor: { x: number; y: number } | undefined = undefined
 ): Promise<string | undefined> {
-  const cx = clamp01(region.x + region.width / 2);
-  const cy = clamp01(region.y + region.height / 2);
+  const cx = clamp01(anchor ? anchor.x : region.x + region.width / 2);
+  const cy = clamp01(anchor ? anchor.y : region.y + region.height / 2);
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
-  const dist = Math.min(SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
+  const dist = Math.min(limit, SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
   if (env.device.platform === "chromium") {
     // Positive deltaY/deltaX reveals content below / to the right (see gesture-scroll).
@@ -803,6 +835,9 @@ async function scrollToVisible(
   within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
+  let prevCut: { room: number; span: number } | undefined;
+  // Whether the walker's anchor is spent: a wheel there left the cut in place.
+  let anchorSpent = false;
   let warning: string | undefined;
   for (let i = 0; i < MAX_SCROLL_ITERATIONS; i++) {
     if (env.signal?.aborted) return { aborted: true };
@@ -818,25 +853,66 @@ async function scrollToVisible(
     const orientation = readingOrientation(env);
     const axisDirection = nativeDirection(direction, orientation);
 
-    // Anchor the gesture inside the container (so the right nested scroller
-    // moves), or over the whole screen when none is named. Its frame is also the
-    // clip window the axis check measures the target against.
-    const region = within ? flowSelectorToFrame(tree, within, orientation) : FULL_SCREEN;
-    if (!region) {
-      return { reason: `scroll container ${describeSelector(within!)} is not visible` };
+    // A target a scroll container cuts along the axis is scrolled inside that
+    // scroller, whether or not the tree has a node for it: the gesture is anchored
+    // where the walker found a wheel moves it against a cutting scroller (`clipAnchors`),
+    // and its region is the cutting window along the axis. A gesture anchored
+    // elsewhere moves another scroller, or what holds this one, carrying the cut
+    // along. Any other gesture is anchored inside the
+    // container (so the right nested scroller moves), or spans the whole screen
+    // when none is named. The axis check measures the target against the window
+    // that cuts it, else the one the container clips its content to, else the
+    // container's frame.
+    const container = within ? flowSelectorToNode(tree, within, orientation) : undefined;
+    if (within && !container) {
+      return { reason: `scroll container ${describeSelector(within)} is not visible` };
     }
-
-    const frame = flowSelectorToFrame(tree, target, orientation);
-    if (frame && axisFullyInside(frame, axisDirection, region)) {
+    const targetNode = flowSelectorToNode(tree, target, orientation);
+    const frame = targetNode?.frame;
+    const cut = frame && targetNode.clipBounds;
+    const vertical = axisDirection === "up" || axisDirection === "down";
+    const anchor = cut && targetNode.clipAnchors?.[vertical ? "y" : "x"];
+    const axisCut = anchor ? cut : undefined;
+    const region =
+      frame && axisCut
+        ? vertical
+          ? { x: frame.x, y: axisCut.y, width: frame.width, height: axisCut.height }
+          : { x: axisCut.x, y: frame.y, width: axisCut.width, height: frame.height }
+        : (container?.frame ?? FULL_SCREEN);
+    if (frame && axisFullyInside(frame, axisDirection, cut ?? container?.clipFrame ?? region)) {
       return { frame, ...warnedBy(warning) };
     }
+    // A cut the last increment left where it was, in a window as long: the walker
+    // cannot see every wheel taker (a page's wheel listener, a closed shadow root's
+    // scroller, a scroller that moved under the anchor), so later increments go where
+    // an uncut target's would. One that leaves it in place too is a cut its scroller
+    // cannot scroll away (it is at its end): further wheels only chain to the page.
+    const at =
+      frame && axisCut
+        ? {
+            room: leadingRoom(frame, axisCut, axisDirection),
+            span: vertical ? axisCut.height : axisCut.width,
+          }
+        : undefined;
+    let spentNow = false;
+    if (
+      at &&
+      prevCut &&
+      Math.abs(at.room - prevCut.room) < 1e-4 &&
+      Math.abs(at.span - prevCut.span) < 1e-4
+    ) {
+      if (anchorSpent) return { frame: frame!, ...warnedBy(warning) };
+      anchorSpent = spentNow = true;
+    }
+    prevCut = at;
+    const room = at?.room;
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
     // changing on every read, so a container that stopped moving would never
     // read as "end of scroll" and the loop would burn all its iterations. The
-    // scope is the `within` region when one is named, otherwise the union of the
-    // visible scroll containers under the gesture anchor (not the innermost; see
+    // scope is the gesture's region when it is a container or a clip, otherwise
+    // the union of the visible scroll containers under the gesture anchor (not the innermost; see
     // anchorScrollFrames). Only when the tree surfaces none there does the scope
     // stay the whole screen, where a screen-level animator can still mask
     // end-of-scroll and the loop falls back to the iteration cap. Text stays in
@@ -844,10 +920,12 @@ async function scrollToVisible(
     // content, so structure alone would misread real progress as a stuck scroll
     // — which leaves an animating node INSIDE the scrolled content a known
     // limitation.
-    const scope = within ? [region] : anchorScrollFrames(tree, getDescribeTapPoint(region));
+    const scope =
+      within || axisCut ? [region] : anchorScrollFrames(tree, getDescribeTapPoint(region));
     if (scope.length === 0) scope.push(FULL_SCREEN);
     const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
-    if (prevFp !== undefined && fp === prevFp) {
+    // A wheel taker the tree cannot see leaves the fingerprint as it was too.
+    if (!spentNow && prevFp !== undefined && fp === prevFp) {
       // End of the scroll — accept the target wherever it landed (best effort).
       if (frame) return { frame, ...warnedBy(warning) };
       return {
@@ -857,7 +935,11 @@ async function scrollToVisible(
     }
     prevFp = fp;
 
-    warning ??= await scrollIncrement(env, axisDirection, region);
+    // A cut target moves no further than its visible start is from the
+    // window's, or one taller than half the window would be carried past it.
+    warning ??= anchorSpent
+      ? await scrollIncrement(env, axisDirection, container?.frame ?? FULL_SCREEN, room)
+      : await scrollIncrement(env, axisDirection, region, room, anchor);
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,

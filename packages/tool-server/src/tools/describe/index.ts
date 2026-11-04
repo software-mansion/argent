@@ -161,7 +161,8 @@ On iOS, uses the AXRuntime accessibility service to inspect whatever is currentl
 system dialogs, permission prompts, and any foreground app content. On a physical iOS device the tree
 covers only the app registered by launch-app. On Android, runs \`uiautomator dump\`.
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol: every visible element with its ARIA
-role, accessible name, and bounding rect (normalized to 0–1).
+role, accessible name, and the part of its rect its overflow ancestors leave visible (normalized to 0–1),
+so content scrolled or clipped out of view has a zero-area frame.
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
 \`[focused]\`/\`[selected]\` so you can see where the D-pad cursor is, then move it with the \`tv-remote\` tool
 (Vega is remote-driven, not touch). If describe returns an empty tree on Vega, relaunch the foreground

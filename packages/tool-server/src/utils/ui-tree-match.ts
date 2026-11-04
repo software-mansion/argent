@@ -698,8 +698,8 @@ function exactFieldCount(
 }
 
 /**
- * The on-screen frame of a selector's best visible match — what a `tap`/`type`
- * action targets. An accessible container (e.g. a Touchable on iOS) aggregates
+ * The best visible match of a selector — the element a `tap`/`type` action
+ * targets. An accessible container (e.g. a Touchable on iOS) aggregates
  * its descendants' labels, so a substring text selector matches the container
  * as well as the leaf carrying the text, and the container's centre can sit
  * over a different child entirely. Matches are therefore ranked: exact field
@@ -719,14 +719,13 @@ function exactFieldCount(
  *
  * Reading order, here and in the relations `findAll` resolves, is the UI's
  * when `orientation` says how the UI lies on the frame space (see the module
- * comment). The frame returned is the node's own, in the frame space: the one
- * to act on.
+ * comment). Its frame is the node's own, in the frame space: the one to act on.
  */
-export function selectorToFrame(
+export function selectorToNode(
   root: DescribeNode,
   selector: Selector,
   orientation?: UiOrientation
-): DescribeFrame | undefined {
+): DescribeNode | undefined {
   const visible = findAll(root, selector, orientation).filter(isVisible);
   if (visible.length === 0) return undefined;
   const reading = readingFrames(orientation);
@@ -735,7 +734,7 @@ export function selectorToFrame(
     for (const n of visible) {
       if (first === undefined || compareBelowPick(reading(n), reading(first)) < 0) first = n;
     }
-    return first?.frame;
+    return first;
   }
   const fullTextRegex = fullConsumptionRegex(selector);
   let best: DescribeNode | undefined;
@@ -756,7 +755,16 @@ export function selectorToFrame(
       best = n;
     }
   }
-  return best?.frame;
+  return best;
+}
+
+/** The frame of {@link selectorToNode}'s match. */
+export function selectorToFrame(
+  root: DescribeNode,
+  selector: Selector,
+  orientation?: UiOrientation
+): DescribeFrame | undefined {
+  return selectorToNode(root, selector, orientation)?.frame;
 }
 
 const GENERIC_ROLES = new Set([

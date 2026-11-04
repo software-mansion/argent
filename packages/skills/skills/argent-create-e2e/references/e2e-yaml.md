@@ -127,7 +127,7 @@ Use the launch map for cross-platform tests. A bare launch applies everywhere an
 
 An Android app that needs a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` and keep the test as a fragment.
 
-In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller.
+In a `scroll-to` map, put the selector under `target:`. The map supports `up`, `down`, `left`, and `right` directions. The default is `down`; set it explicitly to reach a target above the viewport or along a horizontal carousel. If the target is already visible, the step is a safe no-op. `tap`, `type`, and `long-press` do not auto-scroll. Add `scroll-to` when the target can be off-screen. Use `within` for a nested scroller. On Chromium, a target that a scroller shows only in part is scrolled inside that scroller, whatever `within` names.
 
 ### `swipe`
 
