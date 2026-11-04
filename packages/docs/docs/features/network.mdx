@@ -44,7 +44,7 @@ Native code does not use these functions. For native code, use a native layer.
 
 ## Native network capture on Android
 
-Argent calls the native OkHttp layer native network capture. Use a debuggable app on Android 8.0 or later. The app must run as `arm64-v8a` or `x86_64`.
+Argent calls the native OkHttp layer native network capture. Use a debuggable app on Android 9 or later. The app must run as `arm64-v8a` or `x86_64`.
 
 Ask the agent to start native network capture. Argent attaches an in-app agent to the running app. The in-app agent connects to Argent a short time after the agent starts the capture. Thus the agent asks Argent again until Argent reports that the capture is ready. Then repeat the action that sends the request. Argent captures OkHttp traffic, including React Native requests, Fresco images, and Expo `fetch()`.
 
@@ -132,11 +132,14 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - The requests of a `WKWebView`, also the `fetch()` calls in the web page.
   - The requests of an HTTP client that does not use `URLSession`, for example the `HttpClient` of Flutter (`dart:io`).
 - An empty native network log does not prove that the app sent no requests. The app can send requests that the `NSURLProtocol` layer does not record.
-- Native network capture records each OkHttp request that the app starts after Argent attaches the in-app agent. Native network capture does not record these requests:
+- On Android 9 or later, native network capture records each OkHttp request that the app starts after Argent attaches the in-app agent. Native network capture does not record these requests:
   - A request that is already running when Argent attaches the in-app agent.
   - The requests of an OkHttp copy in a different class loader, for example a separate plugin loader.
   - In OkHttp 3, the requests of a custom subclass of `OkHttpClient`.
   - The requests of an HTTP client that does not use OkHttp, for example `HttpURLConnection` or Cronet. A native module can use such a client.
+- On Android 8.0 and 8.1, native network capture records only a part of the requests. The header line gives the reason. Earlier Android versions do not have native network capture.
+  - In a React Native app, it records only the requests of the React Native networking client and of Fresco. It does not record `fetch()` of Expo, WebSockets, or the OkHttp clients of native modules.
+  - In an app without React Native, it records no requests.
 - If R8 fully minifies the OkHttp code of the app, native network capture is unavailable. The header line gives the reason. The requests of the app continue to work.
 - When native network capture records only a part of the requests of the app, the header line says so after `capture active:`.
 - For WebSockets, native network capture records only the connection request.

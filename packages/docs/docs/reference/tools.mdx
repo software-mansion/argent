@@ -129,7 +129,7 @@ Call `screenshot` or `describe` to read the screen again.
 
 ### Native network capture on Android
 
-On Android, `native-network-logs` reads the OkHttp traffic of a debuggable app. The device must run Android 8.0 or later. The app must run as `arm64-v8a` or `x86_64`. Argent attaches an in-app agent to the running app.
+On Android, `native-network-logs` reads the OkHttp traffic of a debuggable app. The device must run Android 8.0 or later. Argent captures all OkHttp requests only on Android 9 or later. On Android 8.0 and 8.1, Argent captures only the requests of the React Native networking client and of Fresco. In an app without React Native, Argent captures no requests, and the capture state is `unavailable`. The app must run as `arm64-v8a` or `x86_64`. Argent attaches an in-app agent to the running app.
 
 To capture a request:
 
