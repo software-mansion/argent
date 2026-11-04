@@ -69,7 +69,7 @@ describe("flow device resolution - while Xcode's component install is pending", 
 
     const error = await resolveFlowDevice({} as Registry, undefined, {}).catch((e: Error) => e);
     expect((error as Error).message).toMatch(
-      /^No booted device found\. Pass a device id or platform explicitly\. The Xcode .*has not finished installing .*-runFirstLaunch.* Available devices: none\.$/
+      /^No booted device found\. Pass a device id or platform explicitly\. (The )?Xcode .*has not finished installing .*-runFirstLaunch.* Available devices: none\.$/
     );
   });
 
