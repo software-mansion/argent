@@ -1429,6 +1429,43 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "sc")).toEqual({ x: 0, y: 0, w: 300, h: 100 });
   });
 
+  it("clips, anchors and follows slots on a page whose script replaced window.Map and window.Set", () => {
+    // A classic page script's \`var Map = ...\` replaces the global property itself.
+    const page = () => {
+      const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
+      const slottedOut = row("slot-out", { x: 1, y: 261, w: 200, h: 40 });
+      (slottedOut as Record<string, unknown>).assignedSlot = slot;
+      const shadowScroller = el({
+        rect: { x: 1, y: 201, w: 200, h: 50 },
+        client: { left: 0, top: 0, width: 200, height: 50 },
+        style: { overflow: "auto" },
+        children: [slot],
+      });
+      (slot as Record<string, unknown>).parentNode = shadowScroller;
+      return [
+        scroller([row("cut", { x: 1, y: 81, w: 285, h: 40 })], {
+          painted: { x: 0, y: 0, w: 300, h: 100 },
+        }),
+        el({
+          tag: "x-host",
+          rect: { x: 1, y: 201, w: 200, h: 50 },
+          children: [slottedOut],
+          shadow: [shadowScroller],
+        }),
+        row("gone", { x: 1, y: 400, w: 50, h: 20 }, { display: "none" }),
+      ];
+    };
+    const builtin = run(page()).tree;
+    for (const globals of [{ Map: { tiles: [] }, Set: class {} }, { Map: class {} }]) {
+      const replaced = run(page(), undefined, {}, "CSS1Compat", globals).tree;
+      expect(replaced).toEqual(builtin);
+    }
+    expect(pxFrame(builtin, "cut")).toEqual({ x: 1, y: 81, w: 285, h: 18 });
+    expect(findById(builtin, "cut")!.clipAnchors).toBeDefined();
+    expect(pxFrame(builtin, "slot-out").h).toBe(0);
+    expect(findById(builtin, "gone")).toBeNull();
+  });
+
   it("anchors a cut where a wheel reaches a scroller moving it in the cutter, farthest from the element", () => {
     // A pane spanning the whole screen height cuts the row at the screen's bottom.
     const pane = (kids: MockElement[], painted?: Rect) =>

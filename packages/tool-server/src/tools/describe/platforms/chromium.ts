@@ -285,12 +285,28 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // entry is the clip a child with that position gets.
   const NO_CLIP = { flow: null, abs: null, fixed: null };
 
+  // An element-keyed map. A page's top-level \`class Map\` shadows only the bare name,
+  // but \`var Map = ...\` replaces globalThis.Map; then a linear list stands in.
+  function nodeMap() {
+    const M = globalThis.Map;
+    const p = typeof M === "function" && M.prototype;
+    if (p && typeof p.get === "function" && typeof p.set === "function" && typeof p.has === "function") {
+      return new M();
+    }
+    const keys = [];
+    const vals = [];
+    return {
+      has: (k) => keys.indexOf(k) >= 0,
+      get: (k) => vals[keys.lastIndexOf(k)],
+      set: (k, v) => void (keys.push(k), vals.push(v)),
+    };
+  }
+
   // A slotted element paints where its <slot> sits in the shadow tree, so it takes the
   // clips in force there; each host's shadow tree is walked before its light children.
-  // globalThis: a page's top-level \`class Map\` shadows the bare name, not the property.
-  const slotClips = new globalThis.Map();
+  const slotClips = nodeMap();
   // Elements hidden() pruned: a slot inside one paints nothing.
-  const pruned = new globalThis.Set();
+  const pruned = nodeMap();
   function inPruned(node) {
     for (let n = node; n; n = getParentNode.call(n)) if (pruned.has(n)) return true;
     return false;
@@ -298,7 +314,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // Each walked element's scrollers, its own last when it scrolls; the elements a
   // scroller cuts are anchored once the whole tree has been walked.
-  const chains = new globalThis.Map();
+  const chains = nodeMap();
   const cuts = [];
 
   // The scroller a wheel at (x, y) scrolls along an axis: the innermost on the
@@ -793,7 +809,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (!(el instanceof Element)) return null;
     const style = window.getComputedStyle(el);
     if (hidden(el, style)) {
-      pruned.add(el);
+      pruned.set(el, true);
       return null;
     }
     // Charge the node budget only for elements that can actually EMIT. A
