@@ -292,7 +292,7 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
   });
 
   // reference/e2e-yaml.mdx documents that '^$' never passes on an iOS text field.
-  it("never passes '^$' on an empty, unlabelled text field or text view", async () => {
+  it("never passes '^$' on an empty, unlabelled text, secure, search field or text view", async () => {
     const tree = await flowTree([
       node({ index: 0, depth: 0, type: "Application" }),
       node({
@@ -313,8 +313,26 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
         value: "",
         rect: { x: 16, y: 200, width: 358, height: 88 },
       }),
+      node({
+        index: 3,
+        depth: 1,
+        parentIndex: 0,
+        type: "SecureTextField",
+        identifier: "password",
+        value: "",
+        rect: { x: 16, y: 300, width: 358, height: 44 },
+      }),
+      node({
+        index: 4,
+        depth: 1,
+        parentIndex: 0,
+        type: "SearchField",
+        identifier: "search",
+        value: "",
+        rect: { x: 16, y: 360, width: 358, height: 44 },
+      }),
     ]);
-    for (const id of ["email", "notes"]) {
+    for (const id of ["email", "notes", "password", "search"]) {
       expect(evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches")).toBe(
         false
       );

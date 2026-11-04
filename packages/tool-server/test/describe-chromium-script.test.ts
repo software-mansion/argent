@@ -877,7 +877,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "logo")).toMatchObject({ label: "Logo" });
   });
 
-  it("reads a blank aria-label or an empty aria-labelledby target as an empty label that hides a placeholder and an alt, and ignores an empty aria-label", () => {
+  it("reads a blank aria-label or empty aria-labelledby targets as an empty label that hides a placeholder and an alt, lets an aria-label win over aria-labelledby, and ignores an empty aria-label", () => {
     const img = el({
       tag: "img",
       attrs: { "id": "logo", "aria-label": " " },
@@ -886,7 +886,27 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     Object.setPrototypeOf(img, MockHTMLImageElement.prototype);
     img.alt = "Logo";
     const emptyTarget = el({ attrs: { id: "icon" }, rect: BOX });
+    const emptyTarget2 = el({ attrs: { id: "icon2" }, rect: BOX });
+    const named = el({ attrs: { id: "row" }, rect: BOX }) as MockElement & Record<string, unknown>;
+    named.__textContent = "Invoice 42";
     const { tree } = run([
+      inputEl({
+        placeholder: "Search",
+        attrs: { "id": "two-empty-targets", "aria-labelledby": "icon icon2" },
+        rect: BOX,
+      }),
+      emptyTarget2,
+      named,
+      el({
+        text: "X",
+        attrs: { "id": "both", "aria-label": "Delete", "aria-labelledby": "row" },
+        rect: BOX,
+      }),
+      inputEl({
+        placeholder: "Search",
+        attrs: { "id": "blank-and-target", "aria-label": " ", "aria-labelledby": "row" },
+        rect: BOX,
+      }),
       inputEl({ placeholder: "Email", attrs: { "id": "blank", "aria-label": "   " }, rect: BOX }),
       inputEl({
         placeholder: "Search",
@@ -899,6 +919,9 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     ]);
     expect(findById(tree, "blank")!.label).toBeUndefined();
     expect(findById(tree, "empty-target")!.label).toBeUndefined();
+    expect(findById(tree, "two-empty-targets")).toMatchObject({ label: " " });
+    expect(findById(tree, "both")).toMatchObject({ label: "Delete", value: "X" });
+    expect(findById(tree, "blank-and-target")!.label).toBeUndefined();
     expect(findById(tree, "logo")!.label).toBeUndefined();
     expect(findById(tree, "empty")).toMatchObject({ label: "Email" });
   });
