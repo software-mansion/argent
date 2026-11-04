@@ -263,6 +263,7 @@ Use when you need a baseline image before an interaction or to inspect the curre
 Fails if the simulator-server / emulator backend / Chromium CDP <flag:harmonyos>/ \`hdc\` </flag:harmonyos>is not reachable for the given device.`,
     alwaysLoad: true,
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
+    readOnly: true,
     zodSchema,
     outputHint: "image",
     capability,
