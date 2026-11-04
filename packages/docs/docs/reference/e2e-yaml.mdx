@@ -243,7 +243,7 @@ The `text` comparators:
 
 `matches` reads an element with no text as an empty string. Use `'^$'` to check that an element has no text, or `'^(?!.*@)'` to check that its text does not contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text.
 
-The text of an element includes the text of its children. It does not include the text of a child with its own `id`, or of a password field on Android or Chromium. On Vega, only an `id` that the app sets counts. So `'^$'` passes on a container that has all its text in such children. A pattern also passes when it matches only the own text of the element, without the text of its children. So a negative pattern, such as `'^(?!.*@)'`, can pass on an element when only a child contains `@`.
+The text of an element includes the text of its children. It does not include the text of a child with its own `id`, or of a password field on Android or Chromium. On Vega, an `id` made only of digits does not count, also when the app sets it. So `'^$'` passes on a container that has all its text in such children. A pattern also passes when it matches only the own text of the element, without the text of its children. So a negative pattern, such as `'^(?!.*@)'`, can pass on an element when only a child contains `@`.
 
 Argent reads text from these elements also when they are empty, so `'^$'` never passes on them:
 
@@ -278,8 +278,9 @@ When an element holds text, Argent reads it like this:
 
 - A `select`, also when it shows a selected option.
 - A `number`, date or time `input` with text that is not a complete value, for example `-`.
-- A `submit` or `reset` `input` with no `value`.
-- An `input` or `textarea` with an empty label. An `aria-label` that holds only spaces, or a single `aria-labelledby` target that has no text, gives an element an empty label. Argent then ignores the `placeholder`, `title` and typed text of an `input` or `textarea`, the `alt` of an `img`, and the `title` of other elements. So `'^$'` also passes on an `img` with an `alt` and an empty label. An empty `aria-label` has no effect.
+- A `submit` or `reset` `input` with no `value`, and an `image` `input`.
+- An element whose text comes only from CSS, such as `::after` content.
+- An `input` or `textarea` with an empty label. An `aria-label` that holds only spaces, or a single `aria-labelledby` target that has no text, gives an element an empty label. Argent then ignores the `placeholder`, `title` and typed text of an `input` or `textarea`, the `alt` of an `img`, and the `title` of other elements. So `'^$'` also passes on an `img` with an `alt` and an empty label. With two or more `aria-labelledby` targets that have no text, the label is a space instead. It hides the same text, but `'^$'` does not pass. An empty `aria-label` has no effect.
 
 A Chromium `textarea` also reads its default text. The default text does not change when the user types. React is an exception: for a `textarea` with a `value` prop, React sets the default text to the typed text.
 

@@ -290,4 +290,34 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
     expect(assertText(sw[0]!)).toBe("1");
     expect(evaluateCondition("text", "^$", sw, "matches")).toBe(false);
   });
+
+  // reference/e2e-yaml.mdx documents that '^$' never passes on an iOS text field.
+  it("never passes '^$' on an empty, unlabelled text field or text view", async () => {
+    const tree = await flowTree([
+      node({ index: 0, depth: 0, type: "Application" }),
+      node({
+        index: 1,
+        depth: 1,
+        parentIndex: 0,
+        type: "TextField",
+        identifier: "email",
+        value: "",
+        rect: { x: 16, y: 120, width: 358, height: 44 },
+      }),
+      node({
+        index: 2,
+        depth: 1,
+        parentIndex: 0,
+        type: "TextView",
+        identifier: "notes",
+        value: "",
+        rect: { x: 16, y: 200, width: 358, height: 88 },
+      }),
+    ]);
+    for (const id of ["email", "notes"]) {
+      expect(evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches")).toBe(
+        false
+      );
+    }
+  });
 });
