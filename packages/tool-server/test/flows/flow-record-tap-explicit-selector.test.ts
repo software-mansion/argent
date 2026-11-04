@@ -110,12 +110,12 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     [
       "matches nothing",
       { identifier: "no-such-id" },
-      /`selector` id="no-such-id" matches no element on this screen/,
+      /`selector` id="no-such-id" matches no element in the tree a replay reads/,
     ],
     [
       "resolves away from the tapped point",
       { text: "Elsewhere" },
-      /`selector` text="Elsewhere" resolves to a different element on this screen/,
+      /`selector` text="Elsewhere" resolves to a different element in the tree a replay reads/,
     ],
   ])("refuses a supplied selector that %s, running nothing", async (_, selector, reason) => {
     setTree([
@@ -144,7 +144,9 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
       selector: { text: "Settings" },
     })) as { message: string };
 
-    expect(res.message).toMatch(/`selector` could not be checked \(helper down\)/);
+    expect(res.message).toMatch(
+      /`selector` could not be checked \(helper down\)\. Omit it to record the tap with its coordinates\./
+    );
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
   });
@@ -183,6 +185,59 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
 
     expect(res.message).toMatch(/delayMs/);
     expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  it("refuses a selector on a tap carrying delayMs: 0", async () => {
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW }),
+      selector: { text: "Settings" },
+      delayMs: 0,
+    })) as { message: string };
+
+    expect(res.message).toMatch(/delayMs/);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  // Replay taps the resolved frame's centre, which here is the Info button,
+  // not the switch the tap hit.
+  it("refuses a container selector whose centre is on another element", async () => {
+    setTree([
+      n({ frame: { x: 0, y: 0.4, width: 1, height: 0.1 }, identifier: "settings-card" }),
+      n({ role: "AXButton", frame: { x: 0.4, y: 0.42, width: 0.2, height: 0.06 }, label: "Info" }),
+      n({
+        role: "AXSwitch",
+        frame: { x: 0.8, y: 0.42, width: 0.12, height: 0.06 },
+        identifier: "switch-3",
+      }),
+    ]);
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.86, y: 0.45 }),
+      selector: { identifier: "settings-card" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(
+      /`selector` id="settings-card" resolves to an element whose centre, where a replay taps, is on a different element than the tap/
+    );
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  it("accepts a container selector whose centre is on a child of the tapped element", async () => {
+    setTree([
+      n({ frame: { x: 0, y: 0.4, width: 1, height: 0.1 }, identifier: "row-container" }),
+      n({ frame: { x: 0.3, y: 0.42, width: 0.4, height: 0.06 }, label: "Wi-Fi" }),
+    ]);
+    await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.1, y: 0.45 }),
+      selector: { identifier: "row-container" },
+    });
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", selector: { identifier: "row-container" } },
+    ]);
   });
 
   // The element here has an id and text, so the warning must not claim otherwise.

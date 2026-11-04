@@ -182,6 +182,13 @@ The old `flow-*` names, for example `flow-execute`, still call these tools. See 
 | `e2e-execute`           | Run a saved e2e test                                                |
 | `e2e-read-prerequisite` | Read the execution prerequisite of an e2e test without running it   |
 
+`e2e-add-step` records a `gesture-tap` as a `tap` step with a selector. Argent derives the selector from the tapped element: the identifier first, then the text, then the role. To record a different selector, pass `selector` with an `identifier`, a `text` or a `role`. Argent checks the selector against the tree that a replay reads. The tool runs nothing and records no step when one of these checks fails:
+
+- Argent cannot read the tree.
+- The selector matches no element, or it matches an element that does not cover the tapped point.
+- The center of the matched element, where a replay taps, is on a different element than the tapped point.
+- The command is not `gesture-tap`, or the call also has `delayMs`.
+
 ## Design variants
 
 Staged through [Argent Lens](/docs/features/lens) so you can compare proposals against the running app. These tools require the `argent-lens` flag and macOS. The flag is off by default, so `argent tools` omits them until you enable it.

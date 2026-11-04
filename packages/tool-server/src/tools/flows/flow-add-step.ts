@@ -65,12 +65,13 @@ import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
 import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
-import type { DescribeSource } from "../describe/contract";
+import { getDescribeTapPoint, type DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
   deriveSelector,
   selectorToFrame,
   frameContains,
+  frameWithin,
   selectorSchema,
   type Selector,
   type TextMatchMode,
@@ -102,8 +103,9 @@ const zodSchema = z.object({
     .describe(
       "For a `gesture-tap` only: the selector to record, instead of one derived from the tapped " +
         "element (identifier, then text, then role). Give at least one of `identifier` / `text` / " +
-        "`role`. The coordinates still dispatch the tap. Refused, with nothing run, when it " +
-        "matches nothing on this screen or resolves to an element that does not cover the point."
+        "`role`. The coordinates still dispatch the tap. Checked against the tree a replay reads, " +
+        "not `describe`. Refused, with nothing run, when that tree cannot be read, has no match, or " +
+        "resolves it to an element other than the tapped one."
     ),
   delayMs: z
     .number()
@@ -640,8 +642,9 @@ async function probeAgainstRunnerTree(
 }
 
 /**
- * `deriveSelector`'s last resort: the tapped node has no identifier and no
- * visible text, so the step replays on role alone. It holds only while that
+ * A selector that matches by role alone: `deriveSelector`'s last resort (the
+ * tapped node has no identifier and no visible text), or one the caller
+ * supplied. The step replays on role alone. It holds only while that
  * element keeps winning `selectorToFrame`'s ranking. The re-resolve guard below
  * proves that for the recording screen, never for the screen replay meets, so
  * the warning says so instead of leaving it silent.
@@ -728,17 +731,37 @@ async function captureTapSelector(
     // silently retarget and coordinates are safer. Ranked in the reading order
     // replay will rank in: the UI's, on a landscape UI.
     const shown = describeSelector(selector);
-    const keepPoint = (problem: string): TapCapture => {
-      const reason = `${shown} ${problem} on this screen`;
-      return supplied
-        ? { rejected: reason }
-        : { warning: `selector ${reason}; kept coordinates (brittle)` };
-    };
+    const retry = "Pass one that resolves to the tapped element, or omit it.";
+    const keepPoint = (problem: string): TapCapture =>
+      supplied
+        ? { rejected: `${shown} ${problem} in the tree a replay reads. ${retry}` }
+        : { warning: `selector ${shown} ${problem} on this screen; kept coordinates (brittle)` };
     const resolved = selectorToFrame(tree, selector, uiOrientation);
     // Unreachable for a derived selector (it matches its own node).
     if (!resolved) return keepPoint("matches no element");
     if (!frameContains(resolved, point.x, point.y)) {
       return keepPoint("resolves to a different element");
+    }
+    // A supplied selector can name a container of the tapped element, which
+    // covers the point too. Replay taps the resolved frame's centre, so the
+    // element there must be the tapped one, inside it, or around it. The tree
+    // is flat, so frames stand in for ancestry.
+    if (supplied) {
+      const tapped = nodeAtPoint(tree, point);
+      const replayed = nodeAtPoint(tree, getDescribeTapPoint(resolved));
+      if (
+        tapped &&
+        replayed &&
+        !frameWithin(tapped.frame, replayed.frame) &&
+        !frameWithin(replayed.frame, tapped.frame)
+      ) {
+        return {
+          rejected:
+            `${shown} resolves to an element whose centre, where a replay taps, is on a ` +
+            `different element than the tap. Tap the centre of the element it names, or pass ` +
+            `the tapped element's own selector.`,
+        };
+      }
     }
     const warnings = [
       roleOnlySelectorWarning(selector, supplied !== undefined),
@@ -750,7 +773,11 @@ async function captureTapSelector(
     // The bare reason: a remedy belongs to the error that knows one, and every
     // tap of a recording taken without a tree repeats whatever is said here.
     const reason = innermostTreeReason(message);
-    if (supplied) return { rejected: `could not be checked (${reason})` };
+    if (supplied) {
+      return {
+        rejected: `could not be checked (${reason}). Omit it to record the tap with its coordinates.`,
+      };
+    }
     return { warning: `selector capture failed (${reason}); kept coordinates` };
   }
 }
@@ -1478,10 +1505,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           params.selector
         );
         if (captured.rejected) {
-          return recordNothing(
-            session,
-            `\`selector\` ${captured.rejected}. Pass one that resolves to the tapped element, or omit it.`
-          );
+          return recordNothing(session, `\`selector\` ${captured.rejected}`);
         }
       }
 
