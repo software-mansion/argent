@@ -109,34 +109,76 @@ export async function toMcpContent(
   return [{ type: "text" as const, text: stringifyForText(result) }];
 }
 
+// Control characters a reader can't see. Tab and line breaks are left alone.
+// eslint-disable-next-line no-control-regex
+const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+
 /**
- * A string result goes out as-is: JSON-encoding it would ship a report or a
- * tree as one quoted line of `\n` and `\"` escapes. Anything else is JSON.
- * JSON.stringify(undefined) returns undefined, which would make an invalid MCP
- * text block; coerce to "null".
+ * A string result goes out as text: JSON-encoding it would ship a report or a
+ * tree as one quoted line of `\n` and `\"` escapes. Control characters are
+ * written as JSON would write them, so they stay visible.
+ * Anything else is compact JSON. JSON.stringify(undefined) returns undefined,
+ * which would make an invalid MCP text block; coerce to "null".
  */
 function stringifyForText(value: unknown): string {
-  if (typeof value === "string") return value.length > 0 ? value : '""';
-  return JSON.stringify(value ?? null, null, 2);
+  if (typeof value !== "string") return compactJson(value ?? null);
+  if (value.length === 0) return '""';
+  return value.replace(HIDDEN_CHARS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
+
+/** Two or more strings: read as lines, as in `e2e-finish-recording`'s `summary`. */
+function isLineList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 1 && value.every((v) => typeof v === "string");
+}
+
+/**
+ * JSON with no indentation, which costs tokens and tells the model nothing. A
+ * top-level field that is a list of strings keeps one item per line, because
+ * `e2e-finish-recording` puts a step's warning on the line below the step. The
+ * lines differ from `JSON.stringify` only in whitespace, so it still parses.
+ */
+function compactJson(value: unknown): string {
+  if (!isRecord(value) || Array.isArray(value) || !Object.values(value).some(isLineList)) {
+    return JSON.stringify(value);
+  }
+  const fields = Object.entries(value).flatMap(([key, field]) => {
+    const text = isLineList(field)
+      ? `[\n${field.map((item) => JSON.stringify(item)).join(",\n")}\n]`
+      : JSON.stringify(field);
+    return text === undefined ? [] : [`${JSON.stringify(key)}:${text}`];
+  });
+  return `{${fields.join(",")}}`;
+}
+
+/**
+ * One tree row: the indent every row shares, any deeper indent, the role and
+ * its annotations, then two spaces and the frame, which always ends the row. A
+ * label can't span lines, so a frame quoted in a label can't be taken for it.
+ */
+const TREE_ROW = /^ {2}( *)(.*?) {2}(\([-\d., ]+\))$/gm;
 
 /**
  * `describe`'s `{ description, source, should_restart?, hint? }` as plain text:
  * the rendered tree, then the fields that qualify it. `source` is left out when
- * the tree's `Source:` line already names it. `undefined` for any other shape
- * (a tool-server from before the text tree), which then renders as JSON.
+ * the tree's `Source:` line already names it. Rows lose the shared indent and
+ * the second space before the frame, which carry nothing; this happens here so
+ * SDK and CLI callers keep the tool-server's text. `undefined` for any other
+ * shape (a tool-server from before the text tree), which then renders as JSON.
  */
 export function describeResultText(result: unknown): string | undefined {
   if (!isRecord(result) || Array.isArray(result)) return undefined;
   const { description, source, should_restart, hint, ...extra } = result;
   if (typeof description !== "string" || description.length === 0) return undefined;
 
-  const lines = [description.replace(/\n+$/, "")];
+  const lines = [description.replace(/\n+$/, "").replace(TREE_ROW, "$1$2 $3")];
   if (typeof source === "string" && !description.includes(`Source: ${source}`)) {
     lines.push(`Source: ${source}`);
   }
   if (should_restart === true) lines.push("should_restart: true");
-  if (typeof hint === "string" && hint.length > 0) lines.push(`Hint: ${hint}`);
+  // TV results already carry their hint inside the tree text.
+  if (typeof hint === "string" && hint.length > 0 && !description.includes(hint)) {
+    lines.push(`Hint: ${hint}`);
+  }
   if (Object.keys(extra).length > 0) lines.push(JSON.stringify(extra));
   return lines.join("\n");
 }
@@ -167,7 +209,7 @@ async function legacyImageContent(
       },
     ];
   }
-  return [{ type: "text", text: JSON.stringify(result, null, 2) }];
+  return [{ type: "text", text: stringifyForText(result) }];
 }
 
 function screenshotBlocks(

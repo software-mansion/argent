@@ -303,7 +303,7 @@ describe("startMcpServer tool calls", () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('"reinstalled": true');
+    expect(textOf(result)).toContain('"reinstalled":true');
     expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
     const posts = requests.filter((r) => r.url === "/tools/reinstall-app");
     expect(posts).toHaveLength(1);
@@ -350,7 +350,7 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
-    expect(textOf(result)).toContain('"ok": true');
+    expect(textOf(result)).toContain('"ok":true');
   });
 });
 
@@ -524,13 +524,13 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content.map((c) => (c.type === "image" ? "image" : c.text!.split("\n")[0]))).toEqual([
-      "{",
+      '{"tapped":true}',
       "--- Screen after action ---",
       "image",
       "Saved: /tmp/shot.png",
       "--- Elements after action (describe) ---",
     ]);
-    expect(content[0]!.text).toContain('"tapped": true');
+    expect(content[0]!.text).toContain('"tapped":true');
     expect(content.at(-1)!.text).toContain("button Done");
   });
 
@@ -589,7 +589,7 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     expect(result.isError).toBeFalsy();
     const text = textOf(result);
-    expect(text).toContain('"tapped": true');
+    expect(text).toContain('"tapped":true');
     expect(text).not.toContain("--- Screen after action ---");
     expect(text).toContain("--- Elements after action (describe) ---");
   });
@@ -623,7 +623,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(result.isError).toBeFalsy();
     expect(toolCalls().filter((url) => url === "/tools/describe")).toHaveLength(1);
     const text = textOf(result);
-    expect(text).toContain('"tapped": true');
+    expect(text).toContain('"tapped":true');
     expect(text).toContain("--- Screen after action ---");
     expect(text).not.toContain(AUTO_DESCRIBE_HEADER);
   });
@@ -656,13 +656,32 @@ describe("startMcpServer screen capture after an interaction", () => {
         await as(clientName);
 
         expect(outline(await tap())).toEqual([
-          "{",
+          '{"tapped":true}',
           "--- Screen after action ---",
           "image",
           "--- Elements after action (describe) ---",
         ]);
       }
     );
+
+    // Haiku's taps on small buttons drifted off centre without this screenshot. The
+    // label is left free on purpose: this pins what the agent gets, not the wording.
+    it.each([
+      ["claude-code", ["image"]],
+      ["an unknown client", ["image", "Saved: /tmp/shot.png"]],
+      ["Q DEV CLI", [screenshotPathNote("/tmp/shot.png").split("\n")[0]]],
+    ])("gives %s a screenshot after an explicit describe, and one tree", async (name, shot) => {
+      await as(name);
+
+      const result = await client.callTool({ name: "describe", arguments: { udid: "u" } });
+
+      expect(outline(result)).toEqual([
+        "button Done (0.1,0.2,0.3,0.1)",
+        expect.any(String),
+        ...shot,
+      ]);
+      expect(toolCalls().filter((url) => url === "/tools/describe")).toHaveLength(1);
+    });
 
     it("keeps the Saved line after the screenshot the agent asked for", async () => {
       await as("claude-code");
@@ -682,7 +701,7 @@ describe("startMcpServer screen capture after an interaction", () => {
 
         const note = screenshotPathNote("/tmp/shot.png");
         expect(outline(auto)).toEqual([
-          "{",
+          '{"tapped":true}',
           "--- Screen after action ---",
           note.split("\n")[0],
           "--- Elements after action (describe) ---",
@@ -780,7 +799,7 @@ describe("startMcpServer with a local tool-server", () => {
     const result = await client.callTool({ name: "noted", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('"ok": true');
+    expect(textOf(result)).toContain('"ok":true');
     const calls = postsTo(second, "/tools/noted");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.headers.authorization).toBe("Bearer tok-2");
