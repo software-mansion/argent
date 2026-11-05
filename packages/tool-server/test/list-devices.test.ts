@@ -137,7 +137,6 @@ function registryWithTap(): Registry {
   return registry;
 }
 
-/** `states` overrides a simulator's state by udid. */
 function simctlJson(states: Record<string, string> = {}): string {
   const json = {
     devices: {
