@@ -165,9 +165,10 @@ function requirementsError(
   });
 }
 
-/** The runtime kinds of the platforms that have only one. */
+/** The runtime kinds of the platforms that have only one. HarmonyOS support covers phones only. */
 const CONSTANT_RUNTIME_KIND: Partial<Record<Platform, FlowRuntimeKind>> = {
   chromium: "mobile",
+  harmony: "mobile",
   vega: "tv",
 };
 

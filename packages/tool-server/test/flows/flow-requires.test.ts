@@ -224,6 +224,16 @@ describe("an explicitly targeted run", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("reads a HarmonyOS device as mobile", async () => {
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry();
+    const err = await run(registry, "tv-only", { device: "harmony-abc123" }).catch(
+      (e: unknown) => e
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect((err as Error).message).toContain("excludes device harmony-abc123 (harmony)");
+  });
+
   it("fails without the skip code when the runtime kind cannot be read", async () => {
     await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
     runtimeKinds.delete(ANDROID);

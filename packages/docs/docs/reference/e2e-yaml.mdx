@@ -83,10 +83,10 @@ steps:
   - launch: com.example.tvapp
 ```
 
-| Key           | Value                                                                                                                                                                                                    |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `platform`    | `ios`, `android`, `chromium` or `vega`, or a list of them. `ios` also covers a remote simulator                                                                                                          |
-| `runtimeKind` | `tv` for Apple TV, Android TV and Fire TV. `mobile` for the other iOS, Android and Chromium targets. A HarmonyOS device has no runtime kind, so an e2e test for HarmonyOS must not declare `runtimeKind` |
+| Key           | Value                                                                                           |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| `platform`    | `ios`, `android`, `chromium` or `vega`, or a list of them. `ios` also covers a remote simulator |
+| `runtimeKind` | `tv` for Apple TV, Android TV and Fire TV. `mobile` for all other targets                       |
 
 The block must have one key or both keys. A target must satisfy all keys in the block. Parsing rejects an unknown key and an unknown value.
 

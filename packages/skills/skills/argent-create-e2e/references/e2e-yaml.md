@@ -40,7 +40,7 @@ steps: []
 
 E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
-A test that only makes sense on some targets declares a top-level `requires:` block. Declare one key or both; a target must meet each one. `platform` is one of `ios`, `android`, `chromium`, `vega` or a list of them (`ios` also covers a remote simulator). `runtimeKind` is `tv` (Apple TV, Android TV, Fire TV) or `mobile` (other iOS, Android and Chromium targets). HarmonyOS has no runtime kind, so a HarmonyOS test must not declare `runtimeKind`. Without the block the test runs on any target. Add it when the scenario is platform-specific (a platform-only screen, an OS settings flow) or TV-specific (focus and remote navigation).
+A test that only makes sense on some targets declares a top-level `requires:` block. Declare one key or both; a target must meet each one. `platform` is one of `ios`, `android`, `chromium`, `vega` or a list of them (`ios` also covers a remote simulator). `runtimeKind` is `tv` (Apple TV, Android TV, Fire TV) or `mobile` (every other target). Without the block the test runs on any target. Add it when the scenario is platform-specific (a platform-only screen, an OS settings flow) or TV-specific (focus and remote navigation).
 
 ```yaml
 requires:
