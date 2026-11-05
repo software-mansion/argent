@@ -195,6 +195,8 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 | `chromium-cookies` | Read and write cookies, including `HttpOnly` ones                     |
 | `chromium-storage` | Read and write `localStorage` and `sessionStorage` of the active page |
 
+On a Chromium app, the text of `describe` leaves out elements that are outside the window. `[scrollHidden=N]` on the parent gives the number of its children left out. To see them, use `gesture-scroll`. `await-ui-element` and e2e tests still read the full tree, so the `exists` condition finds an element outside the window.
+
 ## Profiling
 
 | Tool                              | Description                                                                  |

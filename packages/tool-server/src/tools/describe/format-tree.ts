@@ -2,7 +2,8 @@ import type { DescribeFrame, DescribeNode, DescribeSource } from "./contract";
 
 // Token-efficient text rendering of an already-pruned DescribeNode tree: the
 // per-platform adapters (and the Android v2 trimmer in uiautomator-parser) do
-// the pruning, this layer only formats.
+// the pruning, this layer only formats. The one exception is `offscreenNodes`:
+// await-ui-element and flows need those rows, so only the text leaves them out.
 //
 // Render mode comes from `source`, not the tree silhouette — a single
 // accidental grandchild used to flip an ax-service response into nested mode,
@@ -112,6 +113,49 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
 
+function isZeroArea(f: DescribeFrame): boolean {
+  return clampFinite(f.width) <= 0 || clampFinite(f.height) <= 0;
+}
+
+/**
+ * The rows to leave out of a Chromium tree. The DOM walker lists a whole page and
+ * clamps an element outside the window to a zero-area frame at its edge, so on a
+ * long page most rows are of that kind. They cannot be tapped: an agent has to
+ * scroll to them first. A row stays if anything inside it has an area: a
+ * `position: fixed` child can be on screen inside an off-screen parent.
+ */
+function offscreenNodes(root: DescribeNode): Set<DescribeNode> {
+  const order: DescribeNode[] = [];
+  const stack = [...root.children];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    order.push(node);
+    for (const child of node.children) stack.push(child);
+  }
+  const offscreen = new Set<DescribeNode>();
+  // A parent comes before its children in `order`, so walking back sees the children first.
+  for (let i = order.length - 1; i >= 0; i--) {
+    const node = order[i]!;
+    if (isZeroArea(node.frame) && node.children.every((c) => offscreen.has(c))) {
+      offscreen.add(node);
+    }
+  }
+  return offscreen;
+}
+
+function printsLine(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean {
+  return shouldEmit(n, contentRoles) || n.children.length > 0;
+}
+
+/** How many rows `offscreen` removes from directly under `node`; a folded subtree counts once. */
+function foldedChildren(
+  node: DescribeNode,
+  offscreen: ReadonlySet<DescribeNode>,
+  contentRoles: ReadonlySet<string>
+): number {
+  return node.children.filter((c) => offscreen.has(c) && printsLine(c, contentRoles)).length;
+}
+
 function renderFlat(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
@@ -127,24 +171,28 @@ function renderFlat(
 function renderNested(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
-  source: DescribeSource
+  source: DescribeSource,
+  offscreen: ReadonlySet<DescribeNode>
 ): string[] {
   const lines: string[] = [];
   // Iterative DFS so very deep Compose / RN trees can't overflow the stack.
   // Start at depth 1: the header already prints the root as its ROOT line.
   type Frame = { node: DescribeNode; depth: number };
   const stack: Frame[] = [];
-  for (let i = root.children.length - 1; i >= 0; i--) {
-    stack.push({ node: root.children[i]!, depth: 1 });
-  }
+  const pushChildren = (node: DescribeNode, depth: number) => {
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = node.children[i]!;
+      if (!offscreen.has(child)) stack.push({ node: child, depth });
+    }
+  };
+  pushChildren(root, 1);
   while (stack.length > 0) {
     const { node, depth } = stack.pop()!;
-    if (shouldEmit(node, contentRoles) || node.children.length > 0) {
-      lines.push(formatLine(node, depth, source));
+    if (printsLine(node, contentRoles)) {
+      const folded = foldedChildren(node, offscreen, contentRoles);
+      lines.push(formatLine(folded > 0 ? { ...node, scrollHidden: folded } : node, depth, source));
     }
-    for (let i = node.children.length - 1; i >= 0; i--) {
-      stack.push({ node: node.children[i]!, depth: depth + 1 });
-    }
+    pushChildren(node, depth + 1);
   }
   return lines;
 }
@@ -168,6 +216,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";
+  // Vega's lowercase toolkit roles count as content only for its own source.
+  const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
+  const offscreen = opts.source === "cdp-dom" ? offscreenNodes(root) : new Set<DescribeNode>();
   const header: string[] = [];
   header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
@@ -191,14 +242,14 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     );
   }
   header.push("");
-  header.push(`ROOT  ${root.role} ${fmtFrame(root.frame)}`);
+  const foldedAtRoot = foldedChildren(root, offscreen, contentRoles);
+  const rootFlag = foldedAtRoot > 0 ? ` [scrollHidden=${foldedAtRoot}]` : "";
+  header.push(`ROOT  ${root.role}${rootFlag} ${fmtFrame(root.frame)}`);
   header.push("");
 
-  // Vega's lowercase toolkit roles count as content only for its own source.
-  const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
   const body =
     mode === "flat"
       ? renderFlat(root, contentRoles, opts.source)
-      : renderNested(root, contentRoles, opts.source);
+      : renderNested(root, contentRoles, opts.source, offscreen);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }

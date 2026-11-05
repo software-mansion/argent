@@ -581,6 +581,93 @@ describe("formatDescribeTree", () => {
     expect(lines[0]).toContain("[checked]");
   });
 
+  describe("off-screen rows on Chromium", () => {
+    const offFrame = { x: 0.02, y: 1, width: 0.9, height: 0 };
+    const row = (n: number): DescribeNode =>
+      leaf({ role: "li", identifier: `item-${n}`, frame: offFrame });
+    const page = (children: DescribeNode[]): DescribeNode => ({
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [{ role: "ul", frame: { x: 0, y: 0, width: 1, height: 1 }, children }],
+    });
+
+    it("folds zero-area rows into a count on their parent", () => {
+      const visible = leaf({
+        role: "li",
+        identifier: "item-0",
+        frame: { x: 0.02, y: 0.9, width: 0.9, height: 0.05 },
+      });
+      const out = formatDescribeTree(page([visible, row(1), row(2), row(3)]), {
+        source: "cdp-dom",
+      });
+      expect(out).toMatch(/^ {2}ul \[scrollHidden=3\] {2}\(/m);
+      expect(out).toContain("item-0");
+      expect(out).not.toContain("item-1");
+    });
+
+    it("leaves the tree data as it was", () => {
+      const tree = page([row(1)]);
+      formatDescribeTree(tree, { source: "cdp-dom" });
+      expect(tree.children[0]!.scrollHidden).toBeUndefined();
+      expect(tree.children[0]!.children).toHaveLength(1);
+    });
+
+    it("counts a folded subtree once", () => {
+      const nested: DescribeNode = {
+        role: "section",
+        frame: offFrame,
+        children: [row(1), row(2)],
+      };
+      const out = formatDescribeTree(page([nested]), { source: "cdp-dom" });
+      expect(out).toContain("[scrollHidden=1]");
+      expect(out).not.toContain("section");
+    });
+
+    it("keeps an off-screen parent whose child is on screen", () => {
+      const fixed = leaf({
+        role: "button",
+        label: "Help",
+        frame: { x: 0.9, y: 0.9, width: 0.05, height: 0.05 },
+        clickable: true,
+      });
+      const parent: DescribeNode = { role: "section", frame: offFrame, children: [fixed, row(1)] };
+      const out = formatDescribeTree(page([parent]), { source: "cdp-dom" });
+      expect(out).toMatch(/section \[scrollHidden=1\]/);
+      expect(out).toContain('"Help"');
+    });
+
+    it("does not count a row that would not have printed", () => {
+      const silent = leaf({ role: "div", frame: offFrame });
+      const out = formatDescribeTree(page([silent]), { source: "cdp-dom" });
+      expect(out).not.toContain("scrollHidden");
+    });
+
+    it("puts the count on the ROOT line for children of the root", () => {
+      const root: DescribeNode = {
+        role: "html",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [row(1)],
+      };
+      const out = formatDescribeTree(root, { source: "cdp-dom" });
+      expect(out).toContain("ROOT  html [scrollHidden=1] (0.000, 0.000, 1.000, 1.000)");
+      expect(out).not.toContain("item-1");
+    });
+
+    it("leaves zero-area rows of other sources in the text", () => {
+      for (const source of ["uiautomator", "android-devtools", "vega-automation"] as const) {
+        const out = formatDescribeTree(page([row(1)]), { source });
+        expect(out).toContain("item-1");
+        expect(out).not.toContain("scrollHidden");
+      }
+      const flat: DescribeNode = {
+        role: "AXGroup",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [leaf({ role: "AXButton", label: "add address", frame: offFrame })],
+      };
+      expect(formatDescribeTree(flat, { source: "ax-service" })).toContain('"add address"');
+    });
+  });
+
   // Regression: nested mode previously keyed on "uiautomator" only, so
   // "android-devtools" responses rendered flat and lost all descendants.
   it("renders android-devtools source in nested mode", () => {
