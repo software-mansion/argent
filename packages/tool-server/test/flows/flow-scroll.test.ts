@@ -641,6 +641,51 @@ describe("scroll-to directive", () => {
     ]);
   });
 
+  it.each([
+    {
+      direction: "down",
+      // A carousel beside the row holds the centre of the list window cutting it.
+      beside: { x: 0, y: 0.55, width: 0.55, height: 0.1 },
+      at: (y: number) => ({ x: 0.6, y, width: 0.3, height: 0.3 }),
+      clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+      clipAnchors: { y: { x: 0.3, y: 0.45 } },
+    },
+    {
+      direction: "right",
+      beside: { x: 0.4, y: 0.45, width: 0.4, height: 0.45 },
+      at: (x: number) => ({ x, y: 0.3, width: 0.3, height: 0.1 }),
+      clipBounds: { x: 0.4, y: 0, width: 0.4, height: 1 },
+      clipAnchors: { x: { x: 0.45, y: 0.35 } },
+    },
+  ])(
+    "keeps scrolling a $direction cut target past a scroller holding its window's centre but not the target",
+    async ({ direction, beside, at, clipBounds, clipAnchors }) => {
+      // No scroller is under the target, so the whole screen is fingerprinted
+      // and the target moving while still cut reads as progress.
+      const scroller = n({ identifier: "beside", scrollable: true, frame: beside });
+      const states = [
+        n({ identifier: "card", frame: at(0.75), clipBounds, clipAnchors }),
+        n({ identifier: "card", frame: at(0.55), clipBounds, clipAnchors }),
+        n({ identifier: "card", frame: at(0.45) }),
+      ];
+      let wheels = 0;
+      currentTree = () => screen([scroller, states[Math.min(wheels, 2)]]);
+      const swipes: SwipeCall[] = [];
+      await writeFlow(`beside-${direction}`, {
+        executionPrerequisite: "",
+        steps: [{ kind: "scroll-to", direction, target: { identifier: "card" } } as never],
+      });
+      const result = asRun(
+        await createRunFlowTool(mockRegistry(swipes, () => wheels++)).execute(
+          {},
+          { name: `beside-${direction}`, project_root: tmpDir, device: DEVICE }
+        )
+      );
+      expect(result.steps[0].status).toBe("pass");
+      expect(swipes).toHaveLength(2);
+    }
+  );
+
   it("stops once a cut target keeps its place in the clip while the page moves both", async () => {
     // The list cannot scroll the row's cut away, so each wheel moves the page,
     // carrying the list window and the row up together.
@@ -696,7 +741,7 @@ describe("scroll-to directive", () => {
   });
 
   it("scrolls a cut target with no wheel anchor on the axis like an uncut one", async () => {
-    // A node cut inside a same-origin iframe: the walker gives it clipBounds, no anchors.
+    // The walker withholds clipAnchors outside the top document.
     const swipes = await scrollTo(
       "unanchored-cut",
       (scrolled) => [n({ ...cutRow(scrolled), clipAnchors: undefined })],
