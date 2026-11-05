@@ -25,7 +25,7 @@ export type ArchiveFormat = "zstd" | "gzip";
 
 /**
  * Formats this runtime can write and read, preferred first. zstd is missing
- * from Node 23.0-23.7, which `engines` admits.
+ * from Node 23.0-23.7, which `engines` excludes but npm only warns about.
  */
 export const ARCHIVE_FORMATS: readonly ArchiveFormat[] =
   typeof zlib.createZstdCompress === "function" ? ["zstd", "gzip"] : ["gzip"];
@@ -123,12 +123,19 @@ async function assertSingleCompleteZstdFrame(archivePath: string): Promise<void>
   const fh = await open(archivePath, "r");
   try {
     const { size } = await fh.stat();
-    const buf = Buffer.alloc(5);
+    // One read per header would let a frame of tiny blocks cost seconds per MB.
+    const window = Buffer.alloc(4096);
+    let windowStart = 0;
+    let windowEnd = 0;
     let pos = 0;
     const read = async (n: number): Promise<Buffer> => {
-      const { bytesRead } = await fh.read(buf, 0, n, pos);
-      if (bytesRead < n) throw new ArchiveError("truncated zstd frame");
-      return buf;
+      if (pos < windowStart || pos + n > windowEnd) {
+        const { bytesRead } = await fh.read(window, 0, window.length, pos);
+        windowStart = pos;
+        windowEnd = pos + bytesRead;
+        if (bytesRead < n) throw new ArchiveError("truncated zstd frame");
+      }
+      return window.subarray(pos - windowStart, pos - windowStart + n);
     };
     for (let frame = 0; pos < size; frame++) {
       const header = await read(5);

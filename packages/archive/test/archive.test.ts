@@ -169,6 +169,17 @@ describe("safeExtractArchive zstd framing", () => {
     }
   });
 
+  it("walks a frame of a million one-byte blocks quickly", { timeout: 4_000 }, async () => {
+    const n = 1_000_000;
+    const blocks = Buffer.alloc(n * 4);
+    for (let i = 0; i < n; i++) {
+      // RLE block of size 1; the last one ends the frame.
+      blocks.writeUIntLE((1 << 3) | (1 << 1) | (i === n - 1 ? 1 : 0), i * 4, 3);
+    }
+    const header = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x58]);
+    await expect(extract(Buffer.concat([header, blocks]))).rejects.toThrow(ArchiveError);
+  });
+
   it("rejects a complete frame around a cut tar", async () => {
     const cut = (await plainTar()).subarray(0, 3072);
     const bytes = zlib.zstdCompressSync(cut, {
