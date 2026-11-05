@@ -25,7 +25,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { extractToolsFromSource, dedupeToolsById } from "./extract-tools.mjs";
+import { extractToolsFromSource, dedupeToolsById, renderAllFlagsOn } from "./extract-tools.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const toolsRoot = join(repoRoot, "packages", "tool-server", "src", "tools");
@@ -165,7 +165,7 @@ function oracleFromSource(src, fileName = "oracle.ts") {
           // a shape the extractor can capture, so it must stay non-static.
           if (ts.isPropertyAssignment(prop) && isStaticText(prop.initializer)) {
             descIsPlain = true;
-            descValue = prop.initializer.text.trim();
+            descValue = renderAllFlagsOn(prop.initializer.text).trim();
           }
         }
       });
@@ -289,6 +289,20 @@ test("run-sequence and describe (the two originally dropped tools) and gesture-t
   for (const expected of ["run-sequence", "describe", "gesture-tap"]) {
     assert.ok(names.has(expected), `${expected} missing from extractor output`);
   }
+});
+
+test("no extracted description carries flag tags", () => {
+  const { tools } = runExtractor();
+  const tagged = tools.filter((t) => /<\/?flag:/.test(t.description)).map((t) => t.name);
+  assert.deepEqual(tagged, [], `flag tags reached the scan in: ${tagged.join(", ")}`);
+});
+
+test("a renamed tool is extracted once, under its current id, not its aliases", () => {
+  const { tools } = runExtractor();
+  const names = tools.map((t) => t.name);
+  assert.equal(new Set(names).size, names.length, "duplicate tool names in extractor output");
+  assert.ok(names.includes("e2e-execute"), "e2e-execute missing from extractor output");
+  assert.ok(!names.includes("flow-execute"), "the alias flow-execute was extracted as a tool");
 });
 
 // Boundary-parsing rules (pure, fixture-driven)
@@ -1141,5 +1155,19 @@ test('a computed ["description"] key with a literal value surfaces as an extract
   assert.deepEqual(tools, []);
   assert.deepEqual(oracleFromSource(src).tools, [
     { name: "computed-desc-tool", description: "Real text." },
+  ]);
+});
+
+test("flag spans are emitted with their text and without their tags", () => {
+  const src = `
+    defineTool({
+      id: "flagged-tool",
+      description: \`Drives (iOS, <flag:alpha>Alpha, </flag:alpha>or Android).<flag:beta>
+Beta line.</flag:beta>\`,
+    });
+  `;
+  const tools = extractToolsFromSource(src, "fixture.ts");
+  assert.deepEqual(tools, [
+    { name: "flagged-tool", description: "Drives (iOS, Alpha, or Android).\nBeta line." },
   ]);
 });

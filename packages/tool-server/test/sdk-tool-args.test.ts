@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
+import { TOOL_ID_ALIASES, TOOL_PARAM_ALIASES } from "@argent/registry";
 import { renderSdkToolArgs, toType } from "../src/sdk-tool-args";
 import { EXPECTED_TOOL_COUNT } from "./helpers/catalog";
 
@@ -55,7 +56,28 @@ describe("renderSdkToolArgs", () => {
   const output = renderSdkToolArgs();
 
   it("emits every tool", () => {
-    expect(output.match(/^ {2}("[^"]+"|\w+): /gm)).toHaveLength(EXPECTED_TOOL_COUNT);
+    const aliases = Object.keys(TOOL_ID_ALIASES).length;
+    expect(output.match(/^ {2}("[^"]+"|\w+): /gm)).toHaveLength(EXPECTED_TOOL_COUNT + aliases);
+  });
+
+  it("types each former tool id as the tool it names", () => {
+    for (const [alias, id] of Object.entries(TOOL_ID_ALIASES)) {
+      expect(output).toContain(
+        `  /** @deprecated Renamed to \`${id}\`. */\n  "${alias}": ArgentToolArgs["${id}"];`
+      );
+    }
+  });
+
+  it("types each former param name as the param it names", () => {
+    for (const [id, aliases] of Object.entries(TOOL_PARAM_ALIASES)) {
+      const block = output.slice(output.indexOf(`  "${id}": {`)).split("\n  };")[0]!;
+      for (const [former, current] of Object.entries(aliases)) {
+        expect(block, id).toContain(`    ${current}?: string;`);
+        expect(block, id).toContain(
+          `    /** @deprecated Renamed to \`${current}\`. */\n    ${former}?: string;`
+        );
+      }
+    }
   });
 
   it("emits valid TypeScript", () => {

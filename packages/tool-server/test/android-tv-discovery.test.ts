@@ -177,6 +177,15 @@ describe("Android TV discovery — getAndroidRuntimeKind / isAndroidTv", () => {
     expect(await isAndroidTv("emulator-5556")).toBe(true);
   });
 
+  it("bounds the `adb devices` listing by devicesTimeoutMs", async () => {
+    mockDevice("emulator-5556", { features: LEANBACK_FEATURES });
+    expect(await isAndroidTv("emulator-5556", { devicesTimeoutMs: 1_234 })).toBe(true);
+    const devicesCall = execFileMock.mock.calls.find(
+      ([cmd, args]) => cmd === "adb" && args[0] === "devices"
+    );
+    expect(devicesCall?.[2]).toMatchObject({ timeout: 1_234 });
+  });
+
   it("returns undefined for a serial not in the device list", async () => {
     mockDevice("emulator-5556", { features: LEANBACK_FEATURES });
     // NOTE: getAndroidRuntimeKind memoises per-serial; a serial never seen is

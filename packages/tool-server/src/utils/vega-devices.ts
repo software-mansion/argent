@@ -186,19 +186,17 @@ export async function listVegaDevices(): Promise<VegaDevice[]> {
   );
   const stopped: VegaDevice[] = installedImages
     .filter((img) => !connectedImages.has(img.name))
-    .map(
-      (img): VegaDevice => ({
-        platform: "vega",
-        serial: null,
-        vvdImage: img.name,
-        kind: "vvd",
-        state: "stopped",
-        product: null,
-        profile: img.name,
-        buildDescription: null,
-        simulated: true,
-      })
-    );
+    .map((img): VegaDevice => ({
+      platform: "vega",
+      serial: null,
+      vvdImage: img.name,
+      kind: "vvd",
+      state: "stopped",
+      product: null,
+      profile: img.name,
+      buildDescription: null,
+      simulated: true,
+    }));
 
   return [...connected, ...stopped];
 }

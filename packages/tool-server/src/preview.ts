@@ -242,8 +242,7 @@ export function createPreviewRouter(registry: Registry): Router {
       // and the answer says so.
       let streamUrl = api.streamUrl;
       let panel:
-        | { foldable: true; activeScreen: number; panelSource: string; warning?: string }
-        | undefined;
+        { foldable: true; activeScreen: number; panelSource: string; warning?: string } | undefined;
       if (api.display?.foldable) {
         const live = await resolveLivePanel(udid);
         streamUrl = streamUrlForScreen(api.streamUrl, live.screen);

@@ -2,24 +2,39 @@
 set -euo pipefail
 
 # Downloads signed native binaries from argent-private-releases: the iOS, tvOS
-# and TCP dylibs, the ax-service daemons, and the Android helper APK consumed by
-# packages/native-devtools-android.
+# and TCP dylibs, the ax-service daemons, and the Android helper APK and network
+# inspector consumed by packages/native-devtools-android.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
 #
 # Requires:
-#   - gh CLI (no authentication needed — the repo is public)
+#   - gh CLI, logged in with `gh auth login` (the repo is public, but the
+#     `gh release view` pre-check still needs auth)
 
 REPO="software-mansion-labs/argent-private-releases"
 
 TAG="${1:-argent-main}"
 
 if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
-  echo "Error: release '${TAG}' not found in ${REPO}." >&2
+  echo "Error: release '${TAG}' not found in ${REPO}, or gh is not logged in (gh auth login)." >&2
   echo "Build and publish the native binaries for this version first, then retry." >&2
   exit 1
 fi
+
+if command -v sha256sum &>/dev/null; then
+  sha256() { sha256sum "$@"; }
+elif command -v shasum &>/dev/null; then
+  sha256() { shasum -a 256 "$@"; }
+else
+  echo "Error: neither sha256sum nor shasum found." >&2
+  exit 1
+fi
+
+# Every temporary download lands here, so it is removed on every exit path,
+# including a failed `gh` or `tar` under `set -e`.
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
 
 DYLIBS_DIR="packages/native-devtools-ios/dylibs"
 BIN_DIR="packages/native-devtools-ios/bin"
@@ -142,8 +157,7 @@ else
 fi
 
 echo "  Downloading argent-android-devtools.apk..."
-TMP_APK="$(mktemp -t argent-android-devtools.XXXXXX.apk)"
-trap 'rm -f "$TMP_APK"' EXIT
+TMP_APK="${TMP_DIR}/argent-android-devtools.apk"
 gh release download "${TAG}" \
   --repo "${REPO}" \
   --pattern "argent-android-devtools.apk" \
@@ -208,7 +222,62 @@ unzip -p "${TMP_APK}" AndroidManifest.xml | node -e '
 ANDROID_VERSION_NAME="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versionName")"
 ANDROID_TARGET="${ANDROID_BIN_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
 mv -f "${TMP_APK}" "${ANDROID_TARGET}"
-trap - EXIT
+
+# The network inspector agent: network-inspector.jar plus the JVMTI agent .so
+# for x86_64 and arm64-v8a, in one tarball.
+NETWORK_INSPECTOR_ASSET="network-inspector.tar.gz"
+NETWORK_INSPECTOR_CHECKSUM="${NETWORK_INSPECTOR_ASSET}.sha256"
+NETWORK_INSPECTOR_DIR="${ANDROID_BIN_DIR}/network-inspector"
+NETWORK_INSPECTOR_TMP="${TMP_DIR}/network-inspector"
+echo "  Downloading ${NETWORK_INSPECTOR_ASSET} (Android network inspector)..."
+mkdir -p "${NETWORK_INSPECTOR_TMP}"
+gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "${NETWORK_INSPECTOR_ASSET}" \
+  --pattern "${NETWORK_INSPECTOR_CHECKSUM}" \
+  --dir "${NETWORK_INSPECTOR_TMP}" \
+  --clobber
+
+# Like the trace-processor bundle, a missing checksum or a mismatch is fatal:
+# it means a corrupt or incomplete download. The checksum comes from the same
+# release as the tarball, so it proves integrity only: whoever can replace the
+# tarball there can replace the checksum too. `gh` succeeds when either
+# pattern matches, so both files are checked here.
+NETWORK_INSPECTOR_EXPECTED=""
+NETWORK_INSPECTOR_ACTUAL=""
+if [[ -f "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_CHECKSUM}" ]]; then
+  NETWORK_INSPECTOR_EXPECTED="$(awk '{print $1}' "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_CHECKSUM}")"
+fi
+if [[ -f "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_ASSET}" ]]; then
+  NETWORK_INSPECTOR_ACTUAL="$(sha256 "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_ASSET}" | awk '{print $1}')"
+fi
+if [[ -z "${NETWORK_INSPECTOR_EXPECTED}" || "${NETWORK_INSPECTOR_EXPECTED}" != "${NETWORK_INSPECTOR_ACTUAL}" ]]; then
+  echo "Error: sha256 check failed for ${NETWORK_INSPECTOR_ASSET} on '${TAG}'." >&2
+  echo "  expected: ${NETWORK_INSPECTOR_EXPECTED:-<missing or empty ${NETWORK_INSPECTOR_CHECKSUM}>}" >&2
+  echo "  actual:   ${NETWORK_INSPECTOR_ACTUAL:-<missing ${NETWORK_INSPECTOR_ASSET}>}" >&2
+  exit 1
+fi
+echo "  sha256 OK (${NETWORK_INSPECTOR_ASSET})"
+
+NETWORK_INSPECTOR_EXTRACTED="${NETWORK_INSPECTOR_TMP}/extracted"
+mkdir -p "${NETWORK_INSPECTOR_EXTRACTED}"
+tar -xzf "${NETWORK_INSPECTOR_TMP}/${NETWORK_INSPECTOR_ASSET}" -C "${NETWORK_INSPECTOR_EXTRACTED}"
+
+# The jar's Implementation-Version must equal versionName in
+# assets/manifest.json. A mismatch fails here, before the agent reaches bin/.
+NETWORK_INSPECTOR_VERSION="$(
+  (unzip -p "${NETWORK_INSPECTOR_EXTRACTED}/network-inspector.jar" META-INF/MANIFEST.MF \
+    | tr -d '\r' | sed -n 's/^Implementation-Version: //p') || true
+)"
+if [[ "${NETWORK_INSPECTOR_VERSION}" != "${ANDROID_VERSION_NAME}" ]]; then
+  echo "Error: network-inspector.jar on '${TAG}' is version '${NETWORK_INSPECTOR_VERSION:-<none>}'," >&2
+  echo "       but versionName in ${ANDROID_MANIFEST_FILE} is '${ANDROID_VERSION_NAME}'." >&2
+  echo "       Release a network inspector at version ${ANDROID_VERSION_NAME}, or fix versionName, then retry." >&2
+  exit 1
+fi
+rm -rf "${NETWORK_INSPECTOR_DIR}"
+mv "${NETWORK_INSPECTOR_EXTRACTED}" "${NETWORK_INSPECTOR_DIR}"
+echo "  ✓ network inspector ${NETWORK_INSPECTOR_VERSION} → ${NETWORK_INSPECTOR_DIR}"
 
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 

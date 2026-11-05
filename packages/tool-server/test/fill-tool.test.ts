@@ -392,6 +392,17 @@ describe("fill: secrets and leaks", () => {
     expect(JSON.stringify(result)).not.toContain("FILL_PW");
   });
 
+  it("resolves a secret the client sent ahead of the tool-server's own", async () => {
+    vi.stubEnv("ARGENT_SECRET_FILL_PW", "server-value");
+    const ax = axAnswers({ focused: true, verified: true });
+    const tool = createFillTool(registryWith({ ax }));
+    await tool.execute({}, { udid: IOS, text: "{{secret:FILL_PW}}" }, {
+      artifacts: {},
+      clientSecrets: new Map([["FILL_PW", "client-value"]]),
+    } as any);
+    expect(ax.fill).toHaveBeenCalledWith("client-value", { typeable: true });
+  });
+
   it("names neither the text nor the secret in a failure", async () => {
     vi.stubEnv("ARGENT_SECRET_FILL_PW", "hunter2-secret");
     const ax = axAnswers({ focused: true, verified: false });

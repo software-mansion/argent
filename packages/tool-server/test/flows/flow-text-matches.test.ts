@@ -6,12 +6,10 @@ import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/co
 // these unit tests stub the tree fetch itself.
 let currentTree: () => DescribeNode;
 vi.mock("../../src/tools/flows/flow-tree", () => ({
-  fetchFlowTree: vi.fn(
-    async (): Promise<DescribeTreeData> => ({
-      tree: currentTree(),
-      source: "native-devtools",
-    })
-  ),
+  fetchFlowTree: vi.fn(async (): Promise<DescribeTreeData> => ({
+    tree: currentTree(),
+    source: "native-devtools",
+  })),
 }));
 
 import { serializeFlow, parseFlow } from "../../src/tools/flows/flow-utils";

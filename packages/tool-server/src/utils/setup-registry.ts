@@ -9,8 +9,9 @@ import { chromiumCdpBlueprint } from "../blueprints/chromium-cdp";
 import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-runtime-debugger";
 import { tvControlBlueprint } from "../blueprints/tv-control";
 import { androidTvControlBlueprint } from "../blueprints/android-tv-control";
+import { androidNetworkInspectorBlueprint } from "../blueprints/android-network-inspector";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
-import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../tools/native-devtools/native-full-hierarchy";
 import { nativeDescribeScreenTool } from "../tools/native-devtools/native-describe-screen";
@@ -39,7 +40,7 @@ import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
-import { rotateTool } from "../tools/rotate";
+import { createRotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
 import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
@@ -129,6 +130,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(chromiumJsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(tvControlBlueprint);
   registry.registerBlueprint(androidTvControlBlueprint);
+  registry.registerBlueprint(androidNetworkInspectorBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -156,7 +158,7 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(createKeyboardTool(registry));
   registry.registerTool(createPasteTool(registry));
-  registry.registerTool(rotateTool);
+  registry.registerTool(createRotateTool(registry));
   registry.registerTool(shakeTool);
   registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
@@ -194,7 +196,7 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerLoadTool);
   registry.registerTool(gatherWorkspaceDataTool);
   registry.registerTool(nativeDevtoolsStatusTool);
-  registry.registerTool(nativeNetworkLogsTool);
+  registry.registerTool(createNativeNetworkLogsTool(registry));
   registry.registerTool(nativeFindViewsTool);
   registry.registerTool(nativeFullHierarchyTool);
   registry.registerTool(nativeDescribeScreenTool);
