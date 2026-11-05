@@ -106,6 +106,8 @@ To install the components, do one of these steps:
 
 Argent finds the installed components at the next tool call. You do not need to restart Argent.
 
+Apple TV simulators and foldable iOS simulators are an exception. Before the install, Argent cannot read the type of a simulator. If the agent used such a simulator before the install, Argent continues to drive it incorrectly after the install. To correct this, tell the agent to run `stop-simulator-server` for that simulator.
+
 ## Linux hosts running Android emulators
 
 Argent runs Android emulators on Linux, but a few host-side knobs matter:
