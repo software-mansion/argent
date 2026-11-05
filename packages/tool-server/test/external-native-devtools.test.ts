@@ -39,18 +39,23 @@ let temporaryDirectory: string;
 type LentAgent = {
   close: () => Promise<void>;
   hangUp: () => void;
+  /** Sends the deferred `Control` frame of a `deferHandshake` agent. */
+  handshake: () => void;
   received: Array<{ type: string; payload: Record<string, unknown> }>;
   socketPath: string;
 };
 
-async function startLentAgent(): Promise<LentAgent> {
+async function startLentAgent(options: { deferHandshake?: boolean } = {}): Promise<LentAgent> {
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
 
+  const sendHandshake = (socket: net.Socket) =>
+    socket.write(JSON.stringify({ payload: { bundleId: BUNDLE_ID }, type: "Control" }) + "\n");
+
   const server = net.createServer((socket) => {
     sockets.push(socket);
-    socket.write(JSON.stringify({ payload: { bundleId: BUNDLE_ID }, type: "Control" }) + "\n");
+    if (!options.deferHandshake) sendHandshake(socket);
 
     readline.createInterface({ input: socket }).on("line", (raw) => {
       const message = JSON.parse(raw);
@@ -75,6 +80,9 @@ async function startLentAgent(): Promise<LentAgent> {
     /** What a provider does when the app it was lending goes away. */
     hangUp: () => {
       for (const socket of sockets.splice(0)) socket.destroy();
+    },
+    handshake: () => {
+      for (const socket of sockets) sendHandshake(socket);
     },
     received,
     socketPath,
@@ -232,12 +240,51 @@ describe("a provider that lends its native-devtools agent", () => {
     const { nativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");
 
-    await expect(
-      nativeNetworkLogsTool.execute(
+    const err = await nativeNetworkLogsTool
+      .execute(
         { nativeDevtools: instance.api },
         { bundleId: "com.example.gone", clear: false, limit: 50, udid: DEVICE_ID }
       )
-    ).rejects.toThrow(/not connected/);
+      .catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/not connected/);
+    expect((err as Error).message).toMatch(/describe or screenshot/);
+    expect((err as Error).message).not.toMatch(/call again in a few seconds/);
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  /**
+   * The lent app was running before we attached, so its launch is missed. The
+   * note must say so on the first ok answer, even when an earlier call failed
+   * because the handshake had not landed, and must not send the agent to
+   * restart an app whose relaunch ends capture here.
+   */
+  it("notes the missed launch on the first ok answer without advising a restart", async () => {
+    const agent = await startLentAgent({ deferHandshake: true });
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    const { nativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const call = () =>
+      nativeNetworkLogsTool.execute(
+        { nativeDevtools: instance.api },
+        { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+      );
+
+    await expect(call()).rejects.toThrow(/not connected/);
+
+    agent.handshake();
+    await waitForConnectedBundle(instance.api);
+
+    const first = (await call()) as { status: string; note?: string };
+    expect(first.status).toBe("ok");
+    expect(first.note).toMatch(/were not recorded/);
+    expect(first.note).not.toMatch(/restart-app/);
+
+    const second = (await call()) as { note?: string };
+    expect(second.note).toBeUndefined();
 
     await instance.dispose();
     await agent.close();
