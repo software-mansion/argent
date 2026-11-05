@@ -349,6 +349,35 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("fails without scrolling when the `within` container is not on screen", async () => {
+    currentTree = () =>
+      screen([n({ label: "Row 5", frame: { x: 0.1, y: 0.4, width: 0.8, height: 0.1 } })]);
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes);
+    await writeFlow("missing-within", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          target: { text: "Row 5" },
+          direction: "down",
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "missing-within", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.ok).toBe(false);
+    expect(result.steps[0].status).toBe("fail");
+    expect(result.steps[0].reason).toContain("scroll container");
+    expect(result.steps[0].reason).toContain("is not visible");
+    expect(swipes).toHaveLength(0);
+  });
+
   async function scrollTo(
     name: string,
     nodes: (scrolled: boolean) => DescribeNode[],
@@ -507,6 +536,47 @@ describe("scroll-to directive", () => {
     ]);
   });
 
+  it("keeps the anchor for a horizontal cut whose room recurs in a window of another width", async () => {
+    // The first wheel scrolls the inner of two cutting carousels until it no longer
+    // cuts the card, leaving it as far from the outer carousel's window start.
+    const states = [
+      n({
+        identifier: "card",
+        frame: { x: 0.75, y: 0.3, width: 0.1, height: 0.1 },
+        clipBounds: { x: 0.4, y: 0, width: 0.4, height: 1 },
+        clipAnchors: { x: { x: 0.45, y: 0.35 } },
+      }),
+      n({
+        identifier: "card",
+        frame: { x: 0.65, y: 0.3, width: 0.1, height: 0.1 },
+        clipBounds: { x: 0.3, y: 0, width: 0.42, height: 1 },
+        clipAnchors: { x: { x: 0.35, y: 0.32 } },
+      }),
+      n({ identifier: "card", frame: { x: 0.5, y: 0.3, width: 0.1, height: 0.1 } }),
+    ];
+    let wheels = 0;
+    currentTree = () => screen([states[Math.min(wheels, 2)]]);
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      wheels++;
+    });
+    await writeFlow("regrown-cut-x", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "right", target: { identifier: "card" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "regrown-cut-x", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes.map((sw) => [sw.fromX, sw.fromY])).toEqual([
+      [0.45, 0.35],
+      [0.35, 0.32],
+    ]);
+  });
+
   it("keeps the anchor for a cut that moved closer to its window's start in a window as long", async () => {
     // A row taller than one increment's travel: the first wheel shrinks its room
     // from 0.35 to 0.15 in the same 0.4-0.8 window, the second clears the cut.
@@ -629,6 +699,28 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
     expect(swipes[0].fromX).toBeCloseTo(0.7);
     expect(swipes[0].fromY).toBeCloseTo(0.32);
+  });
+
+  it("scrolls a target cut at its scroller's right edge by half that scroller's window width", async () => {
+    // The carousel's window spans 0.2-0.8; the card is cut flush at 0.8.
+    const swipes = await scrollTo(
+      "cut-right",
+      (scrolled) => [
+        n({
+          identifier: "card",
+          frame: scrolled
+            ? { x: 0.4, y: 0.3, width: 0.2, height: 0.1 }
+            : { x: 0.75, y: 0.3, width: 0.05, height: 0.1 },
+          clipBounds: scrolled ? undefined : { x: 0.2, y: 0, width: 0.6, height: 1 },
+          clipAnchors: scrolled ? undefined : { x: { x: 0.7, y: 0.32 } },
+        }),
+      ],
+      { target: { identifier: "card" }, direction: "right" }
+    );
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX).toBeCloseTo(0.7);
+    expect(swipes[0].fromY).toBeCloseTo(0.32);
+    expect(swipes[0].fromX - swipes[0].toX).toBeCloseTo(0.3);
   });
 
   it("scrolls a `within` target in the scroller cutting it, not at the named container's centre", async () => {
