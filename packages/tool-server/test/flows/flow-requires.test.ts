@@ -325,3 +325,27 @@ describe("a test that boots its own Electron app", () => {
     expect(invokeTool).not.toHaveBeenCalled();
   });
 });
+
+describe("a chromium-only block with a multi-platform launch", () => {
+  it("boots the chromium entry without --platform", async () => {
+    await writeFlow("multi", {
+      requires: { platform: ["chromium"] },
+      steps: [
+        { kind: "launch", app: { android: "com.example.app", chromium: "/nonexistent/App.app" } },
+      ],
+    });
+    const { registry } = mockRegistry([android(ANDROID)]);
+    await expect(run(registry, "multi")).rejects.toThrow("Electron boot: path does not exist");
+  });
+
+  it("still auto-detects when the block allows other platforms too", async () => {
+    await writeFlow("multi", {
+      requires: { platform: ["chromium", "android"] },
+      steps: [
+        { kind: "launch", app: { android: "com.example.app", chromium: "/nonexistent/App.app" } },
+      ],
+    });
+    const { registry } = mockRegistry([android(ANDROID)]);
+    expect((await run(registry, "multi")).device).toBe(ANDROID);
+  });
+});

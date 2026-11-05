@@ -155,7 +155,7 @@ const zodSchema = z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for a standalone e2e test - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or a standalone e2e test's launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for a standalone e2e test - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or a standalone e2e test's launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
       ),
     updateBaselines: z
       .boolean()
@@ -1876,7 +1876,11 @@ async function resolveRunDevice(
     // The executor's own runStack seed, so a boot can never precede a chain it
     // then refuses.
     const leading = await leadingLaunch(flow, runStack, { registry, project });
-    const spec = leading && chromiumBootSpec(leading.app, params.platform);
+    // A block that allows only chromium picks the chromium entry of a multi-platform launch.
+    const chromiumOnly =
+      flow.requires?.platform?.length === 1 && flow.requires.platform[0] === "chromium";
+    const platform = params.platform ?? (chromiumOnly ? "chromium" : undefined);
+    const spec = leading && chromiumBootSpec(leading.app, platform);
     if (spec) {
       assertPlatformMeetsRequires(
         "chromium",

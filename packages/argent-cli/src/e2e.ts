@@ -137,8 +137,9 @@ contain only letters, numbers, "_", or "-" — the same charset a name must
 match. A test is standalone when its first non-\`echo\`/\`script\` step is \`launch\`.
 Other tests are fragments and use the device's current state. Exception: a fragment whose first step \`run:\`s a chromium standalone
 test boots that test's app before step 1 — when that launch is unambiguously
-chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
-multi-platform launch auto-detects a device instead. Pass --device to attach to
+chromium (a lone \`{ chromium: ... }\` target, --platform chromium, or a
+\`requires:\` block that allows only chromium); a multi-platform launch
+auto-detects a device instead. Pass --device to attach to
 a running instance.
 
 A directory run prints only the steps that need attention (each failure, each
