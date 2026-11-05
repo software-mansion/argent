@@ -51,6 +51,9 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
   return result;
 }
 
+/** Every Android native ID starts with this, and so does a truncated or mistyped one. */
+const ANDROID_ID_PREFIX = "android-";
+
 /** Body chars kept, of a request or a response; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
 
@@ -211,6 +214,13 @@ Returns an error message string if the requestId is not found: use view-network-
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    /**
+     * An android- ID in any other shape was not issued by the native layer, and
+     * the JS layer names its requests rn-net-<n>. No layer can hold it, so saying
+     * that needs no debugger. Chromium's IDs are opaque, so Chromium, above, still
+     * gets to answer for itself.
+     */
+    if (params.requestId.startsWith(ANDROID_ID_PREFIX)) return {};
     return {
       inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
     };
@@ -271,6 +281,10 @@ Returns an error message string if the requestId is not found: use view-network-
         details.response = resp;
       }
       return details;
+    }
+
+    if (params.requestId.startsWith(ANDROID_ID_PREFIX)) {
+      return androidNativeNotFound(params.requestId, params.device_id);
     }
 
     const api = services.inspector as NetworkInspectorApi;
