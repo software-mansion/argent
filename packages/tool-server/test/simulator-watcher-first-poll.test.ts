@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const simctlMock = vi.fn();
+const pending = vi.hoisted(() => ({ simctl: false }));
+
+vi.mock("../src/utils/xcode-first-launch", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
+    "../src/utils/xcode-first-launch"
+  );
+  return {
+    ...actual,
+    xcodeFirstLaunchPending: (wrapper: string) => wrapper === "simctl" && pending.simctl,
+  };
+});
 
 vi.mock("../src/utils/simctl-exec", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/simctl-exec")>(
@@ -40,6 +51,7 @@ afterEach(() => {
   stop = undefined;
   vi.useRealTimers();
   simctlMock.mockReset();
+  pending.simctl = false;
 });
 
 describe("firstSimulatorPoll", () => {
@@ -80,6 +92,23 @@ describe("firstSimulatorPoll", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(resolveService).toHaveBeenCalledWith(`NativeDevtools:${UDID}`, expect.anything());
     expect(await isSettled(firstSimulatorPoll())).toBe(true);
+  });
+
+  it("settles at once while Xcode's component install is pending", async () => {
+    vi.useFakeTimers();
+    pending.simctl = true;
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const resolveService = vi.fn();
+
+    try {
+      ({ stop } = startSimulatorWatcher({ resolveService } as unknown as Registry));
+
+      expect(await isSettled(firstSimulatorPoll())).toBe(true);
+      expect(simctlMock).not.toHaveBeenCalled();
+      expect(resolveService).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it("stops waiting 15s after startup when the first poll never settles", async () => {

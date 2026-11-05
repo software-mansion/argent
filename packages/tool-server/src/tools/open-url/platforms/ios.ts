@@ -4,6 +4,7 @@ import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
 import { firstSimulatorPoll } from "../../../utils/simulator-watcher";
+import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 import { httpDeepLinkNote } from "../deep-link-note";
 
@@ -20,6 +21,8 @@ export const iosImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult
         await simctlArgsForUdid(params.udid, ["openurl", params.udid, params.url])
       );
     } catch (err) {
+      // Its message says what to do, and a flow step reports only the thrown message.
+      if (err instanceof XcodeFirstLaunchPendingError) throw err;
       throw new FailureError(
         `Failed to open URL on iOS simulator ${params.udid}.`,
         {

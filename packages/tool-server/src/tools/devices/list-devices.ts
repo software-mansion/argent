@@ -15,6 +15,7 @@ import {
   type IosSimulator,
 } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
+import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
 import { listHarmonyInstances, listHarmonyHdcTargets } from "../../utils/harmony-devices";
@@ -123,9 +124,10 @@ type ListDevicesResult = {
   avds: Array<{ name: string; foldable?: true }>;
   /**
    * Present only when it applies, unlike the description, which is read once
-   * per session: the rules for a provider's device when one is listed, a retry
-   * notice when `simctl` timed out, and how to reach the adb server when it is
-   * not adb's default.
+   * per session: why local iOS targets are missing while Xcode's component
+   * install is pending, a retry notice when `simctl` timed out, the rules for a
+   * provider's device when one is listed, and how to reach the adb server when
+   * it is not adb's default.
    */
   hint?: string;
 };
@@ -141,9 +143,9 @@ const EXTERNAL_DEVICES_HINT =
   `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
 
-const IOS_LIST_TIMED_OUT_HINT = `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice(
-  "list-devices"
-)}`;
+function iosListTimedOutHint(): string {
+  return `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice("list-devices")}`;
+}
 
 /**
  * The agent's shell does not inherit the tool-server's environment, so its adb
@@ -348,6 +350,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
   services: () => ({}),
   async execute(_services, _params) {
     const harmonyEnabled = isHarmonyEnabled();
+    const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
     // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
     // the "no branch can hang the fan-out" guarantee universal. The deadline only
     // substitutes a fallback on *slowness*; a rejection still propagates, so the
@@ -364,7 +367,9 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       harmonyTargets,
       external,
     ] = await Promise.all([
-      withDeadline(scanIosSimulators(), { simulators: [], timedOut: true }, "ios"),
+      xcodeInstallPending.includes("simctl")
+        ? { simulators: [], timedOut: false }
+        : withDeadline(scanIosSimulators(), { simulators: [], timedOut: true }, "ios"),
       withDeadline(
         listIosPhysicalDevices().catch(() => []),
         [],
@@ -507,7 +512,8 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
 
     const adbPrefix = adbCommandPrefix(process.env);
     const hints = [
-      ...(ios.timedOut ? [IOS_LIST_TIMED_OUT_HINT] : []),
+      ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
+      ...(ios.timedOut ? [iosListTimedOutHint()] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];
