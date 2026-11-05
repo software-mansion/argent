@@ -58,7 +58,9 @@ export const DEFAULT_PROFILE: ClientProfile = {
  *
  * "Shown" means the model gets an image block from a tool result, so the `Saved: <path>`
  * line after an auto-screenshot tells it nothing new. A model without image input gets a
- * placeholder or an error instead, and the client's file-read tool does not help it either.
+ * placeholder, an error, or nothing at all (VS Code's agent host). The client's file-read
+ * tool does not show it the PNG, but a shell tool can still open it, so such a model has to
+ * call `screenshot` to learn a path.
  */
 export const KNOWN_CLIENTS: readonly KnownClient[] = [
   {
@@ -129,8 +131,9 @@ export const KNOWN_CLIENTS: readonly KnownClient[] = [
     telemetry: "zed",
   },
   {
-    // VS Code chat. Images: shown on models with vision (source, 1.143.1 with Copilot Chat
-    // 0.71.0). Keywords: dropped on gpt-4 models (source, same versions).
+    // VS Code chat. Images: shown on models with vision (captured 1.143.1 with Copilot Chat
+    // 0.71.0, bring-your-own-key stand-in; Copilot's own models not run). Keywords: dropped
+    // on gpt-4 models (source, same versions).
     id: "vscode",
     names: [/^visual studio code\b/],
     seen: ["Visual Studio Code", "Visual Studio Code - Insiders"],
@@ -140,9 +143,10 @@ export const KNOWN_CLIENTS: readonly KnownClient[] = [
     telemetry: "vscode",
   },
   {
-    // VS Code's agent host. Images: shown on models with vision (source, 1.143.1, partly
-    // inferred from Copilot CLI 1.0.40). Keywords: moves most of them into the description
-    // itself (captured 1.143.1), so the copy would only repeat a fact.
+    // VS Code's agent host. Images: shown on models with vision, dropped silently otherwise
+    // (captured 1.143.1, runtime 1.0.100-1, bring-your-own-key stand-in; Copilot's own models
+    // not run). Keywords: moves most of them into the description itself (captured 1.143.1),
+    // so the copy would only repeat a fact.
     id: "vscode-agent-host",
     names: [/^copilot-cli\b/],
     seen: ["copilot-cli"],
