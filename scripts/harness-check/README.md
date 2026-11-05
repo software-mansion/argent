@@ -17,7 +17,6 @@ the param descriptions for such clients (`keyword-facts.ts`). This check shows w
 works, and whether anything is lost or repeated. The full per-client matrix (keyword facts,
 screenshot forms, telemetry) is in `packages/argent-mcp/src/CLIENTS.md`.
 
-
 ## How it works
 
 ```
