@@ -36,6 +36,7 @@ function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
+    networkLogEvicted: () => false,
     getAppState: async (bundleId) => {
       const app = byBundleId.get(bundleId);
       if (!app) throw new Error(`unknown bundleId: ${bundleId}`);
