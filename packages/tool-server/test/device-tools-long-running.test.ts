@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type ExecOptions = { timeout?: number; killSignal?: string } | undefined;
 const calls: Array<{ cmd: string; args: readonly string[]; options: ExecOptions }> = [];
+// simctl subcommand that fails, and whether it fails by timing out.
+let failing: { sub: string; killed: boolean } | null = null;
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -15,6 +17,16 @@ vi.mock("node:child_process", async () => {
     ) => {
       const callback = typeof opts === "function" ? opts : cb!;
       calls.push({ cmd, args, options: (typeof opts === "function" ? undefined : opts) as never });
+      if (cmd === "xcrun" && failing && args.includes(failing.sub)) {
+        callback(
+          Object.assign(new Error(`simctl ${failing.sub} failed`), { killed: failing.killed }),
+          {
+            stdout: "",
+            stderr: "",
+          }
+        );
+        return;
+      }
       const isProbe = cmd === "/bin/sh" || cmd === "where";
       const isListJson = args.includes("list") && args.includes("--json");
       callback(null, {
@@ -78,6 +90,7 @@ describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => 
 
   beforeEach(() => {
     calls.length = 0;
+    failing = null;
   });
 
   it.each([
@@ -111,4 +124,61 @@ describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => 
       expect(c.options?.timeout).toBeGreaterThan(0);
     }
   });
+});
+
+describe("iOS app tools fail when the step before launch or install times out", () => {
+  const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+  const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
+  const cases = [
+    [
+      "reinstall-app",
+      () => reinstallAppTool.execute!({}, { udid: UDID, bundleId: "com.x", appPath: "/a.app" }),
+      "uninstall",
+      "install",
+      { reinstalled: true, bundleId: "com.x" },
+      /Uninstalling com\.x .* did not finish within 30s/,
+    ],
+    [
+      "launch-app",
+      () =>
+        createLaunchAppTool(fakeRegistry).execute!(
+          {},
+          { udid: UDID, bundleId: "com.x", launchArgs: ["-a"] }
+        ),
+      "terminate",
+      "launch",
+      { launched: true, bundleId: "com.x" },
+      /Terminating iOS app com\.x .* did not finish within 15s/,
+    ],
+    [
+      "restart-app",
+      () => createRestartAppTool(fakeRegistry).execute!({}, { udid: UDID, bundleId: "com.x" }),
+      "terminate",
+      "launch",
+      { restarted: true, bundleId: "com.x" },
+      /Terminating iOS app com\.x .* did not finish within 15s/,
+    ],
+  ] as const;
+
+  beforeEach(() => {
+    calls.length = 0;
+  });
+
+  it.each(cases)(
+    "%s fails on a timed-out %s and never runs %s",
+    async (_id, run, sub, next, _ok, message) => {
+      failing = { sub, killed: true };
+      await expect(run()).rejects.toThrow(message);
+      const simctl = calls.filter((c) => c.cmd === "xcrun" && c.args.includes("simctl"));
+      expect(simctl.some((c) => c.args.includes(next))).toBe(false);
+    }
+  );
+
+  it.each(cases)(
+    "%s still succeeds when %s fails without timing out",
+    async (_id, run, sub, _next, ok) => {
+      failing = { sub, killed: false };
+      await expect(run()).resolves.toMatchObject(ok);
+    }
+  );
 });

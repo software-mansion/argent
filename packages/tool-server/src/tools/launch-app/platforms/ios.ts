@@ -57,8 +57,21 @@ export function makeIosImpl(
             await simctlArgsForUdid(params.udid, ["terminate", params.udid, params.bundleId]),
             { timeout: 15_000, killSignal: SIMCTL_KILL_SIGNAL }
           );
-        } catch {
-          // App may not be running
+        } catch (err) {
+          // Not running is fine; a timed-out terminate leaves a running app that would drop the args.
+          if ((err as { killed?: boolean }).killed) {
+            throw new FailureError(
+              `Terminating iOS app ${params.bundleId} on ${params.udid} to apply launchArgs did not finish within 15s.`,
+              {
+                error_code: FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED,
+                failure_stage: "ios_launch_app_simctl_terminate",
+                failure_area: "tool_server",
+                error_kind: "subprocess",
+                ...subprocessFailureMetadata(err, "xcrun_simctl"),
+              },
+              { cause: err as Error }
+            );
+          }
         }
       }
       try {

@@ -53,8 +53,21 @@ export function makeIosImpl(
           timeout: 15_000,
           killSignal: SIMCTL_KILL_SIGNAL,
         });
-      } catch {
-        // App may not be running
+      } catch (err) {
+        // Not running is fine; a timed-out terminate may have left the old process up.
+        if ((err as { killed?: boolean }).killed) {
+          throw new FailureError(
+            `Terminating iOS app ${bundleId} on ${udid} did not finish within 15s, so it was not restarted.`,
+            {
+              error_code: FAILURE_CODES.IOS_RESTART_TERMINATE_FAILED,
+              failure_stage: "ios_restart_app_simctl_terminate",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              ...subprocessFailureMetadata(err, "xcrun_simctl"),
+            },
+            { cause: err as Error }
+          );
+        }
       }
       try {
         await execFileAsync(

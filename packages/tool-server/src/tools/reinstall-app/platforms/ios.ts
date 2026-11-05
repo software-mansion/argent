@@ -22,8 +22,21 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
         timeout: 30_000,
         killSignal: SIMCTL_KILL_SIGNAL,
       });
-    } catch {
-      // App may not be installed
+    } catch (err) {
+      // Not installed is fine; a timed-out uninstall may have left the old app and its data.
+      if ((err as { killed?: boolean }).killed) {
+        throw new FailureError(
+          `Uninstalling ${bundleId} from ${udid} did not finish within 30s, so it was not reinstalled.`,
+          {
+            error_code: FAILURE_CODES.IOS_REINSTALL_UNINSTALL_FAILED,
+            failure_stage: "ios_reinstall_app_simctl_uninstall",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            ...subprocessFailureMetadata(err, "xcrun_simctl"),
+          },
+          { cause: err as Error }
+        );
+      }
     }
     try {
       await execFileAsync("xcrun", [...prefix, "install", nativeId, absolute], {

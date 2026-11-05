@@ -44,6 +44,8 @@ On Android, Argent also checks the device after the uninstall. If the package is
 - An app that is an active device admin. The app data stays on the device.
 - An updated system app. The uninstall removes only the update. If the update has a newer version than the system app, Android also removes the app data.
 
+On an iOS simulator, the tool fails and does not install the `.app` if the uninstall does not finish within 30 seconds.
+
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
 - Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. The panel that shows the UI is the active panel.
