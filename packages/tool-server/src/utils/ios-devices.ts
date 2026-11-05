@@ -50,7 +50,8 @@ export function simctlListTimeoutAdvice(retry: string): string {
   return (
     `\`xcrun simctl list\` did not answer within ${SIMCTL_LIST_TIMEOUT_MS / 1000}s. ` +
     `CoreSimulatorService is probably still starting, which can take about a minute after a ` +
-    `reboot, so call ${retry} again shortly. If it keeps timing out, restart CoreSimulatorService.`
+    `reboot, so call ${retry} again shortly. If it keeps timing out and Xcode was just updated, ` +
+    `open Xcode once or run \`sudo xcodebuild -runFirstLaunch\`; otherwise restart CoreSimulatorService.`
   );
 }
 

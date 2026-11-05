@@ -284,6 +284,8 @@ describe("list-devices", () => {
 
     expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
     expect(result.hint).toContain("did not answer within 10s");
+    // Xcode 27.1's simctl wrapper hangs in a pending first launch, which no retry fixes.
+    expect(result.hint).toContain("sudo xcodebuild -runFirstLaunch");
   });
 
   it("counts an iOS branch cut off by the deadline as timed out", async () => {
