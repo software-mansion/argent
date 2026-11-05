@@ -1734,8 +1734,7 @@ function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message. It also returns the *value*
   // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
-  // declared `string` return type hides. A bare number goes through String():
-  // JSON.stringify renders `.inf`/`.nan` as `null`.
+  // declared `string` return type hides, and renders `.inf`/`.nan` as `null`.
   let rendered: string;
   try {
     rendered = typeof raw === "number" ? String(raw) : (JSON.stringify(raw) ?? String(raw));
@@ -3817,8 +3816,7 @@ export function parseFlow(content: string): FlowFile {
     });
   if (typeof parsed !== "object" || parsed === null) throw notAFlow();
 
-  // Checked before the file's shape: a newer version may change that shape, and
-  // must be refused as newer, not as malformed.
+  // Before the shape checks: a newer version may change the shape.
   const version: unknown = parsed.version ?? 1;
   if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
     throw new FailureError(
