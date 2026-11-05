@@ -339,6 +339,16 @@ describe("xcodeFirstLaunchPending", () => {
       expect(xcodeFirstLaunchPending()).toBe(false);
     });
 
+    it("with an absolute plist path that uses a shell variable", () => {
+      // With the != check a path read literally would look missing, which reads as pending.
+      plistPath = path.join(root, "Frameworks", "Info.plist");
+      fs.mkdirSync(path.dirname(plistPath));
+      installFramework("1051.55");
+      const wrapper = exactRuleWrapper("1051.55", path.join(root, "${FW}", "Info.plist"));
+      writeWrapper(wrapper.replace("#!/bin/bash\n", '#!/bin/bash\nFW="Frameworks"\n'));
+      expect(xcodeFirstLaunchPending()).toBe(false);
+    });
+
     it("with a relative plist path", () => {
       // With the != check a path read literally would look missing, which reads as pending.
       writeWrapper(exactRuleWrapper("1051.55", "relative/Info.plist"));
