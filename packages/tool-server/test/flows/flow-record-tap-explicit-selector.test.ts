@@ -146,7 +146,7 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     })) as { message: string };
 
     expect(res.message).toMatch(
-      /`selector` could not be checked \(helper down\)\. If that tree can be restored, record the tap again\. Otherwise omit the selector to keep coordinates\./
+      /`selector` could not be checked \(helper down\)\. Record the tap again once that tree can be read\./
     );
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
@@ -267,7 +267,8 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
       args: JSON.stringify({ udid: DEVICE, x: 0.5, y: 0.33 }),
       selector: { text: "Settings" },
     })) as { message: string };
-    expect(refused.message).toMatch(/record the tap at \(0\.15, 0\.33\)/);
+    expect(refused.message).toMatch(/To tap that element, record the tap at \(0\.15, 0\.33\)/);
+    expect(refused.message).not.toMatch(/A smaller element/);
     expect(await recordedSteps()).toHaveLength(0);
 
     await record({
@@ -324,7 +325,7 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
 
     expect(res.message).toMatch(/No element in that tree is at this tap's point \(200, 0\.55\)/);
     expect(res.message).toMatch(
-      /record the tap at \(0\.3, 0\.55\)\. Otherwise omit the selector\./
+      /record the tap at \(0\.3, 0\.55\)\. Otherwise correct the point, then omit the selector if no element is there\./
     );
     expect(res.message).not.toMatch(/not at this tap's point/);
     expect(registry.invokeTool).not.toHaveBeenCalled();
@@ -403,6 +404,71 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(await recordedSteps()).toEqual([
       { kind: "tap", selector: { text: "Settings" }, times: 2 },
     ]);
+  });
+
+  // The tapped card edge is what is covered, not the match, and a derived `card-1`
+  // would replay on Play. Applies to a selector that matches nothing as well.
+  it.each([
+    ["resolves elsewhere", { text: "Elsewhere" }],
+    ["matches nothing", { text: "Nope" }],
+  ])(
+    "offers no omission when the tapped element is covered and the selector %s",
+    async (_, selector) => {
+      setTree([
+        n({ frame: { x: 0, y: 0.4, width: 1, height: 0.1 }, identifier: "card-1" }),
+        n({
+          role: "AXButton",
+          frame: { x: 0.4, y: 0.42, width: 0.2, height: 0.06 },
+          label: "Play",
+        }),
+        n({ frame: { x: 0.1, y: 0.1, width: 0.4, height: 0.1 }, label: "Elsewhere" }),
+      ]);
+      const res = (await record({
+        command: "gesture-tap",
+        args: JSON.stringify({ udid: DEVICE, x: 0.1, y: 0.42 }),
+        selector,
+      })) as { message: string };
+
+      expect(res.message).toMatch(/Otherwise record a tap on another element\./);
+      expect(res.message).not.toMatch(/omit/);
+      expect(registry.invokeTool).not.toHaveBeenCalled();
+    }
+  );
+
+  it("leaves a selector inside the args of another command to that command", async () => {
+    const res = (await record({
+      command: "screenshot",
+      args: JSON.stringify({ udid: DEVICE, selector: { text: "Settings" } }),
+    })) as { recorded?: string };
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    expect(res.recorded).toBeDefined();
+  });
+
+  // Validation names what is missing; the args guard must not get in first.
+  it("does not blame selector when the args JSON is null", async () => {
+    const message = await record({ command: "gesture-tap", args: "null", delayMs: 10 }).then(
+      () => "",
+      (err: Error) => err.message
+    );
+    expect(message).not.toMatch(/reading 'selector'/);
+  });
+
+  it.each([
+    ["ordinary", { text: "Save " }],
+    ["no-break", { text: "Save\u00a0" }],
+    ["blank", { identifier: "\u00a0" }],
+    ["leading", { role: " AXButton" }],
+  ])("refuses a value with %s whitespace at its end, running nothing", async (_, selector) => {
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW }),
+      selector,
+    })) as { message: string };
+
+    expect(res.message).toMatch(/has a value with whitespace at either end/);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
   });
 
   it("offers a retry for a selector that matches nothing, since the screen may be moving", async () => {

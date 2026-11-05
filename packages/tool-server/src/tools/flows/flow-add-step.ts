@@ -739,19 +739,25 @@ async function captureTapSelector(
     const shown = supplied ? JSON.stringify(supplied) : describeSelector(selector);
     const resolved = selectorToFrame(tree, selector, uiOrientation);
     if (supplied) {
+      const tapped = nodeAtPoint(tree, point);
+      // A derived selector passes with no check of its centre, so omitting is no
+      // way out for a tapped element that another element covers at its centre.
+      const otherwise = !tapped
+        ? `Otherwise correct the point, then omit the selector if no element is there.`
+        : nodeAtPoint(tree, getDescribeTapPoint(tapped.frame)) !== tapped
+          ? `Otherwise record a tap on another element.`
+          : `Otherwise pass a selector for the tapped element, or omit it.`;
       if (!resolved) {
         return {
           rejected:
             `${shown} matches no element in the tree a replay reads. If the screen was still ` +
-            `changing, record the tap again. Otherwise pass one that resolves to the tapped ` +
-            `element, or omit it.`,
+            `changing, record the tap again. ${otherwise}`,
         };
       }
       // Replay taps the resolved frame's centre, so the innermost element there
       // must be the one tapped. Not containment: in this flat tree a row's
       // label and a switch inside the row look alike.
       const replayPoint = getDescribeTapPoint(resolved);
-      const tapped = nodeAtPoint(tree, point);
       const replayed = nodeAtPoint(tree, replayPoint);
       if (replayed !== tapped) {
         // Rounded only when the rounded point still hits the same node.
@@ -775,13 +781,6 @@ async function captureTapSelector(
           ? `To tap that element, record the tap at ${at}.`
           : `A smaller element sits at that centre and may take the touch. If a tap there does ` +
             `what you want, record the tap at ${at}.`;
-        // Omitting is no way out when the match is the tapped element: a derived
-        // selector for it passes with no check of its centre.
-        const otherwise = !tapped
-          ? `Otherwise omit the selector.`
-          : sameFrame(tapped.frame)
-            ? `Otherwise record a tap on another element.`
-            : `Otherwise pass a selector for the tapped element, or omit it.`;
         return {
           rejected:
             `${shown} resolves, in the tree a replay reads, to an element centred at ${at}, ` +
@@ -811,9 +810,7 @@ async function captureTapSelector(
     const reason = innermostTreeReason(message);
     if (supplied) {
       return {
-        rejected:
-          `could not be checked (${reason}). If that tree can be restored, record the tap ` +
-          `again. Otherwise omit the selector to keep coordinates.`,
+        rejected: `could not be checked (${reason}). Record the tap again once that tree can be read.`,
       };
     }
     return { warning: `selector capture failed (${reason}); kept coordinates` };
@@ -1471,6 +1468,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           "A `gesture-tap` recorded with `delayMs` keeps its coordinates, so `selector` would be dropped. Record the tap without `delayMs`."
         );
       }
+      // Re-reading the file can trim such a value, so a replay would resolve something else.
+      if (params.selector && Object.values(params.selector).some((v) => v !== v.trim())) {
+        return recordNothing(
+          session,
+          `\`selector\` ${JSON.stringify(params.selector)} has a value with whitespace at either end, which an e2e test file does not keep. Remove it.`
+        );
+      }
       // Appending this step would refuse it, after the tap had already run.
       if (params.selector && holdsOutputReference({ kind: "tap", selector: params.selector })) {
         return recordNothing(
@@ -1504,8 +1508,9 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       }
 
       // `gesture-tap`'s schema strips an unknown key, so the tap would run and
-      // record a derived selector with no word about this one.
-      if (command === "gesture-tap" && args.selector !== undefined) {
+      // record a derived selector with no word about this one. `?.`: the JSON may
+      // be `null`, which the tool's own validation reports.
+      if (command === "gesture-tap" && args?.selector !== undefined) {
         return recordNothing(
           session,
           "`selector` goes beside `args`, not inside the `args` JSON. Pass it as its own parameter."

@@ -24,7 +24,7 @@ Convert element-seeking swipes to `scroll-to`. Keep a coordinate swipe only when
 
 ### Run the gate when capture warns
 
-Work this gate as soon as capture warns that it kept a raw point, and equally when it silently recorded a role-only selector, which warns about nothing. Keep the source screen available and do these checks:
+Work this gate as soon as capture warns that it kept a raw point, and equally when it recorded a role-only selector, with its `matches by role alone` warning. Keep the source screen available and do these checks:
 
 1. **iOS:** query plausible ids or labels with `native-find-views`. If no term is useful, call `native-full-hierarchy` with narrow fields and `maxDepth: 100`. `describe` and `native-describe-screen` are accessibility projections. They cannot prove that no YAML selector exists.
 2. **Other platforms:** use `debugger-component-tree` for React Native; otherwise, use `describe`. Verify Android and Chromium candidates in step 3. Their discovery trees can omit runner elements.
