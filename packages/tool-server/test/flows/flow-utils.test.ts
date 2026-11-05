@@ -761,6 +761,14 @@ describe("parseFlow", () => {
     }
   });
 
+  it("rejects maxMismatch values that Number() would silently coerce", async () => {
+    for (const bad of ["", "null", "true", "false", "[]", '"  "', '"0x10"']) {
+      expect(() =>
+        parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)
+      ).toThrow("snapshot maxMismatch must be a number between 0 and 100");
+    }
+  });
+
   it("parses snapshot cropOn as a selector (bare-string loose, map strict)", async () => {
     const flow = parseFlow(
       "steps:\n" +

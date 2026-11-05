@@ -3705,7 +3705,15 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
       // The runner compares the diff against `maxMismatch` — a NaN here
       // (e.g. from "5%") would make every comparison false, failing the snapshot
       // even on byte-identical frames.
-      const m = Number(b.maxMismatch);
+      // Only real numbers and plain decimal strings count: `Number()` alone would
+      // turn null/false/[]/blank into 0, true into 1 and "0x10" into 16.
+      const rawMax: unknown = b.maxMismatch;
+      const m =
+        typeof rawMax === "number"
+          ? rawMax
+          : typeof rawMax === "string" && /^\s*[-+]?(\d+\.?\d*|\.\d+)\s*$/.test(rawMax)
+            ? Number(rawMax)
+            : NaN;
       if (!Number.isFinite(m) || m < 0 || m > 100) {
         badEntry(
           raw,
