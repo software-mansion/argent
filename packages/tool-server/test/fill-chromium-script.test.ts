@@ -246,6 +246,7 @@ describe("fill page script", () => {
     ["an IDN domain", EMAIL, "a@bücher.de", "a@xn--bcher-kva.de"],
     ["an uppercase IDN domain", EMAIL, "a@BÜCHER.de", "a@xn--bcher-kva.de"],
     ["a domain with ß, mapped transitionally", EMAIL, "a@straße.de", "a@strasse.de"],
+    ["a domain with capital sharp s", EMAIL, "a@ẞü.de", "a@xn--ss-yka.de"],
     ["a domain with final sigma", EMAIL, "a@ς.gr", "a@xn--4xa.gr"],
     ["a domain with a zero-width joiner", EMAIL, "a@a\u200dü.de", "a@xn--a-eha.de"],
     ["two IDN addresses", EMAILS, "a@bücher.de,b@ąę.pl", "a@xn--bcher-kva.de,b@xn--2da4b.pl"],
@@ -270,6 +271,12 @@ describe("fill page script", () => {
     ["an email input, given the ASCII form of an ASCII domain", EMAIL, "a@B.CO", "a@b.co"],
     ["a single email input, given one of two addresses", EMAIL, "a@ü.de,b@ü.de", "a@xn--tda.de"],
     ["a multiple email input, given one of two addresses", EMAILS, "a@ü.de,b@ü.de", "a@xn--tda.de"],
+    [
+      "a single email input, given each part of a domain with a comma",
+      EMAIL,
+      "a@ü,b.de",
+      "a@xn--tda,b.de",
+    ],
   ])(
     "does not verify a rewrite of %s that is not its domain's ASCII form",
     async (_n, props, text, stored) => {
