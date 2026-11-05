@@ -345,7 +345,7 @@ Examples:
     payload[k] = v;
   }
 
-  // `--out` outranks a payload `out`, so the server must not refuse the value that lost.
+  // `--out` wins, so the server must not refuse the payload's `out`.
   if (outPath && meta.outputHint === "image") delete payload.out;
 
   // Checked against the merged payload, so a required field supplied through `--args` or

@@ -265,6 +265,16 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(out).not.toContain("not-here.png");
   });
 
+  it("legacy { url, path }: fetches the url for a tool's own `out`", async () => {
+    state.screenshotData = { url: `${server.url}/artifacts/legacy`, path: "/host/legacy.png" };
+    const own = join(outDir, "own.png");
+
+    await run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: own })], opts);
+
+    expect(fs.readFileSync(own)).toEqual(PNG);
+    expect(logs).toContain(`Wrote: ${own}`);
+  });
+
   it("legacy { url, path }: fetches the url for --out and renders the host path", async () => {
     state.screenshotData = { url: `${server.url}/artifacts/legacy`, path: "/host/legacy.png" };
     const outPath = join(outDir, "saved.png");
