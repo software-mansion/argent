@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
+import { ARCHIVE_FORMATS } from "@argent/archive";
 import {
   FAILURE_CODES,
   CLIENT_SECRETS_HEADER,
@@ -595,7 +596,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   });
 
   // The client tars a file or dir and streams it here before the tool call.
-  // express.json() ignores the body (application/gzip), so we pipe it to disk.
+  // express.json() ignores the body (a compressed tar), so we pipe it to disk.
   app.post("/upload", (req: Request, res: Response) => {
     idleTimer.touch();
     if (pendingUploadBytes() >= maxPendingUploadBytes) {
@@ -714,7 +715,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }));
         return [entry, ...aliases];
       });
-    res.json({ tools });
+    // Formats `POST /upload` reads; a client sends zstd only when listed.
+    res.json({ tools, uploadFormats: ARCHIVE_FORMATS });
   });
 
   app.post(

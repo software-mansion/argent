@@ -384,7 +384,7 @@ describe("prepareFileInputs — collect: flow", () => {
     );
 
     const members = await membersOf("main.yaml", {
-      uploadEndpoint: { url: "https://sim.example", token: "tok" },
+      uploadEndpoint: { url: "https://sim.example", token: "tok", formats: ["zstd", "gzip"] },
     });
 
     expect(members.map((m) => (m.content !== undefined ? "inline" : m.uploadId))).toEqual([
@@ -393,6 +393,12 @@ describe("prepareFileInputs — collect: flow", () => {
       "u-1",
     ]);
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://sim.example/upload",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "content-type": "application/zstd" }),
+      })
+    );
   });
 });
 

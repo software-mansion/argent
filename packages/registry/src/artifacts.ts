@@ -61,8 +61,10 @@ export interface ArtifactHandle {
   mtimeMs?: number;
   /**
    * Set when `hostPath` is a directory (e.g. an Instruments `.trace` bundle).
-   * `GET /artifacts/:id` then streams a gzipped tar that the client unpacks —
-   * only for a remote client; a local one uses the directory in place.
+   * `GET /artifacts/:id` then streams a compressed tar (zstd or gzip, see
+   * `@argent/archive`) that the client unpacks — only for a remote client; a
+   * local one uses the directory in place. The value names no compression; it
+   * stays `"tar.gz"` because older clients match on it.
    */
   archive?: "tar.gz";
   /**
@@ -124,7 +126,7 @@ export interface RegisterArtifactOptions {
   /** Override the inferred MIME type. */
   mimeType?: string;
   /**
-   * Force directory (tar.gz) delivery even if the path can't be stat'd at
+   * Force directory (archive) delivery even if the path can't be stat'd at
    * registration (e.g. a `.trace` bundle from a recovered session). Otherwise
    * directories are auto-detected via stat.
    */
