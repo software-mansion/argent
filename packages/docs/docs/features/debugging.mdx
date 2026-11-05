@@ -53,7 +53,9 @@ The agent reproduces a failed state. The agent restarts the app, reloads the Met
 
 ## Limits
 
-- Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
+- In React Native apps that use React Native DevTools, Hermes sends its most recent logs to Argent when the debugger connects. The agent sees the logs from the start of the app, for example the warnings at launch.
+- Hermes keeps 1000 logs at most. If the app writes more logs before the debugger connects, the agent does not see the oldest logs.
+- In other apps, for example Chromium, Electron and Vega apps, Argent collects the logs from the moment the debugger connects. The agent does not see the earlier logs. Do the operation again after the agent connects.
 - The native view tree is available on iOS only.
 - The agent connects to one app at a time.
 

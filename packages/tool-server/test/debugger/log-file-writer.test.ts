@@ -35,6 +35,13 @@ describe("LogFileWriter", () => {
     expect(fs.existsSync(filePath)).toBe(true);
   });
 
+  it("gives writers created in the same millisecond on one port separate files", () => {
+    const writers = [new LogFileWriter(9999), new LogFileWriter(9999), new LogFileWriter(9999)];
+    const paths = new Set([writer, ...writers].map((w) => w.getFilePath()));
+    for (const w of writers) w.close();
+    expect(paths.size).toBe(4);
+  });
+
   it("writes entries as flat text lines", () => {
     writer.write(makeEntry(0));
     writer.write(makeEntry(1));

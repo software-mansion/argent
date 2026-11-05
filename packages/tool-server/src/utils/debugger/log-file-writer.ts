@@ -55,6 +55,8 @@ const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
 
 const liveLogFiles = new Set<string>();
+// Two sessions on one Metro can start within the same millisecond.
+let lastTimestamp = 0;
 
 export class LogFileWriter {
   private filePath: string;
@@ -67,7 +69,7 @@ export class LogFileWriter {
   private closed = false;
 
   constructor(port: number) {
-    const timestamp = Date.now();
+    const timestamp = (lastTimestamp = Math.max(Date.now(), lastTimestamp + 1));
     const dir = path.join(os.homedir(), ".argent", "tmp");
     fs.mkdirSync(dir, { recursive: true });
     pruneStaleLogs(dir);

@@ -46,11 +46,8 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    // Take this device's breadcrumb: `debugger-log-registry` reads it only on
-    // an empty or not-connected read, so one left here outlives every read that
-    // finds entries and later pins an unrelated empty read on the old session.
-    // An explicit connect makes it wrong anyway — from here the capture is this
-    // session's.
+    // Take this device's breadcrumb: from an explicit connect on, the capture is
+    // this session's, so a later read must not blame the old session.
     //
     // Not in the blueprint's factory: that also runs for the implicit resolve
     // `debugger-log-registry` reconnects through, which would consume the
