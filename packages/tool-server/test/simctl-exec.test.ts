@@ -107,6 +107,21 @@ describe("execSimctl", () => {
     await expect(execSimctl(["simctl", "fail"])).rejects.toThrow(/code 3: boom/);
   });
 
+  // What a host with no `xcrun` hits on the watcher's first poll. With no `error`
+  // listener the failed spawn is an uncaught exception rather than this rejection,
+  // and the deadline is all that still settles the call.
+  it("rejects with spawn's own error when xcrun is not on PATH", async () => {
+    const savedPath = process.env.PATH;
+    process.env.PATH = "/nonexistent";
+    try {
+      await expect(execSimctl(["simctl", "list"], { timeoutMs: 1_000 })).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
   it("kills the wrapper's child on timeout", async () => {
     fs.rmSync(childPidFile(), { force: true });
     // Settled-capture first, so a slow start cannot leave the rejection unobserved.
