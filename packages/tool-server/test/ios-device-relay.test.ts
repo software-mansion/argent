@@ -7,13 +7,20 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { ensureDeviceReady } from "../src/utils/ios-device/devicectl";
-import { goIosErrorSummary } from "../src/utils/ios-device/go-ios";
+import { goIosDriver, goIosErrorSummary } from "../src/utils/ios-device/go-ios";
+import {
+  bundleIdsFromAppsList,
+  pymobiledevice3Driver,
+  pymobiledevice3ErrorSummary,
+} from "../src/utils/ios-device/pymobiledevice3";
 import { iosRelayFor, parseUsbmuxEndpoint } from "../src/utils/ios-device/relay";
+import { iosRelayDriverName } from "../src/utils/ios-device/relay-driver";
+import { killStaleRunnersForDevice } from "../src/utils/ios-device/runner-sweep";
 import {
   runnerAppsFromXctestrun,
+  runnerBundleIdFromXctestrun,
   writeXctestrunWithRunnerPort,
-} from "../src/utils/ios-device/runner-launch";
-import { killStaleRunnersForDevice } from "../src/utils/ios-device/runner-sweep";
+} from "../src/utils/ios-device/xctestrun";
 import { listUsbmuxSerials } from "../src/utils/ios-device/usbmux";
 import { encodeUsbmuxPacket, readUsbmuxSerials } from "../src/utils/ios-device/usbmux-protocol";
 
@@ -228,6 +235,68 @@ describe("runnerAppsFromXctestrun", () => {
   });
 });
 
+describe("runnerBundleIdFromXctestrun", () => {
+  it("reads the test host bundle id and ignores metadata", () => {
+    expect(
+      runnerBundleIdFromXctestrun({
+        __xctestrun_metadata__: { FormatVersion: 1 },
+        ArgentRunnerUITests: {
+          TestHostBundleIdentifier: "com.argent.runner.tteam.uitests.xctrunner",
+        },
+      })
+    ).toBe("com.argent.runner.tteam.uitests.xctrunner");
+    expect(runnerBundleIdFromXctestrun({ __xctestrun_metadata__: {} })).toBeUndefined();
+  });
+});
+
+describe("the relay driver choice", () => {
+  it("defaults to go-ios and honours ARGENT_IOS_RELAY_DRIVER", () => {
+    expect(iosRelayDriverName({})).toBe("go-ios");
+    expect(iosRelayDriverName({ ARGENT_IOS_RELAY_DRIVER: "pymobiledevice3" })).toBe(
+      "pymobiledevice3"
+    );
+    expect(iosRelayDriverName({ ARGENT_IOS_RELAY_DRIVER: " Go-iOS " })).toBe("go-ios");
+    expect(() => iosRelayDriverName({ ARGENT_IOS_RELAY_DRIVER: "idevice" })).toThrow(
+      /names no relay driver/
+    );
+  });
+
+  it("recognises each driver's runner session on the process table", () => {
+    const goIos = `/usr/local/bin/ios runxctest --xctestrun-file-path=/Users/dev/.argent/ios-device-runner/relay/${UDID}.xctestrun --udid ${UDID} --tunnel-info-port 60105`;
+    const pmd3 = `/opt/venv/bin/pymobiledevice3 developer dvt xcuitest com.argent.runner.tteam.uitests.xctrunner --env ARGENT_RUNNER_PORT=27042 --udid ${UDID}`;
+
+    expect(goIosDriver.isRunnerProcessLine(goIos, UDID)).toBe(true);
+    expect(goIosDriver.isRunnerProcessLine(pmd3, UDID)).toBe(false);
+    expect(pymobiledevice3Driver.isRunnerProcessLine(pmd3, UDID)).toBe(true);
+    expect(pymobiledevice3Driver.isRunnerProcessLine(pmd3, OTHER_UDID)).toBe(false);
+    expect(pymobiledevice3Driver.isRunnerProcessLine(goIos, UDID)).toBe(false);
+  });
+});
+
+describe("pymobiledevice3 output parsing", () => {
+  it("reads the last ERROR line", () => {
+    const output =
+      "2026-10-27 16:02:44 host pymobiledevice3.__main__[1] INFO installing\n" +
+      "2026-10-27 16:02:45 host pymobiledevice3.__main__[1] ERROR Device not found: usbmux has no device matching udid X\n" +
+      "2026-10-27 16:02:45 host pymobiledevice3.__main__[1] INFO Run again with -v";
+
+    expect(pymobiledevice3ErrorSummary(output)).toBe(
+      "Device not found: usbmux has no device matching udid X"
+    );
+    expect(pymobiledevice3ErrorSummary("plain\nlast")).toBe("last");
+  });
+
+  it("reads bundle ids from an apps list keyed by id or listed as objects", () => {
+    expect(
+      bundleIdsFromAppsList('{"com.a.one": {"CFBundleName": "One"}, "com.a.two": {}}')
+    ).toEqual(new Set(["com.a.one", "com.a.two"]));
+    expect(bundleIdsFromAppsList('[{"CFBundleIdentifier": "com.a.one"}, {}]')).toEqual(
+      new Set(["com.a.one"])
+    );
+    expect(bundleIdsFromAppsList("not json")).toEqual(new Set());
+  });
+});
+
 describe("goIosErrorSummary", () => {
   it("reads the last error line go-ios logged as JSON", () => {
     const output = [
@@ -261,6 +330,21 @@ describe("the stale-runner sweep on relayed launches", () => {
       "60105",
     ].join(" ");
   }
+
+  it("kills an orphaned pymobiledevice3 runner session for the device", async () => {
+    const kills: number[] = [];
+    vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (signal === 0) throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+      kills.push(pid);
+      return true;
+    });
+
+    const line = `  601     1 /opt/venv/bin/pymobiledevice3 developer dvt xcuitest com.argent.runner.tteam.uitests.xctrunner --env ARGENT_RUNNER_PORT=27042 --udid ${UDID}`;
+    const killed = await killStaleRunnersForDevice(UDID, async () => line);
+
+    expect(killed).toBe(1);
+    expect(kills).toContain(-601);
+  });
 
   it("kills an orphaned go-ios runner for the device, named by its ext: id", async () => {
     const kills: number[] = [];

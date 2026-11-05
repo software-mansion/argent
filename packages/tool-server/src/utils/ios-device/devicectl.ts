@@ -12,7 +12,7 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { appendHintToMessage } from "./usbmux-protocol";
-import { goIosInstallApp, goIosLaunchApp, goIosUninstallApp } from "./go-ios";
+import { iosRelayDriver } from "./relay-driver";
 import { iosRelayFor, type IosRelay } from "./relay";
 import { listUsbmuxSerials } from "./usbmux";
 
@@ -294,7 +294,7 @@ export async function installApp(udid: string, installablePath: string): Promise
   const relay = iosRelayFor(udid);
 
   if (relay) {
-    await goIosInstallApp(relay, installablePath);
+    await (await iosRelayDriver()).installApp(relay, installablePath);
     return;
   }
 
@@ -312,7 +312,7 @@ export async function uninstallApp(udid: string, bundleId: string): Promise<void
   const relay = iosRelayFor(udid);
 
   if (relay) {
-    await goIosUninstallApp(relay, bundleId);
+    await (await iosRelayDriver()).uninstallApp(relay, bundleId);
     return;
   }
 
@@ -379,8 +379,8 @@ export async function launchApp(
 }
 
 /**
- * go-ios launches by bundle id and takes arguments, but has no payload URL:
- * that is a CoreDevice feature. open-url names the gap before reaching here.
+ * The relay drivers launch by bundle id and take arguments, but have no
+ * payload URL: that is a CoreDevice feature. open-url names the gap first.
  */
 async function launchRelayedApp(
   relay: IosRelay,
@@ -389,12 +389,14 @@ async function launchRelayedApp(
 ): Promise<void> {
   if (opts.payloadUrl) {
     throw new IosDeviceControlError(
-      `A relayed iPhone cannot receive a URL at launch (go-ios has no payload URL)`,
+      `A relayed iPhone cannot receive a URL at launch (its driver has no payload URL)`,
       { hint: "Launch the app with launch-app and navigate inside it instead." }
     );
   }
 
-  await goIosLaunchApp(relay, bundleId, {
+  await (
+    await iosRelayDriver()
+  ).launchApp(relay, bundleId, {
     terminateExisting: opts.terminateExisting,
     args: opts.args,
   });

@@ -3,6 +3,8 @@ import { promisify } from "node:util";
 import * as path from "node:path";
 import { pidIsAlive, pollPidsUntilGone, signalGroupThenPid } from "../process-kill";
 import { externalNativeId } from "../external-devices";
+import { goIosDriver } from "./go-ios";
+import { pymobiledevice3Driver } from "./pymobiledevice3";
 import { PS_BIN } from "../vega-process";
 
 /**
@@ -54,14 +56,17 @@ export async function killStaleRunnersForDevice(
   const nativeUdid = externalNativeId(udid);
 
   for (const line of stdout.split("\n")) {
-    // Match only our processes: an xcodebuild or go-ios runner launch, this
-    // UDID, and the cache root (the relayed launch keeps its xctestrun there).
-    const cacheRoot = path.join(".argent", "ios-device-runner");
+    // Match only our processes: an xcodebuild launch of this UDID from the
+    // cache root, or a relay driver's runner session for it.
     const xcodebuildLaunch =
-      line.includes("test-without-building") && line.includes(`platform=iOS,id=${nativeUdid}`);
-    const goIosLaunch = line.includes("runxctest") && line.includes(`--udid ${nativeUdid}`);
+      line.includes("test-without-building") &&
+      line.includes(`platform=iOS,id=${nativeUdid}`) &&
+      line.includes(path.join(".argent", "ios-device-runner"));
+    const relayLaunch =
+      goIosDriver.isRunnerProcessLine(line, nativeUdid) ||
+      pymobiledevice3Driver.isRunnerProcessLine(line, nativeUdid);
 
-    if ((!xcodebuildLaunch && !goIosLaunch) || !line.includes(cacheRoot)) {
+    if (!xcodebuildLaunch && !relayLaunch) {
       continue;
     }
 

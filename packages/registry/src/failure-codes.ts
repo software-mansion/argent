@@ -115,9 +115,9 @@ export const FAILURE_CODES = {
   // The usbmux or HTTP exchange with a reachable runner failed.
   IOS_DEVICE_RUNNER_TRANSPORT_FAILED: "IOS_DEVICE_RUNNER_TRANSPORT_FAILED",
   IOS_DEVICECTL_COMMAND_FAILED: "IOS_DEVICECTL_COMMAND_FAILED",
-  // A relayed physical iPhone (a provider's usbmuxd endpoint): the go-ios
-  // subprocess wrapper that replaces devicectl there.
-  IOS_RELAY_GO_IOS_MISSING: "IOS_RELAY_GO_IOS_MISSING",
+  // A relayed physical iPhone (a provider's usbmuxd endpoint): the driver
+  // (go-ios or pymobiledevice3) that replaces devicectl there.
+  IOS_RELAY_DRIVER_MISSING: "IOS_RELAY_DRIVER_MISSING",
   IOS_RELAY_COMMAND_FAILED: "IOS_RELAY_COMMAND_FAILED",
   IOS_RELAY_TUNNEL_FAILED: "IOS_RELAY_TUNNEL_FAILED",
 

@@ -249,6 +249,14 @@ An environment variable changes the behavior of the process that reads it. Expor
 | `ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT` | unset                      | Set `1` to stop the tool-server when the editor closes the MCP server                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `ARGENT_E2E_FILES_LOG`                    | unset                      | Set `1` to make the MCP server and the CLI print one stderr line for each `run:` fragment, nested e2e test, snapshot baseline and `tool:` file argument that they send over a link, before the call. This includes the files of a step that the agent records. The MCP server or the CLI also prints one line for each baseline that it writes after the call. Each line holds the path and the result: `inline` or `upload` with the size in bytes, `listed`, `missing`, `written`, or `refused` with the reason. It never holds the content. `ARGENT_FLOW_FILES_LOG` is the old name and still works |
 
+### Relayed iPhones
+
+| Variable                  | Default                   | Description                                                                                                                                                                                              |
+| ------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ARGENT_IOS_RELAY_DRIVER` | `go-ios`                  | The tool that drives a [physical iPhone on another machine](/docs/features/physical-ios-devices#an-iphone-on-another-machine): `go-ios` or `pymobiledevice3`. Only in the environment of the tool-server |
+| `ARGENT_GO_IOS`           | `ios` on PATH             | The go-ios binary that drives a relayed iPhone when `ARGENT_IOS_RELAY_DRIVER` is `go-ios` or unset                                                                                                       |
+| `ARGENT_PYMOBILEDEVICE3`  | `pymobiledevice3` on PATH | The pymobiledevice3 binary that drives a relayed iPhone when `ARGENT_IOS_RELAY_DRIVER` is `pymobiledevice3`                                                                                              |
+
 ### Telemetry
 
 | Variable       | Description                                                                                |
