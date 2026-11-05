@@ -31,7 +31,7 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
             error_code: FAILURE_CODES.IOS_REINSTALL_UNINSTALL_FAILED,
             failure_stage: "ios_reinstall_app_simctl_uninstall",
             failure_area: "tool_server",
-            error_kind: "subprocess",
+            error_kind: "timeout",
             ...subprocessFailureMetadata(err, "xcrun_simctl"),
           },
           { cause: err as Error }

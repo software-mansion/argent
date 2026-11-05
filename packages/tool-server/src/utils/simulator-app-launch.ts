@@ -83,8 +83,8 @@ async function runningExecutables(): Promise<string[]> {
   return stdout.split("\n").map((line) => comparablePath(line.trim()));
 }
 
-// Every Simulator.app copy shares one bundle id, so while any of them runs,
-// `open -a` of another copy hands off to it and the new process exits at once.
+// While any Simulator.app copy runs, a newly opened copy exits within a second
+// on its own, which would read as a crash.
 const isSimulatorApp = (executable: string) => executable.endsWith(".app/contents/macos/simulator");
 
 async function survivesLaunch(executable: string): Promise<boolean> {
@@ -101,7 +101,7 @@ async function survivesLaunch(executable: string): Promise<boolean> {
  * crashing at launch. The first launch of each app/CoreSimulator build pair is
  * watched for {@link LAUNCH_WATCH_MS}, and an app whose process is gone by then
  * is recorded as crashing. A launch while any Simulator.app is already running
- * only activates that instance, so it is not watched. Records live in
+ * is not watched. Records live in
  * `~/.argent/simulator-app-launch.json`; delete it to retry. Returns false when the app is on record as crashing at
  * launch: the launch was skipped, or this one has just been recorded so.
  */

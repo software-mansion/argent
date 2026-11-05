@@ -66,7 +66,7 @@ export function makeIosImpl(
                 error_code: FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED,
                 failure_stage: "ios_launch_app_simctl_terminate",
                 failure_area: "tool_server",
-                error_kind: "subprocess",
+                error_kind: "timeout",
                 ...subprocessFailureMetadata(err, "xcrun_simctl"),
               },
               { cause: err as Error }

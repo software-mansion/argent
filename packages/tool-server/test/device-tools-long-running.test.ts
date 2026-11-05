@@ -59,7 +59,7 @@ vi.mock("../src/blueprints/native-devtools", async () => {
   return { ...actual, precheckNativeDevtools: vi.fn(async () => null) };
 });
 
-import { Registry } from "@argent/registry";
+import { getFailureSignal, Registry } from "@argent/registry";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { reinstallAppTool } from "../src/tools/reinstall-app/index";
 import { createRestartAppTool } from "../src/tools/restart-app/index";
@@ -138,6 +138,8 @@ describe("iOS app tools fail when the step before launch or install times out", 
       next: "install",
       ok: { reinstalled: true, bundleId: "com.x" },
       message: /Uninstalling com\.x .* did not finish within 30s/,
+      code: "IOS_REINSTALL_UNINSTALL_FAILED",
+      stage: "ios_reinstall_app_simctl_uninstall",
     },
     {
       id: "launch-app",
@@ -150,6 +152,8 @@ describe("iOS app tools fail when the step before launch or install times out", 
       next: "launch",
       ok: { launched: true, bundleId: "com.x" },
       message: /Terminating iOS app com\.x .* did not finish within 15s/,
+      code: "IOS_LAUNCH_SIMCTL_FAILED",
+      stage: "ios_launch_app_simctl_terminate",
     },
     {
       id: "restart-app",
@@ -158,6 +162,8 @@ describe("iOS app tools fail when the step before launch or install times out", 
       next: "launch",
       ok: { restarted: true, bundleId: "com.x" },
       message: /Terminating iOS app com\.x .* did not finish within 15s/,
+      code: "IOS_RESTART_TERMINATE_FAILED",
+      stage: "ios_restart_app_simctl_terminate",
     },
   ];
 
@@ -167,9 +173,16 @@ describe("iOS app tools fail when the step before launch or install times out", 
 
   it.each(cases)(
     "$id fails on a timed-out $sub and never runs $next",
-    async ({ run, sub, next, message }) => {
+    async ({ run, sub, next, message, code, stage }) => {
       failing = { sub, killed: true };
-      await expect(run()).rejects.toThrow(message);
+      const err = await run().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(message);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: code,
+        failure_stage: stage,
+        error_kind: "timeout",
+      });
       const simctl = calls.filter((c) => c.cmd === "xcrun" && c.args.includes("simctl"));
       expect(simctl.some((c) => c.args.includes(next))).toBe(false);
     }
