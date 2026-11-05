@@ -752,7 +752,11 @@ describe("the wait tools while Xcode's install is pending", () => {
   // Far past this test's own timeout, so running it out would fail the test.
   const NEVER = 60_000;
 
-  it("makes await-ui-element answer at once, not at its timeout", async () => {
+  // The accessibility service itself cannot start, with or without an app to measure.
+  it.each([
+    ["", {}],
+    [" with a bundleId", { bundleId: "com.example.app" }],
+  ])("makes await-ui-element%s answer at once, not at its timeout", async (_name, extra) => {
     pending.value = true;
     const tool = createAwaitUiElementTool(iosRegistry());
     const params = {
@@ -760,6 +764,7 @@ describe("the wait tools while Xcode's install is pending", () => {
       condition: "exists",
       selector: { text: "Done" },
       timeoutMs: NEVER,
+      ...extra,
     };
     await expect(tool.execute({}, params as never)).rejects.toSatisfy(isTheRefusal);
     expect(xcrunCalls()).toEqual([]);
@@ -853,17 +858,65 @@ describe("a warm session while Xcode's install is pending", () => {
     expect(xcrunCalls()).toEqual([]);
   });
 
-  // An empty accessibility read falls back to measuring the app, which needs simctl.
-  it("describe answers the refusal when the fallback's measurement is refused", async () => {
+  // An empty accessibility read falls back to measuring the app, which needs
+  // simctl. The accessibility read itself worked, so the refusal is the hint.
+  it("describe gives the refusal's reason when the fallback's measurement is refused", async () => {
     pending.value = true;
     const app = warmApp(async () => ({ alertVisible: false, elements: [] }));
     const res = await request(app)
       .post("/tools/describe")
       .send({ udid: SIMULATOR.id, bundleId: "com.example.app" });
 
-    // Read as an unmeasured app, it answered 200 with should_restart.
-    expect(res.status).toBe(424);
-    expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+    expect(res.status).toBe(200);
+    expect(res.body.data.hint).toContain("-runFirstLaunch");
+    // Read as an unmeasured app, it was told to restart, which is refused too.
+    expect(res.body.data.should_restart).toBeUndefined();
+    expect(xcrunCalls()).toEqual([]);
+  });
+
+  // Right after a launch the screen is still rendering, and the app has not connected yet.
+  it("await-ui-element with a bundleId waits past the fallback's refusal for the tree", async () => {
+    pending.value = true;
+    let reads = 0;
+    const app = warmApp(async () => ({
+      alertVisible: false,
+      elements: ++reads < 3 ? [] : [BUTTON],
+    }));
+    const res = await request(app)
+      .post("/tools/await-ui-element")
+      .send({
+        udid: SIMULATOR.id,
+        bundleId: "com.example.app",
+        condition: "exists",
+        selector: { text: "Done" },
+        pollIntervalMs: 50,
+        timeoutMs: 5_000,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ success: true });
+    expect(reads).toBe(3);
+    expect(xcrunCalls()).toEqual([]);
+  });
+
+  it("await-ui-element with a bundleId that runs out gives the refusal's reason", async () => {
+    pending.value = true;
+    const app = warmApp(async () => ({ alertVisible: false, elements: [] }));
+    const res = await request(app)
+      .post("/tools/await-ui-element")
+      .send({
+        udid: SIMULATOR.id,
+        bundleId: "com.example.app",
+        condition: "exists",
+        selector: { text: "Done" },
+        pollIntervalMs: 50,
+        timeoutMs: 300,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ success: false, cause: "unreadable" });
+    expect(res.body.data.note).toContain("-runFirstLaunch");
+    expect(res.body.data.note).not.toContain("restart-app");
     expect(xcrunCalls()).toEqual([]);
   });
 });

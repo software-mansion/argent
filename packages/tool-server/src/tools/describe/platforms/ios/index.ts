@@ -307,7 +307,8 @@ export async function describeIos(
 
     // Degrade a rejection (the env re-apply this runs first fails on a sim that
     // went away mid-call) rather than letting the outer catch turn a named
-    // remedy into a bare "could not be read".
+    // remedy into a bare "could not be read". A refusal is not an unmeasured
+    // app, which would be told to restart, so it goes to the outer catch.
     const state = await nativeApi.appConnectionState(target.bundleId).catch((err: unknown) => {
       if (isFirstLaunchRefusal(err)) throw err;
       return "indeterminate" as const;
@@ -342,9 +343,12 @@ export async function describeIos(
     const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
     return { tree: nativeTree, source: "native-devtools", hint };
   } catch (err) {
-    if (isFirstLaunchRefusal(err)) throw err;
     // The service answered but no hierarchy came back: no connected app to
-    // auto-target, an ambiguous frontmost, or the query threw. Returning the
+    // auto-target, an ambiguous frontmost, the query threw, or measuring the
+    // app was refused because Xcode's component install is pending. That
+    // refusal says nothing about the accessibility read, so it is not thrown:
+    // a wait keeps polling until the tree fills, and the hint carries the
+    // refusal's reason. Returning the
     // bare tree would say the screen is empty when it could not be read — and
     // `await-ui-element`'s blind-read guard keys off `hint` / `should_restart`,
     // so with neither set a `hidden` wait resolves against an element that may
