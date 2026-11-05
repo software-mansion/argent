@@ -4,6 +4,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import { mediaDir } from "./cdp-session";
 import type { DownscalerType, MediaReady, Rotation, ScreenshotOpts } from "./types";
+import { readScrollOffset, readViewport } from "./viewport";
 
 interface SharpModule {
   (input: Buffer): {
@@ -66,15 +67,35 @@ interface CaptureContext {
   deviceId: string;
 }
 
+/**
+ * The window as a capture `clip` of one image pixel per CSS pixel. `clip.scale`
+ * multiplies with the device pixel ratio while the page is rasterized, so a 1024×740
+ * window on a 2x display comes out at 1024×740, not 2048×1480, without `sharp`.
+ * No clip when the window already has that density or cannot be read: a plain
+ * capture is then the right image, only larger.
+ */
+async function cssPixelClip(cdp: CDPClient) {
+  try {
+    const { width, height, devicePixelRatio } = await readViewport(cdp);
+    if (devicePixelRatio <= 1) return undefined;
+    const { x, y } = await readScrollOffset(cdp);
+    return { x, y, width, height, scale: 1 / devicePixelRatio };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Capture, optionally rotate / downscale with sharp, persist under `mediaDir()`. */
 export async function captureScreenshot(
   ctx: CaptureContext,
   opts: ScreenshotOpts = {}
 ): Promise<MediaReady> {
+  const clip = opts.cssPixels ? await cssPixelClip(ctx.cdp) : undefined;
   // PNG, not JPEG: matches sim-server's output and survives the downscale.
   const cdpResult = (await ctx.cdp.send("Page.captureScreenshot", {
     format: "png",
     captureBeyondViewport: false,
+    ...(clip ? { clip } : {}),
   })) as { data?: string };
   if (!cdpResult.data) {
     throw new FailureError("Chromium CDP: Page.captureScreenshot returned no data.", {

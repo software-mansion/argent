@@ -45,3 +45,38 @@ export async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
   }
   return { width: parsed.w, height: parsed.h, devicePixelRatio: parsed.dpr || 1 };
 }
+
+/** What `Page.getLayoutMetrics` reports about where the window sits in the page. */
+interface CssViewportMetrics {
+  pageX?: number;
+  pageY?: number;
+}
+
+/**
+ * Where the window's top-left corner sits in document coordinates, in CSS
+ * pixels. A `Page.captureScreenshot` clip is measured from there: clipping from
+ * the document origin on a scrolled page captures the blank area above the window.
+ *
+ * `cssVisualViewport` is preferred because it also carries a pinch-zoom offset;
+ * `cssLayoutViewport` is the fallback for a protocol that predates it. A read
+ * that fails or answers with nothing usable falls back to the document origin,
+ * which is the unscrolled answer and no worse than not asking.
+ */
+export async function readScrollOffset(cdp: CDPClient): Promise<{ x: number; y: number }> {
+  try {
+    const metrics = (await cdp.send("Page.getLayoutMetrics")) as {
+      cssVisualViewport?: CssViewportMetrics;
+      cssLayoutViewport?: CssViewportMetrics;
+      layoutViewport?: CssViewportMetrics;
+    };
+    const vp = metrics.cssVisualViewport ?? metrics.cssLayoutViewport ?? metrics.layoutViewport;
+    const x = vp?.pageX;
+    const y = vp?.pageY;
+    return {
+      x: typeof x === "number" && Number.isFinite(x) ? x : 0,
+      y: typeof y === "number" && Number.isFinite(y) ? y : 0,
+    };
+  } catch {
+    return { x: 0, y: 0 };
+  }
+}

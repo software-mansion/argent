@@ -231,7 +231,7 @@ const zodSchema = z.object({
     .describe(
       "Scale factor. Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>. " +
         "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
-        "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
+        "On Chromium the default is one image pixel per CSS pixel; pass 1.0 for device pixels, <1 to downscale those. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
     .boolean()
@@ -280,10 +280,13 @@ Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harm
       if (device.platform === "chromium") {
         const ref = chromiumCdpRef(device);
         const chromium = (await registry.resolveService(ref.urn, ref.options)) as ChromiumCdpApi;
+        // An explicit scale is relative to the device pixels: a visual baseline
+        // passes 1.0 and must keep its size. Without one, an agent gets CSS pixels.
         const captured = await chromium.captureScreenshot({
           rotation: params.rotation,
           scale: params.scale,
           downscaler: params.downscaler,
+          cssPixels: params.scale === undefined,
         });
         const image = await requireArtifacts(ctx).register({
           hostPath: captured.path,

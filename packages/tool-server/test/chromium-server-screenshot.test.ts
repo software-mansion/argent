@@ -51,6 +51,50 @@ describe("chromium-server/screenshot", () => {
     });
   });
 
+  describe("cssPixels", () => {
+    function cdpWith(viewport: unknown, metrics: unknown = {}) {
+      const send = vi.fn(async (method: string) => {
+        if (method === "Runtime.evaluate") {
+          if (viewport instanceof Error) throw viewport;
+          return { result: { value: JSON.stringify(viewport) } };
+        }
+        if (method === "Page.getLayoutMetrics") return metrics;
+        return { data: ONE_PX_PNG_BASE64 };
+      });
+      return { cdp: { send } as unknown as CDPClient, send };
+    }
+    const captureArgs = (send: ReturnType<typeof vi.fn>) =>
+      send.mock.calls.find(([method]) => method === "Page.captureScreenshot")![1];
+
+    it("clips to the window at 1 / devicePixelRatio", async () => {
+      const { cdp, send } = cdpWith(
+        { w: 1024, h: 740, dpr: 2 },
+        { cssVisualViewport: { pageX: 0, pageY: 300 } }
+      );
+      const out = await captureScreenshot({ cdp, deviceId: "t" }, { cssPixels: true });
+      filesToCleanup.push(out.path);
+      expect(captureArgs(send)).toEqual({
+        format: "png",
+        captureBeyondViewport: false,
+        clip: { x: 0, y: 300, width: 1024, height: 740, scale: 0.5 },
+      });
+    });
+
+    it("takes a plain capture at one device pixel per CSS pixel", async () => {
+      const { cdp, send } = cdpWith({ w: 1024, h: 740, dpr: 1 });
+      const out = await captureScreenshot({ cdp, deviceId: "t" }, { cssPixels: true });
+      filesToCleanup.push(out.path);
+      expect(captureArgs(send)).not.toHaveProperty("clip");
+    });
+
+    it("takes a plain capture when the window cannot be read", async () => {
+      const { cdp, send } = cdpWith(new Error("detached"));
+      const out = await captureScreenshot({ cdp, deviceId: "t" }, { cssPixels: true });
+      filesToCleanup.push(out.path);
+      expect(captureArgs(send)).not.toHaveProperty("clip");
+    });
+  });
+
   it("uses the provided id in the filename", async () => {
     const cdp = stubCdp();
     const out = await captureScreenshot({ cdp, deviceId: "test" }, { id: "demo-123" });

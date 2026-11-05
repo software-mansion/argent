@@ -35,6 +35,8 @@ export interface ScreenshotOpts {
   scale?: number;
   /** Algorithm used when `scale < 1`. */
   downscaler?: DownscalerType;
+  /** Capture one image pixel per CSS pixel, not per device pixel. */
+  cssPixels?: boolean;
   /** Filename suffix; defaults to a timestamp. */
   id?: string;
 }

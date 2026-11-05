@@ -195,6 +195,8 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 | `chromium-cookies` | Read and write cookies, including `HttpOnly` ones                     |
 | `chromium-storage` | Read and write `localStorage` and `sessionStorage` of the active page |
 
+On a Chromium app, `screenshot` without `scale` returns one image pixel for each CSS pixel. On a 2x display, a 1024×740 window gives a 1024×740 image. Pass `scale: 1.0` for device pixels. A `scale` below 1 downscales the device pixels and needs the optional `sharp` package. Visual e2e steps always capture device pixels, so existing baselines stay valid.
+
 ## Profiling
 
 | Tool                              | Description                                                                  |
