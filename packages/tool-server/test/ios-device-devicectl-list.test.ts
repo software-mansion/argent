@@ -158,3 +158,31 @@ describe("listIosPhysicalDevices falls back for absent name and model", () => {
     expect(devices[0]).toMatchObject({ name: "00008030-DEADBEEF", model: null });
   });
 });
+
+describe("CoreDevice network discovery", () => {
+  it("exposes only a connected tunnel address", async () => {
+    fake.payload = {
+      result: {
+        devices: [
+          {
+            ...PHYSICAL_ROW,
+            connectionProperties: {
+              transportType: "localNetwork",
+              tunnelState: "connected",
+              tunnelIPAddress: "fd12::1",
+            },
+          },
+          {
+            ...PHYSICAL_ROW,
+            connectionProperties: {
+              transportType: "localNetwork",
+              tunnelState: "disconnected",
+              tunnelIPAddress: "fd34::1",
+            },
+          },
+        ],
+      },
+    };
+    expect((await listIosPhysicalDevices()).map((d) => d.tunnelAddress)).toEqual(["fd12::1", null]);
+  });
+});

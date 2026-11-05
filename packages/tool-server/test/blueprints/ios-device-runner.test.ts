@@ -1,3 +1,4 @@
+import { ensureDeviceReady } from "../../src/utils/ios-device/devicectl";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -20,7 +21,7 @@ import {
 import { readRunnerCrashSummary } from "../../src/utils/ios-device/runner-crash";
 
 vi.mock("../../src/utils/ios-device/devicectl", () => ({
-  ensureDeviceReady: vi.fn(async () => {}),
+  ensureDeviceReady: vi.fn(async () => null),
 }));
 vi.mock("../../src/utils/ios-device/runner-build", () => ({
   ensureRunnerArtifact: vi.fn(async () => ({
@@ -537,6 +538,20 @@ describe("ios-device-runner blueprint: failure signals", () => {
     expect(terminated[0]?.message).toBe(`iOS device runner exited (code 7). Log: ${LOG_PATH}`);
     expect(getFailureSignal(terminated[0])?.error_code).toBe(
       FAILURE_CODES.IOS_DEVICE_RUNNER_TERMINATED
+    );
+  });
+});
+
+describe("CoreDevice runner bootstrap", () => {
+  it("passes the tunnel address and uses the runner-selected port", async () => {
+    vi.mocked(ensureDeviceReady).mockResolvedValueOnce("fd12::1");
+    const { api } = await createInstance();
+    expect(api.udid).toBe(DEVICE_UDID);
+    expect(launchRunner).toHaveBeenCalledWith(
+      expect.objectContaining({ tunnelAddress: "fd12::1" })
+    );
+    expect(createRunnerClient).toHaveBeenCalledWith(
+      expect.objectContaining({ udid: DEVICE_UDID, port: RUNNER_PORT })
     );
   });
 });

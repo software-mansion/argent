@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createUsbmuxCommandSender } from "../src/utils/ios-device/runner-route";
+import { createRunnerCommandSender } from "../src/utils/ios-device/runner-route";
 import type { Deadline } from "../src/utils/ios-device/usbmux";
 import {
   IosDeviceTransportError,
@@ -27,12 +27,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("createUsbmuxCommandSender", () => {
-  it("surfaces the unattached verdict as-is: Wi-Fi-only devices are not a route", async () => {
+describe("createRunnerCommandSender", () => {
+  it("surfaces an unattached USB device without switching the selected route", async () => {
     const sendViaUsbmux = vi.fn(async () => {
       throw unattachedError();
     });
-    const sender = createUsbmuxCommandSender({ sendViaUsbmux });
+    const sender = createRunnerCommandSender({ sendViaUsbmux });
 
     const error = await sender
       .sendCommand(UDID, PORT, { command: "status" }, { timeoutMs: 1_000, readOnly: true })
@@ -51,7 +51,7 @@ describe("createUsbmuxCommandSender", () => {
     const sendViaUsbmux = vi.fn(async () => {
       throw notListeningError();
     });
-    const sender = createUsbmuxCommandSender({ sendViaUsbmux });
+    const sender = createRunnerCommandSender({ sendViaUsbmux });
 
     const error = await sender
       .sendCommand(
@@ -72,7 +72,7 @@ describe("createUsbmuxCommandSender", () => {
       .mockRejectedValueOnce(notListeningError())
       .mockRejectedValueOnce(notListeningError())
       .mockResolvedValueOnce(OK);
-    const sender = createUsbmuxCommandSender({ sendViaUsbmux });
+    const sender = createRunnerCommandSender({ sendViaUsbmux });
 
     const pending = sender.sendCommand(
       UDID,
@@ -93,7 +93,7 @@ describe("createUsbmuxCommandSender", () => {
     const sendViaUsbmux = vi.fn(async () => {
       throw notListeningError();
     });
-    const sender = createUsbmuxCommandSender({ sendViaUsbmux });
+    const sender = createRunnerCommandSender({ sendViaUsbmux });
 
     const pending = sender
       .sendCommand(UDID, PORT, { command: "status" }, { timeoutMs: 1_000, readOnly: true })
@@ -108,7 +108,7 @@ describe("createUsbmuxCommandSender", () => {
     const sendViaUsbmux = vi.fn(async () => {
       throw new IosDeviceTransportError("protocol", "bad packet", { retryable: false });
     });
-    const sender = createUsbmuxCommandSender({ sendViaUsbmux });
+    const sender = createRunnerCommandSender({ sendViaUsbmux });
 
     const error = await sender
       .sendCommand(UDID, PORT, { command: "status" }, { timeoutMs: 1_000, readOnly: true })
@@ -126,7 +126,7 @@ describe("createUsbmuxCommandSender", () => {
         return OK;
       }
     );
-    const sender = createUsbmuxCommandSender({ sendViaUsbmux });
+    const sender = createRunnerCommandSender({ sendViaUsbmux });
 
     await sender.sendCommand(
       UDID,
@@ -152,7 +152,7 @@ describe("createUsbmuxCommandSender", () => {
         throw notListeningError();
       }
     );
-    const sender = createUsbmuxCommandSender({ sendViaUsbmux });
+    const sender = createRunnerCommandSender({ sendViaUsbmux });
 
     const pending = sender
       .sendCommand(UDID, PORT, { command: "status" }, { timeoutMs: 3_000, readOnly: true })

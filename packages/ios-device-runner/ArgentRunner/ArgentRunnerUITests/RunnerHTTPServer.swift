@@ -4,10 +4,8 @@ import Network
 /// Minimal single-purpose HTTP/1.1 endpoint on NWListener: each connection
 /// carries one POSTed JSON command and receives one JSON reply, then closes.
 ///
-/// The listener is unauthenticated, so it binds loopback-only. The host
-/// reaches the runner through a usbmux forwarded stream that terminates on
-/// the device's own loopback. Bodies are opaque bytes handed to the
-/// dispatch closure.
+/// USB uses a loopback listener. A CoreDevice connection binds only the
+/// device's tunnel IPv6 address. Access follows the transport's host-level trust.
 final class RunnerHTTPServer {
     struct Reply {
         let status: Int
@@ -35,25 +33,39 @@ final class RunnerHTTPServer {
     /// interface is unavailable). Carries the failure description.
     private let onListenerFailure: (String) -> Void
     private var listener: NWListener?
+    private let tunnelAddress: String?
 
     init(
+        tunnelAddress: String? = nil,
         dispatch: @escaping (Data, @escaping (Reply) -> Void) -> Void,
         onFinish: @escaping () -> Void,
         onListenerFailure: @escaping (String) -> Void
     ) {
+        self.tunnelAddress = tunnelAddress
         self.dispatch = dispatch
         self.onFinish = onFinish
         self.onListenerFailure = onListenerFailure
     }
 
-    /// Starts listening on loopback, on the given port or a system-assigned
+    /// Starts listening on the selected interface, on the given port or a system-assigned
     /// one when the port is 0.
     func start(port: UInt16) throws {
-        // Restrict to the loopback interface rather than pinning a 127.0.0.1
-        // endpoint. The interface restriction admits either address family and
-        // keeps port-0 auto-assignment and the .port readback working.
         let parameters = NWParameters.tcp
-        parameters.requiredInterfaceType = .loopback
+        if let address = tunnelAddress {
+            guard let ipv6 = IPv6Address(address),
+                let prefix = ipv6.rawValue.first, prefix & 0xfe == 0xfc
+            else {
+                throw NSError(domain: "ArgentRunner", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Expected a CoreDevice tunnel IPv6 address"
+                ])
+            }
+            // Bind the tunnel only, never Wi-Fi or a wildcard address.
+            parameters.requiredLocalEndpoint = .hostPort(
+                host: NWEndpoint.Host(address), port: NWEndpoint.Port(rawValue: port)!
+            )
+        } else {
+            parameters.requiredInterfaceType = .loopback
+        }
         let listener: NWListener
 
         if port > 0, let nwPort = NWEndpoint.Port(rawValue: port) {

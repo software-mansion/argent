@@ -34,6 +34,7 @@ export async function launchRunner(opts: {
   udid: string;
   xctestrunPath: string;
   derivedDataPath: string;
+  tunnelAddress?: string;
 }): Promise<LaunchedRunner> {
   const logDir = logsRoot();
   const resultsDir = resultsRoot();
@@ -81,6 +82,11 @@ export async function launchRunner(opts: {
     {
       detached: true,
       stdio: ["ignore", logFd, logFd],
+      env: {
+        ...process.env,
+        // Xcode strips TEST_RUNNER_ before passing this non-secret address to XCTest.
+        TEST_RUNNER_ARGENT_RUNNER_ADDRESS: opts.tunnelAddress ?? "",
+      },
     }
   );
 
@@ -119,7 +125,7 @@ const LISTENING_LINE_RE = /ARGENT_RUNNER_LISTENING port=(\d+)/;
 const LISTENING_POLL_INTERVAL_MS = 250;
 
 /**
- * Poll the launch log until the runner reports the loopback port it bound on
+ * Poll the launch log until the runner reports the port it bound on
  * the device. The port is the runner's to choose (a probe on the Mac cannot
  * tell what is free on the phone), and the log is the only channel back
  * before the first command.

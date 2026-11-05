@@ -24,7 +24,7 @@ describe("ephemeral-port listeners", () => {
       fs.readFileSync(file, "utf8")
         .split("\n")
         .forEach((line, index) => {
-          if (/\.listen\(0\b/.test(line) && !/\.listen\(0,\s*"127\.0\.0\.1"/.test(line)) {
+          if (/\.listen\(0\b/.test(line) && !/\.listen\(0,\s*"(?:127\.0\.0\.1|::1)"/.test(line)) {
             offenders.push(`${path.relative(packageRoot, file)}:${index + 1}`);
           }
         });

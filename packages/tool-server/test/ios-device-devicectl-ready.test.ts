@@ -25,60 +25,46 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-// ensureDeviceReady memoizes readiness for 5s per udid, so each case needs its
-// own udid to actually run the probe.
-describe("ensureDeviceReady gates on the cable, not just the tunnel", () => {
-  it("rejects an unplugged device even while its tunnel reports connected", async () => {
-    // Live-verified shape for a paired iPhone with the cable pulled: CoreDevice
-    // still reaches it, so only transportType tells the two apart.
-    fake.connectionProperties = { transportType: "localNetwork", tunnelState: "connected" };
+describe("ensureDeviceReady selects a usable runner route", () => {
+  it.each([undefined, "::1", "fe80::1", "2001:db8::1", "192.168.1.2", "fdzz::1"])(
+    "rejects a network tunnel with unusable address %s",
+    async (address) => {
+      fake.connectionProperties = { transportType: "localNetwork", tunnelState: "connected" };
+      if (address) fake.connectionProperties.tunnelIPAddress = address;
+      const error = await ensureDeviceReady("network").catch((caught: unknown) => caught);
+      expect((error as Error).message).toContain("no connected CoreDevice IPv6 tunnel");
+      expect(getFailureSignal(error)).toMatchObject({
+        error_code: FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED,
+        failure_stage: "ios_device_ready",
+        error_kind: "network",
+      });
+    }
+  );
 
-    const error = await ensureDeviceReady("00008110-000000000000001E").catch(
-      (caught: unknown) => caught
-    );
-
-    expect((error as Error).name).toBe("IosDeviceControlError");
-    expect((error as Error).message).toBe(
-      "Device transport is localNetwork, not wired. " +
-        "Hint: Connect the device by USB cable and unlock it, then retry."
-    );
-    // The verdict bypasses runDevicectl's stamp (devicectl itself succeeded),
-    // so it carries its own: the registry must not file a pulled cable as
-    // unclassified.
-    const signal = getFailureSignal(error);
-    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED);
-    expect(signal?.failure_stage).toBe("ios_device_ready");
-    expect(signal?.error_kind).toBe("not_found");
-    expect(signal?.failure_command).toBe("devicectl");
+  it("reads the current route after a USB disconnect or tunnel reconnect", async () => {
+    fake.connectionProperties = { transportType: "wired", tunnelState: "connected" };
+    await expect(ensureDeviceReady("changing")).resolves.toBeNull();
+    fake.connectionProperties = {
+      transportType: "localNetwork",
+      tunnelState: "connected",
+      tunnelIPAddress: "fd12::1",
+    };
+    await expect(ensureDeviceReady("changing")).resolves.toBe("fd12::1");
+    fake.connectionProperties.tunnelIPAddress = "fd34::1";
+    await expect(ensureDeviceReady("changing")).resolves.toBe("fd34::1");
+    fake.connectionProperties.tunnelState = "connecting";
+    await expect(ensureDeviceReady("changing")).rejects.toThrow("no connected CoreDevice");
   });
 
   it("rejects a wired device whose CoreDevice tunnel is still connecting", async () => {
     fake.connectionProperties = { transportType: "wired", tunnelState: "connecting" };
-
-    const error = await ensureDeviceReady("00008110-000000000000004E").catch(
-      (caught: unknown) => caught
+    await expect(ensureDeviceReady("wired-connecting")).rejects.toThrow(
+      "tunnel is still connecting"
     );
-
-    expect((error as Error).name).toBe("IosDeviceControlError");
-    expect((error as Error).message).toBe(
-      "Device tunnel is still connecting. " +
-        "Hint: Keep the device unlocked and connected; retry in a few seconds."
-    );
-    const signal = getFailureSignal(error);
-    expect(signal?.error_code).toBe(FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED);
-    expect(signal?.failure_stage).toBe("ios_device_ready");
-    expect(signal?.error_kind).toBe("network");
   });
 
-  it("accepts a wired device with a settled tunnel", async () => {
-    fake.connectionProperties = { transportType: "wired", tunnelState: "connected" };
-
-    await expect(ensureDeviceReady("00008110-000000000000002E")).resolves.toBeUndefined();
-  });
-
-  it("accepts a device whose payload omits transportType (older toolchains)", async () => {
+  it("retains USB for older toolchains that omit transportType", async () => {
     fake.connectionProperties = { tunnelState: "connected" };
-
-    await expect(ensureDeviceReady("00008110-000000000000003E")).resolves.toBeUndefined();
+    await expect(ensureDeviceReady("legacy")).resolves.toBeNull();
   });
 });
