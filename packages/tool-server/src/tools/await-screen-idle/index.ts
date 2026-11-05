@@ -17,7 +17,11 @@ import { pollDescribeTree } from "../../utils/poll-describe-tree";
 import type { DescribeNode, DescribeTreeData } from "../describe/contract";
 import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeIosDevice } from "../describe/platforms/ios-device";
-import { describeAndroid, androidRequires } from "../describe/platforms/android";
+import {
+  describeAndroid,
+  describeAndroidWithHelper,
+  androidRequires,
+} from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 import { pollHarmonyTree, harmonyRequires } from "../describe/platforms/harmony";
 
@@ -98,35 +102,137 @@ function treeSignature(root: DescribeNode): string {
   return parts.join("\n");
 }
 
+function fetchTree(
+  registry: Registry,
+  device: DeviceInfo,
+  chromium: ChromiumCdpApi | undefined,
+  isTvOs: boolean,
+  androidIsTv: boolean,
+  androidHelperOnly: boolean,
+  budgetMs: number
+): Promise<DescribeTreeData> {
+  // ios-remote reads the same AX tree through describeIos: the ax-service
+  // blueprint routes it over the sim-remote tunnel, so only the preflight dep
+  // differs from the local branch. `isTvOs` is false for it, matching describe.
+  if (device.platform === "ios" || device.platform === "ios-remote") {
+    // Physical devices poll the same XCUITest runner snapshot as describe.
+    if (device.kind === "device") {
+      return describeIosDevice(registry, device);
+    }
+    return describeIos(registry, device, {}, { isTvOs });
+  }
+  if (device.platform === "android") {
+    if (androidHelperOnly) return describeAndroidWithHelper(registry, device.id);
+    return describeAndroid(registry, device.id, undefined, androidIsTv);
+  }
+  if (device.platform === "harmony") {
+    return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
+  }
+  return describeChromium(chromium as ChromiumCdpApi);
+}
+
+async function resolveChromium(
+  registry: Registry,
+  device: DeviceInfo
+): Promise<ChromiumCdpApi | undefined> {
+  if (device.platform !== "chromium") return undefined;
+  const { urn, options } = chromiumCdpRef(device);
+  return registry.resolveService<ChromiumCdpApi>(urn, options);
+}
+
+export interface ScreenIdleWait {
+  timeoutMs: number;
+  pollIntervalMs: number;
+  minStableMs: number;
+  signal?: AbortSignal;
+  stopOnReadError?: boolean;
+  /** Two equal empty trees count as still, instead of a screen yet to render. */
+  emptyTreeIsStable?: boolean;
+  /** Read through the Android helper (installing and starting it if needed), never `uiautomator dump`. */
+  androidHelperOnly?: boolean;
+  /** Resolved here for a Chromium target when absent. */
+  chromium?: ChromiumCdpApi;
+}
+
+export interface ScreenIdleOutcome extends IdleResult {
+  aborted: boolean;
+  /** Set when the last read failed, or no read ever returned a tree. */
+  readError?: string;
+}
+
+/**
+ * The poll behind `await-screen-idle`, for callers whose wait is internal and
+ * must not be recorded as a tool call of its own.
+ */
+export async function waitForScreenIdle(
+  registry: Registry,
+  device: DeviceInfo,
+  wait: ScreenIdleWait
+): Promise<ScreenIdleOutcome> {
+  if (device.platform === "ios") await ensureDeps(iosRequires);
+  else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
+  else if (device.platform === "android") await ensureDeps(androidRequires);
+  else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
+
+  // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
+  const isTvOs =
+    device.platform === "ios" && device.kind !== "device" && (await isTvOsSimulator(device.id));
+  const androidIsTv =
+    device.platform === "android" && !wait.androidHelperOnly && (await isAndroidTv(device.id));
+  const chromium = wait.chromium ?? (await resolveChromium(registry, device));
+  const { minStableMs } = wait;
+
+  let stableSignature: string | undefined;
+  let stableSince = 0;
+
+  const poll = await pollDescribeTree<true>({
+    fetchTree: (budgetMs) =>
+      fetchTree(
+        registry,
+        device,
+        chromium,
+        isTvOs,
+        androidIsTv,
+        wait.androidHelperOnly === true,
+        budgetMs
+      ),
+    timeoutMs: wait.timeoutMs,
+    pollIntervalMs: wait.pollIntervalMs,
+    signal: wait.signal,
+    stopOnError: wait.stopOnReadError,
+    onSample: (data, nowMs) => {
+      // An empty tree (blank/loading, or a degraded AX read) is not settled.
+      if (data.tree.children.length === 0 && !wait.emptyTreeIsStable) {
+        stableSignature = undefined;
+        stableSince = 0;
+        return { done: false };
+      }
+      const signature = treeSignature(data.tree);
+      if (signature === stableSignature) {
+        if (nowMs - stableSince >= minStableMs) return { done: true, result: true };
+      } else {
+        stableSignature = signature;
+        stableSince = nowMs;
+        if (minStableMs === 0) return { done: true, result: true };
+      }
+      return { done: false };
+    },
+  });
+
+  const note = poll.result === true && poll.lastData?.stale ? poll.lastData.hint : undefined;
+  return {
+    settled: poll.result === true,
+    waitedMs: poll.elapsedMs,
+    polls: poll.polls,
+    ...(note ? { note } : {}),
+    aborted: poll.aborted,
+    ...(poll.lastError !== undefined ? { readError: poll.lastError } : {}),
+  };
+}
+
 // The MCP layer times its auto-screenshot with this: capture once the screen is
 // stable instead of after a fixed delay.
 export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Params, IdleResult> {
-  function fetchTree(
-    device: DeviceInfo,
-    services: Record<string, unknown>,
-    isTvOs: boolean,
-    androidIsTv: boolean,
-    budgetMs: number
-  ): Promise<DescribeTreeData> {
-    // ios-remote reads the same AX tree through describeIos: the ax-service
-    // blueprint routes it over the sim-remote tunnel, so only the preflight dep
-    // differs from the local branch. `isTvOs` is false for it, matching describe.
-    if (device.platform === "ios" || device.platform === "ios-remote") {
-      // Physical devices poll the same XCUITest runner snapshot as describe.
-      if (device.kind === "device") {
-        return describeIosDevice(registry, device);
-      }
-      return describeIos(registry, device, {}, { isTvOs });
-    }
-    if (device.platform === "android") {
-      return describeAndroid(registry, device.id, undefined, androidIsTv);
-    }
-    if (device.platform === "harmony") {
-      return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
-    }
-    return describeChromium(services.chromium as ChromiumCdpApi);
-  }
-
   return {
     id: AWAIT_SCREEN_IDLE_TOOL_ID,
     interaction: {
@@ -160,51 +266,14 @@ panel settles instantly on its last frame, and taps land nowhere until it is wok
     async execute(services, params, ctx?: ToolContext) {
       const device = resolveDevice(params.udid);
       assertSupported(AWAIT_SCREEN_IDLE_TOOL_ID, capability, device);
-      if (device.platform === "ios") await ensureDeps(iosRequires);
-      else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
-      else if (device.platform === "android") await ensureDeps(androidRequires);
-      else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
-
-      // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
-      const isTvOs =
-        device.platform === "ios" && device.kind !== "device" && (await isTvOsSimulator(device.id));
-      const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
-      const minStableMs = params.minStableMs ?? DEFAULT_MIN_STABLE_MS;
-
-      let stableSignature: string | undefined;
-      let stableSince = 0;
-
-      const poll = await pollDescribeTree<true>({
-        fetchTree: (budgetMs) => fetchTree(device, services, isTvOs, androidIsTv, budgetMs),
+      const { settled, waitedMs, polls, note } = await waitForScreenIdle(registry, device, {
         timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         pollIntervalMs: params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+        minStableMs: params.minStableMs ?? DEFAULT_MIN_STABLE_MS,
         signal: ctx?.signal,
-        onSample: (data, nowMs) => {
-          // An empty tree (blank/loading, or a degraded AX read) is not settled.
-          if (data.tree.children.length === 0) {
-            stableSignature = undefined;
-            stableSince = 0;
-            return { done: false };
-          }
-          const signature = treeSignature(data.tree);
-          if (signature === stableSignature) {
-            if (nowMs - stableSince >= minStableMs) return { done: true, result: true };
-          } else {
-            stableSignature = signature;
-            stableSince = nowMs;
-            if (minStableMs === 0) return { done: true, result: true };
-          }
-          return { done: false };
-        },
+        chromium: services.chromium as ChromiumCdpApi | undefined,
       });
-
-      const note = poll.result === true && poll.lastData?.stale ? poll.lastData.hint : undefined;
-      return {
-        settled: poll.result === true,
-        waitedMs: poll.elapsedMs,
-        polls: poll.polls,
-        ...(note ? { note } : {}),
-      };
+      return { settled, waitedMs, polls, ...(note ? { note } : {}) };
     },
   };
 }
