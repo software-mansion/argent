@@ -50,7 +50,7 @@ let resolvedBinary: string | undefined;
  * The go-ios binary: `ARGENT_GO_IOS`, else `ios` on PATH. Memoized once found;
  * a miss is not, so installing go-ios takes effect on the next call.
  */
-export async function resolveGoIosBinary(): Promise<string> {
+async function resolveGoIosBinary(): Promise<string> {
   if (resolvedBinary) {
     return resolvedBinary;
   }
@@ -83,11 +83,6 @@ export async function resolveGoIosBinary(): Promise<string> {
       error_kind: "not_found",
     }
   );
-}
-
-/** Test seam. */
-export function __resetGoIosBinaryForTests(): void {
-  resolvedBinary = undefined;
 }
 
 function firstLine(text: string | undefined): string {
@@ -172,7 +167,7 @@ async function tunnelHealthy(relay: IosRelay, handle: TunnelHandle): Promise<boo
  * the tunnel negotiated. A tunnel that died, or that no longer reaches the
  * phone, is replaced on the next call.
  */
-export async function ensureGoIosTunnel(relay: IosRelay): Promise<TunnelHandle> {
+async function ensureGoIosTunnel(relay: IosRelay): Promise<TunnelHandle> {
   const existing = tunnels.get(relay.udid);
 
   if (existing && existing.child.exitCode === null && existing.child.signalCode === null) {
@@ -280,7 +275,7 @@ function killChild(child: ChildProcess): void {
 }
 
 /** Stop the tunnel for a phone, if one runs. The runner goes down with it. */
-export function stopGoIosTunnel(udid: string): void {
+function stopGoIosTunnel(udid: string): void {
   const handle = tunnels.get(udid);
   if (!handle) return;
   tunnels.delete(udid);
@@ -298,7 +293,7 @@ interface RunGoIosOptions {
  * Run one go-ios command against `relay` and return its output. Failures carry
  * go-ios's last error line and the relay's provenance.
  */
-export async function runGoIos(
+async function runGoIos(
   relay: IosRelay,
   args: string[],
   opts: RunGoIosOptions
@@ -391,10 +386,6 @@ export async function goIosLaunchApp(
   if (opts.terminateExisting) args.push("--kill-existing");
   for (const arg of opts.args ?? []) args.push(`--arg=${arg}`);
   await runGoIos(relay, args, { action: `launch ${bundleId}`, tunnel: true });
-}
-
-export async function goIosKillApp(relay: IosRelay, bundleId: string): Promise<void> {
-  await runGoIos(relay, ["kill", bundleId], { action: `kill ${bundleId}`, tunnel: true });
 }
 
 /**

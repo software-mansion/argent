@@ -273,7 +273,9 @@ describe("ios-device-runner blueprint: launch child exits during the readiness w
     hangReadinessThenExit(child, 65);
 
     const thrown = (await rejectionOf(callFactory())) as Error & { runnerExited?: unknown };
-    expect(thrown.message).toContain("xcodebuild exited (code 65) before the runner became ready");
+    expect(thrown.message).toContain(
+      "the runner launcher exited (code 65) before the runner became ready"
+    );
     expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
     expect(thrown.runnerExited).toBe(true);
     expect(recoverable(thrown)).toBe(true);
@@ -383,7 +385,9 @@ describe("ios-device-runner blueprint: the runner's port", () => {
     });
 
     const thrown = (await rejectionOf(callFactory())) as Error;
-    expect(thrown.message).toContain("xcodebuild exited (code 70) before the runner became ready");
+    expect(thrown.message).toContain(
+      "the runner launcher exited (code 70) before the runner became ready"
+    );
     expect(getFailureSignal(thrown)?.error_code).toBe(FAILURE_CODES.IOS_DEVICE_RUNNER_NOT_READY);
     expect(createRunnerClient).not.toHaveBeenCalled();
     expect(killRunnerProcess).toHaveBeenCalledTimes(1);
