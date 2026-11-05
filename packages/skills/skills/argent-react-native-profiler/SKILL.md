@@ -99,6 +99,7 @@ If the user does not want changes, present the report and suggest the fix withou
 ## 4. Caveats
 
 - **Dev builds** render ~3x slower than production (the report notes it), and Strict Mode can double durations, but not counts. Use counts together with cost: a high count matters only when its time adds up. Do not memoize a component just because it renders often.
+- **No hot commit** does not mean the app is fine. The report then gives render time, the busiest second and what re-rendered most. These are dev-build numbers, idle time in the recording lowers the share, and a listed component is not a finding.
 - **Live API data** may differ between runs (payload sizes, item counts) and shift render counts and durations independently of your fix. Note when data-dependent components vary.
 - **Run-to-run noise:** variations under ~10-15% in commit duration may be noise; only treat consistent, directional changes as signal.
 - **Profiler overhead:** if the native profile shows `JSLexer`, `JSONEmitter` or Hermes internals dominating the JS thread, that is instrumentation cost, not app work. Discount those entries.

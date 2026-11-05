@@ -110,7 +110,7 @@ export interface PipelineOutput {
   componentFindings: ComponentFinding[];
   sessionContext: SessionContext;
   recordingMs: number;
-  allClear: boolean;
+  noHotCommits: boolean;
   maxCommitMs?: number;
   anyRuntimeCompilerDetected: boolean;
   reactCommits: number;

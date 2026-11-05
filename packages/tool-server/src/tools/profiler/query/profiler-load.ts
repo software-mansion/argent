@@ -29,7 +29,7 @@ import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 import {
   parseRenderSummary,
-  formatCommitTime,
+  formatRenderTime,
   type RenderSummary,
 } from "../../../utils/react-profiler/render-summary";
 
@@ -278,7 +278,7 @@ async function loadReactSession(
     `- Total React commits: ${totalReactCommits ?? "unknown"}`,
     // Older sessions lack the summary; say so rather than let render_counts fail later.
     renderSummary
-      ? `- React commit time (all commits): ${formatCommitTime(renderSummary)}`
+      ? `- React render time (all commits): ${formatRenderTime(renderSummary)}`
       : `- Render counts over all commits: not saved (session predates them)`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
     "",

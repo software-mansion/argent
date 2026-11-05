@@ -1,12 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
-  COMMIT_TIME_SHARE_FLOOR,
   RENDER_SUMMARY_VERSION,
-  commitTimeShare,
-  formatCommitTime,
+  formatRenderTime,
   formatShare,
-  isCommitTimeAboveFloor,
   parseRenderSummary,
+  peakRenderShare,
+  renderTimeShare,
   selectFrequentRerenders,
   summarizeRenders,
   type RenderSummary,
@@ -26,6 +25,11 @@ const RERENDER: DevToolsChangeDescription = {
   didHooksChange: false,
   isFirstMount: false,
 };
+
+/** Commit timings for these durations, `gapMs` apart. */
+function timings(durations: number[], gapMs = 100) {
+  return durations.map((durationMs, i) => ({ timestamp: i * gapMs, durationMs }));
+}
 
 function fiber(
   componentName: string,
@@ -74,7 +78,8 @@ function summary(
     version: RENDER_SUMMARY_VERSION,
     recordingMs: 10_000,
     totalCommits: 468,
-    totalCommitMs: 3365.6,
+    totalRenderMs: 3365.6,
+    peakSecondRenderMs: 399,
     maxCommitMs: 14.3,
     fiberRenders: components.reduce((s, c) => s + c.rerenders + c.mounts, 0),
     rerenders: components.reduce((s, c) => s + c.rerenders, 0),
@@ -95,7 +100,7 @@ describe("summarizeRenders", () => {
       // didRender false entries are bail-outs, not renders.
       fiber("Row", 2, 0, RERENDER, { didRender: false, actualDuration: 0 }),
     ];
-    const s = summarizeRenders(commits, [4, 3, 2], 1000);
+    const s = summarizeRenders(commits, timings([4, 3, 2]), 1000);
     const row = s.components.find((c) => c.name === "Row")!;
     expect(row).toMatchObject({
       rerenders: 3,
@@ -118,9 +123,13 @@ describe("summarizeRenders", () => {
 
   it("takes commit totals from the durations, so commits without named fibers still count", () => {
     // Commit 1 lost every fiber's display name at stop; its time is still React's.
-    const s = summarizeRenders([fiber("A", 0, 1), fiber("A", 2, 1)], [10, 20.5, 6], 10_000);
+    const s = summarizeRenders(
+      [fiber("A", 0, 1), fiber("A", 2, 1)],
+      timings([10, 20.5, 6]),
+      10_000
+    );
     expect(s.totalCommits).toBe(3);
-    expect(s.totalCommitMs).toBe(36.5);
+    expect(s.totalRenderMs).toBe(36.5);
     expect(s.maxCommitMs).toBe(20.5);
     expect(s.recordingMs).toBe(10_000);
   });
@@ -138,7 +147,7 @@ describe("summarizeRenders", () => {
           }
         ),
       ],
-      [1],
+      timings([1]),
       100
     );
     expect(s.components[0]).toMatchObject({ reason: "state", topHooks: ["useState"] });
@@ -147,7 +156,7 @@ describe("summarizeRenders", () => {
   it("sorts components by re-render self time", () => {
     const s = summarizeRenders(
       [fiber("Cheap", 0, 0.1), fiber("Cheap", 1, 0.1), fiber("Costly", 0, 5)],
-      [1, 1],
+      timings([1, 1]),
       100
     );
     expect(s.components.map((c) => c.name)).toEqual(["Costly", "Cheap"]);
@@ -155,14 +164,20 @@ describe("summarizeRenders", () => {
 
   it("returns an empty summary for a session with no commits", () => {
     const s = summarizeRenders([], [], 10_000);
-    expect(s).toMatchObject({ totalCommits: 0, totalCommitMs: 0, maxCommitMs: 0, components: [] });
-    expect(formatCommitTime(s)).toBe("0.0 ms of 10.0 s (0%), 0 commits");
+    expect(s).toMatchObject({
+      totalCommits: 0,
+      totalRenderMs: 0,
+      peakSecondRenderMs: 0,
+      maxCommitMs: 0,
+      components: [],
+    });
+    expect(formatRenderTime(s)).toBe("0.0 ms of 10.0 s (0%), 0 commits");
   });
 });
 
 describe("parseRenderSummary", () => {
   it("accepts what summarizeRenders writes, through a JSON round trip", () => {
-    const s = summarizeRenders([fiber("A", 0, 1)], [3], 1000);
+    const s = summarizeRenders([fiber("A", 0, 1)], timings([3]), 1000);
     expect(parseRenderSummary(JSON.parse(JSON.stringify(s)))).toEqual(s);
   });
 
@@ -172,51 +187,94 @@ describe("parseRenderSummary", () => {
   });
 
   it("rejects another version or a damaged value instead of throwing later", () => {
-    const s = summarizeRenders([fiber("A", 0, 1)], [3], 1000);
+    const s = summarizeRenders([fiber("A", 0, 1)], timings([3]), 1000);
     expect(parseRenderSummary({ ...s, version: 2 })).toBeNull();
-    expect(parseRenderSummary({ ...s, totalCommitMs: "3" })).toBeNull();
+    expect(parseRenderSummary({ ...s, totalRenderMs: "3" })).toBeNull();
     expect(parseRenderSummary({ ...s, components: [{ name: "A" }] })).toBeNull();
     expect(parseRenderSummary("summary")).toBeNull();
   });
 });
 
-describe("commit time share line", () => {
+describe("render time line", () => {
   it("prints the clock fixture as the study measured it", () => {
-    const s = summary([], { totalCommitMs: 3365.6, recordingMs: 10_074, totalCommits: 468 });
-    expect(formatCommitTime(s)).toBe("3,366 ms of 10.1 s (33%), 468 commits");
+    const s = summary([], { totalRenderMs: 3365.6, recordingMs: 10_074, totalCommits: 468 });
+    expect(formatRenderTime(s)).toBe("3,366 ms of 10.1 s (33%), peak 40% in 1 s, 468 commits");
   });
 
-  it("keeps one decimal below 10% and never rounds up to the floor", () => {
+  it("keeps one decimal below 10%", () => {
     expect(formatShare(0.029)).toBe("2.9%");
     expect(formatShare(0.02886)).toBe("2.9%");
-    expect(formatShare(0.0996)).toBe("9.9%");
+    expect(formatShare(0.0991)).toBe("9.9%");
+    expect(formatShare(0.0996)).toBe("10%");
     expect(formatShare(0.0004)).toBe("<0.1%");
     expect(formatShare(0)).toBe("0%");
     expect(formatShare(0.334)).toBe("33%");
   });
 
   it("says commit, not commits, for one", () => {
-    expect(formatCommitTime(summary([], { totalCommits: 1, totalCommitMs: 5 }))).toContain(
+    expect(formatRenderTime(summary([], { totalCommits: 1, totalRenderMs: 5 }))).toContain(
       ", 1 commit"
     );
   });
+
+  it("gives a share of 0 for an empty recording", () => {
+    const s = summary([], { recordingMs: 0, totalRenderMs: 0, peakSecondRenderMs: 0 });
+    expect(renderTimeShare(s)).toBe(0);
+    expect(peakRenderShare(s)).toBe(0);
+  });
 });
 
-describe("all-clear gate", () => {
-  it("starts at 10%", () => {
-    expect(COMMIT_TIME_SHARE_FLOOR).toBe(0.1);
+describe("busiest second", () => {
+  // A 2 s burst of 10 ms commits, 20 ms apart: 50% while it lasts.
+  const burst = new Array(100).fill(10);
+
+  it("finds the most render time in any one second", () => {
+    const s = summarizeRenders([], timings(burst, 20), 2000);
+    expect(s.peakSecondRenderMs).toBe(500);
+    expect(peakRenderShare(s)).toBe(0.5);
   });
 
-  it("is inclusive at the floor and off below it", () => {
-    const at = summary([], { recordingMs: 10_000, totalCommitMs: 1000 });
-    const below = summary([], { recordingMs: 10_000, totalCommitMs: 999 });
-    expect(commitTimeShare(at)).toBe(0.1);
-    expect(isCommitTimeAboveFloor(at)).toBe(true);
-    expect(isCommitTimeAboveFloor(below)).toBe(false);
+  it("is not lowered by idle time, unlike the share of the recording", () => {
+    const short = summarizeRenders([], timings(burst, 20), 2000);
+    const long = summarizeRenders([], timings(burst, 20), 70_000);
+    expect(renderTimeShare(long)).toBeCloseTo(renderTimeShare(short) / 35);
+    expect(peakRenderShare(long)).toBe(peakRenderShare(short));
   });
 
-  it("stays off for an empty recording", () => {
-    expect(isCommitTimeAboveFloor(summary([], { recordingMs: 0, totalCommitMs: 0 }))).toBe(false);
+  it("sorts commits first: roots arrive one after the other, not in time order", () => {
+    const mixed = [
+      { timestamp: 900, durationMs: 5 },
+      { timestamp: 100, durationMs: 5 },
+      { timestamp: 5000, durationMs: 7 },
+      { timestamp: 500, durationMs: 5 },
+    ];
+    expect(summarizeRenders([], mixed, 10_000).peakSecondRenderMs).toBe(15);
+  });
+
+  it("does not count a commit exactly one second older in the same window", () => {
+    const edge = [
+      { timestamp: 0, durationMs: 5 },
+      { timestamp: 1000, durationMs: 5 },
+    ];
+    expect(summarizeRenders([], edge, 10_000).peakSecondRenderMs).toBe(5);
+  });
+
+  it("measures a recording shorter than a second against its own length", () => {
+    const s = summarizeRenders([], timings([100, 100], 100), 400);
+    expect(peakRenderShare(s)).toBe(0.5);
+    expect(renderTimeShare(s)).toBe(0.5);
+  });
+
+  it("caps the peak at 100%, since a commit's duration lands on one timestamp", () => {
+    const s = summarizeRenders([], timings([700, 700], 100), 10_000);
+    expect(s.peakSecondRenderMs).toBe(1400);
+    expect(peakRenderShare(s)).toBe(1);
+  });
+
+  it("leaves a commit without a usable timestamp out of the peak, not the total", () => {
+    const s = summarizeRenders([], [{ timestamp: Number.NaN, durationMs: 9 }], 10_000);
+    expect(s.totalRenderMs).toBe(9);
+    expect(s.peakSecondRenderMs).toBe(0);
   });
 });
 

@@ -48,7 +48,8 @@ const CLOCK: RenderSummary = {
   version: RENDER_SUMMARY_VERSION,
   recordingMs: 10_074,
   totalCommits: 468,
-  totalCommitMs: 3365.6,
+  totalRenderMs: 3365.6,
+  peakSecondRenderMs: 399,
   maxCommitMs: 14.3,
   fiberRenders: 58_032,
   rerenders: 58_032,
@@ -67,7 +68,8 @@ const SCROLL: RenderSummary = {
   version: RENDER_SUMMARY_VERSION,
   recordingMs: 6903,
   totalCommits: 102,
-  totalCommitMs: 56.1,
+  totalRenderMs: 56.1,
+  peakSecondRenderMs: 24,
   maxCommitMs: 7.5,
   fiberRenders: 460,
   rerenders: 394,
@@ -100,25 +102,29 @@ async function render(
     anyRuntimeCompilerDetected: false,
     reactCommits: 468,
     debugDir,
-    allClear: true,
+    noHotCommits: true,
     ...overrides,
   });
   return report;
 }
 
-describe("all-clear report with a render summary", () => {
-  it("is no longer all clear when cheap commits take a third of the session", async () => {
+const VERDICTS = /All clear|No performance|hotspots|React was busy|smooth|worth chasing/;
+
+describe("report with no hot commit", () => {
+  it("states what was measured and lists what re-rendered most, with no verdict", async () => {
     const report = await render({
       renderSummary: CLOCK,
       maxCommitMs: CLOCK.maxCommitMs,
       componentOrigin: createComponentOriginClassifier(FIXTURE_INDEX),
     });
-    expect(report).toContain("**React commit time:** 3,366 ms of 10.1 s (33%), 468 commits");
-    expect(report).not.toContain("All clear");
-    expect(report).not.toContain("No performance issues");
-    expect(report).toContain("No slow commit, but React was busy");
-    expect(report).toContain("(peak commit: 14.3ms)");
-    expect(report).toContain("## Frequent Re-renders");
+    expect(report).toContain(
+      "**React render time (dev build):** 3,366 ms of 10.1 s (33%), peak 40% in 1 s, 468 commits"
+    );
+    expect(report).toContain("No commit reached 16ms (peak commit: 14.3ms).");
+    expect(report).not.toMatch(VERDICTS);
+    expect(report).not.toContain("⚠️");
+    expect(report).toContain("## Most Frequent Re-renders");
+    expect(report).toContain("not that it is a problem");
 
     const rows = report.split("\n").filter((l) => l.startsWith("| `"));
     expect(rows.map((r) => r.split("`")[1])).toEqual(["ClockRow", "ClockScreen", "ClockHeader"]);
@@ -127,23 +133,65 @@ describe("all-clear report with a render summary", () => {
     expect(rows[0]).toContain("`fixture/App.js:25`");
     // React Native's Text and View rank above ClockRow by count and are left out.
     expect(report).not.toMatch(/\| `(Text|View)`/);
+    expect(report).toContain("Ask the user which path to take");
+    expect(report).toContain("**Cut re-renders**");
   });
 
-  it("stays all clear below the floor and prints no count table", async () => {
+  it("lists a burst that idle time pushes down to a low share of the recording", async () => {
+    // 3 s of the clock in a 70 s recording: 1.6% of it, no share floor to pass.
+    const report = await render({
+      renderSummary: {
+        ...CLOCK,
+        recordingMs: 70_200,
+        totalCommits: 170,
+        totalRenderMs: 1130,
+        components: [component("ClockRow", 5100, 370, { reason: "props", topProps: ["now"] })],
+      },
+      recordingMs: 70_200,
+      reactCommits: 170,
+      componentOrigin: createComponentOriginClassifier(FIXTURE_INDEX),
+    });
+    expect(report).toContain("1,130 ms of 70.2 s (1.6%), peak 40% in 1 s, 170 commits");
+    expect(report).toContain("## Most Frequent Re-renders");
+    expect(report).toContain("| `ClockRow` |");
+  });
+
+  it("prints no table when no component passes, and still no verdict", async () => {
     const report = await render({
       renderSummary: SCROLL,
       maxCommitMs: SCROLL.maxCommitMs,
       recordingMs: 6903,
       reactCommits: 102,
     });
-    expect(report).toContain("**React commit time:** 56 ms of 6.9 s (0.8%), 102 commits");
-    expect(report).toContain(
-      "✅ **All clear** — all React commits were below 16ms (peak commit: 7.5ms)."
-    );
-    expect(report).toContain("No performance issues detected");
+    expect(report).toContain("56 ms of 6.9 s (0.8%), peak 2.4% in 1 s, 102 commits");
+    expect(report).toContain("No commit reached 16ms (peak commit: 7.5ms).");
+    expect(report).not.toMatch(VERDICTS);
     expect(report).not.toContain("Frequent Re-renders");
     expect(report).not.toContain("| `");
+    expect(report).not.toContain("Ask the user which path");
     expect(report).toContain("mode=`render_counts`");
+    expect(report).toContain("mode=`top_functions`");
+  });
+
+  it("says nothing was measured when nothing rendered", async () => {
+    const report = await render({
+      renderSummary: { ...CLOCK, totalCommits: 0, totalRenderMs: 0, peakSecondRenderMs: 0 },
+      reactCommits: 0,
+    });
+    expect(report).toContain("No React commits were recorded");
+    expect(report).toContain("Interact with the app");
+    expect(report).not.toMatch(VERDICTS);
+    expect(report).not.toContain("No commit reached 16ms");
+    expect(report).not.toContain("Next Steps");
+  });
+
+  it("marks only a dev build as one", async () => {
+    const report = await render({
+      renderSummary: SCROLL,
+      sessionContext: { ...SESSION_CONTEXT, buildMode: "prod" },
+    });
+    expect(report).toContain("**React render time:** 56 ms");
+    expect(report).not.toContain("dev build");
   });
 
   it("points at neither react-profiler-renders nor react-profiler-component-source", async () => {
@@ -155,21 +203,23 @@ describe("all-clear report with a render summary", () => {
     }
   });
 
-  it("says when every frequent re-render is in library code", async () => {
+  it("prints no table when every frequent re-render is in library code", async () => {
     const report = await render({
       renderSummary: { ...CLOCK, components: [component("Text", 28_548, 1082.01)] },
       componentOrigin: createComponentOriginClassifier(FIXTURE_INDEX),
     });
-    expect(report).toContain("No app component re-rendered at least once per second");
+    expect(report).not.toContain("Frequent Re-renders");
+    expect(report).toContain("mode=`render_counts`");
   });
 });
 
 describe("slow commit with no named components", () => {
-  it("does not say every commit was under 16ms, even below the share floor", async () => {
+  it("does not say no commit reached 16ms, whatever the share", async () => {
     const summary: RenderSummary = {
       ...CLOCK,
       totalCommits: 3,
-      totalCommitMs: 50,
+      totalRenderMs: 50,
+      peakSecondRenderMs: 50,
       maxCommitMs: 40,
       recordingMs: 10_000,
       components: [],
@@ -177,10 +227,10 @@ describe("slow commit with no named components", () => {
     const report = await render({ renderSummary: summary, maxCommitMs: 40 });
     expect(report).toContain("Slow commit with no component names");
     expect(report).toContain("the slowest commit took 40.0ms");
-    expect(report).not.toContain("All clear");
-    expect(report).not.toContain("below 16ms");
-    expect(report).not.toContain("## Frequent Re-renders");
-    expect(report).not.toContain("Implement fixes");
+    expect(report).not.toContain("No commit reached 16ms");
+    expect(report).not.toMatch(VERDICTS);
+    expect(report).not.toContain("## Most Frequent Re-renders");
+    expect(report).not.toContain("Cut re-renders");
   });
 
   it("says so when no component in the session has a name", async () => {
@@ -188,15 +238,25 @@ describe("slow commit with no named components", () => {
     const report = await render({ renderSummary: summary, maxCommitMs: 200 });
     expect(report).toContain("Slow commit with no component names");
     expect(report).toContain("No component in this session could be named");
-    expect(report).not.toContain("library components");
+  });
+
+  it("still lists the components it can name", async () => {
+    const report = await render({
+      renderSummary: { ...CLOCK, maxCommitMs: 40 },
+      maxCommitMs: 40,
+      componentOrigin: createComponentOriginClassifier(FIXTURE_INDEX),
+    });
+    expect(report).toContain("Slow commit with no component names");
+    expect(report).toContain("## Most Frequent Re-renders");
   });
 });
 
-describe("all-clear report for a session saved without a render summary", () => {
-  it("keeps the old verdict, prints no share line, and says what it could not measure", async () => {
+describe("report for a session saved without a render summary", () => {
+  it("gives no verdict and no share line, and says what it could not measure", async () => {
     const report = await render({ renderSummary: null });
-    expect(report).toContain("✅ **All clear** — all React commits were below 16ms.");
-    expect(report).not.toContain("React commit time");
+    expect(report).toContain("No commit reached 16ms.");
+    expect(report).not.toMatch(VERDICTS);
+    expect(report).not.toContain("React render time");
     expect(report).toContain("saved without a render summary");
     expect(report).not.toContain("render_counts");
   });
@@ -228,7 +288,8 @@ const TYPING: RenderSummary = {
   version: RENDER_SUMMARY_VERSION,
   recordingMs: 11_241.6,
   totalCommits: 51,
-  totalCommitMs: 324.4,
+  totalRenderMs: 324.4,
+  peakSecondRenderMs: 71,
   maxCommitMs: 33.9,
   fiberRenders: 3169,
   rerenders: 2156,
@@ -239,14 +300,16 @@ const TYPING: RenderSummary = {
 describe("hot-commit report", () => {
   it("prints the share line and slow / all renders", async () => {
     const report = await render({
-      allClear: false,
+      noHotCommits: false,
       hotCommitSummaries: [HOT],
       componentFindings: [SEARCH_SHELL],
       renderSummary: TYPING,
       recordingMs: 11_241.6,
       reactCommits: 51,
     });
-    expect(report).toContain("**React commit time:** 324 ms of 11.2 s (2.9%), 51 commits");
+    expect(report).toContain(
+      "**React render time (dev build):** 324 ms of 11.2 s (2.9%), peak 7.1% in 1 s, 51 commits"
+    );
     expect(report).toContain("re-renders in all 51 commits");
     const row = report.split("\n").find((l) => l.startsWith("| `SearchScreenShell`"));
     expect(row).toContain("| 6 / 50 |");
@@ -256,13 +319,13 @@ describe("hot-commit report", () => {
 
   it("falls back to the stored count for a session without a summary", async () => {
     const report = await render({
-      allClear: false,
+      noHotCommits: false,
       hotCommitSummaries: [HOT],
       componentFindings: [SEARCH_SHELL],
       renderSummary: null,
       reactCommits: 51,
     });
-    expect(report).not.toContain("React commit time");
+    expect(report).not.toContain("React render time");
     expect(report).not.toContain("re-renders in all");
     const row = report.split("\n").find((l) => l.startsWith("| `SearchScreenShell`"));
     expect(row).toContain("| 6 | 9.6ms |");

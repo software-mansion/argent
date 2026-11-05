@@ -18,10 +18,9 @@ import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 import {
   parseRenderSummary,
   hasUnnamedSlowCommit,
-  formatCommitTime,
+  formatRenderTime,
   formatCount,
   formatRenderSummaryReason,
-  isCommitTimeAboveFloor,
   type RenderSummary,
 } from "../../../utils/react-profiler/render-summary";
 
@@ -54,7 +53,7 @@ async function getCommitData(port: number, deviceId: string): Promise<StoredComm
 }
 
 /**
- * A stopped session with no kept commit is the smooth outcome, not a missing
+ * A stopped session with no kept commit is a normal outcome, not a missing
  * session: stop keeps per-commit detail only for commits of 16ms or more and
  * their neighbours. Say so instead of telling the caller to profile again.
  */
@@ -77,14 +76,9 @@ export function renderNoStoredCommits(data: StoredCommitData): string {
     "",
   ];
   if (summary) {
-    // Same gate as the analyze report, so the two never disagree about "smooth".
-    const verdict = unnamedSlowCommit
-      ? "A commit was slow, but it has no breakdown."
-      : isCommitTimeAboveFloor(summary)
-        ? "No single commit was slow, but the cheap ones add up."
-        : "The run was smooth.";
     lines.push(
-      `**React commit time:** ${formatCommitTime(summary)}. ${verdict}`,
+      `**React render time:** ${formatRenderTime(summary)}.`,
+      ...(unnamedSlowCommit ? ["A commit was slow, but it has no breakdown."] : []),
       "",
       "Run `profiler-commit-query` mode=`render_counts` for render counts per component over all commits."
     );
@@ -132,7 +126,7 @@ export function renderRenderCounts(
 
   lines.unshift(heading, "");
   lines.push(
-    `**React commit time:** ${formatCommitTime(summary)}`,
+    `**React render time:** ${formatRenderTime(summary)}`,
     `**Fiber renders:** ${formatCount(summary.fiberRenders)} (${formatCount(summary.rerenders)} re-renders, ` +
       `${formatCount(summary.mounts)} mounts) across ${formatCount(summary.components.length)} components`,
     "",

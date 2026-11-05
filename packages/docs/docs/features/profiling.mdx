@@ -54,7 +54,7 @@ When the agent runs both profilers, the agent can also ask for a combined report
 
 The React report lists the hot commits. A commit is hot when it takes 16 ms or more. For each hot commit, the report shows which components rendered, which component triggered the cascade, and which props changed. The report ends with a table of the components that rendered most.
 
-The report also shows the share of the session that React spent in commits. Many fast commits can use as much time as one slow commit. When React spends 10% or more of the session in commits and no commit is hot, the report lists the app components that render most often.
+The report also shows the share of the session that React spent rendering, and the largest share in one second. Idle time decreases the share of the session, but not the one-second value. When no commit is hot, the report lists the app components that re-render most often. The report does not say that the session is good or bad.
 
 The native report lists the CPU hotspots, the hangs and the memory leaks. Each entry has a severity indicator and a suggestion.
 

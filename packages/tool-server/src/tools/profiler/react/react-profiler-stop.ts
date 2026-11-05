@@ -30,11 +30,12 @@ import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import {
   summarizeRenders,
-  commitTimeShare,
+  renderTimeShare,
+  peakRenderShare,
   formatShare,
   hasUnnamedSlowCommit,
-  isCommitTimeAboveFloor,
   SLOW_COMMIT_MS,
+  type CommitTiming,
 } from "../../../utils/react-profiler/render-summary";
 
 interface StopReadResult {
@@ -75,7 +76,7 @@ function normalizeChangeDescription(raw: unknown): DevToolsChangeDescription | n
  * (typically components unmounted before `STOP_AND_READ_SCRIPT` ran), so the report
  * can warn that a breakdown is incomplete. Tuple: `[commitIndex, fiberCount, ms]`.
  *
- * `commitDurations[i]` is the DevTools duration of flat commit `i`, recorded for
+ * `commitTimings[i]` is the DevTools timestamp and duration of flat commit `i`, recorded for
  * every commit, including one whose fibers were all unattributed.
  */
 export function flattenProfilingData(
@@ -86,11 +87,11 @@ export function flattenProfilingData(
   commits: DevToolsFiberCommit[];
   totalCommits: number;
   unattributedByCommit: Array<[number, number, number]>;
-  commitDurations: number[];
+  commitTimings: CommitTiming[];
 } {
   const commits: DevToolsFiberCommit[] = [];
   const unattributedByCommit: Array<[number, number, number]> = [];
-  const commitDurations: number[] = [];
+  const commitTimings: CommitTiming[] = [];
   let flatCommitIndex = 0;
 
   for (const root of merged.dataForRoots) {
@@ -109,7 +110,7 @@ export function flattenProfilingData(
       }
 
       const commitDuration = typeof c.duration === "number" ? c.duration : 0;
-      commitDurations.push(commitDuration);
+      commitTimings.push({ timestamp: c.timestamp, durationMs: commitDuration });
 
       let droppedCount = 0;
       let droppedMs = 0;
@@ -154,7 +155,7 @@ export function flattenProfilingData(
     }
   }
 
-  return { commits, totalCommits: flatCommitIndex, unattributedByCommit, commitDurations };
+  return { commits, totalCommits: flatCommitIndex, unattributedByCommit, commitTimings };
 }
 
 /**
@@ -408,14 +409,14 @@ Fails if no active profiling session exists, the CDP connection was lost during 
         commits: allCommits,
         totalCommits,
         unattributedByCommit,
-        commitDurations,
+        commitTimings,
       } = flattenProfilingData(merged, stopRead.displayNameById, fiberMeta);
 
       // Counts over every commit, saved next to the hot ±1 commits below, which
       // stay as they are: cheap but frequent renders never reach the 16ms floor.
       const renderSummary = summarizeRenders(
         allCommits,
-        commitDurations,
+        commitTimings,
         (profile.endTime - profile.startTime) / 1000
       );
 
@@ -512,17 +513,18 @@ Fails if no active profiling session exists, the CDP connection was lost during 
         response["hot_commit_indices"] = api.hotCommitIndices ?? [];
         response["any_compiler_optimized"] = api.anyCompilerOptimized ?? false;
         response["fiber_renders_analyzed"] = filteredCommits.length;
-        response["react_commit_ms"] = renderSummary.totalCommitMs;
-        response["react_commit_share_pct"] = Math.round(commitTimeShare(renderSummary) * 1000) / 10;
+        response["react_render_ms"] = renderSummary.totalRenderMs;
+        response["react_render_share_pct"] = Math.round(renderTimeShare(renderSummary) * 1000) / 10;
+        response["react_render_peak_1s_pct"] =
+          Math.round(peakRenderShare(renderSummary) * 1000) / 10;
         const hotCount = api.hotCommitIndices?.length ?? 0;
-        const share = formatShare(commitTimeShare(renderSummary));
+        const share = formatShare(renderTimeShare(renderSummary));
         if (hotCount === 0 && hasUnnamedSlowCommit(renderSummary)) {
           response["selection_note"] =
-            `The slowest commit took ${renderSummary.maxCommitMs.toFixed(1)}ms, but none of its components could be named, so no commit was kept. React spent ${share} of the session in commits`;
+            `The slowest commit took ${renderSummary.maxCommitMs.toFixed(1)}ms, but none of its components could be named, so no commit was kept. React rendered for ${share} of the session`;
         } else if (hotCount === 0) {
-          response["selection_note"] = isCommitTimeAboveFloor(renderSummary)
-            ? `All commits below 16ms, but React spent ${share} of the session in commits: react-profiler-analyze lists the components that re-render most often`
-            : `All commits below 16ms and React spent ${share} of the session in commits — app appears smooth (all-clear)`;
+          response["selection_note"] =
+            `No commit reached 16ms. React rendered for ${share} of the session, peak ${formatShare(peakRenderShare(renderSummary))} in 1 s`;
         } else if (hotCount < totalCommits) {
           response["selection_note"] =
             `${hotCount} of ${totalCommits} commits at ≥16ms absolute floor`;

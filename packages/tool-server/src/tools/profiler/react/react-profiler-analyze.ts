@@ -26,7 +26,7 @@ import type { ArtifactKind, ArtifactStore } from "@argent/registry";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import {
   parseRenderSummary,
-  isCommitTimeAboveFloor,
+  selectFrequentRerenders,
   type RenderSummary,
 } from "../../../utils/react-profiler/render-summary";
 import {
@@ -168,7 +168,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
         }),
         ...(unattributedByCommit && { unattributedByCommit }),
         // [] means stop ran and no commit reached the floor; null means no commit data.
-        allClear: hotCommitIndices !== null && hotCommitIndices.length === 0,
+        noHotCommits: hotCommitIndices !== null && hotCommitIndices.length === 0,
         ...(renderSummary && { maxCommitMs: renderSummary.maxCommitMs }),
       },
     };
@@ -187,10 +187,13 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     // The index costs seconds on a large app, so build it only when the report
     // uses it: for the File column of findings, or to tell app components from
-    // library ones in the frequent re-render rows of a busy all-clear session.
+    // library ones in the frequent re-render rows of a session with no hot
+    // commit. Names alone rule out most rows, which keeps quiet sessions fast.
     const needsSourceIndex =
       pipelineOutput.componentFindings.length > 0 ||
-      (renderSummary !== null && isCommitTimeAboveFloor(renderSummary));
+      (pipelineOutput.noHotCommits &&
+        renderSummary !== null &&
+        selectFrequentRerenders(renderSummary, createComponentOriginClassifier(null)).length > 0);
     let sourceIndex: ComponentSourceIndex | null = null;
     try {
       const astIndex = needsSourceIndex
@@ -250,7 +253,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       reactCommits: pipelineOutput.reactCommits,
       annotations: params.annotations,
       debugDir,
-      allClear: pipelineOutput.allClear,
+      noHotCommits: pipelineOutput.noHotCommits,
       maxCommitMs: pipelineOutput.maxCommitMs,
       renderSummary,
       componentOrigin: createComponentOriginClassifier(sourceIndex),

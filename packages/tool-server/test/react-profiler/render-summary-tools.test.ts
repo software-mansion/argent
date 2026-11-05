@@ -154,6 +154,11 @@ async function stop(live: ProfilingDataBackend, recordingMs: number) {
   return { response, onDisk };
 }
 
+/** Commit timings for these durations, `gapMs` apart. */
+function timings(durations: number[], gapMs = 100) {
+  return durations.map((durationMs, i) => ({ timestamp: i * gapMs, durationMs }));
+}
+
 describe("react-profiler-stop render summary", () => {
   it("saves counts over all commits next to the unchanged hot ±1 commits", async () => {
     // 100 cheap commits, then a hot one: only commit 99 (margin) and 100 are kept.
@@ -164,7 +169,9 @@ describe("react-profiler-stop render summary", () => {
     expect(summary).not.toBeNull();
     expect(summary).toMatchObject({
       totalCommits: 101,
-      totalCommitMs: 540,
+      totalRenderMs: 540,
+      // The last second: 62 commits of 5 ms, 16 ms apart, and the 40 ms commit.
+      peakSecondRenderMs: 350,
       maxCommitMs: 40,
       recordingMs: 2000,
     });
@@ -176,14 +183,16 @@ describe("react-profiler-stop render summary", () => {
     });
   });
 
-  it("does not call a busy session without slow commits smooth", async () => {
+  it("reports what was measured on a session with no slow commit", async () => {
     // 200 commits × 5 ms in 2 s: 50% of the session, none ≥16 ms.
     const { response } = await stop(backend(200, false), 2000);
     expect(response["hot_commit_indices"]).toEqual([]);
-    expect(response["react_commit_ms"]).toBe(1000);
-    expect(response["react_commit_share_pct"]).toBe(50);
-    expect(response["selection_note"]).toContain("React spent 50% of the session");
-    expect(response["selection_note"]).not.toContain("smooth");
+    expect(response["react_render_ms"]).toBe(1000);
+    expect(response["react_render_share_pct"]).toBe(50);
+    expect(response["react_render_peak_1s_pct"]).toBe(31.5);
+    expect(response["selection_note"]).toBe(
+      "No commit reached 16ms. React rendered for 50% of the session, peak 32% in 1 s"
+    );
   });
 
   it("does not claim all commits were cheap when a slow one has no named fibers", async () => {
@@ -198,14 +207,15 @@ describe("react-profiler-stop render summary", () => {
     const { response } = await stop(live, 10_000);
     expect(response["hot_commit_indices"]).toEqual([]);
     expect(response["selection_note"]).toContain("The slowest commit took 40.0ms");
-    expect(response["selection_note"]).not.toContain("All commits below 16ms");
+    expect(response["selection_note"]).not.toContain("No commit reached 16ms");
   });
 
-  it("still calls a quiet session smooth", async () => {
+  it("words a quiet session the same way, with no verdict", async () => {
     // 4 commits × 5 ms in 2 s: 1%.
     const { response } = await stop(backend(4, false), 2000);
-    expect(response["selection_note"]).toContain("app appears smooth (all-clear)");
-    expect(response["selection_note"]).toContain("1.0%");
+    expect(response["selection_note"]).toBe(
+      "No commit reached 16ms. React rendered for 1.0% of the session, peak 2.0% in 1 s"
+    );
   });
 });
 
@@ -268,7 +278,7 @@ function clockSummary(): RenderSummary {
     for (let r = 0; r < 30; r++) all.push(fiber("ClockRow", i, 0.07));
     all.push(fiber("Text", i, 0.08));
   }
-  return summarizeRenders(all, new Array(468).fill(7.19), 10_074);
+  return summarizeRenders(all, timings(new Array(468).fill(7.19), 21.5), 10_074);
 }
 
 describe("profiler-commit-query on a session with no kept commits", () => {
@@ -279,14 +289,14 @@ describe("profiler-commit-query on a session with no kept commits", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.PROFILER_DATA_NOT_LOADED);
   });
 
-  it("says the run was smooth instead of asking for a new profile", async () => {
-    await cacheSession("smooth-device", [], {
+  it("explains why nothing is stored instead of asking for a new profile", async () => {
+    await cacheSession("no-hot-device", [], {
       hotCommitIndices: [],
       totalReactCommits: 468,
       renderSummary: clockSummary(),
     });
     for (const mode of ["by_index", "by_component", "by_time_range", "cascade_tree"]) {
-      const out = await query("smooth-device", {
+      const out = await query("no-hot-device", {
         mode,
         commit_index: 3,
         component_name: "ClockRow",
@@ -294,39 +304,40 @@ describe("profiler-commit-query on a session with no kept commits", () => {
       });
       expect(out, mode).toContain("none of its 468 React commits reached 16ms (peak 7.2ms)");
       expect(out, mode).toContain("not a missing session");
-      // 33% of the session in commits: the analyze report does not call it smooth either.
-      expect(out, mode).toContain("No single commit was slow, but the cheap ones add up.");
-      expect(out, mode).not.toContain("smooth");
+      expect(out, mode).toContain(
+        "**React render time:** 3,365 ms of 10.1 s (33%), peak 34% in 1 s, 468 commits."
+      );
+      expect(out, mode).not.toMatch(/smooth|All clear|add up/);
       expect(out, mode).toContain("mode=`render_counts`");
       expect(out, mode).not.toContain("Run react-profiler-start");
     }
   });
 
-  it("calls a quiet session smooth", async () => {
+  it("gives a quiet session no verdict either", async () => {
     await cacheSession("quiet-device", [], {
       hotCommitIndices: [],
       totalReactCommits: 4,
-      renderSummary: summarizeRenders([fiber("A", 0, 1)], [2, 2, 2, 2], 10_000),
+      renderSummary: summarizeRenders([fiber("A", 0, 1)], timings([2, 2, 2, 2]), 10_000),
     });
     const out = await query("quiet-device", { mode: "by_index", commit_index: 0 });
-    expect(out).toContain("8.0 ms of 10.0 s (0.1%), 4 commits. The run was smooth.");
+    expect(out).toContain("8.0 ms of 10.0 s (0.1%), peak 0.8% in 1 s, 4 commits.");
+    expect(out).not.toContain("smooth");
   });
 
-  it("does not call a session smooth when a slow commit was not kept", async () => {
+  it("says a slow commit was not kept", async () => {
     await cacheSession("unnamed-device", [], {
       hotCommitIndices: [],
       totalReactCommits: 2,
-      renderSummary: summarizeRenders([fiber("A", 0, 1)], [2, 40], 10_000),
+      renderSummary: summarizeRenders([fiber("A", 0, 1)], timings([2, 40]), 10_000),
     });
     const out = await query("unnamed-device", { mode: "by_index", commit_index: 0 });
     expect(out).toContain("those of 16ms or more (peak 40.0ms) have no component");
     expect(out).toContain("A commit was slow, but it has no breakdown.");
-    expect(out).not.toContain("smooth");
   });
 
   it("handles an old session without a summary", async () => {
-    await cacheSession("old-smooth-device", [], { hotCommitIndices: [], totalReactCommits: 12 });
-    const out = await query("old-smooth-device", { mode: "by_index", commit_index: 0 });
+    await cacheSession("old-device", [], { hotCommitIndices: [], totalReactCommits: 12 });
+    const out = await query("old-device", { mode: "by_index", commit_index: 0 });
     expect(out).toContain("none of its 12 React commits reached 16ms");
     expect(out).toContain("saved before render summaries existed");
   });
@@ -352,7 +363,9 @@ describe("profiler-commit-query render_counts", () => {
     });
     const out = await query("counts-device", { mode: "render_counts" });
     expect(out).toContain("## Render Counts — all 468 commits");
-    expect(out).toContain("**React commit time:** 3,365 ms of 10.1 s (33%), 468 commits");
+    expect(out).toContain(
+      "**React render time:** 3,365 ms of 10.1 s (33%), peak 34% in 1 s, 468 commits"
+    );
     const rows = out.split("\n").filter((l) => l.startsWith("| `"));
     expect(rows[0]).toMatch(/^\| `ClockRow` \| 14,040 \| 1393\.7 \| 468 \| /);
     expect(rows[0]).toContain("props: now");
@@ -391,7 +404,11 @@ describe("profiler-commit-query render_counts", () => {
   it("by_component points at render_counts for a component that rendered only in cold commits", async () => {
     await cacheSession("cold-device", [fiber("Hot", 5, 30)], {
       hotCommitIndices: [5],
-      renderSummary: summarizeRenders([fiber("Hot", 5, 30), fiber("Cold", 1, 1)], [3, 30], 1000),
+      renderSummary: summarizeRenders(
+        [fiber("Hot", 5, 30), fiber("Cold", 1, 1)],
+        timings([3, 30]),
+        1000
+      ),
     });
     const out = await query("cold-device", { mode: "by_component", component_name: "Cold" });
     expect(out).toContain("`Cold` rendered 1 time in this session, but never in a stored commit");
@@ -421,13 +438,13 @@ describe("profiler-load with and without a render summary", () => {
     } as never) as Promise<string>;
   }
 
-  it("prints the commit time of a new session", async () => {
+  it("prints the render time of a new session", async () => {
     await writeSession("20261103-120000", {
       totalReactCommits: 468,
       renderSummary: clockSummary(),
     });
     expect(await load("20261103-120000")).toContain(
-      "- React commit time (all commits): 3,365 ms of 10.1 s (33%), 468 commits"
+      "- React render time (all commits): 3,365 ms of 10.1 s (33%), peak 34% in 1 s, 468 commits"
     );
   });
 

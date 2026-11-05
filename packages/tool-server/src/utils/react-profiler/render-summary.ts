@@ -3,9 +3,8 @@
  *
  * react-profiler-stop persists per-fiber detail only for commits of 16 ms or more
  * and their ±1 neighbours, so on a session made of many cheap commits (a 60 Hz
- * timer re-rendering a list) the saved commits are empty and the report used to
- * say "all clear" while React spent a third of the session rendering. The summary
- * is computed from every commit at stop time and saved as `meta.renderSummary`
+ * timer re-rendering a list) the saved commits are empty and the report could not
+ * see React spending a third of the session rendering. The summary is computed from every commit at stop time and saved as `meta.renderSummary`
  * next to the kept commits, which stay exactly as before.
  *
  * Measured on six device sessions (Bluesky and an Expo fixture): 0.1-5 ms to
@@ -21,25 +20,28 @@ import type { ComponentOriginResult } from "./component-origin";
 export const RENDER_SUMMARY_VERSION = 1;
 
 /**
- * Share of the recording React spent in commits at which a session with no
- * commit of 16 ms or more stops being reported as all clear.
- *
- * TENTATIVE. Picked from six device sessions only: fixture 60 Hz clock 33.4%,
- * fixture 500-row list 23.9%, Bluesky tab switches 12.9%, fixture janky renders
- * 12.3%, Bluesky typing 2.9%, Bluesky fast scroll 0.8%. 10% separates the clock
- * (a real problem with no slow commit) from typing and scrolling (nothing worth
- * fixing), but six sessions cannot settle the number. Revisit it with more apps,
- * release builds and Android.
+ * Which components the Most Frequent Re-renders table lists. TENTATIVE, and they
+ * decide a listing, never a verdict: the report does not call a session fine or
+ * busy from any number here. On six device sessions they list the fixture clock's
+ * ClockRow and nothing on Bluesky's fast scroll; they also list SearchScreenShell
+ * on stretches of Bluesky typing that had nothing to fix, so a row is not a finding.
  */
-export const COMMIT_TIME_SHARE_FLOOR = 0.1;
-
-/** Frequent re-render rows need at least this many re-renders, and one per second. */
+/** A row needs at least this many re-renders, and one per second. */
 const MIN_FREQUENT_RERENDERS = 10;
-/** Rows cheaper than this (summed self time per second of recording) are left out. */
+/** Summed self time per second of recording below which a row is left out. */
 const MIN_FREQUENT_SELF_MS_PER_S = 1;
 const MAX_FREQUENT_ROWS = 5;
 const MAX_TOP_PROPS = 3;
 const MAX_TOP_HOOKS = 3;
+const PEAK_WINDOW_MS = 1000;
+
+/** One commit's place in time; the input for the session totals. */
+export interface CommitTiming {
+  /** ms since profiling started, on the DevTools commit clock. */
+  timestamp: number;
+  /** DevTools commit duration, ms. */
+  durationMs: number;
+}
 
 export interface RenderSummaryComponent {
   /** Raw React DevTools display name, the key the saved commits use. */
@@ -66,11 +68,16 @@ export interface RenderSummary {
   /** Every commit the DevTools backend recorded, across all roots. */
   totalCommits: number;
   /**
-   * Sum of the DevTools commit durations. That is render-phase time; it leaves
-   * out layout and passive effects and native mounting, so it is a lower bound
-   * on the main-thread time React costs.
+   * Sum of the DevTools commit durations. DevTools reports the largest rendered
+   * subtree of a commit (its max actualDuration), not the commit's total, so this
+   * leaves out updates in other subtrees and the walk through a deep tree, as well
+   * as effects and native mounting: 56 ms here against 347 ms of render-phase CPU
+   * samples on a Bluesky scroll. It also holds dev-only work and, under Strict
+   * Mode, second renders. Treat it as a rough dev-build number.
    */
-  totalCommitMs: number;
+  totalRenderMs: number;
+  /** Most render time in any one second, so idle time cannot hide a burst. */
+  peakSecondRenderMs: number;
   maxCommitMs: number;
   /** Attributed fiber renders; fibers whose name was lost at stop are not counted. */
   fiberRenders: number;
@@ -91,14 +98,37 @@ function topKeys<K>(freq: Map<K, number>, n: number): K[] {
     .map(([k]) => k);
 }
 
+function validDuration(ms: number): number {
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+/** Largest sum of commit durations inside any window of PEAK_WINDOW_MS. */
+function peakWindowMs(commitTimings: readonly CommitTiming[]): number {
+  const sorted = commitTimings
+    .filter((c) => Number.isFinite(c.timestamp))
+    .sort((a, b) => a.timestamp - b.timestamp);
+  let peak = 0;
+  let inWindow = 0;
+  let first = 0;
+  for (const commit of sorted) {
+    inWindow += validDuration(commit.durationMs);
+    while (sorted[first]!.timestamp <= commit.timestamp - PEAK_WINDOW_MS) {
+      inWindow -= validDuration(sorted[first]!.durationMs);
+      first++;
+    }
+    if (inWindow > peak) peak = inWindow;
+  }
+  return peak;
+}
+
 /**
  * @param commits every flattened fiber render of the session, not the hot-filtered subset
- * @param commitDurations one DevTools commit duration per flat commit index
+ * @param commitTimings one entry per flat commit, in any order
  * @param recordingMs session length in ms
  */
 export function summarizeRenders(
   commits: readonly DevToolsFiberCommit[],
-  commitDurations: readonly number[],
+  commitTimings: readonly CommitTiming[],
   recordingMs: number
 ): RenderSummary {
   interface Acc {
@@ -192,19 +222,20 @@ export function summarizeRenders(
       (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
   );
 
-  let totalCommitMs = 0;
+  let totalRenderMs = 0;
   let maxCommitMs = 0;
-  for (const d of commitDurations) {
-    const ms = Number.isFinite(d) && d > 0 ? d : 0;
-    totalCommitMs += ms;
+  for (const { durationMs } of commitTimings) {
+    const ms = validDuration(durationMs);
+    totalRenderMs += ms;
     if (ms > maxCommitMs) maxCommitMs = ms;
   }
 
   return {
     version: RENDER_SUMMARY_VERSION,
     recordingMs: round2(recordingMs),
-    totalCommits: commitDurations.length,
-    totalCommitMs: round2(totalCommitMs),
+    totalCommits: commitTimings.length,
+    totalRenderMs: round2(totalRenderMs),
+    peakSecondRenderMs: round2(peakWindowMs(commitTimings)),
     maxCommitMs: round2(maxCommitMs),
     fiberRenders,
     rerenders,
@@ -229,7 +260,8 @@ export function parseRenderSummary(raw: unknown): RenderSummary | null {
   for (const key of [
     "recordingMs",
     "totalCommits",
-    "totalCommitMs",
+    "totalRenderMs",
+    "peakSecondRenderMs",
     "maxCommitMs",
     "fiberRenders",
     "rerenders",
@@ -256,14 +288,15 @@ export function parseRenderSummary(raw: unknown): RenderSummary | null {
   return raw as RenderSummary;
 }
 
-/** Fraction (0..1+) of the recording React spent in commits. */
-export function commitTimeShare(summary: RenderSummary): number {
-  return summary.recordingMs > 0 ? summary.totalCommitMs / summary.recordingMs : 0;
+/** Fraction (0..1+) of the recording React spent rendering. */
+export function renderTimeShare(summary: RenderSummary): number {
+  return summary.recordingMs > 0 ? summary.totalRenderMs / summary.recordingMs : 0;
 }
 
-/** True when the session is busy enough that "all clear" would be wrong. */
-export function isCommitTimeAboveFloor(summary: RenderSummary): boolean {
-  return commitTimeShare(summary) >= COMMIT_TIME_SHARE_FLOOR;
+/** Fraction (0..1) of the busiest second, or of a recording shorter than a second. */
+export function peakRenderShare(summary: RenderSummary): number {
+  const windowMs = Math.min(PEAK_WINDOW_MS, summary.recordingMs);
+  return windowMs > 0 ? Math.min(summary.peakSecondRenderMs / windowMs, 1) : 0;
 }
 
 /** A commit at or over this missed a 60 Hz frame. */
@@ -279,17 +312,14 @@ export function hasUnnamedSlowCommit(summary: RenderSummary): boolean {
   return summary.maxCommitMs >= SLOW_COMMIT_MS;
 }
 
-/**
- * "33%" at or above 10%, one decimal below it ("2.9%"). A share just under 10%
- * prints as "9.9%", never "10.0%", so the line cannot contradict the gate.
- */
+/** "33%" at or above 10%, one decimal below it ("2.9%"). */
 export function formatShare(share: number): string {
   const pct = share * 100;
   if (pct <= 0) return "0%";
-  if (pct >= 10) return `${Math.round(pct)}%`;
   const rounded = Math.round(pct * 10) / 10;
+  if (rounded >= 10) return `${Math.round(pct)}%`;
   if (rounded < 0.1) return "<0.1%";
-  return `${Math.min(rounded, 9.9).toFixed(1)}%`;
+  return `${rounded.toFixed(1)}%`;
 }
 
 export function formatMs(ms: number): string {
@@ -300,12 +330,14 @@ export function formatCount(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-/** "3,366 ms of 10.1 s (33%), 468 commits" */
-export function formatCommitTime(summary: RenderSummary): string {
+/** "3,366 ms of 10.1 s (33%), peak 40% in 1 s, 468 commits" */
+export function formatRenderTime(summary: RenderSummary): string {
   const commits = summary.totalCommits === 1 ? "commit" : "commits";
+  const peak =
+    summary.totalCommits > 0 ? `, peak ${formatShare(peakRenderShare(summary))} in 1 s` : "";
   return (
-    `${formatMs(summary.totalCommitMs)} of ${(summary.recordingMs / 1000).toFixed(1)} s ` +
-    `(${formatShare(commitTimeShare(summary))}), ${formatCount(summary.totalCommits)} ${commits}`
+    `${formatMs(summary.totalRenderMs)} of ${(summary.recordingMs / 1000).toFixed(1)} s ` +
+    `(${formatShare(renderTimeShare(summary))})${peak}, ${formatCount(summary.totalCommits)} ${commits}`
   );
 }
 
