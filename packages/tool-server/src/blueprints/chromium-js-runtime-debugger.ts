@@ -238,7 +238,9 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         // to write, unlike Hermes: here `logicalDeviceId` IS `device.id`.
         const captured = logWriter.getStats().totalEntries;
         const connectionLost = !cdp.isConnected();
-        const keepFile = captured > 0 && connectionLost && logWriter.hasFile();
+        // Past a file-size limit or on a full disk the file can exist yet hold nothing.
+        const stored = logWriter.hasFile() && logWriter.getStats().fileSizeBytes > 0;
+        const keepFile = captured > 0 && connectionLost && stored;
         if (captured > 0) {
           const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
           recordReapedSession(
@@ -246,7 +248,7 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
             device.id,
             keepFile
               ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
-              : logWriter.hasFile()
+              : stored
                 ? `The ${entries} went with it — the log file is deleted on teardown, so this ` +
                   `registry starts empty rather than the app having logged nothing.`
                 : `The ${entries} went with it — no log file held them, so this ` +

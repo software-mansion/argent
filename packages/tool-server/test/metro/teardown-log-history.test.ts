@@ -29,6 +29,11 @@ import { createDebuggerLogRegistryTool } from "../../src/tools/debugger/debugger
 import { __resetReapedSessionsForTesting } from "../../src/utils/reaped-sessions";
 import { scopeTempHome } from "../helpers/temp-home";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+});
+
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
 // whose constructor mkdir -p's os.homedir()/.argent/tmp. Keep that out of the
 // developer's real home.
@@ -382,7 +387,7 @@ describe("a debugger session whose app crashed", () => {
 });
 
 describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-  "a debugger session under an unwritable ~/.argent",
+  "a debugger session that cannot write its log file",
   () => {
     const argentDir = () => path.join(os.homedir(), ".argent");
 
@@ -440,6 +445,27 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
 
       expect(result.status).toBe("not_connected");
       expect(result.note).toContain("lost its connection");
+      expect(result.note).toContain("3 captured console entries went with it — no log file");
+      expect(result.note).not.toContain("kept at");
+    });
+
+    it("says a crashed session whose log writes all failed kept no log file", async () => {
+      // A full disk: the file opens, then every write throws.
+      vi.mocked(fs.writeSync).mockImplementation(() => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      });
+      const urn = await connectAndCapture(LOGICAL_ID, 3);
+      appRunning = false;
+      for (const ws of wss.clients) ws.terminate();
+      await vi.waitFor(() =>
+        expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR)
+      );
+      vi.mocked(fs.writeSync).mockReset();
+
+      const result = await readRegistry();
+
       expect(result.note).toContain("3 captured console entries went with it — no log file");
       expect(result.note).not.toContain("kept at");
     });
