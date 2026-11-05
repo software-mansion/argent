@@ -482,10 +482,13 @@ async function spawnSimulatorServerProcess(
  * it and this host, for frames nobody reads between two screenshots. On
  * demand, the agent streams for about a second around each screenshot and
  * while a recording or MJPEG viewer is connected; taps and swipes do not
- * start it. A screenshot then takes 150 to 200 ms instead of a few.
+ * start it. A screenshot then takes up to about half a second longer.
+ *
+ * A provider's own word on the kind comes first, because `device.kind` is read
+ * from the shape of the id.
  */
-function capturesOnDemandAlways(device: DeviceInfo): boolean {
-  return device.platform === "android" && device.kind === "device";
+function capturesOnDemandAlways(device: DeviceInfo, claim?: ExternalDevice): boolean {
+  return device.platform === "android" && (claim?.kind ?? device.kind) === "device";
 }
 
 /**
@@ -496,7 +499,8 @@ function capturesOnDemandAlways(device: DeviceInfo): boolean {
  */
 function withCaptureOnDemand(
   device: DeviceInfo,
-  instance: ServiceInstance<SimulatorServerApi>
+  instance: ServiceInstance<SimulatorServerApi>,
+  claim?: ExternalDevice
 ): ServiceInstance<SimulatorServerApi> {
   const unregister = registerCaptureOnDemandSender(
     device.id,
@@ -504,7 +508,7 @@ function withCaptureOnDemand(
     (enabled) => {
       sendCommand(instance.api, { cmd: "capture_on_demand", enabled }).catch(() => {});
     },
-    capturesOnDemandAlways(device)
+    capturesOnDemandAlways(device, claim)
   );
   return {
     ...instance,
@@ -572,7 +576,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     const claim = externalClaimForAnyId(device.id);
 
     if (claim) {
-      return withCaptureOnDemand(device, await buildAttachedInstance(device, claim));
+      return withCaptureOnDemand(device, await buildAttachedInstance(device, claim), claim);
     }
 
     if (device.platform === "ios-remote") {

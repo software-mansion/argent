@@ -70,7 +70,7 @@ describe("profiling-devices", () => {
     const respawned = vi.fn();
     registerCaptureOnDemandSender("emulator-5554", RESPAWNED, respawned);
     // A lost connection reverts the server; the next check sends the mode again.
-    captureOnDemandDropped("emulator-5554", RESPAWNED);
+    captureOnDemandDropped(RESPAWNED);
     isProfiling("emulator-5554");
     react.profilingActive = false;
     expect(isProfiling("emulator-5554")).toBe(false);
@@ -90,10 +90,35 @@ describe("profiling-devices", () => {
     run.profilingActive = false;
     expect(isProfiling("HT82A0203045")).toBe(false);
     expect(send.mock.calls).toEqual([[true]]);
-    captureOnDemandDropped("HT82A0203045", FIRST);
+    captureOnDemandDropped(FIRST);
     isProfiling("HT82A0203045");
     unregister();
     expect(send.mock.calls).toEqual([[true], [true], [false]]);
+  });
+
+  it("keeps the mode for an id still using a server reached under two ids", () => {
+    const send = vi.fn();
+    const unregisterSerial = registerCaptureOnDemandSender("R5GL", FIRST, send, true);
+    const unregisterExternal = registerCaptureOnDemandSender("ext:phone", FIRST, send, true);
+    send.mockClear();
+
+    unregisterSerial();
+    expect(send).not.toHaveBeenCalled();
+
+    unregisterExternal();
+    expect(send.mock.calls).toEqual([[false]]);
+  });
+
+  it("sends the mode again to every id of a server whose connection dropped", () => {
+    const send = vi.fn();
+    registerCaptureOnDemandSender("R5GL", FIRST, send, true);
+    registerCaptureOnDemandSender("ext:phone", FIRST, send, true);
+    send.mockClear();
+
+    captureOnDemandDropped(FIRST);
+    isProfiling("R5GL");
+
+    expect(send.mock.calls).toEqual([[true], [true]]);
   });
 
   it("ignores the late close of a server that was already replaced", () => {
@@ -104,7 +129,7 @@ describe("profiling-devices", () => {
     unregisterOld();
     const respawned = vi.fn();
     registerCaptureOnDemandSender("emulator-5554", RESPAWNED, respawned);
-    captureOnDemandDropped("emulator-5554", FIRST);
+    captureOnDemandDropped(FIRST);
     run.profilingActive = false;
     expect(isProfiling("emulator-5554")).toBe(false);
     expect(respawned.mock.calls).toEqual([[true], [false]]);

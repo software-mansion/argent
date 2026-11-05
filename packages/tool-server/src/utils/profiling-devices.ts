@@ -79,8 +79,13 @@ export function registerCaptureOnDemandSender(
     servers.delete(deviceId);
     // The server holds the mode for as long as the WebSocket that set it. An
     // attached server's WebSocket outlives this instance, so release the hold
-    // here. A spawned server is about to exit, which releases it anyway.
-    if (entry.onDemand) entry.send(false);
+    // here. A spawned server is about to exit, which releases it anyway. A
+    // device reached under two ids has one entry per id and one server, which
+    // the other entry may still want on demand.
+    const stillWanted = [...servers.values()].some(
+      (other) => other.endpoint === endpoint && other.onDemand
+    );
+    if (entry.onDemand && !stillWanted) entry.send(false);
   };
 }
 
@@ -90,9 +95,10 @@ export function registerCaptureOnDemandSender(
  * was already replaced on the device changes nothing: the new server, at
  * another endpoint, still holds the mode.
  */
-export function captureOnDemandDropped(deviceId: string, endpoint: string): void {
-  const server = servers.get(deviceId);
-  if (server?.endpoint === endpoint) server.onDemand = false;
+export function captureOnDemandDropped(endpoint: string): void {
+  for (const server of servers.values()) {
+    if (server.endpoint === endpoint) server.onDemand = false;
+  }
 }
 
 export function __resetProfilingDevicesForTesting(): void {
