@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import { promisify } from "node:util";
+import { XcodeFirstLaunchPendingError } from "./dependency-errors";
 import { externalNativeId } from "./external-devices";
 import { isFoldableSimulator } from "./ios-devices";
 import { settleWithin, sleepOrAbort } from "./timing";
@@ -551,7 +552,13 @@ export async function foldablePostureHint(
   expected: Size,
   actual: Size
 ): Promise<string | undefined> {
-  if (!(await isFoldableSimulator(udid))) return undefined;
+  // Wording only, so a type that cannot be read while Xcode's install is
+  // pending leaves the postures unnamed rather than failing the comparison.
+  const foldable = await isFoldableSimulator(udid).catch((err: unknown) => {
+    if (err instanceof XcodeFirstLaunchPendingError) return false;
+    throw err;
+  });
+  if (!foldable) return undefined;
   const panels = (await readCoreDeviceDisplays(udid)).displays?.panels;
   const base =
     "This simulator is foldable: a baseline belongs to the posture that produced it, and the " +

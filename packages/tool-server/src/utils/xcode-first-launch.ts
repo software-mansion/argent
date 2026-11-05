@@ -57,6 +57,7 @@ export function xcodeFirstLaunchHint(): string {
     " has not finished installing its system components since it was installed or updated. " +
     "Until it has, Xcode's `simctl` waits for an administrator password on every call, so " +
     "`list-devices` does not show local iOS simulators. " +
+    "Tools that need `simctl` fail until then. " +
     `Ask the user to open ${xcode ? "that Xcode" : "Xcode"} once and let it install the ` +
     `components, or to run \`sudo ${xcodebuild} -runFirstLaunch\`, then retry. ` +
     "Do not run that command or `xcrun simctl` yourself."
