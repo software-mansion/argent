@@ -369,3 +369,46 @@ describe("a chromium-only block with a multi-platform launch", () => {
     expect((await run(registry, "multi")).device).toBe(ANDROID);
   });
 });
+
+describe("the prerequisite notice", () => {
+  const notice = (registry: Registry, name: string, params: Record<string, unknown> = {}) =>
+    createRunFlowTool(registry).execute({}, { name, project_root: tmpDir, ...params });
+
+  it("is not returned for a run whose auto-detected device fails the requirements", async () => {
+    await writeFlow("tv-fragment", {
+      executionPrerequisite: "logged in",
+      requires: { runtimeKind: "tv" },
+    });
+    const { registry } = mockRegistry([android(ANDROID, "mobile")]);
+    expect(await failureCode(notice(registry, "tv-fragment", { platform: "android" }))).toBe(
+      FAILURE_CODES.FLOW_REQUIREMENTS_UNMET
+    );
+  });
+
+  it("is not returned when no device is booted", async () => {
+    await writeFlow("fragment", { executionPrerequisite: "logged in" });
+    const { registry } = mockRegistry([]);
+    expect(await failureCode(notice(registry, "fragment"))).toBe(
+      FAILURE_CODES.FLOW_DEVICE_RESOLUTION
+    );
+  });
+
+  it("is returned when a booted device satisfies the requirements", async () => {
+    await writeFlow("tv-fragment", {
+      executionPrerequisite: "logged in",
+      requires: { runtimeKind: "tv" },
+    });
+    const { registry } = mockRegistry([ios(IOS_TV, "tv")]);
+    expect(await notice(registry, "tv-fragment")).toMatchObject({ notice: expect.any(String) });
+  });
+
+  it("is returned for a fragment with no device steps, with nothing booted", async () => {
+    await writeFlow("echo-fragment", {
+      executionPrerequisite: "logged in",
+      steps: [{ kind: "echo", message: "hi" }],
+    });
+    const { registry, invokeTool } = mockRegistry([]);
+    expect(await notice(registry, "echo-fragment")).toMatchObject({ notice: expect.any(String) });
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+});

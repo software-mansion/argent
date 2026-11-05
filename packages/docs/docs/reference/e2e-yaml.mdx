@@ -92,7 +92,7 @@ The block must have one key or both keys. A target must satisfy all keys in the 
 
 The requirements change how Argent selects the device:
 
-- With `--device` or `--platform`, Argent checks that target before it asks for the execution prerequisite. When the block excludes the target, the run fails with `FLOW_REQUIREMENTS_UNMET`.
+- Argent selects and checks the device before it asks for the execution prerequisite. When the block excludes the target, the run fails with `FLOW_REQUIREMENTS_UNMET`.
 - Without `--device`, Argent selects only from the booted devices that satisfy the requirements. An iOS-only e2e test selects the simulator when an Android emulator is also booted.
 - When devices are booted but none satisfies the requirements, the run fails with `FLOW_REQUIREMENTS_UNMET`. A directory run skips that e2e test. See [The `argent e2e` command](#the-argent-e2e-command).
 - When `runtimeKind` is set and Argent cannot read the runtime kind of a device that it must check, the run fails with `FLOW_DEVICE_RESOLUTION`. A directory run does not skip that e2e test.

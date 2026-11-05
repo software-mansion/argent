@@ -1704,6 +1704,9 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // merely attaches). The chromium-pinned run exempted above lands here and
       // takes the ordinary notice/acknowledge path.
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
+        // Fail now rather than ask the caller to set up a run that cannot happen. No boot is
+        // possible here: a leading launch was refused above unless the run is pinned to a device.
+        await resolveRunDevice(registry, ctx, flow, params, flowsDir, seed, viaUpload, project);
         return {
           e2eTest: flowName,
           flow: flowName,
