@@ -216,7 +216,7 @@ On Chromium, Argent runs a swipe as a mouse drag. On Vega, a swipe fails like th
 
 Argent scrolls inside the container that `within` names. Without `within`, Argent scrolls at the center of the screen.
 
-On Chromium, a scroller can show only part of the target. Argent then scrolls inside that scroller, whatever `within` names. A target that is fully out of view of a nested scroller still needs `within`.
+On Chromium, a scroller in the page's top document can cut the target along the scroll direction. Argent then scrolls inside that scroller, whatever `within` names. Any other target out of view of a nested scroller, such as one fully out of view or inside an iframe, still needs `within`.
 
 ### Foldable devices
 

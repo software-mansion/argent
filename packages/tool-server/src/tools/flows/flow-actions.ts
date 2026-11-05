@@ -911,7 +911,7 @@ async function scrollToVisible(
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
     // changing on every read, so a container that stopped moving would never
     // read as "end of scroll" and the loop would burn all its iterations. The
-    // scope is the gesture's region when it is a container or a clip, otherwise
+    // scope is the gesture's region when it is a container, otherwise
     // the union of the visible scroll containers under the gesture anchor (not the innermost; see
     // anchorScrollFrames). Only when the tree surfaces none there does the scope
     // stay the whole screen, where a screen-level animator can still mask
@@ -920,8 +920,7 @@ async function scrollToVisible(
     // content, so structure alone would misread real progress as a stuck scroll
     // — which leaves an animating node INSIDE the scrolled content a known
     // limitation.
-    const scope =
-      within || axisCut ? [region] : anchorScrollFrames(tree, getDescribeTapPoint(region));
+    const scope = within ? [region] : anchorScrollFrames(tree, getDescribeTapPoint(region));
     if (scope.length === 0) scope.push(FULL_SCREEN);
     const fp = treeFingerprint(tree, (node) => scope.some((r) => framesOverlap(node.frame, r)));
     // A wheel taker the tree cannot see leaves the fingerprint as it was too.

@@ -459,6 +459,32 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(2);
   });
 
+  it("ends the scroll on a stuck cut while a clock outside it never stops ticking", async () => {
+    let ticks = 0;
+    currentTree = () =>
+      screen([
+        n({
+          identifier: "clock",
+          label: String(ticks),
+          frame: { x: 0, y: 0, width: 1, height: 0.1 },
+        }),
+        cutRow(false),
+      ]);
+    const swipes: SwipeCall[] = [];
+    await writeFlow("ticking-stuck-cut", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(swipes, () => ticks++)).execute(
+        {},
+        { name: "ticking-stuck-cut", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(2);
+  });
+
   it("retries a cut the anchor's wheel left in place where an uncut target's gesture goes", async () => {
     // A wheel taker the walker cannot see (a closed shadow root's scroller, a
     // page's wheel listener) holds the anchor, and the tree shows nothing move.
@@ -670,7 +696,7 @@ describe("scroll-to directive", () => {
   });
 
   it("scrolls a cut target with no wheel anchor on the axis like an uncut one", async () => {
-    // Nothing on screen hit-tests to the scroller cutting the row (an overlay covers it).
+    // A node cut inside a same-origin iframe: the walker gives it clipBounds, no anchors.
     const swipes = await scrollTo(
       "unanchored-cut",
       (scrolled) => [n({ ...cutRow(scrolled), clipAnchors: undefined })],
