@@ -346,6 +346,7 @@ Argent runs the script with the project root as the working directory. Argent gi
 - The Windows platform names
 - The proxy names and the TLS certificate names
 - The Node, npm, Android, Java and Apple toolchain names
+- The adb server names `ANDROID_ADB_SERVER_PORT`, `ANDROID_ADB_SERVER_ADDRESS` and `ADB_SERVER_SOCKET`. Thus `adb` in a script uses the same adb server as the tool-server. This includes a server that [`android.adbServerPort`](/docs/reference/configuration#available-keys) selects
 - `CI`, `SSH_AUTH_SOCK`, and each name that starts with `npm_config_`
 
 Argent removes each other name. Argent removes its own token, its own port and each `ARGENT_SECRET_` value. Argent does not read a project `.env` file, so a name such as `NODE_ENV` or `DATABASE_URL` is absent. There is no `env` key. Let the script read a secret or a URL from a file.

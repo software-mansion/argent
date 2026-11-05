@@ -69,6 +69,11 @@ function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function writeJsonFile(filePath: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
+}
+
 // JSONC-tolerant variant for tests that read back files the Zed adapter
 // wrote — those preserve user comments and trailing commas, so strict
 // JSON.parse rejects them.
@@ -376,7 +381,7 @@ describe("ALL_ADAPTERS", () => {
       "Cursor",
       "Claude Code",
       "VS Code",
-      "Windsurf",
+      "Devin Desktop",
       "Zed",
       "Gemini",
       "Codex",
@@ -515,7 +520,7 @@ describe("VS Code adapter", () => {
 // ── Windsurf adapter ─────────────────────────────────────────────────────────
 
 describe("Windsurf adapter", () => {
-  const adapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
 
   afterEach(() => {
     homedirOverride = undefined;
@@ -569,6 +574,81 @@ describe("Windsurf adapter", () => {
     const servers2 = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
     expect(servers2).toHaveProperty("myserver");
     expect(servers2.argent as Record<string, unknown>).not.toHaveProperty("alwaysAllow");
+  });
+
+  // Devin Desktop's agent ignores alwaysAllow; it only auto-approves tools listed
+  // in permissions.allow of its own user config.
+  describe("Devin agent permission", () => {
+    let home: string;
+    let devinConfig: string;
+
+    beforeEach(() => {
+      home = path.join(tmpDir, "home");
+      homedirOverride = home;
+      devinConfig = path.join(home, ".config", "devin", "config.json");
+      adapter.write(path.join(home, ".codeium", "windsurf", "mcp_config.json"), getMcpEntry());
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("adds mcp__argent__* next to the user's own settings, once", () => {
+      writeJsonFile(devinConfig, { version: 1, permissions: { allow: ["mcp__github__*"] } });
+
+      adapter.addAllowlist!(tmpDir, "global");
+      adapter.addAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(devinConfig)).toEqual({
+        version: 1,
+        permissions: { allow: ["mcp__github__*", "mcp__argent__*"] },
+      });
+    });
+
+    it("removeAllowlist drops only argent's rule", () => {
+      writeJsonFile(devinConfig, { version: 1, permissions: { allow: ["mcp__github__*"] } });
+      adapter.addAllowlist!(tmpDir, "global");
+
+      adapter.removeAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(devinConfig)).toEqual({
+        version: 1,
+        permissions: { allow: ["mcp__github__*"] },
+      });
+    });
+
+    it("removes a Devin config that held only argent's rule", () => {
+      adapter.addAllowlist!(tmpDir, "global");
+      expect(readJsonFile(devinConfig)).toEqual({ permissions: { allow: ["mcp__argent__*"] } });
+
+      adapter.removeAllowlist!(tmpDir, "global");
+
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
+
+    it("leaves the Devin config alone on a scope-local cleanup", () => {
+      adapter.addAllowlist!(tmpDir, "global");
+      adapter.removeAllowlist!(tmpDir, "local");
+      expect(fs.existsSync(devinConfig)).toBe(true);
+    });
+
+    it("writes nothing when argent is not configured for Windsurf", () => {
+      fs.rmSync(path.join(home, ".codeium"), { recursive: true, force: true });
+      adapter.addAllowlist!(tmpDir, "global");
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
+
+    it("follows XDG_CONFIG_HOME like Devin does", () => {
+      const xdg = path.join(tmpDir, "xdg");
+      vi.stubEnv("XDG_CONFIG_HOME", xdg);
+
+      adapter.addAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(path.join(xdg, "devin", "config.json"))).toEqual({
+        permissions: { allow: ["mcp__argent__*"] },
+      });
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
   });
 });
 
@@ -1740,7 +1820,7 @@ describe("copyRulesAndAgents", () => {
   });
 
   it("returns empty array for adapters without rules/agents targets", () => {
-    const windsurfAdapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+    const windsurfAdapter = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
     const results = copyRulesAndAgents([windsurfAdapter], tmpDir, "local", rulesDir, agentsDir);
     expect(results).toHaveLength(0);
   });
@@ -2183,7 +2263,7 @@ describe("installer preserves foreign MCP config", () => {
   // editJsoncFile, so a hand-authored comment and a pre-existing foreign server
   // survive an argent `write` — the old readJson → writeJson path reduced the
   // commented file to {} and rewrote it with only the argent entry.
-  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+  for (const name of ["Cursor", "Claude Code", "Devin Desktop", "Gemini", "Kiro"]) {
     it(`${name} write preserves a comment and a foreign server in a JSONC file`, () => {
       const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
       const dir = mintTempDir("argent-fc-");
@@ -2225,7 +2305,7 @@ describe("installer preserves foreign MCP config", () => {
     expect(fs.existsSync(configPath)).toBe(true);
   });
 
-  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+  for (const name of ["Cursor", "Claude Code", "Devin Desktop", "Gemini", "Kiro"]) {
     it(`${name} remove preserves a comment and a foreign server (uninstall round-trip)`, () => {
       const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
       const dir = mintTempDir("argent-fc-");
@@ -2494,7 +2574,7 @@ describe("detection evidence", () => {
   const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
   const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
   const vscode = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
-  const windsurf = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+  const windsurf = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
   const zed = ALL_ADAPTERS.find((a) => a.name === "Zed")!;
   const gemini = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
   const hermes = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;
