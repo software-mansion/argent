@@ -695,6 +695,67 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     }
   );
 
+  // The status tool is what an agent asks before those tools. The same connected
+  // app answers it over its own socket: `connected`, and the env it proves.
+  it("native-devtools-status answers connected for an app on a service created while the install was pending", async () => {
+    const device: DeviceInfo = { ...SIM, id: processScopedUdid("-1523-4000-8000-000000000006") };
+    pending.simctl = true;
+    const app = nativeApp();
+    const ref = nativeDevtoolsRef(device);
+    const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+    expect(api.isEnvSetup()).toBe(false);
+
+    const agent = net.createConnection(api.socketPath, () => {
+      agent.write(JSON.stringify({ type: "Control", payload: { bundleId: BUNDLE_ID } }) + "\n");
+    });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE_ID)).toBe(true));
+
+    execFileMock.mockClear();
+    const res = await request(app)
+      .post("/tools/native-devtools-status")
+      .send({ udid: device.id, bundleId: BUNDLE_ID });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      connected: true,
+      state: "connected",
+      appRunning: true,
+      requiresRestart: false,
+      envSetup: true,
+      nextLaunchWillBeInjected: true,
+      injectable: true,
+    });
+    expect(res.body.data.message).toBeUndefined();
+    expect(xcrunCalls()).toEqual([]);
+    expect(api.getInitFailure()).toBeNull();
+    agent.destroy();
+  });
+
+  it("native-devtools-status answers the refusal for an app that is not connected while another app is", async () => {
+    const device: DeviceInfo = { ...SIM, id: processScopedUdid("-1523-4000-8000-000000000007") };
+    pending.simctl = true;
+    const app = nativeApp();
+    const ref = nativeDevtoolsRef(device);
+    const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+
+    const agent = net.createConnection(api.socketPath, () => {
+      agent.write(
+        JSON.stringify({ type: "Control", payload: { bundleId: "com.other.app" } }) + "\n"
+      );
+    });
+    await vi.waitFor(() => expect(api.isConnected("com.other.app")).toBe(true));
+
+    execFileMock.mockClear();
+    const res = await request(app)
+      .post("/tools/native-devtools-status")
+      .send({ udid: device.id, bundleId: BUNDLE_ID });
+
+    expect(res.status).toBe(424);
+    expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+    expect(xcrunCalls()).toEqual([]);
+    agent.destroy();
+  });
+
   // Only the app asked about may skip the refusal: another app's socket says nothing about it.
   it.each(PRECHECKED_READS)(
     "%s answers the refusal for an app that is not connected while another app is",
