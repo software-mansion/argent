@@ -1,6 +1,23 @@
 import WebSocket from "ws";
-import { FAILURE_CODES, FailureError, TypedEventEmitter } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  TypedEventEmitter,
+  failureSignal,
+  getFailureSignal,
+  type FailureCode,
+  type FailureKind,
+} from "@argent/registry";
 import * as crypto from "node:crypto";
+import { settleWithin, sleep } from "../timing";
+import {
+  readBoxError,
+  readBoxValue,
+  readValue,
+  watchIfThenable,
+  type RemoteVerdict,
+  type SettleBox,
+} from "./scripts/evaluate-awaited";
 
 export interface ScriptInfo {
   scriptId: string;
@@ -114,6 +131,154 @@ interface PendingBinding {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+function requestTimedOut(request: string): FailureError {
+  // The message carries its own recovery guidance: agents otherwise read
+  // this state as transient and retry-loop, each pass waiting out the
+  // full timeout.
+  return new FailureError(
+    `CDP request ${request} timed out — the runtime accepted the ` +
+      `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
+      `debugger-status can still report "connected" in this state (the socket is open). ` +
+      `Do not retry in a loop — restart the app, then reconnect and retry once.`,
+    {
+      error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+      failure_stage: "debugger_cdp_send",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
+  );
+}
+
+interface RemoteObjectLike {
+  type?: string;
+  subtype?: string;
+  className?: string;
+  objectId?: string;
+  value?: unknown;
+  description?: string;
+}
+
+interface RemoteResult {
+  result?: RemoteObjectLike;
+  exceptionDetails?: CDPExceptionDetails;
+}
+
+const PROMISE_POLL_INTERVAL_MS = 50;
+/** How long a trivial evaluate gets to show that the runtime still answers. */
+const ANSWERS_TIMEOUT_MS = 1000;
+/**
+ * The least budget a read after the expression ran gets, so a Promise that
+ * settles at the deadline is still read instead of reported as unsettled.
+ */
+const READ_GRACE_MS = 2000;
+/**
+ * The least wait for a Promise once it is watched. Hermes runs the watch's
+ * callbacks in a later job, so a Promise that is already settled can still
+ * read as pending right after the watch.
+ */
+const SETTLE_GRACE_MS = 500;
+/**
+ * How long after the call gave up a late answer to its first request is still
+ * awaited, so the object group that answer fills can be released.
+ */
+const LATE_ANSWER_WINDOW_MS = 60_000;
+
+function evaluateError(
+  message: string,
+  errorCode: FailureCode,
+  errorKind: FailureKind = "unknown",
+  cause?: Error
+): FailureError {
+  return new FailureError(
+    message,
+    failureSignal(errorCode, "debugger_cdp_evaluate", "tool_server", errorKind),
+    { cause }
+  );
+}
+
+const PAUSE_HINT = "If another debugger has the runtime paused at a breakpoint, resume it there.";
+
+/** The expression ran; only the wait for its Promise was given up. */
+function unsettled(timeout: number): FailureError {
+  return evaluateError(
+    `The expression ran, but the Promise it returned did not settle within ${timeout}ms. ` +
+      `${PAUSE_HINT} Do not run it again for its side effects; to skip the wait, evaluate ` +
+      "`void (<expression>)` instead.",
+    FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+    "timeout"
+  );
+}
+
+/** The runtime answers, but the expression's result did not arrive in time. */
+function resultTimedOut(timeout: number): FailureError {
+  return evaluateError(
+    `The expression's result did not arrive within ${timeout}ms. A Promise it returned may ` +
+      `still be pending. ${PAUSE_HINT} The expression may already have run: do not run it ` +
+      "again for its side effects; to skip waiting on a Promise, evaluate " +
+      "`void (<expression>)` instead.",
+    FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+    "timeout"
+  );
+}
+
+/** Neither the expression nor a later check got an answer in time. */
+function noAnswer(timeout: number): FailureError {
+  return evaluateError(
+    `The runtime did not answer the expression within ${timeout}ms, nor a check sent after ` +
+      `it: it may still be running the expression, be frozen, or be paused at a breakpoint. ` +
+      `${PAUSE_HINT} The expression may already have run: do not run it again for its side ` +
+      `effects. If the app stays unresponsive, restart it and reconnect.`,
+    FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+    "timeout"
+  );
+}
+
+/** The expression ran, but the runtime refused a request that reads its result. */
+function lostResult(cause: unknown): FailureError {
+  return evaluateError(
+    `The expression ran, but reading its result failed: ${(cause as Error).message}. ` +
+      "The JS context may have been reloaded, or the value may be nested too deeply to " +
+      "send. Do not run the expression again for its side effects.",
+    FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR,
+    "unknown",
+    cause as Error
+  );
+}
+
+function failureCode(err: unknown): FailureCode | undefined {
+  return err instanceof Error ? getFailureSignal(err)?.error_code : undefined;
+}
+
+/** A value with no JSON form; the call must not look like it returned one. */
+function unserializable(kind: string): FailureError {
+  return evaluateError(
+    `The expression's result is a ${kind}, which has no JSON form. Return a value ` +
+      `(for a function, call it or read a property) instead.`,
+    FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR,
+    "validation"
+  );
+}
+
+/** The value a `RemoteVerdict` stands for, or the failure it reports. */
+function verdictValue(verdict: RemoteVerdict | undefined): unknown {
+  if (!verdict) return undefined;
+  if ("unserializable" in verdict) throw unserializable(verdict.unserializable);
+  if ("unreadable" in verdict) {
+    throw evaluateError(
+      `The expression's result could not be serialized: ${verdict.unreadable}`,
+      FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION
+    );
+  }
+  return verdict.value;
+}
+
+function runtimeException(details: CDPExceptionDetails): FailureError {
+  return evaluateError(
+    formatExceptionDetails(details),
+    FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION
+  );
+}
+
 export class CDPClient {
   readonly events = new TypedEventEmitter<CDPClientEvents>();
 
@@ -121,6 +286,10 @@ export class CDPClient {
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
   private pendingBindings = new Map<string, PendingBinding>();
+  /** Whether the runtime serves `Runtime.releaseObjectGroup`; unknown until asked. */
+  private releasesHandles: boolean | undefined;
+  /** Set for the legacy inspector, whose answer to the release probe is wrong. */
+  private readonly neverReleases: boolean;
   /** Set by addBinding when the runtime ACKs the command but installs nothing. */
   private bindingUnavailable = false;
   private scripts = new Map<string, ScriptInfo>();
@@ -135,11 +304,18 @@ export class CDPClient {
   private wsUrl: string;
   private sendOrigin: boolean;
 
-  constructor(wsUrl: string, options?: { sendOrigin?: boolean }) {
+  /**
+   * `releasesHandles: false` is for the legacy Hermes inspector (RN 0.72,
+   * Vega), which acknowledges `Runtime.releaseObjectGroup` without releasing
+   * anything, so asking it would get the wrong answer.
+   */
+  constructor(wsUrl: string, options?: { sendOrigin?: boolean; releasesHandles?: false }) {
     this.wsUrl = wsUrl;
     // Default true matches Metro / Expo. Chromium's devtools target rejects an
     // upgrade carrying an Origin header, so those callers pass `sendOrigin: false`.
     this.sendOrigin = options?.sendOrigin !== false;
+    this.neverReleases = options?.releasesHandles === false;
+    this.releasesHandles = options?.releasesHandles;
   }
 
   connect(): Promise<void> {
@@ -334,23 +510,7 @@ export class CDPClient {
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(
-          // The message carries its own recovery guidance: agents otherwise read
-          // this state as transient and retry-loop, each pass waiting out the
-          // full timeout.
-          new FailureError(
-            `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
-              `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
-              `debugger-status can still report "connected" in this state (the socket is open). ` +
-              `Do not retry in a loop — restart the app, then reconnect and retry once.`,
-            {
-              error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
-              failure_stage: "debugger_cdp_send",
-              failure_area: "tool_server",
-              error_kind: "timeout",
-            }
-          )
-        );
+        reject(requestTimedOut(`${method} (id=${id})`));
       }, timeout);
 
       this.pending.set(id, {
@@ -384,16 +544,278 @@ export class CDPClient {
       exceptionDetails?: CDPExceptionDetails;
     };
 
-    if (result.exceptionDetails) {
-      throw new FailureError(formatExceptionDetails(result.exceptionDetails), {
-        error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
-        failure_stage: "debugger_cdp_evaluate",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
-    }
+    if (result.exceptionDetails) throw runtimeException(result.exceptionDetails);
 
     return result.result?.value;
+  }
+
+  /**
+   * Evaluate and return the value, settling a Promise result first.
+   *
+   * `awaitPromise` is requested: V8 honours it and settles the Promise with
+   * the reaction attached inside the engine, so the page never sees an
+   * unhandled rejection. Hermes ignores it and answers with the Promise
+   * object, so the expression runs once without serializing and, if the
+   * result has a `then` method, its settle callbacks write the outcome into a
+   * box object that is polled with `Runtime.getProperties`, which compiles no
+   * script. Every handle belongs to one object group, released when the call
+   * ends. `timeout` bounds the expression and the wait for the Promise; the
+   * reads after it keep at least `READ_GRACE_MS`.
+   *
+   * A runtime that cannot release handles (Hermes before RN 0.77 answers
+   * `Runtime.releaseObjectGroup` with an error, and the legacy inspector of
+   * RN 0.72 and Vega acknowledges it as a no-op) would keep every result
+   * alive, so there the expression is evaluated by value as `evaluate` does,
+   * and a Promise comes back unsettled.
+   */
+  async evaluateAwaited(expression: string, options?: { timeout?: number }): Promise<unknown> {
+    const timeout = options?.timeout ?? DEFAULT_TIMEOUT_MS;
+    if (!(await this.canReleaseHandles(timeout))) return this.evaluate(expression, { timeout });
+    const deadline = Date.now() + timeout;
+    const objectGroup = `argent-await-${crypto.randomUUID()}`;
+    let ran = false;
+    try {
+      const first = await this.evaluateRemote(expression, objectGroup, timeout);
+      ran = true;
+      if (first.exceptionDetails) throw runtimeException(first.exceptionDetails);
+      return await this.readRemote(first.result, objectGroup, deadline, timeout);
+    } catch (err) {
+      if (ran) throw this.afterExpressionRan(err, timeout);
+      if (failureCode(err) !== FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT) throw err;
+      throw (await this.answers()) ? resultTimedOut(timeout) : noAnswer(timeout);
+    } finally {
+      this.releaseGroup(objectGroup);
+    }
+  }
+
+  /**
+   * The first request, given `timeout` to answer. Its own send timeout is
+   * longer, because an answer that lands after the call gave up still puts
+   * its result in `objectGroup`, which the call has already released. The
+   * group is released again when that answer arrives. An answer later than
+   * `LATE_ANSWER_WINDOW_MS` is dropped, and its result stays alive until the
+   * session closes.
+   */
+  private async evaluateRemote(
+    expression: string,
+    objectGroup: string,
+    timeout: number
+  ): Promise<RemoteResult> {
+    const request = this.send(
+      "Runtime.evaluate",
+      { expression, objectGroup, returnByValue: false, awaitPromise: true },
+      timeout + LATE_ANSWER_WINDOW_MS
+    ) as Promise<RemoteResult>;
+    const settled = await settleWithin(request, timeout);
+    if (settled.type === "value") return settled.value;
+    if (settled.type === "error") throw settled.cause;
+    request.then(
+      () => this.releaseGroup(objectGroup),
+      () => undefined
+    );
+    throw requestTimedOut("Runtime.evaluate");
+  }
+
+  private releaseGroup(objectGroup: string): void {
+    this.send("Runtime.releaseObjectGroup", { objectGroup }, 1000).catch(() => undefined);
+  }
+
+  /**
+   * Re-code a failure that came after the expression ran, so that neither
+   * the registry's self-heal nor the agent runs the expression a second time.
+   */
+  private afterExpressionRan(err: unknown, timeout: number): unknown {
+    const signal = err instanceof Error ? getFailureSignal(err) : undefined;
+    const code = signal?.error_code;
+    if (
+      code === FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT &&
+      signal?.failure_stage === "debugger_cdp_send"
+    ) {
+      return resultTimedOut(timeout);
+    }
+    if (
+      code === FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED ||
+      code === FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED
+    ) {
+      return evaluateError(
+        "The connection closed after the expression ran, before its result was read.",
+        FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED,
+        "network",
+        err as Error
+      );
+    }
+    if (code === FAILURE_CODES.JS_RUNTIME_PAUSED) {
+      const paused = this.pausedAt();
+      const where = paused?.location ? ` at ${paused.location}` : "";
+      const why = paused?.reason === "exception" ? "on an exception" : "at a breakpoint";
+      return new FailureError(
+        `The expression ran, but the JS runtime paused ${why}${where} before its result ` +
+          `was read. Resume the runtime there; do not run the expression again.`,
+        {
+          error_code: FAILURE_CODES.JS_RUNTIME_PAUSED,
+          error_kind: "unsupported",
+          failure_area: "tool_server",
+          failure_stage: "debugger_cdp_evaluate",
+        }
+      );
+    }
+    return err;
+  }
+
+  /**
+   * Whether `Runtime.releaseObjectGroup` is served. The answer is kept until a
+   * new execution context is created, as a runtime that is still starting can
+   * fail the probe and serve it a moment later. The probe gets the call's
+   * whole `timeout`, so a runtime busy running JS is waited for; one that
+   * never answers fails the call before the expression is sent.
+   */
+  private async canReleaseHandles(timeout: number): Promise<boolean> {
+    if (this.releasesHandles !== undefined) return this.releasesHandles;
+    try {
+      await this.send(
+        "Runtime.releaseObjectGroup",
+        { objectGroup: "argent-release-probe" },
+        timeout
+      );
+      this.releasesHandles = true;
+    } catch (err) {
+      if (failureCode(err) !== FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR) throw err;
+      this.releasesHandles = false;
+    }
+    return this.releasesHandles;
+  }
+
+  /** Whether the runtime answers a trivial evaluate, i.e. it is not frozen. */
+  private answers(): Promise<boolean> {
+    return this.send("Runtime.evaluate", { expression: "0" }, ANSWERS_TIMEOUT_MS).then(
+      () => true,
+      () => false
+    );
+  }
+
+  /** The value of an evaluate result: as is when primitive, else read in the app. */
+  private async readRemote(
+    result: RemoteObjectLike | undefined,
+    objectGroup: string,
+    deadline: number,
+    timeout: number
+  ): Promise<unknown> {
+    if (!result) return undefined;
+    if (result.type === "symbol") return result.description;
+    if (result.type === "function") throw unserializable("function");
+    if (!result.objectId) return result.value;
+    return this.settleRemote(result.objectId, objectGroup, deadline, timeout);
+  }
+
+  /**
+   * Resolve a remote object to its value. A non-thenable is read by value; a
+   * thenable is watched through a box object (see `scripts/evaluate-awaited`)
+   * that is polled until it settles or `deadline` passes.
+   */
+  private async settleRemote(
+    objectId: string,
+    objectGroup: string,
+    deadline: number,
+    timeout: number
+  ): Promise<unknown> {
+    const readBudget = () => Math.max(deadline - Date.now(), READ_GRACE_MS);
+
+    const box = (await this.callOn(objectId, objectGroup, watchIfThenable, false, readBudget()))
+      .objectId;
+    if (!box) {
+      return verdictValue(
+        (await this.callOn(objectId, objectGroup, readValue, true, readBudget())).value as
+          RemoteVerdict | undefined
+      );
+    }
+
+    const settleBy = Math.max(deadline, Date.now() + SETTLE_GRACE_MS);
+    let state = await this.readBoxState(box, readBudget(), timeout);
+    while (state === "pending") {
+      if (Date.now() >= settleBy) throw unsettled(timeout);
+      await sleep(Math.min(PROMISE_POLL_INTERVAL_MS, Math.max(1, settleBy - Date.now())));
+      state = await this.readBoxState(box, readBudget(), timeout);
+    }
+
+    if (state === "fulfilled") {
+      return verdictValue(
+        (await this.callOn(box, objectGroup, readBoxValue, true, readBudget())).value as
+          RemoteVerdict | undefined
+      );
+    }
+    const reason = (await this.callOn(box, objectGroup, readBoxError, true, readBudget())).value;
+    throw evaluateError(
+      `Promise rejected: ${String(reason)}`,
+      FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION
+    );
+  }
+
+  /**
+   * Read the box's `state` with `Runtime.getProperties`, which runs no script
+   * in the app. A paused runtime would never run the callbacks, so a pause
+   * this client heard of fails fast; it hears `Debugger.paused` only where it
+   * sent `Debugger.enable`, which the Chromium path does not. A slow answer is
+   * waited for until `budget` runs out.
+   */
+  private async readBoxState(
+    box: string,
+    budget: number,
+    timeout: number
+  ): Promise<SettleBox["state"]> {
+    if (this.paused) throw this.pausedError("the Promise's callbacks");
+    let props: { result?: { name: string; value?: RemoteObjectLike }[] };
+    try {
+      props = (await this.send(
+        "Runtime.getProperties",
+        { objectId: box, ownProperties: true },
+        budget
+      )) as typeof props;
+    } catch (err) {
+      const code = failureCode(err);
+      if (code === FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT) throw unsettled(timeout);
+      if (code === FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR) throw lostResult(err);
+      throw err;
+    }
+    const state = props.result?.find((p) => p.name === "state")?.value?.value;
+    if (state === "fulfilled" || state === "rejected") return state;
+    return "pending";
+  }
+
+  /**
+   * Run one of the `scripts/evaluate-awaited` functions in the app with `this`
+   * bound to `objectId`. The function's source is what ships, so it must not
+   * close over anything (see that module's header). The helpers catch their
+   * own errors, so `exceptionDetails` here is a fault in the inspector, not
+   * in the agent's expression, which has already run. A protocol error means
+   * `objectId` no longer resolves or the value could not be sent. Hermes does
+   * not answer a call on an `objectId` that no longer resolves, so there that
+   * case surfaces as a timeout.
+   */
+  private async callOn(
+    objectId: string,
+    objectGroup: string,
+    fn: (this: any) => unknown,
+    returnByValue: boolean,
+    timeout: number
+  ): Promise<RemoteObjectLike> {
+    let res: RemoteResult;
+    try {
+      res = (await this.send(
+        "Runtime.callFunctionOn",
+        { objectId, objectGroup, functionDeclaration: fn.toString(), returnByValue },
+        timeout
+      )) as RemoteResult;
+    } catch (err) {
+      throw failureCode(err) === FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR ? lostResult(err) : err;
+    }
+    if (res.exceptionDetails) {
+      throw evaluateError(
+        `The inspector failed while reading the expression's result, after the expression ` +
+          `ran: ${formatExceptionDetails(res.exceptionDetails)}. Do not run the expression again.`,
+        FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR
+      );
+    }
+    return res.result ?? {};
   }
 
   async addBinding(name: string): Promise<void> {
@@ -578,6 +1000,10 @@ export class CDPClient {
       };
 
       this.events.emit("paused", params);
+    }
+
+    if (method === "Runtime.executionContextCreated" && !this.neverReleases) {
+      this.releasesHandles = undefined;
     }
 
     if (method === "Debugger.resumed") {
