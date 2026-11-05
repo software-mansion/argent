@@ -494,6 +494,42 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
     expect(res.body.data.status).toBe("ok");
     expect(xcrunCalls()).toEqual([]);
   });
+
+  // A server started during the outage arms nothing, but an app launched under an
+  // earlier server's injection still dials this simulator's socket.
+  it.each(PRECHECKED_READS)(
+    "%s serves a connected app on a service created while the install was pending",
+    async (id, extra) => {
+      const device: DeviceInfo = { ...SIM, id: processScopedUdid("-1523-4000-8000-000000000004") };
+      pending.value = true;
+      const app = nativeApp();
+      const ref = nativeDevtoolsRef(device);
+      const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+      expect(api.isEnvSetup()).toBe(false);
+
+      const agent = net.createConnection(api.socketPath, () => {
+        agent.write(JSON.stringify({ type: "Control", payload: { bundleId: BUNDLE_ID } }) + "\n");
+      });
+      readline.createInterface({ input: agent }).on("line", (line) => {
+        const { type, payload } = JSON.parse(line);
+        if (type !== "ViewInspector") return;
+        const result = { screenFrame: { x: 0, y: 0, width: 1, height: 1 }, elements: [] };
+        agent.write(JSON.stringify({ type, payload: { id: payload.id, result } }) + "\n");
+      });
+      await vi.waitFor(() => expect(api.isConnected(BUNDLE_ID)).toBe(true));
+
+      execFileMock.mockClear();
+      const res = await request(app)
+        .post(`/tools/${id}`)
+        .send({ udid: device.id, bundleId: BUNDLE_ID, ...extra });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe("ok");
+      expect(xcrunCalls()).toEqual([]);
+      expect(api.getInitFailure()).toBeNull();
+      agent.destroy();
+    }
+  );
 });
 
 describe("native-profiler-start while Xcode's install is pending", () => {
