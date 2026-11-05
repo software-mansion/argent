@@ -339,6 +339,16 @@ describe("xcodeFirstLaunchPending", () => {
       expect(xcodeFirstLaunchPending()).toBe(false);
     });
 
+    it("with an absolute plist path that uses a shell variable", () => {
+      // With the != check a path read literally would look missing, which reads as pending.
+      plistPath = path.join(root, "Frameworks", "Info.plist");
+      fs.mkdirSync(path.dirname(plistPath));
+      installFramework("1051.55");
+      const wrapper = exactRuleWrapper("1051.55", path.join(root, "${FW}", "Info.plist"));
+      writeWrapper(wrapper.replace("#!/bin/bash\n", '#!/bin/bash\nFW="Frameworks"\n'));
+      expect(xcodeFirstLaunchPending()).toBe(false);
+    });
+
     it("with a relative plist path", () => {
       // With the != check a path read literally would look missing, which reads as pending.
       writeWrapper(exactRuleWrapper("1051.55", "relative/Info.plist"));
@@ -479,6 +489,17 @@ describe("xcodeFirstLaunchHint", () => {
 
 describe("xcodeInstallInstruction", () => {
   it("names the Xcode app and its own xcodebuild", () => {
+    expect(xcodeInstallInstruction()).toBe(
+      `open the Xcode at ${path.join(root, "Xcode.app")} once, ` +
+        `or run \`sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch\``
+    );
+  });
+
+  it.each([
+    ["with a trailing slash", () => `${devDir}/`],
+    ["as a relative path", () => path.relative(process.cwd(), devDir)],
+  ])("names the Xcode app for a Developer directory given %s", (_, developerDir) => {
+    process.env.DEVELOPER_DIR = developerDir();
     expect(xcodeInstallInstruction()).toBe(
       `open the Xcode at ${path.join(root, "Xcode.app")} once, ` +
         `or run \`sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch\``

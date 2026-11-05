@@ -237,7 +237,7 @@ export function startSimulatorWatcher(registry: Registry): {
         if (consecutiveTimeouts === 1) {
           process.stderr.write(
             `[simulator-watcher] ${err.message}; retrying with backoff until it does. ` +
-              `If Xcode was just updated, open Xcode once or run \`sudo xcodebuild -runFirstLaunch\`.\n`
+              `If Xcode was just updated, ${xcodeInstallInstruction()}.\n`
           );
         }
       }
