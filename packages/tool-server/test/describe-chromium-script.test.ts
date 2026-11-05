@@ -193,6 +193,7 @@ function el(opts: Opts = {}): MockElement {
   }
   // Backing fields read by the Element.prototype getAttribute/hasAttribute/
   // getBoundingClientRect methods defined above (the script reads them via the prototype).
+  node.__nodeType = 1;
   node.__attrs = opts.attrs ?? {};
   node.__rect = rect;
   node.__topLayer = opts.topLayer;
@@ -311,6 +312,14 @@ function run(
   }) as MockElement & Record<string, unknown>;
   if (rootChildren.length) (body as Record<string, unknown>).children = rootChildren;
   root.children = [body];
+  // Every element knows its parent, as in a real DOM, unless a fixture set one.
+  const linkParents = (n: Record<string, unknown>) => {
+    for (const k of (n.__children as Record<string, unknown>[]) ?? []) {
+      if (k.__parentNode === undefined) k.__parentNode = n;
+      linkParents(k);
+    }
+  };
+  linkParents(root);
 
   const g = globalThis as Record<string, unknown>;
   const saved: Record<string, unknown> = {
@@ -792,7 +801,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       child("b", "monthly"),
       child("span", "inner", {}, { "aria-label": "billed" }),
       child("img", "", { display: "inline-block" }, { alt: "now" }),
-      { nodeType: 3, nodeValue: "end" },
+      child("span", "kept", {}, { "aria-label": "  " }),
+      { nodeType: 3, nodeValue: " end" },
     ];
     const button = el({
       tag: "button",
@@ -800,7 +810,69 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       attrs: { "id": "btn", "aria-labelledby": "lbl" },
     });
     const { tree } = run([button, label]);
-    expect(findById(tree, "btn")!.label).toBe("Plan Pro monthly billed now end");
+    expect(findById(tree, "btn")!.label).toBe("Plan Pro monthly billed now kept end");
+  });
+
+  it("reads a hidden aria-labelledby target whole, and a target's own aria-label or alt", () => {
+    const child = (tag: string, text: string, style: Record<string, string> = {}, attrs = {}) =>
+      el({ tag, text, rect: BOX, style: { display: "inline", ...style }, attrs });
+    const labelOf = (
+      kids: unknown[],
+      opts: { tag?: string; style?: Record<string, string>; attrs?: Record<string, string> } = {},
+      wrapperAttrs?: Record<string, string>
+    ) => {
+      const label = el({
+        tag: opts.tag ?? "span",
+        rect: BOX,
+        style: { display: "inline", ...opts.style },
+        attrs: { id: "lbl", ...opts.attrs },
+      }) as MockElement & Record<string, unknown>;
+      label.childNodes = kids;
+      const target = wrapperAttrs
+        ? el({ rect: BOX, attrs: wrapperAttrs, children: [label] })
+        : label;
+      const button = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "btn", "aria-labelledby": "lbl" },
+      });
+      return findById(run([button, target]).tree, "btn")!.label;
+    };
+    const text = (nodeValue: string) => ({ nodeType: 3, nodeValue });
+    // A visibility:hidden tooltip: its children inherit visibility:hidden.
+    expect(
+      labelOf([text("Delete "), child("span", "item", { visibility: "hidden" })], {
+        style: { visibility: "hidden" },
+      })
+    ).toBe("Delete item");
+    // Under an aria-hidden ancestor, its own aria-hidden children count too.
+    expect(
+      labelOf(
+        [text("Keep "), child("b", "going", {}, { "aria-hidden": "true" })],
+        {},
+        {
+          "aria-hidden": "true",
+        }
+      )
+    ).toBe("Keep going");
+    // A display:none target: its display:none and script/noscript children part words.
+    expect(
+      labelOf(
+        [
+          text("a"),
+          child("span", "N", { display: "none" }),
+          text("b"),
+          child("script", "s = 1", { display: "none" }),
+          text("c"),
+          child("noscript", "NS"),
+          text("d"),
+        ],
+        { style: { display: "none" } }
+      )
+    ).toBe("a N b c d");
+    expect(labelOf([text("Visible")], { attrs: { "aria-label": "Real" } })).toBe("Real");
+    expect(labelOf([], { tag: "img", attrs: { alt: "Pic" } })).toBe("Pic");
+    expect(labelOf([text("Fallback")], { attrs: { "aria-label": "  " } })).toBe("Fallback");
   });
 
   it("reads a <br> under a display:none element of an aria-labelledby target as nothing", () => {
@@ -1615,7 +1687,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
 
   it("anchors through a cross-axis scroller unless its overscroll-behavior keeps the wheel", () => {
     // A horizontal carousel over the top of a vertical list that cuts the row.
-    const list = (overscroll: string) =>
+    const list = (overscroll: string, carousel: Opts = {}) =>
       el({
         rect: { x: 0, y: 0, w: 300, h: 200 },
         client: { left: 0, top: 0, width: 300, height: 200 },
@@ -1631,6 +1703,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
             scrollSize: { width: 600, height: 180 },
             style: { overflow: "auto", overscrollBehaviorY: overscroll },
             painted: { x: 0, y: 0, w: 300, h: 180 },
+            ...carousel,
           }),
           el({
             attrs: { id: "cut" },
@@ -1639,11 +1712,21 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
           }),
         ],
       });
-    const anchorFor = (overscroll: string) =>
-      findById(run([list(overscroll)]).tree, "cut")!.clipAnchors;
+    const anchorFor = (overscroll: string, carousel?: Opts) =>
+      findById(run([list(overscroll, carousel)]).tree, "cut")!.clipAnchors;
     expect(anchorFor("auto")).toEqual({ y: { x: 0.03, y: 0.02 } });
     expect(anchorFor("contain")).toEqual({ y: { x: 0.03, y: 0.18 } });
     expect(anchorFor("none")).toEqual({ y: { x: 0.03, y: 0.18 } });
+    // A scroll container that scrolls along neither axis keeps the wheel just the same.
+    const still = (overflowX: string) => ({
+      scrollSize: { width: 300, height: 180 },
+      style: { overflowX, overflowY: "auto", overscrollBehaviorY: "contain" },
+    });
+    expect(anchorFor("contain", still("hidden"))).toEqual({ y: { x: 0.03, y: 0.18 } });
+    expect(anchorFor("contain", still("auto"))).toEqual({ y: { x: 0.03, y: 0.18 } });
+    // overflow: clip makes no scroll container.
+    const clipped = { style: { overflow: "clip", overscrollBehaviorY: "contain" } };
+    expect(anchorFor("contain", clipped)).toEqual({ y: { x: 0.03, y: 0.02 } });
   });
 
   it("anchors no point whose wheel scrolls a scroller holding the cutter", () => {
@@ -1691,6 +1774,38 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       }),
     ]);
     expect(findById(tree, "card")!.clipAnchors).toEqual({ x: { x: 0.5, y: 0.425 } });
+  });
+
+  it("keeps a fallback anchor on screen for a cutter that runs past either side of it", () => {
+    // Carousels hanging 300px off the left and the right edge, each cutting its card.
+    const carousel = (x: number, card: Rect) =>
+      scroller([el({ attrs: { id: "card" }, rect: card })], {
+        rect: { x, y: 400, w: 400, h: 100 },
+        client: { left: 0, top: 0, width: 400, height: 100 },
+        offset: { width: 400, height: 100 },
+        scrollSize: { width: 1200, height: 100 },
+      });
+    const anchorOf = (c: MockElement) => findById(run([c]).tree, "card")!.clipAnchors;
+    expect(anchorOf(carousel(-300, { x: 50, y: 400, w: 200, h: 50 }))).toEqual({
+      x: { x: 0.05, y: 0.425 },
+    });
+    expect(anchorOf(carousel(900, { x: 850, y: 400, w: 200, h: 50 }))).toEqual({
+      x: { x: 0.95, y: 0.425 },
+    });
+    // And lists hanging off the top and the bottom edge.
+    const list = (y: number, card: Rect) =>
+      scroller([el({ attrs: { id: "card" }, rect: card })], {
+        rect: { x: 0, y, w: 300, h: 400 },
+        client: { left: 0, top: 0, width: 300, height: 400 },
+        offset: { width: 300, height: 400 },
+        scrollSize: { width: 300, height: 1200 },
+      });
+    expect(anchorOf(list(-300, { x: 0, y: 50, w: 300, h: 200 }))).toEqual({
+      y: { x: 0.15, y: 0.05 },
+    });
+    expect(anchorOf(list(900, { x: 0, y: 850, w: 300, h: 200 }))).toEqual({
+      y: { x: 0.15, y: 0.95 },
+    });
   });
 
   it("tries only on-screen points of a cutter whose window runs past the viewport", () => {

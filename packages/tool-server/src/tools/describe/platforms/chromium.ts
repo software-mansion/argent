@@ -173,19 +173,21 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return s.replace(WHITESPACE, " ").trim();
   }
 
-  // An aria-labelledby target's text (text and CDATA), read like Chrome's accessible
-  // name: a non-inline element or a <br> parts the words around it, a descendant's
-  // aria-label or an <img>'s alt stands in for its content, and script/style never
-  // count. A shown target leaves out its display:none, visibility:hidden and
-  // aria-hidden subtrees; a hidden one reads them all. Iterative: the target's depth
-  // has no MAX_DEPTH bound.
+  // An aria-labelledby target's text (text and CDATA), read by a subset of Chrome's
+  // accessible-name rules: an aria-label, or an <img>'s alt, stands in for an element's
+  // content, a non-inline element or a <br> parts the words around it, and script,
+  // style and noscript text never counts. A shown target leaves out its display:none,
+  // visibility:hidden and aria-hidden subtrees; a hidden one reads them all, and there
+  // a display:none or script-like element parts words. Embedded controls' values are
+  // not read. Iterative: the target's depth has no MAX_DEPTH bound.
   function labelText(root) {
-    let shown = true;
-    for (let n = root; n && getNodeType.call(n) === 1; n = getParentNode.call(n)) {
-      if (window.getComputedStyle(n).display === "none") {
-        shown = false;
-        break;
-      }
+    const own = altText(root);
+    if (own) return own;
+    let shown = window.getComputedStyle(root).visibility !== "hidden";
+    for (let n = root; shown && n && getNodeType.call(n) === 1; n = getParentNode.call(n)) {
+      const hiddenHere =
+        window.getComputedStyle(n).display === "none" || getAttr.call(n, "aria-hidden") === "true";
+      if (hiddenHere) shown = false;
     }
     let s = "";
     // Nodes, and SPACE where a non-inline element's content ends.
@@ -212,9 +214,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         s += " ";
         continue;
       }
-      const html = getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml";
-      const tag = getLocalName.call(node);
-      if (html && /^(script|style|template|noscript)$/.test(tag)) continue;
       const style = window.getComputedStyle(node);
       if (
         shown &&
@@ -224,19 +223,30 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       ) {
         continue;
       }
-      const label =
-        getAttr.call(node, "aria-label") || (html && tag === "img" && getAttr.call(node, "alt"));
-      if (label && label.trim()) {
-        s += " " + label + " ";
+      const alt = altText(node);
+      if (alt) {
+        s += " " + alt + " ";
         continue;
       }
-      if (style.display !== "inline" && style.display !== "none") {
+      const rawText =
+        getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml" &&
+        /^(script|style|noscript)$/.test(getLocalName.call(node));
+      if (style.display !== "inline" || (rawText && !shown)) {
         s += " ";
         stack.push(SPACE);
       }
-      pushChildren(node);
+      if (!rawText) pushChildren(node);
     }
     return s.replace(WHITESPACE, " ");
+  }
+
+  // An element's aria-label, or an <img>'s alt, when it has one that is not blank.
+  function altText(el) {
+    const img =
+      getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml" &&
+      getLocalName.call(el) === "img";
+    const t = getAttr.call(el, "aria-label") || (img && getAttr.call(el, "alt"));
+    return t && t.trim() ? t : null;
   }
 
   function isInteractive(el) {
@@ -349,8 +359,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // The scroller a wheel at (x, y) scrolls along an axis: the innermost on the
   // painted element's chain, the one Chrome latches to. Null where that is unknown:
-  // over a frame, whose own document may take the wheel, or past a scroller whose
-  // overscroll-behavior on the axis keeps the wheel from chaining out of it.
+  // over a frame, whose own document may take the wheel, or where a scroll container
+  // short of that scroller, scrollable or not, keeps the wheel with its
+  // overscroll-behavior on the axis.
   function wheelScroller(x, y, axis) {
     let hit = elementsAt(document, x, y)[0];
     for (let sr = hit && getShadowRoot.call(hit); sr; sr = getShadowRoot.call(hit)) {
@@ -359,17 +370,22 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       hit = deeper;
     }
     if (hit && /^(IFRAME|FRAME|EMBED|OBJECT)$/.test(htmlTag(hit))) return null;
+    const overscroll = axis === "sx" ? "overscrollBehaviorX" : "overscrollBehaviorY";
+    let scroller;
     for (let n = hit; n; ) {
-      if (chains.has(n)) {
+      if (scroller === undefined && chains.has(n)) {
         const chain = chains.get(n) || [];
-        const overscroll = axis === "sx" ? "overscrollBehaviorX" : "overscrollBehaviorY";
-        for (let i = chain.length - 1; i >= 0; i--) {
-          if (chain[i][axis]) return chain[i].el;
-          const ob = window.getComputedStyle(chain[i].el)[overscroll];
-          if (ob === "contain" || ob === "none") return null;
+        scroller = null;
+        for (let i = chain.length - 1; i >= 0 && !scroller; i--) {
+          if (chain[i][axis]) scroller = chain[i].el;
         }
-        return null;
+        if (!scroller) return null;
       }
+      if (n === scroller) return scroller;
+      const st = getNodeType.call(n) === 1 && window.getComputedStyle(n);
+      const contains = st && (st[overscroll] === "contain" || st[overscroll] === "none");
+      const clips = (o) => o !== "visible" && o !== "clip";
+      if (contains && (clips(st.overflowX) || clips(st.overflowY))) return null;
       const p = getAssignedSlot.call(n) || getParentNode.call(n);
       n = p && getNodeType.call(p) === 11 ? p.host : p;
     }
