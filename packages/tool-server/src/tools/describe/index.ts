@@ -179,7 +179,8 @@ with tap coordinates. When no dialog is present, it returns the foreground app's
 On a physical iOS device, launch-app \`com.apple.springboard\` first to read system dialogs.
 
 Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree, one
-line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
+line per element with its role, label/value/id, interactivity flags, an optional
+\`[overlaps ...]\` note, and frame. Frame coordinates
 are normalized [0,1] fractions of the screen / window width/height (not pixels), the same space as
 gesture-tap / gesture-swipe / gesture-pinch.
 
@@ -187,7 +188,9 @@ To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width /
 \`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
 can be applied to a line in isolation.
 The tree carries no z-order or occlusion information: an element listed at a point may be covered
-by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
+by an overlay (e.g. a toolbar over list rows). An element whose centre another labelled element
+partly covers carries \`[overlaps "<name>", ...]\`: check a screenshot before tapping it. An element
+wholly inside another one gets no note, so also check a screenshot when a tap lands unexpectedly.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS simulator only).
