@@ -203,7 +203,7 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 | `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                    |
 | `react-profiler-status`           | Check the profiler session state without side effects                         |
 | `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report              |
-| `react-profiler-renders`          | List mounted component instances with self durations from the live fiber tree |
+| `react-profiler-renders`          | List mounted instances and self durations from the fiber tree's top 30 levels |
 | `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                          |
 | `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                               |
 | `react-profiler-component-source` | Find a component's source file, line, and memoization status                  |
