@@ -185,16 +185,26 @@ describe("bootBrowser", () => {
     expect(args).not.toContain("about:blank");
   });
 
-  it("opens about:blank when the only non-flag argument is empty", async () => {
+  it("drops an empty argument, which Chromium would open as a second start page", async () => {
     installed.set(chrome!, "exec");
     await bootBrowser({ browser: "chrome", extraArgs: ["--headless=new", ""] });
-    expect(bootElectronAppMock.mock.calls[0]![0].extraArgs.slice(-1)).toEqual(["about:blank"]);
+    expect(bootElectronAppMock.mock.calls[0]![0].extraArgs.slice(-2)).toEqual([
+      "--headless=new",
+      "about:blank",
+    ]);
   });
 
   it("falls back to a later install location", async () => {
     installed.set(chromeFallback!, "exec");
     await bootBrowser({ browser: "chrome" });
     expect(bootElectronAppMock.mock.calls[0]![0].appPath).toBe(chromeFallback);
+  });
+
+  it("prefers the first install location when the browser is in several", async () => {
+    installed.set(chrome!, "exec");
+    installed.set(chromeFallback!, "exec");
+    await bootBrowser({ browser: "chrome" });
+    expect(bootElectronAppMock.mock.calls[0]![0].appPath).toBe(chrome);
   });
 
   it("skips a directory or non-executable file in an earlier location", async () => {
@@ -287,6 +297,11 @@ describe("bootBrowser", () => {
       made.push(dir);
       return dir;
     };
+    // Older than the relaunch grace, which spares a profile its browser just left.
+    const settle = () => {
+      const past = new Date(Date.now() - 60_000);
+      for (const d of made) fs.utimesSync(d, past, past);
+    };
     beforeEach(() => {
       fakeHome.dir = fs.mkdtempSync(path.join(os.tmpdir(), "sweephome-"));
     });
@@ -317,15 +332,19 @@ describe("bootBrowser", () => {
         path.join(fakeHome.dir, "snap", "brave", "common")
       );
 
+      settle();
+      const justLeft = make("argent-browser-justleft", DEAD_PID);
+
       installed.set(chrome!, "exec");
       await bootBrowser({ browser: "chrome" });
       const gone = [dead, crashed, emptyPid, groupPid, hostOnlyLock, otherSnap];
       await vi.waitFor(() => expect(gone.filter((d) => fs.existsSync(d))).toEqual([]));
-      expect([live, locked, noPidFile, foreign].filter((d) => fs.existsSync(d))).toEqual([
+      expect([live, locked, noPidFile, foreign, justLeft].filter((d) => fs.existsSync(d))).toEqual([
         live,
         locked,
         noPidFile,
         foreign,
+        justLeft,
       ]);
     });
 
@@ -333,6 +352,7 @@ describe("bootBrowser", () => {
       const locked = make("argent-browser-winlocked", DEAD_PID);
       fs.writeFileSync(path.join(locked, "lockfile"), "");
       const dead = make("argent-browser-windead", DEAD_PID);
+      settle();
       Object.defineProperty(process, "platform", { value: "win32" });
       process.env["LOCALAPPDATA"] = "C:\\L";
       installed.set(browserExecutableCandidates("chrome", "win32")[0]!, "exec");

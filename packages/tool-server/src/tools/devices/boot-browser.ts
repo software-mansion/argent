@@ -74,7 +74,10 @@ const PROFILE_PREFIX = "argent-browser-";
  * browser's, so the sweep spares a profile that is still booting.
  */
 const PID_FILE = "argent-browser.pid";
-/** A relaunch (chrome://restart, an update) ends our process and starts a new browser on the profile. */
+/**
+ * A relaunch (chrome://restart, an update) ends our process and starts a new
+ * browser on the profile, which takes the lock only after a moment.
+ */
 const RELAUNCH_GRACE_MS = 5000;
 
 /** 0 and negative pids name process groups, which a kill(pid, 0) probe always reaches. */
@@ -154,12 +157,16 @@ function removeStaleProfiles(): void {
   });
   for (const dir of dirs) {
     let pid: number;
+    let mtimeMs: number;
     try {
       pid = Number(fs.readFileSync(path.join(dir, PID_FILE), "utf8"));
+      ({ mtimeMs } = fs.statSync(dir));
     } catch {
-      continue; // not ours
+      continue; // not ours, or already gone
     }
-    if (!holderAlive(pid) && !profileLocked(dir)) {
+    // A browser exiting deletes its lock, so a fresh mtime may be a relaunch.
+    const settled = Date.now() - mtimeMs >= RELAUNCH_GRACE_MS;
+    if (settled && !holderAlive(pid) && !profileLocked(dir)) {
       fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => {});
     }
   }
@@ -217,10 +224,10 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     );
   }
 
-  const extraArgs = options.extraArgs ?? [];
-  // Chromium reads every non-empty, non-flag argument as a start URL, and headless mode
-  // exits on more than one, so about:blank is only the default.
-  const hasStartUrl = extraArgs.some((a) => a !== "" && !a.startsWith("-"));
+  // Chromium reads every non-flag argument, an empty one too, as a start URL,
+  // and headless mode exits on more than one, so about:blank is only the default.
+  const extraArgs = (options.extraArgs ?? []).filter((a) => a !== "");
+  const hasStartUrl = extraArgs.some((a) => !a.startsWith("-"));
   const snap = snapName(executable);
   const root = snap ? path.join(os.homedir(), "snap", snap, "common") : os.tmpdir();
   fs.mkdirSync(root, { recursive: true });

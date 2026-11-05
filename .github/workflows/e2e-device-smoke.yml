@@ -45,6 +45,9 @@ on:
       - "packages/tool-server/src/blueprints/simulator-server.ts"
       - "packages/tool-server/src/blueprints/chromium-cdp.ts"
       - "packages/tool-server/src/utils/simulator-client.ts"
+      # On every fixed-port Chromium boot path.
+      - "packages/tool-server/src/utils/free-port.ts"
+      - "packages/tool-server/src/chromium-server/cdp-session.ts"
       - "packages/tool-server/test/fixtures/electron-smoke-app/**"
       - "scripts/e2e/drive-device.sh"
       - ".github/workflows/e2e-device-smoke.yml"

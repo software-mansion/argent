@@ -132,7 +132,7 @@ const zodSchema = z.object({
     .max(900_000)
     .optional()
     .describe(
-      "Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega<flag:harmonyos>, 180000 (3 min) on HarmonyOS, where with `force` it spans the shutdown as well as the boot</flag:harmonyos>. Clamped to [30s, 15min]. Ignored on iOS."
+      "Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega<flag:harmonyos>, 180000 (3 min) on HarmonyOS, where with `force` it spans the shutdown as well as the boot</flag:harmonyos>. Clamped to [30s, 15min]. Ignored on iOS, Electron and browsers."
     ),
   force: z
     .boolean()
