@@ -12,8 +12,9 @@ const CORE_SIMULATOR_INFO_PLIST =
   "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/Info.plist";
 
 // A Simulator.app built against an older CoreSimulator than the installed one
-// (e.g. Xcode 16.4 selected after an Xcode 27 install) aborts up to ~1.7 s into
-// every launch, popping a "Simulator quit unexpectedly" dialog each time.
+// (e.g. Xcode 16.4 selected after an Xcode 27 install) aborts up to ~1.7 s after
+// launch while a simulator is booted, popping a "Simulator quit unexpectedly"
+// dialog each time.
 const LAUNCH_WATCH_MS = 5_000;
 const LAUNCH_POLL_MS = 250;
 
@@ -73,19 +74,24 @@ async function launchKey(simulatorApp: string): Promise<string> {
 // a launchd-started server may be) it escapes non-ASCII bytes instead.
 const comparablePath = (p: string) => p.normalize("NFC").toLowerCase();
 
-async function isRunning(executable: string): Promise<boolean> {
+async function runningExecutables(): Promise<string[]> {
   // Without -a: another user's instance of the same app is not this launch.
   const { stdout } = await execFileAsync(PS_BIN, ["-xo", "comm="], {
     timeout: 5_000,
     env: { ...process.env, LC_ALL: "en_US.UTF-8" },
   });
-  const wanted = comparablePath(executable);
-  return stdout.split("\n").some((line) => comparablePath(line.trim()) === wanted);
+  return stdout.split("\n").map((line) => comparablePath(line.trim()));
 }
 
+// Every Simulator.app copy shares one bundle id, so while any of them runs,
+// `open -a` of another copy hands off to it and the new process exits at once.
+const isSimulatorApp = (executable: string) =>
+  executable.endsWith(".app/contents/macos/simulator");
+
 async function survivesLaunch(executable: string): Promise<boolean> {
+  const wanted = comparablePath(executable);
   for (let waited = 0; ; waited += LAUNCH_POLL_MS) {
-    if (!(await isRunning(executable))) return false;
+    if (!(await runningExecutables()).includes(wanted)) return false;
     if (waited >= LAUNCH_WATCH_MS) return true;
     await new Promise((resolve) => setTimeout(resolve, LAUNCH_POLL_MS));
   }
@@ -95,9 +101,9 @@ async function survivesLaunch(executable: string): Promise<boolean> {
  * Runs `launch` (which opens `simulatorApp`) unless this app is on record as
  * crashing at launch. The first launch of each app/CoreSimulator build pair is
  * watched for {@link LAUNCH_WATCH_MS}, and an app whose process is gone by then
- * is recorded as crashing. A launch that only activates an instance already
- * running is not watched. Records live in `~/.argent/simulator-app-launch.json`;
- * delete it to retry. Returns false when the app is on record as crashing at
+ * is recorded as crashing. A launch while any Simulator.app is already running
+ * only activates that instance, so it is not watched. Records live in
+ * `~/.argent/simulator-app-launch.json`; delete it to retry. Returns false when the app is on record as crashing at
  * launch: the launch was skipped, or this one has just been recorded so.
  */
 export function launchSimulatorApp(
@@ -113,7 +119,11 @@ export function launchSimulatorApp(
     const verdict = loadVerdicts()[key];
     if (verdict === "crashes") return false;
     const executable = path.join(simulatorApp, "Contents", "MacOS", "Simulator");
-    const watch = verdict !== "runs" && !(await isRunning(executable).catch(() => true));
+    const watch =
+      verdict !== "runs" &&
+      !(await runningExecutables()
+        .then((running) => running.some(isSimulatorApp))
+        .catch(() => true));
     await launch();
     if (!watch) return true;
     const runs = await survivesLaunch(executable).catch(() => null);

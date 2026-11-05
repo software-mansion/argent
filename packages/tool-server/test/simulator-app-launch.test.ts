@@ -226,13 +226,27 @@ describe("launchSimulatorApp", () => {
   });
 
   it("does not mistake another Simulator.app for the launched one", async () => {
-    psOthers = [
-      "/Applications/Xcode-26.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator",
-      `/Volumes/Backup${EXECUTABLE}`,
-    ];
+    launch.mockImplementation(async () => {
+      appRunning = false;
+      psOthers = [
+        "/Applications/Xcode-26.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator",
+        `/Volumes/Backup${EXECUTABLE}`,
+      ];
+    });
 
     await run();
     expect(verdicts()).toEqual({ [`${APP} 1042.1 / CoreSimulator 1166`]: "crashes" });
+  });
+
+  it.each([
+    "/Applications/Xcode-26.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator",
+    `/Volumes/Backup${EXECUTABLE}`,
+  ])("does not judge a launch while another Simulator.app runs: %s", async (other) => {
+    psOthers = [other];
+
+    await expect(run()).resolves.toBe(true);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(path.join(home, ".argent", "simulator-app-launch.json"))).toBe(false);
   });
 
   it("does not take another user's instance for the launched one", async () => {
