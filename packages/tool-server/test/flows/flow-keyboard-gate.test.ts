@@ -19,9 +19,9 @@ function makeRegistry(invoke: (id: string, args: unknown) => Promise<unknown>) {
 }
 
 async function writeFlow(name: string, yaml: string): Promise<string> {
-  const flowsDir = nodePath.join(PROJECT_ROOT, ".argent", "flows");
-  const file = nodePath.join(flowsDir, `${name}.yaml`);
-  await fs.mkdir(flowsDir, { recursive: true });
+  const e2eDir = nodePath.join(PROJECT_ROOT, ".argent", "e2e");
+  const file = nodePath.join(e2eDir, `${name}.yaml`);
+  await fs.mkdir(e2eDir, { recursive: true });
   await fs.writeFile(file, yaml, "utf8");
   return file;
 }
@@ -66,7 +66,7 @@ async function runGated(
       {
         name,
         project_root: PROJECT_ROOT,
-        flow_file: flowFile,
+        e2e_test_file: flowFile,
         device: "00000000-0000-0000-0000-0000000000ab",
       }
     )
@@ -155,7 +155,7 @@ describe("recording a keyboard step", () => {
 
     const finished = await finish("rec-unlanded");
     expect(finished.message).toBe(
-      'Finished recording "rec-unlanded" flow (1 steps) — 1 step recorded text that did not ' +
+      'Finished recording "rec-unlanded" e2e test (1 steps) — 1 step recorded text that did not ' +
         "land; read `summary` before converting or replaying"
     );
     expect(finished.summary).toEqual([
@@ -168,9 +168,9 @@ describe("recording a keyboard step", () => {
     ["verified", { typed: "display", keys: 7, verified: true }],
     ["unchecked", { typed: "display", keys: 7 }],
   ])("does not warn on a %s step", async (name, result) => {
-    expect(await record(`rec-${name}`, result)).toBe(`Step added to "rec-${name}" flow`);
+    expect(await record(`rec-${name}`, result)).toBe(`Step added to "rec-${name}" e2e test`);
     expect((await finish(`rec-${name}`)).message).toBe(
-      `Finished recording "rec-${name}" flow (1 steps)`
+      `Finished recording "rec-${name}" e2e test (1 steps)`
     );
   });
 });

@@ -12,36 +12,53 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 
 ## Devices and apps
 
-| Tool                         | Description                                                                                   |
-| ---------------------------- | --------------------------------------------------------------------------------------------- |
-| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, and Vega (Fire TV) devices |
-| `boot-device`                | Boot a simulator, emulator, or Vega Virtual Device, or spawn an Electron app                  |
-| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                      |
-| `restart-app`                | Terminate then relaunch an app                                                                |
-| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                            |
-| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                        |
-| `open-url`                   | Open a URL or URL scheme on the device                                                        |
-| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                 |
-| `rotate`                     | Set the device orientation to portrait or either landscape                                    |
-| `fold`                       | Fold or unfold a foldable iOS simulator to a posture or a hinge angle                         |
-| `shake`                      | Shake the device                                                                              |
-| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                 |
-| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                            |
-| `stop-simulator-server`      | Stop the transport session for one device and free its resources                              |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons              |
-| `stop-metro`                 | Stop the Metro bundler listening on a given port                                              |
+| Tool                         | Description                                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `list-devices`               | List iOS simulators, Android emulators and devices, Chromium apps, Vega (Fire TV) devices, and HarmonyOS phones and emulators |
+| `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, or spawn an Electron app                              |
+| `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                      |
+| `restart-app`                | Terminate then relaunch an app                                                                                                |
+| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                                                            |
+| `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                        |
+| `open-url`                   | Open a URL or URL scheme on the device                                                                                        |
+| `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                 |
+| `rotate`                     | Set the device orientation to portrait or either landscape                                                                    |
+| `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                     |
+| `shake`                      | Shake the device                                                                                                              |
+| `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                 |
+| `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                            |
+| `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                              |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, native network capture                      |
+| `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                              |
 
 `launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
 
-Argent drives a foldable iOS simulator, for example the iPhone Duo. `list-devices` marks it with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
+`reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
+
+- `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS).
+- `bundleId` does not match the bundle id in the `.app`, the package name in the `.apk` or the bundle name in the `.hap`. On a remote simulator, Argent does not compare the bundle id.
+
+Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
 - Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. The panel that shows the UI is the active panel.
 - All tools use the active panel. This is also true after a fold made outside Argent.
 - The coordinates and the screenshot size change with the panel.
+- `fold` returns when the device accepts input again.
+
+On an iOS simulator:
+
 - A video keeps the size of the panel where the recording started. Argent keeps the proportions of the other panel and adds black bars.
 - A fold between two angles that are not 0 or 180 can keep the current panel. To change panels, fold to `closed` or `open`.
 - Unfolded, the UI is landscape. `rotate` sets the orientation of the device, not of the UI. `Portrait` gives a landscape UI.
 - If Argent cannot find the active panel, it uses the cover panel. The tool result then has a warning.
+
+On an Android emulator:
+
+- The result gives `deviceState` (`CLOSED`, `HALF_OPENED` or `OPENED`) and the matching `posture`.
+- Argent dismisses a lock screen that the fold to closed shows, if it has no PIN or password.
+- The result has a warning if the screen is off or the lock screen shows after the fold.
+- On a generic foldable profile, closed shows only the left part of the display, and `describe` frames do not match taps. Use a Pixel Fold profile to test the cover panel.
+- A physical device and an emulator without a hinge reject the call.
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
@@ -75,6 +92,15 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `screen-recording-start` | Start recording the screen to an h264 mp4                       |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                       |
 
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
+
+Through the MCP server, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
+
+- Argent waits at most 15 seconds for the screenshot and the element tree together. If a capture takes longer, the result does not include it.
+- Argent does not send a capture call again after a timeout.
+
+Call `screenshot` or `describe` to read the screen again.
+
 ### Typed text on Android
 
 On an Android phone or tablet, `keyboard` reads the focused field before and after it types. Android sends the text as one burst of key events. A field that redraws on each keystroke can drop part of that burst, and `adb` still reports success.
@@ -96,7 +122,7 @@ The result carries `verified`:
 - Focus moves to a different field.
 - The contents of the field fit both a full and a partial landing. A field that formats a phone number is an example.
 
-A `false` value stops a `run-sequence` at that step. It also fails a flow `type` step, a flow `tool: keyboard` step and a flow `tool: run-sequence` step that holds one. Argent does not press Enter after a failed `type` step. `flow-add-step` records such a `keyboard` step with a warning, and `flow-finish-recording` repeats it.
+A `false` value stops a `run-sequence` at that step. It also fails an e2e `type` step, an e2e `tool: keyboard` step and an e2e `tool: run-sequence` step that holds one. Argent does not press Enter after a failed `type` step. `e2e-add-step` records such a `keyboard` step with a warning, and `e2e-finish-recording` repeats it.
 
 ## JavaScript runtime debugging
 
@@ -114,15 +140,75 @@ A `false` value stops a `run-sequence` at that step. It also fails a flow `type`
 
 ## Native devtools
 
-| Tool                                     | Description                                                           |
-| ---------------------------------------- | --------------------------------------------------------------------- |
-| `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared |
-| `native-describe-screen`                 | Read the app's native accessibility screen description                |
-| `native-full-hierarchy`                  | Get the complete UIKit view tree                                      |
-| `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`    |
-| `native-view-at-point`                   | Inspect the deepest visible view at a native window point             |
-| `native-user-interactable-view-at-point` | Inspect the deepest view at a point that would receive touch input    |
-| `native-network-logs`                    | Retrieve requests captured at the native `NSURLProtocol` level        |
+| Tool                                     | Description                                                                             |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared (iOS)             |
+| `native-describe-screen`                 | Read the app's native accessibility screen description                                  |
+| `native-full-hierarchy`                  | Get the complete UIKit view tree                                                        |
+| `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`                      |
+| `native-view-at-point`                   | Inspect the deepest visible view at a native window point                               |
+| `native-user-interactable-view-at-point` | Inspect the deepest view at a point that would receive touch input                      |
+| `native-network-logs`                    | Read native HTTP requests on iOS and Android, or stop native network capture on Android |
+
+### Native network capture on Android
+
+On Android, `native-network-logs` reads the OkHttp traffic of a debuggable app. The device must run Android 8.0 or later. Argent captures all OkHttp requests only on Android 9 or later. On Android 8.0 and 8.1, Argent captures only the requests of the React Native networking client and of Fresco. In an app without React Native, Argent captures no requests, and the capture state is `unavailable`. The app must run as `arm64-v8a` or `x86_64`. Argent attaches an in-app agent to the running app.
+
+To capture a request:
+
+1. Call `native-network-logs` with the serial of the device and the package name of the app. The first call usually returns `armed: false`.
+2. Call `native-network-logs` again until `armed` is `true`.
+3. Do the action that sends the request again.
+4. Call `native-network-logs` again to read the list of requests.
+
+| Parameter  | Effect on Android                                                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`     | The serial of the device                                                                                                               |
+| `bundleId` | The package name of the app                                                                                                            |
+| `port`     | The Metro port. Argent removes the traffic to this port on a local address from the list. The default is the Metro port of the device. |
+| `limit`    | The maximum number of requests in the list. Argent returns the most recent requests, oldest first. The default is 50.                  |
+| `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                                |
+| `stop`     | Stop native network capture for this app. The capture of a different app continues.                                                    |
+
+The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `total` and `requests`. The `capture` field and the `header` line show the state of the capture. The `capture` field is absent when `armed` is `false`. The `captureDetail` field contains the detail that the in-app agent sent with the state. The `header` line shows this detail too. These are the states:
+
+| State       | Meaning                                                                                                                            |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| active      | Argent captures the OkHttp requests of the app. If Argent captures only some requests, the `header` line gives the reason.         |
+| waiting     | The app did not load OkHttp yet. The capture starts when the app loads it.                                                         |
+| unavailable | The in-app agent cannot capture in this process, for example because R8 fully minified OkHttp. The `header` line gives the reason. |
+
+Each request has an ID with the format `android-<4 hex digits>-<number>`, for example `android-3f9a-12`. An ID is valid only in the tool-server that listed it. An ID is not valid after `native-network-logs` with `stop: true` or `stop-all-simulator-servers` stops the capture, or after the tool-server stops. Give the ID to `view-network-request-details` together with an id of the same device. This needs no debugger connection. The details contain these items:
+
+- The request headers that went on the wire, for example `Cookie` and `User-Agent`. When Argent knows only the headers that the app set, the details say so.
+- Each redirect with the request headers that went on the wire for it and the headers of its response, for example `Location`.
+- The final URL of the response.
+- The request body and the response body.
+
+The details do not contain an initiator.
+
+Only the in-app agent that Argent attached can report requests to Argent.
+
+While native network capture is on for an app, these tools tell you:
+
+| Tool                                            | What it reports                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `launch-app`, `restart-app`                     | Argent attaches the in-app agent to the new process. The tool waits until the capture is ready, for at most 5 seconds. If the capture is not ready after this time, Argent reads the reason from the log of the device. This step can add 3 seconds when adb does not answer. The `networkCapture` field tells if Argent attached it. If Argent did not attach it, the field gives the reason. |
+| `e2e-execute`                                   | A `launch` step uses `restart-app`. The report shows the `networkCapture` note as a `warning` on the first launch of the app, and again when the note changes. A new pid alone is not a change.                                                                                                                                                                                                |
+| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the device with native network capture on.                                                                                                                                                                                                                                                                                              |
+
+A process of the app can also start in a different way, for example from a launcher tap, from a link or after a crash. The next call of `native-network-logs` attaches the in-app agent to this process.
+
+Native network capture stays on until `native-network-logs` with `stop: true` stops it for the app, or `stop-all-simulator-servers` stops the services of the device. After that, call `restart-app` to start the app without the in-app agent. See [Network inspection](/docs/features/network) for the limits.
+
+With `stop: true`, `native-network-logs` does not list requests. The result contains `status`, `stopped` and `message`:
+
+- `stopped` is `true` when native network capture was on for the app. Argent removes the session file and the files of the in-app agent from the data directory of the app. Argent also removes the `adb reverse` tunnel of the app.
+- `stopped` is `false` when native network capture was not on for the app. Argent does not start native network capture for the app.
+
+The in-app agent stays in the current process of the app until this process ends. The `message` field tells you to call `restart-app`. After the stop, `launch-app` and `restart-app` do not attach the in-app agent. The next call of `native-network-logs` without `stop` starts native network capture again.
+
+On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`. The native devtools of iOS cannot stop network capture. On iOS, network capture stays on for the app until `stop-all-simulator-servers` stops the services of the device and the app restarts.
 
 ## Chromium and Electron
 
@@ -153,17 +239,31 @@ A `false` value stops a `run-sequence` at that step. It also fails a flow `type`
 | `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
 
-## Flows
+While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
 
-| Tool                     | Description                                                       |
-| ------------------------ | ----------------------------------------------------------------- |
-| `flow-start-recording`   | Start recording a new flow, resetting `.argent/flows/<name>.yaml` |
-| `flow-add-step`          | Execute a tool call and record it as a step in the open recording |
-| `flow-add-echo`          | Record an echo step that prints a message during replay           |
-| `flow-add-script`        | Run a local `.mjs` file and add it to the open recording          |
-| `flow-finish-recording`  | Finish the recording and write the flow to disk                   |
-| `flow-execute`           | Run a saved flow                                                  |
-| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it           |
+When two or more devices use one Metro, `react-profiler-start` takes the `logicalDeviceId` of Metro, not the device id. Interaction tools take the device id. Thus Argent finds the device of the React profile:
+
+1. The app writes a marker line to the device log.
+2. Argent reads the logs of the connected Android devices and the booted iOS simulators.
+3. The device whose log contains the marker is the device of the React profile.
+
+When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
+
+<a id="flows" />
+
+## E2E
+
+The old `flow-*` names, for example `flow-execute`, still call these tools. See [Record and replay e2e tests](/docs/features/e2e).
+
+| Tool                    | Description                                                         |
+| ----------------------- | ------------------------------------------------------------------- |
+| `e2e-start-recording`   | Start recording a new e2e test, resetting `.argent/e2e/<name>.yaml` |
+| `e2e-add-step`          | Execute a tool call and record it as a step in the open recording   |
+| `e2e-add-echo`          | Record an echo step that prints a message during replay             |
+| `e2e-add-script`        | Run a local `.mjs` file and add it to the open recording            |
+| `e2e-finish-recording`  | Finish the recording and write the e2e test to disk                 |
+| `e2e-execute`           | Run a saved e2e test                                                |
+| `e2e-read-prerequisite` | Read the execution prerequisite of an e2e test without running it   |
 
 ## Design variants
 
@@ -183,6 +283,8 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 | `dismiss-update`        | Silence update reminders for a number of hours             |
 
 ## Footnotes
+
+Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
 
 `terminate-app`, `ui-tree`, `foreground-app` and `fill` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 

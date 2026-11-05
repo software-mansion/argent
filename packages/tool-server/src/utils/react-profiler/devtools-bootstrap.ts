@@ -3,7 +3,7 @@
  * the agent-facing message for each failure reason.
  */
 
-export type BootstrapReason =
+type BootstrapReason =
   | "already-attached"
   | "bootstrapped"
   | "no-hook"
