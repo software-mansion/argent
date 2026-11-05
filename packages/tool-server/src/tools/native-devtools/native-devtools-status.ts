@@ -60,7 +60,7 @@ export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   // verbatim (pinned by native-devtools-status.test.ts): the description must stay
   // a plain literal for scripts/extract-tools.mjs to read statically.
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
-Use when you need to verify native devtools readiness: call this before app-scoped native hierarchy tools or native-network-logs.
+Use when verifying readiness on iOS, before app-scoped native hierarchy tools or native-network-logs.
 
 Returns { envSetup, appRunning, connected, requiresRestart, state, message, nextLaunchWillBeInjected, injectable }:
 - envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment

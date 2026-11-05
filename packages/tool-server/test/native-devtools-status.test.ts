@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FailureError, FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { FailureError, FAILURE_CODES, Registry, getFailureSignal } from "@argent/registry";
 import {
   buildAppStateMessage,
   isInjectableBundleId,
@@ -31,9 +31,11 @@ import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-de
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
 import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
-import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
+
+const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
 function makeNativeApi(options: {
   envSetup?: boolean;
