@@ -421,6 +421,7 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter under an unwritable ~/.arge
     expect(w.hasFile()).toBe(false);
     expect(w.write(makeEntry(0)).marker).toBe("[L:0]");
     expect(w.getStats().totalEntries).toBe(1);
+    expect(w.getStats().fileSizeBytes).toBe(0);
     expect(w.readAll()).toEqual([]);
     w.close();
   });

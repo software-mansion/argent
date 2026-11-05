@@ -120,9 +120,9 @@ export class LogFileWriter {
     if (this.ready && this.fd !== null) {
       const buf = Buffer.from(line);
       fs.writeSync(this.fd, buf);
+      this.bytesWritten += buf.length;
     }
 
-    this.bytesWritten += Buffer.byteLength(line);
     this.entryCount++;
 
     this.levelCounts[entry.level] = (this.levelCounts[entry.level] || 0) + 1;
