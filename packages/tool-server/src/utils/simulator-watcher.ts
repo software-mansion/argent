@@ -110,7 +110,7 @@ export function startSimulatorWatcher(registry: Registry): {
    * install would wait out what is left of it.
    */
   function simctlWouldStartInstall(): boolean {
-    if (!xcodeFirstLaunchPending()) {
+    if (!xcodeFirstLaunchPending("simctl")) {
       firstLaunchReported = false;
       return false;
     }

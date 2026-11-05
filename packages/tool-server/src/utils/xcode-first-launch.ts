@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 
 /**
- * Xcode's `simctl` is a shell wrapper. It reads the installed CoreSimulator
+ * Xcode's `simctl` and `devicectl` are shell wrappers. Each reads the installed
  * framework's `CFBundleVersion`, compares it with an `EXPECTED_VERSION`, and on
  * a mismatch runs `xcodebuild -runFirstLaunch` before exec'ing the real binary.
  * After an Xcode update that install needs an administrator password, and run
@@ -15,6 +15,13 @@ import { execFileSync } from "node:child_process";
  * wrapper reads the plist with `PlistBuddy`, which takes XML and binary plists
  * alike. This module reads an XML plist itself and a binary one with `plutil`.
  */
+export type XcodeWrapper = "simctl" | "devicectl";
+
+/** The devices each wrapper controls. */
+const WRAPPER_DEVICES: Record<XcodeWrapper, string> = {
+  simctl: "local iOS simulators",
+  devicectl: "physical iPhones",
+};
 
 /** Where an Xcode app bundle keeps its developer directory. */
 const BUNDLED_DEVELOPER_DIR = path.join("/Contents", "Developer");
@@ -46,21 +53,25 @@ export function xcodeInstallInstruction(): string {
 }
 
 /**
- * What the agent is told while `simctl` would start the install. It names the
- * Xcode whose wrapper was read: that wrapper runs its own Xcode's `xcodebuild`,
+ * What the agent is told while `wrappers` would start the install. It names the
+ * Xcode whose wrappers were read: a wrapper runs its own Xcode's `xcodebuild`,
  * while a plain `sudo xcodebuild` runs the one `xcode-select` points at.
  */
-export function xcodeFirstLaunchHint(): string {
+export function xcodeFirstLaunchHint(wrappers: readonly XcodeWrapper[]): string {
   const { xcode, xcodebuild } = activeXcode();
+  const names = wrappers.map((wrapper) => `\`${wrapper}\``);
+  const commands = wrappers.map((wrapper) => `\`xcrun ${wrapper}\``);
   return (
     (xcode ? `The Xcode at ${xcode}` : "Xcode") +
     " has not finished installing its system components since it was installed or updated. " +
-    "Until it has, Xcode's `simctl` waits for an administrator password on every call, so " +
-    "`list-devices` does not show local iOS simulators. " +
-    "Tools that need `simctl` fail until then. " +
+    `Until it has, Xcode's ${names.join(" and ")} ${wrappers.length === 1 ? "waits" : "wait"} ` +
+    "for an administrator password on every call, so `list-devices` does not show " +
+    `${wrappers.map((wrapper) => WRAPPER_DEVICES[wrapper]).join(" or ")}. ` +
+    `Tools that need ${names.join(" or ")} fail until then. ` +
     `Ask the user to open ${xcode ? "that Xcode" : "Xcode"} once and let it install the ` +
     `components, or to run \`sudo ${xcodebuild} -runFirstLaunch\`, then retry. ` +
-    "Do not run that command or `xcrun simctl` yourself."
+    `Do not run that command${commands.length === 1 ? " or " : ", "}${commands.join(" or ")} ` +
+    "yourself."
   );
 }
 
@@ -109,11 +120,11 @@ interface WrapperCheck {
   expected: string;
   plistPath: string;
   /**
-   * The two checks Xcode's `simctl` has shipped with. Both run the install for
-   * an older framework. For a missing one `PlistBuddy` prints an error instead
-   * of a version: the `!=` check (Xcode 26) sees a mismatch and runs it, the
-   * `version_is_older` check (Xcode 27) sorts the text after any version and
-   * does not.
+   * The two checks Xcode has shipped with. Both run the install for an older
+   * framework. For a missing one `PlistBuddy` prints an error instead of a
+   * version: the `!=` check (Xcode 26's `simctl`, `devicectl`) sees a mismatch
+   * and runs it, the `version_is_older` check (Xcode 27's `simctl`) sorts the
+   * text after any version and does not.
    */
   rule: "older" | "different";
 }
@@ -143,10 +154,11 @@ function parseWrapper(file: string): WrapperCheck | null {
 }
 
 /**
- * `CFBundleVersion` of a plist. "missing" when the file does not exist; null
- * when it exists but no version can be read from it. Only a binary plist is
- * handed to `plutil`: Xcode 16 installs CoreSimulator's as one, and an Xcode
- * update leaves it in place until the install. An XML one spawns nothing.
+ * `CFBundleVersion` of a wrapper's plist. "missing" when the file does not
+ * exist; null when it exists but no version can be read from it. Only a binary
+ * plist is handed to `plutil`: CoreDevice's is one, and so is the CoreSimulator
+ * one Xcode 16 installs, which an Xcode update leaves in place until the
+ * install. An XML one spawns nothing.
  */
 function readBundleVersion(plistPath: string): string | "missing" | null {
   let data: Buffer;
@@ -198,14 +210,14 @@ function isOlder(a: string, b: string): boolean {
 }
 
 /**
- * True when the active Xcode's `simctl` would run `xcodebuild -runFirstLaunch`:
+ * True when the active Xcode's `wrapper` would run `xcodebuild -runFirstLaunch`:
  * its framework is older than the wrapper expects, or missing where the
  * wrapper's check treats that as a mismatch. An Xcode update leaves this state
  * behind until the components are installed.
  *
  * False whenever nothing can be concluded (not macOS, no Xcode, an
  * unrecognised wrapper, a version that cannot be read), so an unexpected layout
- * never hides the simulators of a working setup. Also false for a framework
+ * never hides the devices of a working setup. Also false for a framework
  * newer than expected: the `!=` check runs the install then too, but
  * `xcodebuild -checkFirstLaunchStatus` finds nothing to install (seen on Xcode 26.6).
  *
@@ -213,11 +225,11 @@ function isOlder(a: string, b: string): boolean {
  * mid-session is picked up on the next call. It spawns nothing, except
  * `plutil` for a binary plist.
  */
-export function xcodeFirstLaunchPending(): boolean {
+export function xcodeFirstLaunchPending(wrapper: XcodeWrapper): boolean {
   if (process.platform !== "darwin") return false;
   const devDir = activeDeveloperDir();
   if (!devDir) return false;
-  const check = parseWrapper(path.join(devDir, "usr", "bin", "simctl"));
+  const check = parseWrapper(path.join(devDir, "usr", "bin", wrapper));
   if (!check) return false;
   const installed = readBundleVersion(check.plistPath);
   if (installed === null) return false;

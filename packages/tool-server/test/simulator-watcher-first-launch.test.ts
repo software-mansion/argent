@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const pending = vi.hoisted(() => ({ value: false }));
+const pending = vi.hoisted(() => ({ value: false, devicectl: false }));
 const execSimctlMock = vi.fn();
 const execFileMock = vi.fn();
 
@@ -13,7 +13,11 @@ vi.mock("../src/utils/xcode-first-launch", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
     "../src/utils/xcode-first-launch"
   );
-  return { ...actual, xcodeFirstLaunchPending: () => pending.value };
+  return {
+    ...actual,
+    xcodeFirstLaunchPending: (wrapper: string) =>
+      wrapper === "simctl" ? pending.value : pending.devicectl,
+  };
 });
 
 // Where a real native-devtools service writes the simulator's launchd environment.
@@ -106,6 +110,20 @@ afterEach(() => {
 });
 
 describe("simulator-watcher while Xcode's component install is pending", () => {
+  it("keeps polling while only devicectl would start the install", async () => {
+    pending.devicectl = true;
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      stop();
+
+      expect(execSimctlMock).toHaveBeenCalled();
+      expect(stderrWrites).toEqual([]);
+    } finally {
+      pending.devicectl = false;
+    }
+  });
+
   it("starts without calling simctl, so the server binds at once, and says why once", async () => {
     pending.value = true;
     const { ready, stop } = startSimulatorWatcher(registry);

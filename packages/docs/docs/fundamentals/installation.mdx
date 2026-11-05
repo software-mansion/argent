@@ -87,9 +87,11 @@ In local mode the committed MCP config runs the project-local copy, so the bare 
 
 ## macOS hosts after an Xcode update
 
-After you install or update Xcode, Xcode must install its system components. Until then, a `simctl` call can start that install. The install waits for an administrator password, also when nobody sees the prompt.
+After you install or update Xcode, Xcode must install its system components. Until then, a `simctl` or `devicectl` call can start that install. The install waits for an administrator password, also when nobody sees the prompt.
 
-Argent reads Xcode's files to find if a `simctl` call starts the install. If it does:
+Argent reads Xcode's files to find if a `simctl` or `devicectl` call starts the install.
+
+If a `simctl` call starts the install:
 
 - Argent does not look for booted simulators in the background.
 - `list-devices` does not show local iOS simulators. Its `hint` field gives the reason to the agent.
@@ -97,7 +99,13 @@ Argent reads Xcode's files to find if a `simctl` call starts the install. If it 
 
 Argent reads the type of a simulator with `simctl`. Argent must know the type to find an Apple TV simulator or a foldable iOS simulator. Thus, the tools that send input to a simulator or capture its screen also fail if Argent does not know its type yet. This occurs, for example, when Argent starts after the Xcode update.
 
-Argent stops only its own calls. An `xcrun simctl` command that the agent or you run still starts the install. Commands that call `simctl`, for example `npx react-native run-ios`, also start it.
+If a `devicectl` call starts the install:
+
+- `list-devices` does not show physical iPhones. Its `hint` field gives the reason to the agent.
+- The tools that need `devicectl` fail. Most of them return an error that gives the same reason to the agent.
+- A tool that only talks to the runner on the iPhone keeps working while the runner is up.
+
+Argent stops only its own calls. An `xcrun simctl` or `xcrun devicectl` command that the agent or you run still starts the install. Commands that call `simctl` or `devicectl`, for example `npx react-native run-ios`, also start it.
 
 The `hint` field and the error name the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
 

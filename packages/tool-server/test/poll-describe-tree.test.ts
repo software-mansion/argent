@@ -17,7 +17,7 @@ function poll(fetchTree: () => Promise<DescribeTreeData>, timeoutMs = TIMEOUT_MS
 
 describe("pollDescribeTree with Xcode's component install pending", () => {
   it("rejects at once with the refusal", async () => {
-    const refusal = new XcodeFirstLaunchPendingError();
+    const refusal = new XcodeFirstLaunchPendingError("simctl");
     const fetchTree = vi.fn(() => Promise.reject(refusal));
 
     await expect(poll(fetchTree)).rejects.toBe(refusal);
@@ -26,8 +26,20 @@ describe("pollDescribeTree with Xcode's component install pending", () => {
 
   // How it arrives when the service factory refuses: the registry wraps it.
   it("rejects at once with a service failure caused by the refusal", async () => {
-    const refusal = new XcodeFirstLaunchPendingError();
+    const refusal = new XcodeFirstLaunchPendingError("simctl");
     const wrapped = new ServiceInitializationError("AXService:x", refusal.message, {
+      cause: refusal,
+    });
+    const fetchTree = vi.fn(() => Promise.reject(wrapped));
+
+    await expect(poll(fetchTree)).rejects.toBe(wrapped);
+    expect(fetchTree).toHaveBeenCalledOnce();
+  });
+
+  // How a physical iPhone's wait gets it: starting the runner needs `devicectl`.
+  it("rejects at once when starting the iPhone runner is refused", async () => {
+    const refusal = new XcodeFirstLaunchPendingError("devicectl");
+    const wrapped = new ServiceInitializationError("IosDeviceRunner:x", refusal.message, {
       cause: refusal,
     });
     const fetchTree = vi.fn(() => Promise.reject(wrapped));

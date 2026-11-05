@@ -98,12 +98,15 @@ vi.mock("../src/utils/ios-device/devicectl", async () => {
 });
 
 // Whether Xcode's component install is pending, set per test. Defaults to installed.
-const xcodePending = vi.hoisted(() => ({ value: false }));
+const xcodePending = vi.hoisted(() => ({ simctl: false, devicectl: false }));
 vi.mock("../src/utils/xcode-first-launch", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
     "../src/utils/xcode-first-launch"
   );
-  return { ...actual, xcodeFirstLaunchPending: () => xcodePending.value };
+  return {
+    ...actual,
+    xcodeFirstLaunchPending: (wrapper: "simctl" | "devicectl") => xcodePending[wrapper],
+  };
 });
 
 import * as fs from "node:fs";
@@ -282,7 +285,7 @@ describe("list-devices", () => {
       execFileMock.mock.calls.filter(([cmd, args]) => cmd === "xcrun" && args[0] === "simctl");
 
     beforeEach(() => {
-      xcodePending.value = true;
+      xcodePending.simctl = true;
       execFileMock.mockImplementation((cmd: string, args: string[]) => {
         if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };
         if (cmd === "adb" && args[0] === "devices") {
@@ -293,7 +296,7 @@ describe("list-devices", () => {
     });
 
     afterEach(() => {
-      xcodePending.value = false;
+      xcodePending.simctl = false;
     });
 
     it("does not call simctl, lists no simulators, and says why", async () => {
@@ -303,7 +306,7 @@ describe("list-devices", () => {
       expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
       // The text itself is pinned in xcode-first-launch.test.ts, on a fixture
       // Xcode: here it would depend on the host's.
-      expect(result.hint).toBe(xcodeFirstLaunchHint());
+      expect(result.hint).toBe(xcodeFirstLaunchHint(["simctl"]));
     });
 
     it("still lists the other platforms, and physical iPhones from devicectl", async () => {
@@ -326,6 +329,40 @@ describe("list-devices", () => {
       expect(result.devices.filter((d) => d.platform === "ios")).toEqual([
         expect.objectContaining({ kind: "device", udid: "00008110-000000000000001E" }),
       ]);
+    });
+  });
+
+  // `listIosPhysicalDevices` itself answers [] while devicectl is refused; the
+  // gates test pins that. Here: what the listing says, and that simulators stay.
+  describe("while devicectl would start Xcode's component install", () => {
+    beforeEach(() => {
+      xcodePending.devicectl = true;
+      execFileMock.mockImplementation((cmd: string, args: string[]) =>
+        cmd === "xcrun" && args[0] === "simctl"
+          ? { stderr: "", stdout: simctlJson() }
+          : { stderr: "", stdout: "" }
+      );
+    });
+
+    afterEach(() => {
+      xcodePending.simctl = false;
+      xcodePending.devicectl = false;
+    });
+
+    it("still lists simulators, and says why iPhones are missing", async () => {
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(result.devices.filter((d) => d.platform === "ios").length).toBeGreaterThan(0);
+      expect(result.hint).toBe(xcodeFirstLaunchHint(["devicectl"]));
+    });
+
+    it("covers both when simctl would start it too", async () => {
+      xcodePending.simctl = true;
+
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
+      expect(result.hint).toBe(xcodeFirstLaunchHint(["simctl", "devicectl"]));
     });
   });
 

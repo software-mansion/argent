@@ -1,5 +1,9 @@
 import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
-import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "./xcode-first-launch";
+import {
+  xcodeFirstLaunchHint,
+  xcodeFirstLaunchPending,
+  type XcodeWrapper,
+} from "./xcode-first-launch";
 
 /**
  * Thrown when a declared host-binary dependency (e.g. `adb`, `xcrun`) can't be
@@ -22,14 +26,14 @@ export class DependencyMissingError extends Error {
 }
 
 /**
- * `simctl` would start Xcode's component install, which waits forever for an
+ * `wrapper` would start Xcode's component install, which waits forever for an
  * administrator password. Mapped to 424 like any missing dependency, with the
  * hint as the message, but counted apart from a missing `xcrun` in failure
  * telemetry.
  */
 export class XcodeFirstLaunchPendingError extends DependencyMissingError {
-  constructor() {
-    super(["xcrun"], xcodeFirstLaunchHint());
+  constructor(wrapper: XcodeWrapper) {
+    super(["xcrun"], xcodeFirstLaunchHint([wrapper]));
     this.name = "XcodeFirstLaunchPendingError";
     withFailureSignal(this, {
       error_code: FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING,
@@ -41,12 +45,12 @@ export class XcodeFirstLaunchPendingError extends DependencyMissingError {
 }
 
 /**
- * Refuse before spawning `simctl` while it would start Xcode's component
+ * Refuse before spawning `wrapper` while it would start Xcode's component
  * install. Called where the argv is built, so no caller can reach the wrapper
  * without it.
  *
  * @throws XcodeFirstLaunchPendingError
  */
-export function assertXcodeFirstLaunchDone(): void {
-  if (xcodeFirstLaunchPending()) throw new XcodeFirstLaunchPendingError();
+export function assertXcodeFirstLaunchDone(wrapper: XcodeWrapper): void {
+  if (xcodeFirstLaunchPending(wrapper)) throw new XcodeFirstLaunchPendingError(wrapper);
 }

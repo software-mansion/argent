@@ -93,7 +93,7 @@ describe("findRuntimeDevice", () => {
 
   // The simulator listing is refused while Xcode's install is pending.
   it("still answers when the simulator listing is refused", async () => {
-    vi.mocked(listIosSimulators).mockRejectedValue(new XcodeFirstLaunchPendingError());
+    vi.mocked(listIosSimulators).mockRejectedValue(new XcodeFirstLaunchPendingError("simctl"));
     try {
       await expect(findRuntimeDevice(runtimeOn("ext:cloud-phone"))).resolves.toBeUndefined();
       await expect(findRuntimeDevice(runtimeOn("emulator-5556"))).resolves.toBe("emulator-5556");
