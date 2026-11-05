@@ -802,6 +802,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       child("span", "inner", {}, { "aria-label": "billed" }),
       child("img", "", { display: "inline-block" }, { alt: "now" }),
       child("span", "kept", {}, { "aria-label": "  " }),
+      child("span", "plain", {}, { alt: "not-an-image" }),
       { nodeType: 3, nodeValue: " end" },
     ];
     const button = el({
@@ -810,7 +811,93 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       attrs: { "id": "btn", "aria-labelledby": "lbl" },
     });
     const { tree } = run([button, label]);
-    expect(findById(tree, "btn")!.label).toBe("Plan Pro monthly billed now kept end");
+    expect(findById(tree, "btn")!.label).toBe("Plan Pro monthly billed now keptplain end");
+  });
+
+  // A span target labelling a button, holding `kids`.
+  const labelledBy = (kids: unknown[], style: Record<string, string> = { display: "inline" }) => {
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" }, style }) as MockElement &
+      Record<string, unknown>;
+    Object.assign(label, { nodeType: 1, parentNode: { nodeType: 9 } });
+    label.childNodes = kids;
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    return findById(run([button, label]).tree, "btn")!.label;
+  };
+  const elementNode = (tag: string, kids: unknown[], fields: Record<string, unknown> = {}) => {
+    const style = { display: tag === "span" ? "inline" : "inline-block" };
+    const node = el({ tag, rect: BOX, style }) as MockElement & Record<string, unknown>;
+    Object.assign(node, { nodeType: 1, ...fields });
+    node.childNodes = kids;
+    return node;
+  };
+  const text = (nodeValue: string) => ({ nodeType: 3, nodeValue });
+
+  it("reads an embedded select's chosen options, not all of its options", () => {
+    const small = elementNode("option", [text("Small")], { label: "Small" });
+    const large = elementNode("option", [text("Large")], { label: "Large" });
+    const size = elementNode("select", [small, large], { selectedOptions: [large] });
+    expect(labelledBy([text("Size"), size, text("end")])).toBe("Size Large end");
+    const both = elementNode("select", [small, large], { selectedOptions: [small, large] });
+    expect(labelledBy([text("Size"), both, text("end")])).toBe("Size Small Large end");
+    const none = elementNode("select", [small, large], { selectedOptions: [] });
+    expect(labelledBy([text("Size"), none, text("end")])).toBe("Size end");
+  });
+
+  it("reads an embedded textarea's live value or placeholder, not its default text", () => {
+    const area = (value: string, placeholder: string) =>
+      elementNode("textarea", [text("default")], { value, placeholder });
+    expect(labelledBy([text("Qty"), area("typed", "hint"), text("items")])).toBe("Qty typed items");
+    expect(labelledBy([text("Qty"), area("", "hint"), text("items")])).toBe("Qty hint items");
+    expect(labelledBy([text("Qty"), area("", ""), text("items")])).toBe("Qty items");
+  });
+
+  it("reads a target that is itself a select or textarea by what it shows", () => {
+    const label = (tag: string, fields: Record<string, unknown>, attrs = {}) => {
+      const target = el({ tag, rect: BOX, attrs: { id: "lbl", ...attrs } }) as MockElement &
+        Record<string, unknown>;
+      Object.assign(target, { nodeType: 1, parentNode: { nodeType: 9 }, ...fields });
+      target.childNodes = [text("default")];
+      const button = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "btn", "aria-labelledby": "lbl" },
+      });
+      return findById(run([button, target]).tree, "btn")!.label;
+    };
+    expect(label("select", { selectedOptions: [{ label: "Large" }] })).toBe("Large");
+    expect(label("textarea", { value: "typed", placeholder: "" })).toBe("typed");
+    expect(label("textarea", { value: "typed", placeholder: "" }, { "aria-label": "Named" })).toBe(
+      "typed"
+    );
+  });
+
+  it("names an embedded control by what it shows, over its own aria-label", () => {
+    const area = elementNode("textarea", [], { value: "typed", placeholder: "" });
+    area.__attrs = { "aria-label": "ignored" };
+    expect(labelledBy([text("Qty"), area, text("items")])).toBe("Qty typed items");
+  });
+
+  it("parts words at every element under display:none, which has no inline layout", () => {
+    const span = (t: string) => elementNode("span", [text(t)]);
+    const none = { display: "none" };
+    expect(labelledBy([span("Close"), span("dialog")], none)).toBe("Close dialog");
+    expect(labelledBy([text("a"), span("b"), text("c")], none)).toBe("a b c");
+    // A nested display:none parts its content in a target hidden another way, and the
+    // inline layout resumes where it ends.
+    const inner = elementNode("span", [span("a"), span("b")]);
+    (inner.__style as Record<string, string>).display = "none";
+    const hidden = { display: "inline", visibility: "hidden" };
+    expect(labelledBy([text("x"), inner, span("y"), span("z")], hidden)).toBe("x a b yz");
+  });
+
+  it("keeps inline elements joined in a target hidden without losing its layout", () => {
+    const span = (t: string) => elementNode("span", [text(t)]);
+    const hidden = { display: "inline", visibility: "hidden" };
+    expect(labelledBy([span("Close"), span("dialog")], hidden)).toBe("Closedialog");
   });
 
   it("reads a hidden aria-labelledby target whole, and a target's own aria-label or alt", () => {
@@ -2183,6 +2270,51 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       el({ rect: bordered, client: padding, style: { contain: "paint" }, children: [host()] }),
     ]).tree;
     expect(pxFrame(contained, "row")).toEqual({ x: 12, y: 62, w: 300, h: 50 });
+  });
+
+  it.each([
+    {
+      edge: "left",
+      rect: { x: 97, y: 120, w: 65, h: 40 },
+      painted: { x: 100, y: 120, w: 62, h: 40 },
+      clipped: { x: 112, y: 120, w: 50, h: 40 },
+    },
+    {
+      edge: "top",
+      rect: { x: 120, y: 97, w: 40, h: 65 },
+      painted: { x: 120, y: 100, w: 40, h: 62 },
+      clipped: { x: 120, y: 112, w: 40, h: 50 },
+    },
+    {
+      edge: "right",
+      rect: { x: 362, y: 120, w: 65, h: 40 },
+      painted: { x: 362, y: 120, w: 62, h: 40 },
+      clipped: { x: 362, y: 120, w: 50, h: 40 },
+    },
+    {
+      edge: "bottom",
+      rect: { x: 120, y: 162, w: 40, h: 65 },
+      painted: { x: 120, y: 162, w: 40, h: 62 },
+      clipped: { x: 120, y: 162, w: 40, h: 50 },
+    },
+  ])("clips a light child that hit-tests across its clipper's $edge border", (c) => {
+    // A 12px border around the padding box x 112..412, y 112..212.
+    const { tree } = run([
+      el({
+        rect: { x: 100, y: 100, w: 324, h: 124 },
+        client: { left: 12, top: 12, width: 300, height: 100 },
+        style: { contain: "paint" },
+        children: [
+          el({
+            tag: "app-row",
+            rect: ZERO,
+            style: { display: "contents" },
+            children: [el({ attrs: { id: "row" }, rect: c.rect, painted: c.painted })],
+          }),
+        ],
+      }),
+    ]);
+    expect(pxFrame(tree, "row")).toEqual(c.clipped);
   });
 
   it("frames closed-root popup content by where its descendants or a shadow tree hit-test", () => {

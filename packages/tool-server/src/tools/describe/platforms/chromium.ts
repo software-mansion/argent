@@ -175,23 +175,31 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // An aria-labelledby target's text (text and CDATA), read by a subset of Chrome's
   // accessible-name rules: an aria-label, or an <img>'s alt, stands in for an element's
-  // content, a non-inline element or a <br> parts the words around it, and script,
-  // style and noscript text never counts. A shown target leaves out its display:none,
-  // visibility:hidden and aria-hidden subtrees; a hidden one reads them all, and there
-  // a display:none or script-like element parts words. Embedded controls' values are
-  // not read. Iterative: the target's depth has no MAX_DEPTH bound.
+  // content, a <select> or <textarea> reads as it shows, a non-inline element or a <br>
+  // parts the words around it, and script, style and noscript text never counts. A shown
+  // target leaves out its display:none, visibility:hidden and aria-hidden subtrees; a
+  // hidden one reads them all, and there a script-like element parts words, as does every
+  // element under display:none, which has no layout to run inline in. An <input>'s value
+  // is not read. Iterative: the target's depth has no MAX_DEPTH bound.
   function labelText(root) {
-    const own = altText(root);
-    if (own) return own;
+    const own = controlText(root) ?? altText(root);
+    if (own !== null) return own;
     let shown = window.getComputedStyle(root).visibility !== "hidden";
-    for (let n = root; shown && n && getNodeType.call(n) === 1; n = getParentNode.call(n)) {
-      const hiddenHere =
-        window.getComputedStyle(n).display === "none" || getAttr.call(n, "aria-hidden") === "true";
-      if (hiddenHere) shown = false;
+    // How many display:none elements enclose the walk's position.
+    let unrendered = 0;
+    for (let n = root; !unrendered && n && getNodeType.call(n) === 1; n = getParentNode.call(n)) {
+      if (window.getComputedStyle(n).display === "none") {
+        unrendered = 1;
+        shown = false;
+      } else if (getAttr.call(n, "aria-hidden") === "true") {
+        shown = false;
+      }
     }
     let s = "";
-    // Nodes, and SPACE where a non-inline element's content ends.
+    // Nodes, SPACE where a non-inline element's content ends, and RENDERED where a
+    // display:none element's does.
     const SPACE = {};
+    const RENDERED = {};
     const stack = [];
     const pushChildren = (node) => {
       const kids = getChildNodes.call(node);
@@ -202,6 +210,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const node = stack.pop();
       if (node === SPACE) {
         s += " ";
+        continue;
+      }
+      if (node === RENDERED) {
+        unrendered--;
         continue;
       }
       const type = getNodeType.call(node);
@@ -223,21 +235,36 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       ) {
         continue;
       }
-      const alt = altText(node);
-      if (alt) {
-        s += " " + alt + " ";
+      const content = controlText(node) ?? altText(node);
+      if (content !== null) {
+        s += " " + content + " ";
         continue;
       }
       const rawText =
         getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml" &&
         /^(script|style|noscript)$/.test(getLocalName.call(node));
-      if (style.display !== "inline" || (rawText && !shown)) {
+      if (style.display !== "inline" || (rawText && !shown) || unrendered) {
         s += " ";
         stack.push(SPACE);
+      }
+      if (style.display === "none") {
+        unrendered++;
+        stack.push(RENDERED);
       }
       if (!rawText) pushChildren(node);
     }
     return s.replace(WHITESPACE, " ");
+  }
+
+  // What a <select> or <textarea> shows, which its child text is not; null for others.
+  function controlText(el) {
+    if (getNamespaceURI.call(el) !== "http://www.w3.org/1999/xhtml") return null;
+    const tag = getLocalName.call(el);
+    if (tag === "textarea") return el.value || el.placeholder;
+    if (tag !== "select") return null;
+    let chosen = "";
+    for (const option of el.selectedOptions) chosen += option.label + " ";
+    return chosen;
   }
 
   // An element's aria-label, or an <img>'s alt, when it has one that is not blank.
