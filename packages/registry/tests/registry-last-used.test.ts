@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Registry } from "../src/registry";
+import { TypedEventEmitter } from "../src/event-emitter";
 import { ServiceState } from "../src/types";
 import {
   createMockBlueprint,
@@ -167,5 +168,59 @@ describe("Registry -- lastUsedAt", () => {
 
     expect(registry.getSnapshot().services.get(staticUrn("sim"))?.state).toBe(ServiceState.RUNNING);
     expect(lastUsedAt(registry, staticUrn("sim"))).toBeUndefined();
+  });
+
+  it("reports the services of every call in flight at once as in use", async () => {
+    const registry = new Registry();
+    registry.registerBlueprint(createMockBlueprint("Sim"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered = 0;
+    registry.registerTool({
+      id: "await-ui-element",
+      services: (params: { udid: string }) => ({ sim: `Sim:${params.udid}` }),
+      execute: async () => {
+        entered++;
+        await gate;
+      },
+    });
+
+    const calls = ["dev-1", "dev-2"].map((udid) =>
+      registry.invokeTool("await-ui-element", { udid })
+    );
+    await vi.waitFor(() => expect(entered).toBe(2));
+    vi.setSystemTime(1_010_000);
+
+    expect([lastUsedAt(registry, "Sim:dev-1"), lastUsedAt(registry, "Sim:dev-2")]).toEqual([
+      1_010_000, 1_010_000,
+    ]);
+    release();
+    await Promise.all(calls);
+  });
+
+  it("reports a service as in use while the call is still starting it", async () => {
+    const registry = new Registry();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let factoryEntered = false;
+    registry.registerBlueprint({
+      namespace: "Sim",
+      getURN: (ctx: string) => `Sim:${ctx}`,
+      factory: async () => {
+        factoryEntered = true;
+        await gate;
+        return { api: {}, dispose: async () => {}, events: new TypedEventEmitter() };
+      },
+    });
+    registry.registerTool(createMockToolDef("tap", () => ({ sim: "Sim:dev-1" })));
+
+    const call = registry.invokeTool("tap");
+    await vi.waitFor(() => expect(factoryEntered).toBe(true));
+    vi.setSystemTime(1_010_000);
+
+    expect(registry.getSnapshot().services.get("Sim:dev-1")?.state).toBe(ServiceState.STARTING);
+    expect(lastUsedAt(registry, "Sim:dev-1")).toBe(1_010_000);
+    release();
+    await call;
   });
 });

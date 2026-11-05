@@ -40,4 +40,39 @@ describe("lastDeviceUse", () => {
 
     expect(lastDeviceUse(services, [UDID]).size).toBe(0);
   });
+
+  it.each([
+    "IosDeviceRunner",
+    "NativeDevtools",
+    "AndroidDevtools",
+    "ChromiumCdp",
+    "ChromiumJsRuntimeDebugger",
+    "TvControl",
+    "AXService",
+    "NetworkInspector:8081",
+    "ReactProfilerSession:8081",
+  ])("marks a device used only through %s", (prefix) => {
+    const services = snapshot({ [`${prefix}:${UDID}`]: { lastUsedAt: 100 } });
+
+    expect(lastDeviceUse(services, [UDID])).toEqual(new Map([[UDID, 100]]));
+  });
+
+  it("counts a service that is still starting", () => {
+    const services = snapshot({
+      [`SimulatorServer:${UDID}`]: { lastUsedAt: 100, state: ServiceState.STARTING },
+    });
+
+    expect(lastDeviceUse(services, [UDID])).toEqual(new Map([[UDID, 100]]));
+  });
+
+  /** Their nodes stay RUNNING after the device shuts down, and serials are reused. */
+  it("ignores session services that outlive their device", () => {
+    const services = snapshot({
+      [`ScreenRecordingSession:${UDID}`]: { lastUsedAt: 100 },
+      [`NativeProfilerSession:${UDID}`]: { lastUsedAt: 200 },
+      "AndroidTvControl:emulator-5554": { lastUsedAt: 300 },
+    });
+
+    expect(lastDeviceUse(services, [UDID, "emulator-5554"]).size).toBe(0);
+  });
 });
