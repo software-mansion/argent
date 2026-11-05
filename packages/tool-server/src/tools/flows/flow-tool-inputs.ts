@@ -197,13 +197,13 @@ export async function prepareToolStepInputs(
     // Not reached: the upload gate refuses such an input before step 1.
     if (!isClientFileArgument(file)) {
       throw new FileInputError(
-        `"${file.path}" (argument ${file.spec.target} of ${toolId}) cannot be read from the client`
+        `"${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId}) cannot be read from the client`
       );
     }
     const bytes = await project.readFile(file.path);
     if (bytes === null) {
       throw new FileInputError(
-        `the client has no file at "${file.path}" (argument ${file.spec.target} of ${toolId})`
+        `the client has no file at "${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})`
       );
     }
     const wire: FileInputWire = {
@@ -244,7 +244,7 @@ async function prepareHostFileArguments(
         ? ""
         : `; a relative path is resolved against the tool server's working directory, not the e2e test's`;
       throw new FileInputError(
-        `there is no file at "${file.path}" (argument ${file.spec.target} of ${toolId})${relative}`
+        `there is no file at "${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})${relative}`
       );
     }
     const wire: FileInputWire = {

@@ -88,6 +88,17 @@ describe("a tool: step with e2e_test_path, without a link", () => {
     );
   });
 
+  it("keeps the reason on one line when the missing path has a newline", async () => {
+    const result = await runOuter(
+      `  - tool: e2e-read-prerequisite\n    args: { e2e_test_path: "${root}/oth\\ner/frag.yaml", project_root: ${root} }\n`
+    );
+
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toBe(
+      `there is no file at "${root}/oth\\ner/frag.yaml" (argument e2e_test_path of e2e-read-prerequisite)`
+    );
+  });
+
   it("says where a relative path that names no file was looked up", async () => {
     const result = await runOuter(
       `  - tool: e2e-execute\n    args: { e2e_test_path: elsewhere/frag.yaml, project_root: ${root}, prerequisiteAcknowledged: true }\n`
