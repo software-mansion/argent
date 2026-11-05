@@ -4,12 +4,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { uploadFile } from "../src/file-inputs.js";
 
-const afterTar = vi.hoisted(() => ({ run: (): void => {} }));
+const afterTar = vi.hoisted(() => ({ run: (): void => {}, signal: undefined as unknown }));
 vi.mock("@argent/archive", async (importOriginal) => {
   const real = await importOriginal<typeof import("@argent/archive")>();
   return {
     ...real,
     createTarGzFile: async (...args: Parameters<typeof real.createTarGzFile>) => {
+      afterTar.signal = args[2];
       await real.createTarGzFile(...args);
       afterTar.run();
     },
@@ -38,6 +39,7 @@ describe("uploadFile", () => {
         )
       ).rejects.toThrow();
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(afterTar.signal).toBe(controller.signal);
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

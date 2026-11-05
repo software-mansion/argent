@@ -75,17 +75,20 @@ export function getGlobalBinaryPath(): string | null {
 }
 
 /**
- * The global binary still on PATH after an uninstall. A version-manager shim
- * (nodenv's) outlives the package until a rehash, then exits 127.
+ * The global argent still on PATH after an uninstall: a binary that resolves to
+ * the package, or one that still runs (a pnpm shim). A version-manager shim
+ * (nodenv's, mise's) outlives the package until a reshim, and then fails.
  */
 export function getRemainingGlobalBinaryPath(): string | null {
   const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath || process.platform === "win32") return binaryPath;
+  if (!binaryPath || process.platform === "win32" || getGloballyInstalledPackageRoot()) {
+    return binaryPath;
+  }
   try {
     execFileSync(binaryPath, ["--version"], { stdio: "ignore", timeout: 10_000 });
     return binaryPath;
-  } catch (err) {
-    return (err as { status?: number }).status === 127 ? null : binaryPath;
+  } catch {
+    return null;
   }
 }
 

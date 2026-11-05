@@ -115,6 +115,7 @@ beforeEach(() => {
   savedAgent = process.env.npm_config_user_agent;
   delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
+  childProcessMock.versionProbe.mockReset();
   // A global bin that `npm uninstall -g` removes, so no case depends on the host's argent.
   const globalBin = path.join(tmpDir, "global-bin", "argent");
   writeFile(globalBin);
@@ -235,6 +236,10 @@ describe("uninstall — telemetry consent preservation", () => {
 
     it("reports a failure when the uninstall exits 0 and leaves the package", async () => {
       const clack = await import("@clack/prompts");
+      // Resolving to the package is enough: a probe that fails does not clear it.
+      childProcessMock.versionProbe.mockImplementation(() => {
+        throw Object.assign(new Error("exit 1"), { status: 1 });
+      });
 
       await uninstall(["--yes"]);
 
@@ -307,54 +312,42 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
   });
 
-  it("removes the global and then the local install past a version-manager shim that no longer runs", async () => {
-    const clack = await import("@clack/prompts");
-    const shim = path.join(tmpDir, "nodenv", "shims", "argent");
-    writeFile(shim, "#!/usr/bin/env bash\n");
-    childProcessMock.which.mockImplementation(() => shim + "\n");
-    childProcessMock.versionProbe.mockImplementationOnce(() => {
-      throw Object.assign(new Error("exit 127"), { status: 127 });
-    });
-    const projectDir = path.join(tmpDir, "project");
-    writeFile(
-      path.join(projectDir, "package.json"),
-      JSON.stringify({ devDependencies: { "@swmansion/argent": "1.0.0" } })
-    );
-    writeFile(
-      path.join(projectDir, "node_modules", "@swmansion", "argent", "package.json"),
-      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
-    );
-    process.chdir(projectDir);
+  it.each([
+    ["nodenv", 127],
+    ["mise", 1],
+  ])(
+    "removes the global and then the local install past a stale %s shim",
+    async (manager, status) => {
+      const clack = await import("@clack/prompts");
+      const shim = path.join(tmpDir, manager, "shims", "argent");
+      writeFile(shim, "#!/usr/bin/env bash\n");
+      childProcessMock.which.mockImplementation(() => shim + "\n");
+      childProcessMock.versionProbe.mockImplementationOnce(() => {
+        throw Object.assign(new Error(`exit ${status}`), { status });
+      });
+      const projectDir = path.join(tmpDir, "project");
+      writeFile(
+        path.join(projectDir, "package.json"),
+        JSON.stringify({ devDependencies: { "@swmansion/argent": "1.0.0" } })
+      );
+      writeFile(
+        path.join(projectDir, "node_modules", "@swmansion", "argent", "package.json"),
+        JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+      );
+      process.chdir(projectDir);
 
-    await uninstall(["--yes", "--global", "--local"]);
+      await uninstall(["--yes", "--global", "--local"]);
 
-    expect(childProcessMock.versionProbe).toHaveBeenCalledWith(
-      shim,
-      ["--version"],
-      expect.anything()
-    );
-    expect(vi.mocked(clack.log.error)).not.toHaveBeenCalled();
-    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
-    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed local package.");
-  });
-
-  it("keeps reporting a leftover whose version probe fails for another reason", async () => {
-    const clack = await import("@clack/prompts");
-    const bin = path.join(tmpDir, "other", "argent");
-    writeFile(bin);
-    childProcessMock.which.mockImplementation(() => bin + "\n");
-    childProcessMock.versionProbe.mockImplementationOnce(() => {
-      throw Object.assign(new Error("exit 1"), { status: 1 });
-    });
-    process.chdir(tmpDir);
-
-    await uninstall(["--yes", "--global"]);
-
-    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
-      `global uninstall failed: Error: ${bin} is still on PATH. ` +
-        "Remove it with the package manager that installed it."
-    );
-  });
+      expect(childProcessMock.versionProbe).toHaveBeenCalledWith(
+        shim,
+        ["--version"],
+        expect.anything()
+      );
+      expect(vi.mocked(clack.log.error)).not.toHaveBeenCalled();
+      expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+      expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed local package.");
+    }
+  );
 
   it("reports a failure when a second global install stays on PATH", async () => {
     const clack = await import("@clack/prompts");

@@ -43,7 +43,7 @@ export function detectGlobalPackageManager(): PackageManager {
   const root = getGloballyInstalledPackageRoot();
   if (!binaryPath || !root) return "npm";
   const npmCopy = path.join(path.dirname(path.dirname(binaryPath)), "lib", "node_modules");
-  return canonicalPath(path.join(npmCopy, PACKAGE_NAME)) === root ? "npm" : "yarn";
+  return canonicalPath(path.join(npmCopy, PACKAGE_NAME)) === canonicalPath(root) ? "npm" : "yarn";
 }
 
 function asKnownPm(name: unknown): PackageManager | null {

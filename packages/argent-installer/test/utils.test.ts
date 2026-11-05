@@ -759,6 +759,25 @@ describe("detectGlobalPackageManager", () => {
       expect(detectGlobalPackageManager()).toBe("npm");
     });
 
+    it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+      "returns npm over npm's layout behind a PATH entry in another case",
+      () => {
+        // npm links the bin relatively, so realpath keeps the case PATH spells.
+        const pkg = path.join(dir, "prefix", "lib", "node_modules", "@swmansion", "argent");
+        fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+        fs.mkdirSync(path.join(dir, "prefix", "bin"));
+        fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+        fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+        fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+        fs.symlinkSync(
+          "../lib/node_modules/@swmansion/argent/dist/cli.js",
+          path.join(dir, "prefix", "bin", "argent")
+        );
+        process.env.PATH = `${path.join(dir, "PREFIX", "bin")}:/usr/bin:/bin`;
+        expect(detectGlobalPackageManager()).toBe("npm");
+      }
+    );
+
     it("returns npm over an `npm link`ed checkout", () => {
       putGlobalOnPath("checkout");
       fs.mkdirSync(path.join(dir, "lib", "node_modules", "@swmansion"), { recursive: true });
