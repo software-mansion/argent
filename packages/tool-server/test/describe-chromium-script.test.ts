@@ -848,6 +848,14 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([text("Size"), none, text("end")])).toBe("Size end");
   });
 
+  it("reads a select outside the HTML namespace by its content", () => {
+    // The HTML parser keeps <math><select> and <svg><select> in the foreign namespace.
+    const namespaceURI = "http://www.w3.org/1998/Math/MathML";
+    const option = elementNode("option", [text("Opt")], { namespaceURI });
+    const select = elementNode("select", [option], { namespaceURI });
+    expect(labelledBy([text("Pick"), select, text("end")])).toBe("Pick Opt end");
+  });
+
   it("reads an embedded textarea's live value or placeholder, not its default text", () => {
     const area = (value: string, placeholder: string) =>
       elementNode("textarea", [text("default")], { value, placeholder });
