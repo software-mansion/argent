@@ -1,23 +1,15 @@
-import { execFile } from "node:child_process";
 import * as fsp from "node:fs/promises";
-import { promisify } from "node:util";
+import { buildPlist, readPlistFile, type PlistValue } from "../plist";
 
 /**
  * Reading and rewriting an `.xctestrun`, the plist xcodebuild produces for a
- * built test bundle. plutil does the plist round trip, so no plist writer is
- * needed here.
+ * built test bundle.
  */
-
-const execFileAsync = promisify(execFile);
 
 export type XctestrunDocument = Record<string, unknown>;
 
 export async function readXctestrun(sourcePath: string): Promise<XctestrunDocument> {
-  const { stdout } = await execFileAsync("plutil", ["-convert", "json", "-o", "-", sourcePath], {
-    maxBuffer: 16 * 1024 * 1024,
-  });
-
-  return JSON.parse(stdout) as XctestrunDocument;
+  return (await readPlistFile(sourcePath)) as XctestrunDocument;
 }
 
 /** Every test target in the document: the keys that are not metadata. */
@@ -83,14 +75,7 @@ export async function writeXctestrunWithRunnerPort(
     }
   }
 
-  const jsonPath = `${targetPath}.json`;
-  await fsp.writeFile(jsonPath, JSON.stringify(document));
-
-  try {
-    await execFileAsync("plutil", ["-convert", "xml1", "-o", targetPath, jsonPath]);
-  } finally {
-    await fsp.rm(jsonPath, { force: true });
-  }
+  await fsp.writeFile(targetPath, buildPlist(document as PlistValue));
 
   return document;
 }

@@ -4,16 +4,13 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { readBundleIdentifier } from "../plist";
 import { scheduleGroupSigkill, signalGroupThenPid } from "../process-kill";
 import { sleep } from "../timing";
 import { iosRelayFor, type IosRelay } from "./relay";
 import { iosRelayDriver } from "./relay-driver";
 import { readXctestrun, runnerAppsFromXctestrun, runnerBundleIdFromXctestrun } from "./xctestrun";
-
-const execFileAsync = promisify(execFile);
 
 /**
  * Launch the built runner on a device, learn the port it bound, and kill it again.
@@ -172,7 +169,8 @@ async function launchRelayedRunner(
   const installed = await driver.installedBundleIds(relay);
 
   for (const app of runnerAppsFromXctestrun(document, path.dirname(xctestrunPath))) {
-    const bundleId = app.bundleId ?? (await readBundleIdentifier(app.path));
+    const bundleId =
+      app.bundleId ?? (await readBundleIdentifier(path.join(app.path, "Info.plist")));
 
     if (bundleId && installed.has(bundleId)) continue;
 
@@ -192,23 +190,6 @@ async function launchRelayedRunner(
     return { child, logPath, resultBundlePath, port: RELAY_RUNNER_PORT };
   } finally {
     fs.closeSync(logFd);
-  }
-}
-
-/** `CFBundleIdentifier` from an app bundle's Info.plist, or undefined. */
-async function readBundleIdentifier(appPath: string): Promise<string | undefined> {
-  try {
-    const { stdout } = await execFileAsync("plutil", [
-      "-extract",
-      "CFBundleIdentifier",
-      "raw",
-      "-o",
-      "-",
-      path.join(appPath, "Info.plist"),
-    ]);
-    return stdout.trim() || undefined;
-  } catch {
-    return undefined;
   }
 }
 

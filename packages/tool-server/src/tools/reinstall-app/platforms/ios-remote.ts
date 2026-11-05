@@ -17,8 +17,7 @@ export const iosRemoteImpl: PlatformImpl<
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
-    // The tool-server may run on Linux here, with no plutil to read the bundle id.
-    await assertIosAppBundle(absolute, bundleId, { readBundleId: false });
+    await assertIosAppBundle(absolute, bundleId);
     try {
       await simctlUninstall(udid, bundleId);
     } catch {

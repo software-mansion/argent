@@ -1,11 +1,8 @@
-import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { InvalidToolInputError } from "../../utils/capability";
 import { readApkPackageName, readZipEntry } from "../../utils/apk-package";
-
-const execFileAsync = promisify(execFile);
+import { readBundleIdentifier } from "../../utils/plist";
 
 // reinstall-app uninstalls before it installs, so every check here must pass
 // before the uninstall: a bad appPath or a mismatched id would otherwise
@@ -28,15 +25,8 @@ function mismatch(bundleId: string, absolute: string, actual: string): InvalidTo
   );
 }
 
-/**
- * Check an iOS `.app` before uninstalling. `readBundleId: false` only checks the
- * bundle shape, for hosts without `plutil` (the remote-simulator path).
- */
-export async function assertIosAppBundle(
-  absolute: string,
-  bundleId: string,
-  { readBundleId = true }: { readBundleId?: boolean } = {}
-): Promise<void> {
+/** Check an iOS `.app` before uninstalling. */
+export async function assertIosAppBundle(absolute: string, bundleId: string): Promise<void> {
   await requirePath(absolute, "directory", "an .app bundle directory");
   const infoPlist = join(absolute, "Info.plist");
   if (!(await stat(infoPlist).catch(() => null))?.isFile()) {
@@ -44,18 +34,7 @@ export async function assertIosAppBundle(
       `appPath ${absolute} has no Info.plist, so it is not an iOS .app bundle. Nothing was uninstalled.`
     );
   }
-  if (!readBundleId) return;
-  const actual = await execFileAsync("plutil", [
-    "-extract",
-    "CFBundleIdentifier",
-    "raw",
-    "-o",
-    "-",
-    infoPlist,
-  ]).then(
-    ({ stdout }) => stdout.trim(),
-    () => ""
-  );
+  const actual = (await readBundleIdentifier(infoPlist)) ?? "";
   if (!actual) {
     throw new InvalidToolInputError(
       `${infoPlist} has no CFBundleIdentifier, so it is not an iOS .app bundle. Nothing was uninstalled.`
