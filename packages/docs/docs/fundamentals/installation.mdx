@@ -58,10 +58,10 @@ argent init
 
 ## Install from a GitHub release
 
-Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.30.1.tgz`. It is the same file npm serves. Download it and install it globally:
+Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.32.0.tgz`. It is the same file npm serves. Download it and install it globally:
 
 ```bash
-npm install -g ./swmansion-argent-0.30.1.tgz
+npm install -g ./swmansion-argent-0.32.0.tgz
 argent init
 ```
 
@@ -84,6 +84,37 @@ Add `--no-telemetry` to also commit a telemetry opt-out for the repository. Loca
 :::note
 In local mode the committed MCP config runs the project-local copy, so the bare `argent` command is **not** on teammates' `PATH`. Note that `npm install` builds Argent's native dependencies (`tree-sitter`) on each machine. These are prebuilt for macOS, Linux x64 and Windows x64; other targets compile from source and need a C/C++ toolchain.
 :::
+
+## macOS hosts after an Xcode update
+
+After you install or update Xcode, Xcode must install its system components. Until then, a `simctl` or `devicectl` call can start that install. The install waits for an administrator password, also when nobody sees the prompt.
+
+Argent reads Xcode's files to find if a `simctl` or `devicectl` call starts the install.
+
+If a `simctl` call starts the install:
+
+- Argent does not look for booted simulators in the background.
+- `list-devices` does not show local iOS simulators. Its `hint` field gives the reason to the agent.
+- The tools that need `simctl` fail. Most of them return an error that gives the same reason to the agent.
+
+Argent reads the type of a simulator with `simctl`. Argent must know the type to find an Apple TV simulator or a foldable iOS simulator. Thus, the tools that send input to a simulator or capture its screen also fail if Argent does not know its type yet. This occurs, for example, when Argent starts after the Xcode update.
+
+If a `devicectl` call starts the install:
+
+- `list-devices` does not show physical iPhones. Its `hint` field gives the reason to the agent.
+- The tools that need `devicectl` fail. Most of them return an error that gives the same reason to the agent.
+- A tool that only talks to the runner on the iPhone keeps working while the runner is up.
+
+Argent stops only its own calls. An `xcrun simctl` or `xcrun devicectl` command that the agent or you run still starts the install. Commands that call `simctl` or `devicectl`, for example `npx react-native run-ios`, also start it.
+
+The `hint` field and the error name the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
+
+To install the components, do one of these steps:
+
+- Open that Xcode and let it install the components.
+- Run the `xcodebuild` of that Xcode with `sudo`, for example `sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch`.
+
+Argent finds the installed components at the next tool call. You do not need to restart Argent.
 
 ## Linux hosts running Android emulators
 

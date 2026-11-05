@@ -140,14 +140,14 @@ async function runFlowRaw(
   signal?: AbortSignal
 ): Promise<FlowRunResult | { notice: string }> {
   // The flow file deliberately lives outside project_root (it pins the
-  // flow-relative app-path anchor). Run it as a co-located explicit flow_path
+  // flow-relative app-path anchor). Run it as a co-located explicit e2e_test_path
   // verified by the file-input boundary — an uploaded flow would reject the
   // run: composition some of these flows use.
-  const flowPath = String(params.flow_file);
-  const { name: _name, flow_file: _flowFile, ...rest } = params;
+  const flowPath = String(params.e2e_test_file);
+  const { name: _name, e2e_test_file: _flowFile, ...rest } = params;
   const ctx = {
     fileInputs: {
-      flow_path: {
+      e2e_test_path: {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
@@ -158,7 +158,7 @@ async function runFlowRaw(
   };
   return (await createRunFlowTool(registry).execute(
     {},
-    { ...rest, flow_path: flowPath } as never,
+    { ...rest, e2e_test_path: flowPath } as never,
     ctx as never
   )) as FlowRunResult | { notice: string };
 }
@@ -194,7 +194,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "chromium-e2e",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     // Booted once, from the app path resolved against the flow file's directory —
@@ -247,7 +247,7 @@ describe("flow-execute chromium boot", () => {
       const result = await runFlow(makeRegistry(), {
         name: "boot-timing",
         project_root: PROJECT_ROOT,
-        flow_file: flowFile,
+        e2e_test_file: flowFile,
       });
 
       expect(result.ok).toBe(true);
@@ -273,7 +273,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "seed-then-launch",
       project_root: flowDir,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(bootElectronApp).toHaveBeenCalledTimes(1);
@@ -297,7 +297,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "multi",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       platform: "chromium",
     });
 
@@ -329,7 +329,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "ambiguous",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(bootElectronApp).not.toHaveBeenCalled();
@@ -347,7 +347,7 @@ describe("flow-execute chromium boot", () => {
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: /abs/app }\n");
     const registry = makeRegistry();
 
-    await runFlow(registry, { name: "abs", project_root: PROJECT_ROOT, flow_file: flowFile });
+    await runFlow(registry, { name: "abs", project_root: PROJECT_ROOT, e2e_test_file: flowFile });
 
     expect(bootElectronApp.mock.calls[0][0]).toMatchObject({ appPath: "/abs/app" });
   });
@@ -376,7 +376,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "main",
       project_root: PROJECT_ROOT,
-      flow_file: linkPath,
+      e2e_test_file: linkPath,
     });
 
     expect(result.ok).toBe(true);
@@ -399,10 +399,10 @@ describe("flow-execute chromium boot", () => {
     await expect(
       createRunFlowTool(registry).execute(
         {},
-        { name: "uploaded", project_root: PROJECT_ROOT, flow_file: flowFile } as never,
+        { name: "uploaded", project_root: PROJECT_ROOT, e2e_test_file: flowFile } as never,
         {
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/uploaded.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -421,10 +421,10 @@ describe("flow-execute chromium boot", () => {
     const result = asRun(
       await createRunFlowTool(registry).execute(
         {},
-        { name: "uploaded-abs", project_root: PROJECT_ROOT, flow_file: flowFile } as never,
+        { name: "uploaded-abs", project_root: PROJECT_ROOT, e2e_test_file: flowFile } as never,
         {
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/uploaded-abs.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -450,7 +450,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "pinned",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -490,7 +490,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "parent-chromium",
       project_root: PROJECT_ROOT,
-      flow_file: parent,
+      e2e_test_file: parent,
     });
 
     // Both paths resolve against the same flow directory.
@@ -550,7 +550,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "rebind",
       project_root: PROJECT_ROOT,
-      flow_file: parent,
+      e2e_test_file: parent,
     });
 
     expect(result.ok).toBe(true);
@@ -571,7 +571,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "relaunch",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(result.ok).toBe(true);
@@ -611,7 +611,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "aliased-relaunch",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(result.ok).toBe(true);
@@ -646,7 +646,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "retire-then-fail",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(result.ok).toBe(false);
@@ -678,7 +678,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "cross-app-relaunch",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(result.ok).toBe(true);
@@ -712,7 +712,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "pinned-then-boot",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -767,7 +767,7 @@ describe("flow-execute chromium boot", () => {
 
     const result = await runFlow(
       registry,
-      { name: "cancelled", project_root: PROJECT_ROOT, flow_file: parent },
+      { name: "cancelled", project_root: PROJECT_ROOT, e2e_test_file: parent },
       controller.signal
     );
 
@@ -800,7 +800,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "leads-with-run",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
       platform: "chromium",
     });
 
@@ -836,7 +836,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "hop-then-e2e",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
     });
 
     expect(bootElectronApp).toHaveBeenCalledTimes(1);
@@ -866,7 +866,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "inline-then-e2e",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
     });
 
     expect(bootElectronApp).toHaveBeenCalledTimes(1);
@@ -891,7 +891,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "empty-hop-then-e2e",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
     });
 
     expect(bootElectronApp).toHaveBeenCalledTimes(1);
@@ -917,7 +917,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "twice-hopped",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
     });
 
     expect(bootElectronApp).toHaveBeenCalledTimes(1);
@@ -948,7 +948,7 @@ describe("flow-execute chromium boot", () => {
       runFlow(registry, {
         name: "real-step-hop",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
       })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
@@ -974,7 +974,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "hoist-mismatch",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
     });
 
     // Fails loudly, naming both apps — never a green "boot" of the wrong app —
@@ -1010,7 +1010,7 @@ describe("flow-execute chromium boot", () => {
       const result = await runFlow(registry, {
         name: "rewritten-mid-run",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
       });
 
       expect(result.ok).toBe(false);
@@ -1032,7 +1032,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "chained",
       project_root: PROJECT_ROOT,
-      flow_file: top,
+      e2e_test_file: top,
     });
 
     expect(bootElectronApp).toHaveBeenCalledTimes(1);
@@ -1051,7 +1051,7 @@ describe("flow-execute chromium boot", () => {
     readFileCalls.mockClear();
 
     await expect(
-      runFlow(registry, { name: "cyclic", project_root: PROJECT_ROOT, flow_file: top })
+      runFlow(registry, { name: "cyclic", project_root: PROJECT_ROOT, e2e_test_file: top })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
     // One read each for the top flow and the two loop files — a walk that only
@@ -1075,7 +1075,7 @@ describe("flow-execute chromium boot", () => {
     );
 
     await expect(
-      runFlow(registry, { name: "cyclic-then-e2e", project_root: PROJECT_ROOT, flow_file: top })
+      runFlow(registry, { name: "cyclic-then-e2e", project_root: PROJECT_ROOT, e2e_test_file: top })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
@@ -1102,7 +1102,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "deep-ok",
       project_root: PROJECT_ROOT,
-      flow_file: top,
+      e2e_test_file: top,
     });
 
     expect(bootElectronApp).toHaveBeenCalledTimes(1);
@@ -1116,7 +1116,7 @@ describe("flow-execute chromium boot", () => {
     );
 
     await expect(
-      runFlow(registry, { name: "deep-refused", project_root: PROJECT_ROOT, flow_file: top })
+      runFlow(registry, { name: "deep-refused", project_root: PROJECT_ROOT, e2e_test_file: top })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
@@ -1133,7 +1133,7 @@ describe("flow-execute chromium boot", () => {
     );
 
     await expect(
-      runFlow(registry, { name: "deep-then-e2e", project_root: PROJECT_ROOT, flow_file: top })
+      runFlow(registry, { name: "deep-then-e2e", project_root: PROJECT_ROOT, e2e_test_file: top })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
@@ -1153,7 +1153,7 @@ describe("flow-execute chromium boot", () => {
       const result = await runFlow(registry, {
         name: "sideways",
         project_root: PROJECT_ROOT,
-        flow_file: top,
+        e2e_test_file: top,
       });
 
       expect(bootElectronApp).toHaveBeenCalledTimes(1);
@@ -1177,7 +1177,11 @@ describe("flow-execute chromium boot", () => {
     );
 
     await expect(
-      runFlow(registry, { name: "missing-then-e2e", project_root: PROJECT_ROOT, flow_file: top })
+      runFlow(registry, {
+        name: "missing-then-e2e",
+        project_root: PROJECT_ROOT,
+        e2e_test_file: top,
+      })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
 
@@ -1186,7 +1190,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "missing-then-e2e",
       project_root: PROJECT_ROOT,
-      flow_file: top,
+      e2e_test_file: top,
       device: "chromium-cdp-9999",
     });
 
@@ -1206,7 +1210,7 @@ describe("flow-execute chromium boot", () => {
     );
 
     await expect(
-      runFlow(registry, { name: "no-launch", project_root: PROJECT_ROOT, flow_file: top })
+      runFlow(registry, { name: "no-launch", project_root: PROJECT_ROOT, e2e_test_file: top })
     ).rejects.toThrow(/No booted device found/);
     expect(bootElectronApp).not.toHaveBeenCalled();
   });
@@ -1228,7 +1232,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "nested-no-chromium",
       project_root: PROJECT_ROOT,
-      flow_file: parent,
+      e2e_test_file: parent,
     });
 
     expect(result.ok).toBe(false);
@@ -1251,7 +1255,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "failing-reclaim",
       project_root: PROJECT_ROOT,
-      flow_file: parent,
+      e2e_test_file: parent,
     });
 
     expect(result.ok).toBe(false);
@@ -1279,7 +1283,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "wedged-teardown",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(result.ok).toBe(true);
@@ -1304,7 +1308,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "pinned-no-chromium",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -1333,7 +1337,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "multi-platform",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "emulator-5554",
     });
 
@@ -1361,7 +1365,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "locked",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -1402,7 +1406,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "locked-dead-suspect",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -1432,7 +1436,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "locked-after-move",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -1470,7 +1474,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "hoisted-locked",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(result.ok).toBe(false);
@@ -1516,7 +1520,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "locked-two-owned",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(result.ok).toBe(false);
@@ -1547,7 +1551,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "locked-dead-owned",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     expect(result.ok).toBe(false);
@@ -1575,7 +1579,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "not-lock-shaped",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -1616,7 +1620,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "crash-not-lock",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -1641,7 +1645,7 @@ describe("flow-execute chromium boot", () => {
     const rejection = runFlow(registry, {
       name: "hoist-locked",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
     });
 
     // The underlying error survives the rewording; the hint follows it.
@@ -1677,7 +1681,7 @@ describe("flow-execute chromium boot", () => {
       runFlow(registry, {
         name: "hoist-missing-app",
         project_root: PROJECT_ROOT,
-        flow_file: flowFile,
+        e2e_test_file: flowFile,
       })
     ).rejects.toBe(raw);
   });
@@ -1707,7 +1711,7 @@ describe("flow-execute chromium boot", () => {
       runFlow(registry, {
         name: "hoist-crash",
         project_root: PROJECT_ROOT,
-        flow_file: flowFile,
+        e2e_test_file: flowFile,
       })
     ).rejects.toBe(raw);
   });
@@ -1733,7 +1737,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "fragment-b",
       project_root: PROJECT_ROOT,
-      flow_file: fragmentB,
+      e2e_test_file: fragmentB,
       device: "chromium-cdp-9999",
     });
 
@@ -1760,7 +1764,7 @@ describe("flow-execute chromium boot", () => {
     const result = await runFlow(registry, {
       name: "pinned-dead",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-9999",
     });
 
@@ -1790,7 +1794,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     const refusal = runFlow(registry, {
       name: "indirect-prereq",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
       prerequisiteAcknowledged: true,
     });
     await expect(refusal).rejects.toThrow(/must not declare executionPrerequisite/i);
@@ -1814,7 +1818,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       runFlow(registry, {
         name: "top-frag",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
         prerequisiteAcknowledged: true,
       })
     ).rejects.toThrow(/"e2e-inner"/);
@@ -1835,7 +1839,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       runFlowRaw(registry, {
         name: "indirect-prereq-notice",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
       })
     ).rejects.toThrow(/must not declare executionPrerequisite/i);
     expect(bootElectronApp).not.toHaveBeenCalled();
@@ -1853,7 +1857,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       runFlowRaw(registry, {
         name: "seed-prereq",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
       })
     ).rejects.toThrow(/must not declare executionPrerequisite/i);
     expect(bootElectronApp).not.toHaveBeenCalled();
@@ -1877,14 +1881,14 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       runFlowRaw(registry, {
         name: "hop-prereq",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
       })
     ).rejects.toThrow(/must not declare executionPrerequisite/i);
     await expect(
       runFlow(registry, {
         name: "hop-prereq",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
         prerequisiteAcknowledged: true,
       })
     ).rejects.toThrow(/"e2e-a"/);
@@ -1905,14 +1909,14 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       runFlowRaw(registry, {
         name: "inline-prereq",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
       })
     ).rejects.toThrow(/must not declare executionPrerequisite/i);
     await expect(
       runFlow(registry, {
         name: "inline-prereq",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
         prerequisiteAcknowledged: true,
       })
     ).rejects.toThrow(/"e2e-a"/);
@@ -1942,7 +1946,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     const params = {
       name: "pinned-prereq",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
       device: "chromium-cdp-9999",
     };
 
@@ -1993,7 +1997,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       runFlow(registry, {
         name: "unpinned-prereq",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
         prerequisiteAcknowledged: true,
       })
     ).rejects.toThrow(/must not declare executionPrerequisite/i);
@@ -2028,7 +2032,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       const refusal = runFlow(registry, {
         name: "pinned-native-prereq",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
         device,
         prerequisiteAcknowledged: true,
       });
@@ -2053,7 +2057,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     const result = await runFlowRaw(registry, {
       name: "plain-prereq",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
     });
 
     expect(result).toMatchObject({
@@ -2079,7 +2083,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     const noticed = await runFlowRaw(registry, {
       name: "broken-chain",
       project_root: PROJECT_ROOT,
-      flow_file: fragment,
+      e2e_test_file: fragment,
     });
     expect(noticed).toMatchObject({ notice: expect.stringContaining("prerequisite") });
 
@@ -2087,7 +2091,7 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       runFlow(registry, {
         name: "broken-chain",
         project_root: PROJECT_ROOT,
-        flow_file: fragment,
+        e2e_test_file: fragment,
         prerequisiteAcknowledged: true,
       })
     ).rejects.toThrow(/No booted device found/);
