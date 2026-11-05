@@ -11,7 +11,7 @@ import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspe
 import { createDebuggerLogRegistryTool } from "../src/tools/debugger/debugger-log-registry";
 import { debuggerEvaluateTool } from "../src/tools/debugger/debugger-evaluate";
 
-const SKILL = path.resolve(__dirname, "../../skills/skills/argent-metro-debugger/SKILL.md");
+const SKILL_DIR = path.resolve(__dirname, "../../skills/skills/argent-metro-debugger");
 
 const registry = new Registry();
 
@@ -38,7 +38,9 @@ function schemaOf(tool: ToolDefinition<any, any>): {
 }
 
 const overviewSection = (() => {
-  const after = readFileSync(SKILL, "utf8").split("## 2. Tool Overview")[1];
+  const after = readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf8").split(
+    "## 2. Tool Overview"
+  )[1];
   expect(after, "## 2. Tool Overview is missing from the skill").toBeDefined();
   const section = after!.split("\n## 3. ")[0]!;
   expect(section, "## 3. is missing from the skill after ## 2. Tool Overview").not.toBe(after);
@@ -51,7 +53,7 @@ const rows = new Map(
 );
 
 const targetingClaim = (() => {
-  const line = overviewSection.split("\n").find((l) => l.includes("`port` (default 8081)"));
+  const line = overviewSection.split("\n").find((l) => l.includes("AND `device_id`"));
   expect(line, "no sentence in the overview states the targeting parameters").toBeDefined();
   return line!;
 })();
@@ -61,24 +63,39 @@ describe("argent-metro-debugger tool overview", () => {
     expect([...rows.keys()].sort()).toEqual(OVERVIEW_TOOLS.map((t) => t.id).sort());
   });
 
-  it("keeps the port/device_id claim off the tools that take neither", () => {
+  it("exempts from the port/device_id claim exactly the tools missing either", () => {
     const outliers = OVERVIEW_TOOLS.filter((tool) => {
       const { properties } = schemaOf(tool);
       return !("port" in properties) || !("device_id" in properties);
     });
-    expect(outliers.map((t) => t.id)).toContain("restart-app");
+    const exemptions = targetingClaim.match(/ except (.*?) accepts /)?.[1] ?? "";
+    const exempted = [...exemptions.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]!);
+    expect(exempted.sort()).toEqual(outliers.map((t) => t.id).sort());
 
     for (const tool of outliers) {
-      expect(
-        targetingClaim,
-        `${tool.id} takes no port/device_id yet the claim covers it`
-      ).toContain(`\`${tool.id}\``);
-      for (const param of schemaOf(tool).required) {
-        expect(
-          rows.get(tool.id),
-          `${tool.id}'s row does not name its \`${param}\` parameter`
-        ).toContain(`\`${param}\``);
+      const { properties, required } = schemaOf(tool);
+      const [takes] = rows.get(tool.id)!.split(" not ");
+      for (const param of required) {
+        expect(takes, `${tool.id}'s row does not name its \`${param}\` parameter`).toContain(
+          `\`${param}\``
+        );
       }
+      for (const param of ["port", "device_id"].filter((p) => !(p in properties))) {
+        expect(takes, `${tool.id}'s row offers \`${param}\`, which it lacks`).not.toContain(
+          `\`${param}\``
+        );
+      }
+    }
+  });
+
+  it("names restart-app's required parameters where a recovery spells out its arguments", () => {
+    const scenarios = readFileSync(path.join(SKILL_DIR, "references/failure-scenarios.md"), "utf8");
+    const recoveries = [...scenarios.matchAll(/`restart-app` with ([^.]*)\./g)].map((m) => m[1]!);
+    expect(recoveries).not.toEqual([]);
+
+    const { required } = schemaOf(OVERVIEW_TOOLS.find((t) => t.id === "restart-app")!);
+    for (const recovery of recoveries) {
+      for (const param of required) expect(recovery).toContain(`\`${param}\``);
     }
   });
 });
