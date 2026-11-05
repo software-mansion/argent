@@ -88,7 +88,20 @@ function loadTreeSitter(): {
   return { ParserClass: _ParserClass, ts: _tsLanguage, tsx: _tsxLanguage };
 }
 
-const EXCLUDE_DIRS = new Set(["node_modules", ".git", "android", "ios", "dist", "build", ".expo"]);
+const EXCLUDE_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "android",
+  "ios",
+  "dist",
+  "build",
+  ".expo",
+  "__tests__",
+  "__mocks__",
+]);
+
+/** A mock defined in a test is not the app's component, though it may share its name. */
+const TEST_FILE = /\.(test|spec)\.[jt]sx?$/;
 
 async function findSourceFiles(dir: string): Promise<string[]> {
   const result: string[] = [];
@@ -109,10 +122,11 @@ async function findSourceFiles(dir: string): Promise<string[]> {
       } else if (entry.isFile()) {
         const name = entry.name;
         if (
-          name.endsWith(".ts") ||
-          name.endsWith(".tsx") ||
-          name.endsWith(".js") ||
-          name.endsWith(".jsx")
+          (name.endsWith(".ts") ||
+            name.endsWith(".tsx") ||
+            name.endsWith(".js") ||
+            name.endsWith(".jsx")) &&
+          !TEST_FILE.test(name)
         ) {
           result.push(join(current, name));
         }

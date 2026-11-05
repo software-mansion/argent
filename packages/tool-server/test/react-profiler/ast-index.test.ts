@@ -62,6 +62,22 @@ describe("buildAstIndexWithDiagnostics", () => {
     expect(res.index.get("BigScreen")?.line).toBe(1201);
   });
 
+  it("leaves test files and mocks out: a mock named View is not the app's View", async () => {
+    const dir = makeTempDir("ast-index-tests-");
+    mkdirSync(join(dir, "__mocks__"), { recursive: true });
+    mkdirSync(join(dir, "__tests__"), { recursive: true });
+    const mock = (name: string) => `export function ${name}() { return <Text />; }\n`;
+    writeFileSync(join(dir, "feed.test.tsx"), mock("InTestFile"));
+    writeFileSync(join(dir, "feed.spec.ts"), mock("InSpecFile"));
+    writeFileSync(join(dir, "__mocks__", "native.tsx"), mock("InMocks"));
+    writeFileSync(join(dir, "__tests__", "helper.tsx"), mock("InTests"));
+    writeFileSync(join(dir, "Latest.tsx"), mock("RealScreen"));
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()]).toEqual(["RealScreen"]);
+  });
+
   it("leaves out a file too large to be a screen someone wrote", async () => {
     const dir = makeTempDir("ast-index-huge-");
     writeFileSync(
