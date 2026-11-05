@@ -552,7 +552,9 @@ describe("boot-device — iOS path", () => {
     );
     expect(simctl.map(([, args]) => args[1])).toEqual(["shutdown", "boot", "bootstatus"]);
     for (const [, , options] of simctl) {
-      expect(options).toMatchObject({ killSignal: "SIGKILL", timeout: expect.any(Number) });
+      expect(options).toMatchObject({ killSignal: "SIGKILL" });
+      // 0 means no timeout to Node.
+      expect(options.timeout).toBeGreaterThan(0);
     }
   });
 
