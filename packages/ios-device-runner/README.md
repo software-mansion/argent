@@ -63,8 +63,9 @@ The signing team resolves in two steps, and the environment variable wins:
   Apple ID and team) or at developer.apple.com/account under Membership.
 - When it is not set, the tool-server detects the team from the Mac's
   keychain: the Apple Development certificates name their team (and the
-  legacy iPhone Developer name is checked too), and with several teams the
-  one with the newest certificate wins. The detection result is memoized for
+  legacy iPhone Developer name is checked too). With several teams, the newest
+  one with a provisioning profile that lists the phone wins, and otherwise the
+  one with the newest certificate. The detection result is memoized for
   the tool-server process. With no certificate at all, the build fails with a
   prompt to sign into Xcode and mint one (Manage Certificates > + > Apple
   Development).

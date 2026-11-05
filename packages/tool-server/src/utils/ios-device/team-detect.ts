@@ -177,12 +177,16 @@ function formatTeam(team: DetectedSigningTeam): string {
 }
 
 /** The agent-facing summary of which team detection picked and why. */
-export function buildSigningDetectionNote(teams: readonly DetectedSigningTeam[]): string {
-  const [winner, ...others] = teams;
-
+export function buildSigningDetectionNote(
+  teams: readonly DetectedSigningTeam[],
+  winner: DetectedSigningTeam | undefined = teams[0],
+  coveredUdid?: string
+): string {
   if (!winner) {
     throw new Error("buildSigningDetectionNote requires at least one detected team");
   }
+
+  const others = teams.filter((team) => team !== winner);
 
   if (others.length === 0) {
     return (
@@ -194,30 +198,38 @@ export function buildSigningDetectionNote(teams: readonly DetectedSigningTeam[])
 
   return (
     `Signing the on-device runner with team ${winner.teamId} (${winner.label}), ` +
-    `the newest of ${teams.length} signing identities in this Mac's keychain. ` +
+    (coveredUdid
+      ? `the newest of ${teams.length} signing identities in this Mac's keychain with a ` +
+        `provisioning profile that lists phone ${coveredUdid}. `
+      : `the newest of ${teams.length} signing identities in this Mac's keychain. `) +
     `Also found: ${others.map(formatTeam).join(", ")}. ` +
     `To sign under a different team, set ARGENT_IOS_TEAM_ID in the tool-server's ` +
     `environment: argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach`
   );
 }
 
-let announced = false;
+const announcedTeams = new Set<string>();
 let pendingNote: string | null = null;
 
 /**
- * Called when a detected (not env-configured) team is first used for signing.
- * Logs the outcome once and stages the same text for the tool-result note
- * channel below. Subsequent uses of the memoized detection stay silent.
+ * Called when a detected (not env-configured) team is used for signing. Logs
+ * the outcome once per team, since phones can sign under different ones, and
+ * stages the same text for the tool-result note channel below. Later uses of the
+ * same team stay silent.
  */
-export function announceDetectedSigningTeam(teams: readonly DetectedSigningTeam[]): void {
-  if (announced || teams.length === 0) {
+export function announceDetectedSigningTeam(
+  teams: readonly DetectedSigningTeam[],
+  winner: DetectedSigningTeam | undefined = teams[0],
+  coveredUdid?: string
+): void {
+  if (!winner || announcedTeams.has(winner.teamId)) {
     return;
   }
 
-  announced = true;
-  const note = buildSigningDetectionNote(teams);
+  announcedTeams.add(winner.teamId);
+  const note = buildSigningDetectionNote(teams, winner, coveredUdid);
   process.stderr.write(`[ios-device-signing] ${note}\n`);
-  pendingNote = note;
+  pendingNote = pendingNote ? `${pendingNote}\n${note}` : note;
 }
 
 /**
@@ -241,6 +253,6 @@ export function consumePendingSigningDetectionNote(): string | null {
 export function __setCertificateListerForTests(lister: CertificateLister | null): void {
   certificateLister = lister ?? listCertificatePem;
   memoizedTeams = null;
-  announced = false;
+  announcedTeams.clear();
   pendingNote = null;
 }
