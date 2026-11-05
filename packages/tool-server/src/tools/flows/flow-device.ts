@@ -238,11 +238,12 @@ export async function assertDeviceMeetsRequires(
 function unknownRuntimeKindError(
   requires: FlowRequires,
   devices: string[],
-  subject = "This e2e test"
+  subject = "This e2e test",
+  remedy = ""
 ): FailureError {
   return requirementsError(
     `${subject} declares ${describeRequires(requires)}, but the runtime kind of ` +
-      `${devices.join(", ")} could not be determined.`,
+      `${devices.join(", ")} could not be determined.${remedy}`,
     FAILURE_CODES.FLOW_DEVICE_RESOLUTION
   );
 }
@@ -279,9 +280,24 @@ export async function resolveFlowDevice(
   const candidates = requires ? scoped.filter((d) => platformMeets(d.platform, requires)) : scoped;
   const kinds = new Map<RawDevice, FlowRuntimeKind | undefined>();
   if (requires?.runtimeKind) {
-    for (const d of candidates) kinds.set(d, await candidateRuntimeKind(d));
-    const unknown = candidates.filter((d) => kinds.get(d) === undefined);
-    if (unknown.length > 0) throw unknownRuntimeKindError(requires, unknown.map(describeDevice));
+    const wanted = requires.runtimeKind;
+    const anyMatch = () => candidates.some((d) => kinds.get(d) === wanted);
+    for (const d of candidates) kinds.set(d, listedRuntimeKind(d));
+    // A listed match is enough: probing the other devices can hang on a frozen one.
+    if (!anyMatch()) {
+      for (const d of candidates) {
+        if (kinds.get(d) === undefined) kinds.set(d, await candidateRuntimeKind(d));
+      }
+      const unknown = candidates.filter((d) => kinds.get(d) === undefined);
+      if (!anyMatch() && unknown.length > 0) {
+        throw unknownRuntimeKindError(
+          requires,
+          unknown.map(describeDevice),
+          undefined,
+          " Pass --device or --platform to choose a device."
+        );
+      }
+    }
   }
   const eligible = requires?.runtimeKind
     ? candidates.filter((d) => kinds.get(d) === requires.runtimeKind)

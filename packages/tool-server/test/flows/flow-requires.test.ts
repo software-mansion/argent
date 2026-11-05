@@ -10,6 +10,7 @@ import {
   type FlowFile,
   type FlowStep,
 } from "../../src/tools/flows/flow-utils";
+import { getAndroidRuntimeKind } from "../../src/utils/adb";
 
 // Probed for an explicit device and for a listed device with no runtime kind.
 const runtimeKinds = new Map<string, "mobile" | "tv">();
@@ -99,6 +100,7 @@ async function failureCode(promise: Promise<unknown>): Promise<string | undefine
 }
 
 beforeEach(async () => {
+  vi.clearAllMocks();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "flow-requires-"));
   runtimeKinds.clear();
   runtimeKinds.set(IOS, "mobile");
@@ -258,10 +260,18 @@ describe("requirements narrow device auto-detection", () => {
   it("fails without the skip code when a candidate's runtime kind is unknown", async () => {
     await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
     runtimeKinds.delete(ANDROID);
-    const { registry } = mockRegistry([ios(IOS_TV, "tv"), android(ANDROID)]);
+    const { registry } = mockRegistry([ios(IOS, "mobile"), android(ANDROID)]);
     const err = await run(registry, "tv-only").catch((e: unknown) => e);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_DEVICE_RESOLUTION);
     expect((err as Error).message).toContain(`runtime kind of ${ANDROID} (android, device)`);
+    expect((err as Error).message).toContain("Pass --device or --platform");
+  });
+
+  it("picks a listed match without probing a device whose kind is unknown", async () => {
+    await writeFlow("tv-only", { requires: { runtimeKind: "tv" } });
+    const { registry } = mockRegistry([ios(IOS_TV, "tv"), android(ANDROID)]);
+    expect((await run(registry, "tv-only")).device).toBe(IOS_TV);
+    expect(getAndroidRuntimeKind).not.toHaveBeenCalled();
   });
 
   it("probes a candidate whose listing has no runtime kind", async () => {
@@ -274,7 +284,7 @@ describe("requirements narrow device auto-detection", () => {
   it("fails a cleanup test rather than sweeping unscoped when a runtime kind is unknown", async () => {
     await writeFlow("tv-cleanup", { requires: { runtimeKind: "tv" }, steps: [CLEANUP] });
     runtimeKinds.delete(ANDROID);
-    const { registry, invokeTool } = mockRegistry([ios(IOS_TV, "tv"), android(ANDROID)]);
+    const { registry, invokeTool } = mockRegistry([ios(IOS, "mobile"), android(ANDROID)]);
     expect(await failureCode(run(registry, "tv-cleanup"))).toBe(
       FAILURE_CODES.FLOW_DEVICE_RESOLUTION
     );
