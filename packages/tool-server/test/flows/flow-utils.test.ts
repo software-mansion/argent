@@ -871,6 +871,60 @@ describe("parseFlow", () => {
   // parse time — silently dropping it would apply the default instead and
   // surface later as a misleading runtime failure (wrong scroll direction,
   // lost submit opt-out, lost timeout, lost snapshot tolerance).
+  describe("format version", () => {
+    const thrown = (content: string): unknown => {
+      try {
+        parseFlow(content);
+      } catch (e) {
+        return e;
+      }
+      throw new Error("parseFlow did not throw");
+    };
+
+    it("reads a file without version, and one with version 1, the same", async () => {
+      const body = "steps:\n  - echo: hi\n";
+      expect(parseFlow(`version: 1\n${body}`)).toEqual(parseFlow(body));
+    });
+
+    it.each([[2], [3]])("refuses a version %i file and says to update", async (v) => {
+      const err = thrown(`version: ${v}\nsteps:\n  - echo: hi\n`);
+      expect((err as Error).message).toBe(
+        `The e2e test file is version ${v}, but this Argent reads up to version 1. Update Argent to run it.`
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_NEWER_VERSION);
+    });
+
+    it.each([
+      ["adds a top-level key", "version: 2\nmetadata: x\nsteps: []\n"],
+      ["reshapes steps", "version: 2\nsteps:\n  main: []\n"],
+    ])("refuses a newer file that %s as newer, not as malformed", async (_, file) => {
+      expect(() => parseFlow(file)).toThrow(
+        "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it."
+      );
+    });
+
+    it.each([
+      ["0", "0"],
+      ["1.5", "1.5"],
+      ['"1"', '"1"'],
+      [".inf", "Infinity"],
+      [".nan", "NaN"],
+      ["&a [*a]", "[cyclic entry]"],
+    ])("rejects version: %s, naming it as %s", async (v, shown) => {
+      const err = thrown(`version: ${v}\nsteps: []\n`);
+      expect((err as Error).message).toBe(
+        `Invalid e2e test file: version must be a positive integer, got ${shown}`
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+    });
+
+    it("caps an oversized version in the message", async () => {
+      expect(() => parseFlow(`version: ${"x".repeat(300)}\nsteps: []\n`)).toThrow(
+        /got "x{199}…\(\+102 chars\)$/
+      );
+    });
+  });
+
   describe("unknown option keys are rejected at parse time", () => {
     it("rejects a misspelled scroll-to direction key with a suggestion", async () => {
       expect(() =>
@@ -963,68 +1017,9 @@ describe("parseFlow", () => {
       );
     });
 
-    it("reads a file without version, and one with version 1, the same", async () => {
-      const body = "steps:\n  - echo: hi\n";
-      expect(parseFlow(`version: 1\n${body}`)).toEqual(parseFlow(body));
-    });
-
-    it("refuses a file from a newer format version and says to update", async () => {
-      let err: unknown;
-      try {
-        parseFlow("version: 2\nsteps:\n  - echo: hi\n");
-      } catch (e) {
-        err = e;
-      }
-      expect((err as Error).message).toBe(
-        "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it."
-      );
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_NEWER_VERSION);
-    });
-
-    it.each([
-      ["adds a top-level key", "version: 2\nmetadata: x\nsteps: []\n"],
-      ["reshapes steps", "version: 2\nsteps:\n  main: []\n"],
-    ])("refuses a newer file that %s as newer, not as malformed", async (_, file) => {
-      expect(() => parseFlow(file)).toThrow(
-        "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it."
-      );
-    });
-
-    it("renders a cyclic or oversized version as a capped, signalled failure", async () => {
-      const cyclic = (() => {
-        try {
-          parseFlow("version: &a [*a]\nsteps: []\n");
-        } catch (e) {
-          return e;
-        }
-      })();
-      expect((cyclic as Error).message).toBe(
-        "Invalid e2e test file: version must be a positive integer, got [cyclic entry]"
-      );
-      expect(getFailureSignal(cyclic)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
-      expect(() => parseFlow(`version: ${"x".repeat(300)}\nsteps: []\n`)).toThrow(
-        /got "x{199}…\(\+102 chars\)$/
-      );
-    });
-
-    it.each([
-      [".inf", "Infinity"],
-      [".nan", "NaN"],
-    ])("names a non-finite version: %s as %s", async (v, shown) => {
-      expect(() => parseFlow(`version: ${v}\nsteps: []\n`)).toThrow(
-        `Invalid e2e test file: version must be a positive integer, got ${shown}`
-      );
-    });
-
     it("names a non-finite step entry instead of null", async () => {
       expect(() => parseFlow("steps:\n  - .inf\n")).toThrow(
         "Unrecognized e2e test entry (step must be an object): Infinity"
-      );
-    });
-
-    it.each([["0"], ["1.5"], ['"1"']])("rejects version: %s", async (v) => {
-      expect(() => parseFlow(`version: ${v}\nsteps: []\n`)).toThrow(
-        /version must be a positive integer/
       );
     });
 
