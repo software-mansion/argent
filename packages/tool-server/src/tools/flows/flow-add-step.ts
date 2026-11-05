@@ -1495,7 +1495,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       if (params.selector && !survivesFlowFile(params.selector)) {
         return recordNothing(
           session,
-          `\`selector\` ${JSON.stringify(params.selector)} changes when an e2e test file is written and read back, so a replay would resolve something else. Drop the whitespace at the ends of its values, or select by another field.`
+          `\`selector\` ${JSON.stringify(params.selector)} would not read back unchanged from an e2e test file that ends with this step, so a replay could resolve something else. Change that value, or select by another field.`
         );
       }
 

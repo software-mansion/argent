@@ -251,7 +251,7 @@ To record a different selector, pass `selector` beside `args`, with an `identifi
 - A replay taps the center of the matched element. The innermost element at that center is not the innermost element at the tapped point. The message gives the center, so that the agent can record the tap there.
 - The command is not `gesture-tap`, or the call also has `delayMs`.
 - The selector contains `{{output:`, which a recorded step cannot use.
-- A selector value changes when the e2e test file is written and read back, for example a value that ends in a no-break space.
+- A selector value would not read back unchanged from an e2e test file that ends with this step, for example a value that ends in a no-break space.
 - The `args` string holds a `selector`.
 
 ## Design variants
