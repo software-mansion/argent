@@ -130,6 +130,7 @@ import { createLaunchAppTool } from "../src/tools/launch-app";
 import { openUrlTool } from "../src/tools/open-url";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { reinstallAppTool } from "../src/tools/reinstall-app";
+import { settingsPermissionsTool } from "../src/tools/settings-permissions";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "../src/utils/ax-prefs";
 import { pinStatusBar, restoreStatusBar } from "../src/utils/status-bar";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
@@ -254,7 +255,7 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
   const BUNDLE_ID = "com.example.app";
   let appPath: string;
 
-  function app() {
+  function tools() {
     __primeDepCacheForTests(["xcrun"]);
     const registry = new Registry();
     registry.registerBlueprint(nativeDevtoolsBlueprint);
@@ -263,8 +264,37 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
     registry.registerTool(openUrlTool as never);
     registry.registerTool(createRestartAppTool(registry) as never);
     registry.registerTool(reinstallAppTool as never);
-    return createHttpApp(registry).app;
+    registry.registerTool(settingsPermissionsTool as never);
+    return registry;
   }
+
+  function app() {
+    return createHttpApp(tools()).app;
+  }
+
+  // Armed while the install was done, so launch-app and restart-app pass the
+  // native-devtools precheck, which then runs no simctl, and reach `simctl launch`.
+  async function armedTools() {
+    pending.value = false;
+    const registry = tools();
+    const ref = nativeDevtoolsRef(SIMULATOR);
+    const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+    expect(api.isEnvSetup()).toBe(true);
+    return registry;
+  }
+
+  // Each tool wraps a failed `simctl` call in its own error.
+  const WRAPPING = [
+    ["launch-app", { bundleId: BUNDLE_ID }, FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED, "launch"],
+    ["restart-app", { bundleId: BUNDLE_ID }, FAILURE_CODES.IOS_RESTART_LAUNCH_FAILED, "launch"],
+    ["open-url", { url: "https://example.com" }, FAILURE_CODES.IOS_OPEN_URL_FAILED, "openurl"],
+    [
+      "settings-permissions",
+      { action: "grant", permission: "camera", bundleId: BUNDLE_ID },
+      FAILURE_CODES.IOS_SETTINGS_PERMISSION_FAILED,
+      "privacy",
+    ],
+  ] as const;
 
   beforeEach(() => {
     // reinstall-app reads the bundle id of a real .app before it touches the device.
@@ -288,6 +318,10 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
     ["open-url", () => ({ url: "https://example.com" })],
     ["restart-app", () => ({ bundleId: BUNDLE_ID })],
     ["reinstall-app", () => ({ bundleId: BUNDLE_ID, appPath })],
+    [
+      "settings-permissions",
+      () => ({ action: "grant", permission: "contacts", bundleId: BUNDLE_ID }),
+    ],
   ] as const)("%s answers the refusal and spawns no xcrun", async (id, params) => {
     const res = await request(app())
       .post(`/tools/${id}`)
@@ -295,7 +329,53 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
 
     expect(res.status).toBe(424);
     expect(res.body.error).toMatch(/-runFirstLaunch/);
+    expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
     expect(xcrunCalls()).toEqual([]);
+  });
+
+  // A flow step's reason is the message of the error the tool throws, and nothing
+  // under it, so a tool's own wrapper would leave the agent without the fix.
+  it.each(WRAPPING)(
+    "%s throws the refusal itself on a service armed before the install went pending",
+    async (id, params) => {
+      const registry = await armedTools();
+      try {
+        pending.value = true;
+        execFileMock.mockClear();
+        const err = await registry
+          .invokeTool(id, { udid: SIMULATOR.id, ...params })
+          .catch((e: unknown) => e);
+
+        expect((err as Error).message).toBe(
+          `[Tool:${id}] ${new XcodeFirstLaunchPendingError().message}`
+        );
+        expect(getFailureSignal(err)?.error_code).toBe(
+          FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING
+        );
+        expect(xcrunCalls()).toEqual([]);
+      } finally {
+        await registry.dispose();
+      }
+    }
+  );
+
+  it.each(WRAPPING)("%s still wraps any other simctl failure", async (id, params, code, verb) => {
+    const registry = await armedTools();
+    try {
+      execFileMock.mockImplementation((...args: unknown[]) => {
+        const cb = args[args.length - 1] as (err: Error | null, out?: unknown) => void;
+        const failed = args[0] === "xcrun" && (args[1] as string[]).includes(verb);
+        cb(failed ? new Error("simctl failed") : null, { stdout: "", stderr: "" });
+      });
+      const err = await registry
+        .invokeTool(id, { udid: SIMULATOR.id, ...params })
+        .catch((e: unknown) => e);
+
+      expect((err as Error).message).toMatch(/^\[Tool:[a-z-]+\] Failed to /);
+      expect(getFailureSignal(err)?.error_code).toBe(code);
+    } finally {
+      await registry.dispose();
+    }
   });
 
   it("the status bar and accessibility helpers spawn no xcrun", async () => {
@@ -580,7 +660,10 @@ describe("native-profiler-start while Xcode's install is pending", () => {
   it.each([
     ["detecting the app", {}],
     ["given an app_process, rather than saying to launch the app", { app_process: "Probe" }],
+    ["looking up an app to cold-launch", { app_process: "Probe", malloc_stack_logging: true }],
   ])("answers 424 %s", async (_case, params) => {
+    // Only `xctrace --device` can cold-launch an app for malloc_stack_logging.
+    if ("malloc_stack_logging" in params) vi.stubEnv("ARGENT_IOS_CAPTURE", "device");
     pending.value = true;
     __primeDepCacheForTests(["xcrun"]);
     const registry = new Registry();
@@ -593,8 +676,9 @@ describe("native-profiler-start while Xcode's install is pending", () => {
 
       expect(res.status).toBe(424);
       expect(res.body.error).toMatch(/-runFirstLaunch/);
-      expect(res.body.error_code).toBe(FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED);
+      expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
     } finally {
+      vi.unstubAllEnvs();
       await registry.dispose();
     }
   });
