@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync, spawn } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync, existsSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { redirectHomeTo } from "./helpers/home-redirect.js";
@@ -306,6 +306,21 @@ describe("ensureToolsServer", () => {
 
     expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(await launcher.isToolsServerHealthy(fresh!.port, "127.0.0.1")).toBe(true);
+  });
+
+  it("gives the child its 30-minute idle timeout over an exported one", async () => {
+    const idleFile = join(TEST_HOME, "idle-timeout");
+    process.env.ARGENT_IDLE_TIMEOUT_MINUTES = "1";
+    process.env.FAKE_IDLE_FILE = idleFile;
+    try {
+      await launcher.ensureToolsServer(fakePaths());
+      spawnedPids.push((await launcher.readToolsServerState(FAKE_BUNDLE))!.pid);
+
+      expect(readFileSync(idleFile, "utf8")).toBe("30");
+    } finally {
+      delete process.env.ARGENT_IDLE_TIMEOUT_MINUTES;
+      delete process.env.FAKE_IDLE_FILE;
+    }
   });
 
   it("binds the child to 127.0.0.1 even when ARGENT_HOST names another address", async () => {

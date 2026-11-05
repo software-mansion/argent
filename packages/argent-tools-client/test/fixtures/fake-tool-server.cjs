@@ -26,6 +26,7 @@
  *                            test that drives the readiness-timeout path (where
  *                            spawnToolsServer rejects without returning a pid)
  *                            can still find the child and assert it was reaped
+ *   FAKE_IDLE_FILE=<path>    write the child's ARGENT_IDLE_TIMEOUT_MINUTES to <path>
  */
 
 const fs = require("node:fs");
@@ -34,6 +35,9 @@ const http = require("node:http");
 const mode = process.env.FAKE_MODE || "ready";
 
 // Written first thing so even exit-immediate / no-ready modes expose their pid.
+if (process.env.FAKE_IDLE_FILE) {
+  fs.writeFileSync(process.env.FAKE_IDLE_FILE, String(process.env.ARGENT_IDLE_TIMEOUT_MINUTES));
+}
 if (process.env.FAKE_PIDFILE) {
   try {
     fs.writeFileSync(process.env.FAKE_PIDFILE, String(process.pid));
