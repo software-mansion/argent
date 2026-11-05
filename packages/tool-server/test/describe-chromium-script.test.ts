@@ -1578,6 +1578,101 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(tree, "cut")!.clipAnchors).toEqual({ y: { x: 0.0295, y: 0.0108 } });
   });
 
+  it("anchors through a cross-axis scroller unless its overscroll-behavior keeps the wheel", () => {
+    // A horizontal carousel over the top of a vertical list that cuts the row.
+    const list = (overscroll: string) =>
+      el({
+        rect: { x: 0, y: 0, w: 300, h: 200 },
+        client: { left: 0, top: 0, width: 300, height: 200 },
+        offset: { width: 300, height: 200 },
+        scrollSize: { width: 300, height: 600 },
+        style: { overflow: "auto" },
+        painted: { x: 0, y: 0, w: 300, h: 200 },
+        children: [
+          el({
+            rect: { x: 0, y: 0, w: 300, h: 180 },
+            client: { left: 0, top: 0, width: 300, height: 180 },
+            offset: { width: 300, height: 180 },
+            scrollSize: { width: 600, height: 180 },
+            style: { overflow: "auto", overscrollBehaviorY: overscroll },
+            painted: { x: 0, y: 0, w: 300, h: 180 },
+          }),
+          el({
+            attrs: { id: "cut" },
+            rect: { x: 0, y: 180, w: 300, h: 60 },
+            painted: { x: 0, y: 180, w: 300, h: 20 },
+          }),
+        ],
+      });
+    const anchorFor = (overscroll: string) =>
+      findById(run([list(overscroll)]).tree, "cut")!.clipAnchors;
+    expect(anchorFor("auto")).toEqual({ y: { x: 0.03, y: 0.02 } });
+    expect(anchorFor("contain")).toEqual({ y: { x: 0.03, y: 0.18 } });
+    expect(anchorFor("none")).toEqual({ y: { x: 0.03, y: 0.18 } });
+  });
+
+  it("anchors no point whose wheel scrolls a scroller holding the cutter", () => {
+    // An overlay in the outer pane covers the list's upper part: a wheel there
+    // scrolls the pane, carrying the list and the row together.
+    const list = el({
+      rect: { x: 0, y: 0, w: 300, h: 200 },
+      client: { left: 0, top: 0, width: 300, height: 200 },
+      offset: { width: 300, height: 200 },
+      scrollSize: { width: 300, height: 600 },
+      style: { overflow: "auto" },
+      painted: { x: 0, y: 0, w: 300, h: 200 },
+      children: [
+        el({
+          attrs: { id: "cut" },
+          rect: { x: 0, y: 180, w: 300, h: 60 },
+          painted: { x: 0, y: 180, w: 300, h: 20 },
+        }),
+      ],
+    });
+    const overlay = el({
+      rect: { x: 0, y: 0, w: 300, h: 150 },
+      painted: { x: 0, y: 0, w: 300, h: 150 },
+    });
+    const pane = el({
+      rect: { x: 0, y: 0, w: 400, h: H },
+      client: { left: 0, top: 0, width: 400, height: H },
+      offset: { width: 400, height: H },
+      scrollSize: { width: 400, height: 3 * H },
+      style: { overflow: "auto" },
+      painted: { x: 0, y: 0, w: 400, h: H },
+      children: [list, overlay],
+    });
+    expect(findById(run([pane]).tree, "cut")!.clipAnchors).toEqual({ y: { x: 0.03, y: 0.18 } });
+  });
+
+  it("falls back to the cut window's centre along x for a horizontal cut no wheel is seen to reach", () => {
+    const strip = { x: 0, y: 400, w: W, h: 200 };
+    const { tree } = run([
+      scroller([el({ attrs: { id: "card" }, rect: { x: 950, y: 400, w: 200, h: 50 } })], {
+        rect: strip,
+        client: { left: 0, top: 0, width: W, height: 200 },
+        offset: { width: W, height: 200 },
+        scrollSize: { width: 3 * W, height: 200 },
+      }),
+    ]);
+    expect(findById(tree, "card")!.clipAnchors).toEqual({ x: { x: 0.5, y: 0.425 } });
+  });
+
+  it("tries only on-screen points of a cutter whose window runs past the viewport", () => {
+    // The pane starts 1000px above the screen and cuts the row at the screen's bottom.
+    const tall = { x: 0, y: -H, w: 300, h: 2 * H };
+    const { tree } = run([
+      scroller([el({ attrs: { id: "cut" }, rect: { x: 1, y: 950, w: 285, h: 100 } })], {
+        rect: tall,
+        client: { left: 0, top: 0, width: 300, height: 2 * H },
+        offset: { width: 300, height: 2 * H },
+        scrollSize: { width: 300, height: 4 * H },
+        painted: tall,
+      }),
+    ]);
+    expect(findById(tree, "cut")!.clipAnchors).toEqual({ y: { x: 0.03, y: 0.1 } });
+  });
+
   it("clips a row cut inside a same-origin iframe but gives it no top-document wheel anchor", () => {
     const area = { x: 0, y: 0, w: 300, h: 100 };
     const innerHtml = el({

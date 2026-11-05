@@ -319,7 +319,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // The scroller a wheel at (x, y) scrolls along an axis: the innermost on the
   // painted element's chain, the one Chrome latches to. Null where that is unknown:
-  // over a frame, whose own document may take the wheel.
+  // over a frame, whose own document may take the wheel, or past a scroller whose
+  // overscroll-behavior on the axis keeps the wheel from chaining out of it.
   function wheelScroller(x, y, axis) {
     let hit = elementsAt(document, x, y)[0];
     for (let sr = hit && getShadowRoot.call(hit); sr; sr = getShadowRoot.call(hit)) {
@@ -331,7 +332,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     for (let n = hit; n; ) {
       if (chains.has(n)) {
         const chain = chains.get(n) || [];
-        for (let i = chain.length - 1; i >= 0; i--) if (chain[i][axis]) return chain[i].el;
+        const overscroll = axis === "sx" ? "overscrollBehaviorX" : "overscrollBehaviorY";
+        for (let i = chain.length - 1; i >= 0; i--) {
+          if (chain[i][axis]) return chain[i].el;
+          const ob = window.getComputedStyle(chain[i].el)[overscroll];
+          if (ob === "contain" || ob === "none") return null;
+        }
         return null;
       }
       const p = getAssignedSlot.call(n) || getParentNode.call(n);
