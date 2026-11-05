@@ -48,10 +48,12 @@ type Result =
  * clears that record). Only `appConnectionState`'s unconnected path re-applies
  * the env, so for a connected or non-injectable app the record is whatever an
  * earlier call for another bundle left — and a live connection is the better
- * evidence: the process reached this endpoint, so the env was in place.
+ * evidence: the process reached this endpoint, so the env was in place. That
+ * holds even before this service applied the env itself, on a server started
+ * after an earlier one armed the simulator.
  */
 function envSetupReading(api: NativeDevtoolsApi, connected: boolean): boolean {
-  return api.isEnvSetup() && (connected || api.getInitFailure() === null);
+  return connected || (api.isEnvSetup() && api.getInitFailure() === null);
 }
 
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
@@ -134,7 +136,21 @@ Fails if the simulator server is not running for the given UDID.`,
       };
     }
 
-    const blocked = await precheckNativeDevtools(api, params.udid);
+    let blocked: NativeDevtoolsInitFailedResult | null;
+    try {
+      blocked = await precheckNativeDevtools(api, params.udid);
+    } catch (err) {
+      // The 2-arg precheck has no app to make an exception for, so it refuses
+      // while Xcode's component install is pending even when the app asked
+      // about is connected. That app is read over its own socket, which needs
+      // no simctl, and `appConnectionState` below answers it before any simctl
+      // call. Answering the refusal instead would tell the agent to wait for
+      // the install while the native tools serve this very app.
+      if (!(err instanceof XcodeFirstLaunchPendingError) || !api.isConnected(params.bundleId)) {
+        throw err;
+      }
+      blocked = null;
+    }
     if (blocked) return blocked;
 
     // Re-applies the launchd env on its way to a verdict, repairing (and
