@@ -99,7 +99,9 @@ Argent tries to remove every handle. If one handle does not close, Argent stops 
 
 ## Limits that Argent applies to itself
 
-Argent never starts, restarts or shuts down the device of a provider. `boot-device` refuses the device, also under its real udid or serial. `stop-simulator-server` stops no server of the provider. It removes the handles that Argent holds.
+Argent never starts, restarts or shuts down the device of a provider. `boot-device` refuses the device, also under its real udid or serial. `stop-simulator-server` and `stop-all-simulator-servers` do not stop the simulator-server of the provider. They remove the handles that Argent holds for that server and they do not report that server as stopped. This applies under the `ext:` id and under the real udid or serial.
+
+`stop-all-simulator-servers` stops the services that Argent runs for the device, for example the accessibility service and native devtools. It reports these services as stopped. If the `stopped` list is empty, the simulator-server of the provider can still run.
 
 Argent never removes the file of a provider. Argent uses only the endpoints that its own simulator-server build supplies.
 

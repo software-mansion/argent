@@ -134,7 +134,8 @@ const EXTERNAL_DEVICES_HINT =
   `'provider.workspace.path' matches the project you are working in, and do NOT call boot-device on them, since the ` +
   `provider owns their lifecycle. stop-simulator-server IS safe on them and never stops the provider's server — it ` +
   `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
-  `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
+  `since moved. stop-all-simulator-servers does the same for that server, also under the device's plain UDID / ` +
+  `serial, and leaves it out of 'stopped', so an empty 'stopped' does not mean the provider's server is gone. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
 
 /**

@@ -2,8 +2,11 @@ import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
-import { isExternalId } from "../../utils/external-devices";
-import { deviceIdOwningUrn, transportNamespacesForPlatform } from "./device-services";
+import {
+  deviceIdOwningUrn,
+  isBorrowedSimulatorServer,
+  transportNamespacesForPlatform,
+} from "./device-services";
 
 const zodSchema = z.object({
   udid: z
@@ -37,14 +40,6 @@ export function createStopSimulatorServerTool(
       const platform = resolveDevice(udid).platform;
       const namespaces = transportNamespacesForPlatform(platform);
 
-      /**
-       * An external device has no server of ours to stop. Its `dispose()` is
-       * a no-op by design. Still drop the cached handles so the next call
-       * re-resolves against the provider's state, but report `stopped: false`.
-       * A clean no-op beats an error for an agent that calls this on every device.
-       */
-      const external = isExternalId(udid);
-
       const snapshot = registry.getSnapshot();
       let stopped = false;
       // Scanned rather than fetched by exact URN, so ids resolve through the
@@ -57,7 +52,12 @@ export function createStopSimulatorServerTool(
         const entry = snapshot.services.get(urn);
         if (!entry || entry.state === ServiceState.IDLE) continue;
 
-        if (external) {
+        // A provider's simulator-server is borrowed and its `dispose()` is a
+        // no-op by design: drop the cached handle so the next call re-resolves
+        // against the provider's state, but do not report it stopped. Only that
+        // one URN is borrowed; TvControl and IosDeviceRunner of the same device
+        // are Argent's own and fall through like any other.
+        if (await isBorrowedSimulatorServer(registry, urn)) {
           await registry.disposeService(urn);
           continue;
         }
