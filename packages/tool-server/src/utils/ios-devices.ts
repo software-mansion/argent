@@ -12,6 +12,7 @@ import {
 } from "./ios-device-sets";
 import { externalNativeId, isExternalId } from "./external-devices";
 import { resolveDevice } from "./device-info";
+import { XcodeFirstLaunchPendingError } from "./dependency-errors";
 
 const execFileAsync = promisify(execFile);
 
@@ -43,7 +44,13 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
-/** List one device set's iOS/tvOS simulators; [] on any failure. */
+/**
+ * List one device set's iOS/tvOS simulators; [] on any failure but the refusal
+ * while Xcode's component install is pending. Read as an empty set, it would
+ * make a simulator's type lookup answer "not tvOS, not foldable".
+ *
+ * @throws XcodeFirstLaunchPendingError
+ */
 async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
   // simctl materializes a missing `--set` directory as a side effect, so a
   // config typo would leave a stray directory on disk.
@@ -85,7 +92,8 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
       })
     );
     return out;
-  } catch {
+  } catch (err) {
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     return [];
   }
 }
@@ -96,6 +104,8 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
  * with its owning set and remembered in the UDID → device-set map, so later
  * per-device simctl calls target the right set. Empty when xcrun is missing or
  * every set fails, keeping the rest of the tool surface usable off macOS.
+ *
+ * @throws XcodeFirstLaunchPendingError
  */
 export async function listIosSimulators(): Promise<IosSimulator[]> {
   const sets: DeviceSetPath[] = [null, ...configuredAdditionalDeviceSets()];
@@ -197,10 +207,11 @@ const foldableCache = new Map<string, boolean>();
 
 async function listDeviceTypeBundlePaths(): Promise<Map<string, string>> {
   try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devicetypes", "--json"], {
-      timeout: 10_000,
-      killSignal: SIMCTL_KILL_SIGNAL,
-    });
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      [...simctlPrefix(null), "list", "devicetypes", "--json"],
+      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+    );
     const data = JSON.parse(stdout) as {
       devicetypes?: Array<{ identifier?: string; bundlePath?: string }>;
     };

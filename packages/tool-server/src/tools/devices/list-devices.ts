@@ -11,6 +11,7 @@ import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
+import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
 import { listHarmonyInstances, listHarmonyHdcTargets } from "../../utils/harmony-devices";
@@ -125,10 +126,12 @@ type ListDevicesResult = {
   devices: Array<ListedDevice & DeviceUsage>;
   avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Rules for a provider's device, present only when one is listed, and how to
-   * reach the adb server, present only when it is not adb's default. Most
-   * installs need neither and the description is read once per session, so a
-   * provider appearing later would miss it. This is re-read per call.
+   * Why local iOS targets are missing, present only while Xcode's component
+   * install is pending; rules for a provider's device, present only when one is
+   * listed; and how to reach the adb server, present only when it is not adb's
+   * default. Most installs need none of them, and the description is read once
+   * per session, so a state that appears later would be missed. This is re-read
+   * per call.
    */
   hint?: string;
 };
@@ -368,7 +371,7 @@ TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
 A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'. Use the \`fold\` tool to fold or unfold it.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
-'inUse: true' marks a device that a tool call used through a session that is still open on this tool-server, which every agent on this argent install shares, so it may be yours or another agent's; 'idleSeconds' is the time since a tool last used it, and a large value suggests a forgotten session. A device that is not running never carries them. Informational only; blind to other argent installs, other programs, tools that only run a platform command (e.g. reinstall-app, native profiling, screen recording past screen-recording-start on a local device, tv-remote on Android TV, or boot-device while the device boots), a debugger session connected with a logicalDeviceId, <flag:harmonyos>HarmonyOS, </flag:harmonyos>and every Vega tool except the debugger and network tools.
+'inUse: true' marks a device that a tool call used through a session that is still open on this tool-server, which every agent on this argent install shares, so it may be yours or another agent's; 'idleSeconds' is the time since a tool last used it, and a large value suggests a forgotten session. A device that is not running never carries them. Informational only; blind to other argent installs, other programs, tools that only run a platform command (e.g. reinstall-app, native profiling, native-network-logs on Android, screen recording past screen-recording-start on a local device, tv-remote on Android TV, or boot-device while the device boots), a debugger session connected with a logicalDeviceId, <flag:harmonyos>HarmonyOS, </flag:harmonyos>and every Vega tool except the debugger and network tools.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
     alwaysLoad: true,
     searchHint:
@@ -378,6 +381,9 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     services: () => ({}),
     async execute(_services, _params) {
       const harmonyEnabled = isHarmonyEnabled();
+      const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(
+        xcodeFirstLaunchPending
+      );
       // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
       // the "no branch can hang the fan-out" guarantee universal. The deadline only
       // substitutes a fallback on *slowness*; a rejection still propagates, so the
@@ -394,7 +400,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
         harmonyTargets,
         external,
       ] = await Promise.all([
-        withDeadline(listIosSimulators(), [], "ios"),
+        xcodeInstallPending.includes("simctl") ? [] : withDeadline(listIosSimulators(), [], "ios"),
         withDeadline(
           listIosPhysicalDevices().catch(() => []),
           [],
@@ -537,6 +543,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
 
       const adbPrefix = adbCommandPrefix(process.env);
       const hints = [
+        ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
         ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
         ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
       ];

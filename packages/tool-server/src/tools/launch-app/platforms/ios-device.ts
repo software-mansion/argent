@@ -10,10 +10,10 @@ import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 /**
  * Latency bound for the post-launch signing probe. Resolution is the env var
- * or the process-memoized keychain detection, so only the first probe in a
- * process can pay a `security` shellout; a wedged keychain must not gate the
- * launch result, so a slow first probe reports nothing and the next runner
- * tool call tells the full story.
+ * or the process-memoized keychain detection, plus reading provisioning profiles
+ * when the keychain holds several teams; a wedged `security` must not gate the
+ * launch result, so a slow probe reports nothing and the next runner tool call
+ * tells the full story.
  */
 const SIGNING_PROBE_TIMEOUT_MS = 1_500;
 
@@ -25,12 +25,12 @@ function firstSentence(message: string): string {
 /**
  * launch-app goes through devicectl and succeeds with unready signing; the
  * very next interaction tool would then fail building the XCUITest runner.
- * This probe pre-announces that: it only resolves the signing config (env
- * var, else memoized keychain detection), and never triggers a build.
+ * This probe pre-announces that: it only resolves the signing config, and never
+ * triggers a build.
  */
-async function signingUnreadyNote(): Promise<string | undefined> {
+async function signingUnreadyNote(udid: string): Promise<string | undefined> {
   const failure = await Promise.race([
-    resolveRunnerSigningConfig().then(
+    resolveRunnerSigningConfig(udid).then(
       () => null,
       (error: unknown) => (error instanceof Error ? error.message : String(error))
     ),
@@ -74,7 +74,7 @@ export const iosDeviceImpl: PlatformImpl<
 
     setCurrentIosDeviceApp(params.udid, params.bundleId);
 
-    const note = await signingUnreadyNote();
+    const note = await signingUnreadyNote(params.udid);
 
     return {
       launched: true,
