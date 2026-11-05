@@ -5,6 +5,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import { canonicalDeviceId } from "../utils/debugger/device-alias";
 import { assertExternalCapability } from "../utils/external-devices";
 import type { CDPClient, ScriptInfo } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
@@ -289,8 +290,11 @@ function stopSamplerInNextRuntime(cdp: CDPClient): void {
 
 const profilerPathsCache = new Map<string, ProfilerSessionPaths>();
 
+// Canonical, because react-profiler-stop stores under the id the session was
+// connected with, while the analyze and query tools are handed the
+// `logicalDeviceId` that debugger-connect returned.
 function cacheKey(port: number, deviceId: string): string {
-  return `${port}:${deviceId}`;
+  return `${port}:${canonicalDeviceId(deviceId) ?? deviceId}`;
 }
 
 export function cacheProfilerPaths(
