@@ -13,8 +13,8 @@ export const SIMCTL_SPAWN_TIMEOUT_MS = 10_000;
  *
  * Killing the direct child suffices for the real `simctl`, a single-process
  * XPC client whose work runs under the simulator's `launchd_sim`. But `xcrun
- * simctl` first runs Xcode's bash wrapper (seen in 26.6 and 27.2), which can
- * hang in a child `xcodebuild -runFirstLaunch` that a direct-child kill
- * orphans; `execSimctl` in `simctl-exec.ts` kills the whole process group
- * instead. */
+ * simctl` first runs Xcode's bash wrapper (in 16.4, 26.6 and 27.2; nothing
+ * before 16.4 was checked), which can hang in a child
+ * `xcodebuild -runFirstLaunch` that a direct-child kill orphans; `execSimctl`
+ * in `simctl-exec.ts` kills the whole process group instead. */
 export const SIMCTL_KILL_SIGNAL = "SIGKILL" as const;

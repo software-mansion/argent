@@ -14,14 +14,15 @@ export class SimctlTimeoutError extends Error {
  * Run `xcrun <args>` and resolve with its stdout, killing the whole process
  * group when it overruns `timeoutMs` or `signal` aborts.
  *
- * Xcode's `simctl` is a bash wrapper (seen in 26.6 and 27.2) that runs
- * `xcodebuild -runFirstLaunch` before exec'ing the real binary for some
- * installed CoreSimulators: anything but the version it expects in 26.6, an
- * older version or an Info.plist without one in 27.2. That run can hang
- * unattended, and SIGKILL on the direct child (what `execFile`'s `timeout`
- * does) leaves the `xcodebuild` behind as an orphan. Spawning detached makes
- * the child lead its own group, so `kill(-pid)` reaps the wrapper's descendants
- * too. `execFile` drops `detached`, hence the hand-rolled spawn.
+ * Xcode's `simctl` is a bash wrapper (in 16.4, 26.6 and 27.2; nothing before
+ * 16.4 was checked) that runs `xcodebuild -runFirstLaunch` before exec'ing the
+ * real binary for some installed CoreSimulators: anything but the version it
+ * expects in 16.4 and 26.6, an older version or an Info.plist without one in
+ * 27.2. That run can hang unattended, and SIGKILL on the direct child (what
+ * `execFile`'s `timeout` does) leaves the `xcodebuild` behind as an orphan.
+ * Spawning detached makes the child lead its own group, so `kill(-pid)` reaps
+ * the wrapper's descendants too. `execFile` drops `detached`, hence the
+ * hand-rolled spawn.
  *
  * The flip side: the call leaves the caller's own group, so a caller that is
  * SIGKILLed mid-call (no chance to abort) no longer takes it along. Abort
