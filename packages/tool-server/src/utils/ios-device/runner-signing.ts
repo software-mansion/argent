@@ -69,7 +69,13 @@ export async function resolveRunnerSigningConfig(udid?: string): Promise<RunnerS
   const covering = udid && teams.length > 1 ? await teamsCoveringDevice(udid) : new Set<string>();
   const winner = teams.find((team) => covering.has(team.teamId)) ?? teams[0]!;
 
-  announceDetectedSigningTeam(teams, winner, covering.has(winner.teamId) ? udid : undefined);
+  announceDetectedSigningTeam(
+    teams,
+    winner,
+    udid
+      ? { udid, coveringTeams: teams.filter((team) => covering.has(team.teamId)).length }
+      : undefined
+  );
 
   return signingConfigForTeam(winner.teamId);
 }

@@ -124,21 +124,17 @@ const CACHE_KEY_FILE = ".argent-cache-key";
 const TEAM_DIRECTORY_RE = /^[A-Z0-9]{10}$/;
 
 /**
- * Earlier versions built directly in the derived root. A stamp there marks such
- * a build, which no team directory uses, so it only takes up disk space.
+ * Earlier versions built directly in the derived root, and a build that failed
+ * there left no stamp. Only team directories belong in the root now, so anything
+ * else is such a build and only takes up disk space.
  */
-async function removeBuildSharedByAllTeams(): Promise<void> {
+async function removeBuildSharedByAllTeams(currentTeamId: string): Promise<void> {
   const root = derivedRoot();
-
-  if (!fs.existsSync(path.join(root, CACHE_KEY_FILE))) {
-    return;
-  }
-
-  const entries = await fsp.readdir(root);
+  const entries = await fsp.readdir(root).catch(() => [] as string[]);
 
   await Promise.all(
     entries
-      .filter((entry) => !TEAM_DIRECTORY_RE.test(entry))
+      .filter((entry) => entry !== currentTeamId && !TEAM_DIRECTORY_RE.test(entry))
       .map((entry) => fsp.rm(path.join(root, entry), { recursive: true, force: true }))
   );
 }
@@ -331,7 +327,7 @@ export async function ensureRunnerArtifact(
   const build = opts.build ?? buildRunnerArtifact;
 
   return withRunnerBuildLock(async (): Promise<RunnerArtifact> => {
-    await removeBuildSharedByAllTeams();
+    await removeBuildSharedByAllTeams(config.teamId);
 
     const stampPath = path.join(derivedDataPath, CACHE_KEY_FILE);
     const stamped = await fsp.readFile(stampPath, "utf8").catch(() => null);

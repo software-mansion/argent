@@ -228,6 +228,20 @@ describe("ensureRunnerArtifact", () => {
     });
   });
 
+  it("removes a failed build in the derived root, which left no stamp", async () => {
+    await withEnsureEnv("shared-root-unstamped", async () => {
+      const build = fakeBuild({ builds: 0 });
+      const teamBuild = await ensureRunnerArtifact(CONFIG, { build });
+      const root = path.dirname(teamBuild.derivedDataPath);
+      await fsp.mkdir(path.join(root, "Build"), { recursive: true });
+      await fsp.mkdir(path.join(root, "ModuleCache.noindex"), { recursive: true });
+
+      await ensureRunnerArtifact(CONFIG, { build });
+
+      expect(await fsp.readdir(root)).toEqual([path.basename(teamBuild.derivedDataPath)]);
+    });
+  });
+
   /** Plant a fake embedded profile where the cached runner app keeps it. */
   async function writeFakeProfile(derivedDataPath: string, expiresAt: string): Promise<void> {
     const app = path.join(

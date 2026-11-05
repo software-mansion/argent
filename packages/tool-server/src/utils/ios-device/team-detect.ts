@@ -176,11 +176,38 @@ function formatTeam(team: DetectedSigningTeam): string {
   return `${team.teamId} (${team.label})`;
 }
 
+/** The phone a team was picked for. */
+export interface SigningNotePhone {
+  udid: string;
+  /** How many of the detected teams have an unexpired profile that lists the phone. */
+  coveringTeams: number;
+}
+
+function reasonForTeam(teamCount: number, phone: SigningNotePhone | undefined): string {
+  const keychain = "signing identities in this Mac's keychain";
+
+  if (!phone) {
+    return `the newest of ${teamCount} ${keychain}.`;
+  }
+
+  const listsPhone = `a provisioning profile that lists phone ${phone.udid}`;
+
+  if (phone.coveringTeams === 0) {
+    return `the newest of ${teamCount} ${keychain}; none has ${listsPhone}.`;
+  }
+
+  if (phone.coveringTeams === 1) {
+    return `the only one of ${teamCount} ${keychain} with ${listsPhone}.`;
+  }
+
+  return `the newest of the ${phone.coveringTeams} ${keychain} with ${listsPhone}.`;
+}
+
 /** The agent-facing summary of which team detection picked and why. */
 export function buildSigningDetectionNote(
   teams: readonly DetectedSigningTeam[],
   winner: DetectedSigningTeam | undefined = teams[0],
-  coveredUdid?: string
+  phone?: SigningNotePhone
 ): string {
   if (!winner) {
     throw new Error("buildSigningDetectionNote requires at least one detected team");
@@ -198,51 +225,57 @@ export function buildSigningDetectionNote(
 
   return (
     `Signing the on-device runner with team ${winner.teamId} (${winner.label}), ` +
-    (coveredUdid
-      ? `the newest of ${teams.length} signing identities in this Mac's keychain with a ` +
-        `provisioning profile that lists phone ${coveredUdid}. `
-      : `the newest of ${teams.length} signing identities in this Mac's keychain. `) +
+    `${reasonForTeam(teams.length, phone)} ` +
     `Also found: ${others.map(formatTeam).join(", ")}. ` +
     `To sign under a different team, set ARGENT_IOS_TEAM_ID in the tool-server's ` +
     `environment: argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach`
   );
 }
 
+/** Pending-note key for a team picked without naming a phone: any phone may read it. */
+const ANY_PHONE = "";
 const announcedTeams = new Set<string>();
-let pendingNote: string | null = null;
+const pendingNotes = new Map<string, string>();
 
 /**
  * Called when a detected (not env-configured) team is used for signing. Logs
- * the outcome once per team, since phones can sign under different ones, and
- * stages the same text for the tool-result note channel below. Later uses of the
- * same team stay silent.
+ * the outcome once per phone and team, since phones can sign under different
+ * teams, and stages the same text for that phone's tool-result note below. Later
+ * uses of the same team on that phone stay silent.
  */
 export function announceDetectedSigningTeam(
   teams: readonly DetectedSigningTeam[],
   winner: DetectedSigningTeam | undefined = teams[0],
-  coveredUdid?: string
+  phone?: SigningNotePhone
 ): void {
-  if (!winner || announcedTeams.has(winner.teamId)) {
+  const key = phone?.udid ?? ANY_PHONE;
+  const announcement = `${key}/${winner?.teamId}`;
+
+  if (!winner || announcedTeams.has(announcement)) {
     return;
   }
 
-  announcedTeams.add(winner.teamId);
-  const note = buildSigningDetectionNote(teams, winner, coveredUdid);
+  announcedTeams.add(announcement);
+  const note = buildSigningDetectionNote(teams, winner, phone);
   process.stderr.write(`[ios-device-signing] ${note}\n`);
-  pendingNote = pendingNote ? `${pendingNote}\n${note}` : note;
+  const pending = pendingNotes.get(key);
+  pendingNotes.set(key, pending ? `${pending}\n${note}` : note);
 }
 
 /**
- * Drained by http.ts into the note of the first tool call that targets a
- * physical iPhone and completes after detection resolved (the same
- * module-global channel the screen-recording reminder uses), so the agent
- * driving the hardware sees which team signs the runner without any new
- * plumbing, and a call on another platform never carries it.
+ * Drained by http.ts into the note of the first tool call that targets `udid`
+ * and completes after detection resolved (the same module-global channel the
+ * screen-recording reminder uses), so the agent driving that phone sees which
+ * team signs its runner without any new plumbing. A call on another phone or
+ * platform never carries it.
  */
-export function consumePendingSigningDetectionNote(): string | null {
-  const note = pendingNote;
-  pendingNote = null;
-  return note;
+export function consumePendingSigningDetectionNote(udid: string): string | null {
+  const notes = [udid, ANY_PHONE].flatMap((key) => {
+    const note = pendingNotes.get(key);
+    pendingNotes.delete(key);
+    return note ? [note] : [];
+  });
+  return notes.length > 0 ? notes.join("\n") : null;
 }
 
 /**
@@ -254,5 +287,5 @@ export function __setCertificateListerForTests(lister: CertificateLister | null)
   certificateLister = lister ?? listCertificatePem;
   memoizedTeams = null;
   announcedTeams.clear();
-  pendingNote = null;
+  pendingNotes.clear();
 }

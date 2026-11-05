@@ -5,7 +5,10 @@ import {
   resolveSigningHint,
 } from "../src/utils/ios-device/runner-signing";
 import { __setProfileReaderForTests } from "../src/utils/ios-device/provisioning-profiles";
-import { __setCertificateListerForTests } from "../src/utils/ios-device/team-detect";
+import {
+  __setCertificateListerForTests,
+  consumePendingSigningDetectionNote,
+} from "../src/utils/ios-device/team-detect";
 import { TEAM_A_PEM, TEAM_B_PEM } from "./fixtures/signing-certs";
 
 describe("resolveRunnerSigningConfig", () => {
@@ -163,5 +166,23 @@ describe("resolveRunnerSigningConfig with several teams and a phone", () => {
 
   it("takes the newest team when no phone is named", async () => {
     expect(await resolveWith({ [OLDER]: [UDID] })).toBe(NEWER);
+  });
+
+  it("tells that phone's agent why its team won", async () => {
+    await resolveWith({ [OLDER]: [UDID], [NEWER]: ["other"] }, UDID);
+
+    expect(consumePendingSigningDetectionNote("00008120-00000000000B001E")).toBeNull();
+    const note = consumePendingSigningDetectionNote(UDID);
+    expect(note).toContain(`team ${OLDER}`);
+    expect(note).toContain("the only one of 2 signing identities");
+    expect(note).toContain(`Also found: ${NEWER}`);
+  });
+
+  it("does not count a team that has a profile but no certificate here", async () => {
+    await resolveWith({ [OLDER]: [UDID], TEAMNOCERT0: [UDID] }, UDID);
+
+    expect(consumePendingSigningDetectionNote(UDID)).toContain(
+      "the only one of 2 signing identities"
+    );
   });
 });
