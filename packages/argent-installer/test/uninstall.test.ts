@@ -39,14 +39,22 @@ const toolsClientMock = vi.hoisted(() => ({
 
 vi.mock("@argent/telemetry", () => telemetryMock);
 // The PATH probe (`which -a argent` / `where argent`) goes to its own mock so the
-// execFileSync assertions below only see package-manager runs.
-vi.mock("node:child_process", () => ({
-  ...childProcessMock,
-  execFileSync: (bin: string, ...rest: unknown[]) =>
-    bin === "which" || bin === "where"
-      ? childProcessMock.which(bin, ...rest)
-      : childProcessMock.execFileSync(bin, ...rest),
-}));
+// execFileSync assertions below only see package-manager runs. Like `which -a`,
+// it lists only the paths that exist.
+vi.mock("node:child_process", async () => {
+  const { existsSync } = await import("node:fs");
+  return {
+    ...childProcessMock,
+    execFileSync: (bin: string, ...rest: unknown[]) =>
+      bin === "which" || bin === "where"
+        ? String(childProcessMock.which(bin, ...rest))
+            .split("\n")
+            .filter((line) => line && existsSync(line))
+            .map((line) => line + "\n")
+            .join("")
+        : childProcessMock.execFileSync(bin, ...rest),
+  };
+});
 vi.mock("@argent/tools-client", () => toolsClientMock);
 // Lets a test stand in for a release whose agents bundle dropped a file, with
 // a retired list whose hashes match the test's own copies.
@@ -104,10 +112,16 @@ beforeEach(() => {
   savedAgent = process.env.npm_config_user_agent;
   delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
-  // A path that never exists, so the post-uninstall PATH check doesn't depend
-  // on the host having a global argent.
-  childProcessMock.which.mockImplementation(() => path.join(tmpDir, "global-bin", "argent") + "\n");
-  childProcessMock.execFileSync.mockImplementation(() => undefined);
+  // A global bin that `npm uninstall -g` removes, so no case depends on the host's argent.
+  const globalBin = path.join(tmpDir, "global-bin", "argent");
+  writeFile(globalBin);
+  childProcessMock.which.mockImplementation(() => globalBin + "\n");
+  childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+    if (bin === "npm" && args[0] === "uninstall" && args.includes("-g")) {
+      fs.rmSync(globalBin, { force: true });
+    }
+    return undefined;
+  });
 });
 
 afterEach(() => {
@@ -269,6 +283,28 @@ describe("uninstall — telemetry consent preservation", () => {
         "Remove it with the package manager that installed it."
     );
     expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
+  });
+
+  it("reports a failure when a second global install stays on PATH", async () => {
+    const clack = await import("@clack/prompts");
+    const npmBin = path.join(tmpDir, "npm-prefix", "bin", "argent");
+    const yarnBin = path.join(tmpDir, "yarn-bin", "argent");
+    writeFile(npmBin);
+    writeFile(yarnBin);
+    childProcessMock.which.mockImplementation(() => `${npmBin}\n${yarnBin}\n`);
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "npm") fs.rmSync(npmBin);
+      return undefined;
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${yarnBin} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
   });
 
   it("removes both installs when run through npx from a project that has a local devDependency", async () => {

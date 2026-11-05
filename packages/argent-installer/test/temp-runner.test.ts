@@ -95,6 +95,16 @@ describe("isGloballyInstalled — temp package runners", () => {
     expect(isGloballyInstalled()).toBe(false);
   });
 
+  it("matches a project copy whose case differs on Windows", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      whichFinds(path.join(process.cwd().toUpperCase(), "node_modules", ".bin", "argent.cmd"));
+      expect(isGloballyInstalled()).toBe(false);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it("finds the global install behind a project copy", () => {
     const projectBin = path.join(process.cwd(), "node_modules", ".bin", "argent");
     whichFinds(`${projectBin}\n/usr/local/bin/argent`);
