@@ -1,7 +1,7 @@
 name: Device E2E smoke
 
 # Boot-and-drive smoke tests for every (target × host) cell of the support
-# matrix that runs on GitHub-hosted runners. Each job boots ONE device through
+# matrix that CI runners can host. Each job boots ONE device through
 # the tool-server and asserts the headless interaction pipeline end-to-end via
 # scripts/e2e/drive-device.sh: booted:true → screenshot has real pixels →
 # gesture-tap round-trips.
@@ -16,18 +16,19 @@ name: Device E2E smoke
 #   │ Chromium / Electron│ macOS         │ chromium-macos (this file)       │
 #   └────────────────────┴───────────────┴──────────────────────────────────┘
 #
-# KNOWN GAPS — cells Argent supports on real machines but that GitHub-hosted
-# runners can't run, so they are intentionally not jobs here:
+# KNOWN GAPS — cells Argent supports on real machines but that CI runners
+# can't run, so they are intentionally not jobs here:
 #   - Android emulator on macOS: the arm64 emulator needs HVF (`-enable-hvf`),
-#     but hosted macOS runners are themselves VMs with no nested virtualization
-#     — qemu dies with "HVF error: HV_UNSUPPORTED" seconds into boot. The
-#     Android boot/screenshot/tap path is already regression-guarded on Linux
-#     via KVM (wayland-e2e.yml), so macOS adds no runnable coverage here.
+#     but the macOS runners (GitHub-hosted and our tart ones) are VMs with no
+#     nested virtualization — qemu dies with "HVF error: HV_UNSUPPORTED"
+#     seconds into boot. The Android boot/screenshot/tap path is already
+#     regression-guarded on Linux via KVM (wayland-e2e.yml), so macOS adds no
+#     runnable coverage here.
 #   - Physical devices: real iOS (CoreDevice HID) and real Android (adb-USB)
-#     have no attached hardware on hosted runners.
-#   Both would need self-hosted runners (a Mac exposing HVF / wired-up devices).
+#     have no attached hardware on CI runners.
+#   Both would need a bare-metal Mac runner (HVF / wired-up devices).
 #
-# Manual + on-change trigger only — the macOS jobs are slow and billed.
+# Manual + on-change trigger only — the macOS jobs are slow.
 
 on:
   workflow_dispatch:
@@ -51,7 +52,7 @@ on:
       - ".github/actions/start-tool-server/action.yml"
 
 # Cancel superseded runs on the same ref: rapid pushes to a PR would otherwise
-# stack up the slow, billed macOS jobs (see header) with no cancellation.
+# stack up the slow macOS jobs (see header) with no cancellation.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -60,7 +61,9 @@ jobs:
   # ── iOS simulator on macOS ────────────────────────────────────────────────
   ios-sim-macos:
     name: macOS + iOS E2E
-    runs-on: macos-latest-xlarge
+    # Argent's self-hosted tart VMs. Fork PRs get a GitHub-hosted runner so
+    # untrusted code stays off them.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -154,7 +157,8 @@ jobs:
   # ── Chromium / Electron on macOS ──────────────────────────────────────────
   chromium-macos:
     name: macOS + Chromium E2E
-    runs-on: macos-latest-xlarge
+    # Same runner choice as ios-sim-macos.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7

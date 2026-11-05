@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { InvalidToolInputError } from "../../utils/capability";
-import { readApkPackageName } from "../../utils/apk-package";
+import { readApkPackageName, readZipEntry } from "../../utils/apk-package";
 
 const execFileAsync = promisify(execFile);
 
@@ -80,4 +80,24 @@ export async function assertApk(absolute: string, packageName: string): Promise<
 
 export async function assertVpkg(absolute: string): Promise<void> {
   await requirePath(absolute, "file", "a .vpkg file");
+}
+
+/** Check a HarmonyOS `.hap` before uninstalling: `app.bundleName` in its `module.json`. */
+export async function assertHap(absolute: string, bundleName: string): Promise<void> {
+  await requirePath(absolute, "file", "a .hap file");
+  let actual: unknown;
+  try {
+    const moduleJson = JSON.parse((await readZipEntry(absolute, "module.json")).toString("utf8"));
+    actual = moduleJson?.app?.bundleName;
+  } catch (err) {
+    throw new InvalidToolInputError(
+      `appPath ${absolute} is not a readable HAP (${(err as Error).message}). Nothing was uninstalled.`
+    );
+  }
+  if (typeof actual !== "string" || actual.length === 0) {
+    throw new InvalidToolInputError(
+      `appPath ${absolute} has no app.bundleName in module.json, so it is not a HarmonyOS .hap. Nothing was uninstalled.`
+    );
+  }
+  if (actual !== bundleName) throw mismatch(bundleName, absolute, actual);
 }

@@ -72,6 +72,38 @@ describe("flow report rendering", () => {
     );
   });
 
+  it("names the test and fragments from e2eTest, and from flow when only that is sent", () => {
+    const steps = (field: "e2eTest" | "flow"): StepReport[] => [
+      { index: 0, kind: "tap", status: "pass", [field]: "checkout", target: '"Pay"' },
+      { index: 1, kind: "tool", status: "fail", tool: "screenshot", [field]: "login" },
+    ];
+    const expected = [
+      'E2E test "checkout" on UDID-1',
+      '  ✓  1 tap "Pay"',
+      "  ✗  2 tool screenshot [login]",
+      "",
+      "  ✗ step 2 tool screenshot [login]",
+      "",
+      "FAIL — 1 passed, 1 failed, 0 errored, 0 skipped",
+    ].join("\n");
+
+    const current = mkReport(steps("e2eTest"), { e2eTest: "checkout" });
+    delete current.flow;
+    expect(renderReport(current)).toBe(expected);
+    expect(summarizeFailure(current).headline).toBe("step 2 tool screenshot [login]");
+
+    const older = mkReport(steps("flow"));
+    expect(renderReport(older)).toBe(expected);
+    expect(summarizeFailure(older).headline).toBe("step 2 tool screenshot [login]");
+
+    // A current tool-server sends both, with the same value.
+    const both = mkReport(
+      steps("e2eTest").map((s) => ({ ...s, flow: s.e2eTest })),
+      { e2eTest: "checkout" }
+    );
+    expect(renderReport(both)).toBe(expected);
+  });
+
   it("live step lines match the buffered renderer's step lines", () => {
     const report = mkReport(STEPS);
     const buffered = renderReport(report).split("\n");

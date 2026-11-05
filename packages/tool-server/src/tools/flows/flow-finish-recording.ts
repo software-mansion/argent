@@ -141,6 +141,8 @@ export const flowFinishRecordingTool: ToolDefinition<
     executionPrerequisite: string;
     steps: number;
     summary: string[];
+    e2eTestFile: string;
+    /** @deprecated Same value as `e2eTestFile`, kept for clients that predate it. */
     flowFile: string;
     savedTo: FlowSavedTo;
   }
@@ -158,7 +160,7 @@ export const flowFinishRecordingTool: ToolDefinition<
     failedMsg: ({ params, failureSignal }) =>
       `Failed to finish recording of e2e test ${params.name}: ${failureSignal.error_code}`,
   },
-  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
+  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, e2eTestFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
 A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line of its own, right below the step it judges, and \`message\` counts them by kind. A warning is repeated only while the step it judges is still identifiable by its number: hand-editing the .yaml during the recording moves the steps, so those warnings are DROPPED rather than pinned on whichever step inherited the number, and \`message\` says how many were dropped. A step that carries a cross-tree warning was re-probed against the runner's tree: read it before converting that wait to \`await:\`/\`assert:\`, which is what the verdict is about and what this moment is for. A step that recorded a wait which did not pass was never probed at all, and its own warning names the CAUSE, because only one of them judges the condition: an unmet wait was read and found false, and it stops the run at replay; a wait whose tree source could not be read, or one that was cancelled, observed nothing and leaves the condition UNKNOWN rather than known-bad. Read those before replaying.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
@@ -222,6 +224,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
       executionPrerequisite: flow.executionPrerequisite,
       steps: flow.steps.length,
       summary,
+      e2eTestFile: flowFile,
       flowFile,
       savedTo,
     };

@@ -4,14 +4,18 @@ import { createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  CLIENT_SECRETS_HEADER,
   E2E_DIR_CLIENT_HEADER,
   LINKED_CALL_HEADER,
+  ToolParamAliasError,
+  canonicalToolArgs,
   describeParamIssues,
   getFailureSignal,
+  withFormerParamSpecs,
   type FailureSignal,
   type FileInputSpec,
   type Registry,
@@ -51,6 +55,7 @@ import {
   isExternalId,
 } from "./utils/external-devices";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "./utils/debugger/device-alias";
+import { isProfiling } from "./utils/profiling-devices";
 import { attributeDeviceForTelemetry, type DeviceAttribution } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
@@ -65,6 +70,7 @@ import {
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
+import { renderFlagGated } from "./utils/flag-gated-text";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -170,16 +176,18 @@ function extractDeviceArg(data: unknown): string | null {
 }
 
 /**
- * Whether the call names a physical iPhone as the device it acts on. Reads
+ * The physical iPhone the call names as the device it acts on, if any. Reads
  * `device` as well as the three spellings above: `flow-execute` names its
  * target that way, and a session that only replays flows on the phone must
  * still be handed the signing note.
  */
-function targetsIosPhysicalDevice(data: unknown): boolean {
+function targetedIosPhysicalDevice(data: unknown): string | null {
   const record = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
   const flowDevice = typeof record?.device === "string" ? record.device : null;
   const deviceArg = extractDeviceArg(data) ?? flowDevice;
-  return deviceArg !== null && isIosPhysicalDevice(resolveDevice(deviceArg));
+  if (deviceArg === null) return null;
+  const device = resolveDevice(deviceArg);
+  return isIosPhysicalDevice(device) ? device.id : null;
 }
 
 type InvocationMeta = {
@@ -270,6 +278,10 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   // `device_id` calls refine an Android TV AVD once the cache is warm.
   if (typeof (data as Record<string, unknown>).avdName === "string") {
     return { platform: "android" };
+  }
+  // HarmonyOS twin: an instance is named, not addressed.
+  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") {
+    return { platform: "harmony" };
   }
   return null;
 }
@@ -680,18 +692,25 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           searchHint?: string;
           longRunning?: boolean;
           hideFromMcp?: boolean;
+          readOnly?: boolean;
           aliasOf?: string;
         } = {
           name: def.id,
-          description: def.description ?? "",
-          inputSchema: def.inputSchema ?? { type: "object", properties: {} },
+          description: renderFlagGated(def.description ?? "", isFlagEnabled),
+          inputSchema: renderFlagGated(
+            def.inputSchema ?? { type: "object", properties: {} },
+            isFlagEnabled
+          ),
         };
-        if (def.outputHint) entry.outputHint = def.outputHint;
-        if (def.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
+        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagEnabled);
+        if (def.fileInputs && def.fileInputs.length > 0) {
+          entry.fileInputs = withFormerParamSpecs(def.id, def.fileInputs);
+        }
         if (def.alwaysLoad) entry.alwaysLoad = true;
-        if (def.searchHint) entry.searchHint = def.searchHint;
+        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagEnabled);
         if (def.longRunning) entry.longRunning = true;
         if (def.hideFromMcp) entry.hideFromMcp = true;
+        if (def.readOnly) entry.readOnly = true;
         // A former id is listed too, so a client that calls by it finds the
         // tool's file inputs. Hidden from MCP, so agents see one name.
         const aliases = (def.aliases ?? []).map((alias) => ({
@@ -767,15 +786,48 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         return;
       }
 
+      let clientSecrets: Map<string, string> | undefined;
+      const clientSecretsHeader = firstHeader(req.headers[CLIENT_SECRETS_HEADER]);
+      if (clientSecretsHeader !== undefined) {
+        try {
+          clientSecrets = decodeClientSecrets(clientSecretsHeader);
+        } catch (err) {
+          res.status(400).json({
+            error: `The ${CLIENT_SECRETS_HEADER} header ${err instanceof Error ? err.message : String(err)}.`,
+          });
+          return;
+        }
+      }
+
       // File boundary: turn client file-input wrappers back into plain
       // server-readable paths BEFORE schema validation, so the tool's zod schema
       // only ever sees the string params it declares. 422 on a file reachable
       // neither in place nor via uploaded content.
+      let body: unknown;
+      try {
+        body = canonicalToolArgs(def.id, req.body);
+      } catch (err) {
+        if (!(err instanceof ToolParamAliasError)) throw err;
+        emitHttpFailure(
+          {
+            error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+            failure_stage: "http_param_alias",
+            failure_area: "http",
+            error_kind: "validation",
+          },
+          req.body
+        );
+        // `error` in the zod issue shape: older CLIs `JSON.parse` it (see below).
+        const issues = [{ code: "custom", path: [], message: err.message }];
+        res.status(400).json({ error: JSON.stringify(issues), message: err.message, issues });
+        return;
+      }
+
       let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       let derivedTargets: string[];
       try {
-        const resolved = await resolveFileInputs(def, req.body, (id) => {
+        const resolved = await resolveFileInputs(def, body, (id) => {
           const entry = uploads.get(id);
           if (entry) uploads.delete(id);
           return entry;
@@ -1009,6 +1061,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           ...(firstHeader(req.headers[E2E_DIR_CLIENT_HEADER]) === "1"
             ? {}
             : { legacyE2eDir: true }),
+          ...(clientSecrets ? { clientSecrets } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream
@@ -1037,13 +1090,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
-        // Staged once when keychain team detection first signs the on-device
-        // runner (utils/ios-device/team-detect); drained here into the first
-        // completed call that targets a physical iPhone, so the agent driving
-        // the hardware learns which team was picked and how to override, and a
-        // caller on another platform sharing this tool-server never does.
-        const signingNote = targetsIosPhysicalDevice(parsedData)
-          ? consumePendingSigningDetectionNote()
+        // Staged once per phone and team when keychain team detection signs the
+        // on-device runner (utils/ios-device/team-detect); drained here into the
+        // first completed call that targets that phone, so the agent driving it
+        // learns which team was picked and how to override, and a caller on
+        // another phone or platform sharing this tool-server never does.
+        const targetedPhone = targetedIosPhysicalDevice(parsedData);
+        const signingNote = targetedPhone
+          ? consumePendingSigningDetectionNote(targetedPhone)
           : null;
         if (signingNote) {
           notes.push(signingNote);
@@ -1055,11 +1109,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const toolNote = takeToolNote(data);
         if (toolNote) notes.push(toolNote);
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
+        // For the MCP adapter: its post-action capture would load the app a
+        // profiler is recording on this device. Read at completion.
+        const profilingPayload =
+          deviceArg && isProfiling(canonicalDeviceId(deviceArg) ?? deviceArg)
+            ? { profiling: true }
+            : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload });
+          writeLine({ event: "result", data, ...notePayload, ...profilingPayload });
           res.end();
         } else {
-          res.json({ data, ...notePayload });
+          res.json({ data, ...notePayload, ...profilingPayload });
         }
       } catch (err: unknown) {
         /**

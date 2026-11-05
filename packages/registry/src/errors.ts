@@ -23,7 +23,12 @@ export const FAILURE_COMMANDS = [
   "adb",
   "emulator",
   "vega",
+  "hdc",
+  "deveco_emulator",
   "xcrun_simctl",
+  // The `sim-remote` CLI, which stands in for simctl (and more) against a
+  // remote simulator.
+  "sim_remote",
   "xctrace",
   "native_devtools",
   "android_devtools",

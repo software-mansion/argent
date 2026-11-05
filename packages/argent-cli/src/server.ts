@@ -1,7 +1,7 @@
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { homedir, networkInterfaces } from "node:os";
+import { constants, homedir, networkInterfaces } from "node:os";
 import { spawn } from "node:child_process";
 import {
   killToolServer,
@@ -104,7 +104,11 @@ function logsCmd(follow: boolean): void {
   // Delegate follow to `tail` rather than reimplementing it; Ctrl-C then exits
   // the way a terminal user expects.
   const child = spawn("tail", ["-f", LOG_FILE], { stdio: "inherit" });
-  child.on("exit", (code) => process.exit(code ?? 0));
+  // Mirror tail's exit; signal deaths use the conventional 128+signo code, as
+  // runForeground does.
+  child.on("exit", (code, signal) =>
+    process.exit(code ?? (signal ? 128 + (signalNumber(signal) ?? 0) : 0))
+  );
 }
 
 interface StartFlags {
@@ -149,7 +153,7 @@ export function parseStartFlags(argv: string[]): StartFlags {
   }
   return {
     port: options.port === undefined ? null : parsePort(options.port as string),
-    host: (options.host as string | undefined) ?? "127.0.0.1",
+    host: (options.host as string | undefined)?.trim() || "127.0.0.1",
     idleTimeoutMinutes:
       options["idle-timeout"] === undefined ? 0 : parseIdle(options["idle-timeout"] as string),
     detach: options.detach === true,
@@ -214,7 +218,7 @@ function isLoopback(host: string): boolean {
 }
 
 function isWildcard(host: string): boolean {
-  return host === "0.0.0.0" || host === "::" || host === "::0" || host === "";
+  return host === "0.0.0.0" || host === "::" || host === "::0";
 }
 
 /** First non-internal IPv4, to suggest a reachable host when bound to a wildcard. */
@@ -460,8 +464,7 @@ async function runForeground(
 }
 
 function signalNumber(signal: NodeJS.Signals): number | null {
-  const map: Record<string, number> = { SIGINT: 2, SIGTERM: 15, SIGHUP: 1, SIGKILL: 9 };
-  return map[signal] ?? null;
+  return constants.signals[signal] ?? null;
 }
 
 function printServerHelp(): void {

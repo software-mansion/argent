@@ -8,7 +8,7 @@ import { ArtifactStore } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
 
 /**
- * The flow_path branch derives its logical flow name from the YAML basename,
+ * The e2e_test_path branch derives its logical flow name from the YAML basename,
  * and that name is the only thing keeping one flow's baselines out of another
  * directory: flow-visual joins it as `<flowsDir>/__baselines__/<flowName>`.
  * A dotted basename clears the extension arm — path.extname("...yaml") really
@@ -64,12 +64,12 @@ function mockRegistry(): Registry {
   } as unknown as Registry;
 }
 
-/** The ctx the flow_path boundary produces for a co-located, stat-matched path. */
+/** The ctx the e2e_test_path boundary produces for a co-located, stat-matched path. */
 function boundaryCtx(flowPath: string): ToolContext {
   return {
     artifacts: new ArtifactStore(),
     fileInputs: {
-      flow_path: {
+      e2e_test_path: {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
@@ -79,7 +79,7 @@ function boundaryCtx(flowPath: string): ToolContext {
   };
 }
 
-describe("flow_path stems that would collapse the baseline directory", () => {
+describe("e2e_test_path stems that would collapse the baseline directory", () => {
   it.each([
     // path.join(flowsDir, "__baselines__", "..") IS flowsDir, so an adopted
     // baseline lands beside the flow file itself rather than under a
@@ -88,7 +88,7 @@ describe("flow_path stems that would collapse the baseline directory", () => {
     // One level less, but still not a directory of its own: every such flow's
     // baselines would pile into the shared __baselines__ root.
     [".", "..yaml"],
-  ])('refuses the "%s" stem a "%s" flow_path derives', async (stem, basename) => {
+  ])('refuses the "%s" stem a "%s" e2e_test_path derives', async (stem, basename) => {
     const flowPath = path.join(flowDir, basename);
     await fs.writeFile(
       flowPath,
@@ -102,7 +102,7 @@ describe("flow_path stems that would collapse the baseline directory", () => {
         {},
         {
           project_root: flowDir,
-          flow_path: flowPath,
+          e2e_test_path: flowPath,
           device: IOS_DEVICE,
           updateBaselines: true,
         },
@@ -132,11 +132,11 @@ function asRun(result: FlowRunResult | { notice: string }): FlowRunResult {
  * state.baselineKey into runSnapshot's baseline directory (for a real file the
  * canonical stem it derives from IS this one), the step scope's
  * flow into every report, and runStack[0] into run: cycle detection — and only
- * a flow_path run can tell any of them apart from params.name (undefined
+ * an e2e_test_path run can tell any of them apart from params.name (undefined
  * here), so each thread is pinned end-to-end through the same boundary the
  * escapes use.
  */
-describe("the stem a valid flow_path derives", () => {
+describe("the stem a valid e2e_test_path derives", () => {
   it("keys the adopted baseline under __baselines__/<stem> and attributes the report to it", async () => {
     const flowPath = path.join(flowDir, "checkout.yaml");
     await fs.writeFile(
@@ -151,7 +151,7 @@ describe("the stem a valid flow_path derives", () => {
         {},
         {
           project_root: flowDir,
-          flow_path: flowPath,
+          e2e_test_path: flowPath,
           device: IOS_DEVICE,
           updateBaselines: true,
         },
@@ -172,7 +172,7 @@ describe("the stem a valid flow_path derives", () => {
       }),
     ]);
 
-    // The write landed at exactly <dirname(flow_path)>/__baselines__/<stem>/
+    // The write landed at exactly <dirname(e2e_test_path)>/__baselines__/<stem>/
     // <name>__<platform>-WxH.png, byte-for-byte the capture; the full listing
     // proves nothing landed anywhere else beside the flow.
     const baseline = path.join(flowDir, "__baselines__", "checkout", "shot__ios-390x844.png");
@@ -202,7 +202,7 @@ describe("the stem a valid flow_path derives", () => {
     const result = asRun(
       await runFlow.execute(
         {},
-        { project_root: flowDir, flow_path: flowPath, device: IOS_DEVICE },
+        { project_root: flowDir, e2e_test_path: flowPath, device: IOS_DEVICE },
         boundaryCtx(flowPath)
       )
     );
@@ -234,7 +234,7 @@ describe("the stem a valid flow_path derives", () => {
  * above, these run end-to-end with updateBaselines and assert the file the
  * adoption copy actually left on disk, not a message.
  */
-describe("the baseline key a symlinked flow_path derives from its target", () => {
+describe("the baseline key a symlinked e2e_test_path derives from its target", () => {
   /**
    * Run `flowDir/safe.yaml` — a symlink to `flowDir/vault/<targetBase>`, the
    * one-project spelling of the vault layout. The as-written name is always
@@ -257,7 +257,7 @@ describe("the baseline key a symlinked flow_path derives from its target", () =>
         {},
         {
           project_root: flowDir,
-          flow_path: flowPath,
+          e2e_test_path: flowPath,
           device: IOS_DEVICE,
           updateBaselines: true,
         },
