@@ -595,7 +595,7 @@ describe("foldablePostureHint", () => {
   it("says nothing for a device that is not foldable", async () => {
     isFoldableSimulatorMock.mockResolvedValue(false);
     expect(
-      await foldablePostureHint(DUO, { width: 1, height: 2 }, { width: 2, height: 1 })
+      await foldablePostureHint(DUO, { width: 1, height: 2 }, { width: 3, height: 2 })
     ).toBeUndefined();
     expect(devicectlCalls()).toBe(0);
   });
