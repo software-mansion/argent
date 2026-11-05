@@ -725,9 +725,44 @@ describe("detectGlobalPackageManager", () => {
     expect(detectGlobalPackageManager()).toBe("yarn");
   });
 
-  it("returns npm for a Yarn 2+ agent", () => {
-    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
-    expect(detectGlobalPackageManager()).toBe("npm");
+  describe.skipIf(process.platform === "win32")("Yarn 2+ agent over a global on PATH", () => {
+    const originalPath = process.env.PATH;
+    let dir: string;
+
+    function putGlobalOnPath(packageParent: string): void {
+      const pkg = path.join(dir, packageParent, "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(dir, "bin", "argent"));
+    }
+
+    beforeEach(() => {
+      dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-global-pm-")));
+      fs.mkdirSync(path.join(dir, "bin"));
+      process.env.PATH = `${path.join(dir, "bin")}:/usr/bin:/bin`;
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    });
+
+    afterEach(() => {
+      process.env.PATH = originalPath;
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("returns npm with no global install", () => {
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it("returns npm over an npm-owned global", () => {
+      putGlobalOnPath("lib/node_modules");
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it("returns yarn over a Yarn classic global, whose owner it must not duplicate", () => {
+      putGlobalOnPath(".config/yarn/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("yarn");
+    });
   });
 
   it("returns pnpm for pnpm agent", () => {

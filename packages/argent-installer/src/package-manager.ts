@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getGloballyInstalledPackageRoot } from "./topology.js";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
@@ -28,11 +29,13 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
-// Yarn 2+ has no `yarn global`; npm installs for it.
+// Yarn 2+ has no `yarn global`, so npm installs for it - except over a Yarn classic
+// global, where npm would add a second argent to PATH and leave the first in place.
 export function detectGlobalPackageManager(): PackageManager {
   const pm = detectPackageManager();
   const agent = process.env.npm_config_user_agent ?? "";
-  return pm === "yarn" && !agent.startsWith("yarn/1.") ? "npm" : pm;
+  if (pm !== "yarn" || agent.startsWith("yarn/1.")) return pm;
+  return getGloballyInstalledPackageRoot()?.includes("/yarn/global/node_modules/") ? "yarn" : "npm";
 }
 
 function asKnownPm(name: unknown): PackageManager | null {
