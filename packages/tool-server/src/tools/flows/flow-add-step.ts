@@ -681,7 +681,6 @@ function innermostTreeReason(message: string): string {
 
 type TapCapture = { selector?: Selector; warning?: string; rejected?: string };
 
-/** Whether a tap on this selector reads back from an e2e test file as written. */
 function survivesFlowFile(selector: Selector): boolean {
   try {
     // No prerequisite: written after the steps, it would hide a trim at the file's end.
