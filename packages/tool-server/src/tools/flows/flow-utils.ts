@@ -3803,37 +3803,17 @@ export function parseFlow(content: string): FlowFile {
     );
   }
 
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("steps" in parsed) ||
-    !Array.isArray(parsed.steps)
-  ) {
-    throw new FailureError("Invalid e2e test file: expected an object with a steps array", {
+  const notAFlow = () =>
+    new FailureError("Invalid e2e test file: expected an object with a steps array", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_file_parse",
       failure_area: "tool_server",
       error_kind: "validation",
     });
-  }
+  if (typeof parsed !== "object" || parsed === null) throw notAFlow();
 
-  // Same strictness as step bodies: a misspelled `executionPrerequisite` must
-  // not silently become "".
-  const topKeys: readonly string[] = ["version", "executionPrerequisite", "steps"];
-  const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
-  if (unknownTop.length > 0) {
-    throw new FailureError(
-      `Invalid e2e test file: ${describeUnknownKeys(unknownTop, topKeys)} — ` +
-        `allowed top-level keys: ${topKeys.join(", ")}`,
-      {
-        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
-        failure_stage: "flow_file_parse",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
-    );
-  }
-
+  // Checked before the file's shape: a newer version may change that shape, and
+  // must be refused as newer, not as malformed.
   const version: unknown = parsed.version ?? 1;
   if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
     throw new FailureError(
@@ -3849,6 +3829,25 @@ export function parseFlow(content: string): FlowFile {
   if (version > FLOW_FILE_VERSION) {
     throw new FailureError(
       `Invalid e2e test file: it is version ${version}, but this Argent reads up to version ${FLOW_FILE_VERSION}. Update Argent to run it.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+
+  if (!("steps" in parsed) || !Array.isArray(parsed.steps)) throw notAFlow();
+
+  // Same strictness as step bodies: a misspelled `executionPrerequisite` must
+  // not silently become "".
+  const topKeys: readonly string[] = ["version", "executionPrerequisite", "steps"];
+  const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
+  if (unknownTop.length > 0) {
+    throw new FailureError(
+      `Invalid e2e test file: ${describeUnknownKeys(unknownTop, topKeys)} — ` +
+        `allowed top-level keys: ${topKeys.join(", ")}`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_file_parse",

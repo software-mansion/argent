@@ -978,6 +978,15 @@ describe("parseFlow", () => {
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
     });
 
+    it.each([
+      ["adds a top-level key", "version: 2\nmetadata: x\nsteps: []\n"],
+      ["reshapes steps", "version: 2\nsteps:\n  main: []\n"],
+    ])("refuses a newer file that %s as newer, not as malformed", async (_, file) => {
+      expect(() => parseFlow(file)).toThrow(
+        "Invalid e2e test file: it is version 2, but this Argent reads up to version 1. Update Argent to run it."
+      );
+    });
+
     it.each([["0"], ["1.5"], ['"1"']])("rejects version: %s", async (v) => {
       expect(() => parseFlow(`version: ${v}\nsteps: []\n`)).toThrow(
         /version must be a positive integer/
