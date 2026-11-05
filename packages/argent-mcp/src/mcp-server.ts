@@ -48,6 +48,10 @@ import { createToolCaller } from "./tool-caller.js";
 
 export { fetchWithReconnect } from "./tool-caller.js";
 
+// These end their session whatever the client does, and their result is the only
+// reference to the file: a retry after a dropped result finds no session.
+const SAVES_FILES_AFTER_CANCEL = new Set(["screen-recording-stop", "native-profiler-stop"]);
+
 export interface StartMcpServerOptions {
   /**
    * Locations of bundled artifacts in the published package, used when no
@@ -296,6 +300,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   server.setRequestHandler(CallToolRequestSchema, async ({ params }, { signal }) => {
     const t0 = Date.now();
+    const callSignal = SAVES_FILES_AFTER_CANCEL.has(canonicalToolId(params.name))
+      ? undefined
+      : signal;
     await spyLog({
       ts: new Date().toISOString(),
       event: "tool_called",
@@ -306,7 +313,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       const { result, outputHint, note, profiling } = await callTool(
         params.name,
         params.arguments,
-        { signal }
+        { signal: callSignal }
       );
 
       await spyLog({
@@ -322,7 +329,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         toolsUrl: TOOLS_URL,
         authToken: AUTH_TOKEN,
         deviceId: getDeviceIdFromArgs(params.arguments),
-        signal,
+        signal: callSignal,
       };
 
       let content: ContentBlock[];

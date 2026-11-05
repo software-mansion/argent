@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
@@ -586,6 +586,26 @@ describe("startMcpServer screen capture after an interaction", () => {
           res.writeHead(200, { "Content-Type": "image/png" });
           res.end(PNG);
         },
+        ...Object.fromEntries(
+          ["screen-recording-stop", "native-profiler-stop"].map((name): [string, Route] => [
+            `/tools/${name}`,
+            slow(name, (res) =>
+              send(res, 200, {
+                data: {
+                  __argentArtifact: true,
+                  id: "kept-1",
+                  filename: "kept.bin",
+                  mimeType: "application/octet-stream",
+                  size: PNG.length,
+                },
+              })
+            ),
+          ])
+        ),
+        "/artifacts/kept-1": (res) => {
+          res.writeHead(200, { "Content-Type": "application/octet-stream" });
+          res.end(PNG);
+        },
       },
       listing: CAPTURE_LISTING,
     });
@@ -797,6 +817,31 @@ describe("startMcpServer screen capture after an interaction", () => {
     // Well inside CAPTURE_MS, whose timeout also ends a capture request.
     await vi.waitFor(() => expect(stub.hungUp).toEqual([route]), { timeout: 300 });
   });
+
+  it.each(["screen-recording-stop", "native-profiler-stop"])(
+    "saves the file of a %s the client cancels, since a retry finds no session",
+    async (name) => {
+      const artifactsDir = join(TEST_HOME, `artifacts-${name}`);
+      vi.stubEnv("ARGENT_ARTIFACTS_DIR", artifactsDir);
+      const controller = new AbortController();
+
+      const pending = client.callTool({ name, arguments: { udid: "u" } }, undefined, {
+        signal: controller.signal,
+      });
+      await vi.waitFor(() =>
+        expect(stub.requests.filter((r) => r.url === `/tools/${name}`)).toHaveLength(1)
+      );
+      controller.abort("stopped in the editor");
+
+      await expect(pending).rejects.toThrow("stopped in the editor");
+      await vi.waitFor(() =>
+        expect(
+          readdirSync(artifactsDir, { recursive: true }).map((f) => basename(String(f)))
+        ).toContain("kept.bin")
+      );
+      expect(stub.hungUp).toEqual([]);
+    }
+  );
 
   it("ends the artifact download of a screenshot the client cancels", async () => {
     const route = "/artifacts/shot-1";
