@@ -191,6 +191,11 @@ jobs:
           BOOT_JSON: '{"electronAppPath":"${{ github.workspace }}/packages/tool-server/test/fixtures/electron-smoke-app","electronPort":19222}'
           DEVICE_ID: chromium-cdp-19222
 
+      - name: Install Chrome
+        # The hosted image ships it; the self-hosted VMs do not.
+        run: |
+          [ -d "/Applications/Google Chrome.app" ] || brew install --cask google-chrome
+
       - name: Boot + drive the runner's Chrome
         # Same start URL as on Linux; the /Applications lookup is macOS-only.
         run: bash scripts/e2e/drive-device.sh
