@@ -754,13 +754,27 @@ describe("detectGlobalPackageManager", () => {
       expect(detectGlobalPackageManager()).toBe("npm");
     });
 
-    it("returns npm over an npm-owned global", () => {
+    it("returns npm over a global in npm's own layout", () => {
       putGlobalOnPath("lib/node_modules");
       expect(detectGlobalPackageManager()).toBe("npm");
     });
 
-    it("returns yarn over a Yarn classic global, whose owner it must not duplicate", () => {
-      putGlobalOnPath(".config/yarn/global/node_modules");
+    it("returns npm over an `npm link`ed checkout", () => {
+      putGlobalOnPath("checkout");
+      fs.mkdirSync(path.join(dir, "lib", "node_modules", "@swmansion"), { recursive: true });
+      fs.symlinkSync(
+        path.join(dir, "checkout", "@swmansion", "argent"),
+        path.join(dir, "lib", "node_modules", "@swmansion", "argent")
+      );
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it.each([
+      ["Yarn classic's default folder", ".config/yarn/global/node_modules"],
+      ["a custom Yarn classic global-folder", "yg/node_modules"],
+      ["bun's global folder", ".bun/install/global/node_modules"],
+    ])("returns yarn over a global in %s, which npm would duplicate", (_shape, parent) => {
+      putGlobalOnPath(parent);
       expect(detectGlobalPackageManager()).toBe("yarn");
     });
   });

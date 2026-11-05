@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getGloballyInstalledPackageRoot } from "./topology.js";
+import { canonicalPath } from "@argent/configuration-core";
+import { PACKAGE_NAME } from "./constants.js";
+import { getGlobalBinaryPath, getGloballyInstalledPackageRoot } from "./topology.js";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
@@ -29,13 +31,19 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
-// Yarn 2+ has no `yarn global`, so npm installs for it - except over a Yarn classic
-// global, where npm would add a second argent to PATH and leave the first in place.
+// Yarn 2+ has no `yarn global`, so npm installs for it - except over a global npm
+// does not own, where it would add a second argent to PATH and leave the first in
+// place. `yarn` then fails without installing anything. npm's layout puts
+// <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent.
 export function detectGlobalPackageManager(): PackageManager {
   const pm = detectPackageManager();
   const agent = process.env.npm_config_user_agent ?? "";
   if (pm !== "yarn" || agent.startsWith("yarn/1.")) return pm;
-  return getGloballyInstalledPackageRoot()?.includes("/yarn/global/node_modules/") ? "yarn" : "npm";
+  const binaryPath = getGlobalBinaryPath();
+  const root = getGloballyInstalledPackageRoot();
+  if (!binaryPath || !root) return "npm";
+  const npmCopy = path.join(path.dirname(path.dirname(binaryPath)), "lib", "node_modules");
+  return canonicalPath(path.join(npmCopy, PACKAGE_NAME)) === root ? "npm" : "yarn";
 }
 
 function asKnownPm(name: unknown): PackageManager | null {

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { isGloballyInstalled } from "../src/utils.js";
 import { runInstall } from "../src/install-runner.js";
@@ -104,6 +106,25 @@ describe("isGloballyInstalled — temp package runners", () => {
       platform.mockRestore();
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "ignores a project copy that `npm --prefix <symlink>` puts on PATH",
+    () => {
+      const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-prefix-link-")));
+      const originalCwd = process.cwd();
+      try {
+        fs.mkdirSync(path.join(tmp, "project", "node_modules", ".bin"), { recursive: true });
+        fs.writeFileSync(path.join(tmp, "project", "node_modules", ".bin", "argent"), "");
+        fs.symlinkSync(path.join(tmp, "project"), path.join(tmp, "link"));
+        process.chdir(path.join(tmp, "project"));
+        whichFinds(path.join(tmp, "link", "node_modules", ".bin", "argent"));
+        expect(isGloballyInstalled()).toBe(false);
+      } finally {
+        process.chdir(originalCwd);
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  );
 
   it("finds the global install behind a project copy", () => {
     const projectBin = path.join(process.cwd(), "node_modules", ".bin", "argent");

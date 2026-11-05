@@ -18,7 +18,7 @@ import {
   detectGlobalPackageManager,
   detectProjectPackageManager,
   formatShellCommand,
-  getGlobalBinaryPath,
+  getRemainingGlobalBinaryPath,
   getGloballyInstalledPackageRoot,
   globalUninstallCommand,
   localUninstallCommand,
@@ -728,7 +728,7 @@ export async function uninstall(args: string[]): Promise<void> {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
         // The command comes from the launcher, not the install's owner: npm
         // exits 0 on a package Yarn classic or pnpm installed and leaves it.
-        const leftover = removable.kind === "global" ? getGlobalBinaryPath() : null;
+        const leftover = removable.kind === "global" ? getRemainingGlobalBinaryPath() : null;
         if (leftover) {
           throw new Error(
             `${leftover} is still on PATH. Remove it with the package manager that installed it.`

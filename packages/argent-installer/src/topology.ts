@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import semver from "semver";
+import { canonicalPath } from "@argent/configuration-core";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { resolvePackageRoot } from "./package-root.js";
 import { isYarnPnp } from "./preflight.js";
@@ -35,9 +36,10 @@ function isTempRunnerPath(binaryPath: string): boolean {
 }
 
 // npm exec, npx and package scripts prepend `<cwd or ancestor>/node_modules/.bin`,
-// which holds a project's devDependency, not a global install.
+// which holds a project's devDependency, not a global install. Compared by
+// canonical path: process.cwd() is physical, and `npm --prefix <symlink>` is not.
 function isProjectBinPath(binaryPath: string): boolean {
-  const norm = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const norm = (p: string) => (process.platform === "win32" ? p.toLowerCase() : canonicalPath(p));
   const binDir = norm(path.dirname(path.resolve(binaryPath)));
   for (let dir = path.resolve(process.cwd()); ; dir = path.dirname(dir)) {
     if (norm(path.join(dir, "node_modules", ".bin")) === binDir) return true;
@@ -69,6 +71,21 @@ export function getGlobalBinaryPath(): string | null {
     );
   } catch {
     return null;
+  }
+}
+
+/**
+ * The global binary still on PATH after an uninstall. A version-manager shim
+ * (nodenv's) outlives the package until a rehash, then exits 127.
+ */
+export function getRemainingGlobalBinaryPath(): string | null {
+  const binaryPath = getGlobalBinaryPath();
+  if (!binaryPath || process.platform === "win32") return binaryPath;
+  try {
+    execFileSync(binaryPath, ["--version"], { stdio: "ignore", timeout: 10_000 });
+    return binaryPath;
+  } catch (err) {
+    return (err as { status?: number }).status === 127 ? null : binaryPath;
   }
 }
 
