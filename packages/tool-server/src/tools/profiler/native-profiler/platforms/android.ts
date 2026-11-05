@@ -27,7 +27,7 @@ interface AndroidStartParams {
 export async function startNativeProfilerAndroid(
   api: NativeProfilerSessionApi,
   params: AndroidStartParams
-): Promise<{ status: "recording"; pid: number; traceFile: string }> {
+): Promise<{ status: "recording"; pid: number; traceFile: string; warning?: string }> {
   if (api.profilingActive) {
     throw new FailureError(
       `A native profiling session is already running (PID: ${api.capturePid}).`,

@@ -1,4 +1,5 @@
 import { FAILURE_CODES, withFailureSignal } from "@argent/registry";
+import { teamsCoveringDevice } from "./provisioning-profiles";
 import { announceDetectedSigningTeam, detectSigningTeams } from "./team-detect";
 
 /**
@@ -37,13 +38,16 @@ function signingConfigForTeam(teamId: string): RunnerSigningConfig {
 }
 
 /**
- * Resolve signing: `ARGENT_IOS_TEAM_ID` when set, otherwise the team detected
- * from this Mac's keychain (memoized; several teams auto-pick the newest).
+ * Resolve signing: `ARGENT_IOS_TEAM_ID` when set, otherwise a team detected
+ * from this Mac's keychain (memoized). With several teams, `udid` narrows the
+ * pick to teams whose provisioning profile already lists that phone, since those
+ * can build for it without registering it; the newest of those wins. Without any,
+ * the newest team wins, and building against the phone can register it.
  * Throws only when neither yields a team, and that error prompts an Xcode
  * sign-in: with no certificate in the keychain, naming a team id could not
  * make the build signable anyway.
  */
-export async function resolveRunnerSigningConfig(): Promise<RunnerSigningConfig> {
+export async function resolveRunnerSigningConfig(udid?: string): Promise<RunnerSigningConfig> {
   const envTeamId = process.env.ARGENT_IOS_TEAM_ID?.trim();
 
   if (envTeamId) {
@@ -62,9 +66,18 @@ export async function resolveRunnerSigningConfig(): Promise<RunnerSigningConfig>
     );
   }
 
-  announceDetectedSigningTeam(teams);
+  const covering = udid && teams.length > 1 ? await teamsCoveringDevice(udid) : new Set<string>();
+  const winner = teams.find((team) => covering.has(team.teamId)) ?? teams[0]!;
 
-  return signingConfigForTeam(teams[0]!.teamId);
+  announceDetectedSigningTeam(
+    teams,
+    winner,
+    udid
+      ? { udid, coveringTeams: teams.filter((team) => covering.has(team.teamId)).length }
+      : undefined
+  );
+
+  return signingConfigForTeam(winner.teamId);
 }
 
 /** Map xcodebuild output to a signing-recovery hint, or null. */

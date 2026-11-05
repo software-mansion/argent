@@ -1,0 +1,307 @@
+import { adbShell, shellQuote } from "../utils/adb";
+
+/**
+ * The device side of the Android network inspector: what it reads from the
+ * device and the shell it runs there. Everything here is a plain adb call; the
+ * inspector decides what each answer means for capture.
+ */
+
+export const JAR_NAME = "network-inspector.jar";
+export const AGENT_LIB_NAME = "libjvmti_network_inspector.so";
+const SESSION_FILE_NAME = "session";
+export const AGENT_ABIS = ["arm64-v8a", "x86_64"] as const;
+export type AgentAbi = (typeof AGENT_ABIS)[number];
+
+/** adb pushes here, and `run-as` copies into the app, which loads only from its own data. */
+export const DEVICE_STAGING_DIR = "/data/local/tmp/.argent-inspector";
+
+export interface AppProcess {
+  pid: number;
+  startTime: number;
+}
+
+export function processKey(proc: AppProcess): string {
+  return `${proc.pid}:${proc.startTime}`;
+}
+
+/**
+ * The agent's directory in the app's data for Android user `user`. Under
+ * `code_cache`, which backups leave out and an app update clears, so nothing
+ * outlives the build it was copied for. For user 0 it is the same directory as
+ * `/data/data/<pkg>/code_cache/...`.
+ */
+export function agentDirFor(packageName: string, user: number): string {
+  return `/data/user/${user}/${packageName}/code_cache/.argent-inspector`;
+}
+
+/**
+ * `run-as` for the app as installed for `user`. `--user` goes after the
+ * package, and only for a user other than 0: Android versions without the flag
+ * know only user 0.
+ */
+export function runAsCommand(packageName: string, user: number, command: string): string {
+  return `run-as ${shellQuote(packageName)}${user !== 0 ? ` --user ${user}` : ""} ${command}`;
+}
+
+interface DeviceFacts {
+  sdk: number | null;
+  /** The ABI the kernel runs natively, or null when `uname -m` names neither agent ABI. */
+  kernelAbi: AgentAbi | null;
+  /**
+   * `ro.serialno` of a physical device, the same for every adb connection to
+   * it. Null for an emulator, where it tells nothing apart: every emulator of
+   * one emulator version reports the same one.
+   */
+  hardwareKey: string | null;
+  /** The foreground Android user; 0 when the device does not say. */
+  user: number;
+}
+
+/** Everything the gates need from the device, in one adb round trip. */
+export async function readDeviceFacts(serial: string): Promise<DeviceFacts> {
+  const out = await adbShell(
+    serial,
+    [
+      'echo "sdk=$(getprop ro.build.version.sdk)"',
+      'echo "machine=$(uname -m)"',
+      'echo "serialno=$(getprop ro.serialno)"',
+      'echo "qemu=$(getprop ro.kernel.qemu)$(getprop ro.boot.qemu)"',
+      'echo "user=$(am get-current-user 2>/dev/null)"',
+    ].join("; "),
+    { timeoutMs: 15_000 }
+  );
+  const fields = new Map<string, string>();
+  for (const line of out.split("\n")) {
+    const at = line.indexOf("=");
+    if (at > 0) fields.set(line.slice(0, at).trim(), line.slice(at + 1).trim());
+  }
+  const sdk = Number.parseInt(fields.get("sdk") ?? "", 10);
+  const machine = fields.get("machine") ?? "";
+  const serialNo = fields.get("serialno") ?? "";
+  // Either property is 1 on an emulator, also one adb reaches over TCP.
+  const emulator = serial.startsWith("emulator-") || (fields.get("qemu") ?? "").includes("1");
+  const user = Number.parseInt(fields.get("user") ?? "", 10);
+  return {
+    sdk: Number.isFinite(sdk) ? sdk : null,
+    kernelAbi: machine === "aarch64" ? "arm64-v8a" : machine === "x86_64" ? "x86_64" : null,
+    hardwareKey: emulator ? null : serialNo || null,
+    user: Number.isInteger(user) && user >= 0 ? user : 0,
+  };
+}
+
+/**
+ * The ABI the app's process runs as, which decides which agent can load in
+ * it: a 64-bit phone still runs an app 32-bit when its APK ships only 32-bit
+ * native libraries. `primaryCpuAbi` is null for an app with no native
+ * libraries, which then runs as the device's primary ABI.
+ */
+export async function resolveAppAbi(serial: string, packageName: string): Promise<string> {
+  const dump = await adbShell(
+    serial,
+    `dumpsys package ${shellQuote(packageName)} | grep -m1 primaryCpuAbi; true`,
+    { timeoutMs: 15_000 }
+  );
+  const abi = /primaryCpuAbi=(\S+)/.exec(dump)?.[1];
+  if (abi && abi !== "null") return abi;
+  return (await adbShell(serial, "getprop ro.product.cpu.abi", { timeoutMs: 10_000 })).trim();
+}
+
+export interface AppProcesses {
+  /** The foreground Android user, or null when the device did not say. */
+  user: number | null;
+  /** The app's processes of every Android user, in pidof's order. */
+  processes: Array<AppProcess & { user: number }>;
+}
+
+/**
+ * The foreground Android user and the app's processes, in one adb round trip,
+ * so the process picked is the one of the user in the foreground then. pidof
+ * also lists the app's processes in a work profile or another user, and only
+ * the one whose files `run-as --user` reaches can load the agent. Each user has
+ * a range of 100000 uids. The comm field of /proc/<pid>/stat can hold spaces,
+ * so the start time is counted from the field after its closing parenthesis.
+ * `timeoutMs` limits the adb call.
+ */
+export async function readAppProcesses(
+  serial: string,
+  packageName: string,
+  timeoutMs = 10_000
+): Promise<AppProcesses> {
+  const out = await adbShell(
+    serial,
+    [
+      'echo "user=$(am get-current-user 2>/dev/null)"',
+      `for p in $(pidof ${shellQuote(packageName)}); do echo "$p $(sed 's/.*) //' /proc/$p/stat | cut -d' ' -f20) $(grep '^Uid:' /proc/$p/status)"; done`,
+    ].join("; "),
+    { timeoutMs }
+  );
+  let user: number | null = null;
+  const processes: AppProcesses["processes"] = [];
+  for (const raw of out.split("\n")) {
+    const line = raw.trim();
+    const foreground = /^user=(\d+)$/.exec(line);
+    if (foreground) {
+      user = Number(foreground[1]);
+      continue;
+    }
+    const match = /^(\d+) (\d+) Uid:\s+(\d+)/.exec(line);
+    if (match) {
+      processes.push({
+        pid: Number(match[1]),
+        startTime: Number(match[2]),
+        user: Math.floor(Number(match[3]) / 100_000),
+      });
+    }
+  }
+  return { user, processes };
+}
+
+/** The app's process for Android user `user`, or null when none runs. */
+export function processOfUser(read: AppProcesses, user: number): AppProcess | null {
+  const found = read.processes.find((p) => p.user === user);
+  return found ? { pid: found.pid, startTime: found.startTime } : null;
+}
+
+/**
+ * Runs as the app with the session line on its stdin: writes the session file,
+ * owner-only and replaced in one rename.
+ */
+export function sessionScript(agentDir: string): string {
+  const session = `${agentDir}/${SESSION_FILE_NAME}`;
+  return [
+    "umask 077",
+    `mkdir -p ${agentDir}`,
+    `cat > ${session}.tmp`,
+    `mv -f ${session}.tmp ${session}`,
+  ].join(" && ");
+}
+
+/**
+ * The script that runs as the app on every attach attempt, with the session
+ * line on its stdin: it prints the device clock (see `sessionWrittenSince`),
+ * writes the session file (see `sessionScript`), then reports whether `pid`
+ * already maps the agent and copies the agent in when it does not.
+ */
+export function attachScript(agentDir: string, pid: number): string {
+  const jar = `${agentDir}/${JAR_NAME}`;
+  const lib = `${agentDir}/${AGENT_LIB_NAME}`;
+  const copy = [
+    // A read-only copy from an earlier attach cannot be overwritten in place.
+    `rm -f ${jar} ${lib}`,
+    `cp ${DEVICE_STAGING_DIR}/${JAR_NAME} ${jar}`,
+    `cp ${DEVICE_STAGING_DIR}/${AGENT_LIB_NAME} ${lib}`,
+    // Android 14 and later refuse to load a writable dex file.
+    `chmod 444 ${jar}`,
+    `chmod 555 ${lib}`,
+    "echo copied",
+  ].join(" && ");
+  return [
+    'echo "since=$(date +%s.%N)"',
+    sessionScript(agentDir),
+    `if grep -q ${AGENT_LIB_NAME} /proc/${pid}/maps; then echo loaded; else ${copy}; fi`,
+  ].join(" && ");
+}
+
+/**
+ * The device time `attachScript` printed right before it wrote the session,
+ * in seconds.milliseconds like logcat's `-v epoch` times, or undefined when
+ * the output has none.
+ */
+export function sessionWrittenSince(out: string): string | undefined {
+  const match = /\bsince=(\d+)(?:\.(\d+))?/.exec(out);
+  if (!match) return undefined;
+  return `${match[1]}.${(match[2] ?? "").padEnd(3, "0").slice(0, 3)}`;
+}
+
+/**
+ * Removes the agent's directory only while its session file still holds the
+ * secret on stdin: once another tool-server wrote its own session there, the
+ * files are that one's. Only shell builtins see the secret, so it stays out of
+ * every command line.
+ */
+export function removeSessionScript(agentDir: string): string {
+  const session = `${agentDir}/${SESSION_FILE_NAME}`;
+  return `IFS= read -r s; case "$(cat ${session} 2>/dev/null)" in *"\\"secret\\":\\"$s\\""*) rm -rf ${agentDir};; esac`;
+}
+
+/** What a `run-as` failure says about the app, from its message. */
+type RunAsFailure = "not_debuggable" | "not_application" | "unknown_package" | "other";
+
+export function classifyRunAsFailure(detail: string): RunAsFailure {
+  if (/package not debuggable/i.test(detail)) return "not_debuggable";
+  if (/package not an application/i.test(detail)) return "not_application";
+  if (/unknown package/i.test(detail)) return "unknown_package";
+  // The app has no data directory for that Android user: it is not installed
+  // for the user, or the user does not exist.
+  if (/couldn't stat \/data\/(?:user\/\d+|data)\b/i.test(detail)) return "unknown_package";
+  return "other";
+}
+
+/** The logcat tag the agent writes under, from the app's process. */
+export const AGENT_LOG_TAG = "ArgentNetworkInspector";
+const AGENT_REASON_TIMEOUT_MS = 3_000;
+const MAX_AGENT_REASON_CHARS = 300;
+/** A line of the agent's tag in logcat's `tag`, `brief` or `threadtime` format; group 1 is the message. */
+const AGENT_LOG_LINE = new RegExp(`\\b${AGENT_LOG_TAG}\\s*(?:\\(\\s*\\d+\\))?\\s*:\\s?(.*)$`);
+
+/**
+ * The last line the agent in process `pid` logged about not connecting or
+ * about closing a connection, or undefined when it logged none. Throws when
+ * adb fails or does not answer within a few seconds.
+ *
+ * `--pid` (Android 7.0 and later) is filtered by logd and `-s` by logcat
+ * itself. No `-t` count: it counts lines before the tag filter, so the
+ * app's own logging could push the agent's line out of a short tail. The
+ * agent logs a reason once when it changes, so the dump reads the history.
+ * `since` is the device time (seconds.milliseconds) this tool-server wrote
+ * its session at. A line from before it no longer holds, as a missing
+ * session file, unless it asks for an app restart: the agent does not try
+ * again then, so that reason stays true.
+ */
+export async function readAgentReason(
+  serial: string,
+  pid: number,
+  since?: string
+): Promise<string | undefined> {
+  const out = await adbShell(serial, `logcat -d --pid=${pid} -v epoch -s ${AGENT_LOG_TAG}:I`, {
+    timeoutMs: AGENT_REASON_TIMEOUT_MS,
+  });
+  return lastAgentReason(out, since);
+}
+
+/**
+ * The last refusal or close line in logcat output of the agent's tag. With
+ * `since`, a line whose `-v epoch` time is earlier counts only when it asks
+ * for an app restart.
+ */
+export function lastAgentReason(logcat: string, since?: string): string | undefined {
+  const lines = logcat.split("\n");
+  const from = since === undefined ? undefined : Number(since);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trimEnd();
+    const message = AGENT_LOG_LINE.exec(line)?.[1]?.trim();
+    if (!message || !isAgentReason(message)) continue;
+    const at = /^\s*(\d+(?:\.\d+)?)\s/.exec(line)?.[1];
+    if (
+      from !== undefined &&
+      at !== undefined &&
+      Number(at) < from &&
+      !/restart the app/i.test(message)
+    ) {
+      continue;
+    }
+    const clean = message.replace(/\s+/g, " ");
+    return clean.length > MAX_AGENT_REASON_CHARS
+      ? `${clean.slice(0, MAX_AGENT_REASON_CHARS)}…`
+      : clean;
+  }
+  return undefined;
+}
+
+function isAgentReason(message: string): boolean {
+  return (
+    / - not connecting\b/.test(message) ||
+    / - closing\b/.test(message) ||
+    message.startsWith("Closing the tool-server connection:")
+  );
+}

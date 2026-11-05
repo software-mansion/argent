@@ -87,7 +87,10 @@ async function androidSerials(): Promise<string[]> {
 }
 
 async function bootedSimulators(): Promise<string[]> {
-  const simulators = await listIosSimulators();
+  // `firstFound` counts only checks that resolve: a rejected listing would leave
+  // it waiting forever, with the rejection unhandled. While Xcode's install is
+  // pending the listing is refused, and so is every log read below.
+  const simulators = await listIosSimulators().catch(() => []);
   return simulators.filter((s) => s.state === "Booted").map((s) => s.udid);
 }
 
