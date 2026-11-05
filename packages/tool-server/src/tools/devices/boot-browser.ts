@@ -69,10 +69,18 @@ function findBrowserExecutable(browser: BrowserName): string | null {
 }
 
 const PROFILE_PREFIX = "argent-browser-";
-/** Holds the booting tool-server's pid: it covers the profile until its browser takes the lock. */
+/**
+ * Holds the booting tool-server's pid until the boot succeeds, then the
+ * browser's, so the sweep spares a profile that is still booting.
+ */
 const PID_FILE = "argent-browser.pid";
 /** A relaunch (chrome://restart, an update) ends our process and starts a new browser on the profile. */
 const RELAUNCH_GRACE_MS = 5000;
+
+/** 0 and negative pids name process groups, which a kill(pid, 0) probe always reaches. */
+function holderAlive(pid: number): boolean {
+  return pid > 0 && pidIsAlive(pid);
+}
 
 /**
  * Whether a browser holds `dir`, by Chromium's own profile lock: on POSIX a
@@ -83,7 +91,7 @@ function profileLocked(dir: string): boolean {
   if (process.platform === "win32") return fs.existsSync(path.join(dir, "lockfile"));
   try {
     const owner = fs.readlinkSync(path.join(dir, "SingletonLock"));
-    return pidIsAlive(Number(owner.slice(owner.lastIndexOf("-") + 1)));
+    return holderAlive(Number(owner.slice(owner.lastIndexOf("-") + 1)));
   } catch {
     return false;
   }
@@ -120,23 +128,38 @@ export function snapName(executable: string): string | null {
   }
 }
 
-/** Deletes profiles nothing holds, e.g. left by a tool-server that exited first. */
-function removeStaleProfiles(root: string): void {
-  let names: string[];
+/** Every root a profile can be in: the temp dir, and each snap's own dir. */
+function profileRoots(): string[] {
+  const snaps = path.join(os.homedir(), "snap");
+  let names: string[] = [];
   try {
-    names = fs.readdirSync(root).filter((n) => n.startsWith(PROFILE_PREFIX));
+    names = fs.readdirSync(snaps);
   } catch {
-    return;
+    // no snaps
   }
-  for (const name of names) {
-    const dir = path.join(root, name);
+  return [os.tmpdir(), ...names.map((n) => path.join(snaps, n, "common"))];
+}
+
+/** Deletes profiles nothing holds, e.g. left by a tool-server that exited first. */
+function removeStaleProfiles(): void {
+  const dirs = profileRoots().flatMap((root) => {
+    try {
+      return fs
+        .readdirSync(root)
+        .filter((n) => n.startsWith(PROFILE_PREFIX))
+        .map((n) => path.join(root, n));
+    } catch {
+      return [];
+    }
+  });
+  for (const dir of dirs) {
     let pid: number;
     try {
       pid = Number(fs.readFileSync(path.join(dir, PID_FILE), "utf8"));
     } catch {
       continue; // not ours
     }
-    if (!pidIsAlive(pid) && !profileLocked(dir)) {
+    if (!holderAlive(pid) && !profileLocked(dir)) {
       fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => {});
     }
   }
@@ -195,13 +218,13 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
   }
 
   const extraArgs = options.extraArgs ?? [];
-  // Chromium reads every non-flag argument as a start URL, and headless mode
+  // Chromium reads every non-empty, non-flag argument as a start URL, and headless mode
   // exits on more than one, so about:blank is only the default.
-  const hasStartUrl = extraArgs.some((a) => !a.startsWith("-"));
+  const hasStartUrl = extraArgs.some((a) => a !== "" && !a.startsWith("-"));
   const snap = snapName(executable);
   const root = snap ? path.join(os.homedir(), "snap", snap, "common") : os.tmpdir();
   fs.mkdirSync(root, { recursive: true });
-  removeStaleProfiles(root);
+  removeStaleProfiles();
   const profileDir = fs.mkdtempSync(path.join(root, PROFILE_PREFIX));
   fs.writeFileSync(path.join(profileDir, PID_FILE), String(process.pid));
   const result = await bootElectronApp({
@@ -223,6 +246,11 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
       }, RELAUNCH_GRACE_MS).unref();
     },
   });
+  try {
+    fs.writeFileSync(path.join(profileDir, PID_FILE), String(result.pid));
+  } catch {
+    // The tool-server's pid it already holds keeps the profile until that exits.
+  }
 
   const ours = await answersOnProfile(result.port, profileDir).catch((err: unknown) => {
     killChromiumByPort(result.port);

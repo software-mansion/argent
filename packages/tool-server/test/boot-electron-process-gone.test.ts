@@ -198,6 +198,18 @@ describe("bootElectronApp onProcessGone / label", () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("lets concurrent boots that pick their own ports both start", async () => {
+    spawnMock.mockImplementation(() => makeFakeChild(12345));
+    const boot = () =>
+      bootElectronApp({ appPath: appBinary, readyTimeoutMs: 200 }).catch((e: unknown) => e);
+    const errs = await Promise.all([boot(), boot()]);
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    for (const err of errs) {
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_CDP_TIMEOUT);
+    }
+  });
+
   it("refuses a fixed port something already answers on, without spawning", async () => {
     const holder = net.createServer();
     await new Promise<void>((resolve) => holder.listen(0, "127.0.0.1", resolve));

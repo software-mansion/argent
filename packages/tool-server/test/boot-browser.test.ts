@@ -11,13 +11,14 @@ vi.mock("../src/tools/devices/boot-electron", () => ({
 
 // SystemInfo.getInfo on the browser that answers the booted port.
 const cdpSend = vi.fn();
+const cdpDisconnect = vi.fn(async () => {});
 vi.mock("../src/chromium-server/cdp-session", () => ({
   browserWebSocketUrl: async () => "ws://127.0.0.1/devtools/browser/x",
 }));
 vi.mock("../src/utils/debugger/cdp-client", () => ({
   CDPClient: class {
     connect = async () => {};
-    disconnect = async () => {};
+    disconnect = () => cdpDisconnect();
     send = (method: string) => cdpSend(method);
   },
 }));
@@ -140,6 +141,7 @@ describe("bootBrowser", () => {
     cdpSend.mockImplementation(async () => ({
       commandLine: `chrome ${bootElectronAppMock.mock.lastCall![0].extraArgs.join(" ")}`,
     }));
+    cdpDisconnect.mockClear();
   });
   afterEach(() => {
     for (const call of bootElectronAppMock.mock.calls) {
@@ -181,6 +183,12 @@ describe("bootBrowser", () => {
     const args: string[] = bootElectronAppMock.mock.calls[0]![0].extraArgs;
     expect(args.slice(-2)).toEqual(["--headless=new", "http://localhost:3000"]);
     expect(args).not.toContain("about:blank");
+  });
+
+  it("opens about:blank when the only non-flag argument is empty", async () => {
+    installed.set(chrome!, "exec");
+    await bootBrowser({ browser: "chrome", extraArgs: ["--headless=new", ""] });
+    expect(bootElectronAppMock.mock.calls[0]![0].extraArgs.slice(-1)).toEqual(["about:blank"]);
   });
 
   it("falls back to a later install location", async () => {
@@ -253,7 +261,7 @@ describe("bootBrowser", () => {
     expect(fs.existsSync(relaunchedDir)).toBe(true);
   });
 
-  it("records the booting tool-server's pid in the profile before launching", async () => {
+  it("records the booting tool-server's pid before launching, then the browser's", async () => {
     installed.set(chrome!, "exec");
     bootElectronAppMock.mockImplementation(async (opts: { extraArgs: string[] }) => {
       const dir = profileDirOf(opts.extraArgs)!;
@@ -265,23 +273,28 @@ describe("bootBrowser", () => {
     await bootBrowser({ browser: "chrome" });
     expect(bootElectronAppMock).toHaveBeenCalledTimes(1);
     const dir = profileDirOf(bootElectronAppMock.mock.calls[0]![0].extraArgs)!;
-    expect(fs.readFileSync(path.join(dir, "argent-browser.pid"), "utf8")).toBe(String(process.pid));
+    expect(fs.readFileSync(path.join(dir, "argent-browser.pid"), "utf8")).toBe("4242");
   });
 
   describe("sweeping leftover profiles", () => {
     const platform = process.platform;
     const made: string[] = [];
     const tag = `${process.pid}-${Date.now()}`;
-    const make = (name: string, pid?: number) => {
-      const dir = path.join(os.tmpdir(), `${name}-${tag}`);
+    const make = (name: string, pid?: number | string, root = os.tmpdir()) => {
+      const dir = path.join(root, `${name}-${tag}`);
       fs.mkdirSync(dir, { recursive: true });
       if (pid !== undefined) fs.writeFileSync(path.join(dir, "argent-browser.pid"), String(pid));
       made.push(dir);
       return dir;
     };
+    beforeEach(() => {
+      fakeHome.dir = fs.mkdtempSync(path.join(os.tmpdir(), "sweephome-"));
+    });
     afterEach(() => {
       Object.defineProperty(process, "platform", { value: platform });
       for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+      fs.rmSync(fakeHome.dir, { recursive: true, force: true });
+      fakeHome.dir = "";
     });
 
     it("deletes only profiles that neither their tool-server nor a browser holds", async () => {
@@ -293,10 +306,21 @@ describe("bootBrowser", () => {
       lockFor(locked, process.pid);
       const noPidFile = make("argent-browser-nopid");
       const foreign = make("other-dead", DEAD_PID);
+      // pid 0 and negative pids would probe a process group, which always answers.
+      const emptyPid = make("argent-browser-emptypid", "");
+      const groupPid = make("argent-browser-grouppid", "-1");
+      const hostOnlyLock = make("argent-browser-hostonly", DEAD_PID);
+      fs.symlinkSync("some-host-", path.join(hostOnlyLock, "SingletonLock"));
+      const otherSnap = make(
+        "argent-browser-snap",
+        DEAD_PID,
+        path.join(fakeHome.dir, "snap", "brave", "common")
+      );
 
       installed.set(chrome!, "exec");
       await bootBrowser({ browser: "chrome" });
-      await vi.waitFor(() => expect([dead, crashed].filter((d) => fs.existsSync(d))).toEqual([]));
+      const gone = [dead, crashed, emptyPid, groupPid, hostOnlyLock, otherSnap];
+      await vi.waitFor(() => expect(gone.filter((d) => fs.existsSync(d))).toEqual([]));
       expect([live, locked, noPidFile, foreign].filter((d) => fs.existsSync(d))).toEqual([
         live,
         locked,
@@ -320,6 +344,15 @@ describe("bootBrowser", () => {
       await vi.waitFor(() => expect(fs.existsSync(dead)).toBe(false));
       expect(fs.existsSync(locked)).toBe(true);
     });
+  });
+
+  it("closes its identity-check connection whether or not the browser is ours", async () => {
+    installed.set(chrome!, "exec");
+    await bootBrowser({ browser: "chrome" });
+    expect(cdpDisconnect).toHaveBeenCalledTimes(1);
+    cdpSend.mockResolvedValue({ commandLine: "chrome --user-data-dir=/elsewhere" });
+    await bootBrowser({ browser: "chrome" }).catch(() => {});
+    expect(cdpDisconnect).toHaveBeenCalledTimes(2);
   });
 
   it("kills its browser and fails when another argent browser answers the port", async () => {
