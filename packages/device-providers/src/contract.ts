@@ -216,6 +216,11 @@ export function isExternalDeviceUrn(urn: string): boolean {
  *                        (scoped to `deviceSet` when one is declared).
  * - `simulator-server` — attach to the device's `apiUrl` / `streamUrl` for
  *                        input, screenshots and the MJPEG stream.
+ * - `usbmuxd`          — reach a physical iPhone through the usbmuxd endpoint
+ *                        in `usbmuxd` instead of the Mac's own `/var/run/usbmuxd`:
+ *                        lockdown, app install and launch, the on-device runner.
+ *                        The phone may be cabled to another machine, with the
+ *                        provider relaying its usbmuxd socket to a local port.
  *
  * Unknown tokens are ignored, so a provider may declare capabilities from a
  * future Argent version without tripping an older one.
@@ -228,6 +233,7 @@ export const EXTERNAL_CAPABILITIES = [
   "native-profiler",
   "simctl",
   "simulator-server",
+  "usbmuxd",
 ] as const;
 
 export type ExternalCapability = (typeof EXTERNAL_CAPABILITIES)[number];
@@ -340,6 +346,16 @@ const nativeDevtoolsSchema = z.object({
   socketPath: z.string().min(1).max(104),
 });
 
+/**
+ * A usbmuxd endpoint: `host:port` for a TCP relay (the shape libimobiledevice,
+ * pymobiledevice3 and go-ios read from `USBMUXD_SOCKET_ADDRESS`), or an absolute
+ * unix socket path. Argent speaks the usbmuxd protocol to it exactly as it does
+ * to `/var/run/usbmuxd`, so the device behind it needs no CoreDevice pairing
+ * with this Mac: the pairing record comes from the usbmuxd that owns the cable.
+ */
+const USBMUXD_ENDPOINT_SHAPE =
+  /^(?:\/[^\0]+|[A-Za-z0-9.][A-Za-z0-9.-]*:\d{1,5}|\[[0-9A-Fa-f:.]+\]:\d{1,5})$/;
+
 const simulatorServerSchema = z.object({
   apiUrl: simulatorServerUrl,
   streamUrl: simulatorServerUrl,
@@ -383,8 +399,30 @@ export const providerDeviceSchema = z
     platform: z.enum(["ios", "android"]),
     simulatorServer: simulatorServerSchema.optional(),
     state: z.string().min(1).max(64),
+    /**
+     * iOS hardware only. Where Argent reaches this phone's usbmuxd when it is
+     * not on this Mac's own `/var/run/usbmuxd`. Required by, and only
+     * meaningful with, the `usbmuxd` capability.
+     */
+    usbmuxd: z.string().min(1).max(256).regex(USBMUXD_ENDPOINT_SHAPE).optional(),
   })
   .superRefine((device, ctx) => {
+    if (device.capabilities.includes("usbmuxd") && !device.usbmuxd) {
+      ctx.addIssue({
+        code: "custom",
+        message: "required when the 'usbmuxd' capability is declared",
+        path: ["usbmuxd"],
+      });
+    }
+
+    if (device.usbmuxd && (device.platform !== "ios" || device.kind !== "device")) {
+      ctx.addIssue({
+        code: "custom",
+        message: "only meaningful for a physical iOS device",
+        path: ["usbmuxd"],
+      });
+    }
+
     if (device.capabilities.includes("simulator-server") && !device.simulatorServer) {
       ctx.addIssue({
         code: "custom",
@@ -502,4 +540,6 @@ export interface ExternalDevice {
   };
   simulatorServer?: { apiUrl: string; streamUrl: string; version?: string };
   state: string;
+  /** usbmuxd endpoint for a relayed physical iPhone; see the `usbmuxd` capability. */
+  usbmuxd?: string;
 }

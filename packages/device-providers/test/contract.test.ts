@@ -11,7 +11,7 @@ import {
   providerDeviceSchema,
   providerRecordSchema,
 } from "../src/index.js";
-import { androidDevice, ANDROID_SERIAL, iosDevice, IOS_UDID } from "./fixtures.js";
+import { androidDevice, ANDROID_SERIAL, iosDevice, IOS_UDID, relayedIphone } from "./fixtures.js";
 
 describe("external device ids", () => {
   it("round-trips through make / parse", () => {
@@ -182,6 +182,37 @@ describe("provider schemas", () => {
         supportUrl: "https://example.invalid/issues",
       }).success
     ).toBe(true);
+  });
+
+  it("accepts a relayed physical iPhone: the usbmuxd capability with its endpoint", () => {
+    expect(providerDeviceSchema.safeParse(relayedIphone()).success).toBe(true);
+    expect(
+      providerDeviceSchema.safeParse(relayedIphone({ usbmuxd: "/tmp/acme/usbmuxd" })).success
+    ).toBe(true);
+    expect(providerDeviceSchema.safeParse(relayedIphone({ usbmuxd: "[::1]:15038" })).success).toBe(
+      true
+    );
+  });
+
+  it("requires usbmuxd when the usbmuxd capability is declared", () => {
+    expect(providerDeviceSchema.safeParse(relayedIphone({ usbmuxd: undefined })).success).toBe(
+      false
+    );
+  });
+
+  it("rejects a usbmuxd endpoint that is neither host:port nor an absolute socket path", () => {
+    for (const usbmuxd of ["15038", "127.0.0.1", "relative/socket", "-x:1", "host:port"]) {
+      expect(providerDeviceSchema.safeParse(relayedIphone({ usbmuxd })).success).toBe(false);
+    }
+  });
+
+  it("rejects a usbmuxd endpoint on anything but a physical iOS device", () => {
+    expect(
+      providerDeviceSchema.safeParse(androidDevice({ usbmuxd: "127.0.0.1:15038" })).success
+    ).toBe(false);
+    expect(providerDeviceSchema.safeParse(iosDevice({ usbmuxd: "127.0.0.1:15038" })).success).toBe(
+      false
+    );
   });
 
   it("rejects a deviceSet on a non-iOS device", () => {

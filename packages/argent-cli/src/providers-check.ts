@@ -230,16 +230,17 @@ async function checkDevices(devices: ProviderDevice[], findings: Finding[]): Pro
     }
 
     /**
-     * Adoption refuses a provider-offered physical iPhone outright (see
-     * `adoptDevice`), Argent would route the hardware UDID to its own devicectl
-     * backend, past this descriptor's grants. Say so here too or the device is
-     * simply absent with a green check behind it.
+     * Adoption refuses a provider-offered physical iPhone without a usbmuxd
+     * endpoint (see `adoptDevice`): Argent would route the hardware UDID to its
+     * own devicectl backend, past this descriptor's grants. Say so here too or
+     * the device is simply absent with a green check behind it.
      */
-    if (device.platform === "ios" && isIosPhysicalUdid(device.nativeId)) {
+    if (device.platform === "ios" && isIosPhysicalUdid(device.nativeId) && !device.usbmuxd) {
       findings.push(
         error(
-          `${label}: '${device.nativeId}' is a physical iPhone udid; argent cannot yet attach ` +
-            `to a physical iPhone offered by a provider, so it would ignore this device entirely`
+          `${label}: '${device.nativeId}' is a physical iPhone udid; argent attaches to a ` +
+            `physical iPhone offered by a provider only through a 'usbmuxd' endpoint with the ` +
+            `'usbmuxd' capability, so it would ignore this device entirely`
         )
       );
     }
