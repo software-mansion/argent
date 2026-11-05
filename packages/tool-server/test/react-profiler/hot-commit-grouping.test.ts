@@ -21,7 +21,7 @@ function fiber(overrides: Partial<DevToolsFiberCommit>): DevToolsFiberCommit {
     componentName: "View",
     actualDuration: 1,
     selfDuration: 1,
-    commitDuration: 20,
+    commitDuration: 25,
     didRender: true,
     changeDescription: null,
     ...overrides,
@@ -29,7 +29,7 @@ function fiber(overrides: Partial<DevToolsFiberCommit>): DevToolsFiberCommit {
 }
 
 // A 20ms View containing a 15ms View containing a 10ms View, 1ms self each.
-// Summing their inclusive durations gives 45ms, more than the 20ms commit.
+// Summing their inclusive durations gives 45ms, more than the 25ms commit.
 const nestedViews = [
   fiber({ actualDuration: 20, selfDuration: 1 }),
   fiber({ actualDuration: 15, selfDuration: 1 }),
@@ -99,13 +99,16 @@ describe("renderByComponent (profiler-commit-query by_component)", () => {
   it("prints the summed self and the largest subtree", () => {
     const markdown = renderByComponent(nestedViews, "View", 10);
 
-    expect(markdown).toContain("| #0 | 3 | 3.0 | 20.0 | 20.0 |");
+    expect(markdown).toContain(
+      "| Commit | Instances | Self (ms) | Largest subtree (ms) | Commit Total (ms) |"
+    );
+    expect(markdown).toContain("| #0 | 3 | 3.0 | 20.0 | 25.0 |");
   });
 
   it("prints the largest subtree when DevTools lists the smallest instance first", () => {
     const markdown = renderByComponent(postOrderViews, "View", 10);
 
-    expect(markdown).toContain("| #0 | 3 | 3.0 | 20.0 | 20.0 |");
+    expect(markdown).toContain("| #0 | 3 | 3.0 | 20.0 | 25.0 |");
   });
 
   it("ranks commits by self time when truncating", () => {

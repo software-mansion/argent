@@ -57,8 +57,8 @@ describe("COLLECT_RENDERS_SCRIPT — same-name fibers", () => {
 
 describe("react-profiler-renders", () => {
   it("ranks by self time, not by the largest subtree", async () => {
-    // Wrapper: 50ms subtree, 1ms self. Leaf: 10ms subtree, 10ms self.
-    const tree = fiber("Wrapper", 50, 1, fiber("Leaf", 10, 10));
+    // Wrapper: 50ms subtree, 1ms self. Leaf: 12ms subtree, 10ms self.
+    const tree = fiber("Wrapper", 50, 1, fiber("Leaf", 12, 10));
     const cdp = {
       send: async (_method: string, { expression }: { expression: string }) => ({
         result: { value: evaluate(expression, tree) },
@@ -73,7 +73,12 @@ describe("react-profiler-renders", () => {
       params as unknown as Parameters<typeof reactProfilerRendersTool.execute>[1]
     );
 
-    expect(markdown).toContain("| `Leaf` | 1 | 10.00 | 10.00 |");
+    expect(markdown.split("\n")).toEqual(
+      expect.arrayContaining([
+        "| Component | Instances | Largest subtree (ms) | Self Base (ms) |",
+        "| `Leaf` | 1 | 12.00 | 10.00 |",
+      ])
+    );
     expect(markdown).not.toContain("Wrapper");
   });
 });
