@@ -257,6 +257,22 @@ describe("resolveFileInputs — tar-upload kind", () => {
     );
   });
 
+  it.each(["~/dl/MyApp.app", "$HOME/dl/MyApp.app", "file:///dl/MyApp.app"])(
+    "says %s is not an absolute path instead of advising an update",
+    async (spelled) => {
+      const err = await resolveFileInputs(
+        { fileInputs: TAR_UPLOAD_SPEC },
+        { appPath: wire({ path: spelled }) },
+        () => undefined
+      ).catch((e: unknown) => e);
+
+      expect((err as Error).message).toBe(
+        `Path "${spelled}" is not an absolute path. Nothing expands "~", environment ` +
+          `variables or file: URLs in a file argument, so pass the file's absolute path.`
+      );
+    }
+  );
+
   it("fails when uploadId is set without contentHash", async () => {
     const appDir = await makeFakeApp("MyApp.app");
     const tarPath = await tarApp(appDir);

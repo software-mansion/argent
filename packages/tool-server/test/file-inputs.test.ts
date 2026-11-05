@@ -363,6 +363,16 @@ describe("resolveFileInputs", () => {
     ).rejects.toThrow(/does not exist on the tool-server host/);
   });
 
+  it.each(["file", "directory"] as const)(
+    "%s kind says a path with ~ is not an absolute path",
+    async (kind) => {
+      const spec: FileInputSpec[] = [{ target: "p", path: "${p}", kind }];
+      await expect(
+        resolveFileInputs({ fileInputs: spec }, { p: wire({ path: "~/shots/a.png" }) })
+      ).rejects.toThrow('Path "~/shots/a.png" is not an absolute path.');
+    }
+  );
+
   it("probe kind never fails and reports presence via metadata", async () => {
     const spec: FileInputSpec[] = [{ target: "dir", path: "${dir}", kind: "probe" }];
     const ghost = path.join(tmpDir, "ghost-dir");
