@@ -4,14 +4,18 @@
  * administrator-password request behind. The same holds for `devicectl`. The
  * refusal must reach the agent as a 424 that says what to do.
  */
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import { Readable } from "node:stream";
+import { PNG } from "pngjs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import {
+  ArtifactStore,
   FAILURE_CODES,
   getFailureSignal,
   Registry,
@@ -44,10 +48,24 @@ vi.mock("@argent/configuration-core", async () => {
 });
 
 const execFileMock = vi.fn();
+// Real unless a case fakes the simulator-server process.
+const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
+  spawnMock.mockImplementation(actual.spawn);
+  return {
+    ...actual,
+    execFile: (...args: unknown[]) => execFileMock(...args),
+    spawn: (...args: unknown[]) => spawnMock(...args),
+  };
 });
+
+// A gesture's touches, which reach a simulator-server over its WebSocket.
+const sendCommandMock = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock("../src/utils/simulator-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/simulator-client")>()),
+  sendCommand: sendCommandMock,
+}));
 
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/bootstrap.dylib",
@@ -63,7 +81,18 @@ import {
   ensureDeps,
 } from "../src/utils/check-deps";
 import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
-import { isFoldableDeviceType } from "../src/utils/ios-devices";
+import {
+  __resetSimulatorRuntimeKindCacheForTesting,
+  cacheSimulatorRuntimeKind,
+  isFoldableDeviceType,
+} from "../src/utils/ios-devices";
+import {
+  simulatorServerBlueprint,
+  simulatorServerRef,
+  type SimulatorServerApi,
+} from "../src/blueprints/simulator-server";
+import { executeScreenshotDiffTool } from "../src/tools/screenshot-diff";
+import { summaryReportsDimensionMismatch } from "../src/tools/screenshot-diff/screenshot-diff-summary";
 import { createAwaitUiElementTool } from "../src/tools/await-ui-element";
 import { createAwaitScreenIdleTool } from "../src/tools/await-screen-idle";
 import {
@@ -134,6 +163,7 @@ beforeEach(() => {
   });
   __resetDepCacheForTests();
   __resetDeviceSetCacheForTesting();
+  __resetSimulatorRuntimeKindCacheForTesting();
   // boot-device refuses an iOS target off macOS before it reaches simctl.
   Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
 });
@@ -224,7 +254,13 @@ describe("an iOS tool while Xcode's install is pending", () => {
     return createHttpApp(registry).app;
   }
 
-  it("answers 424 with what to do, and spawns no xcrun", async () => {
+  // A type read before the install went pending is remembered, so describe goes
+  // on to start the accessibility service, and that start is refused.
+  it.each([
+    ["whose type the server has not read", undefined],
+    ["whose type the server read before", "mobile" as const],
+  ])("answers 424 with what to do, and spawns no xcrun, for a simulator %s", async (_, kind) => {
+    cacheSimulatorRuntimeKind(SIMULATOR.id, kind);
     pending.simctl = true;
     const res = await request(describeApp()).post("/tools/describe").send({ udid: SIMULATOR.id });
 
@@ -615,7 +651,11 @@ describe("native-profiler-start while Xcode's install is pending", () => {
 });
 
 describe("the wait tools while Xcode's install is pending", () => {
-  beforeEach(() => __primeDepCacheForTests(["xcrun"]));
+  beforeEach(() => {
+    __primeDepCacheForTests(["xcrun"]);
+    // Read before the outage; unread, the type lookup is refused before any polling.
+    cacheSimulatorRuntimeKind(SIMULATOR.id, "mobile");
+  });
 
   function iosRegistry() {
     const registry = new Registry();
@@ -675,6 +715,8 @@ describe("a warm session while Xcode's install is pending", () => {
 
   function warmApp(describe: () => Promise<unknown>) {
     __primeDepCacheForTests(["xcrun"]);
+    // The tool that started the accessibility service read the simulator's type first.
+    cacheSimulatorRuntimeKind(SIMULATOR.id, "mobile");
     const reg = new Registry();
     registry = reg;
     reg.registerBlueprint({
@@ -742,6 +784,226 @@ describe("a warm session while Xcode's install is pending", () => {
     expect(res.status).toBe(424);
     expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
     expect(xcrunCalls()).toEqual([]);
+  });
+});
+
+// A simulator-server is built for the simulator's type: none for an Apple TV,
+// and one that names its panels for a foldable. A server built on a guess would
+// stay wrong after the install.
+describe("a simulator-server while Xcode's install is pending", () => {
+  const SIMS = {
+    tv: processScopedUdid("-1763-4000-8000-00000000000A"),
+    foldable: processScopedUdid("-1763-4000-8000-00000000000B"),
+    iphone: processScopedUdid("-1763-4000-8000-00000000000C"),
+  };
+  const DEVICE_TYPES = {
+    [SIMS.tv]: "Apple-TV-4K",
+    [SIMS.foldable]: "iPhone-Duo",
+    [SIMS.iphone]: "iPhone-17",
+  };
+  const PANELS = [
+    { screenId: 1, width: 1398, height: 2034 },
+    { screenId: 3, width: 2007, height: 2853 },
+  ];
+  const BINARY = "/fake/sim-server";
+  const realFetch = globalThis.fetch;
+  const realSpawn = spawnMock.getMockImplementation()!;
+  let typesDir: string;
+  let registry: Registry | undefined;
+
+  const deviceType = (udid: string) =>
+    `com.apple.CoreSimulator.SimDeviceType.${DEVICE_TYPES[udid]}`;
+  const listed = (udid: string) => ({
+    udid,
+    name: DEVICE_TYPES[udid],
+    state: "Booted",
+    deviceTypeIdentifier: deviceType(udid),
+    isAvailable: true,
+  });
+
+  beforeEach(() => {
+    __primeDepCacheForTests(["xcrun"]);
+    // The device-type profiles; the Duo's lists two integrated displays.
+    typesDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-first-launch-types-"));
+    for (const udid of Object.values(SIMS)) {
+      const resources = path.join(typesDir, DEVICE_TYPES[udid]!, "Contents", "Resources");
+      fs.mkdirSync(resources, { recursive: true });
+      fs.writeFileSync(path.join(resources, "capabilities.plist"), "");
+    }
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const [cmd, argv] = args as [string, string[]];
+      const cb = args[args.length - 1] as (err: Error | null, out: object) => void;
+      let stdout = "";
+      if (cmd === "xcrun" && argv.includes("devices")) {
+        stdout = JSON.stringify({
+          devices: {
+            "com.apple.CoreSimulator.SimRuntime.tvOS-26-5": [listed(SIMS.tv)],
+            "com.apple.CoreSimulator.SimRuntime.iOS-27-1": [
+              listed(SIMS.foldable),
+              listed(SIMS.iphone),
+            ],
+          },
+        });
+      } else if (cmd === "xcrun" && argv.includes("devicetypes")) {
+        stdout = JSON.stringify({
+          devicetypes: Object.values(SIMS).map((udid) => ({
+            identifier: deviceType(udid),
+            bundlePath: path.join(typesDir, DEVICE_TYPES[udid]!),
+          })),
+        });
+      } else if (cmd === "plutil") {
+        const panels = argv.at(-1)!.includes("iPhone-Duo") ? 2 : 1;
+        stdout = JSON.stringify(Array(panels).fill({ displayType: "integrated" }));
+      }
+      cb(null, { stdout, stderr: "" });
+    });
+    spawnMock.mockImplementation((...args: unknown[]) =>
+      args[0] === BINARY
+        ? fakeSimulatorServer()
+        : realSpawn(...(args as Parameters<typeof realSpawn>))
+    );
+    globalThis.fetch = vi.fn(async () =>
+      Response.json({ foldable: true, panels: PANELS, hingeAngle: null })
+    ) as unknown as typeof fetch;
+    sendCommandMock.mockClear();
+  });
+
+  afterEach(async () => {
+    await registry?.dispose();
+    registry = undefined;
+    spawnMock.mockImplementation(realSpawn);
+    globalThis.fetch = realFetch;
+    fs.rmSync(typesDir, { recursive: true, force: true });
+  });
+
+  /** A simulator-server process that is ready at once. */
+  function fakeSimulatorServer() {
+    const proc = Object.assign(new EventEmitter(), {
+      stdout: new Readable({ read() {} }),
+      stderr: new Readable({ read() {} }),
+      stdin: { write: vi.fn() },
+      kill: vi.fn(),
+    });
+    setImmediate(() =>
+      proc.stdout.push("api_ready http://127.0.0.1:61900\nstream_ready http://127.0.0.1:61901\n")
+    );
+    return proc;
+  }
+
+  function app() {
+    registry = new Registry();
+    registry.registerBlueprint(simulatorServerBlueprint);
+    registry.registerTool(gestureTapTool as never);
+    return createHttpApp(registry).app;
+  }
+
+  const tap = (server: ReturnType<typeof app>, udid: string) =>
+    request(server).post("/tools/gesture-tap").send({ udid, x: 0.5, y: 0.5 });
+
+  const simulatorServersSpawned = () =>
+    spawnMock.mock.calls.filter(([binary]) => binary === BINARY).length;
+
+  async function displayOf(udid: string) {
+    const ref = simulatorServerRef({ id: udid, platform: "ios", kind: "simulator" });
+    return (await registry!.resolveService<SimulatorServerApi>(ref.urn, ref.options)).display;
+  }
+
+  it.each([
+    [
+      "an Apple TV",
+      SIMS.tv,
+      async (res: request.Response) => {
+        expect(res.status).toBe(400);
+        expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION);
+        expect(simulatorServersSpawned()).toBe(0);
+      },
+    ],
+    [
+      "a foldable",
+      SIMS.foldable,
+      async (res: request.Response) => {
+        expect(res.status).toBe(200);
+        expect(await displayOf(SIMS.foldable)).toMatchObject({ foldable: true, panels: PANELS });
+      },
+    ],
+    // Its type would be guessed right, but nothing tells it from the other two.
+    [
+      "an iPhone",
+      SIMS.iphone,
+      async (res: request.Response) => {
+        expect(res.status).toBe(200);
+        expect(await displayOf(SIMS.iphone)).toBeUndefined();
+      },
+    ],
+  ])(
+    "refuses %s on a server that has not read its type, and builds the right server after the install",
+    async (_name, udid, afterInstall) => {
+      pending.simctl = true;
+      const server = app();
+
+      const refused = await tap(server, udid);
+      expect(refused.status).toBe(424);
+      expect(refused.body.error).toMatch(/-runFirstLaunch/);
+      expect(refused.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(simulatorServersSpawned()).toBe(0);
+      expect(xcrunCalls()).toEqual([]);
+
+      pending.simctl = false;
+      await afterInstall(await tap(server, udid));
+    }
+  );
+
+  it("keeps a simulator-server that is already up working", async () => {
+    const server = app();
+    expect((await tap(server, SIMS.foldable)).status).toBe(200);
+    expect((await tap(server, SIMS.iphone)).status).toBe(200);
+    expect((await tap(server, SIMS.tv)).status).toBe(400);
+    const spawned = simulatorServersSpawned();
+
+    pending.simctl = true;
+    execFileMock.mockClear();
+    sendCommandMock.mockClear();
+    expect((await tap(server, SIMS.foldable)).status).toBe(200);
+    expect((await tap(server, SIMS.iphone)).status).toBe(200);
+    // Its type was read before, so it is still told what it is.
+    expect((await tap(server, SIMS.tv)).body.error_code).toBe(
+      FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION
+    );
+    expect(sendCommandMock).toHaveBeenCalledTimes(4);
+    expect(simulatorServersSpawned()).toBe(spawned);
+    expect(xcrunCalls()).toEqual([]);
+    expect(await displayOf(SIMS.foldable)).toMatchObject({ foldable: true, panels: PANELS });
+  });
+});
+
+// Two saved screenshots need no simulator. On a foldable, a size mismatch also
+// names each posture, which needs its type.
+describe("screenshot-diff while Xcode's install is pending", () => {
+  it("compares two saved screenshots of a simulator whose type it cannot read", async () => {
+    pending.simctl = true;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-first-launch-diff-"));
+    try {
+      const png = (width: number, height: number) => PNG.sync.write(new PNG({ width, height }));
+      fs.writeFileSync(path.join(dir, "baseline.png"), png(2, 4));
+      fs.writeFileSync(path.join(dir, "current.png"), png(4, 2));
+
+      const result = await executeScreenshotDiffTool(
+        {},
+        {
+          baselinePath: path.join(dir, "baseline.png"),
+          currentPath: path.join(dir, "current.png"),
+          udid: SIMULATOR.id,
+          outputDir: dir,
+        },
+        { artifacts: new ArtifactStore() }
+      );
+
+      expect(summaryReportsDimensionMismatch(result.summary)).toBe(true);
+      expect(result.summary).not.toContain("posture:");
+      expect(xcrunCalls()).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
