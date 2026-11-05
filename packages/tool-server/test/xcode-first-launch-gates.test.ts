@@ -122,7 +122,7 @@ import {
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
 import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
-import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-devtools-status";
 import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
@@ -438,6 +438,8 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
   };
   const BUNDLE_ID = "com.example.app";
   const AT_POINT = { x: 10, y: 10 };
+  // Built through its factory since #1164; the registry it takes serves only Android.
+  const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
   const TOOLS = [
     [nativeDescribeScreenTool, {}],
     [nativeFindViewsTool, {}],
