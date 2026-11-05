@@ -41,6 +41,19 @@ export function canonicalDeviceId(deviceId: string | undefined): string | undefi
   return logicalIdToConnectId.get(deviceId) ?? deviceId;
 }
 
+/**
+ * Every id currently known to name the same device as `deviceId`, in no
+ * particular order. Includes `deviceId` itself, so an unaliased id yields just
+ * that id.
+ */
+export function deviceIdsOf(deviceId: string): string[] {
+  const connectId = canonicalDeviceId(deviceId) ?? deviceId;
+  const logicalIds = [...logicalIdToConnectId]
+    .filter(([, aliased]) => aliased === connectId)
+    .map(([logicalId]) => logicalId);
+  return [...new Set([deviceId, connectId, ...logicalIds])];
+}
+
 /** Drop a learned alias when its debugger connection is disposed. */
 export function forgetDeviceAlias(logicalDeviceId: string | undefined): void {
   if (logicalDeviceId) logicalIdToConnectId.delete(logicalDeviceId);
