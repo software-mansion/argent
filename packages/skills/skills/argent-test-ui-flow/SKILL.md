@@ -33,7 +33,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
 3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...): you receive a screenshot automatically.
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, prefer blocking until it settles with `await-ui-element` (expected element `visible`, or a spinner `hidden`) over a guessed delay, but only with a selector you can trust (`text`/`identifier`/`role`) that the screen is known to have or that you saw in a prior `describe`; a guessed one just times out. Otherwise use a short fixed wait. Pick evidence by what's being asserted:
    - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff` against the baseline captured in step 1: it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to visual inspection of the auto-screenshot only when a stable baseline isn't available.
-   - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe` or `native-describe-screen`; `debugger-component-tree` shows labels and hierarchy, not values or selection.
+   - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe`, `debugger-component-tree`, or `native-describe-screen`. `debugger-component-tree` prints no values or selection. On an iOS simulator or Android, `describe` prints no selection either: use `native-describe-screen` traits (iOS simulator) or the screenshot.
    - **Runtime / log / network** (console errors, API calls, persistence, timing): verify with `view-network-logs`, `debugger-log-registry`, `debugger-evaluate`, or targeted tests. Note `debugger-log-registry` returns `{ status: "not_connected", reason, guidance }` with no log file when the debugger is unreachable; that is not evidence about the app; follow its `guidance` to reconnect, then re-verify.
    - **Mixed**: collect evidence for each relevant class.
    - Report the combined verdict: expected behavior, observed behavior, evidence used, and any blocker for requested visual diffing.
@@ -89,7 +89,7 @@ Steps:
 4. describe / debugger-component-tree → find the control and use its returned tap coordinates.
 5. gesture-tap → perform the visual behavior under test.
 6. screenshot-diff { baselinePath, captureCurrent: true, udid, outputDir } → inspect visible change or stability.
-7. describe → verify selected state, label, route, or attributes if relevant.
+7. describe / debugger-component-tree → verify label, route, or attributes if relevant.
 8. Report combined verdict from expected behavior, visual inspection, diff summary, and structural evidence.
 ```
 
