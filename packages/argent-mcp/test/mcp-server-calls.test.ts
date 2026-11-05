@@ -798,6 +798,22 @@ describe("startMcpServer screen capture after an interaction", () => {
     await vi.waitFor(() => expect(stub.hungUp).toEqual([route]), { timeout: 300 });
   });
 
+  it("ends the artifact download of a screenshot the client cancels", async () => {
+    const route = "/artifacts/shot-1";
+    shotAsArtifact = true;
+    stub.hanging.add(route);
+    const controller = new AbortController();
+
+    const pending = client.callTool({ name: "screenshot", arguments: { udid: "u" } }, undefined, {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(stub.requests.filter((r) => r.url === route)).toHaveLength(1));
+    controller.abort("stopped in the editor");
+
+    await expect(pending).rejects.toThrow("stopped in the editor");
+    await vi.waitFor(() => expect(stub.hungUp).toEqual([route]), { timeout: 300 });
+  });
+
   it("skips the fallback wait for the screen once the client cancels", async () => {
     vi.stubEnv("ARGENT_AUTO_SCREENSHOT_DELAY_MS", "60000");
     stub.hanging.add("/tools/await-screen-idle");

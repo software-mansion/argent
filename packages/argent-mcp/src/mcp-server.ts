@@ -322,6 +322,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         toolsUrl: TOOLS_URL,
         authToken: AUTH_TOKEN,
         deviceId: getDeviceIdFromArgs(params.arguments),
+        signal,
       };
 
       let content: ContentBlock[];
