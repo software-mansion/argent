@@ -41,7 +41,12 @@ const zodSchema = z.object({
         "generic type subtrees while keeping _UIHostingView and UIKit bridges. " +
         'Avoid broad prefixes like "_UI": they prune useful system views.'
     ),
-  maxDepth: z.number().int().positive().optional().describe("Maximum recursion depth (default 8)."),
+  maxDepth: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("Maximum recursion depth (default 8). Raise it to reach deeper views."),
 });
 
 type Params = z.infer<typeof zodSchema>;

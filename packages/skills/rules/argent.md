@@ -11,7 +11,8 @@ Argent - general rules:
 - Prefer mcp-tool calls over raw commands like `xcrun` or `adb`; use them as fallback.
 - Interaction tools return screenshot and element tree automatically.
 - prefer `launch-app` or `open-url` than tapping icons on home screen.
-- If a task can require a saved e2e test, use e2e tools before the first launch or in-app action; recording is not retroactive.
+- If a task can require a saved e2e test, load `argent-create-e2e` (`argent-qa-e2e` for acceptance tests) before the first launch or in-app action; recording is not retroactive.
+- Load the matching `argent-*` skill before React Native build/debug, profiling, a physical phone or a TV.
 - Do not stop simulator servers when a task finishes: the next task reuses them. Call `stop-all-simulator-servers` when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services, with devices this session used. One tool-server is shared by every other agent, so unscoped call tears down their devices too. Never stop a Metro the user started unless they ask.
 - Use the `await-ui-element` tool to block until the UI settles instead of polling using screenshot.
 - The `argent` CLI manages the toolkit: `argent --help` lists commands, `argent --version` shows the installed version.

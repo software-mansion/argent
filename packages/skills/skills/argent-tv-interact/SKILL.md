@@ -10,6 +10,7 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 - A TV is **focus-driven, not touch-driven.** Drive every interaction with `describe` + `tv-remote` + `keyboard`; never use `gesture-*` / coordinate taps; they don't apply on any TV platform.
 - **Always `describe` before navigating** to find the live cursor and your target; never guess focus from a screenshot. The cursor is the focused element; on **Vega** the toolkit often leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor when nothing reports `[focused]`.
 - Pass the `udid` from `list-devices`: an Apple TV simulator UDID or an Android TV / Vega `serial`. Dispatch is automatic from the id; the same tools drive all three.
+- **E2E tests: Vega only.** Apple TV and Android TV have no e2e support (a `tap:` can pass without doing anything): report that limitation.
 - **Fire TV (Vega)** (`platform: "vega"` in `list-devices`): read `references/vega.md` before driving it. It covers booting and stopping the VVD, Fast Refresh, and debugging the JS runtime.
 
 ## The navigation loop

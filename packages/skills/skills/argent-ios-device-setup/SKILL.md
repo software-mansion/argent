@@ -15,6 +15,6 @@ Read this only for a physical iPhone. Simulators use `argent-ios-simulator-setup
 
 ## Signing and failures
 
-Signing needs no configuration: the first call on a phone names the team it picked and how to override it. Errors name their fix (cable, lock, trust, signing, a stuck runner): apply it and retry the same call. A failed build quotes xcodebuild's own `error:` lines.
+Signing needs no configuration: the first call on a phone names the team it picked; `ARGENT_IOS_TEAM_ID` in the tool-server environment overrides it. Errors name their fix (cable, lock, trust, signing, a stuck runner): apply it and retry the same call. A failed build quotes xcodebuild's own `error:` lines.
 
 Then read `argent-ios-device-interact`.

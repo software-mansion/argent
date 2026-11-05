@@ -770,7 +770,8 @@ export function createDebuggerComponentTreeTool(
     description: `Fetch the current screen of a running React Native app as a compact tree of React components.
 Each on-screen component is listed with its name, its text (or accessibilityLabel when it has no
 text), [testID=…] and normalized (tap: x,y) centre in [0,1] (fractions of the screen, not pixels).
-Full-screen transparent wrappers and implementation-detail components are pruned.
+Full-screen transparent wrappers and implementation-detail components are pruned. Wrappers the size
+of their parent are pruned too, so a missing name proves nothing: check with debugger-inspect-element.
 
 Use when you need what describe does not show: a testID for a selector (on Android, describe omits
 the testID of a view that has no label and is not tappable), or the component names and nesting

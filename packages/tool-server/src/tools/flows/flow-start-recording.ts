@@ -64,7 +64,7 @@ export const flowStartRecordingTool: ToolDefinition<
 > = {
   id: "e2e-start-recording",
   description: `Start recording a new e2e test, resetting .argent/e2e/<name>.yaml to an empty e2e test and replacing any existing one.
-Use when you want to capture a reusable sequence of device interactions for later replay.
+Use when you want to capture a reusable sequence of device interactions for later replay. Load the argent-create-e2e skill first: it holds the polish, audit and replay steps. Not for Apple TV or Android TV.
 Returns { message, e2eTestFile, savedTo } and optionally { restarted, discardedSteps } if a live recording of the same e2e test was discarded.
 Without a link, it creates that file and fails if the .argent/e2e/ directory cannot be created or the file cannot be written. Over a link (argent link or ARGENT_TOOLS_URL, also to 127.0.0.1), your client writes the file, and \`savedTo\` is its path on your computer, or null when that write failed.
 
