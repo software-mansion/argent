@@ -116,6 +116,10 @@ describe("screenshot tool", () => {
     expect(result).not.toHaveProperty("url");
   });
 
+  it("has no readOnly annotation, because `out` can replace a file", () => {
+    expect(createScreenshotTool({} as never).readOnly).toBeUndefined();
+  });
+
   it("accepts a trimmed, absolute `out` and leaves it off the result", async () => {
     vi.stubGlobal(
       "fetch",

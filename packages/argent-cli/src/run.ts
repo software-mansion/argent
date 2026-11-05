@@ -345,6 +345,9 @@ Examples:
     payload[k] = v;
   }
 
+  // `--out` outranks a payload `out`, so the server must not refuse the value that lost.
+  if (outPath && meta.outputHint === "image") delete payload.out;
+
   // Checked against the merged payload, so a required field supplied through `--args` or
   // `--<field>-json` counts. Answering here spares a round trip — and, for a tool that takes
   // file inputs, spares uploading those files only to be told a flag was missing.

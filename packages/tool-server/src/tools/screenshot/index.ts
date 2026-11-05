@@ -84,12 +84,11 @@ const zodSchema = z.object({
   out: z
     .string()
     .trim()
-    .min(1)
     // win32 also accepts POSIX-absolute paths, and the client may run on either OS.
     .refine((p) => path.win32.isAbsolute(p), "must be an absolute path")
     .optional()
     .describe(
-      "Over MCP or `argent run`, also save the PNG at this absolute path on your machine, creating missing directories and replacing an existing file. Ignored in an e2e test step."
+      "Over MCP or `argent run`, also save the PNG at this absolute path on your machine, creating missing directories and replacing an existing file. An e2e test step and the Node client write nothing."
     ),
 });
 
@@ -274,7 +273,7 @@ Use when you need a baseline image before an interaction or to inspect the curre
 Fails if the simulator-server / emulator backend / Chromium CDP <flag:harmonyos>/ \`hdc\` </flag:harmonyos>is not reachable for the given device.`,
     alwaysLoad: true,
     searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
-    readOnly: true,
+    // Not readOnly: plan mode would run a call whose `out` replaces a file without a prompt.
     zodSchema,
     outputHint: "image",
     capability,

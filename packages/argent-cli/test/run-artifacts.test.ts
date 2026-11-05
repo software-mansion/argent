@@ -13,6 +13,7 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x11, 0
 // `state.screenshotData` to the `data` payload a screenshot call should return.
 interface ServerState {
   screenshotData: unknown;
+  screenshotBody: string;
   artifactBytes: Buffer;
   artifactHits: number;
 }
@@ -42,7 +43,10 @@ function startServer(state: ServerState): Promise<{ url: string; close: () => Pr
       return;
     }
     if (url.startsWith("/tools/screenshot") && req.method === "POST") {
-      req.on("data", () => {});
+      state.screenshotBody = "";
+      req.on("data", (chunk) => {
+        state.screenshotBody += chunk;
+      });
       req.on("end", () => {
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ data: state.screenshotData }));
@@ -93,7 +97,7 @@ describe("CLI run — artifact materialization end-to-end", () => {
   const opts: RunCommandOptions = { paths: {} as never }; // unused: ARGENT_TOOLS_URL is set
 
   beforeEach(async () => {
-    state = { screenshotData: null, artifactBytes: PNG, artifactHits: 0 };
+    state = { screenshotData: null, screenshotBody: "", artifactBytes: PNG, artifactHits: 0 };
     server = await startServer(state);
     artRoot = await mkdtemp(join(tmpdir(), "cli-art-"));
     hostDir = await mkdtemp(join(tmpdir(), "cli-host-"));
@@ -170,6 +174,32 @@ describe("CLI run — artifact materialization end-to-end", () => {
     );
     expect(fs.readFileSync(flag)).toEqual(PNG);
     expect(fs.existsSync(ignored)).toBe(false);
+    expect(JSON.parse(state.screenshotBody)).toEqual({ udid: "SIM-1" });
+  });
+
+  it("writes a tool's own `out` under --json, with no `Wrote:` on stdout", async () => {
+    state.screenshotData = { image: await localScreenshotHandle() };
+    const own = join(outDir, "own.png");
+
+    await run(
+      ["screenshot", "--json", "--args", JSON.stringify({ udid: "SIM-1", out: own })],
+      opts
+    );
+
+    expect(fs.readFileSync(own)).toEqual(PNG);
+    expect(logs.join("\n")).not.toContain("Wrote:");
+    expect(JSON.parse(logs.join("\n"))).toHaveProperty("image");
+  });
+
+  it("leaves `out` alone on a tool that returns no image", async () => {
+    const own = join(outDir, "own.png");
+    const flag = join(outDir, "flag.png");
+
+    await run(["list-devices", "--args", JSON.stringify({ out: own }), "--out", flag], opts);
+
+    expect(fs.existsSync(own)).toBe(false);
+    expect(fs.existsSync(flag)).toBe(false);
+    expect(logs.join("\n")).not.toContain("Wrote:");
   });
 
   it.each([["--out="], ["--out", "   "], ["--out=   "]])(
