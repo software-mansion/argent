@@ -10,7 +10,14 @@ import { once } from "node:events";
 
 const runAdb = vi.fn(async (..._a: unknown[]) => ({ stdout: "", stderr: "", code: 0 }));
 const emulatorSerial = vi.fn();
-vi.mock("../src/utils/adb", () => ({ runAdb: (...a: unknown[]) => runAdb(...a) }));
+vi.mock("../src/utils/adb", () => ({
+  runAdb: (...a: unknown[]) => runAdb(...a),
+  // Logs through `runAdb`, as the real one does, so adds and removes share one order.
+  adbForward: async (serial: string, hostPort: number, devicePort: number) => {
+    await runAdb(["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${devicePort}`]);
+    return "";
+  },
+}));
 vi.mock("../src/utils/vega-automation", () => ({
   emulatorSerial: (...a: unknown[]) => emulatorSerial(...a),
 }));

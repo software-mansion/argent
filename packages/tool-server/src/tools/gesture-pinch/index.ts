@@ -117,6 +117,9 @@ Auto-generates interpolated frames at ~60fps<flag:harmonyos> on iOS and Android;
 Use when you need to zoom in or out on a map, image, or zoomable view. Physical iPhones play both fingers through the runner as one event stream. Returns { pinched: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device, or on a physical iPhone when the app is not drawn in portrait.`,
   zodSchema,
   capability,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
     // No simulator-server controller exists for HarmonyOS.

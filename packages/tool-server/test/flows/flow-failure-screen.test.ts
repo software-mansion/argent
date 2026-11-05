@@ -60,7 +60,7 @@ async function run(steps: string, awaitMet: boolean, shot: () => Promise<unknown
   });
   const result = (await createRunFlowTool(registry).execute(
     {},
-    { name: "screen", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+    { name: "screen", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "X" }
   )) as FlowRunResult;
   const shots = vi.mocked(registry.invokeTool).mock.calls.filter(([id]) => id === "screenshot");
   return { result, shots };

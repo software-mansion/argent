@@ -17,7 +17,7 @@ function makeRegistry(invoke: (id: string, args: unknown) => Promise<unknown>) {
 
 // The flow lives at the exact path the file-input boundary derives
 // (`${project_root}/.argent/flows/${name}.yaml`) — any other explicit
-// flow_file is rejected by the containment check.
+// e2e_test_file is rejected by the containment check.
 async function writeFlow(yaml: string): Promise<string> {
   const flowsDir = path.join(PROJECT_ROOT, ".argent", "flows");
   const file = path.join(flowsDir, "gated.yaml");
@@ -73,7 +73,7 @@ describe("flow-execute with await-ui-element gating", () => {
     const result = asRun(
       await tool.execute(
         {},
-        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+        { name: "gated", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "X" }
       )
     );
 
@@ -101,7 +101,7 @@ describe("flow-execute with await-ui-element gating", () => {
     const result = asRun(
       await tool.execute(
         {},
-        { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" }
+        { name: "gated", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "X" }
       )
     );
 
@@ -118,7 +118,7 @@ describe("flow-execute with await-ui-element gating", () => {
 
     await tool.execute(
       {},
-      { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+      { name: "gated", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "X" },
       { signal: controller.signal } as never
     );
 
@@ -135,7 +135,7 @@ describe("flow-execute with await-ui-element gating", () => {
 
     await tool.execute(
       {},
-      { name: "gated", project_root: PROJECT_ROOT, flow_file: flowFile, device: "X" },
+      { name: "gated", project_root: PROJECT_ROOT, e2e_test_file: flowFile, device: "X" },
       { signal: controller.signal } as never
     );
 
