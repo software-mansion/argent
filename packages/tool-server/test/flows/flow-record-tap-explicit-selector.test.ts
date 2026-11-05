@@ -146,7 +146,7 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     })) as { message: string };
 
     expect(res.message).toMatch(
-      /`selector` could not be checked \(helper down\)\. Restore the tree, then record the tap again\./
+      /`selector` could not be checked \(helper down\)\. If that tree can be restored, record the tap again\. Otherwise omit the selector to keep coordinates\./
     );
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
@@ -222,9 +222,11 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(res.message).toMatch(
       /`selector` \{"identifier":"settings-card"\} resolves, in the tree a replay reads, to an element centred at \(0\.5, 0\.45\)/
     );
-    // Info sits at that centre, so tapping there would not tap the card either.
-    expect(res.message).toMatch(/A smaller element sits at that centre/);
-    expect(res.message).not.toMatch(/record the tap at/);
+    // Info sits at that centre: only the device can say which of them takes a touch.
+    expect(res.message).toMatch(
+      /A smaller element sits at that centre and may take the touch\. If a tap there does what you want, record the tap at \(0\.5, 0\.45\)\./
+    );
+    expect(res.message).toMatch(/Otherwise pass a selector for the tapped element, or omit it\./);
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
   });
@@ -321,8 +323,10 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     })) as { message: string };
 
     expect(res.message).toMatch(/No element in that tree is at this tap's point \(200, 0\.55\)/);
-    expect(res.message).toMatch(/record the tap at \(0\.3, 0\.55\)/);
-    expect(res.message).not.toMatch(/element under this tap/);
+    expect(res.message).toMatch(
+      /record the tap at \(0\.3, 0\.55\)\. Otherwise omit the selector\./
+    );
+    expect(res.message).not.toMatch(/not at this tap's point/);
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
   });
@@ -340,7 +344,9 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
       selector: { identifier: "card-1" },
     })) as { message: string };
 
-    expect(res.message).toMatch(/no selector for the tapped element replays this tap/);
+    expect(res.message).toMatch(
+      /record the tap at \(0\.5, 0\.45\)\. Otherwise record a tap on another element\./
+    );
     expect(res.message).not.toMatch(/omit/);
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
@@ -369,6 +375,82 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Dup" } }]);
   });
 
+  it("refuses a selector inside the args JSON, running nothing", async () => {
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW, selector: { text: "Settings" } }),
+    })) as { message: string; recorded?: string };
+
+    expect(res.message).toMatch(/`selector` goes beside `args`/);
+    expect(res.recorded).toBeUndefined();
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  it("dispatches the caller's coordinates and clickCount, and reports the supplied selector", async () => {
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW, clickCount: 2 }),
+      selector: { text: "Settings" },
+    })) as { recorded?: string };
+
+    expect(registry.invokeTool).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(registry.invokeTool).mock.calls[0]?.slice(0, 2)).toEqual([
+      "gesture-tap",
+      { udid: DEVICE, ...ON_ROW, clickCount: 2 },
+    ]);
+    expect(res.recorded).toContain('1. tap: {"text":"Settings"}');
+    expect(await recordedSteps()).toEqual([
+      { kind: "tap", selector: { text: "Settings" }, times: 2 },
+    ]);
+  });
+
+  it("offers a retry for a selector that matches nothing, since the screen may be moving", async () => {
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW }),
+      selector: { text: "Nope" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/If the screen was still changing, record the tap again\./);
+  });
+
+  it("names the centre to three decimals", async () => {
+    setTree([
+      ...POSITIONAL_ROW,
+      n({ frame: { x: 0.1, y: 0.1, width: 0.05, height: 0.1 }, label: "Tiny" }),
+    ]);
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW }),
+      selector: { text: "Tiny" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/record the tap at \(0\.125, 0\.15\)/);
+  });
+
+  // Each overlapping frame differs from the match in one field, and is walked
+  // first so that it wins the tie where its area is equal.
+  it.each([
+    ["x", { x: 0.25, y: 0.4, width: 0.4, height: 0.2 }],
+    ["y", { x: 0.2, y: 0.45, width: 0.4, height: 0.2 }],
+    ["width", { x: 0.2, y: 0.4, width: 0.3, height: 0.2 }],
+    ["height", { x: 0.2, y: 0.4, width: 0.4, height: 0.15 }],
+  ])("tells a frame differing only in %s from the match", async (_, frame) => {
+    setTree([
+      n({ frame, identifier: "over" }),
+      n({ frame: { x: 0.2, y: 0.4, width: 0.4, height: 0.2 }, label: "Go" }),
+      n({ frame: { x: 0.85, y: 0.85, width: 0.1, height: 0.1 }, identifier: "other" }),
+    ]);
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.9, y: 0.9 }),
+      selector: { text: "Go" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/A smaller element sits at that centre/);
+  });
+
   it("refuses a selector on a platform with no runner tree, naming the platform", async () => {
     const res = (await record({
       command: "gesture-tap",
@@ -377,7 +459,7 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     })) as { message: string };
 
     expect(res.message).toMatch(/this platform's e2e runner has no UI tree/);
-    expect(res.message).not.toMatch(/Restore the tree/);
+    expect(res.message).not.toMatch(/could not be checked/);
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
   });

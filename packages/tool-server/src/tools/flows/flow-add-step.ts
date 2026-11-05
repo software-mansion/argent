@@ -742,8 +742,9 @@ async function captureTapSelector(
       if (!resolved) {
         return {
           rejected:
-            `${shown} matches no element in the tree a replay reads. Pass one that ` +
-            `resolves to the tapped element, or omit it.`,
+            `${shown} matches no element in the tree a replay reads. If the screen was still ` +
+            `changing, record the tap again. Otherwise pass one that resolves to the tapped ` +
+            `element, or omit it.`,
         };
       }
       // Replay taps the resolved frame's centre, so the innermost element there
@@ -752,40 +753,39 @@ async function captureTapSelector(
       const replayPoint = getDescribeTapPoint(resolved);
       const tapped = nodeAtPoint(tree, point);
       const replayed = nodeAtPoint(tree, replayPoint);
-      if (!tapped || replayed !== tapped) {
+      if (replayed !== tapped) {
         // Rounded only when the rounded point still hits the same node.
         const round3 = (n: number): number => Math.round(n * 1000) / 1000;
         const rounded = { x: round3(replayPoint.x), y: round3(replayPoint.y) };
         const named = nodeAtPoint(tree, rounded) === replayed ? rounded : replayPoint;
         const at = `(${named.x}, ${named.y})`;
-        // A smaller element at the centre takes any tap there.
+        // By value: two nodes can share a frame, and either then stands for the match.
         const sameFrame = (f: DescribeFrame | undefined): boolean =>
           f !== undefined &&
           f.x === resolved.x &&
           f.y === resolved.y &&
           f.width === resolved.width &&
           f.height === resolved.height;
-        const lead =
-          `${shown} resolves, in the tree a replay reads, to an element centred at ${at}, ` +
-          `and a replay taps there`;
-        if (sameFrame(tapped?.frame)) {
-          // Omitting it would derive this same element and retarget silently.
-          return {
-            rejected:
-              `${lead}. A smaller element sits at that centre and takes the replay's tap, so ` +
-              `no selector for the tapped element replays this tap. Record a tap on another element.`,
-          };
-        }
+        const where = tapped
+          ? `, not at this tap's point.`
+          : `. No element in that tree is at this tap's point (${point.x}, ${point.y}); ` +
+            `x and y are fractions of the screen, from 0 to 1.`;
+        // The tree cannot say which of them takes a real touch: a label does not, a button does.
         const retap = sameFrame(replayed?.frame)
-          ? `To tap that element, record the tap at ${at}. Otherwise`
-          : `A smaller element sits at that centre, so a tap there misses the match too. Instead,`;
+          ? `To tap that element, record the tap at ${at}.`
+          : `A smaller element sits at that centre and may take the touch. If a tap there does ` +
+            `what you want, record the tap at ${at}.`;
+        // Omitting is no way out when the match is the tapped element: a derived
+        // selector for it passes with no check of its centre.
+        const otherwise = !tapped
+          ? `Otherwise omit the selector.`
+          : sameFrame(tapped.frame)
+            ? `Otherwise record a tap on another element.`
+            : `Otherwise pass a selector for the tapped element, or omit it.`;
         return {
-          rejected: tapped
-            ? `${lead}, not on the element under this tap. ${retap} pass a selector for the ` +
-              `tapped element, or omit it.`
-            : `${lead}. No element in that tree is at this tap's point ` +
-              `(${point.x}, ${point.y}); x and y are fractions of the screen, from 0 to 1. ` +
-              `${retap} omit the selector.`,
+          rejected:
+            `${shown} resolves, in the tree a replay reads, to an element centred at ${at}, ` +
+            `and a replay taps there${where} ${retap} ${otherwise}`,
         };
       }
     } else {
@@ -811,7 +811,9 @@ async function captureTapSelector(
     const reason = innermostTreeReason(message);
     if (supplied) {
       return {
-        rejected: `could not be checked (${reason}). Restore the tree, then record the tap again.`,
+        rejected:
+          `could not be checked (${reason}). If that tree can be restored, record the tap ` +
+          `again. Otherwise omit the selector to keep coordinates.`,
       };
     }
     return { warning: `selector capture failed (${reason}); kept coordinates` };
@@ -1499,6 +1501,15 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         args = canonicalToolArgs(command, args);
       } catch {
         // Both names of one param: the step's own tool refuses the call.
+      }
+
+      // `gesture-tap`'s schema strips an unknown key, so the tap would run and
+      // record a derived selector with no word about this one.
+      if (command === "gesture-tap" && args.selector !== undefined) {
+        return recordNothing(
+          session,
+          "`selector` goes beside `args`, not inside the `args` JSON. Pass it as its own parameter."
+        );
       }
 
       // Over a link the project is on the client, and the recorder records only
