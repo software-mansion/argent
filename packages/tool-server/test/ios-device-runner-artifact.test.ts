@@ -191,6 +191,57 @@ describe("ensureRunnerArtifact", () => {
     });
   });
 
+  it("keeps a build per team, so one team's build survives another's", async () => {
+    await withEnsureEnv("per-team", async () => {
+      const counter = { builds: 0 };
+      const build = fakeBuild(counter);
+      const otherTeam = { ...CONFIG, teamId: "ZZZZZ99999" };
+
+      const first = await ensureRunnerArtifact(CONFIG, { build });
+      const other = await ensureRunnerArtifact(otherTeam, { build });
+      expect(other.derivedDataPath).not.toBe(first.derivedDataPath);
+      expect(counter.builds).toBe(2);
+
+      await expect(ensureRunnerArtifact(CONFIG, { build })).resolves.toMatchObject({
+        fromCache: true,
+        xctestrunPath: first.xctestrunPath,
+      });
+      await expect(ensureRunnerArtifact(otherTeam, { build })).resolves.toMatchObject({
+        fromCache: true,
+        xctestrunPath: other.xctestrunPath,
+      });
+      expect(counter.builds).toBe(2);
+    });
+  });
+
+  it("removes a build made directly in the derived root, keeping team builds", async () => {
+    await withEnsureEnv("shared-root", async () => {
+      const build = fakeBuild({ builds: 0 });
+      const teamBuild = await ensureRunnerArtifact(CONFIG, { build });
+      const root = path.dirname(teamBuild.derivedDataPath);
+      await fsp.mkdir(path.join(root, "Build"), { recursive: true });
+      await fsp.writeFile(path.join(root, ".argent-cache-key"), "old");
+
+      await ensureRunnerArtifact(CONFIG, { build });
+
+      expect(await fsp.readdir(root)).toEqual([path.basename(teamBuild.derivedDataPath)]);
+    });
+  });
+
+  it("removes a failed build in the derived root, which left no stamp", async () => {
+    await withEnsureEnv("shared-root-unstamped", async () => {
+      const build = fakeBuild({ builds: 0 });
+      const teamBuild = await ensureRunnerArtifact(CONFIG, { build });
+      const root = path.dirname(teamBuild.derivedDataPath);
+      await fsp.mkdir(path.join(root, "Build"), { recursive: true });
+      await fsp.mkdir(path.join(root, "ModuleCache.noindex"), { recursive: true });
+
+      await ensureRunnerArtifact(CONFIG, { build });
+
+      expect(await fsp.readdir(root)).toEqual([path.basename(teamBuild.derivedDataPath)]);
+    });
+  });
+
   /** Plant a fake embedded profile where the cached runner app keeps it. */
   async function writeFakeProfile(derivedDataPath: string, expiresAt: string): Promise<void> {
     const app = path.join(

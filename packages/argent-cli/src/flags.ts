@@ -4,6 +4,7 @@
 
 import pc from "picocolors";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+import { linkedSecretsNote } from "./secrets.js";
 import {
   FLAG_REGISTRY,
   getFlagDefinition,
@@ -84,14 +85,15 @@ Options:
 `);
 }
 
+/** The flag it toggled; undefined after --help. */
 function runToggle(
   argv: string[],
   command: "enable" | "disable",
   registry: readonly FlagDefinition[]
-): void {
+): string | undefined {
   if (argv.includes("--help") || argv.includes("-h")) {
     printToggleHelp(command, registry);
-    return;
+    return undefined;
   }
 
   let parsed: ParsedToggleArgs;
@@ -133,10 +135,18 @@ function runToggle(
   } else {
     console.log(`Disabled flag "${parsed.name}" (${parsed.scope}).`);
   }
+  return parsed.name;
 }
 
-export function enable(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
-  runToggle(argv, "enable", registry);
+export function enable(
+  argv: string[],
+  registry: readonly FlagDefinition[] = FLAG_REGISTRY
+): Promise<void> | void {
+  if (runToggle(argv, "enable", registry) !== "forward-secrets") return;
+  // A link that refuses forwarded values is said now, not at the next failing call.
+  return linkedSecretsNote().then((note) => {
+    if (note !== undefined) console.log(pc.yellow(note));
+  });
 }
 
 export function disable(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {

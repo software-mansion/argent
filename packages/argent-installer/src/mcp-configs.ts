@@ -7,6 +7,7 @@ import {
   MCP_BINARY_NAME,
   PACKAGE_NAME,
   PERMISSION_RULE,
+  DEVIN_PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
 import {
@@ -19,6 +20,8 @@ import {
   readYaml,
   writeYaml,
   copyDir,
+  findRetiredFiles,
+  resolveLinkedDestination,
   realpathOrSelf,
   editJsoncFile,
   isYarnPnp,
@@ -26,6 +29,8 @@ import {
   RULES_DIR,
   AGENTS_DIR,
   ARGENT_SKILL_PREFIX,
+  RETIRED_BUNDLED_PATHS,
+  type RetiredFile,
 } from "./utils.js";
 import { isMap, parse as parseYamlText } from "yaml";
 import { parse as parseJsoncText, type ParseError } from "jsonc-parser";
@@ -51,7 +56,7 @@ export interface McpServerEntry {
 // Argent config or client state outside the scope init just wrote that can keep
 // that entry from taking effect. Adapters only report; init-stale-config.ts
 // decides removal vs. warning.
-export interface ShadowingConfigFinding {
+interface ShadowingConfigFinding {
   /** Human-readable location, e.g. `~/.claude.json (project-local scope)`. */
   location: string;
   /** One-line consequence for the user, e.g. `takes precedence over .mcp.json`. */
@@ -69,6 +74,9 @@ export interface ShadowingConfigFinding {
 
 export interface McpConfigAdapter {
   name: string;
+  // Telemetry slug kept stable across a product rename; defaults to the
+  // sanitized `name`.
+  telemetryName?: string;
   detect(): boolean;
   projectPath(root: string): string | null;
   globalPath(): string | null;
@@ -338,8 +346,9 @@ function jsonLooksArgentServerOnly(filePath: string, containerKey: string): bool
 // rules/ and agents/ are byte copies of the bundled payloads, so argent-written
 // means every entry matches a bundled name exactly (a user's own
 // "argent-notes.md" must NOT pass); skills/ come from the skills CLI, where
-// argent owns the ARGENT_SKILL_PREFIX namespace. An empty dir is user evidence:
-// argent's copies always carry content.
+// argent owns the ARGENT_SKILL_PREFIX namespace. Retired paths count too, so a
+// leftover from an older version is not user evidence. An empty dir is user
+// evidence: argent's copies always carry content.
 let bundledManagedNamesCache: Map<string, Set<string>> | null = null;
 function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
   if (!bundledManagedNamesCache) bundledManagedNamesCache = new Map();
@@ -351,6 +360,7 @@ function bundledManagedNames(kind: "rules" | "agents"): Set<string> {
   } catch {
     names = new Set();
   }
+  for (const retired of RETIRED_BUNDLED_PATHS[kind]) names.add(retired.path.split("/")[0]);
   bundledManagedNamesCache.set(kind, names);
   return names;
 }
@@ -993,8 +1003,21 @@ function vscodeUserDirs(): string[] {
 
 // MARK: Windsurf
 
+// Windsurf was renamed Devin Desktop. Its bundled Devin agent still loads MCP
+// servers from ~/.codeium/windsurf/mcp_config.json, but ignores alwaysAllow
+// there: tool approvals come only from permissions.allow in its own user config.
+function devinUserConfigPath(): string {
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(homedir(), "AppData", "Roaming");
+    return path.join(appData, "devin", "config.json");
+  }
+  const xdg = process.env.XDG_CONFIG_HOME;
+  return path.join(xdg || path.join(homedir(), ".config"), "devin", "config.json");
+}
+
 const windsurfAdapter: McpConfigAdapter = {
-  name: "Windsurf",
+  name: "Devin Desktop",
+  telemetryName: "windsurf",
 
   detect(): boolean {
     return dirHasEditorEvidence(
@@ -1041,19 +1064,22 @@ const windsurfAdapter: McpConfigAdapter = {
   },
 
   // Targets just the argent entry's alwaysAllow key, so comments and foreign
-  // servers survive.
+  // servers survive. alwaysAllow serves the legacy Cascade agent; the Devin
+  // agent needs its own permission rule.
   addAllowlist(): void {
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return;
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], ["*"]);
+    addAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
   },
 
   removeAllowlist(_root: string, scope: "local" | "global"): void {
     // Global-only client: a scope-"local" cleanup must not touch the
     // machine-global config a retained global install depends on.
     if (scope !== "global") return;
+    removeAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
     if (!fs.existsSync(configPath)) return;
     const config = readJsonc(configPath);
@@ -1132,8 +1158,7 @@ const zedAdapter: McpConfigAdapter = {
     if (!fs.existsSync(settingsPath)) return;
     const config = readJsonc(settingsPath);
     const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     if (!perms || perms.default !== "allow") return;
     editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "confirm");
   },
@@ -1621,39 +1646,45 @@ export function findConfiguredAdapterScopes(
   return results;
 }
 
-export function addClaudePermission(root: string, scope: "local" | "global"): void {
-  const settingsPath =
-    scope === "global"
-      ? path.join(homedir(), ".claude", "settings.json")
-      : path.join(root, ".claude", "settings.json");
-
+// Shared by Claude Code and Devin, whose settings both keep tool approvals in
+// a `permissions.allow` string array.
+function addAllowRule(settingsPath: string, rule: string): void {
   // Route through readJsonc / editJsoncFile so a hand-added comment can't make
   // readJson's `catch { return {} }` drop the user's other permissions on write.
   // editJsoncFile creates the permissions.allow path if absent.
   const config = readJsonc(settingsPath);
   const permissions = (config.permissions ?? {}) as Record<string, unknown>;
   const allow = Array.isArray(permissions.allow) ? (permissions.allow as string[]) : [];
-  if (allow.includes(PERMISSION_RULE)) return;
-  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, PERMISSION_RULE]);
+  if (allow.includes(rule)) return;
+  editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, rule]);
 }
 
-export function removeClaudePermission(root: string, scope: "local" | "global"): void {
-  const settingsPath =
-    scope === "global"
-      ? path.join(homedir(), ".claude", "settings.json")
-      : path.join(root, ".claude", "settings.json");
-
+function removeAllowRule(settingsPath: string, rule: string): void {
   if (!fs.existsSync(settingsPath)) return;
   const config = readJsonc(settingsPath);
   const permissions = config?.permissions as Record<string, unknown> | undefined;
   const allow = permissions?.allow;
   if (!permissions || !Array.isArray(allow)) return;
-  if (!allow.includes(PERMISSION_RULE)) return;
-  const next = (allow as string[]).filter((rule) => rule !== PERMISSION_RULE);
+  if (!allow.includes(rule)) return;
+  const next = (allow as string[]).filter((r) => r !== rule);
   // undefined deletes the emptied `allow`; editJsoncFile then prunes an emptied
   // `permissions` and removes the file if the document collapses to {}, while a
   // comment or foreign permission keeps the file and survives byte-intact.
   editJsoncFile(settingsPath, ["permissions", "allow"], next.length > 0 ? next : undefined);
+}
+
+function claudeSettingsPath(root: string, scope: "local" | "global"): string {
+  return scope === "global"
+    ? path.join(homedir(), ".claude", "settings.json")
+    : path.join(root, ".claude", "settings.json");
+}
+
+export function addClaudePermission(root: string, scope: "local" | "global"): void {
+  addAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
+}
+
+export function removeClaudePermission(root: string, scope: "local" | "global"): void {
+  removeAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
 }
 
 type ManagedContentScope = "local" | "global";
@@ -1792,6 +1823,27 @@ export function getManagedContentTargets(
         addManagedTarget(targets.agentTargets, adapter.name, path.join(base, "agents"), root);
         break;
       }
+      case "Kiro": {
+        // Argent writes no skills here itself, but `npx skills add` links
+        // .kiro/skills/<name> into .agents/skills when it detects Kiro.
+        const kiroBase =
+          scope === "global" ? path.join(homedir(), ".kiro") : path.join(root, ".kiro");
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(kiroBase, "skills"), root);
+        break;
+      }
+      case "Devin Desktop": {
+        // Argent writes no skills here itself, but `npx skills add` links
+        // Devin's skills/<name> into .agents/skills once Devin's config dir
+        // exists, and addAllowlist creates it. The skills CLI resolves the
+        // global dir from XDG_CONFIG_HOME on every platform, so this is not
+        // devinUserConfigPath(), which uses %APPDATA% on Windows.
+        const devinBase =
+          scope === "global"
+            ? path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), ".config"), "devin")
+            : path.join(root, ".devin");
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(devinBase, "skills"), root);
+        break;
+      }
     }
   }
 
@@ -1868,6 +1920,45 @@ export function removeCodexRules(configPath: string): boolean {
 }
 
 // MARK: Copy orchestrator
+
+export interface RetiredTargetFiles {
+  kind: "rules" | "agents";
+  target: ManagedContentTarget;
+  /** The target's label, naming where its link leads when it is one. */
+  location: string;
+  files: RetiredFile[];
+}
+
+// Copying only adds files, so one an older version wrote and this one dropped
+// stays, and editors keep loading it. Same targets as copyRulesAndAgents, for
+// each scan's adapters and scope.
+export function findRetiredRulesAndAgents(
+  scans: ReadonlyArray<{ adapters: McpConfigAdapter[]; scope: ManagedContentScope }>,
+  root: string,
+  rulesDir: string,
+  agentsDir: string
+): RetiredTargetFiles[] {
+  const targets = scans.flatMap(({ adapters, scope }) => {
+    const { ruleTargets, agentTargets } = getManagedContentTargets(adapters, root, scope);
+    return [
+      ...ruleTargets.map((target) => ({ kind: "rules" as const, target, bundleDir: rulesDir })),
+      ...agentTargets.map((target) => ({ kind: "agents" as const, target, bundleDir: agentsDir })),
+    ];
+  });
+  const found: RetiredTargetFiles[] = [];
+  // Targets that are one dir share its files: list them once. That is a link to
+  // a canonical dir, or the local and global target when root is the home dir.
+  const seen = new Set<string>();
+  for (const { kind, target, bundleDir } of targets) {
+    const dir = resolveLinkedDestination(target.targetPath);
+    if (seen.has(`${kind}:${realpathOrSelf(dir)}`)) continue;
+    seen.add(`${kind}:${realpathOrSelf(dir)}`);
+    const files = findRetiredFiles(RETIRED_BUNDLED_PATHS[kind], bundleDir, target.targetPath);
+    if (files.length === 0) continue;
+    found.push({ kind, target, location: formatCopyDestination(target, dir, root), files });
+  }
+  return found;
+}
 
 export function copyRulesAndAgents(
   adapters: McpConfigAdapter[],

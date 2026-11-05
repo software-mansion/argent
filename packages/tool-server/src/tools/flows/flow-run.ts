@@ -4,7 +4,10 @@ import * as path from "node:path";
 import {
   baselineKeyFor,
   canonicalFlowPath,
+  canonicalToolId,
   classifyOnDiskSpelling,
+  e2eFileCandidates,
+  e2eShadowWarning,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
@@ -12,6 +15,7 @@ import {
   isLiveServiceState,
   MAX_RUN_DEPTH,
   nestedFlowTarget,
+  pickE2eFile,
   wrapFailure,
 } from "@argent/registry";
 import type {
@@ -32,8 +36,8 @@ import {
   assertValidProjectRoot,
   blockSteps,
   chromiumLaunchSpec,
+  E2E_FILE_TEMPLATES,
   flowNameCasingError,
-  getFlowPath,
   iosLaunchArgs,
   isBlockStep,
   parseFlow,
@@ -47,7 +51,12 @@ import {
   windowsPathRefusal,
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
-import { ClientProjectAccess, HostProjectAccess, type ProjectAccess } from "./project-access";
+import {
+  ClientProjectAccess,
+  HostProjectAccess,
+  resolveRunTarget,
+  type ProjectAccess,
+} from "./project-access";
 import {
   UPLOAD_STAGE_BY_KIND,
   prepareToolStepInputs,
@@ -63,6 +72,7 @@ import { runFlowScriptStep } from "./flow-script-step";
 import { describeWhenCondition, stepTarget } from "./flow-step-definitions";
 import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
+import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
 import { isUnmetUiWaitResult } from "../await-ui-element";
 import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
@@ -114,24 +124,24 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        'Name of a saved flow to run from `.argent/flows` (e.g. "settings-explore"). Omit when flow_path is set.'
+        'Name of a saved e2e test to run from `.argent/e2e`, or `.argent/flows` when it is not there (e.g. "settings-explore"). Omit when e2e_test_path is set.'
       ),
     project_root: z
       .string()
       .describe(
-        "Absolute path to the calling agent's project root: the cwd it is working in. With name, the saved flow is read from `.argent/flows/<name>.yaml` under this root; with flow_path, the flow, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
+        "Absolute path to the calling agent's project root: the cwd it is working in. With name, the saved e2e test is read from `.argent/e2e/<name>.yaml`, else `.argent/flows/<name>.yaml`, under this root; with e2e_test_path, the e2e test, its run: siblings, its script: paths and baselines all resolve beside the YAML instead, so pass the agent's cwd. A script still RUNS in this root whichever source was used."
       ),
-    flow_file: z
+    e2e_test_file: z
       .string()
       .optional()
       .describe(
-        "Path to the flow .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
+        "Path to the e2e test .yaml as readable by the tool-server. Internal: the argent client derives it from project_root and name automatically; leave unset."
       ),
-    flow_path: z
+    e2e_test_path: z
       .string()
       .optional()
       .describe(
-        "Omit when name is set. Absolute path to a flow .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, its run: fragments and the snapshot baselines of each run, and the tool-server runs those copies. Keep run: fragments under project_root or beside the flow file. With updateBaselines, the client writes the new baselines when the run ends. The client also uploads each absolute .png or .yaml path that a tool: step takes as a file argument, when the file is under project_root or beside the flow file. A tool: flow-execute step that names a flow with name and an absolute project_root without a .. segment runs: the client also uploads that flow and its own files. Over a link, the uploaded flows must not have: script: steps; tool: steps that run a flow another way or record a flow; tool: steps that take a directory, an app or an output directory; tool: steps whose tool builds a file path from several arguments; tool: steps that name a relative path or a file other than .png or .yaml. Without a link, the tool-server reads the files in place and all step kinds run."
+        "Omit when name is set. Absolute path to an e2e test .yaml on the client. Over a link (argent link or ARGENT_TOOLS_URL), the argent client uploads the file, its run: fragments and the snapshot baselines of each run, and the tool-server runs those copies. Keep run: fragments under project_root or beside the e2e test file. With updateBaselines, the client writes the new baselines when the run ends. The client also uploads each absolute .png or .yaml path that a tool: step takes as a file argument, when the file is under project_root or beside the e2e test file. A tool: e2e-execute step that names an e2e test with name and an absolute project_root without a .. segment runs: the client also uploads that e2e test and its own files. Over a link, the uploaded e2e tests must not have: script: steps; tool: steps that run an e2e test another way or record an e2e test; tool: steps that take a directory, an app or an output directory; tool: steps whose tool builds a file path from several arguments; tool: steps that name a relative path or a file other than .png or .yaml. Without a link, the tool-server reads the files in place and all step kinds run."
       ),
     device: z
       .string()
@@ -143,13 +153,13 @@ const zodSchema = z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for an e2e flow - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or an e2e launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; pass `ios-remote` to select a remote one. `chromium` does more than filter: with no `device` it SELECTS the self-boot branch for a standalone e2e test - the runner boots an Electron instance from the `launch` step's chromium value and tears it down after the run (a single-key `launch: { chromium: … }` map selects it on its own, without this parameter). When it selects that branch it never falls back to device auto-detection (a fragment, or a standalone e2e test's launch map with no `chromium` key, still does), and the launch value must be a real Electron app path on the tool-server host: a bare-string `launch:` - what the recorder writes - holds an installed-app bundle id, so passing `chromium` for one fails the whole run with `Electron boot: path does not exist`. Edit the launch to `{ chromium: <app path> }` first."
       ),
     updateBaselines: z
       .boolean()
       .optional()
       .describe(
-        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the flows that tool: flow-execute steps run, unless such a step sets updateBaselines itself."
+        "Write/refresh screenshot baselines for `snapshot` steps instead of diffing against them, also in the e2e tests that tool: e2e-execute steps run, unless such a step sets updateBaselines itself."
       ),
     prerequisiteAcknowledged: z
       .boolean()
@@ -159,16 +169,16 @@ const zodSchema = z
       ),
   })
   .superRefine((params, ctx) => {
-    if ((params.name === undefined) === (params.flow_path === undefined)) {
+    if ((params.name === undefined) === (params.e2e_test_path === undefined)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
           params.name !== undefined
-            ? "Pass exactly one flow source: name or flow_path."
-            : "Pass exactly one flow source: name or flow_path. flow-execute needs the flow's " +
-              "name in `name` — it resolves <project_root>/.argent/flows/<name>.yaml.",
-        // The ROOT, not `flow_path`: the rule spans both source fields, and a
-        // path would prefix the message with "`flow_path`:".
+            ? "Pass exactly one e2e test source: name or e2e_test_path."
+            : "Pass exactly one e2e test source: name or e2e_test_path. e2e-execute needs the e2e test's " +
+              "name in `name` — it resolves <project_root>/.argent/e2e/<name>.yaml, else .argent/flows/<name>.yaml.",
+        // The ROOT, not `e2e_test_path`: the rule spans both source fields, and a
+        // path would prefix the message with "`e2e_test_path`:".
         path: [],
       });
     }
@@ -176,26 +186,28 @@ const zodSchema = z
 
 type Params = z.infer<typeof zodSchema>;
 
-// A dual-source call (name + flow_path) must be diagnosed by the schema's
+// A dual-source call (name + e2e_test_path) must be diagnosed by the schema's
 // exactly-one rule, not by whether either unused file happens to exist:
-// - unwrapWhenSet: flow_path is caller-authored, so alongside name zod still
+// - unwrapWhenSet: e2e_test_path is caller-authored, so alongside name zod still
 //   sees it — dropping it would silently run the saved flow instead.
-// - skipWhenSet: flow_file is client-derived, so alongside flow_path it is
+// - skipWhenSet: e2e_test_file is client-derived, so alongside e2e_test_path it is
 //   dropped; the caller never authored it.
 const fileInputs: FileInputSpec[] = [
   {
-    target: "flow_path",
-    path: "${flow_path}",
+    target: "e2e_test_path",
+    path: "${e2e_test_path}",
     kind: "file",
     optional: true,
     unwrapWhenSet: "name",
     collect: "flow",
   },
   {
-    target: "flow_file",
+    target: "e2e_test_file",
+    // A client that predates `paths` reads the legacy dir only.
     path: "${project_root}/.argent/flows/${name}.yaml",
+    paths: E2E_FILE_TEMPLATES,
     kind: "file",
-    skipWhenSet: "flow_path",
+    skipWhenSet: "e2e_test_path",
     collect: "flow",
   },
 ];
@@ -222,7 +234,9 @@ export interface StepReport {
    * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
+   * from one that waited. Also raised by a launch whose Android native network
+   * capture note differs from the last one reported for that app
+   * ({@link networkCaptureWarning}).
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */
@@ -236,13 +250,16 @@ export interface StepReport {
   /** Echo message. */
   message?: string;
   /**
-   * The fragment a step belongs to (set on `run` and the steps it expands) —
-   * the target's basename stem; when that stem collides with the top-level
-   * flow's name, the as-written path minus `.yaml` (`./<stem>` for a bare
-   * spelling). Renderers distinguish fragment steps by this differing from the
-   * report's `flow`, which the collision fallback guarantees: both
-   * disambiguated shapes contain a `/`, which FLOW_NAME_PATTERN forbids.
+   * The e2e test a step belongs to: the run's own name, or for a fragment (a
+   * `run` step and the steps it expands) the target's basename stem; when that
+   * stem collides with the top-level test's name, the as-written path minus
+   * `.yaml` (`./<stem>` for a bare spelling). Renderers distinguish fragment
+   * steps by this differing from the report's `e2eTest`, which the collision
+   * fallback guarantees: both disambiguated shapes contain a `/`, which
+   * FLOW_NAME_PATTERN forbids.
    */
+  e2eTest?: string;
+  /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
   flow?: string;
   /**
    * Human-readable "what this step acts on" — the selector for directive
@@ -287,6 +304,9 @@ export interface StepReport {
 }
 
 export interface FlowRunResult {
+  /** The e2e test's name. */
+  e2eTest: string;
+  /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
   flow: string;
   device: string;
   executionPrerequisite: string;
@@ -309,19 +329,25 @@ export interface FlowRunResult {
    * puts its path, or `{ path, error }`, in its place.
    */
   baselineWrites?: ClientFileDirective[];
+  /** A test of the same name that this one hides ({@link e2eShadowWarning}). */
+  warning?: string;
 }
 
 export interface FlowPrerequisiteNotice {
+  /** The e2e test's name. */
+  e2eTest: string;
+  /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
   flow: string;
   notice: string;
   executionPrerequisite: string;
+  warning?: string;
 }
 
 /**
  * The tools a `tool:` step can start a nested `flow-execute` with: itself, and
  * `flow-add-step` with `command: flow-execute`, which runs the call live.
  */
-const FLOW_STARTING_TOOLS: ReadonlySet<string> = new Set(["flow-execute", "flow-add-step"]);
+const FLOW_STARTING_TOOLS: ReadonlySet<string> = new Set(["e2e-execute", "e2e-add-step"]);
 
 /**
  * The args a nested `flow-execute` is dispatched with: a run that updates its
@@ -333,7 +359,9 @@ function nestedRunArgs(
   tool: string,
   args: Record<string, unknown>
 ): Record<string, unknown> {
-  return tool === "flow-execute" && state.updateBaselines && args.updateBaselines === undefined
+  return canonicalToolId(tool) === "e2e-execute" &&
+    state.updateBaselines &&
+    args.updateBaselines === undefined
     ? { ...args, updateBaselines: true }
     : args;
 }
@@ -478,7 +506,7 @@ export function flowLaunchGateReason(
       // this, so the measured remedy reads as advice to change nothing.
       return (
         `${bundleId} was relaunched by this step and is no longer running ${LAUNCH_TO_VERDICT_MS} ms later, ` +
-        `so it exited after launch rather than failing to connect. Re-running the flow repeats the same launch: ` +
+        `so it exited after launch rather than failing to connect. Re-running the e2e test repeats the same launch: ` +
         `start it by hand (launch-app, then describe or screenshot) to see the crash or early exit first.`
       );
     case "stale_process":
@@ -491,7 +519,7 @@ export function flowLaunchGateReason(
       // needs `processAge + grace >= listenerAge`).
       return (
         `${measured} This step already relaunched it, so the process it measured predates whatever the ` +
-        `relaunch would have given it — re-run the flow to launch again. If it lands here twice, the ` +
+        `relaunch would have given it — re-run the e2e test to launch again. If it lands here twice, the ` +
         `simulator's launchd environment is not holding argent's instrumentation: re-boot the device ` +
         `(boot-device with force) before re-running.`
       );
@@ -503,7 +531,7 @@ export function flowLaunchGateReason(
       // first sleep, so a dial during the post-launch settle counts too.
       return (
         `${measured} A cold start slower than the ${LAUNCH_TO_VERDICT_MS} ms this step waited reads the ` +
-        `same way — if that is likely, re-run the flow to relaunch and wait again before restarting anything.`
+        `same way — if that is likely, re-run the e2e test to relaunch and wait again before restarting anything.`
       );
     case "connecting":
       // A process seconds old, though this step launched the app
@@ -513,11 +541,11 @@ export function flowLaunchGateReason(
       return (
         `${measured} This step launched it ${LAUNCH_TO_VERDICT_MS} ms before that reading, so the process ` +
         `being measured started after the step's own launch — something relaunched it in between. Re-run ` +
-        `the flow once the app is settled.`
+        `the e2e test once the app is settled.`
       );
     case "indeterminate":
       return (
-        `${measured} This step already performed that one restart, so re-run the flow at most once more ` +
+        `${measured} This step already performed that one restart, so re-run the e2e test at most once more ` +
         `before restarting the tool-server rather than the app.`
       );
     case "provider_attached":
@@ -526,7 +554,7 @@ export function flowLaunchGateReason(
       // that does not ask argent to restart a process the provider owns.
       return (
         `${measured} This step already waited ${LAUNCH_TO_VERDICT_MS} ms after launching it, so the ` +
-        `provider is lending a different app rather than one still connecting. Re-run the flow only ` +
+        `provider is lending a different app rather than one still connecting. Re-run the e2e test only ` +
         `once it is lending this one; otherwise drive the app by coordinate.`
       );
   }
@@ -646,12 +674,38 @@ async function treeSourceGate(
     const ready = await waitForVegaAutomation(device, signal);
     if (!ready && !signal?.aborted) {
       return (
-        `the Vega automation toolkit never served a page source for ${bundleId} (the flow tree source). ` +
+        `the Vega automation toolkit never served a page source for ${bundleId} (the runner tree source). ` +
         `The toolkit attaches at app launch — re-run to relaunch; if it keeps failing, confirm the app was built with automation support and the VVD is reachable over adb.`
       );
     }
   }
   return null;
+}
+
+/**
+ * The `networkCapture` note an Android launch-app or restart-app result carries
+ * while native network capture, started earlier by `native-network-logs`, is on
+ * for the app: whether the capture followed the app into the new process.
+ * Reported as a step warning: the step passed, but the app may run
+ * instrumented. A flow that relaunches the same app repeats a note only when it
+ * differs from the last one reported for that app, so a later launch that
+ * attached is not hidden behind an earlier one that did not. Numbers are
+ * ignored in that comparison, so a new pid alone does not make a note differ.
+ */
+function networkCaptureWarning(
+  state: ExecState,
+  bundleId: unknown,
+  result: unknown
+): string | undefined {
+  if (typeof bundleId !== "string" || typeof result !== "object" || result === null) {
+    return undefined;
+  }
+  const note = (result as { networkCapture?: unknown }).networkCapture;
+  if (typeof note !== "string" || note === "") return undefined;
+  const key = note.replace(/\d+/g, "#");
+  if (state.networkCaptureNoted.get(bundleId) === key) return undefined;
+  state.networkCaptureNoted.set(bundleId, key);
+  return note;
 }
 
 /**
@@ -718,7 +772,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
-  return { ok: true };
+  const warning = networkCaptureWarning(state, bundleId, restart);
+  return warning === undefined ? { ok: true } : { ok: true, warning };
 }
 
 /**
@@ -746,7 +801,7 @@ async function runChromiumLaunch(state: ExecState, app: Launch): Promise<Directi
     if (declared !== owned.appPath) {
       return {
         ok: false,
-        reason: `launch declares "${declared}" but the instance booted for this run is "${owned.appPath}" — the flow file changed after the run started`,
+        reason: `launch declares "${declared}" but the instance booted for this run is "${owned.appPath}" — the e2e test file changed after the run started`,
       };
     }
     // Seconds old and already fronted; just settle. Reported as a boot all the
@@ -1045,7 +1100,7 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   pinned: boolean;
   /**
    * Chromium instances the runner booted, oldest first — torn down in reverse at
-   * run end. A chromium e2e flow's leading launch has its boot hoisted into
+   * run end. A chromium standalone flow's leading launch has its boot hoisted into
    * {@link resolveRunDevice}, so that one is here before step 1.
    */
   owned: BootedChromium[];
@@ -1084,6 +1139,11 @@ interface ExecState extends Omit<ActionEnv, "device"> {
   attachedAppPath?: string;
   projectRoot: string;
   scriptLogBudget: FlowScriptLogBudget;
+  /**
+   * The last native network capture note this run reported for each app (see
+   * {@link networkCaptureWarning}). Shared with nested `run:` flows.
+   */
+  networkCaptureNoted: Map<string, string>;
   /** Live progress hook: receives every report the moment it is appended. */
   onStepReport?: (report: StepReport) => void;
 }
@@ -1097,7 +1157,9 @@ interface ExecState extends Omit<ActionEnv, "device"> {
  */
 function deviceEnv(state: ExecState): ActionEnv {
   if (!state.device) {
-    throw new Error("internal: a step that acts on a device ran in a flow resolved as device-free");
+    throw new Error(
+      "internal: a step that acts on a device ran in an e2e test resolved as device-free"
+    );
   }
   return { ...state, device: state.device };
 }
@@ -1113,16 +1175,16 @@ interface BootedChromium {
 
 /**
  * Flow name for interaction messages: the display half of resolveFlowSource
- * (basename stem on the flow_path branch) without its validation — these
+ * (basename stem on the e2e_test_path branch) without its validation — these
  * messages render before validation and must still say something on a call
  * validation is about to reject. path.basename keeps a bare ".yaml" filename
  * intact, and the fallbacks keep a pathological source from rendering as "" or
  * "undefined".
  */
-function displayFlowName(params: { name?: string; flow_path?: string }): string {
+function displayFlowName(params: { name?: string; e2e_test_path?: string }): string {
   const stem =
-    params.flow_path === undefined ? undefined : path.basename(params.flow_path, ".yaml");
-  return params.name || stem || params.flow_path || "(unspecified)";
+    params.e2e_test_path === undefined ? undefined : path.basename(params.e2e_test_path, ".yaml");
+  return params.name || stem || params.e2e_test_path || "(unspecified)";
 }
 
 /**
@@ -1352,14 +1414,14 @@ function assertUploadSelfContained(
   flow: FlowFile,
   closure: { project: ClientProjectAccess; rootCanonical: string } | undefined,
   origin: { subject: string; arrival: string } = {
-    subject: "This flow",
+    subject: "This e2e test",
     arrival: "it arrived as an upload",
   }
 ): void {
   const offending: { kind: keyof typeof UPLOAD_STAGE_BY_KIND; line: string }[] = [];
   const toolFileFixes = new Set<ToolFileFix>();
   // A nested step that names its flow with `name` runs for a client that
-  // sends the flow with the call; an update does not help a `flow_path` one.
+  // sends the flow with the call; an update does not help an `e2e_test_path` one.
   let namedNestedFlow = false;
   const queue = [{ flow, canonical: closure?.rootCanonical ?? "", within: "", hop: 0 }];
   const seen = new Set<string>();
@@ -1368,14 +1430,17 @@ function assertUploadSelfContained(
     file: (typeof queue)[number],
     anchorDir: string,
     target: string,
-    entry: { kind: "run" | "nested"; line: string }
+    entry: { kind: "run"; line: string } | { kind: "nested"; line: string; paths: string[] }
   ): void => {
     // The runner checks the depth of a `run:` step before it reads the target.
     if (entry.kind === "run" && file.hop + 1 >= MAX_RUN_DEPTH) return;
     const key = flowMemberKey(anchorDir, target);
     if (closure === undefined || seen.has(key)) return;
     seen.add(key);
-    const member = closure.project.member(anchorDir, target);
+    const member =
+      entry.kind === "run"
+        ? closure.project.runMember(anchorDir, target)
+        : closure.project.savedTestMember(entry.paths);
     if (member?.state === "refused") {
       offending.push({ kind: entry.kind, line: `${entry.line} (${member.error})` });
     } else if (
@@ -1408,14 +1473,15 @@ function assertUploadSelfContained(
       } else if (step.kind === "snapshot") {
         if (closure) continue;
         offending.push({ kind: "snapshot", line: `${where}: snapshot: ${step.name}` });
-      } else if (step.kind === "tool" && RECORDING_TOOL_IDS.has(step.name)) {
+      } else if (step.kind === "tool" && RECORDING_TOOL_IDS.has(canonicalToolId(step.name))) {
         offending.push({
           kind: "recording",
-          line: `${where}: tool: ${step.name} (records a flow)`,
+          line: `${where}: tool: ${step.name} (records an e2e test)`,
         });
       } else if (step.kind === "tool") {
         const issue = toolStepUploadIssue(registry, step.name, step.args, closure !== undefined);
-        const target = step.name === "flow-execute" ? nestedFlowTarget(step.args) : undefined;
+        const target =
+          canonicalToolId(step.name) === "e2e-execute" ? nestedFlowTarget(step.args) : undefined;
         if (issue !== undefined) {
           offending.push({ kind: issue.kind, line: `${where}: ${issue.line}` });
           for (const fix of issue.fixes) toolFileFixes.add(fix);
@@ -1423,7 +1489,8 @@ function assertUploadSelfContained(
         } else if (target?.kind === "name") {
           follow(file, path.dirname(target.path), `${target.name}.yaml`, {
             kind: "nested",
-            line: `${where}: tool: flow-execute (name: ${target.name})`,
+            line: `${where}: tool: ${step.name} (name: ${target.name})`,
+            paths: target.paths,
           });
         }
       }
@@ -1436,7 +1503,7 @@ function assertUploadSelfContained(
       : []),
     ...(!closure && namedNestedFlow
       ? [
-          "tool: flow-execute steps that name a flow with name, for a client that sends those flows with the call",
+          "tool: e2e-execute steps that name an e2e test with name, for a client that sends those e2e tests with the call",
         ]
       : []),
     ...(!closure && offending.some((o) => o.kind === "snapshot")
@@ -1450,9 +1517,15 @@ function assertUploadSelfContained(
     `${origin.subject} is not self-contained, and ${origin.arrival}. The steps below read ` +
       `or write project files, which stay on the client:\n` +
       offending.map((o) => `  - ${o.line}`).join("\n") +
-      `\nRun the flow on the computer that runs the tool-server, with no link and no ` +
+      `\nRun the e2e test on the computer that runs the tool-server, with no link and no ` +
       `ARGENT_TOOLS_URL, so that the tool-server reads the files in place.` +
-      `${uploadUpdateHint(servable)}${toolFilePathHints(toolFileFixes)}`,
+      `${uploadUpdateHint(servable)}` +
+      // An older client lists e2e_test_path from this schema but collects the
+      // files only for flow_path.
+      (servable.length > 0
+        ? " A client older than the e2e_test_path param sends those files for a test passed as flow_path."
+        : "") +
+      toolFilePathHints(toolFileFixes),
     {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: UPLOAD_STAGE_BY_KIND[offending[0]!.kind],
@@ -1466,17 +1539,18 @@ export function createRunFlowTool(
   registry: Registry
 ): ToolDefinition<Params, FlowRunResult | FlowPrerequisiteNotice> {
   return {
-    id: "flow-execute",
+    id: "e2e-execute",
+    aliases: ["flow-execute"],
     interaction: {
-      startedMsg: ({ params }) => `Running flow ${displayFlowName(params)}`,
-      completedMsg: ({ params }) => `Ran flow ${displayFlowName(params)}`,
+      startedMsg: ({ params }) => `Running e2e test ${displayFlowName(params)}`,
+      completedMsg: ({ params }) => `Ran e2e test ${displayFlowName(params)}`,
       failedMsg: ({ params, failureSignal }) =>
-        `Failed to run flow ${displayFlowName(params)}: ${failureSignal.error_code}`,
+        `Failed to run e2e test ${displayFlowName(params)}: ${failureSignal.error_code}`,
     },
-    description: `Run a saved YAML flow end to end. Use when
+    description: `Run a saved YAML e2e test end to end. Use when
 asked to replay a recorded path, re-run a QA regression, or check that a known journey still passes; for a
-one-off interaction use the gesture tools instead, and to author a flow use flow-start-recording. Pass
-exactly one flow source: name (under project_root) or flow_path.
+one-off interaction use the gesture tools instead, and to author an e2e test use e2e-start-recording. Pass
+exactly one e2e test source: name (under project_root) or e2e_test_path.
 Returns a per-step report: the first failure stops the run and the rest report as skipped.`,
     longRunning: true,
     zodSchema,
@@ -1485,11 +1559,12 @@ Returns a per-step report: the first failure stops the run and the rest report a
     async execute(_services, params, ctx?: ToolContext) {
       const runStartedAt = Date.now();
       const signal = ctx?.signal;
-      const { filePath, flowName, viaUpload } = await resolveFlowSource(
+      const { filePath, flowName, viaUpload, shadowed } = await resolveFlowSource(
         params,
-        ctx?.fileInputs?.flow_file,
-        ctx?.fileInputs?.flow_path
+        ctx?.fileInputs?.e2e_test_file,
+        ctx?.fileInputs?.e2e_test_path
       );
+      const warning = shadowed ? { warning: e2eShadowWarning(filePath, shadowed) } : {};
       // Where the run's file references resolve: on this host, unless the
       // root flow arrived as an upload with the files its steps reach (the
       // members of its file input) — then in those files. A nested run gets
@@ -1497,7 +1572,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // file in place (viaUpload false) and stays on the host, so a run without
       // a link never changes behavior.
       const rootInput = viaUpload
-        ? (ctx?.fileInputs?.flow_path ?? ctx?.fileInputs?.flow_file)
+        ? (ctx?.fileInputs?.e2e_test_path ?? ctx?.fileInputs?.e2e_test_file)
         : undefined;
       const clientProject = rootInput?.members
         ? new ClientProjectAccess(rootInput.members)
@@ -1525,7 +1600,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
           // it, so it names its own flow, whose steps it numbers.
           ctx?.flowStack !== undefined
             ? {
-                subject: `The nested flow "${flowName}"`,
+                subject: `The nested e2e test "${flowName}"`,
                 arrival: "the client sent it with the call",
               }
             : undefined
@@ -1536,7 +1611,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // driven it (see findRetiredToolArg).
       const retiredArg = findRetiredToolArg(registry, flow.steps);
       if (retiredArg) {
-        throw new FailureError(`Flow "${flowName}" ${retiredArgReason(retiredArg)}`, {
+        throw new FailureError(`E2E test "${flowName}" ${retiredArgReason(retiredArg)}`, {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
           failure_stage: "flow_run_validate",
           failure_area: "tool_server",
@@ -1566,7 +1641,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
       const enclosing = ctx?.flowStack ?? [];
       if (enclosing.some((entry) => entry.canonical === rootEntry.canonical)) {
         throw nestingFailure(
-          `cyclic flow reference: ${[...enclosing, rootEntry].map((entry) => entry.display).join(" → ")}`
+          `cyclic e2e test reference: ${[...enclosing, rootEntry].map((entry) => entry.display).join(" → ")}`
         );
       }
       if (enclosing.length >= MAX_RUN_DEPTH) throw nestingFailure("max run depth exceeded");
@@ -1598,7 +1673,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
             ? ` Or pin the run to a chromium instance you have already brought to that state (--device chromium-cdp-<port>), where the leading launch only attaches.`
             : "";
           throw new FailureError(
-            `A flow whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
+            `An e2e test whose leading run: chain reaches a launch step must not declare executionPrerequisite — it launches its own app and controls its start state. Drop the leading launch in "${leading.flow}" to make it a fragment, or drop executionPrerequisite from "${flowName}".${pinRemedy}`,
             {
               error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
               failure_stage: "flow_run_validate",
@@ -1616,11 +1691,13 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // takes the ordinary notice/acknowledge path.
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
         return {
+          e2eTest: flowName,
           flow: flowName,
           notice:
-            "This flow has an execution prerequisite that must be fulfilled before it can run. " +
-            "Verify the prerequisite is met and call flow-execute again with prerequisiteAcknowledged set to true.",
+            "This e2e test has an execution prerequisite that must be fulfilled before it can run. " +
+            "Verify the prerequisite is met and call e2e-execute again with prerequisiteAcknowledged set to true.",
           executionPrerequisite: flow.executionPrerequisite,
+          ...warning,
         };
       }
 
@@ -1644,7 +1721,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
 
       // Normalize the status bar (clock/battery/signal) for the whole run so it
       // never drives a snapshot diff. Pinned before step 1 — it's a device-level
-      // override independent of the app, so an e2e flow's leading launch step
+      // override independent of the app, so a standalone flow's leading launch step
       // (relaunch + settle) doubles as propagation headroom. No-op (returns
       // false) on chromium/vega and on a run already cancelled; restored on
       // teardown.
@@ -1702,6 +1779,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
         snapshotApps: new Map(),
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
+        networkCaptureNoted: new Map(),
         ...(!resolved.booted && device?.platform === "chromium"
           ? { attachedDeviceId: device.id }
           : {}),
@@ -1745,7 +1823,11 @@ Returns a per-step report: the first failure stops the run and the rest report a
       // the baseline directory of each run.
       const baselineWrites =
         ctx?.flowStack === undefined ? (clientProject?.baselineDirectives() ?? []) : [];
-      return baselineWrites.length > 0 ? { ...result, baselineWrites } : result;
+      return {
+        ...result,
+        ...(baselineWrites.length > 0 ? { baselineWrites } : {}),
+        ...warning,
+      };
     },
   };
 }
@@ -1755,7 +1837,7 @@ Returns a per-step report: the first failure stops the run and the rest report a
  * unambiguously chromium (see {@link chromiumBootSpec}) and no explicit
  * `device` is given, this boots a fresh Electron instance from the launch's
  * app path and returns it for teardown — a fragment whose leading `run:` chain
- * reaches a chromium e2e flow boots just the same ({@link leadingLaunch}).
+ * reaches a chromium standalone flow boots just the same ({@link leadingLaunch}).
  * Otherwise it attaches to an already-booted device. An explicit `device`
  * never boots here — only a launch step beyond the first moves off it onto an
  * instance the runner owns ({@link bootChromiumForLaunch}). `flowDir` is the
@@ -1890,7 +1972,7 @@ const NO_EXECUTABLE_STEP = "no-executable-step";
  * The spelling says how the client's listing spells the root's basename. A
  * case-folded match is refused with the error a co-located run gives for the
  * same call ({@link resolveFlowSource}), chosen by the argument the caller
- * named the flow with (`name`, else `flow_path`): the spelling keys the report
+ * named the flow with (`name`, else `e2e_test_path`): the spelling keys the report
  * and `__baselines__/`, and no directory entry carries it.
  */
 function clientRootCanonical(
@@ -1912,7 +1994,7 @@ function clientRootCanonical(
 
 /**
  * The launch the RUN begins with, following a leading `run:` — a fragment whose
- * first step composes an e2e flow starts with that flow's launch, and the runner
+ * first step composes a standalone flow starts with that flow's launch, and the runner
  * has to know that before step 1 to boot a chromium app for it (and to refuse a
  * prerequisite that launch would invalidate). `flow` names the flow whose first
  * step IS the launch, so a rejection can point at the right file. Null when the
@@ -1966,7 +2048,7 @@ async function scanLeadingLaunch(
     let nested: FlowFile;
     let canonical: string;
     try {
-      const hop = await env.project.resolveFlowFile(path.dirname(top.canonical), step.flow);
+      const hop = await resolveRunTarget(env.project, path.dirname(top.canonical), step.flow);
       canonical = hop.canonical;
       if (stack.some((entry) => entry.canonical === canonical)) return null;
       if (stack.length >= MAX_RUN_DEPTH) return null;
@@ -2053,9 +2135,9 @@ async function bootChromiumForFlow(
   // path, so reject with the contract error instead.
   if (viaUpload && !path.isAbsolute(spec.path)) {
     throw new FailureError(
-      `A relative chromium app path ("${spec.path}") resolves against the flow file's ` +
+      `A relative chromium app path ("${spec.path}") resolves against the e2e test file's ` +
         `directory, which requires a run with no link and no ARGENT_TOOLS_URL — an uploaded ` +
-        `flow has no real flow directory on this host. Use an absolute tool-server path instead.`,
+        `e2e test has no real e2e test directory on this host. Use an absolute tool-server path instead.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_upload_chromium_app_path",
@@ -2130,6 +2212,7 @@ function summarize(
     else errored++;
   }
   return {
+    e2eTest: flowName,
     flow: flowName,
     device: deviceId,
     executionPrerequisite,
@@ -2151,9 +2234,11 @@ function summarize(
 /**
  * Append a report to the run and hand it to any live progress consumer. The
  * single choke point for every report — a push site that bypasses it would
- * silently drop steps from the progress stream.
+ * silently drop steps from the progress stream, and the deprecated `flow`
+ * copy of `e2eTest` that older clients read.
  */
 function pushReport(state: ExecState, report: StepReport): void {
+  if (report.e2eTest !== undefined) report.flow = report.e2eTest;
   state.reports.push(report);
   state.onStepReport?.(report);
 }
@@ -2181,7 +2266,7 @@ interface StepScope {
   depth: number;
 }
 
-/** The flow name steps in this scope are attributed to (StepReport.flow). */
+/** The e2e test steps in this scope are attributed to (StepReport.e2eTest). */
 function scopeFlow(scope: StepScope): string {
   return scope.runStack[scope.runStack.length - 1]!.display;
 }
@@ -2193,7 +2278,7 @@ function scopeFlow(scope: StepScope): string {
  * when the spelling is bare (stripping would reproduce the stem). Two
  * different files may legitimately share a stem (root `login.yaml` composing
  * `helpers/login.yaml`), and a bare-stem attribution there would make
- * `StepReport.flow` equal the report's top-level `flow`, so renderers that mark
+ * `StepReport.e2eTest` equal the report's top-level `e2eTest`, so renderers that mark
  * fragment steps by that inequality would read the fragment's failures as the
  * root flow's. A bare spelling has no directory component to keep, yet still
  * names a genuinely different file when written in a nested fragment
@@ -2275,7 +2360,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         index,
         kind: step.kind,
         status: "skip",
-        flow: stepFlow(step, scope),
+        e2eTest: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
         ...(stopReason ? { reason: stopReason } : {}),
@@ -2301,10 +2386,10 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         index,
         kind: step.kind,
         status: "error",
-        flow: scopeFlow(scope),
+        e2eTest: scopeFlow(scope),
         target: stepTarget(step),
         ...depthOf(scope),
-        reason: `step needs a device but the flow was resolved as device-free — pass an explicit device`,
+        reason: `step needs a device but the e2e test was resolved as device-free — pass an explicit device`,
       });
       const inner = blockSteps(step);
       if (inner) reportBlockSkipped(state, inner, childScope(scope));
@@ -2317,7 +2402,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
         kind: step.kind,
         status: "skip",
         reason: "run aborted",
-        flow: stepFlow(step, scope),
+        e2eTest: stepFlow(step, scope),
         target: stepTarget(step),
         ...depthOf(scope),
         ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -2396,7 +2481,7 @@ function reportBlockSkipped(
       kind: step.kind,
       status: "skip",
       reason,
-      flow: stepFlow(step, scope),
+      e2eTest: stepFlow(step, scope),
       target: stepTarget(step),
       ...depthOf(scope),
       ...(step.kind === "echo" ? { message: step.message } : {}),
@@ -2447,7 +2532,7 @@ async function execWhenStep(
   const marker = {
     index,
     kind: "when",
-    flow: scopeFlow(scope),
+    e2eTest: scopeFlow(scope),
     target,
     ...depthOf(scope),
   } as const;
@@ -2524,7 +2609,7 @@ async function execRunStep(
       index,
       kind: "run",
       status: "error",
-      flow: display,
+      e2eTest: display,
       target,
       reason,
       ...depthOf(scope),
@@ -2539,7 +2624,7 @@ async function execRunStep(
   // step with the reason.
   let hop: Awaited<ReturnType<ProjectAccess["resolveFlowFile"]>>;
   try {
-    hop = await state.project.resolveFlowFile(scopeFlowDir(scope), target);
+    hop = await resolveRunTarget(state.project, scopeFlowDir(scope), target);
   } catch (err) {
     return fail(`could not load fragment "${target}": ${errMsg(err)}`);
   }
@@ -2553,7 +2638,7 @@ async function execRunStep(
   // immediately below still stops the recursion.
   if (scope.runStack.some((entry) => entry.canonical === canonical)) {
     return fail(
-      `cyclic flow reference: ${[...scope.runStack.map((entry) => entry.display), display].join(" → ")}`
+      `cyclic e2e test reference: ${[...scope.runStack.map((entry) => entry.display), display].join(" → ")}`
     );
   }
 
@@ -2578,7 +2663,7 @@ async function execRunStep(
     // that fork asks for the rename it really needs.
     const recovery = spelling.addressable
       ? `reference it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
-      : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — flow files must be ` +
+      : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — e2e test files must be ` +
         `lowercase .yaml`;
     return fail(
       `mis-cased fragment reference "${target}": no directory entry is named "${suppliedBase}" ` +
@@ -2590,7 +2675,7 @@ async function execRunStep(
 
   // There is deliberately NO path fence on the host read. A `run:` target is
   // reachable exactly when the tool-server user can read it, the same reach the
-  // front door already grants: an operator can point flow_path at any YAML on
+  // front door already grants: an operator can point e2e_test_path at any YAML on
   // the host, so restricting composition below that only breaks documented
   // layouts — a fragment shared sideways (`../shared/login.yaml`), and a flows
   // dir symlinked to a tree kept outside the project. The one route that
@@ -2633,7 +2718,7 @@ async function execRunStep(
     index,
     kind: "run",
     status: "pass",
-    flow: display,
+    e2eTest: display,
     target,
     ...depthOf(scope),
     durationMs: Date.now() - startedAt,
@@ -2725,6 +2810,7 @@ async function runFold(
     const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
       activeScreen?: number;
       screen?: { panel?: string; width?: number; height?: number };
+      deviceState?: string;
       warning?: string;
     };
     const size =
@@ -2734,9 +2820,14 @@ async function runFold(
     // The step's own target, not the result's posture: that is set only at a
     // preset angle, and a mid angle can leave either panel live.
     const target = step.posture ?? `${step.angle}°`;
+    // Android names the device state the guest committed, not a panel.
+    const landed =
+      result.deviceState !== undefined
+        ? `device state ${result.deviceState}`
+        : `screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`;
     return {
       ok: true,
-      reason: `${target}: screen ${result.activeScreen ?? "?"} (${result.screen?.panel ?? "?"}${size})`,
+      reason: `${target}: ${landed}`,
       ...(result.warning !== undefined ? { warning: result.warning } : {}),
     };
   } catch (err) {
@@ -2756,7 +2847,7 @@ async function execLeafStep(
   const base = {
     index,
     kind: step.kind,
-    flow: scopeFlow(scope),
+    e2eTest: scopeFlow(scope),
     target: stepTarget(step),
     ...depthOf(scope),
   } as const;
@@ -2771,7 +2862,12 @@ async function execLeafStep(
       // A run cancelled mid-launch is a skip (matching the pre-step guard and
       // the directives), never a step failure — the app did nothing wrong.
       if (r.aborted) return { ...base, status: "skip", reason: r.reason };
-      return { ...base, status: r.ok ? "pass" : "error", reason: r.reason };
+      return {
+        ...base,
+        status: r.ok ? "pass" : "error",
+        reason: r.reason,
+        ...(r.warning !== undefined ? { warning: r.warning } : {}),
+      };
     }
 
     case "tap":
@@ -2799,8 +2895,13 @@ async function execLeafStep(
         // wedged. Scoring that `fail` would make CI read an environment problem
         // as a regression. `error` keeps the run non-ok while saying plainly
         // that the app was never judged. Scoped to `idle`, whose whole verdict
-        // rests on being able to observe the screen.
-        if (!r.ok && r.indeterminate && step.kind === "idle") {
+        // rests on being able to observe the screen, and to platforms with no
+        // flow tree source, where every read fails.
+        if (
+          !r.ok &&
+          r.indeterminate &&
+          (step.kind === "idle" || (device !== null && !supportsFlowTree(device.platform)))
+        ) {
           return { ...base, status: "error", reason: r.reason };
         }
         return {
@@ -2929,7 +3030,9 @@ async function execLeafStep(
           ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
           // The two tools that can start a nested run continue this run's
           // stack, so a flow that runs itself stops at the cycle guard.
-          ...(FLOW_STARTING_TOOLS.has(step.name) ? { flowStack: scope.runStack } : {}),
+          ...(FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))
+            ? { flowStack: scope.runStack }
+            : {}),
         });
         if (isUnmetUiWaitResult(step.name, result)) {
           const note = (result as { note?: string }).note;
@@ -2994,13 +3097,23 @@ async function execLeafStep(
         // first" — the very advice the measured diagnosis replaces. UNPINNED,
         // like any other raw tool step. After the invoke, like `runLaunch`: a
         // tool that threw started nothing.
+        let warning: string | undefined;
         if (step.name === "launch-app" || step.name === "restart-app") {
           const launched = (args as { bundleId?: unknown }).bundleId;
           if (typeof launched === "string") {
             state.treeTarget = { bundleId: launched, pinned: false, probeAnswered: false };
           }
+          warning = networkCaptureWarning(state, launched, result);
         }
-        return { ...base, status: "pass", tool: step.name, result, outputHint, args };
+        return {
+          ...base,
+          status: "pass",
+          tool: step.name,
+          result,
+          outputHint,
+          args,
+          ...(warning !== undefined ? { warning } : {}),
+        };
       } catch (err) {
         // A gesture tool that consults the signal rejects when the run is
         // cancelled mid-dispatch. Per ABORTED_OUTCOME that is a skip, never a
@@ -3045,7 +3158,7 @@ function errMsg(err: unknown): string {
 }
 
 /**
- * The two rules on the shape of a flow_path string itself, apart from how it
+ * The two rules on the shape of an e2e_test_path string itself, apart from how it
  * reached us, so they are reported apart from the boundary gate — a caller
  * that did use the boundary must not be told to use the boundary. A host path
  * is checked as the string execute() will open; an upload's client spelling is
@@ -3058,7 +3171,7 @@ function assertFlowPathShape(flowPath: string): void {
   // against the tool server's working directory, which is not the caller's.
   // `argent flow list` prints relative paths, so this is the spelling an agent
   // is most likely to pass back.
-  const windows = windowsPathRefusal("flow_path", flowPath);
+  const windows = windowsPathRefusal("e2e_test_path", flowPath);
   if (windows) {
     throw new FailureError(windows, {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -3069,9 +3182,9 @@ function assertFlowPathShape(flowPath: string): void {
   }
   if (!path.isAbsolute(flowPath)) {
     throw new FailureError(
-      `Invalid flow_path "${flowPath}": flow paths must be absolute — a relative path ` +
+      `Invalid e2e_test_path "${flowPath}": e2e test paths must be absolute — a relative path ` +
         `is resolved against the tool server's working directory, not the caller's. Pass the ` +
-        `absolute path to the flow's YAML.`,
+        `absolute path to the e2e test's YAML.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_path_absolute",
@@ -3089,15 +3202,15 @@ function assertFlowPathShape(flowPath: string): void {
   // different files — or, when the directory chain is broken, slip through
   // canonicalFlowPath's verbatim fallback to fail later as a raw readFile
   // ENOENT on the unresolved spelling. Rejecting up front means every admitted
-  // flow_path has exactly one reading. The argent client rejects ".." segments
+  // e2e_test_path has exactly one reading. The argent client rejects ".." segments
   // before sending; only a direct MCP/HTTP caller can pass an unresolved
-  // flow_path.
+  // e2e_test_path.
   if (flowPath.split(/[\\/]+/).includes("..")) {
     throw new FailureError(
-      `Invalid flow_path "${flowPath}": flow paths must not contain ".." segments — ` +
+      `Invalid e2e_test_path "${flowPath}": e2e test paths must not contain ".." segments — ` +
         `a ".." after a symlinked directory can name a different file than the spelling ` +
         `suggests, and the argent client always sends fully resolved paths. Pass the fully ` +
-        `resolved absolute path to the flow's YAML.`,
+        `resolved absolute path to the e2e test's YAML.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_path_dotdot",
@@ -3109,7 +3222,7 @@ function assertFlowPathShape(flowPath: string): void {
 }
 
 /**
- * The flow name a flow_path carries — the basename minus `.yaml`, held to the
+ * The flow name an e2e_test_path carries — the basename minus `.yaml`, held to the
  * charset of a saved flow's name, since it keys the report, __baselines__/ and
  * --output. Judged on the client's spelling: over HTTP a host path and its
  * client spelling are one string, and for an upload the client's is the only
@@ -3127,9 +3240,9 @@ function flowNameOf(clientPath: string): string {
     // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
     const detail =
       clientExt.toLowerCase() === ".yaml"
-        ? `flow files must use the lowercase .yaml extension, not "${clientExt}".`
-        : `flow files must use the .yaml extension.`;
-    throw new FailureError(`Invalid flow_path "${clientPath}": ${detail}`, {
+        ? `e2e test files must use the lowercase .yaml extension, not "${clientExt}".`
+        : `e2e test files must use the .yaml extension.`;
+    throw new FailureError(`Invalid e2e_test_path "${clientPath}": ${detail}`, {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_path_extension",
       failure_area: "tool_server",
@@ -3145,7 +3258,7 @@ function flowNameOf(clientPath: string): string {
 }
 
 /**
- * The refusal of a `flow_path` whose basename is not in its directory's listing
+ * The refusal of an `e2e_test_path` whose basename is not in its directory's listing
  * as spelled. Thrown for the listing on this host ({@link resolveFlowSource})
  * and for the one on the client, which a linked run that composes reads from
  * the root's wire ({@link clientRootCanonical}), so one call fails alike on
@@ -3163,13 +3276,13 @@ function flowPathCasingError(
     spelling.state === "absent"
       ? `Pass the basename exactly as it appears on disk.`
       : spelling.addressable
-        ? `Pass flow_path with the on-disk basename "${spelling.actual}".`
-        : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — flow files must be lowercase .yaml.`;
+        ? `Pass e2e_test_path with the on-disk basename "${spelling.actual}".`
+        : `Rename "${spelling.actual}" to "${suppliedBase}" to run it — e2e test files must be lowercase .yaml.`;
   return new FailureError(
-    `Invalid flow_path "${clientPath}": the file must be named as it appears on disk — this ` +
+    `Invalid e2e_test_path "${clientPath}": the file must be named as it appears on disk — this ` +
       `filesystem matched "${suppliedBase}" case-insensitively` +
       (spelling.state === "case_folded" ? ` to "${spelling.actual}"` : "") +
-      `, so the flow name (which keys the report and __baselines__/) would be one no ` +
+      `, so the e2e test name (which keys the report and __baselines__/) would be one no ` +
       `directory entry carries. ${recovery}`,
     {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -3181,7 +3294,7 @@ function flowPathCasingError(
 }
 
 /**
- * Resolve the flow YAML source a tool reads. An explicit `flow_path` is accepted
+ * Resolve the flow YAML source a tool reads. An explicit `e2e_test_path` is accepted
  * in two shapes. An upload (`viaUpload`) is a temp file this process wrote from
  * the client's content; it runs under the client's spelling, and execute()
  * refuses it when its steps need the files beside it, which the upload does not
@@ -3190,15 +3303,15 @@ function flowPathCasingError(
  * matched the client-recorded stat (`statVerified`) — presence alone is
  * satisfiable by a hand-crafted stat-less wrapper, so it is not containment.
  *
- * With no `flow_path` or `flow_file`, derive the saved-flow path from
- * project_root + name. When `flow_file` is set it must be one of the two shapes
+ * With no `e2e_test_path` or `e2e_test_file`, derive the saved-flow path from
+ * project_root + name. When `e2e_test_file` is set it must be one of the two shapes
  * its file-input boundary legitimately produces: the exact
  * `${project_root}/.argent/flows/${name}.yaml` path (an unlinked client), or a
  * temp file THIS server materialized from uploaded content
  * (`fileInput.viaUpload` — a linked client). Anything else is rejected: the schema
- * marks `flow_file` internal, and honoring an arbitrary path would let a caller
+ * marks `e2e_test_file` internal, and honoring an arbitrary path would let a caller
  * execute (and, under --update-baselines, write PNGs next to) any YAML on the
- * host through a parameter no caller is supposed to set — `flow_path`, gated on
+ * host through a parameter no caller is supposed to set — `e2e_test_path`, gated on
  * the boundary above, is the one legitimate spelling for a file outside the
  * flows dir. Either source's flow name must then appear in that flow's own
  * directory listing byte-for-byte — a case-insensitive filesystem opens files
@@ -3216,17 +3329,17 @@ export async function resolveFlowSource(
   params: {
     name?: string;
     project_root: string;
-    flow_file?: string;
-    flow_path?: string;
+    e2e_test_file?: string;
+    e2e_test_path?: string;
   },
   fileInput?: ResolvedFileInput,
   flowPathInput?: ResolvedFileInput
-): Promise<{ filePath: string; flowName: string; viaUpload: boolean }> {
+): Promise<{ filePath: string; flowName: string; viaUpload: boolean; shadowed?: string }> {
   // The schemas' superRefine already enforces this for flow-execute and
   // flow-read-prerequisite; this copy covers direct execute() callers (tests,
   // in-process invocations) and keeps the params.name! below sound.
-  if ((params.name === undefined) === (params.flow_path === undefined)) {
-    throw new FailureError("Pass exactly one flow source: name or flow_path.", {
+  if ((params.name === undefined) === (params.e2e_test_path === undefined)) {
+    throw new FailureError("Pass exactly one e2e test source: name or e2e_test_path.", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_source",
       failure_area: "tool_server",
@@ -3237,14 +3350,14 @@ export async function resolveFlowSource(
   // Before either branch, so both are covered. `getFlowPath` validates the root
   // on the `name` branch only, and deleting `setActiveProjectRoot` — which ran
   // here, unconditionally, and whose body is today's assertValidProjectRoot —
-  // removed the check on the `flow_path` branch entirely, letting relative and
+  // removed the check on the `e2e_test_path` branch entirely, letting relative and
   // ".."-bearing roots through. That branch is no longer free of reads either:
   // ExecState.projectRoot carries it to a script: step as the child's
   // working directory, so this guard is what keeps a relative or
   // ".."-bearing root from becoming a script's cwd.
   assertValidProjectRoot(params.project_root);
 
-  if (params.flow_path !== undefined) {
+  if (params.e2e_test_path !== undefined) {
     // An upload is the client's own file, materialized by this process into a
     // temp directory it created (see file-inputs.ts): no host file is opened
     // on the caller's say-so, so the boundary gate below has nothing to
@@ -3260,7 +3373,7 @@ export async function resolveFlowSource(
     if (flowPathInput?.viaUpload) {
       const clientPath = flowPathInput.clientPath;
       assertFlowPathShape(clientPath);
-      return { filePath: params.flow_path, flowName: flowNameOf(clientPath), viaUpload: true };
+      return { filePath: params.e2e_test_path, flowName: flowNameOf(clientPath), viaUpload: true };
     }
 
     // The last conjunct is not containment — over HTTP both sides come from the
@@ -3270,12 +3383,12 @@ export async function resolveFlowSource(
     const isVerifiedHostPath =
       flowPathInput?.presentOnHost === true &&
       flowPathInput.statVerified === true &&
-      path.resolve(params.flow_path) === path.resolve(flowPathInput.clientPath);
+      path.resolve(params.e2e_test_path) === path.resolve(flowPathInput.clientPath);
 
     if (!isVerifiedHostPath) {
       throw new FailureError(
-        `Invalid flow_path "${params.flow_path}": explicit flow paths must be supplied through ` +
-          `the flow_path file-input boundary. Pass the client-local path and let the argent ` +
+        `Invalid e2e_test_path "${params.e2e_test_path}": explicit e2e test paths must be supplied through ` +
+          `the e2e_test_path file-input boundary. Pass the client-local path and let the argent ` +
           `client resolve it.`,
         {
           error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -3286,7 +3399,7 @@ export async function resolveFlowSource(
       );
     }
 
-    assertFlowPathShape(params.flow_path);
+    assertFlowPathShape(params.e2e_test_path);
     const clientPath = flowPathInput!.clientPath;
     const flowName = flowNameOf(clientPath);
 
@@ -3301,17 +3414,18 @@ export async function resolveFlowSource(
     // with the boundary's stat vouching for the file, so a listing that lacks it
     // entirely is the same phantom spelling.
     const spelling = await classifyOnDiskSpelling(
-      path.dirname(params.flow_path),
+      path.dirname(params.e2e_test_path),
       path.basename(clientPath)
     );
     if (spelling.state !== "listed") throw flowPathCasingError(clientPath, spelling);
 
-    return { filePath: params.flow_path, flowName, viaUpload: false };
+    return { filePath: params.e2e_test_path, flowName, viaUpload: false };
   }
 
   const flowName = params.name!;
   assertSafeFlowName(flowName);
-  const expected = getFlowPath(params.project_root, flowName);
+  // Where the saved test can be, `.argent/e2e` first: both pass the gates below.
+  const candidates = e2eFileCandidates(params.project_root, flowName);
   // A path the boundary materialized from uploaded content is a fresh temp file
   // this process itself created (see file-inputs.ts) — trusted as-is, and
   // returned ahead of the on-disk-spelling gate below deliberately: the only
@@ -3321,22 +3435,24 @@ export async function resolveFlowSource(
   // flow that composes reports on in the root's wire (clientRootCanonical).
   // That temp dir is also what a run takes flowsDir
   // from, where `run:` targets and `__baselines__/` are not — the same contract
-  // as an uploaded flow_path above: a self-contained flow runs; execute()
+  // as an uploaded e2e_test_path above: a self-contained flow runs; execute()
   // refuses one whose steps use files on the client before any step, naming
   // those steps rather than a missing fragment or baseline, and runs one that
   // composes from the fragments the client sent with it.
-  if (params.flow_file && fileInput?.viaUpload)
-    return { filePath: params.flow_file, flowName, viaUpload: true };
+  if (params.e2e_test_file && fileInput?.viaUpload)
+    return { filePath: params.e2e_test_file, flowName, viaUpload: true };
   if (
-    params.flow_file &&
-    (!path.isAbsolute(params.flow_file) ||
-      params.flow_file.split(/[\\/]+/).includes("..") ||
-      path.resolve(params.flow_file) !== path.resolve(expected))
+    params.e2e_test_file &&
+    (!path.isAbsolute(params.e2e_test_file) ||
+      params.e2e_test_file.split(/[\\/]+/).includes("..") ||
+      !candidates.some(
+        (candidate) => path.resolve(candidate) === path.resolve(params.e2e_test_file!)
+      ))
   ) {
     throw new FailureError(
-      `Invalid flow_file "${params.flow_file}": it must resolve to the flow's path under the ` +
-        `project root ("${expected}"). flow_file is internal — leave it unset and pass ` +
-        `project_root + name.`,
+      `Invalid e2e_test_file "${params.e2e_test_file}": it must resolve to the e2e test's path under the ` +
+        `project root ("${candidates.join('" or "')}"). e2e_test_file is internal — leave it unset ` +
+        `and pass project_root + name.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_file_containment",
@@ -3346,7 +3462,7 @@ export async function resolveFlowSource(
     );
   }
 
-  // Same invariant as the flow_path branch, on the route every remote/MCP
+  // Same invariant as the e2e_test_path branch, on the route every remote/MCP
   // caller takes: nothing above consulted the directory, so on a
   // case-insensitive filesystem `name: "Snap"` opens a file really named
   // snap.yaml and then keys the report and __baselines__/ under "Snap" — a
@@ -3354,10 +3470,28 @@ export async function resolveFlowSource(
   // on a case-sensitive volume. Only a case-folded match refuses: a name that
   // matches nothing at all is an ordinary missing flow, and the read that
   // follows says so far better than a casing complaint would.
-  const spelling = await classifyOnDiskSpelling(path.dirname(expected), `${flowName}.yaml`);
-  if (spelling.state === "case_folded") throw flowNameCasingError(flowName, spelling);
-
+  //
   // Either the boundary's own path for this flow (containment-checked above,
-  // so it resolves to `expected`) or `expected` itself.
-  return { filePath: params.flow_file || expected, flowName, viaUpload: false };
+  // so it is one of the candidates, the one the client found first) or the
+  // first candidate that exists here, `.argent/e2e` before `.argent/flows`.
+  const picked = await pickE2eFile(candidates);
+  const filePath = params.e2e_test_file || picked.path;
+  // When no candidate exists byte-for-byte (always the case on a case-sensitive
+  // filesystem for a mis-cased name), list every candidate directory, or a
+  // case-folded entry in `.argent/flows` would go unseen.
+  const spellingDirs =
+    params.e2e_test_file || picked.exists
+      ? [path.dirname(filePath)]
+      : candidates.map((candidate) => path.dirname(candidate));
+  for (const dir of spellingDirs) {
+    const spelling = await classifyOnDiskSpelling(dir, `${flowName}.yaml`);
+    if (spelling.state === "case_folded") throw flowNameCasingError(flowName, spelling);
+  }
+
+  // A legacy test of the same name is hidden by this one: say so.
+  const shadowed =
+    picked.shadowed !== undefined && path.resolve(filePath) === path.resolve(picked.path)
+      ? picked.shadowed
+      : undefined;
+  return { filePath, flowName, viaUpload: false, ...(shadowed ? { shadowed } : {}) };
 }

@@ -56,7 +56,7 @@ function writeJsonFile(filePath: string, data: unknown): void {
 const claude = getAdapterByName("Claude Code")!;
 const cursor = getAdapterByName("Cursor")!;
 const vscode = getAdapterByName("VS Code")!;
-const windsurf = getAdapterByName("Windsurf")!;
+const windsurf = getAdapterByName("Devin Desktop")!;
 
 const ARGENT_GLOBAL_ENTRY = { type: "stdio", command: "argent", args: ["mcp"] };
 
