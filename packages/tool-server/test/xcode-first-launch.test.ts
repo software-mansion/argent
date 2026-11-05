@@ -555,6 +555,19 @@ describe("xcodeInstallInstruction", () => {
     );
   });
 
+  // Each reaches its own candidate of the developer directory, not the fallback.
+  it.each([
+    ["the app bundle", () => path.relative(process.cwd(), path.join(root, "Xcode.app"))],
+    ["the folder that holds Xcode.app", () => path.relative(process.cwd(), root)],
+  ])("names the Xcode app for a relative DEVELOPER_DIR naming %s", (_, developerDir) => {
+    fs.mkdirSync(devDir, { recursive: true });
+    process.env.DEVELOPER_DIR = developerDir();
+    expect(xcodeInstallInstruction()).toBe(
+      `open the Xcode at ${path.join(root, "Xcode.app")} once, ` +
+        `or run \`sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch\``
+    );
+  });
+
   it("falls back to the bare command when no developer directory resolves", () => {
     delete process.env.DEVELOPER_DIR;
     __setXcodeLocationsForTests({
