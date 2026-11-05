@@ -85,12 +85,19 @@ import {
   __resetSimulatorRuntimeKindCacheForTesting,
   cacheSimulatorRuntimeKind,
   isFoldableDeviceType,
+  listIosSimulators,
 } from "../src/utils/ios-devices";
+import {
+  __resetExternalDeviceCacheForTesting,
+  makeExternalId,
+} from "../src/utils/external-devices";
 import {
   simulatorServerBlueprint,
   simulatorServerRef,
   type SimulatorServerApi,
 } from "../src/blueprints/simulator-server";
+import { tvControlBlueprint } from "../src/blueprints/tv-control";
+import { createTvRemoteTool } from "../src/tools/tv-remote";
 import { executeScreenshotDiffTool } from "../src/tools/screenshot-diff";
 import { summaryReportsDimensionMismatch } from "../src/tools/screenshot-diff/screenshot-diff-summary";
 import { createAwaitUiElementTool } from "../src/tools/await-ui-element";
@@ -952,6 +959,85 @@ describe("a simulator-server while Xcode's install is pending", () => {
       await afterInstall(await tap(server, udid));
     }
   );
+
+  // A provider's simulator needs no simctl for a tap, but its type is read
+  // under its `ext:` id, which no listing records.
+  it("refuses a provider's simulator listed before the install went pending, and taps it after the install", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-first-launch-provider-"));
+    const descriptor = path.join(dir, "acme.json");
+    fs.writeFileSync(
+      descriptor,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["simctl", "simulator-server"],
+            kind: "simulator",
+            name: "iPhone 17",
+            nativeId: SIMS.iphone,
+            platform: "ios",
+            simulatorServer: {
+              apiUrl: "http://127.0.0.1:61910",
+              streamUrl: "http://127.0.0.1:61911",
+            },
+            state: "Booted",
+          },
+        ],
+        id: "acme-3f2a9c",
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+    const savedDisable = process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptor;
+    __resetExternalDeviceCacheForTesting();
+    try {
+      const id = makeExternalId("acme-3f2a9c", SIMS.iphone);
+      const server = app();
+      // What list-devices runs.
+      await listIosSimulators();
+      pending.simctl = true;
+      execFileMock.mockClear();
+
+      const refused = await tap(server, id);
+      expect(refused.status).toBe(424);
+      expect(refused.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(simulatorServersSpawned()).toBe(0);
+      expect(xcrunCalls()).toEqual([]);
+
+      pending.simctl = false;
+      expect((await tap(server, id)).status).toBe(200);
+      expect(simulatorServersSpawned()).toBe(0);
+    } finally {
+      delete process.env.ARGENT_DEVICE_PROVIDERS;
+      if (savedDisable === undefined) delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+      else process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = savedDisable;
+      __resetExternalDeviceCacheForTesting();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The tv-control service reads the type too, before it starts the Apple TV's
+  // daemons.
+  it("answers the reason to a tv-remote call on an Apple TV whose type it has not read", async () => {
+    // Nothing may reach a real process here.
+    spawnMock.mockImplementation(() => {
+      throw new Error("no process may start here");
+    });
+    registry = new Registry();
+    registry.registerBlueprint(tvControlBlueprint);
+    registry.registerTool(createTvRemoteTool(registry) as never);
+    pending.simctl = true;
+
+    const res = await request(createHttpApp(registry).app)
+      .post("/tools/tv-remote")
+      .send({ udid: SIMS.tv, button: "select" });
+
+    expect(res.status).toBe(424);
+    expect(res.body.error).toMatch(/-runFirstLaunch/);
+    expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+    expect(xcrunCalls()).toEqual([]);
+  });
 
   it("keeps a simulator-server that is already up working", async () => {
     const server = app();

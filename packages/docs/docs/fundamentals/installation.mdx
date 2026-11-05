@@ -97,7 +97,7 @@ If a `simctl` call starts the install:
 - `list-devices` does not show local iOS simulators. Its `hint` field gives the reason to the agent.
 - The tools that need `simctl` fail. Most of them return an error that gives the same reason to the agent.
 
-Argent reads the type of a simulator with `simctl`. Argent must know the type to find an Apple TV simulator or a foldable iOS simulator. Thus, taps and screenshots also fail on a simulator if Argent does not know its type yet. This occurs, for example, when Argent starts after the Xcode update.
+Argent reads the type of a simulator with `simctl`. Argent must know the type to find an Apple TV simulator or a foldable iOS simulator. Thus, the tools that send input to a simulator or capture its screen also fail if Argent does not know its type yet. This occurs, for example, when Argent starts after the Xcode update.
 
 If a `devicectl` call starts the install:
 
