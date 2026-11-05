@@ -249,6 +249,9 @@ describe("fill page script", () => {
     ["a capital sharp s", EMAIL, "a@ẞü.de", "a@xn--ss-yka.de"],
     ["a final sigma", EMAIL, "a@ς.gr", "a@xn--4xa.gr"],
     ["a zero-width joiner", EMAIL, "a@a\u200dü.de", "a@xn--a-eha.de"],
+    ["a zero-width non-joiner", EMAIL, "a@b\u200cc.de", "a@bc.de"],
+    ["a numeric last label", EMAIL, "a@ü.123", "a@xn--tda.123"],
+    ["a one-digit last label", EMAIL, "a@ü.1", "a@xn--tda.1"],
     ["two IDN addresses", EMAILS, "a@bücher.de,b@ąę.pl", "a@xn--bcher-kva.de,b@xn--2da4b.pl"],
     ["an IDN address after an uppercase ASCII one", EMAILS, "A@B.CO,c@ü.de", "A@B.CO,c@xn--tda.de"],
     [
@@ -274,6 +277,7 @@ describe("fill page script", () => {
     ["an email input holding another domain", EMAIL, "a@ü.de", "a@xn--zz.de"],
     ["an email input holding another local part", EMAIL, "a@ü.de", "b@xn--tda.de"],
     ["an email input holding an ASCII domain lowercased", EMAIL, "a@B.CO", "a@b.co"],
+    ["an email input holding a text without @ in ASCII", EMAIL, "ü", "xn--tda"],
     ["a single email input holding one of two addresses", EMAIL, "a@ü.de,b@ü.de", "a@xn--tda.de"],
     [
       "a multiple email input holding one of two addresses",
