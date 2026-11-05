@@ -122,7 +122,7 @@ A provider can offer an iPhone that is cabled to a different computer. The provi
 }
 ```
 
-`usbmuxd` is `host:port` for a TCP relay, the form that libimobiledevice, pymobiledevice3 and go-ios read from `USBMUXD_SOCKET_ADDRESS`, or an absolute unix socket path. Argent speaks the usbmuxd protocol to the endpoint as it does to `/var/run/usbmuxd` on the Mac: the pairing record comes from the usbmuxd that owns the cable, so the phone needs no pairing with the Mac of the agent and never appears in Xcode. The [physical iOS devices](/docs/features/physical-ios-devices) page lists what works on such a phone and what the Mac needs.
+`usbmuxd` is `host:port` for a TCP relay, the form that libimobiledevice, pymobiledevice3 and go-ios read from `USBMUXD_SOCKET_ADDRESS`, or an absolute unix socket path. Argent speaks the usbmuxd protocol to the endpoint as it does to `/var/run/usbmuxd` on the Mac: the pairing record comes from the usbmuxd that owns the cable, so the phone needs no pairing with the Mac of the agent and never appears in Xcode. The [physical iOS devices](/docs/features/physical-ios-devices#an-iphone-on-another-machine) page lists what works on such a phone and what the Mac needs.
 
 Argent examines the booted simulators and injects its own native agent into them. A provider that boots a simulator can publish its descriptor a moment later. Argent can inject in this interval.
 

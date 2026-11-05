@@ -44,6 +44,18 @@ The agent launches, restarts and reinstalls apps, passes launch arguments to an 
 
 A web URL opens in Safari, not in the app that owns the link. The agent names the app to hand it the URL. For any other URL scheme, the agent names the app that receives the URL.
 
+## An iPhone on another machine
+
+A [device provider](/docs/reference/device-providers#a-physical-iphone-on-another-machine) can offer an iPhone that is cabled to a different computer by relaying its usbmuxd socket to a local port. The phone appears in the device list as an external device, with the name and the `ext:` id of the provider, and the agent drives it with the same tools.
+
+The runner reaches such a phone through the relay instead of through Xcode:
+
+- Argent builds and signs the runner as for a cabled phone, so the Mac still needs Xcode and a certificate. The team must know the UDID of the phone: Xcode registers a device only when it sees it, which it never does through a relay, so add the UDID under Devices on developer.apple.com, or cable the phone to a Mac with Xcode once.
+- Argent launches the runner, installs apps and launches them with [go-ios](https://github.com/danielpaulus/go-ios). Install it with `npm i -g go-ios` so `ios` is on PATH, or set `ARGENT_GO_IOS` to the binary in the environment of the tool-server. go-ios builds the tunnel that iOS 17 and later require in user space; nothing needs root.
+- The Xcode device window and `devicectl` never show a relayed phone. Argent does not need them for it.
+
+Everything in [What works](#what-works) applies, except `open-url`: go-ios cannot hand a URL to an app at launch, so the agent launches the app and navigates inside it. A relayed phone that the provider withdraws fails the next call with a message that names the provider.
+
 ## Troubleshooting
 
 | Symptom                                           | Action                                                                                               |

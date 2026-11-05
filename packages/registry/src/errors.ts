@@ -42,6 +42,7 @@ export const FAILURE_COMMANDS = [
   "unknown",
   "devicectl",
   "xcodebuild",
+  "go_ios",
 ] as const;
 
 export type FailureCommand = (typeof FAILURE_COMMANDS)[number];
