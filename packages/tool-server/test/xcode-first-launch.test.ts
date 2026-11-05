@@ -20,6 +20,12 @@ import {
 // The suite-wide stub pins the answer; this file tests the real check.
 vi.unmock("../src/utils/xcode-first-launch");
 
+// Passed through, so a test can tell whether the check spawned anything.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
+
 const realPlatform = process.platform;
 const realDeveloperDir = process.env.DEVELOPER_DIR;
 let root: string;
@@ -66,6 +72,12 @@ function installFramework(version: string): void {
       `\t<key>CFBundleIdentifier</key>\n\t<string>com.apple.CoreSimulator</string>\n` +
       `\t<key>CFBundleVersion</key>\n\t<string>${version}</string>\n</dict>\n</plist>\n`
   );
+}
+
+/** Rewrites the framework plist as a binary one, as Xcode 16 installs CoreSimulator's. */
+function convertFrameworkToBinary(): void {
+  execFileSync("/usr/bin/plutil", ["-convert", "binary1", plistPath]);
+  expect(fs.readFileSync(plistPath).toString("latin1", 0, 6)).toBe("bplist");
 }
 
 beforeEach(() => {
@@ -153,6 +165,44 @@ describe("xcodeFirstLaunchPending", () => {
     expect(xcodeFirstLaunchPending()).toBe(false);
     writeWrapper(olderRuleWrapper("1010.19", plistPath));
     expect(xcodeFirstLaunchPending()).toBe(true);
+  });
+
+  it("reads an XML plist without spawning anything, with a version or without one", () => {
+    writeWrapper(exactRuleWrapper("1175.5", plistPath));
+    installFramework("1174.21");
+    vi.mocked(execFileSync).mockClear();
+    expect(xcodeFirstLaunchPending()).toBe(true);
+    fs.writeFileSync(plistPath, "<plist><dict></dict></plist>");
+    expect(xcodeFirstLaunchPending()).toBe(false);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  // The wrapper's PlistBuddy reads a binary plist too, and an Xcode update leaves
+  // Xcode 16's binary CoreSimulator plist in place until the install.
+  describe.skipIf(realPlatform !== "darwin")("with a binary framework plist", () => {
+    it.each([
+      ["older", "1010.15", true],
+      ["at the expected version", "1174.21", false],
+      ["newer", "1175.5", false],
+    ] as const)(
+      "answers as for XML when the framework is %s, under either check",
+      (_, version, pending) => {
+        for (const wrapper of [olderRuleWrapper, exactRuleWrapper]) {
+          writeWrapper(wrapper("1174.21", plistPath));
+          installFramework(version);
+          expect(xcodeFirstLaunchPending(), `${wrapper.name}, XML`).toBe(pending);
+          convertFrameworkToBinary();
+          expect(xcodeFirstLaunchPending(), `${wrapper.name}, binary`).toBe(pending);
+        }
+      }
+    );
+
+    it("cannot tell from a corrupt one", () => {
+      // With the != check a corrupt plist read as missing would read as pending.
+      writeWrapper(exactRuleWrapper("1175.5", plistPath));
+      fs.writeFileSync(plistPath, "bplist00 but not a plist");
+      expect(xcodeFirstLaunchPending()).toBe(false);
+    });
   });
 
   it("accepts DEVELOPER_DIR naming the app bundle rather than its Developer directory", () => {
@@ -506,6 +556,19 @@ describe("xcodeInstallInstruction", () => {
     );
   });
 
+  // Each reaches its own candidate of the developer directory, not the fallback.
+  it.each([
+    ["the app bundle", () => path.relative(process.cwd(), path.join(root, "Xcode.app"))],
+    ["the folder that holds Xcode.app", () => path.relative(process.cwd(), root)],
+  ])("names the Xcode app for a relative DEVELOPER_DIR naming %s", (_, developerDir) => {
+    fs.mkdirSync(devDir, { recursive: true });
+    process.env.DEVELOPER_DIR = developerDir();
+    expect(xcodeInstallInstruction()).toBe(
+      `open the Xcode at ${path.join(root, "Xcode.app")} once, ` +
+        `or run \`sudo ${path.join(devDir, "usr", "bin", "xcodebuild")} -runFirstLaunch\``
+    );
+  });
+
   it("falls back to the bare command when no developer directory resolves", () => {
     delete process.env.DEVELOPER_DIR;
     __setXcodeLocationsForTests({
@@ -641,6 +704,9 @@ describe.skipIf(realWrappers.length === 0)("agrees with the wrappers installed o
       if (version === null) fs.rmSync(plistPath, { force: true });
       else installFramework(version);
       expect(xcodeFirstLaunchPending(), state).toBe(wrapperInstalls());
+      if (version === null) continue;
+      convertFrameworkToBinary();
+      expect(xcodeFirstLaunchPending(), `${state}, binary`).toBe(wrapperInstalls());
     }
 
     // A newer framework does not read as pending even where the wrapper runs the install.
