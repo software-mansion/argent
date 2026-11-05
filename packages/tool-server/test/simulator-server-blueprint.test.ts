@@ -13,7 +13,7 @@ import { toSimulatorNetworkError } from "../src/utils/format-error";
 // specific (argv, stdio).
 
 const spawnMock = vi.fn();
-const ensureAutomationEnabledMock = vi.fn();
+const clearAutomationEnabledOrWarnMock = vi.fn();
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -23,8 +23,8 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-vi.mock("../src/blueprints/ax-service", () => ({
-  ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
+vi.mock("../src/utils/ax-prefs", () => ({
+  clearAutomationEnabledOrWarn: (...args: unknown[]) => clearAutomationEnabledOrWarnMock(...args),
 }));
 
 // `android.sdkRoot` reaches the binary as ANDROID_HOME; stub the config read
@@ -52,8 +52,9 @@ vi.mock("@argent/native-devtools-ios", () => ({
 // iOS path (false) so these spawn/stdio tests stay hermetic — no real `simctl`,
 // which would otherwise hang the fake-timer test waiting on a child process.
 const isFoldableSimulatorMock = vi.fn(async (_udid: string) => false);
+const isTvOsSimulatorMock = vi.fn(async (_udid: string) => false);
 vi.mock("../src/utils/ios-devices", () => ({
-  isTvOsSimulator: vi.fn(async () => false),
+  isTvOsSimulator: (udid: string) => isTvOsSimulatorMock(udid),
   // A foldable's factory probes the server for its panels; every case here is
   // a plain device unless it flips this.
   isFoldableSimulator: (udid: string) => isFoldableSimulatorMock(udid),
@@ -113,7 +114,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
   beforeEach(async () => {
     spawnMock.mockReset();
     androidSdkRootMock.mockReturnValue(null);
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(false);
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
     // shell out to `command -v adb` — CI Linux runners don't have adb on PATH
@@ -155,9 +156,21 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(instance.api.apiUrl).toBe("http://127.0.0.1:55555");
     expect(typeof instance.api.pressKey).toBe("function");
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(udid);
 
     await instance.dispose();
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a tvOS simulator without clearing tv-control's AutomationEnabled", async () => {
+    isTvOsSimulatorMock.mockResolvedValueOnce(true);
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const device = iosDevice("66666666-2222-3333-4444-555555555555");
+
+    await expect(simulatorServerBlueprint.factory({}, device, { device })).rejects.toThrow(/tvOS/);
+
+    expect(clearAutomationEnabledOrWarnMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("passes --device-set for an iOS device from an additional CoreSimulator set", async () => {
@@ -529,7 +542,7 @@ describe("simulatorServerBlueprint.factory — a foldable simulator's panels", (
 
   beforeEach(async () => {
     spawnMock.mockReset();
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     isFoldableSimulatorMock.mockReset().mockResolvedValue(true);
     fetchMock.mockReset();
     globalThis.fetch = fetchMock as unknown as typeof fetch;

@@ -177,6 +177,8 @@ still be starting.</flag:harmonyos>
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
 On a physical iOS device, launch-app \`com.apple.springboard\` first to read system dialogs.
+On a local iOS simulator a text field shows its placeholder as its value, with no label, so an
+empty field reads like one holding that text; check a screenshot to tell them apart.
 
 Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree, one
 line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates

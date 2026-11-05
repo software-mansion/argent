@@ -42,10 +42,11 @@ vi.mock("node:fs", async () => {
 
 // Mock the AX-bypass helpers at the module boundary so this file asserts
 // boot-device's dispatch (state probe → pre-boot if shutdown → boot →
-// ensureAutomationEnabled fallback → native-devtools → open) without pulling
+// clearAutomationEnabledOrWarn → native-devtools → open) without pulling
 // plist/kickstart internals into the exec-call sequence.
 const listIosSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
+const clearAutomationEnabledOrWarnMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
 const isEntitlementBypassActiveMock = vi.fn();
 
@@ -53,8 +54,9 @@ vi.mock("../src/utils/ios-devices", () => ({
   listIosSimulators: (...args: unknown[]) => listIosSimulatorsMock(...args),
 }));
 
-vi.mock("../src/blueprints/ax-service", () => ({
+vi.mock("../src/utils/ax-prefs", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
+  clearAutomationEnabledOrWarn: (...args: unknown[]) => clearAutomationEnabledOrWarnMock(...args),
   ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
@@ -94,6 +96,7 @@ describe("boot-device — iOS path", () => {
       { udid: "33333333-3333-3333-3333-333333333333", state: "Shutdown" },
     ]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
@@ -120,18 +123,22 @@ describe("boot-device — iOS path", () => {
     });
 
     // Pre-boot write must precede `simctl boot` so SB inherits the bypass at
-    // first init; ensureAutomationEnabled then runs as a defense-in-depth
-    // no-op (pref already cached, kickstart branch skipped).
+    // first init.
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledTimes(1);
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111"
+      "11111111-1111-1111-1111-111111111111",
+      { isTvOs: false }
     );
     expect(setAccessibilityPrefsPreBootMock.mock.invocationCallOrder[0]).toBeLessThan(
       mockExecFile.mock.invocationCallOrder[0]
     );
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledTimes(1);
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledTimes(1);
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(
       "11111111-1111-1111-1111-111111111111"
+    );
+    const bootstatusCallOrder = mockExecFile.mock.invocationCallOrder[1];
+    expect(clearAutomationEnabledOrWarnMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      bootstatusCallOrder
     );
 
     expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
@@ -307,7 +314,7 @@ describe("boot-device — iOS path", () => {
     });
   });
 
-  it("skips pre-boot plist write when the sim is already Booted and falls back to ensureAutomationEnabled", async () => {
+  it("skips pre-boot plist write when the sim is already Booted and still clears AutomationEnabled", async () => {
     const resolveService = vi.fn(async () => ({
       getInitFailure: () => null,
       reverifyEnv: async () => {},
@@ -318,17 +325,16 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
 
     // Already-Booted sim: in-sim cfprefsd would overwrite the host write, so
-    // skip it. ensureAutomationEnabled writes prefs best-effort (no kickstart).
+    // skip it.
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(
       "22222222-2222-2222-2222-222222222222"
     );
   });
 
-  it("still runs the fallback ensureAutomationEnabled when the state probe fails", async () => {
+  it("still clears AutomationEnabled when the state probe fails", async () => {
     // listIosSimulators returns [] on xcrun failure / unknown udid; boot must
-    // not block on the probe — fall through to ensureAutomationEnabled which
-    // writes prefs best-effort.
+    // not block on the probe.
     listIosSimulatorsMock.mockResolvedValueOnce([]);
 
     const resolveService = vi.fn(async () => ({
@@ -341,14 +347,13 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: "44444444-4444-4444-4444-444444444444" });
 
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalledWith(
       "44444444-4444-4444-4444-444444444444"
     );
   });
 
   it("does not block boot on a pre-boot plist write failure", async () => {
-    // plutil missing / data container read-only: log and continue;
-    // ensureAutomationEnabled writes prefs best-effort post-boot.
+    // plutil missing / data container read-only: log and continue.
     setAccessibilityPrefsPreBootMock.mockRejectedValueOnce(new Error("plutil missing"));
 
     const resolveService = vi.fn(async () => ({
@@ -366,7 +371,7 @@ describe("boot-device — iOS path", () => {
       booted: true,
     });
 
-    expect(ensureAutomationEnabledMock).toHaveBeenCalled();
+    expect(clearAutomationEnabledOrWarnMock).toHaveBeenCalled();
   });
 
   it("returns a structured init_failed result when native-devtools has given up", async () => {
@@ -450,7 +455,8 @@ describe("boot-device — iOS path", () => {
     });
 
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
-      "22222222-2222-2222-2222-222222222222"
+      "22222222-2222-2222-2222-222222222222",
+      { isTvOs: false }
     );
     const execCalls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
     expect(execCalls[0]).toEqual([
@@ -504,6 +510,24 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: TV_UDID });
 
     expect(disposeService).toHaveBeenCalledWith(`TvControl:${TV_UDID}`);
+    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(TV_UDID, { isTvOs: true });
+  });
+
+  it("writes AutomationEnabled on a tvOS sim instead of clearing it", async () => {
+    listIosSimulatorsMock.mockResolvedValueOnce([
+      { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
+    ]);
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: TV_UDID });
+
+    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(TV_UDID);
+    expect(clearAutomationEnabledOrWarnMock).not.toHaveBeenCalled();
   });
 
   it("disposes the cached TvControl service on a tvOS force reboot", async () => {

@@ -21,7 +21,7 @@ import {
   simctlTargetForWithdrawal,
 } from "./ios-device-sets";
 import { isTvOsSimulator } from "./ios-devices";
-import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
+import { clearAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
   proxyStart as simRemoteProxyStart,
   proxyStop as simRemoteProxyStop,
@@ -573,7 +573,7 @@ export const localIosHost: IosHost = {
   listRunningBundleIds: listRunningUIKitApplicationBundleIds,
   inspectRunningApp: inspectRunningAppLocal,
   async bootstrapAx(udid) {
-    await ensureAutomationEnabled(udid);
+    await clearAutomationEnabled(udid);
     return { entitlementBypassActive: await isEntitlementBypassActive(udid) };
   },
   spawnAxDaemon: spawnAxDaemonLocal,
@@ -581,7 +581,12 @@ export const localIosHost: IosHost = {
   async stopProxy() {},
 };
 
-/** Accessibility `defaults` keys (all `-bool true`) that describe-driven tools need. */
+/**
+ * Accessibility `defaults` keys (all `-bool true`) written on cloud sims.
+ * `AutomationEnabled` makes UIKit label a text field with its placeholder;
+ * local sims leave it out to keep Full Keyboard Access working
+ * ({@linkcode clearAutomationEnabled}).
+ */
 const ACCESSIBILITY_DEFAULT_FLAGS = [
   "AutomationEnabled",
   "AccessibilityEnabled",
@@ -608,9 +613,8 @@ export const remoteIosHost: IosHost = {
     const { stdout } = await simRemoteSpawn(udid, { args: ["launchctl", "list"] });
     return { running: parseUIKitApplicationJobs(stdout).has(bundleId), process: null };
   },
-  // The same accessibility `defaults write`s the local host performs, routed
-  // through the remote generic spawn. The entitlement-bypass plist is assumed
-  // active on cloud sims.
+  // Accessibility `defaults write`s routed through the remote generic spawn.
+  // The entitlement-bypass plist is assumed active on cloud sims.
   async bootstrapAx(udid) {
     for (const flag of ACCESSIBILITY_DEFAULT_FLAGS) {
       await simRemoteSpawn(udid, {
