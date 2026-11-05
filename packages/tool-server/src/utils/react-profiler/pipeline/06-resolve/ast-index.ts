@@ -243,7 +243,11 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
       continue;
     }
 
-    const isTsxFile = file.endsWith(".tsx") || file.endsWith(".jsx");
+    // JSX is common in plain .js files (an Expo App.js); the TypeScript grammar
+    // fails at the first tag and drops every component after it. TSX parses all
+    // of JavaScript, so only .ts, where `<T>value` casts conflict with JSX, keeps
+    // the TypeScript grammar.
+    const isTsxFile = file.endsWith(".tsx") || file.endsWith(".jsx") || file.endsWith(".js");
     const language = isTsxFile ? tsxLang : tsLang;
 
     let tree: { rootNode: TreeSitterNode };

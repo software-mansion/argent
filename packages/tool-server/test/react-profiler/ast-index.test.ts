@@ -49,6 +49,26 @@ describe("buildAstIndexWithDiagnostics", () => {
     expect(res.index.get("Baz")?.line).toBe(5);
   });
 
+  it("indexes every component of a .js file with JSX, not just those before the first tag", async () => {
+    // Expo's App.js: with the TypeScript grammar the parse broke at the first JSX
+    // tag, so only components declared above it were indexed.
+    const dir = makeTempDir("ast-index-js-");
+    writeFileSync(
+      join(dir, "App.js"),
+      [
+        `function Row({ now }) { return <Text>{now}</Text>; }`,
+        `function Header({ now }) { return <Text>{now}</Text>; }`,
+        `const Screen = () => <View><Header now={1} /><Row now={1} /></View>;`,
+        `export default function App() { return <Screen />; }`,
+        ``,
+      ].join("\n")
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()].sort()).toEqual(["App", "Header", "Row", "Screen"]);
+  });
+
   it("indexes memo()/forwardRef()/React.memo()/nested-wrapped components", async () => {
     // Regression: wrapped components are declared `const X = memo(...)`, whose
     // value node is a call_expression (not arrow/function), so they were missed
