@@ -654,6 +654,36 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       agent.destroy();
     }
   );
+
+  // Only the app asked about may skip the refusal: another app's socket says nothing about it.
+  it.each(PRECHECKED_READS)(
+    "%s answers the refusal for an app that is not connected while another app is",
+    async (id, extra) => {
+      const device: DeviceInfo = { ...SIM, id: processScopedUdid("-1523-4000-8000-000000000005") };
+      pending.value = true;
+      const app = nativeApp();
+      const ref = nativeDevtoolsRef(device);
+      const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+      expect(api.isEnvSetup()).toBe(false);
+
+      const agent = net.createConnection(api.socketPath, () => {
+        agent.write(
+          JSON.stringify({ type: "Control", payload: { bundleId: "com.other.app" } }) + "\n"
+        );
+      });
+      await vi.waitFor(() => expect(api.isConnected("com.other.app")).toBe(true));
+
+      execFileMock.mockClear();
+      const res = await request(app)
+        .post(`/tools/${id}`)
+        .send({ udid: device.id, bundleId: BUNDLE_ID, ...extra });
+
+      expect(res.status).toBe(424);
+      expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(xcrunCalls()).toEqual([]);
+      agent.destroy();
+    }
+  );
 });
 
 describe("native-profiler-start while Xcode's install is pending", () => {
