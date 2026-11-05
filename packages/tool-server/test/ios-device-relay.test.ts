@@ -174,7 +174,7 @@ describe("a relayed phone's readiness", () => {
   });
 });
 
-describe("writeXctestrunWithRunnerPort", () => {
+describe.skipIf(process.platform !== "darwin")("writeXctestrunWithRunnerPort", () => {
   it("pins ARGENT_RUNNER_PORT in the runner's environment and leaves the rest intact", async () => {
     const dir = await tempDir();
     const source = path.join(dir, "ArgentRunner_iphoneos18.0-arm64.xctestrun");
