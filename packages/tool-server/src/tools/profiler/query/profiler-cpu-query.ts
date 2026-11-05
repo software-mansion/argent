@@ -373,10 +373,10 @@ export function renderComponentCpu(
     }
   }
 
-  const aggregated = new Map<
-    string,
-    { selfMs: number; totalMs: number; url?: string; lineNumber?: number }
-  >();
+  const aggregated = new Map<string, { selfMs: number; totalMs: number }>();
+  // Hermes can give one function a different line in each call-tree node, so rows
+  // go by name and show the line that took the most self time.
+  const selfMsByLocation = new Map<string, Map<string, SourceSelfTime>>();
 
   const childToParent = index.childToParent ?? buildChildToParent(index.nodeMap);
 
@@ -394,11 +394,16 @@ export function renderComponentCpu(
         selfMs: number;
         totalMs: number;
         members: { nodeId: number; totalMs: number }[];
-        url?: string;
-        lineNumber?: number;
       }
     >();
     for (const hs of hotspots) {
+      const locations = selfMsByLocation.get(hs.name) ?? new Map<string, SourceSelfTime>();
+      selfMsByLocation.set(hs.name, locations);
+      const locationKey = `${hs.url ?? ""}:${hs.lineNumber ?? ""}`;
+      const location = locations.get(locationKey);
+      if (location) location.selfMs += hs.selfMs;
+      else
+        locations.set(locationKey, { url: hs.url, lineNumber: hs.lineNumber, selfMs: hs.selfMs });
       const seen = perWindow.get(hs.name);
       if (seen) {
         seen.selfMs += hs.selfMs;
@@ -414,8 +419,6 @@ export function renderComponentCpu(
           selfMs: hs.selfMs,
           totalMs: hs.totalMs,
           members: [{ nodeId: hs.nodeId, totalMs: hs.totalMs }],
-          url: hs.url,
-          lineNumber: hs.lineNumber,
         });
       }
     }
@@ -451,7 +454,12 @@ export function renderComponentCpu(
     "|---|---|---|---|",
   ];
 
-  for (const [name, { selfMs, totalMs, url, lineNumber }] of sorted) {
+  for (const [name, { selfMs, totalMs }] of sorted) {
+    let top: SourceSelfTime | undefined;
+    for (const location of selfMsByLocation.get(name)!.values()) {
+      if (!top || location.selfMs > top.selfMs) top = location;
+    }
+    const { url, lineNumber } = top!;
     const loc = url ? `${shortenUrl(url)}${lineNumber != null ? `:${lineNumber}` : ""}` : "—";
     lines.push(
       `| \`${name}\` | ${Math.round(selfMs * 100) / 100} | ${Math.round(totalMs * 100) / 100} | ${loc} |`
@@ -459,6 +467,12 @@ export function renderComponentCpu(
   }
 
   return lines.join("\n");
+}
+
+interface SourceSelfTime {
+  url?: string;
+  lineNumber?: number;
+  selfMs: number;
 }
 
 function shortenUrl(url: string): string {

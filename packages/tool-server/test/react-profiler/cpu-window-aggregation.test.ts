@@ -220,3 +220,62 @@ describe("renderComponentCpu — frames without self samples", () => {
     expect(md).not.toContain("`outer`");
   });
 });
+
+describe("renderComponentCpu — the Location of a row", () => {
+  const at = (id: number, name: string, line: number, children: number[]): HermesProfileNode => ({
+    id,
+    hitCount: 0,
+    callFrame: { ...frame(name), url: `http://x/src/${name}.js`, lineNumber: line },
+    children,
+  });
+  const index = (nodeMap: Map<number, HermesProfileNode>, sampleNodeIds: number[]) => {
+    const n = sampleNodeIds.length;
+    return {
+      timestampsMs: Float64Array.from({ length: n }, (_, i) => i + 1),
+      intervalStartsMs: Float64Array.from({ length: n }, (_, i) => i),
+      sampleNodeIds,
+      nodeMap,
+      durationMs: n,
+    } satisfies CpuSampleIndex;
+  };
+  const twoCommits = (firstMs: number, secondMs: number) => ({
+    commits: [
+      { commitIndex: 0, timestamp: 0, commitDuration: firstMs, componentName: "Login" },
+      { commitIndex: 1, timestamp: firstMs, commitDuration: secondMs, componentName: "Login" },
+    ],
+  });
+  const locationOf = (markdown: string, name: string) =>
+    markdown
+      .split("\n")
+      .find((line) => line.startsWith(`| \`${name}\``))
+      ?.split("|")[4]
+      ?.trim();
+
+  it("is not taken from a node with no self time in an earlier commit", () => {
+    // Commit 0: render@10 → leaf (2 samples, all in leaf); commit 1: render@20 (3 samples).
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, { id: 1, hitCount: 0, callFrame: frame("(root)"), children: [2, 4] });
+    nodeMap.set(2, at(2, "render", 10, [3]));
+    nodeMap.set(3, at(3, "leaf", 5, []));
+    nodeMap.set(4, at(4, "render", 20, []));
+    const md = renderComponentCpu(index(nodeMap, [3, 3, 4, 4, 4]), twoCommits(2, 3), "Login", 10);
+    expect(readRow(md, "render")).toEqual({ self: 3, total: 5 });
+    expect(locationOf(md, "render")).toBe("src/render.js:20");
+  });
+
+  it("is the line with the most self time summed over the commits", () => {
+    // render@10: 2 samples in each commit; render@20: 3 samples in commit 1 only.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, { id: 1, hitCount: 0, callFrame: frame("(root)"), children: [2, 3] });
+    nodeMap.set(2, at(2, "render", 10, []));
+    nodeMap.set(3, at(3, "render", 20, []));
+    const md = renderComponentCpu(
+      index(nodeMap, [2, 2, 3, 3, 3, 2, 2]),
+      twoCommits(2, 5),
+      "Login",
+      10
+    );
+    expect(readRow(md, "render").self).toBe(7);
+    expect(locationOf(md, "render")).toBe("src/render.js:10");
+  });
+});
