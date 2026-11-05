@@ -201,9 +201,12 @@ describe("parseFlow", () => {
     expect(message.length).toBeLessThan(400);
   });
 
-  it("throws when content is not an object with steps", async () => {
-    expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
-  });
+  it.each([["- echo: Hello\n"], ["~\n"], ["hello\n"], ["42\n"]])(
+    "throws when content is not an object with steps: %j",
+    async (content) => {
+      expect(() => parseFlow(content)).toThrow("expected an object with a steps array");
+    }
+  );
 
   it("classifies a YAML syntax error as a validation failure with the parser's detail", async () => {
     let thrown: unknown;
