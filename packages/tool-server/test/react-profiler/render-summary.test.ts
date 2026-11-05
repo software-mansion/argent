@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   RENDER_SUMMARY_VERSION,
+  formatPeakCommit,
+  formatRenderSummaryReason,
   formatRenderTime,
   formatShare,
+  hasUnnamedSlowCommit,
   parseRenderSummary,
   peakRenderShare,
   renderTimeShare,
@@ -60,6 +63,7 @@ function component(
   return {
     name,
     rerenders,
+    untrackedRenders: 0,
     rerenderCommits: rerenders,
     rerenderSelfMs,
     maxRerenderSelfMs: rerenders > 0 ? rerenderSelfMs / rerenders : 0,
@@ -84,6 +88,7 @@ function summary(
     fiberRenders: components.reduce((s, c) => s + c.rerenders + c.mounts, 0),
     rerenders: components.reduce((s, c) => s + c.rerenders, 0),
     mounts: components.reduce((s, c) => s + c.mounts, 0),
+    untrackedRenders: 0,
     components,
     ...totals,
   };
@@ -112,13 +117,29 @@ describe("summarizeRenders", () => {
       reason: "props",
       topProps: ["now", "index"],
     });
-    // A null change description is a mount, as in the analyze pipeline.
+    // DevTools records no change data for context fibers, on any render.
     expect(s.components.find((c) => c.name === "App")).toMatchObject({
       rerenders: 0,
-      mounts: 1,
+      mounts: 0,
+      untrackedRenders: 1,
       reason: null,
     });
-    expect(s).toMatchObject({ fiberRenders: 5, rerenders: 3, mounts: 2 });
+    expect(s).toMatchObject({ fiberRenders: 5, rerenders: 3, mounts: 1, untrackedRenders: 1 });
+  });
+
+  it("does not call a context fiber's renders mounts", () => {
+    const provider = (i: number) => fiber("ListContext.Provider", i, 0.1, null);
+    const s = summarizeRenders([provider(0), provider(1), provider(2)], timings([1, 1, 1]), 1000);
+    const row = s.components[0]!;
+    expect(row).toMatchObject({ mounts: 0, untrackedRenders: 3 });
+    expect(formatRenderSummaryReason(row)).toBe("no change data");
+  });
+
+  it("rounds the slowest commit down, so 15.996 ms has not reached the 16 ms floor", () => {
+    const s = summarizeRenders([], timings([15.996]), 1000);
+    expect(s.maxCommitMs).toBe(15.99);
+    expect(hasUnnamedSlowCommit(s)).toBe(false);
+    expect(hasUnnamedSlowCommit(summarizeRenders([], timings([16]), 1000))).toBe(true);
   });
 
   it("takes commit totals from the durations, so commits without named fibers still count", () => {
@@ -181,6 +202,13 @@ describe("parseRenderSummary", () => {
     expect(parseRenderSummary(JSON.parse(JSON.stringify(s)))).toEqual(s);
   });
 
+  it("rejects a damaged row that would throw while printing", () => {
+    const s = summarizeRenders([fiber("A", 0, 1)], timings([3]), 1000);
+    const row = s.components[0]!;
+    expect(parseRenderSummary({ ...s, components: [{ ...row, topProps: "now" }] })).toBeNull();
+    expect(parseRenderSummary({ ...s, components: [{ ...row, reason: 3 }] })).toBeNull();
+  });
+
   it("treats a session saved before the field existed as having no summary", () => {
     expect(parseRenderSummary(undefined)).toBeNull();
     expect(parseRenderSummary(null)).toBeNull();
@@ -215,6 +243,12 @@ describe("render time line", () => {
     expect(formatRenderTime(summary([], { totalCommits: 1, totalRenderMs: 5 }))).toContain(
       ", 1 commit"
     );
+  });
+
+  it("never prints a peak under 16 ms as 16.0ms", () => {
+    expect(formatPeakCommit(15.97)).toBe("15.9ms");
+    expect(formatPeakCommit(14.34)).toBe("14.3ms");
+    expect(formatPeakCommit(40)).toBe("40.0ms");
   });
 
   it("gives a share of 0 for an empty recording", () => {
@@ -353,6 +387,20 @@ describe("selectFrequentRerenders", () => {
     ])
   );
 
+  it("counts commits, not fibers: 100 rows re-rendering once is one event", () => {
+    const rows = selectFrequentRerenders(
+      summary([component("ClockRow", 100, 50, { rerenderCommits: 1 })], { recordingMs: 10_000 }),
+      classify
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("does not raise the bar with idle time: a burst keeps its row in a long recording", () => {
+    const burst = component("ClockRow", 5100, 600, { rerenderCommits: 170 });
+    const rows = selectFrequentRerenders(summary([burst], { recordingMs: 300_000 }), classify);
+    expect(rows.map((r) => r.component.name)).toEqual(["ClockRow"]);
+  });
+
   it("lists app components by self time per second and leaves library rows out", () => {
     const rows = selectFrequentRerenders(
       summary([
@@ -370,12 +418,12 @@ describe("selectFrequentRerenders", () => {
     expect(rows[0]!.origin.file).toBe("/app/App.js");
   });
 
-  it("needs at least one re-render per second and a measurable cost", () => {
+  it("needs re-renders in at least 10 commits and a measurable cost", () => {
     const rows = selectFrequentRerenders(
       summary([component("Rare", 9, 500), component("Free", 5000, 5)]),
       classify
     );
-    // 9 re-renders in 10 s is below once per second; 5 ms over 10 s is under 1 ms/s.
+    // Rare re-rendered in 9 commits; Free's 5 ms over 10 s is under 1 ms/s.
     expect(rows).toEqual([]);
   });
 

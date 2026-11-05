@@ -60,7 +60,7 @@ Call `react-profiler-stop` **and** `native-profiler-stop` in parallel (skip the 
 
 Call `react-profiler-analyze` with your annotations. Check the report's React Compiler and build-mode lines before proposing fixes.
 
-If both profilers ran, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report`: it surfaces correlations the individual reports miss.
+If both profilers ran, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report`: it surfaces correlations the individual reports miss. If it says no React commits are stored, use the native report on its own.
 
 ### Step 4: Assess results
 

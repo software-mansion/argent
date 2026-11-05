@@ -33,6 +33,7 @@ function component(
   return {
     name,
     rerenders,
+    untrackedRenders: 0,
     rerenderCommits: rerenders,
     rerenderSelfMs,
     maxRerenderSelfMs: rerenders > 0 ? rerenderSelfMs / rerenders : 0,
@@ -54,6 +55,7 @@ const CLOCK: RenderSummary = {
   fiberRenders: 58_032,
   rerenders: 58_032,
   mounts: 0,
+  untrackedRenders: 0,
   components: [
     component("Text", 28_548, 1082.01),
     component("ClockRow", 14_040, 1007.84, { reason: "props", topProps: ["now"] }),
@@ -74,6 +76,7 @@ const SCROLL: RenderSummary = {
   fiberRenders: 460,
   rerenders: 394,
   mounts: 66,
+  untrackedRenders: 0,
   components: [component("Forget(Outlet)", 204, 1.22), component("View", 58, 3)],
 };
 
@@ -124,6 +127,7 @@ describe("report with no hot commit", () => {
     expect(report).not.toMatch(VERDICTS);
     expect(report).not.toContain("⚠️");
     expect(report).toContain("## Most Frequent Re-renders");
+    expect(report).toContain("in at least 10 of the 468 commits");
     expect(report).toContain("not that it is a problem");
 
     const rows = report.split("\n").filter((l) => l.startsWith("| `"));
@@ -183,6 +187,37 @@ describe("report with no hot commit", () => {
     expect(report).not.toMatch(VERDICTS);
     expect(report).not.toContain("No commit reached 16ms");
     expect(report).not.toContain("Next Steps");
+  });
+
+  it("says no commits were recorded for an older session too, without the 16ms claim", async () => {
+    const report = await render({ renderSummary: null, noReactCommits: true, reactCommits: 0 });
+    expect(report).toContain("No React commits were recorded");
+    expect(report).not.toContain("No commit reached 16ms");
+    expect(report).not.toContain("has no render summary");
+  });
+
+  it("claims nothing about commits when no commit data could be read", async () => {
+    const report = await render({ noHotCommits: false, renderSummary: null, reactCommits: 0 });
+    expect(report).toContain("No React commit data could be read");
+    expect(report).not.toContain("No commit reached 16ms");
+    expect(report).not.toContain("has no render summary");
+    expect(report).not.toMatch(VERDICTS);
+  });
+
+  it("uses the summary when a hot commit could not be shown", async () => {
+    // Stop marked a commit hot, but its only named fiber did no work.
+    const report = await render({
+      noHotCommits: false,
+      renderSummary: { ...CLOCK, maxCommitMs: 40, components: [] },
+      maxCommitMs: 40,
+    });
+    expect(report).toContain("the slowest commit took 40.0ms");
+    expect(report).not.toContain("No React commit data could be read");
+  });
+
+  it("does not print a commit just under 16ms as 16.0ms", async () => {
+    const report = await render({ renderSummary: SCROLL, maxCommitMs: 15.97 });
+    expect(report).toContain("No commit reached 16ms (peak commit: 15.9ms).");
   });
 
   it("marks only a dev build as one", async () => {
@@ -251,13 +286,13 @@ describe("slow commit with no named components", () => {
   });
 });
 
-describe("report for a session saved without a render summary", () => {
+describe("report for a session with no render summary", () => {
   it("gives no verdict and no share line, and says what it could not measure", async () => {
     const report = await render({ renderSummary: null });
     expect(report).toContain("No commit reached 16ms.");
     expect(report).not.toMatch(VERDICTS);
     expect(report).not.toContain("React render time");
-    expect(report).toContain("saved without a render summary");
+    expect(report).toContain("has no render summary");
     expect(report).not.toContain("render_counts");
   });
 });
@@ -294,6 +329,7 @@ const TYPING: RenderSummary = {
   fiberRenders: 3169,
   rerenders: 2156,
   mounts: 1013,
+  untrackedRenders: 0,
   components: [component("Forget(SearchScreenShell)", 50, 59.6)],
 };
 
@@ -310,6 +346,7 @@ describe("hot-commit report", () => {
     expect(report).toContain(
       "**React render time (dev build):** 324 ms of 11.2 s (2.9%), peak 7.1% in 1 s, 51 commits"
     );
+    expect(report).toContain("re-renders in the stored commits");
     expect(report).toContain("re-renders in all 51 commits");
     const row = report.split("\n").find((l) => l.startsWith("| `SearchScreenShell`"));
     expect(row).toContain("| 6 / 50 |");

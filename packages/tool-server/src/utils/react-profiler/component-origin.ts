@@ -1,6 +1,6 @@
 /**
  * Guess whether a recorded component is the app's own code or a library's, for
- * the report's "Frequent re-renders" rows. A raw table of the components that
+ * the report's "Most Frequent Re-renders" rows. A raw table of the components that
  * re-render most is mostly React Native primitives, list internals and animation
  * wrappers; telling an agent about them only invites it to memoise cheap renders
  * it cannot change.
@@ -30,7 +30,9 @@
  * - The index sees function declarations and arrow/function/memo/forwardRef
  *   assignments only. App class components, components made by a factory or HOC
  *   (`styled.View`, `connect()`), and code outside the project root count as
- *   library. Libraries that ship React Compiler output count as app.
+ *   library, as do components in a plain .ts file over 32 KB or any file over
+ *   512 KB, which the index skips. Libraries that ship React Compiler output
+ *   count as app.
  * - Names DevTools cannot resolve (`Anonymous`) are left out.
  */
 import { ANIMATED_PATTERN } from "./pipeline/03-tag";

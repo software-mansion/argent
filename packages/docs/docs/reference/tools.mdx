@@ -219,11 +219,11 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 
 The report of `react-profiler-analyze` contains these items:
 
-- The `React render time` line: the sum of the commit durations, the session length, the share of the session, the largest share in one second, and the number of commits. This value is approximate. React DevTools gives only the largest rendered subtree of each commit, and a development build is slower than a production build.
+- The `React render time` line: total render time, session length, share of the session, largest share in one second, and number of commits. These values are approximate. React DevTools gives only the largest rendered subtree of each commit. A development build is slower than a production build.
 - "No commit reached 16ms" when no commit takes 16 ms or more. The report does not say that the session is good or bad.
-- A warning when a commit takes 16 ms or more but has no component that Argent can name. Argent does not store this commit.
-- When no commit is hot: a "Most Frequent Re-renders" table, if one or more components are in the limits. The table lists up to 5 app components that re-render one or more times per second and use 1 ms or more of render time per second, sorted by render time per second. A row shows what re-rendered. It does not show a problem. React Native components, list internals, animation wrappers, providers and development components are not in the table.
-- In the table of the hot commits, `Renders` shows two counts: the re-renders in the stored commits and the re-renders in all commits, for example `6 / 50`.
+- A warning when no commit is hot but a commit takes 16 ms or more. Argent can name no component of this commit, so Argent does not store it.
+- A "Most Frequent Re-renders" table when no commit is hot. The table lists up to 5 app components, sorted by render time per second. A component must re-render in 10 or more commits and use 1 ms or more of render time per second. A row shows what re-rendered. It does not show a problem. React Native components, list internals, animation wrappers, providers and development components are not in the table.
+- In the Top Components table, `Renders` shows two counts: the re-renders in the stored commits and the re-renders in all commits. An example is `6 / 50`.
 
 When a session has no hot commits, the other modes of `profiler-commit-query` return a message that tells the agent to use `render_counts`.
 
@@ -297,7 +297,7 @@ Argent marks the tools that only read state with the MCP `readOnlyHint` annotati
 
 `terminate-app`, `ui-tree`, `foreground-app`, `fill` and `gather-workspace-data` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
-`react-profiler-renders` is hidden from MCP. Call it with the [Argent SDK](./node-client.mdx). It reads only the top 30 levels of the React fiber tree and counts the mounted components, not the re-renders. For render counts, use `profiler-commit-query` with `mode: "render_counts"` after a profiling session.
+`react-profiler-renders` is hidden from MCP. Call it with the [Argent SDK](/docs/reference/node-client). It reads only the top 30 levels of the React fiber tree and counts the mounted components, not the re-renders. For render counts, use `profiler-commit-query` with `mode: "render_counts"` after a profiling session.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
 

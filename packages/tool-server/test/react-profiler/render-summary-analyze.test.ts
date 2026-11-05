@@ -69,11 +69,24 @@ afterEach(async () => {
 async function analyze(name: string, selfMs: number): Promise<string> {
   const fibers = Array.from({ length: 100 }, (_, i) => rerender(name, i, selfMs));
   const timings = fibers.map((f) => ({ timestamp: f.timestamp, durationMs: 5 }));
-  const renderSummary = summarizeRenders(fibers, timings, 2000);
+  return runAnalyze({
+    meta: { hotCommitIndices: [], renderSummary: summarizeRenders(fibers, timings, 2000) },
+    hotCommitIndices: [],
+    totalReactCommits: 100,
+  });
+}
+
+/** Stores a session with no kept commits and runs the real tool on it. */
+async function runAnalyze(session: {
+  commits?: DevToolsFiberCommit[];
+  meta: Record<string, unknown>;
+  hotCommitIndices: number[] | null;
+  totalReactCommits: number | null;
+}): Promise<string> {
   const commitsPath = join(scratch, "commits.json");
   await fs.writeFile(
     commitsPath,
-    JSON.stringify({ commits: [], meta: { hotCommitIndices: [], renderSummary } })
+    JSON.stringify({ commits: session.commits ?? [], meta: session.meta })
   );
   cacheProfilerPaths(
     PORT,
@@ -85,8 +98,8 @@ async function analyze(name: string, selfMs: number): Promise<string> {
       cpuSampleIndexPath: null,
       detectedArchitecture: null,
       anyCompilerOptimized: null,
-      hotCommitIndices: [],
-      totalReactCommits: 100,
+      hotCommitIndices: session.hotCommitIndices,
+      totalReactCommits: session.totalReactCommits,
     },
     DEVICE
   );
@@ -113,5 +126,78 @@ describe("source index on a session with no hot commit", () => {
   it("is built when a row needs it to tell app code from library code", async () => {
     await analyze("ClockRow", 1);
     expect(buildIndex).toHaveBeenCalledOnce();
+  });
+
+  it("reaches the classifier: a name the index knows gets a row with its file", async () => {
+    buildIndex.mockResolvedValue({
+      index: new Map([["ClockRow", { file: "/app/src/Clock.tsx", line: 25 }]]),
+      treeSitterAvailable: true,
+    });
+    const report = await analyze("ClockRow", 1);
+    expect(report).toContain("| `ClockRow` |");
+    expect(report).toContain("Clock.tsx:25");
+  });
+
+  it("keeps the row without a file when tree-sitter is not available", async () => {
+    buildIndex.mockResolvedValue({ index: new Map(), treeSitterAvailable: false });
+    const report = await analyze("ClockRow", 1);
+    expect(report).toContain("| `ClockRow` |");
+  });
+
+  it("reaches the classifier: a name the index does not know counts as library", async () => {
+    buildIndex.mockResolvedValue({
+      index: new Map([["Other", { file: "/app/src/Other.tsx", line: 1 }]]),
+      treeSitterAvailable: true,
+    });
+    expect(await analyze("SomeLibraryRow", 1)).not.toContain("Frequent Re-renders");
+  });
+});
+
+describe("source index on a hot session", () => {
+  it("is built for the File column of the findings", async () => {
+    buildIndex.mockResolvedValue({
+      index: new Map([["ClockRow", { file: "/app/src/Clock.tsx", line: 25, col: 0 }]]),
+      treeSitterAvailable: true,
+    });
+    const commits = [0, 1, 2, 3].map((i) => ({
+      ...rerender("ClockRow", i, 20),
+      commitDuration: 30,
+    }));
+    const report = await runAnalyze({
+      commits,
+      meta: { hotCommitIndices: [0, 1, 2, 3] },
+      hotCommitIndices: [0, 1, 2, 3],
+      totalReactCommits: 4,
+    });
+    expect(buildIndex).toHaveBeenCalledOnce();
+    expect(report).toContain("Clock.tsx:25");
+  });
+});
+
+describe("sessions with little or no commit data", () => {
+  it("says nothing was measured for an older session that recorded no commits", async () => {
+    const report = await runAnalyze({
+      meta: { hotCommitIndices: [] },
+      hotCommitIndices: [],
+      totalReactCommits: 0,
+    });
+    expect(report).toContain("No React commits were recorded");
+    expect(report).not.toContain("No commit reached 16ms");
+  });
+
+  it("makes no claim about commits when the session has no commit data", async () => {
+    const report = await runAnalyze({ meta: {}, hotCommitIndices: null, totalReactCommits: null });
+    expect(report).toContain("No React commit data could be read");
+    expect(report).not.toContain("No commit reached 16ms");
+  });
+
+  it("does not take an unknown commit count for zero", async () => {
+    const report = await runAnalyze({
+      meta: { hotCommitIndices: [] },
+      hotCommitIndices: [],
+      totalReactCommits: null,
+    });
+    expect(report).toContain("No commit reached 16ms.");
+    expect(report).not.toContain("No React commits were recorded");
   });
 });

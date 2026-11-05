@@ -16,7 +16,11 @@ interface TreeSitterNode {
 
 interface ParserInstance {
   setLanguage(lang: unknown): void;
-  parse(src: string): { rootNode: TreeSitterNode };
+  parse(
+    src: string,
+    oldTree?: undefined,
+    options?: { bufferSize?: number }
+  ): { rootNode: TreeSitterNode };
 }
 
 type ParserCtor = new () => ParserInstance;
@@ -212,6 +216,11 @@ function pickPrimary(entries: ComponentIndexEntry[]): {
   };
 }
 
+/** What tree-sitter parses with its default 32 KB buffer. */
+const DEFAULT_PARSE_BUFFER_CHARS = 32 * 1024 - 1;
+/** Over this a file is generated or vendored, not a screen someone wrote. */
+const MAX_JSX_FILE_CHARS = 512 * 1024;
+
 /**
  * Index every React component in the project. Without tree-sitter, returns an
  * empty index and treeSitterAvailable=false rather than throwing.
@@ -249,17 +258,29 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
     // the TypeScript grammar.
     const isTsxFile = file.endsWith(".tsx") || file.endsWith(".jsx") || file.endsWith(".js");
     const language = isTsxFile ? tsxLang : tsLang;
+    // Walking a tree is the slow part, not parsing it. Large plain .ts files hold
+    // data, not components: Bluesky's 55 cost about 3 s of CPU and add no names,
+    // while its 13 large .tsx files are real screens.
+    if (source.length > (isTsxFile ? MAX_JSX_FILE_CHARS : DEFAULT_PARSE_BUFFER_CHARS)) continue;
 
     let tree: { rootNode: TreeSitterNode };
     try {
       const parser = new ParserClass();
       parser.setLanguage(language);
-      tree = parser.parse(source);
+      // The binding's default buffer rejects larger files with "Invalid argument".
+      // The size is in UTF-16 code units, plus one for the terminator.
+      tree = parser.parse(source, undefined, { bufferSize: source.length + 1 });
     } catch {
       continue;
     }
 
-    const memoizedNames = collectMemoizedNames(tree.rootNode);
+    let memoizedNames: ReturnType<typeof collectMemoizedNames>;
+    try {
+      memoizedNames = collectMemoizedNames(tree.rootNode);
+    } catch {
+      // A generated expression can nest past the stack limit; skip that file, not the index.
+      continue;
+    }
 
     function findComponents(node: TreeSitterNode): void {
       if (node.type === "function_declaration") {

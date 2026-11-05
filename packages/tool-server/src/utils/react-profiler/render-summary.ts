@@ -26,8 +26,8 @@ export const RENDER_SUMMARY_VERSION = 1;
  * ClockRow and nothing on Bluesky's fast scroll; they also list SearchScreenShell
  * on stretches of Bluesky typing that had nothing to fix, so a row is not a finding.
  */
-/** A row needs at least this many re-renders, and one per second. */
-const MIN_FREQUENT_RERENDERS = 10;
+/** A row needs re-renders in at least this many commits: 100 rows in one commit is one event. */
+const MIN_FREQUENT_RERENDER_COMMITS = 10;
 /** Summed self time per second of recording below which a row is left out. */
 const MIN_FREQUENT_SELF_MS_PER_S = 1;
 const MAX_FREQUENT_ROWS = 5;
@@ -46,8 +46,10 @@ export interface CommitTiming {
 export interface RenderSummaryComponent {
   /** Raw React DevTools display name, the key the saved commits use. */
   name: string;
-  /** Renders that were not first mounts. */
+  /** Renders with change data that were not first mounts. */
   rerenders: number;
+  /** Renders with no change data: DevTools records none for context fibers. */
+  untrackedRenders: number;
   /** Distinct commits with at least one re-render of this component. */
   rerenderCommits: number;
   /** Summed self (exclusive) time of those re-renders, ms. */
@@ -55,7 +57,7 @@ export interface RenderSummaryComponent {
   maxRerenderSelfMs: number;
   mounts: number;
   mountSelfMs: number;
-  /** Dominant re-render reason; null when the component only mounted. */
+  /** Dominant re-render reason; null with no re-render. */
   reason: ReRenderReason | null;
   topProps?: string[];
   topHooks?: string[];
@@ -83,6 +85,7 @@ export interface RenderSummary {
   fiberRenders: number;
   rerenders: number;
   mounts: number;
+  untrackedRenders: number;
   /** Sorted by rerenderSelfMs, then rerenders, descending. */
   components: RenderSummaryComponent[];
 }
@@ -135,6 +138,7 @@ export function summarizeRenders(
     rerenders: number;
     rerenderSelfMs: number;
     maxRerenderSelfMs: number;
+    untrackedRenders: number;
     mounts: number;
     mountSelfMs: number;
     lastRerenderCommit: number;
@@ -147,6 +151,7 @@ export function summarizeRenders(
   let fiberRenders = 0;
   let rerenders = 0;
   let mounts = 0;
+  let untrackedRenders = 0;
 
   for (const c of commits) {
     if (!c.didRender) continue;
@@ -157,6 +162,7 @@ export function summarizeRenders(
         rerenders: 0,
         rerenderSelfMs: 0,
         maxRerenderSelfMs: 0,
+        untrackedRenders: 0,
         mounts: 0,
         mountSelfMs: 0,
         lastRerenderCommit: -1,
@@ -168,8 +174,15 @@ export function summarizeRenders(
       byName.set(c.componentName, acc);
     }
     const cd = c.changeDescription;
-    // Same first-mount rule as the analyze pipeline's reduce stage.
-    if (cd === null || cd.isFirstMount === true) {
+    // The analyze pipeline's reduce stage drops both of these. Here they are
+    // counted apart: a context fiber has no change data on any render, so
+    // calling it a mount would show one that re-rendered 74 times as 74 mounts.
+    if (cd === null) {
+      untrackedRenders++;
+      acc.untrackedRenders++;
+      continue;
+    }
+    if (cd.isFirstMount === true) {
       mounts++;
       acc.mounts++;
       acc.mountSelfMs += c.selfDuration;
@@ -201,6 +214,7 @@ export function summarizeRenders(
     const row: RenderSummaryComponent = {
       name,
       rerenders: acc.rerenders,
+      untrackedRenders: acc.untrackedRenders,
       rerenderCommits: acc.rerenderCommits,
       rerenderSelfMs: round2(acc.rerenderSelfMs),
       maxRerenderSelfMs: round2(acc.maxRerenderSelfMs),
@@ -236,10 +250,12 @@ export function summarizeRenders(
     totalCommits: commitTimings.length,
     totalRenderMs: round2(totalRenderMs),
     peakSecondRenderMs: round2(peakWindowMs(commitTimings)),
-    maxCommitMs: round2(maxCommitMs),
+    // Rounded down: 15.996 ms did not reach the 16 ms floor.
+    maxCommitMs: Math.floor(maxCommitMs * 100) / 100,
     fiberRenders,
     rerenders,
     mounts,
+    untrackedRenders,
     components,
   };
 }
@@ -266,6 +282,7 @@ export function parseRenderSummary(raw: unknown): RenderSummary | null {
     "fiberRenders",
     "rerenders",
     "mounts",
+    "untrackedRenders",
   ]) {
     if (!isFiniteNumber(s[key])) return null;
   }
@@ -276,6 +293,7 @@ export function parseRenderSummary(raw: unknown): RenderSummary | null {
     if (typeof row.name !== "string") return null;
     for (const key of [
       "rerenders",
+      "untrackedRenders",
       "rerenderCommits",
       "rerenderSelfMs",
       "maxRerenderSelfMs",
@@ -283,6 +301,10 @@ export function parseRenderSummary(raw: unknown): RenderSummary | null {
       "mountSelfMs",
     ]) {
       if (!isFiniteNumber(row[key])) return null;
+    }
+    if (row.reason !== null && typeof row.reason !== "string") return null;
+    for (const key of ["topProps", "topHooks"]) {
+      if (row[key] !== undefined && !Array.isArray(row[key])) return null;
     }
   }
   return raw as RenderSummary;
@@ -322,6 +344,11 @@ export function formatShare(share: number): string {
   return `${rounded.toFixed(1)}%`;
 }
 
+/** Rounded down to 0.1 ms, so a commit under 16 ms never prints as "16.0ms". */
+export function formatPeakCommit(ms: number): string {
+  return `${(Math.floor(ms * 10) / 10).toFixed(1)}ms`;
+}
+
 export function formatMs(ms: number): string {
   return ms >= 10 ? `${Math.round(ms).toLocaleString("en-US")} ms` : `${ms.toFixed(1)} ms`;
 }
@@ -344,7 +371,7 @@ export function formatRenderTime(summary: RenderSummary): string {
 export function formatRenderSummaryReason(c: RenderSummaryComponent): string {
   switch (c.reason) {
     case null:
-      return "mount only";
+      return c.mounts > 0 ? "mount only" : "no change data";
     case "props":
       return c.topProps && c.topProps.length > 0 ? `props: ${c.topProps.join(", ")}` : "props";
     case "hooks":
@@ -371,11 +398,10 @@ export interface FrequentRerenderRow {
 }
 
 /**
- * App components that re-render at least once per second (and at least 10
- * times), sorted by summed self time per second, at most five. Library
- * components (React Native primitives, list internals, animation wrappers,
- * providers and contexts, dev-only views) are left out by `classify`; see
- * component-origin.ts for how it decides and where it is wrong.
+ * App components that re-rendered in at least 10 commits, sorted by summed self
+ * time per second, at most five. Library components (React Native primitives,
+ * list internals, animation wrappers, providers and contexts, dev-only views)
+ * are left out by `classify`; see `component-origin.ts` for how and its limits.
  */
 export function selectFrequentRerenders(
   summary: RenderSummary,
@@ -383,10 +409,9 @@ export function selectFrequentRerenders(
   limit = MAX_FREQUENT_ROWS
 ): FrequentRerenderRow[] {
   const seconds = Math.max(summary.recordingMs / 1000, 0.001);
-  const minRerenders = Math.max(MIN_FREQUENT_RERENDERS, Math.ceil(seconds));
   const rows: FrequentRerenderRow[] = [];
   for (const component of summary.components) {
-    if (component.rerenders < minRerenders) continue;
+    if (component.rerenderCommits < MIN_FREQUENT_RERENDER_COMMITS) continue;
     const selfMsPerSecond = component.rerenderSelfMs / seconds;
     if (selfMsPerSecond < MIN_FREQUENT_SELF_MS_PER_S) continue;
     const origin = classify(component.name);

@@ -276,10 +276,10 @@ async function loadReactSession(
     `- CPU profile: ${sampleInfo}`,
     `- Commits persisted (hot ±1 margin, ≥16ms): ${commitCount}`,
     `- Total React commits: ${totalReactCommits ?? "unknown"}`,
-    // Older sessions lack the summary; say so rather than let render_counts fail later.
+    // Older sessions lack the summary; say so here, before render_counts does.
     renderSummary
       ? `- React render time (all commits): ${formatRenderTime(renderSummary)}`
-      : `- Render counts over all commits: not saved (session predates them)`,
+      : `- Render counts over all commits: not available for this session`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
     "",
     "Query tools (`profiler-cpu-query`, `profiler-commit-query`) are now ready to use against this data.",

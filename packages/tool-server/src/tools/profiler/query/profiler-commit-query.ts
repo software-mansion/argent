@@ -20,6 +20,7 @@ import {
   hasUnnamedSlowCommit,
   formatRenderTime,
   formatCount,
+  formatPeakCommit,
   formatRenderSummaryReason,
   type RenderSummary,
 } from "../../../utils/react-profiler/render-summary";
@@ -61,10 +62,10 @@ export function renderNoStoredCommits(data: StoredCommitData): string {
   const summary = data.renderSummary;
   const total = summary?.totalCommits ?? data.totalReactCommits;
   if (total === 0) {
-    return "_No React commits were recorded in this session: nothing rendered while the profiler ran, so there is no commit data to query._";
+    return "_No React commits were recorded in this session, so there is no commit data to query._";
   }
   const peak =
-    summary && summary.maxCommitMs > 0 ? ` (peak ${summary.maxCommitMs.toFixed(1)}ms)` : "";
+    summary && summary.maxCommitMs > 0 ? ` (peak ${formatPeakCommit(summary.maxCommitMs)})` : "";
   const count = total !== null ? `its ${formatCount(total)} React commits` : "its React commits";
   const unnamedSlowCommit = summary !== null && hasUnnamedSlowCommit(summary);
   const lines = [
@@ -84,7 +85,7 @@ export function renderNoStoredCommits(data: StoredCommitData): string {
     );
   } else {
     lines.push(
-      "This session was saved before render summaries existed, so mode=`render_counts` has no data for it either. Re-profile to get counts over all commits."
+      "This session has no render summary, usually because an older version saved it, so mode=`render_counts` has no data for it either. Re-profile to get counts over all commits."
     );
   }
   return lines.join("\n");
@@ -98,7 +99,7 @@ export function renderRenderCounts(
 ): string {
   if (!summary) {
     return (
-      "_This session has no render summary: it was saved before react-profiler-stop wrote one. " +
+      "_This session has no render summary, usually because an older version saved it. " +
       "Re-profile to get render counts over all commits; the other modes still cover the commits of 16ms or more._"
     );
   }
@@ -128,20 +129,21 @@ export function renderRenderCounts(
   lines.push(
     `**React render time:** ${formatRenderTime(summary)}`,
     `**Fiber renders:** ${formatCount(summary.fiberRenders)} (${formatCount(summary.rerenders)} re-renders, ` +
-      `${formatCount(summary.mounts)} mounts) across ${formatCount(summary.components.length)} components`,
+      `${formatCount(summary.mounts)} mounts, ${formatCount(summary.untrackedRenders)} with no change data) ` +
+      `across ${formatCount(summary.components.length)} components`,
     "",
     "Every component that rendered, library components included, by re-render self time. The other modes see " +
       "only commits of 16ms or more and their neighbours; these counts cover every commit.",
     "",
-    "| Component | Re-renders | Per second | Commits | Self total (ms) | Self ms/s | Max (ms) | Mounts | Reason |",
-    "|---|---|---|---|---|---|---|---|---|"
+    "| Component | Re-renders | Per second | Commits | Self total (ms) | Self ms/s | Max (ms) | Mounts | No change data | Reason |",
+    "|---|---|---|---|---|---|---|---|---|---|"
   );
   for (const c of shown) {
     lines.push(
       `| \`${c.name}\` | ${formatCount(c.rerenders)} | ${(c.rerenders / seconds).toFixed(1)} | ` +
         `${formatCount(c.rerenderCommits)} | ${c.rerenderSelfMs.toFixed(1)} | ` +
         `${(c.rerenderSelfMs / seconds).toFixed(1)} | ${c.maxRerenderSelfMs.toFixed(1)} | ` +
-        `${formatCount(c.mounts)} | ${formatRenderSummaryReason(c)} |`
+        `${formatCount(c.mounts)} | ${formatCount(c.untrackedRenders)} | ${formatRenderSummaryReason(c)} |`
     );
   }
   if (rows.length > shown.length) {
@@ -186,13 +188,17 @@ function renderByComponent(
     );
     if (elsewhere.kind === "exact" || elsewhere.kind === "display") {
       const row = summary.components.find((c) => c.name === elsewhere.rawName)!;
-      const renders = row.rerenders + row.mounts;
+      const renders = row.rerenders + row.mounts + row.untrackedRenders;
       return (
         `_\`${row.name}\` rendered ${formatCount(renders)} ${renders === 1 ? "time" : "times"} in this session, ` +
         `but never in a stored commit: only commits of 16ms or more and their neighbours are stored._\n\n` +
         `Run \`profiler-commit-query\` mode=\`render_counts\` component_name=\`${row.name}\` for its counts over all commits.`
       );
     }
+    return renderComponentNameMiss(elsewhere, {
+      fiberRenders: summary.fiberRenders,
+      commits: summary.totalCommits,
+    });
   }
   if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
     return renderComponentNameMiss(resolution, {

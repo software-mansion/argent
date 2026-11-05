@@ -254,6 +254,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       annotations: params.annotations,
       debugDir,
       noHotCommits: pipelineOutput.noHotCommits,
+      noReactCommits: totalReactCommits === 0,
       maxCommitMs: pipelineOutput.maxCommitMs,
       renderSummary,
       componentOrigin: createComponentOriginClassifier(sourceIndex),

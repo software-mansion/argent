@@ -293,8 +293,11 @@ function renderComponentCpu(
   componentName: string,
   topN: number
 ): string {
-  if (!commitTree || commitTree.commits.length === 0) {
+  if (!commitTree) {
     return "_No commit data available. Run react-profiler-analyze first._";
+  }
+  if (commitTree.commits.length === 0) {
+    return "_No per-commit data is stored for this session: only commits of 16ms or more with named components, and their neighbours, are kept. Use mode=`top_functions` for JS CPU, or `profiler-commit-query` mode=`render_counts` for render counts._";
   }
 
   // The report prints display names (wrappers stripped), so accept those too —

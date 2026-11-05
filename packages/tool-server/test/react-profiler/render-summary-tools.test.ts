@@ -302,7 +302,7 @@ describe("profiler-commit-query on a session with no kept commits", () => {
         component_name: "ClockRow",
         time_range_ms: { start: 0, end: 1000 },
       });
-      expect(out, mode).toContain("none of its 468 React commits reached 16ms (peak 7.2ms)");
+      expect(out, mode).toContain("none of its 468 React commits reached 16ms (peak 7.1ms)");
       expect(out, mode).toContain("not a missing session");
       expect(out, mode).toContain(
         "**React render time:** 3,365 ms of 10.1 s (33%), peak 34% in 1 s, 468 commits."
@@ -339,7 +339,7 @@ describe("profiler-commit-query on a session with no kept commits", () => {
     await cacheSession("old-device", [], { hotCommitIndices: [], totalReactCommits: 12 });
     const out = await query("old-device", { mode: "by_index", commit_index: 0 });
     expect(out).toContain("none of its 12 React commits reached 16ms");
-    expect(out).toContain("saved before render summaries existed");
+    expect(out).toContain("usually because an older version saved it");
   });
 
   it("says when nothing rendered at all", async () => {
@@ -394,6 +394,21 @@ describe("profiler-commit-query render_counts", () => {
     expect(missing).toContain("not found in this profiling session");
   });
 
+  it("keeps a context fiber's renders out of Mounts and shows them as no change data", async () => {
+    const provider = (commitIndex: number): DevToolsFiberCommit => ({
+      ...fiber("ListContext.Provider", commitIndex, 0.1),
+      changeDescription: null,
+    });
+    await cacheSession("context-device", [], {
+      hotCommitIndices: [],
+      totalReactCommits: 2,
+      renderSummary: summarizeRenders([provider(0), provider(1)], timings([1, 1]), 1000),
+    });
+    const out = await query("context-device", { mode: "render_counts" });
+    expect(out).toContain("0 re-renders, 0 mounts, 2 with no change data");
+    expect(out).toMatch(/\| 0 \| 2 \| no change data \|$/m);
+  });
+
   it("explains an old session without a summary", async () => {
     await cacheSession("counts-old-device", [fiber("A", 0, 20)], { hotCommitIndices: [0] });
     expect(await query("counts-old-device", { mode: "render_counts" })).toContain(
@@ -413,6 +428,39 @@ describe("profiler-commit-query render_counts", () => {
     const out = await query("cold-device", { mode: "by_component", component_name: "Cold" });
     expect(out).toContain("`Cold` rendered 1 time in this session, but never in a stored commit");
     expect(out).toContain("mode=`render_counts` component_name=`Cold`");
+  });
+
+  it("by_component reports a name that is ambiguous only among cold commits", async () => {
+    await cacheSession("cold-ambiguous-device", [fiber("Hot", 5, 30)], {
+      hotCommitIndices: [5],
+      renderSummary: summarizeRenders(
+        [fiber("Hot", 5, 30), fiber("Memo(Foo)", 1, 1), fiber("Forget(Foo)", 2, 1)],
+        timings([3, 3, 30]),
+        1000
+      ),
+    });
+    const out = await query("cold-ambiguous-device", {
+      mode: "by_component",
+      component_name: "Foo",
+    });
+    expect(out).toContain("is ambiguous");
+    expect(out).not.toContain("not found");
+  });
+
+  it("by_component counts a missing name against the whole session", async () => {
+    await cacheSession("cold-missing-device", [fiber("Hot", 5, 30)], {
+      hotCommitIndices: [5],
+      renderSummary: summarizeRenders(
+        [fiber("Hot", 5, 30), fiber("Cold", 1, 1)],
+        timings([3, 3, 3]),
+        1000
+      ),
+    });
+    const out = await query("cold-missing-device", {
+      mode: "by_component",
+      component_name: "Nope",
+    });
+    expect(out).toContain("recorded 2 fiber renders across 3 commits");
   });
 });
 
@@ -452,7 +500,7 @@ describe("profiler-load with and without a render summary", () => {
     await writeSession("20261103-120001", { totalReactCommits: 12 });
     const out = await load("20261103-120001");
     expect(out).toContain("Loaded React profiler session");
-    expect(out).toContain("- Render counts over all commits: not saved");
+    expect(out).toContain("- Render counts over all commits: not available for this session");
   });
 });
 

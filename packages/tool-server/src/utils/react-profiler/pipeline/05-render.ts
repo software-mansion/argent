@@ -14,6 +14,7 @@ import type { SessionContext } from "../types/pipeline";
 import { annotateComponentName } from "../component-names";
 import {
   formatCount,
+  formatPeakCommit,
   formatRenderSummaryReason,
   formatRenderTime,
   hasUnnamedSlowCommit,
@@ -36,6 +37,8 @@ interface RenderInput {
   annotations?: Array<{ offsetMs: number; label: string }>;
   debugDir: string;
   noHotCommits?: boolean;
+  /** Stop recorded no commit at all; true also for sessions with no summary. */
+  noReactCommits?: boolean;
   maxCommitMs?: number;
   /** Counts over all commits; null/undefined for sessions saved before stop wrote it. */
   renderSummary?: RenderSummary | null;
@@ -70,7 +73,11 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
   const hotCommitsTotal = hotCommits.length;
 
   if (hotCommitsTotal === 0) {
-    const report = renderNoHotCommits(input, 0);
+    // A summary still holds real totals, for example when the hot commit's only
+    // named fiber did no work. Without one, nothing about commits is known.
+    const report = input.renderSummary
+      ? renderNoHotCommits(input, input.maxCommitMs ?? 0)
+      : renderNoCommitData(input);
     const wroteFile = await writeReport(reportFile, report);
     return {
       report,
@@ -117,6 +124,29 @@ function renderTimeLine(input: RenderInput, summary: RenderSummary): string {
   return `**React render time${label}:** ${formatRenderTime(summary)}`;
 }
 
+function renderReportHeader(input: RenderInput): string[] {
+  const durationS = (input.recordingMs / 1000).toFixed(1);
+  const compilerLine = renderCompilerStatus(
+    input.sessionContext.reactCompilerEnabled,
+    input.anyRuntimeCompilerDetected
+  );
+  const lines = [
+    `# Profiling Analysis — ${durationS}s session`,
+    `${compilerLine}  **Hot commits:** 0 of ${input.reactCommits} total`,
+  ];
+  if (input.renderSummary) lines.push(renderTimeLine(input, input.renderSummary));
+  lines.push(``);
+  return lines;
+}
+
+/** The session holds a CPU profile at most, so it can claim nothing about commits. */
+function renderNoCommitData(input: RenderInput): string {
+  return [
+    ...renderReportHeader(input),
+    `No React commit data could be read for this session, so no commit durations were measured. Re-profile to measure them.`,
+  ].join("\n");
+}
+
 /**
  * No hot commit. The report states what was measured and lists what re-rendered
  * most. It gives no verdict: "no commit reached 16ms" does not show the app is
@@ -124,36 +154,26 @@ function renderTimeLine(input: RenderInput, summary: RenderSummary): string {
  * idle time grows, and dev builds and Strict Mode inflate it by a varying amount.
  */
 function renderNoHotCommits(input: RenderInput, maxMs: number): string {
-  const durationS = (input.recordingMs / 1000).toFixed(1);
-  const compilerLine = renderCompilerStatus(
-    input.sessionContext.reactCompilerEnabled,
-    input.anyRuntimeCompilerDetected
-  );
   const summary = input.renderSummary ?? null;
-  const lines = [
-    `# Profiling Analysis — ${durationS}s session`,
-    `${compilerLine}  **Hot commits:** 0 of ${input.reactCommits} total`,
-  ];
-  if (summary) lines.push(renderTimeLine(input, summary));
-  lines.push(``);
+  const lines = renderReportHeader(input);
 
-  if (summary?.totalCommits === 0) {
+  if (summary?.totalCommits === 0 || input.noReactCommits) {
     lines.push(
-      `No React commits were recorded: nothing rendered during this recording, so there is nothing to measure. Interact with the app while the profiler records.`
+      `No React commits were recorded, so there is nothing to measure. Interact with the app while the profiler records.`
     );
     return lines.join("\n");
   }
 
-  const maxNote = maxMs > 0 ? ` (peak commit: ${maxMs.toFixed(1)}ms)` : "";
+  const maxNote = maxMs > 0 ? ` (peak commit: ${formatPeakCommit(maxMs)})` : "";
   lines.push(
     summary && hasUnnamedSlowCommit(summary)
-      ? `⚠️ **Slow commit with no component names** — the slowest commit took ${summary.maxCommitMs.toFixed(1)}ms, but none of its components could be named, so it has no breakdown.`
+      ? `⚠️ **Slow commit with no component names** — the slowest commit took ${formatPeakCommit(summary.maxCommitMs)}, but none of its components could be named, so it has no breakdown.`
       : `No commit reached 16ms${maxNote}.`
   );
   if (!summary) {
     lines.push(
       ``,
-      `> This session was saved without a render summary (an older tool-server), so commits under 16ms were not measured: many cheap re-renders can still add up. Re-profile to measure them.`
+      `> This session has no render summary, usually because an older version saved it, so commits under 16ms were not measured: many cheap re-renders can still add up. Re-profile to measure them.`
     );
   } else if (summary.components.length === 0) {
     lines.push(``, `No component in this session could be named, so there is nothing to list.`);
@@ -171,7 +191,7 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
       `---`,
       `## Most Frequent Re-renders`,
       ``,
-      `App components that re-rendered at least once per second, by self time per second, over all ${formatCount(summary.totalCommits)} commits. This shows what re-rendered most, not that it is a problem. React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
+      `App components that re-rendered in at least 10 of the ${formatCount(summary.totalCommits)} commits, by self time per second. This shows what re-rendered most, not that it is a problem. React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
       ``,
       `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
       `|---|---|---|---|---|---|---|`
@@ -267,7 +287,7 @@ function buildFullMarkdown(
       : null;
     if (renderSummary) {
       lines.push(
-        `> \`Renders\` = re-renders in the commits above (hot and ±1 neighbours, which Total/Avg/Max cover) / re-renders in all ${formatCount(renderSummary.totalCommits)} commits.`
+        `> \`Renders\` = re-renders in the stored commits (hot and ±1 neighbours, which Total/Avg/Max cover) / re-renders in all ${formatCount(renderSummary.totalCommits)} commits.`
       );
       lines.push("");
     }
