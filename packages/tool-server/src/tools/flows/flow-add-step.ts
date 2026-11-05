@@ -11,6 +11,7 @@ import {
   getFailureSignal,
   nestedFlowTarget,
   ToolNotFoundError,
+  ToolParamAliasError,
   wrapFailure,
   type ClientFileDirective,
   type FileInputSpec,
@@ -1393,8 +1394,15 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       const authoredArgs = { ...args };
       try {
         args = canonicalToolArgs(command, args);
-      } catch {
-        // Both names of one param: the step's own tool refuses the call.
+      } catch (err) {
+        if (!(err instanceof ToolParamAliasError)) throw err;
+        // Dispatched as written: the step's own tool refuses both names before
+        // it runs, in its own words, and the refusal is logged as that tool's
+        // (see describeNestedParamError). The rewrite and the link checks below
+        // read one name only, and would refuse the call for another reason.
+        await invokeSubTool(registry, ctx, params.command, args);
+        // Not reached while the registry refuses both names.
+        throw err;
       }
 
       // Over a link the project is on the client, and the recorder records only
