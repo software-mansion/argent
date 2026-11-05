@@ -137,8 +137,9 @@ function registryWithTap(): Registry {
   return registry;
 }
 
-function simctlJson(): string {
-  return JSON.stringify({
+/** `states` overrides a simulator's state by udid. */
+function simctlJson(states: Record<string, string> = {}): string {
+  const json = {
     devices: {
       "com.apple.CoreSimulator.SimRuntime.iOS-18-2": [
         {
@@ -173,7 +174,11 @@ function simctlJson(): string {
         },
       ],
     },
-  });
+  };
+  for (const sims of Object.values(json.devices)) {
+    for (const sim of sims) sim.state = states[sim.udid] ?? sim.state;
+  }
+  return JSON.stringify(json);
 }
 
 /**
@@ -686,7 +691,12 @@ describe("list-devices", () => {
 
   it("annotates each device a tool is driving with inUse and the seconds since that tool call", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return {
+          stderr: "",
+          stdout: simctlJson({ "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB": "Booted" }),
+        };
+      }
       if (cmd === "adb" && args[0] === "devices") {
         return {
           stderr: "",
@@ -742,6 +752,25 @@ describe("list-devices", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("leaves a shut-down simulator unmarked though a session a tool used outlived it", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };
+      return { stderr: "", stdout: "" };
+    });
+    const registry = registryWithTap();
+    await registry.invokeTool("tap", {
+      urn: "SimulatorServer:DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD",
+    });
+
+    const result = await createListDevicesTool(registry).execute!({}, {});
+
+    const appleTv = result.devices.find(
+      (d) => "udid" in d && d.udid === "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD"
+    );
+    expect(appleTv).toMatchObject({ state: "Shutdown" });
+    expect(appleTv).not.toHaveProperty("inUse");
   });
 
   it("reports idleSeconds 0, not a negative value, after the wall clock steps back", async () => {

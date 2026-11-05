@@ -333,6 +333,8 @@ function withUsage(
   const lastUse = lastDeviceUse(registry.getSnapshot().services, devices.flatMap(listedDeviceIds));
   const now = Date.now();
   return devices.map((d) => {
+    // A shut-down device can still hold a session that outlived it, e.g. TvControl.
+    if (readinessRank(d) !== 0) return d;
     const used = listedDeviceIds(d).flatMap((id) => lastUse.get(id) ?? []);
     if (used.length === 0) return d;
     const idleSeconds = Math.max(0, Math.floor((now - Math.max(...used)) / 1000));
@@ -366,7 +368,7 @@ TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
 A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'. Use the \`fold\` tool to fold or unfold it.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
-'inUse: true' marks a device that a tool call used through a session that is still open on this tool-server, which every agent on this argent install shares, so it may be yours or another agent's; 'idleSeconds' is the time since a tool last used it, and a large value suggests a forgotten session. Informational only; blind to other argent installs, other programs, tools that only run a platform command (e.g. reinstall-app, native profiling, tv-remote on Android TV, or boot-device while the device boots), a debugger session connected with a logicalDeviceId, <flag:harmonyos>HarmonyOS, </flag:harmonyos>and every Vega tool except the debugger and network tools.
+'inUse: true' marks a device that a tool call used through a session that is still open on this tool-server, which every agent on this argent install shares, so it may be yours or another agent's; 'idleSeconds' is the time since a tool last used it, and a large value suggests a forgotten session. A device that is not running never carries them. Informational only; blind to other argent installs, other programs, tools that only run a platform command (e.g. reinstall-app, native profiling, screen recording past screen-recording-start on a local device, tv-remote on Android TV, or boot-device while the device boots), a debugger session connected with a logicalDeviceId, <flag:harmonyos>HarmonyOS, </flag:harmonyos>and every Vega tool except the debugger and network tools.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
     alwaysLoad: true,
     searchHint:

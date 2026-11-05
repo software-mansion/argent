@@ -167,3 +167,14 @@ describe("flag-gated tool text", () => {
     expect(renderFlagGated(text, (flag) => flag === "other")).toBe("ac");
   });
 });
+
+describe("createRegistry", () => {
+  it("builds list-devices on the registry its tools run on, which holds the use stamps", async () => {
+    const registry = createRegistry();
+    const snapshot = vi.spyOn(registry, "getSnapshot");
+
+    await registry.invokeTool("list-devices", {});
+
+    expect(snapshot).toHaveBeenCalled();
+  });
+});
