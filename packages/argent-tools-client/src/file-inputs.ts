@@ -178,10 +178,11 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
 }
 
 /**
- * An unexpanded `~`, variable or URL: `~/app`, `$HOME/app`, `%USERPROFILE%\app`,
- * `file:///app`. A scheme has two letters or more, so `D:dir` is not one.
+ * An unexpanded `~`, variable, command or URL: `~/app`, `$HOME/app`, `$1/app`,
+ * `$(pwd)/app`, `` `pwd`/app ``, `%USERPROFILE%\app`, `file:///app`. A scheme has
+ * two letters or more, so `D:dir` is not one.
  */
-const UNEXPANDED_PATH = /^~|\$[A-Za-z_{]|%[A-Za-z_][A-Za-z0-9_]*%|^[A-Za-z][A-Za-z0-9+.-]+:/;
+const UNEXPANDED_PATH = /^~|\$[A-Za-z0-9_{(]|`|%[A-Za-z_][A-Za-z0-9_]*%|^[A-Za-z][A-Za-z0-9+.-]+:/;
 
 /**
  * `p` as an absolute path on this machine. The tool-server works in the

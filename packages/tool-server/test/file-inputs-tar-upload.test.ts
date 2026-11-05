@@ -267,8 +267,8 @@ describe("resolveFileInputs — tar-upload kind", () => {
       ).catch((e: unknown) => e);
 
       expect((err as Error).message).toBe(
-        `Path "${spelled}" is not an absolute path. Nothing expands "~", environment ` +
-          `variables or file: URLs in a file argument, so pass the file's absolute path.`
+        `Path "${spelled}" is not an absolute path. Nothing expands "~", variables, ` +
+          `commands or URLs in a file argument, so pass the file's absolute path.`
       );
     }
   );

@@ -369,13 +369,13 @@ async function resolveMembers(
 
 /**
  * A current client sends a path as absolute, except a spelling nothing expanded
- * (`~`, `$VAR`, `%VAR%`, a URL), which no host has a file at either.
+ * (`~`, `$VAR`, `$(cmd)`, `%VAR%`, a URL), which no host has a file at either.
  */
 function unexpandedPathError(wire: FileInputWire): FileInputError | undefined {
   if (isAbsolute(wire.path) || win32.isAbsolute(wire.path)) return undefined;
   return new FileInputError(
-    `Path "${wire.path}" is not an absolute path. Nothing expands "~", environment ` +
-      `variables or file: URLs in a file argument, so pass the file's absolute path.`
+    `Path "${wire.path}" is not an absolute path. Nothing expands "~", variables, ` +
+      `commands or URLs in a file argument, so pass the file's absolute path.`
   );
 }
 
