@@ -172,6 +172,21 @@ describe("simulator-watcher while Xcode's component install is pending", () => {
     expect(timeoutLines()).toHaveLength(2);
   });
 
+  // A hang the check could not foresee, such as a wrapper it does not recognise,
+  // gets the same fix: a bare `sudo xcodebuild` would install another Xcode's components.
+  it("names the same Xcode when simctl hangs though no install was seen pending", async () => {
+    execSimctlMock.mockRejectedValue(timeout);
+    const { ready, stop } = startSimulatorWatcher(registry);
+    await ready;
+    stop();
+
+    expect(timeoutLines()).toEqual([
+      `[simulator-watcher] ${timeout.message}; retrying with backoff until it does. ` +
+        `If Xcode was just updated, open the Xcode at ${FAKE_APP} once, ` +
+        `or run \`sudo ${FAKE_APP}/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch\`.\n`,
+    ]);
+  });
+
   // Asked nothing, so the watcher knows nothing: it must not read that as "shut down".
   it("keeps the simulators it tracks until a poll says they are gone", async () => {
     const udid = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
