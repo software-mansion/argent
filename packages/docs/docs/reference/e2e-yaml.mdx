@@ -251,9 +251,9 @@ The `text` comparators:
 | `equals`   | Case-insensitive full match     |
 | `matches`  | Case-sensitive JavaScript regex |
 
-`matches` reads an element with no text as an empty string. Use `'^$'` to check that an element has no text, or `'^(?!.*@)'` to check that its text does not contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text.
+`matches` reads an element with no text as an empty string. Use `'^$'` to check that an element has no text, or `'^[^@]*$'` to check that its text does not contain `@`. A pattern that can match an empty string, such as `'(Saved)?'`, passes on an element with no text. In a selector, `text: { matches }` never matches an element with no text.
 
-The text of an element includes the text of its children. It does not include the text of a child with its own `id`, or of a password field on Android or Chromium. On Vega, an `id` made only of digits does not count, also when the app sets it. So `'^$'` passes on a container that has all its text in such children. A pattern also passes when it matches only the own text of the element, without the text of its children. So a negative pattern, such as `'^(?!.*@)'`, can pass on an element when only a child contains `@`.
+The text of an element includes the text of its children. It does not include the text of a child with its own `id`, or of a password field on Android or Chromium. It also does not include the text of a child that is off screen or scrolled out of view. On Vega, an `id` made only of digits does not count, also when the app sets it. So `'^$'` passes on a container that has all its text in such children. A pattern also passes when it matches only the own text of the element, without the text of its children. So a negative pattern, such as `'^[^@]*$'`, can pass on an element when only a child contains `@`.
 
 Argent reads text from these elements also when they are empty, so `'^$'` never passes on them:
 
@@ -274,7 +274,7 @@ Argent reads text from these elements also when they are empty, so `'^$'` never 
 
 An element that matches more than one row can read a different text, for example the content description and then the hint. On Chromium, an `aria-label` takes the place of an `aria-labelledby` label, also when it holds only spaces.
 
-`matches` never reads an iOS text field as empty, on a simulator or on a physical iPhone. So `'^$'` never passes on an iOS text field. On a simulator, Argent cannot read the typed text of an iOS text field. A filled field reads only its accessibility label, or no text when it has no label. So a pattern that can match an empty string, such as `'^(?!.*@)'`, never passes on a filled field without a label there. A container with its own `id` around a filled field can read as empty there. On a simulator, Argent identifies every `UITextView` as a text field, also one that only displays text, and in an app on the old React Native architecture, every `<Text>`. On the new architecture, each `<Text>` holds an empty text field with the same frame, which a selector with `any: true` can pick instead of the `<Text>`.
+`matches` never reads an iOS text field as empty, on a simulator or on a physical iPhone. So `'^$'` never passes on an iOS text field. On a simulator, Argent cannot read the typed text of an iOS text field. A filled field reads its accessibility label and the text of its children, or no text when it has neither. So a pattern that can match an empty string, such as `'^[^@]*$'`, never passes there on a filled field without a label or child text. A container with its own `id` around a filled field can read as empty there. On a simulator, Argent identifies every `UITextView` as a text field, also one that only displays text. On a simulator, Argent also identifies every `<Text>` as a text field in an app on the old React Native architecture. On the new architecture, each `<Text>` holds an empty text field with the same frame. A selector with `any: true` can pick that field instead of the `<Text>`.
 
 When an element holds text, Argent reads it like this:
 

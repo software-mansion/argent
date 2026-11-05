@@ -877,7 +877,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "logo")).toMatchObject({ label: "Logo" });
   });
 
-  it("reads a blank aria-label or empty aria-labelledby targets as an empty label that hides a placeholder and an alt, lets an aria-label win over aria-labelledby, and ignores an empty aria-label", () => {
+  it("reads a blank aria-label or empty aria-labelledby targets as an empty label that hides a placeholder, typed text, a title and an alt, lets an aria-label win over aria-labelledby, and ignores an empty aria-label", () => {
     const img = el({
       tag: "img",
       attrs: { "id": "logo", "aria-label": " " },
@@ -908,6 +908,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
         rect: BOX,
       }),
       inputEl({ placeholder: "Email", attrs: { "id": "blank", "aria-label": "   " }, rect: BOX }),
+      inputEl({ value: "abc", attrs: { "id": "blank-typed", "aria-label": " " }, rect: BOX }),
+      el({ attrs: { "id": "blank-title", "aria-label": " ", "title": "Tip" }, rect: BOX }),
       inputEl({
         placeholder: "Search",
         attrs: { "id": "empty-target", "aria-labelledby": "icon" },
@@ -918,6 +920,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       img,
     ]);
     expect(findById(tree, "blank")!.label).toBeUndefined();
+    expect(findById(tree, "blank-typed")!.label).toBeUndefined();
+    expect(findById(tree, "blank-title")!.label).toBeUndefined();
     expect(findById(tree, "empty-target")!.label).toBeUndefined();
     expect(findById(tree, "two-empty-targets")).toMatchObject({ label: " " });
     expect(findById(tree, "both")).toMatchObject({ label: "Delete", value: "X" });
