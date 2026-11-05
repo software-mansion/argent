@@ -104,7 +104,9 @@ beforeEach(() => {
   savedAgent = process.env.npm_config_user_agent;
   delete process.env.npm_config_user_agent;
   vi.clearAllMocks();
-  childProcessMock.which.mockImplementation(() => "/usr/local/bin/argent\n");
+  // A path that never exists, so the post-uninstall PATH check doesn't depend
+  // on the host having a global argent.
+  childProcessMock.which.mockImplementation(() => path.join(tmpDir, "global-bin", "argent") + "\n");
   childProcessMock.execFileSync.mockImplementation(() => undefined);
 });
 
@@ -203,7 +205,7 @@ describe("uninstall — telemetry consent preservation", () => {
       await uninstall(["--yes"]);
 
       expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
-        `global uninstall failed: Error: ${fs.realpathSync(globalPkg)} is still installed. ` +
+        `global uninstall failed: Error: ${path.join(globalPkg, "bin", "argent")} is still on PATH. ` +
           "Remove it with the package manager that installed it."
       );
       expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
@@ -248,6 +250,75 @@ describe("uninstall — telemetry consent preservation", () => {
       expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
       expect(vi.mocked(clack.outro)).toHaveBeenCalled();
     });
+  });
+
+  it("reports a failure when a pnpm global shim stays on PATH", async () => {
+    const clack = await import("@clack/prompts");
+    const shim = path.join(tmpDir, "pnpm-home", "argent");
+    writeFile(
+      shim,
+      '#!/bin/sh\nexec node "$basedir/global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"\n'
+    );
+    childProcessMock.which.mockImplementation(() => shim + "\n");
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${shim} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
+  });
+
+  it("removes both installs when run through npx from a project that has a local devDependency", async () => {
+    const clack = await import("@clack/prompts");
+    const project = fs.realpathSync(tmpDir);
+    fs.writeFileSync(
+      path.join(project, "package.json"),
+      JSON.stringify({ name: "host", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    const localPkg = path.join(project, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    writeFile(path.join(localPkg, "bin", "argent"), "#!/usr/bin/env node\n");
+    const localBin = path.join(project, "node_modules", ".bin", "argent");
+    fs.mkdirSync(path.dirname(localBin), { recursive: true });
+    fs.symlinkSync(path.join(localPkg, "bin", "argent"), localBin);
+    const globalPkg = path.join(project, "prefix", "lib", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(globalPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    writeFile(path.join(globalPkg, "bin", "argent"), "#!/usr/bin/env node\n");
+    const globalBin = path.join(project, "prefix", "bin", "argent");
+    fs.mkdirSync(path.dirname(globalBin), { recursive: true });
+    fs.symlinkSync(path.join(globalPkg, "bin", "argent"), globalBin);
+    // npm exec puts the project's node_modules/.bin ahead of the global prefix.
+    childProcessMock.which.mockImplementation(
+      () => [localBin, globalBin].filter((bin) => fs.existsSync(bin)).join("\n") + "\n"
+    );
+    childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+      if (bin !== "npm") return undefined;
+      if (args.includes("-g")) {
+        fs.rmSync(globalBin);
+        fs.rmSync(globalPkg, { recursive: true, force: true });
+      } else {
+        fs.rmSync(localBin);
+        fs.rmSync(localPkg, { recursive: true, force: true });
+      }
+      return undefined;
+    });
+    process.chdir(project);
+
+    await uninstall(["--yes", "--global", "--local"]);
+
+    expect(vi.mocked(clack.log.error)).not.toHaveBeenCalled();
+    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed local package.");
+    expect(fs.existsSync(localPkg)).toBe(false);
   });
 
   it("removes a local devDependency with the project's yarn when launched from Yarn 2+", async () => {

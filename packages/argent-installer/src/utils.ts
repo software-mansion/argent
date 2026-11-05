@@ -34,6 +34,7 @@ export {
 export type { PackageManager, ShellCommand } from "./package-manager.js";
 export { hasProjectPackageJson, isYarnPnp } from "./preflight.js";
 export {
+  getGlobalBinaryPath,
   isGloballyInstalled,
   getGloballyInstalledVersion,
   getGloballyInstalledPackageRoot,

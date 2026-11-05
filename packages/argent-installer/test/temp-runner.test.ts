@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as path from "node:path";
 import { isGloballyInstalled } from "../src/utils.js";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand } from "../src/shell.js";
@@ -87,6 +88,17 @@ describe("isGloballyInstalled — temp package runners", () => {
   it.each(TEMP_RUNNER_BINS)("ignores the copy %s puts on PATH", (_runner, bin) => {
     whichFinds(bin);
     expect(isGloballyInstalled()).toBe(false);
+  });
+
+  it("ignores a project copy that npm exec puts on PATH from the cwd or an ancestor", () => {
+    whichFinds(path.join(path.dirname(process.cwd()), "node_modules", ".bin", "argent"));
+    expect(isGloballyInstalled()).toBe(false);
+  });
+
+  it("finds the global install behind a project copy", () => {
+    const projectBin = path.join(process.cwd(), "node_modules", ".bin", "argent");
+    whichFinds(`${projectBin}\n/usr/local/bin/argent`);
+    expect(isGloballyInstalled()).toBe(true);
   });
 
   it.each(GLOBAL_BINS)("counts a %s global install", (_pm, bin) => {

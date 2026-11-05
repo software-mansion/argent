@@ -18,6 +18,7 @@ import {
   detectGlobalPackageManager,
   detectProjectPackageManager,
   formatShellCommand,
+  getGlobalBinaryPath,
   getGloballyInstalledPackageRoot,
   globalUninstallCommand,
   localUninstallCommand,
@@ -644,6 +645,8 @@ export async function uninstall(args: string[]): Promise<void> {
       // Tool-server teardown scope. Null when unresolvable (Yarn PnP), which
       // skips the kill.
       installDir: string | null;
+      // The global argent on PATH, checked after the uninstall command.
+      binPath: string | null;
     }
 
     const buildRemovable = (kind: InstallMode): RemovableInstall | null => {
@@ -671,6 +674,7 @@ export async function uninstall(args: string[]): Promise<void> {
           prompt: `Remove the local ${PACKAGE_NAME} devDependency from this project?`,
           defaultRemove: true,
           installDir: uninstallLocalProbe.packageDir,
+          binPath: null,
         };
       }
       if (!globalPresent) return null;
@@ -680,6 +684,7 @@ export async function uninstall(args: string[]): Promise<void> {
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
         installDir: getGloballyInstalledPackageRoot(),
+        binPath: getGlobalBinaryPath(),
       };
     };
 
@@ -727,15 +732,9 @@ export async function uninstall(args: string[]): Promise<void> {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
         // The command comes from the launcher, not the install's owner: npm
         // exits 0 on a package Yarn classic or pnpm installed and leaves it.
-        // Re-resolve through PATH: installDir of a linked install is the source
-        // checkout, which outlives a successful uninstall.
-        if (
-          removable.kind === "global" &&
-          removable.installDir &&
-          getGloballyInstalledPackageRoot() === removable.installDir
-        ) {
+        if (removable.binPath && fs.existsSync(removable.binPath)) {
           throw new Error(
-            `${removable.installDir} is still installed. Remove it with the package manager that installed it.`
+            `${removable.binPath} is still on PATH. Remove it with the package manager that installed it.`
           );
         }
         p.log.success(`Removed ${removable.kind} package.`);

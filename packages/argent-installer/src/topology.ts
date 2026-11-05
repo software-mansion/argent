@@ -34,12 +34,23 @@ function isTempRunnerPath(binaryPath: string): boolean {
   return TEMP_RUNNER_PATTERNS.some((pattern) => pattern.test(slashed));
 }
 
+// npm exec, npx and package scripts prepend `<cwd or ancestor>/node_modules/.bin`,
+// which holds a project's devDependency, not a global install.
+function isProjectBinPath(binaryPath: string): boolean {
+  const norm = (p: string) => (process.platform === "win32" ? p.toLowerCase() : p);
+  const binDir = norm(path.dirname(path.resolve(binaryPath)));
+  for (let dir = path.resolve(process.cwd()); ; dir = path.dirname(dir)) {
+    if (norm(path.join(dir, "node_modules", ".bin")) === binDir) return true;
+    if (path.dirname(dir) === dir) return false;
+  }
+}
+
 /**
  * Path of the globally-installed argent binary, or null when argent is not
- * permanently on PATH. Checks every match so a concurrent temp-runner
- * invocation does not mask a real global install.
+ * permanently on PATH. Checks every match so a temp-runner or project copy
+ * does not mask a real global install.
  */
-function getGlobalBinaryPath(): string | null {
+export function getGlobalBinaryPath(): string | null {
   try {
     const [cmd, args] =
       process.platform === "win32"
@@ -54,7 +65,7 @@ function getGlobalBinaryPath(): string | null {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean)
-        .find((line) => !isTempRunnerPath(line)) ?? null
+        .find((line) => !isTempRunnerPath(line) && !isProjectBinPath(line)) ?? null
     );
   } catch {
     return null;
