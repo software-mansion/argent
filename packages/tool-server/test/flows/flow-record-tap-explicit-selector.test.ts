@@ -299,6 +299,76 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Go" } }]);
   });
 
+  // Appending the step refuses this marker, which would be after the tap ran.
+  it("refuses a selector holding an output reference, running nothing", async () => {
+    setTree([n({ frame: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 }, label: "Pay {{output:x}}" })]);
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW }),
+      selector: { text: "{{output:x}}" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/uses unsupported template syntax/);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  it("blames the tap point, not the selector, when no element is under it", async () => {
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 200, y: 0.55 }),
+      selector: { text: "Settings" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/No element in that tree is at this tap's point \(200, 0\.55\)/);
+    expect(res.message).toMatch(/record the tap at \(0\.3, 0\.55\)/);
+    expect(res.message).not.toMatch(/element under this tap/);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  // With no selector the recorder derives `card-1` here and retargets silently,
+  // so the refusal must not send the caller there.
+  it("offers no omission when the match is the tapped element but not at its centre", async () => {
+    setTree([
+      n({ frame: { x: 0, y: 0.4, width: 1, height: 0.1 }, identifier: "card-1" }),
+      n({ role: "AXButton", frame: { x: 0.4, y: 0.42, width: 0.2, height: 0.06 }, label: "Play" }),
+    ]);
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.1, y: 0.42 }),
+      selector: { identifier: "card-1" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/no selector for the tapped element replays this tap/);
+    expect(res.message).not.toMatch(/omit/);
+    expect(registry.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  // Equal frames tie on reading order: the upper one on the frame space, the
+  // other in the UI of this landscape screen, which is the one a replay taps.
+  it("checks a supplied selector in the reading order of a landscape UI", async () => {
+    currentTreeData = () => ({
+      tree: n({
+        role: "AXGroup",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          n({ frame: { x: 0.6, y: 0.1, width: 0.2, height: 0.1 }, label: "Dup" }),
+          n({ frame: { x: 0.1, y: 0.6, width: 0.2, height: 0.1 }, label: "Dup" }),
+        ],
+      }),
+      source: "native-devtools",
+      uiOrientation: "landscapeLeft",
+    });
+    await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.2, y: 0.65 }),
+      selector: { text: "Dup" },
+    });
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { text: "Dup" } }]);
+  });
+
   it("refuses a selector on a platform with no runner tree, naming the platform", async () => {
     const res = (await record({
       command: "gesture-tap",

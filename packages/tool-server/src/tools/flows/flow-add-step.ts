@@ -765,14 +765,27 @@ async function captureTapSelector(
           f.y === resolved.y &&
           f.width === resolved.width &&
           f.height === resolved.height;
+        const lead =
+          `${shown} resolves, in the tree a replay reads, to an element centred at ${at}, ` +
+          `and a replay taps there`;
+        if (sameFrame(tapped?.frame)) {
+          // Omitting it would derive this same element and retarget silently.
+          return {
+            rejected:
+              `${lead}. A smaller element sits at that centre and takes the replay's tap, so ` +
+              `no selector for the tapped element replays this tap. Record a tap on another element.`,
+          };
+        }
         const retap = sameFrame(replayed?.frame)
-          ? `To tap that element, record the tap at ${at}. Otherwise pass`
-          : `A smaller element sits at that centre, so a tap there misses the match too. Pass`;
+          ? `To tap that element, record the tap at ${at}. Otherwise`
+          : `A smaller element sits at that centre, so a tap there misses the match too. Instead,`;
         return {
-          rejected:
-            `${shown} resolves, in the tree a replay reads, to an element centred at ${at}, ` +
-            `and a replay taps there, not on the element under this tap. ${retap} a selector ` +
-            `for the tapped element, or omit it.`,
+          rejected: tapped
+            ? `${lead}, not on the element under this tap. ${retap} pass a selector for the ` +
+              `tapped element, or omit it.`
+            : `${lead}. No element in that tree is at this tap's point ` +
+              `(${point.x}, ${point.y}); x and y are fractions of the screen, from 0 to 1. ` +
+              `${retap} omit the selector.`,
         };
       }
     } else {
@@ -1454,6 +1467,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         return recordNothing(
           session,
           "A `gesture-tap` recorded with `delayMs` keeps its coordinates, so `selector` would be dropped. Record the tap without `delayMs`."
+        );
+      }
+      // Appending this step would refuse it, after the tap had already run.
+      if (params.selector && holdsOutputReference({ kind: "tap", selector: params.selector })) {
+        return recordNothing(
+          session,
+          `\`selector\` ${JSON.stringify(params.selector)} uses unsupported template syntax. Replace it with the literal value the step needs.`
         );
       }
 
