@@ -49,8 +49,8 @@ const TOUCH = {
   second_y: null,
 } as const;
 
-/** What a released cloud machine actually throws from `sendControl`. */
-const CLOSED = () => new Error("track is closed");
+/** What `MoqClient.sendControl` and `MoqClient.key` throw once the session is closed. */
+const CLOSED = () => new Error("MoQ session is closed");
 
 function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
   return {
@@ -61,10 +61,11 @@ function apiWith(transport: SimulatorServerTransport): SimulatorServerApi {
   };
 }
 
-/** A `MoqClient` whose control track is closed, as after the machine is released. */
+/** A `MoqClient` whose session is closed, as after the machine is released. */
 function closedMoqClient(): MoqClient {
   return {
     sendControl: () => Promise.reject(CLOSED()),
+    key: () => Promise.reject(CLOSED()),
     screenshot: () => Promise.reject(new Error("unexpected end of stream")),
     close: () => Promise.resolve(),
   };
@@ -127,7 +128,7 @@ describe("sendCommand over a MoQ transport", () => {
     expect(String(err)).toContain("'touch'");
     expect(String(err)).toContain("NOT delivered to the device");
     // The underlying cause survives, so the log still names the real fault.
-    expect(String(err)).toContain("track is closed");
+    expect(String(err)).toContain("MoQ session is closed");
     // A dead session recovers on the same machine, so the first remedy is a
     // new session, not a new machine.
     expect(String(err)).toContain("Call stop-simulator-server for this device and retry");
@@ -141,6 +142,7 @@ describe("sendCommand over a MoQ transport", () => {
           sent.push(payload);
           return Promise.resolve();
         },
+        key: () => Promise.reject(new Error("not used")),
         screenshot: () => Promise.reject(new Error("not used")),
         close: () => Promise.resolve(),
       },
@@ -192,6 +194,43 @@ describe("sendCommand over a MoQ transport", () => {
   });
 });
 
+/**
+ * `sendControl` is one MoQ group per frame, read latest-wins: a Down overtaken
+ * by its Up loses the letter. Keys go through the SDK's ordered "keys" track.
+ */
+describe("keys ride the ordered keys track", () => {
+  it("pressKey calls key, never sendControl", async () => {
+    const keys: [string, number][] = [];
+    let controlSends = 0;
+    const transport = createMoqTransport(
+      {
+        sendControl: () => {
+          controlSends++;
+          return Promise.resolve();
+        },
+        key: (action, code) => {
+          keys.push([action, code]);
+          return Promise.resolve();
+        },
+        screenshot: () => Promise.reject(new Error("not used")),
+        close: () => Promise.resolve(),
+      },
+      { pasteText: () => Promise.resolve() }
+    );
+
+    await expect(
+      sendCommand(apiWith(transport), { cmd: "key", direction: "Down", code: 4 })
+    ).resolves.toEqual({});
+    await transport.pressKey("Up", 4);
+
+    expect(keys).toEqual([
+      ["Down", 4],
+      ["Up", 4],
+    ]);
+    expect(controlSends).toBe(0);
+  });
+});
+
 describe("every send routed onto MoQ reports its own failure", () => {
   const COMMANDS = [
     { name: "touch", cmd: { ...TOUCH } },
@@ -200,7 +239,7 @@ describe("every send routed onto MoQ reports its own failure", () => {
     { name: "key", cmd: { cmd: "key", direction: "Down", code: 0x19 } },
   ] as const;
 
-  it.each(COMMANDS)("$name rejects when the track is closed", async ({ cmd }) => {
+  it.each(COMMANDS)("$name rejects when the session is closed", async ({ cmd }) => {
     const transport = createMoqTransport(closedMoqClient(), { pasteText: () => Promise.resolve() });
     expect(
       getFailureSignal(await sendCommand(apiWith(transport), { ...cmd }).catch((e: unknown) => e))
@@ -270,7 +309,7 @@ describe("the remote paste chord", () => {
     let sends = 0;
     vi.mocked(openMoqClient).mockResolvedValueOnce({
       ...closedMoqClient(),
-      sendControl: () => (sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve()),
+      key: () => (sends++ === index ? Promise.reject(CLOSED()) : Promise.resolve()),
     });
     const instance = await simulatorServerBlueprint.factory(
       {} as never,

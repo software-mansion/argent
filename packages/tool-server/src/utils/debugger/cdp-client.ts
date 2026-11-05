@@ -10,7 +10,7 @@ export interface ScriptInfo {
   endLine: number;
 }
 
-export interface ConsoleCallArg {
+interface ConsoleCallArg {
   type: string;
   value?: unknown;
   description?: string;

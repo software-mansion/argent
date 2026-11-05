@@ -18,6 +18,8 @@ const h = vi.hoisted(() => {
   // separately from the host HID daemon.
   const execFileCalls: Array<{ cmd: string; args: string[] }> = [];
   const killedProcs: Array<{ tag: string; signal: string | undefined }> = [];
+  // The ax daemons spawned, so a test can make one exit.
+  const axProcs: Array<{ emit: (event: string, ...args: unknown[]) => boolean }> = [];
   const unlinked: string[] = [];
   // When set, the host HID daemon spawn fails to ever bind its socket and exits,
   // so the factory's waitForSocket(hidSock) rejects and the error/cleanup path
@@ -39,7 +41,7 @@ const h = vi.hoisted(() => {
     return i >= 0 ? args[i + 1] : undefined;
   }
 
-  return { liveSockets, execFileCalls, killedProcs, unlinked, socketArg, state };
+  return { liveSockets, execFileCalls, killedProcs, axProcs, unlinked, socketArg, state };
 });
 
 class FakeProc extends EventEmitter {
@@ -66,6 +68,7 @@ vi.mock("node:child_process", async () => {
       // simctl spawn`. Tag by cmd so kill-signal assertions can tell them apart.
       const isHid = cmd === "/fake/tvos-hid-daemon";
       proc.tag = isHid ? "hid" : "ax";
+      if (!isHid) h.axProcs.push(proc);
       if (isHid && h.state.hidSpawnError) {
         // Emit `error` (not `exit`) — the spawn-fault signal. Never bind the
         // socket. waitForSocket must catch this and reject fast with the cause.
@@ -149,6 +152,13 @@ vi.mock("@argent/native-devtools-ios", () => ({
   tvosHidDaemonBinaryPath: () => "/fake/tvos-hid-daemon",
 }));
 
+// Whether simctl would start Xcode's component install, which refuses the ax spawn.
+const xcodePending = vi.hoisted(() => ({ value: false }));
+vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/xcode-first-launch")>()),
+  xcodeFirstLaunchPending: () => xcodePending.value,
+}));
+
 const listIosSimulatorsMock = vi.fn();
 const cacheSimulatorRuntimeKindMock = vi.fn();
 vi.mock("../src/utils/ios-devices", () => ({
@@ -176,10 +186,12 @@ beforeEach(() => {
   h.liveSockets.clear();
   h.execFileCalls.length = 0;
   h.killedProcs.length = 0;
+  h.axProcs.length = 0;
   h.unlinked.length = 0;
   h.state.failHidSpawn = false;
   h.state.hidSpawnError = false;
   h.state.axConnectHook = null;
+  xcodePending.value = false;
   listIosSimulatorsMock.mockReset();
   cacheSimulatorRuntimeKindMock.mockReset();
   listIosSimulatorsMock.mockResolvedValue([
@@ -402,5 +414,40 @@ describe("tvControlBlueprint — target validation", () => {
     await expect(buildService()).rejects.toThrow(/no available simulator/);
     // The no-match throw is before the warm call, so nothing is cached.
     expect(cacheSimulatorRuntimeKindMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("tvControlBlueprint - a respawn refused while Xcode's install is pending", () => {
+  // `describe` recycles the daemon when the focus set stays empty, as it can
+  // mid-transition. Killed before the refusal, the daemon would be gone until
+  // the install, though it needs no simctl to answer.
+  it("keeps a working ax daemon when its recycle is refused", async () => {
+    const instance = await buildService();
+    xcodePending.value = true;
+    await expect(instance.api.recycleAx()).rejects.toThrow(/-runFirstLaunch/);
+
+    expect(h.killedProcs).toEqual([]);
+    expect(h.unlinked).toEqual([]);
+    const res = await instance.api.describe();
+    expect(res.bundleId).toBe("com.example.tvapp");
+    expect(axSpawnCount()).toBe(1);
+    await instance.dispose();
+  });
+
+  // Left marked alive, a daemon that exited would never be respawned, and
+  // every describe would fail to connect until the service is disposed.
+  it("respawns an ax daemon that exited on the first describe after the install", async () => {
+    const instance = await buildService();
+    xcodePending.value = true;
+    const axSpawn = h.execFileCalls.find((c) => c.cmd === "xcrun")!;
+    h.liveSockets.delete(h.socketArg(axSpawn.args)!);
+    h.axProcs[0].emit("exit", 1);
+    await expect(instance.api.describe()).rejects.toThrow(/-runFirstLaunch/);
+
+    xcodePending.value = false;
+    const res = await instance.api.describe();
+    expect(res.bundleId).toBe("com.example.tvapp");
+    expect(axSpawnCount()).toBe(2);
+    await instance.dispose();
   });
 });

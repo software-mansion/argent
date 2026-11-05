@@ -13,10 +13,16 @@ const zodSchema = z
       .describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
     x: z
       .number()
+      .min(0)
+      .max(1)
       .describe(
         "Anchor x: normalized 0.0–1.0 (fraction of window width, not pixels). The wheel events land here; put it over the element you want to scroll."
       ),
-    y: z.number().describe("Anchor y: normalized 0.0–1.0 (fraction of window height, not pixels)."),
+    y: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe("Anchor y: normalized 0.0–1.0 (fraction of window height, not pixels)."),
     deltaX: z
       .number()
       .optional()
@@ -69,7 +75,7 @@ export const gestureScrollTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ failureSignal }) => `Failed to scroll: ${failureSignal.error_code}`,
   },
   description: `Scroll content in a Chromium app by dispatching mouse-wheel events at a point. Anchor x/y are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe. Deltas are fractions of the window too: deltaY 0.5 scrolls down half a window; negative scrolls back up.
-Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only: on iOS/Android use gesture-swipe.
+Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
 Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
   searchHint: "scroll wheel list page chromium mouse down up content fold",
   zodSchema,

@@ -25,11 +25,10 @@ export async function shutdownOwnedDevice(id: string): Promise<void> {
     return;
   }
   if (platform === "ios") {
-    await execFileAsync(
-      "xcrun",
-      await simctlArgsForUdid(id, ["shutdown", id]),
-      SHUTDOWN_EXEC_OPTIONS
-    ).catch(() => {});
+    // Building the argv can refuse too (Xcode's component install pending).
+    await simctlArgsForUdid(id, ["shutdown", id])
+      .then((args) => execFileAsync("xcrun", args, SHUTDOWN_EXEC_OPTIONS))
+      .catch(() => {});
   } else if (platform === "android") {
     // adb often isn't on PATH (notably on Windows); resolveAndroidBinary falls
     // back to the SDK roots.

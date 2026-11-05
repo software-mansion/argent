@@ -259,6 +259,11 @@ async function runGlobal(opts: {
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed globally."));
+      if (!isGloballyInstalled()) {
+        p.log.warn(
+          `${pc.cyan("argent")} is not on PATH, so editors can't start it. Add your package manager's global bin directory to PATH.`
+        );
+      }
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
       await tel.trackPackageAction("fresh_install", packageActionStartedAt, true);
     } catch (err) {

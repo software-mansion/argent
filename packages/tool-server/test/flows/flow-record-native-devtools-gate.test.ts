@@ -44,7 +44,7 @@ function addStep(registry: Registry, command: string, args: Record<string, unkno
 }
 
 async function recordedSteps() {
-  const content = await fs.readFile(path.join(tmpDir, ".argent", "flows", `${FLOW}.yaml`), "utf8");
+  const content = await fs.readFile(path.join(tmpDir, ".argent", "e2e", `${FLOW}.yaml`), "utf8");
   return parseFlow(content).steps;
 }
 

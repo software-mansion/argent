@@ -11,20 +11,22 @@ Argent Cloud is a cloud-hosted iOS simulator infrastructure platform developed b
 <Prompt>
 {`
 Set up Argent Cloud on this computer and boot a hosted iOS simulator.
-
-Follow the documentation at https://docs.swmansion.com/argent/docs/cloud/fundamentals/installation.
+Follow the documentation at https://docs.swmansion.com/argent/docs/cloud/fundamentals/installation
 
 1. Download the latest sim-remote binary for this platform from
-   https://github.com/software-mansion/sim-remote-releases/releases/latest,
-   make it executable and put it in ~/.local/bin. Add ~/.local/bin to PATH if it is missing.
-2. Confirm the installation with sim-remote --help.
-3. Run export SIM_REMOTE_API_KEY=<my api key>, then run sim-remote login and wait until
-   it prints the acquired machine. Do not write the key to any file.
-4. Run sim-remote simctl list devices available and pick an iPhone.
-5. Boot it and wait until the boot completes with sim-remote simctl bootstatus <UDID> -b.
-6. Report the machine name, the UDID and the state of the simulator.
+   https://github.com/software-mansion/sim-remote-releases/releases/latest
+   into ~/.local/bin, make it executable, add ~/.local/bin to PATH if missing,
+   and confirm with sim-remote --help.
+2. If SIM_REMOTE_API_KEY is set, run \`sim-remote login\`. If not, ask me to add
+   it to my shell profile or a secret manager. Never ask for, print or store the key.
+3. Run \`sim-remote simctl list devices available\`, pick an iPhone,
+   boot it and wait with \`sim-remote simctl bootstatus <UDID> -b\`.
+4. Confirm the simulator shows up in argent's list-devices as a remote device.
+   Reply in at most 5 lines: machine name, UDID, state, and one sentence
+   telling me what I can ask you to do on it now (e.g. "open the app and
+   profile a screen"). No build steps, no command lists.
 
-Do not run sim-remote logout. I want to keep the machine.
+Do not run sim-remote logout or release. I want to keep the machine.
 `}
 
 </Prompt>
