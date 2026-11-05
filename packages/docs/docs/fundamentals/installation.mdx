@@ -95,6 +95,8 @@ Argent reads Xcode's files to find if a `simctl` call starts the install. If it 
 - `list-devices` does not show local iOS simulators. Its `hint` field gives the reason to the agent.
 - The tools that need `simctl` fail. Most of them return an error that gives the same reason to the agent.
 
+Argent reads the type of a simulator with `simctl`. Argent must know the type to find an Apple TV simulator or a foldable iOS simulator. Thus, taps and screenshots also fail on a simulator if Argent does not know its type yet. This occurs, for example, when Argent starts after the Xcode update.
+
 Argent stops only its own calls. An `xcrun simctl` command that the agent or you run still starts the install. Commands that call `simctl`, for example `npx react-native run-ios`, also start it.
 
 The `hint` field and the error name the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
@@ -105,13 +107,6 @@ To install the components, do one of these steps:
 - Run the `xcodebuild` of that Xcode with `sudo`, for example `sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch`.
 
 Argent finds the installed components at the next tool call. You do not need to restart Argent.
-
-Apple TV simulators and foldable iOS simulators are an exception. Before the install, Argent cannot read the type of a simulator. If the agent used such a simulator before the install, these problems continue after the install:
-
-- On an Apple TV simulator, gestures have no effect.
-- On an open foldable iOS simulator, taps and screenshots use the cover panel.
-
-To correct this, tell the agent to run `stop-simulator-server` for that simulator.
 
 ## Linux hosts running Android emulators
 
