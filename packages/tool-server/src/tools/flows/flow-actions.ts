@@ -936,9 +936,10 @@ async function scrollToVisible(
 
     // A cut target moves no further than its visible start is from the
     // window's, or one taller than half the window would be carried past it.
-    warning ??= anchorSpent
+    const sent = anchorSpent
       ? await scrollIncrement(env, axisDirection, container?.frame ?? FULL_SCREEN, room)
       : await scrollIncrement(env, axisDirection, region, room, anchor);
+    warning ??= sent;
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
@@ -1311,7 +1312,8 @@ async function runPinch(
   let sentWarning: string | undefined;
   for (let i = 0; i < n; i++) {
     if (env.signal?.aborted) return ABORTED_OUTCOME;
-    sentWarning ??= toolWarning(await invokeOnDevice(env, "gesture-pinch", args));
+    const sent = toolWarning(await invokeOnDevice(env, "gesture-pinch", args));
+    sentWarning ??= sent;
     if (i < n - 1 && !(await sleepOrAbort(PINCH_SETTLE_MS, env.signal))) return ABORTED_OUTCOME;
   }
   return { ok: true, ...warnedBy(settle.warning, sentWarning) };
