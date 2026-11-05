@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { renderComponentCpu } from "../../src/tools/profiler/query/profiler-cpu-query";
-import type { CpuSampleIndex } from "../../src/utils/react-profiler/pipeline/00-cpu-correlate";
+import {
+  queryCpuWindow,
+  type CpuSampleIndex,
+} from "../../src/utils/react-profiler/pipeline/00-cpu-correlate";
 import type { HermesProfileNode } from "../../src/utils/react-profiler/types/input";
 
 function frame(functionName: string): HermesProfileNode["callFrame"] {
@@ -135,5 +138,85 @@ describe("renderComponentCpu — a window with more call-tree nodes than one hot
     // The outer frame's 1 + the inner frame's 3, not the inner frame alone.
     expect(self).toBeCloseTo(4, 5);
     expect(total).toBeCloseTo(4, 5);
+  });
+});
+
+describe("renderComponentCpu — frames without self samples", () => {
+  const mk = (id: number, name: string, children: number[]): HermesProfileNode => ({
+    id,
+    hitCount: 0,
+    callFrame: frame(name),
+    children,
+  });
+  const indexOf = (nodeMap: Map<number, HermesProfileNode>, sampleNodeIds: number[]) => {
+    const n = sampleNodeIds.length;
+    return {
+      timestampsMs: Float64Array.from({ length: n }, (_, i) => i + 1),
+      intervalStartsMs: Float64Array.from({ length: n }, (_, i) => i),
+      sampleNodeIds,
+      nodeMap,
+      durationMs: n,
+    } satisfies CpuSampleIndex;
+  };
+
+  it("counts the inclusive time of a recursion's outer frame that took no self sample", () => {
+    // root → wrap (0 samples) → walk (0 samples) → [walk (1 sample), leaf (3 samples)].
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [5]));
+    nodeMap.set(5, mk(5, "wrap", [2]));
+    nodeMap.set(2, mk(2, "walk", [3, 4]));
+    nodeMap.set(3, mk(3, "walk", []));
+    nodeMap.set(4, mk(4, "leaf", []));
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 4, componentName: "Login" }],
+    };
+    const md = renderComponentCpu(indexOf(nodeMap, [3, 4, 4, 4]), commit, "Login", 10);
+    expect(readRow(md, "walk")).toEqual({ self: 1, total: 4 });
+    expect(readRow(md, "leaf")).toEqual({ self: 3, total: 3 });
+    // A frame with no self time stays out of the table.
+    expect(md).not.toContain("`wrap`");
+  });
+
+  it("lists the callers of the sampled frames only when asked to", () => {
+    // root → wrap (0 samples) → leaf (2 samples).
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2]));
+    nodeMap.set(2, mk(2, "wrap", [3]));
+    nodeMap.set(3, mk(3, "leaf", []));
+    const index = indexOf(nodeMap, [3, 3]);
+    const names = (r: ReturnType<typeof queryCpuWindow>) => r.hotspots.map((h) => h.name);
+    expect(names(queryCpuWindow(index, 0, 2))).toEqual(["leaf"]);
+    const all = queryCpuWindow(index, 0, 2, Infinity, { withCallers: true });
+    expect(all.hotspots.find((h) => h.name === "wrap")).toMatchObject({ selfMs: 0, totalMs: 2 });
+  });
+
+  it("adds a function's self and inclusive time across the component's commits", () => {
+    // Commit 0 spends 2 samples in walk → leaf, commit 1 spends 3 in walk alone.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2]));
+    nodeMap.set(2, mk(2, "walk", [3]));
+    nodeMap.set(3, mk(3, "leaf", []));
+    const commits = {
+      commits: [
+        { commitIndex: 0, timestamp: 0, commitDuration: 2, componentName: "Login" },
+        { commitIndex: 1, timestamp: 2, commitDuration: 3, componentName: "Login" },
+      ],
+    };
+    const md = renderComponentCpu(indexOf(nodeMap, [2, 3, 2, 2, 2]), commits, "Login", 10);
+    expect(readRow(md, "walk")).toEqual({ self: 4, total: 5 });
+  });
+
+  it("ranks rows by self time when truncating to top_n", () => {
+    // outer: 1 self, 4 inclusive; inner: 3 self, 3 inclusive.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2]));
+    nodeMap.set(2, mk(2, "outer", [3]));
+    nodeMap.set(3, mk(3, "inner", []));
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 4, componentName: "Login" }],
+    };
+    const md = renderComponentCpu(indexOf(nodeMap, [2, 3, 3, 3]), commit, "Login", 1);
+    expect(readRow(md, "inner")).toEqual({ self: 3, total: 3 });
+    expect(md).not.toContain("`outer`");
   });
 });

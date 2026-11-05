@@ -381,8 +381,11 @@ export function renderComponentCpu(
   const childToParent = index.childToParent ?? buildChildToParent(index.nodeMap);
 
   for (const window of commitWindows.values()) {
-    // Every node: a name's outer frame can rank below the cut while its nested one does not.
-    const { hotspots } = queryCpuWindow(index, window.start, window.end, Infinity);
+    // Every node on the sampled stacks: a name's outer frame can rank below the cut, or
+    // take no self sample at all, while its nested one does.
+    const { hotspots } = queryCpuWindow(index, window.start, window.end, Infinity, {
+      withCallers: true,
+    });
     // Rows are per call-tree node. Self time adds; inclusive time sums only
     // the outermost of a name's nodes (`members`), since recursion nests them.
     const perWindow = new Map<
@@ -427,7 +430,10 @@ export function renderComponentCpu(
     }
   }
 
-  const sorted = [...aggregated.entries()].sort((a, b) => b[1].selfMs - a[1].selfMs).slice(0, topN);
+  const sorted = [...aggregated.entries()]
+    .filter(([, row]) => row.selfMs > 0)
+    .sort((a, b) => b[1].selfMs - a[1].selfMs)
+    .slice(0, topN);
 
   if (sorted.length === 0) {
     return `_No CPU samples found during \`${resolvedName}\` commits._`;
