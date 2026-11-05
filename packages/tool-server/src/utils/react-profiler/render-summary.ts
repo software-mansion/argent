@@ -16,6 +16,7 @@
 import type { DevToolsFiberCommit } from "./types/input";
 import type { ReRenderReason } from "./types/output";
 import { deriveReason } from "./pipeline/utils";
+import type { ComponentOriginResult } from "./component-origin";
 
 export const RENDER_SUMMARY_VERSION = 1;
 
@@ -32,6 +33,11 @@ export const RENDER_SUMMARY_VERSION = 1;
  */
 export const COMMIT_TIME_SHARE_FLOOR = 0.1;
 
+/** Frequent re-render rows need at least this many re-renders, and one per second. */
+const MIN_FREQUENT_RERENDERS = 10;
+/** Rows cheaper than this (summed self time per second of recording) are left out. */
+const MIN_FREQUENT_SELF_MS_PER_S = 1;
+const MAX_FREQUENT_ROWS = 5;
 const MAX_TOP_PROPS = 3;
 const MAX_TOP_HOOKS = 3;
 
@@ -301,4 +307,60 @@ export function formatCommitTime(summary: RenderSummary): string {
     `${formatMs(summary.totalCommitMs)} of ${(summary.recordingMs / 1000).toFixed(1)} s ` +
     `(${formatShare(commitTimeShare(summary))}), ${formatCount(summary.totalCommits)} ${commits}`
   );
+}
+
+export function formatRenderSummaryReason(c: RenderSummaryComponent): string {
+  switch (c.reason) {
+    case null:
+      return "mount only";
+    case "props":
+      return c.topProps && c.topProps.length > 0 ? `props: ${c.topProps.join(", ")}` : "props";
+    case "hooks":
+    case "state":
+      return c.topHooks && c.topHooks.length > 0
+        ? `${c.reason}: ${c.topHooks.join(", ")}`
+        : c.reason;
+    case "context":
+      return "context changed";
+    case "parent":
+      return "parent re-render";
+    case "force_update":
+      return "forceUpdate()";
+    default:
+      return c.reason;
+  }
+}
+
+export interface FrequentRerenderRow {
+  component: RenderSummaryComponent;
+  perSecond: number;
+  selfMsPerSecond: number;
+  origin: ComponentOriginResult;
+}
+
+/**
+ * App components that re-render at least once per second (and at least 10
+ * times), sorted by summed self time per second, at most five. Library
+ * components (React Native primitives, list internals, animation wrappers,
+ * providers and contexts, dev-only views) are left out by `classify`; see
+ * component-origin.ts for how it decides and where it is wrong.
+ */
+export function selectFrequentRerenders(
+  summary: RenderSummary,
+  classify: (rawName: string) => ComponentOriginResult,
+  limit = MAX_FREQUENT_ROWS
+): FrequentRerenderRow[] {
+  const seconds = Math.max(summary.recordingMs / 1000, 0.001);
+  const minRerenders = Math.max(MIN_FREQUENT_RERENDERS, Math.ceil(seconds));
+  const rows: FrequentRerenderRow[] = [];
+  for (const component of summary.components) {
+    if (component.rerenders < minRerenders) continue;
+    const selfMsPerSecond = component.rerenderSelfMs / seconds;
+    if (selfMsPerSecond < MIN_FREQUENT_SELF_MS_PER_S) continue;
+    const origin = classify(component.name);
+    if (origin.origin === "library") continue;
+    rows.push({ component, perSecond: component.rerenders / seconds, selfMsPerSecond, origin });
+  }
+  rows.sort((a, b) => b.selfMsPerSecond - a.selfMsPerSecond);
+  return rows.slice(0, limit);
 }

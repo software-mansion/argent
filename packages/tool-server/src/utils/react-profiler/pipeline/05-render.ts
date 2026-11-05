@@ -12,6 +12,20 @@ import { join } from "path";
 import type { HotCommitSummary, ComponentFinding } from "../types/output";
 import type { SessionContext } from "../types/pipeline";
 import { annotateComponentName } from "../component-names";
+import {
+  COMMIT_TIME_SHARE_FLOOR,
+  commitTimeShare,
+  formatCommitTime,
+  formatCount,
+  formatRenderSummaryReason,
+  formatShare,
+  hasUnnamedSlowCommit,
+  isCommitTimeAboveFloor,
+  selectFrequentRerenders,
+  type FrequentRerenderRow,
+  type RenderSummary,
+} from "../render-summary";
+import { createComponentOriginClassifier, type ComponentOriginResult } from "../component-origin";
 
 const MAX_INLINE_COMMITS = 10;
 const REPORT_FILENAME = "react-profiler-report.md";
@@ -27,6 +41,10 @@ interface RenderInput {
   debugDir: string;
   allClear?: boolean;
   maxCommitMs?: number;
+  /** Counts over all commits; null/undefined for sessions saved before stop wrote it. */
+  renderSummary?: RenderSummary | null;
+  /** Library-vs-app guess for frequent re-render rows; name-only when omitted. */
+  componentOrigin?: (rawName: string) => ComponentOriginResult;
 }
 
 interface RenderOutput {
@@ -98,30 +116,134 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
   return { report, reportFile: wroteFile ? reportFile : null, hotCommitsTotal, hotCommitsShown };
 }
 
+function commitTimeLine(summary: RenderSummary): string {
+  return `**React commit time:** ${formatCommitTime(summary)}`;
+}
+
+const FLOOR_PCT = Math.round(COMMIT_TIME_SHARE_FLOOR * 100);
+
 function renderAllClear(input: RenderInput, maxMs: number): string {
   const durationS = (input.recordingMs / 1000).toFixed(1);
   const compilerLine = renderCompilerStatus(
     input.sessionContext.reactCompilerEnabled,
     input.anyRuntimeCompilerDetected
   );
+  const summary = input.renderSummary ?? null;
   const maxNote = maxMs > 0 ? ` (peak commit: ${maxMs.toFixed(1)}ms)` : "";
   const lines = [
     `# Profiling Analysis — ${durationS}s session`,
     `${compilerLine}  **Hot commits:** 0 of ${input.reactCommits} total`,
-    ``,
-    `✅ **All clear** — all React commits were below 16ms${maxNote}.`,
-    `No performance issues detected in this session.`,
+  ];
+  if (summary) lines.push(commitTimeLine(summary));
+  lines.push(``);
+
+  if (summary && (isCommitTimeAboveFloor(summary) || hasUnnamedSlowCommit(summary))) {
+    lines.push(...renderNoHotCommitsWarning(input, summary, maxNote));
+    return lines.join("\n");
+  }
+
+  lines.push(`✅ **All clear** — all React commits were below 16ms${maxNote}.`);
+  if (summary) {
+    lines.push(
+      `React spent ${formatShare(commitTimeShare(summary))} of the session in commits, below the ${FLOOR_PCT}% at which frequent cheap re-renders are worth chasing. No performance issues detected in this session.`
+    );
+  } else {
+    lines.push(`No performance issues detected in this session.`);
+    lines.push(``);
+    lines.push(
+      `> This session was saved without a render summary (an older tool-server), so commits under 16ms were not measured: many cheap re-renders can still add up. Re-profile to measure them.`
+    );
+  }
+  lines.push(
     ``,
     `---`,
     `## Suggested Improvements`,
     ``,
     `No performance hotspots found. Consider these proactive checks:`,
     ``,
-    `- Run \`react-profiler-component-source\` on your most-rendered components to verify memoization is in place.`,
-    `- Run \`react-profiler-renders\` for a live count of mounted instances per component.`,
-    `- Re-profile under heavier load (longer interaction, more data) to catch issues that don't appear in short sessions.`,
-  ];
+    `- Re-profile under heavier load (longer interaction, more data) to catch issues that don't appear in short sessions.`
+  );
+  if (summary && summary.totalCommits > 0) {
+    lines.push(
+      `- \`profiler-commit-query\` mode=\`render_counts\` lists each component's render count over all ${formatCount(summary.totalCommits)} commits. At this share, high counts alone are not worth optimizing.`
+    );
+  }
   return lines.join("\n");
+}
+
+/**
+ * No hot commit, yet the session is not all clear: React spent at least
+ * COMMIT_TIME_SHARE_FLOOR of it committing, or a commit reached 16ms with no
+ * named component in it.
+ */
+function renderNoHotCommitsWarning(
+  input: RenderInput,
+  summary: RenderSummary,
+  maxNote: string
+): string[] {
+  const share = formatShare(commitTimeShare(summary));
+  const lines = [
+    hasUnnamedSlowCommit(summary)
+      ? `⚠️ **Slow commit with no component names** — the slowest commit took ${summary.maxCommitMs.toFixed(1)}ms, but none of its components could be named, so it has no breakdown. React spent ${share} of the session in commits.`
+      : `⚠️ **No slow commit, but React was busy** — every commit stayed below 16ms${maxNote}, yet React spent ${share} of the session in commits. Many cheap renders add up.`,
+    ``,
+  ];
+  const aboveFloor = isCommitTimeAboveFloor(summary);
+  const rows = aboveFloor
+    ? selectFrequentRerenders(
+        summary,
+        input.componentOrigin ?? createComponentOriginClassifier(null)
+      )
+    : [];
+  if (aboveFloor) {
+    lines.push(`---`, `## Frequent Re-renders`, ``);
+    if (rows.length > 0) {
+      lines.push(
+        `App components that re-rendered at least once per second, by self time per second, over all ${formatCount(summary.totalCommits)} commits. React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
+        ``,
+        `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
+        `|---|---|---|---|---|---|---|`
+      );
+      for (const row of rows) lines.push(renderFrequentRow(row));
+    } else if (summary.components.length > 0) {
+      lines.push(
+        `No app component re-rendered at least once per second at a measurable cost: the time is in mounts or in library components. \`profiler-commit-query\` mode=\`render_counts\` lists every component.`
+      );
+    } else {
+      lines.push(`No component in this session could be named, so there is nothing to list.`);
+    }
+    lines.push(``);
+  }
+  lines.push(
+    `---`,
+    `## Next Steps`,
+    ``,
+    `Ask the user which path to take:`,
+    ``,
+    `1. **Investigate further** — \`profiler-commit-query\` mode=\`render_counts\` for every component's counts, or \`profiler-cpu-query\` mode=\`top_functions\` for the JS work behind them.`
+  );
+  if (rows.length > 0) {
+    lines.push(
+      `2. **Implement fixes** — cut how often the top rows re-render (the Reason column names what changes each time, e.g. a timer or animation kept in React state), then re-profile the same scenario and compare the React commit time.`,
+      `3. **Done for now** — save the report for reference.`
+    );
+  } else {
+    lines.push(`2. **Done for now** — save the report for reference.`);
+  }
+  return lines;
+}
+
+function renderFrequentRow(row: FrequentRerenderRow): string {
+  const c = row.component;
+  const ann = annotateComponentName(c.name);
+  const file =
+    row.origin.file !== undefined
+      ? `\`${shortenPath(row.origin.file)}${row.origin.line !== undefined ? `:${row.origin.line}` : ""}\``
+      : "—";
+  return (
+    `| \`${ann.displayName}\`${ann.tag} | ${formatCount(c.rerenders)} | ${row.perSecond.toFixed(1)} | ` +
+    `${row.selfMsPerSecond.toFixed(1)} | ${c.rerenderSelfMs.toFixed(1)}ms | ${formatRenderSummaryReason(c)} | ${file} |`
+  );
 }
 
 function renderCompilerStatus(enabled: boolean, detectedAtRuntime: boolean): string {
@@ -146,6 +268,7 @@ function buildFullMarkdown(
   const lines: string[] = [
     `# Profiling Analysis — ${durationS}s session`,
     `${compilerLine}  **Hot commits:** ${totalHotCommits} of ${input.reactCommits} total`,
+    ...(input.renderSummary ? [commitTimeLine(input.renderSummary)] : []),
     ``,
     `> **Duration columns:** \`self\` = this component's own render work only (exclusive).`,
     `> \`w/children\` = self + the entire subtree it owns (inclusive).`,
@@ -166,6 +289,19 @@ function buildFullMarkdown(
     lines.push("---");
     lines.push("## Top Components by Total Render Cost");
     lines.push("");
+    // Total/Avg/Max and the first count cover only the commits kept above; the
+    // second count is from the all-commit summary, so a component re-rendering
+    // cheaply between slow commits is not under-counted (6 of 50 on Bluesky).
+    const renderSummary = input.renderSummary ?? null;
+    const allRerenders = renderSummary
+      ? new Map(renderSummary.components.map((c) => [c.name, c.rerenders]))
+      : null;
+    if (renderSummary) {
+      lines.push(
+        `> \`Renders\` = re-renders in the commits above (hot and ±1 neighbours, which Total/Avg/Max cover) / re-renders in all ${formatCount(renderSummary.totalCommits)} commits.`
+      );
+      lines.push("");
+    }
     lines.push("| Component | Renders | Total | Avg | Max | Reason | File |");
     lines.push("|---|---|---|---|---|---|---|");
     for (const f of input.componentFindings) {
@@ -175,8 +311,10 @@ function buildFullMarkdown(
       const reasonStr = formatReason(f.dominantReason, f.topChangedProps, f.topChangedHookNames);
       const compilerFlag = f.compilerBailoutSuspected ? " ⚠️" : f.isCompilerOptimized ? " ✓" : "";
       const ann = annotateComponentName(f.component);
+      const all = allRerenders?.get(f.component);
+      const renders = all !== undefined ? `${f.renders} / ${formatCount(all)}` : `${f.renders}`;
       lines.push(
-        `| \`${ann.displayName}\`${ann.tag}${compilerFlag} | ${f.renders} | ${f.totalMs}ms | ${f.avgMs}ms | ${f.maxMs}ms | ${reasonStr} | ${file} |`
+        `| \`${ann.displayName}\`${ann.tag}${compilerFlag} | ${renders} | ${f.totalMs}ms | ${f.avgMs}ms | ${f.maxMs}ms | ${reasonStr} | ${file} |`
       );
     }
 
