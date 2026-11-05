@@ -161,4 +161,4 @@ export async function createChromiumServer(
 // Consumed by the chromium-cdp blueprint.
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 export type { TabInfo } from "./tabs";
-export type { NetworkRequestRecord } from "./network";
+export type { NetworkRedirectHop, NetworkRequestRecord } from "./network";

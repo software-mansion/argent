@@ -4,6 +4,7 @@ import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import type { NetworkRedirectHop } from "../../chromium-server";
 import { resolveDevice } from "../../utils/device-info";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
@@ -123,6 +124,8 @@ interface NetworkRequestDetails {
   resourceType?: string;
   durationMs?: number;
   encodedDataLength?: number;
+  /** Chromium only: the redirect responses before the final request, oldest first. */
+  redirects?: Omit<NetworkRedirectHop, "timestamp">[];
   request?: {
     url: string;
     method: string;
@@ -155,6 +158,7 @@ export const networkRequestTool: ToolDefinition<
   },
   description: `Get full details of a specific network request by its requestId (from view-network-logs).
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
+On Chromium, a redirected request also lists each earlier hop in "redirects" (method, URL, status, Location); the request and response fields describe the final hop.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is replaced by "[body omitted: binary <mime>, N bytes]". Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found: use view-network-logs to get valid requestId values.`,
   readOnly: true,
@@ -185,6 +189,15 @@ Returns an error message string if the requestId is not found: use view-network-
         errorText: rec.errorText,
         initiator: rec.initiator,
       };
+      if (rec.redirects) {
+        details.redirects = rec.redirects.map((hop) => ({
+          method: hop.method,
+          url: hop.url,
+          status: hop.status,
+          statusText: hop.statusText,
+          location: hop.location,
+        }));
+      }
       if (rec.url) {
         details.request = {
           url: rec.url,
