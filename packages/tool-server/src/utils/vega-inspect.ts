@@ -6,7 +6,7 @@
  * `ensureAutomationToolkitEnabled`.
  */
 import { request } from "node:http";
-import { runAdb } from "./adb";
+import { adbForward, runAdb } from "./adb";
 import { emulatorSerial } from "./vega-automation";
 
 const TOOLKIT_DEVICE_PORT = 8383;
@@ -23,9 +23,7 @@ export async function fetchVegaPageSource(timeoutMs = 15_000): Promise<string> {
   const { serial, consolePort } = await emulatorSerial();
   const hostPort = consolePort + HOST_PORT_OFFSET;
 
-  await runAdb(["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${TOOLKIT_DEVICE_PORT}`], {
-    timeoutMs: 10_000,
-  });
+  await adbForward(serial, hostPort, TOOLKIT_DEVICE_PORT, { timeoutMs: 10_000 });
   try {
     const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getPageSource", params: {} });
     const respText = await postJson("127.0.0.1", hostPort, "/jsonrpc", body, timeoutMs);

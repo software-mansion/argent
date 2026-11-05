@@ -4,6 +4,7 @@ import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/
 import { InvalidToolInputError } from "../../../utils/capability";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import { simctlPrivacy as remoteSimctlPrivacy } from "../../../utils/sim-remote";
 import type {
   PermissionAction,
@@ -156,6 +157,8 @@ function buildIosHandler(
         await backend.run(udid, SIMCTL_ACTION[action], service, bundleId);
         applied.push(service);
       } catch (err) {
+        // Its message says what to do, and a flow step reports only the thrown message.
+        if (err instanceof XcodeFirstLaunchPendingError) throw err;
         // A secondary service (e.g. `photos-add`) this runtime doesn't model
         // must not fail the whole action.
         if (!isPrimary) continue;

@@ -131,6 +131,9 @@ describe("resolveSecretPlaceholders", () => {
     }
     expect(caught).toBeInstanceOf(InvalidToolInputError);
     expect(caught!.message).toContain('Unknown secret "NOPE"');
+    expect(caught!.message).toContain(
+      "no source on the machine running the tool-server defines NOPE"
+    );
     expect(caught!.message).toContain("ARGENT_SECRET_NOPE");
     expect(caught!.message).toContain("APP_PASSWORD");
     expect(caught!.message).toContain("TOTP_SEED");
@@ -181,6 +184,84 @@ describe("resolveSecretPlaceholders", () => {
     expect(caught!.message).toContain('Unknown secret "ARGENT_SECRET_NOPE"');
     expect(caught!.message).toContain("export ARGENT_SECRET_NOPE");
     expect(caught!.message).not.toContain("ARGENT_SECRET_ARGENT_SECRET_NOPE");
+  });
+});
+
+describe("secrets the argent client sent", () => {
+  const clientSecrets = new Map([["APP_PASSWORD", "from-client"]]);
+
+  it("resolve ahead of the tool-server's own sources", () => {
+    const { text, secrets } = resolveSecretPlaceholders("{{secret:APP_PASSWORD}}", {
+      ...opts(),
+      clientSecrets,
+    });
+    expect(text).toBe("from-client");
+    expect(secrets).toEqual([{ name: "APP_PASSWORD", value: "from-client" }]);
+  });
+
+  it("leave a name the client did not send to the tool-server's sources", () => {
+    expect(
+      resolveSecretPlaceholders("{{secret:TOTP_SEED}}", { ...opts(), clientSecrets }).text
+    ).toBe("JBSWY3DP");
+  });
+
+  it("are named, without a value, when a name resolves nowhere", () => {
+    let caught: Error | undefined;
+    try {
+      resolveSecretPlaceholders("{{secret:NOPE}}", { ...opts({ PATH: "/bin" }), clientSecrets });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught!.message).toContain(
+      'Unknown secret "NOPE" — the required secret NOPE was not provided: the argent client ' +
+        "forwards its secrets to this tool-server and has no value for it, and no source on the " +
+        "machine running the tool-server defines it either."
+    );
+    expect(caught!.message).toContain(
+      "1. secrets the argent client sent with this call — 1 secret"
+    );
+    expect(caught!.message).toContain("Available secrets: APP_PASSWORD.");
+    expect(caught!.message).not.toContain("from-client");
+  });
+
+  it("say a name was not provided when the client sent none, and where to define it", () => {
+    let caught: Error | undefined;
+    try {
+      resolveSecretPlaceholders("{{secret:NOPE}}", {
+        ...opts({ PATH: "/bin" }),
+        clientSecrets: new Map(),
+      });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught!.message).toContain("the required secret NOPE was not provided");
+    expect(caught!.message).toContain(
+      "1. secrets the argent client sent with this call — 0 secrets"
+    );
+    expect(caught!.message).toContain(
+      "ask the user to add `NOPE=…` to ~/.argent/secrets.env on the client's machine"
+    );
+    expect(caught!.message).not.toContain("in the tool-server's environment");
+  });
+
+  it("reach keyboard and paste through ctx.clientSecrets", async () => {
+    const ctx = { artifacts: {}, clientSecrets } as any;
+    const { api, chars } = recordingCdpApi();
+    const keyboard = createKeyboardTool(registryWith(api));
+    const typed = await keyboard.execute(
+      {},
+      { udid: CHROMIUM_UDID, text: "{{secret:APP_PASSWORD}}", delayMs: 0 },
+      ctx
+    );
+    expect(chars.join("")).toBe("from-client");
+    expect(JSON.stringify(typed)).not.toContain("from-client");
+
+    const pasteApi = { apiUrl: "http://127.0.0.1:1", pressKey: vi.fn() };
+    const paste = createPasteTool(registryWith(pasteApi));
+    await paste.execute({}, { udid: IOS_UDID, text: "{{secret:APP_PASSWORD}}" }, ctx);
+    expect(vi.mocked(setSimulatorClipboardText)).toHaveBeenCalledWith(pasteApi, "from-client", {
+      sensitive: true,
+    });
   });
 });
 
