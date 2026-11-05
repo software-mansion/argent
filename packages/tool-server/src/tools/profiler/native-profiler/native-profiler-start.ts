@@ -73,7 +73,7 @@ export const nativeProfilerStartTool: ToolDefinition<
 Auto-detects the running app process unless app_process is explicitly provided.
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
-Returns { status, pid, traceFile } confirming the recording has started.
+Returns { status, pid, traceFile, warning? } confirming the recording has started; warning says when the device cannot record part of the data.
 Fails if no app is running on the device, or the profiler cannot attach to the process.`,
   zodSchema,
   services: (params) => ({

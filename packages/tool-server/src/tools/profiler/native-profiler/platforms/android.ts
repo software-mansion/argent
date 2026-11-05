@@ -62,7 +62,7 @@ export async function startNativeProfilerAndroid(
   // prior capture's recovery flags and traceFile intact, or the partial trace
   // it could still recover via native-profiler-stop is silently burned. (Same
   // contract as the iOS start path.)
-  const { pid, onDeviceTracePath, child } = await startPerfetto({
+  const { pid, onDeviceTracePath, child, cpuSampling } = await startPerfetto({
     serial: params.device_id,
     appPackage,
     timestamp,
@@ -101,6 +101,7 @@ export async function startNativeProfilerAndroid(
   api.capturePid = pid;
   api.captureProcess = child;
   api.androidOnDeviceTracePath = onDeviceTracePath;
+  api.androidCpuSampling = cpuSampling;
   api.profilingActive = true;
   api.wallClockStartMs = Date.now();
   // This capture's own stop will succeed, so an earlier teardown breadcrumb
@@ -128,6 +129,13 @@ export async function startNativeProfilerAndroid(
     status: "recording",
     pid,
     traceFile: hostTracePath,
+    ...(cpuSampling
+      ? {}
+      : {
+          warning:
+            "perfetto on this device cannot sample CPU callstacks (Android 11 and older), so " +
+            "this trace will have no CPU hotspots.",
+        }),
   };
 }
 
@@ -252,7 +260,9 @@ export async function analyzeNativeProfilerAndroid(
 
   let pipelineResult: Awaited<ReturnType<typeof runAndroidProfilerPipeline>>;
   try {
-    pipelineResult = await runAndroidProfilerPipeline(hostTracePath, appPackage);
+    pipelineResult = await runAndroidProfilerPipeline(hostTracePath, appPackage, {
+      cpuSampling: api.androidCpuSampling,
+    });
   } catch (err) {
     // Bundled WASM engine failed to load: return a prominent banner instead,
     // with empty exportErrors so it never renders as an "Export warnings" list.

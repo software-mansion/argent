@@ -100,6 +100,7 @@ describe("a teardown inside the native-profiler start window", () => {
         pid: 9001,
         onDeviceTracePath: "/data/misc/perfetto-traces/fake.pftrace",
         child: new FakeChild() as unknown as ChildProcess,
+        cpuSampling: true,
       };
     });
 
@@ -129,6 +130,7 @@ describe("a teardown inside the native-profiler start window", () => {
       pid: 9002,
       onDeviceTracePath: "/data/misc/perfetto-traces/real.pftrace",
       child: new FakeChild() as unknown as ChildProcess,
+      cpuSampling: true,
     });
 
     const result = await startNativeProfilerAndroid(api, { device_id: androidDevice.id });

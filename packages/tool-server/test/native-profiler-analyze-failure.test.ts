@@ -103,6 +103,7 @@ async function buildSessionWithTrace(): Promise<{
     recordingExitedUnexpectedly: false,
     lastExitInfo: null,
     androidOnDeviceTracePath: null,
+    androidCpuSampling: true,
   };
 
   return {

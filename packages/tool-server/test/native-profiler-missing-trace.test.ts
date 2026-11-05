@@ -71,6 +71,7 @@ describe("native-profiler-analyze: missing trace file", () => {
         recordingExitedUnexpectedly: false,
         lastExitInfo: null,
         androidOnDeviceTracePath: null,
+        androidCpuSampling: true,
       };
 
       const result = await nativeProfilerAnalyzeTool.execute(

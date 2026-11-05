@@ -44,6 +44,7 @@ function fakeApi(): NativeProfilerSessionApi {
     recordingExitedUnexpectedly: false,
     lastExitInfo: null,
     androidOnDeviceTracePath: null,
+    androidCpuSampling: true,
   };
 }
 

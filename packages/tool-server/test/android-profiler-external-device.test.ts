@@ -7,9 +7,9 @@ import { startPerfetto } from "../src/utils/android-profiler/capture";
 import { makeExternalId } from "../src/utils/external-devices";
 
 /**
- * Perfetto is the one `adb` caller that spawns for itself: the trace config
- * goes in on stdin and the daemon's PID comes back on stdout, which `runAdb`
- * (whose contract is "run to completion, give me the output") cannot express.
+ * Perfetto is the one `adb` caller that spawns for itself: the daemon's PID
+ * comes back on stdout while it keeps running, which `runAdb` (whose contract
+ * is "run to completion, give me the output") cannot express.
  * So it is also the one place `adb` can be handed a serial `runAdb` never
  * substituted.
  *

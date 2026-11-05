@@ -78,7 +78,17 @@ vi.mock("../../src/utils/adb", async () => ({
   adbShell: vi.fn(async () => ""),
 }));
 
-import { startPerfetto, buildTraceConfig } from "../../src/utils/android-profiler/capture";
+import { readFileSync } from "fs";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { runAdb, adbShell } from "../../src/utils/adb";
+import {
+  startPerfetto,
+  buildTraceConfig,
+  withoutCpuSampling,
+} from "../../src/utils/android-profiler/capture";
+
+const runAdbMock = vi.mocked(runAdb);
+const adbShellMock = vi.mocked(adbShell);
 
 // Poll on a wall-clock deadline rather than a fixed tick budget: startPerfetto
 // does real async work (resolveAndroidBinary + buildTraceConfig's fs.readFile)
@@ -112,12 +122,59 @@ describe("buildTraceConfig", () => {
   });
 });
 
+/** The `adb push` calls, with the host file's content read while it still exists. */
+function recordPushes(): { args: string[]; content: string }[] {
+  const pushes: { args: string[]; content: string }[] = [];
+  runAdbMock.mockImplementation(async (args: string[]) => {
+    if (args.includes("push")) {
+      pushes.push({ args, content: readFileSync(args[args.indexOf("push") + 1], "utf8") });
+    }
+    return { stdout: "", stderr: "" };
+  });
+  return pushes;
+}
+
+const CONFIG_PATH = /^\/data\/local\/tmp\/argent-20260101-000000-[0-9a-f]{8}\.pbtxt$/;
+const MODERN_HELP =
+  "  --background-wait -D : Exits once tracing starts\n  --txt : Parse config as pbtxt\n";
+const ANDROID_11_HELP = "  --background -d : Exits immediately\n  --txt : Parse config as pbtxt\n";
+const ANDROID_9_HELP = "perfetto: unrecognized option\n  --background -b : Exits immediately\n";
+
+function mockShell(help: string): void {
+  adbShellMock.mockImplementation(async (_serial: string, command: string) =>
+    command.startsWith("perfetto --help") ? help : ""
+  );
+}
+
+describe("withoutCpuSampling", () => {
+  it("removes the marked section of the real template and nothing else", async () => {
+    const full = await buildTraceConfig("com.example.app");
+    expect(full).toContain("linux.perf");
+    const out = withoutCpuSampling(full);
+    expect(out).not.toContain("linux.perf");
+    expect(out).not.toContain("callstack_sampling");
+    expect(out).toContain("linux.ftrace");
+    expect(out).toContain("buffers:");
+    expect(out.split("{").length).toBe(out.split("}").length);
+  });
+
+  it("leaves a config without the markers alone", () => {
+    const cfg = 'data_sources: { config: { name: "linux.perf" } }';
+    expect(withoutCpuSampling(cfg)).toBe(cfg);
+  });
+});
+
 describe("startPerfetto", () => {
   beforeEach(() => {
     captureState.lastSpawn = null;
+    runAdbMock.mockReset();
+    runAdbMock.mockResolvedValue({ stdout: "", stderr: "" });
+    adbShellMock.mockReset();
+    mockShell(MODERN_HELP);
   });
 
-  it("invokes adb with --background-wait and -c - (stdin config)", async () => {
+  it("pushes the config and pipes it into perfetto on the device", async () => {
+    const pushes = recordPushes();
     const promise = startPerfetto({
       serial: "emulator-5554",
       appPackage: "com.example.app",
@@ -128,16 +185,158 @@ describe("startPerfetto", () => {
     const result = await promise;
 
     expect(result.pid).toBe(12345);
+    expect(pushes).toHaveLength(1);
+    const pushArgs = pushes[0].args;
+    expect(pushArgs.slice(0, 3)).toEqual(["-s", "emulator-5554", "push"]);
+    const onDeviceConfigPath = pushArgs[4];
+    expect(onDeviceConfigPath).toMatch(CONFIG_PATH);
+    expect(pushes[0].content).toContain("data_sources");
+    expect(pushes[0].content).toContain("com.example.app");
+
     const args = lastSpawnRef()!.args;
-    expect(args).toContain("--background-wait");
-    expect(args).toContain("-c");
-    const cIdx = args.indexOf("-c");
-    expect(args[cIdx + 1]).toBe("-");
-    const oIdx = args.indexOf("-o");
-    expect(args[oIdx + 1]).toMatch(/^\/data\/misc\/perfetto-traces\/argent-.*\.pftrace$/);
-    const stdinText = (lastSpawnRef()!.child as { stdinWritten: string }).stdinWritten;
-    expect(stdinText).toContain("data_sources");
-    expect(stdinText).toContain("com.example.app");
+    expect(args.slice(-2)[0]).toBe("shell");
+    const command = args[args.length - 1];
+    expect(command).toContain(`cat ${onDeviceConfigPath} | perfetto --txt -c - --background-wait`);
+    expect(command).toMatch(/-o \/data\/misc\/perfetto-traces\/argent-.*\.pftrace$/);
+    // The pushed config is removed once perfetto has read it.
+    expect(adbShellMock).toHaveBeenCalledWith(
+      "emulator-5554",
+      `rm -f ${onDeviceConfigPath}`,
+      expect.anything()
+    );
+  });
+
+  it("uses --background where perfetto has no --background-wait, and checks it stayed up", async () => {
+    mockShell(ANDROID_11_HELP);
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.stdout.emit("data", Buffer.from("12345\n"));
+    const result = await promise;
+    expect(result.cpuSampling).toBe(true);
+    expect(lastSpawnRef()!.args.at(-1)!).toContain("perfetto --txt -c - --background -o ");
+    expect(adbShellMock).toHaveBeenCalledWith(
+      "emulator-5554",
+      expect.stringContaining("/proc/12345"),
+      expect.anything()
+    );
+  });
+
+  it("reports a backgrounded perfetto that died right after printing its PID", async () => {
+    adbShellMock.mockImplementation(async (_serial: string, command: string) => {
+      if (command.startsWith("perfetto --help")) return ANDROID_11_HELP;
+      return command.includes("/proc/") ? "gone\n" : "";
+    });
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.stdout.emit("data", Buffer.from("12345\n"));
+    await expect(promise).rejects.toThrow(/persist\.traced\.enable/);
+  });
+
+  it("retries without CPU sampling when perfetto rejects a config field", async () => {
+    mockShell(ANDROID_11_HELP);
+    const pushes = recordPushes();
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    const first = lastSpawnRef()!.child;
+    captureState.lastSpawn = null;
+    first.stdout.emit("data", Buffer.from('-:38:7 error: No field named "timebase" in proto\n'));
+    first.emit("exit", 0, null);
+    await waitForSpawn();
+    lastSpawnRef()!.child.stdout.emit("data", Buffer.from("777\n"));
+    const result = await promise;
+
+    expect(result.pid).toBe(777);
+    expect(result.cpuSampling).toBe(false);
+    expect(pushes).toHaveLength(2);
+    expect(pushes[0].content).toContain("linux.perf");
+    expect(pushes[1].content).not.toContain("linux.perf");
+    expect(pushes[1].content).not.toContain("callstack_sampling");
+    expect(pushes[1].content).toContain("linux.ftrace");
+  });
+
+  it("does not count empty --help output as an unsupported device", async () => {
+    mockShell("");
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.stdout.emit("data", Buffer.from("12345\n"));
+    await promise;
+    expect(lastSpawnRef()!.args.at(-1)!).toContain("--background-wait");
+  });
+
+  it("stops an on-device perfetto when the start fails", async () => {
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.emit("exit", 1, null);
+    await expect(promise).rejects.toThrow(/perfetto exited/);
+    expect(adbShellMock).toHaveBeenCalledWith(
+      "emulator-5554",
+      "pkill -f '[a]rgent-20260101-000000.pftrace'",
+      expect.anything()
+    );
+  });
+
+  it("refuses a perfetto that cannot read a text config, before pushing anything", async () => {
+    mockShell(ANDROID_9_HELP);
+    const err = await startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    }).catch((e: unknown) => e);
+    expect((err as Error).message).toContain("Android 10 or newer");
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_PROFILER_PERFETTO_UNSUPPORTED
+    );
+    expect(runAdbMock).not.toHaveBeenCalled();
+    expect(lastSpawnRef()).toBeNull();
+  });
+
+  it("removes the pushed config when perfetto fails to start", async () => {
+    const pushes = recordPushes();
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.emit("exit", 1, null);
+    await expect(promise).rejects.toThrow(/perfetto exited/);
+    expect(adbShellMock).toHaveBeenCalledWith(
+      "emulator-5554",
+      `rm -f ${pushes[0].args[4]}`,
+      expect.anything()
+    );
+  });
+
+  it("fails clearly when the push fails, without starting perfetto", async () => {
+    runAdbMock.mockRejectedValue(new Error("remote couldn't create file: Permission denied"));
+    await expect(
+      startPerfetto({
+        serial: "emulator-5554",
+        appPackage: "com.example.app",
+        timestamp: "20260101-000000",
+      })
+    ).rejects.toThrow(/Failed to push the perfetto config.*Permission denied/);
+    expect(lastSpawnRef()).toBeNull();
   });
 
   it("tolerates warning text preceding the PID — parses the last non-empty stdout line", async () => {
@@ -210,16 +409,5 @@ describe("startPerfetto", () => {
     await waitForSpawn();
     lastSpawnRef()!.child.emit("error", new Error("spawn EACCES"));
     await expect(promise).rejects.toThrow(/Failed to launch adb for perfetto.*EACCES/);
-  });
-
-  it("rejects when writing the config to a broken stdin emits 'error'", async () => {
-    const promise = startPerfetto({
-      serial: "emulator-5554",
-      appPackage: "com.example.app",
-      timestamp: "20260101-000000",
-    });
-    await waitForSpawn();
-    lastSpawnRef()!.child.stdin.emit("error", new Error("EPIPE"));
-    await expect(promise).rejects.toThrow(/Failed to write perfetto config.*EPIPE/);
   });
 });

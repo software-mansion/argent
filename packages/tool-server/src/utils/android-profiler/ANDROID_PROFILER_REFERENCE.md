@@ -23,13 +23,16 @@ Mirrors `utils/ios-profiler/IOS_PROFILER_REFERENCE.md` for the iOS branch.
 ```
 ADB shell                                 device
    │                                        │
-   │ spawn `perfetto --txt -c -                       (stdin: TraceConfig textproto)
-   │        --background-wait                         (wait for data sources to start)
+   │ adb shell `perfetto --help`            │  (choose the background flag)
+   │ adb push <cfg> /data/local/tmp/argent-<ts>-<rand>.pbtxt
+   │ spawn `cat <that path> | perfetto --txt -c -
+   │        --background-wait                         (--background on Android 11 and older)
    │        -o /data/misc/perfetto-traces/argent-<ts>.pftrace`
    │                                        │
-   │ <───  PID prints on stdout once data sources are running
+   │ <───  PID prints on stdout
    │                                        │
-   │ adb shell exits (stdin closed)         │  traced keeps recording
+   │ adb shell exits                        │  traced keeps recording
+   │ adb shell `rm -f <cfg path>`           │
    │                                        │
    │ (user interaction)                     │
    │                                        │
@@ -39,10 +42,12 @@ ADB shell                                 device
    │ adb shell `rm -f <onDevicePath>`       │
 ```
 
-Two live constraints to remember:
+Live constraints to remember:
 
-- `/data/misc/perfetto-traces/` is `drwxrwx-wx` but SELinux denies `shell:s0` writes. The config CANNOT be staged via `cat > <path>` — it has to be piped to `perfetto` on stdin (`-c -`). `traced` writes the output as a privileged daemon, so the `.pftrace` lands fine.
-- `--background-wait` prints the PID on stdout once all data sources are running. Tolerate warnings preceding the PID by taking the _last_ non-empty stdout line.
+- The config is pushed to `/data/local/tmp/` and piped into perfetto by the on-device shell. perfetto cannot open it there (SELinux), `shell:s0` cannot write `/data/misc/perfetto-traces/`, and `/data/misc/perfetto-configs/` only exists from Android 12. Piping from the host instead (`adb shell perfetto -c -` with the config on adb's stdin) needs adb to deliver end of input, which takes the `shell_v2` protocol: over a transport that does not advertise it, perfetto waits for more config forever.
+- `--background-wait` prints the PID once all data sources are running. Android 11 and older only have `--background`, which prints it straight away, so a trace there can miss the first moments, and the capture checks that the daemon is still alive shortly afterwards. Tolerate warnings preceding the PID by taking the _last_ non-empty stdout line.
+- Android 11 and older reject the `linux.perf` fields in the config, and one unknown field fails the whole config. When perfetto answers `No field named`, the capture retries without the section between the `ARGENT_CPU_SAMPLING` markers, so those traces have no CPU callstacks. The start result and the analysis report say so.
+- Below Android 10 perfetto has no `--txt`, so native profiling fails with `NATIVE_PROFILER_PERFETTO_UNSUPPORTED`.
 
 ---
 

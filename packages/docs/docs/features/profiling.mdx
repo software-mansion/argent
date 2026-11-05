@@ -23,7 +23,9 @@ Argent has two profilers. The agent can run one profiler or both profilers at th
 | -------- | ------------ | ------------------------- | ----------------------------------------------------------------- |
 | React    | iOS, Android | Hermes and React DevTools | JS CPU samples, React commits, renders of each component          |
 | Native   | iOS          | Xcode Instruments         | Native CPU time, UI hangs, memory leaks                           |
-| Native   | Android      | Perfetto                  | Native CPU time, UI hangs with the jank reason, GC, memory growth |
+| Native   | Android 10+  | Perfetto                  | Native CPU time, UI hangs with the jank reason, GC, memory growth |
+
+On Android 10 and 11 the native profiler records no CPU callstacks, because perfetto there cannot sample them. Below Android 10 it reports that it is not supported.
 
 The React profiler connects to the Hermes runtime of the app through the debugger. Thus the app must run in a debuggable build. The native profiler attaches to the process of the app on the device. On iOS, the native profiler does not need a special build. On Android, the app must be a debug build or be profileable. Without this, the native profile has no CPU call stacks. To make a release build profileable, add `<profileable android:shell="true"/>` under `<application>` in `AndroidManifest.xml`.
 

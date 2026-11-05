@@ -1,7 +1,7 @@
 # Argent — Perfetto TraceConfig (text protobuf)
 #
 # The Android twin of packages/tool-server/src/utils/ios-profiler/Argent.tracetemplate.
-# Pushed to the device and consumed by `perfetto --txt -c <this-file>`.
+# Pushed to the device and piped in by the on-device shell: `cat <file> | perfetto --txt -c -`.
 #
 # In production this is template-substituted: TARGET_CMDLINE_PLACEHOLDER and
 # TARGET_PACKAGE_PLACEHOLDER are replaced with the auto-detected foreground app
@@ -26,10 +26,12 @@ buffers: {
 
 # ----------------------------------------------------------------------------
 # Data source 1: CPU callstack sampling (the Time Profiler equivalent)
+# Removed between the ARGENT_CPU_SAMPLING markers where perfetto rejects its fields.
 # ----------------------------------------------------------------------------
 # Outputs perf_sample rows we GROUP BY callsite + thread in queries/cpu-hotspots.sql.
 # target_cmdline restricts sampling to the user's app — system-wide noise is
 # excluded at capture time, not analysis time.
+# ARGENT_CPU_SAMPLING_BEGIN
 data_sources: {
   config: {
     name: "linux.perf"
@@ -53,6 +55,8 @@ data_sources: {
     }
   }
 }
+
+# ARGENT_CPU_SAMPLING_END
 
 # ----------------------------------------------------------------------------
 # Data source 2: kernel scheduler events + atrace app slices
