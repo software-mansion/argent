@@ -3,12 +3,22 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
+import * as v8 from "node:v8";
+import * as vm from "node:vm";
+import {
+  LogFileWriter,
+  TAIL_MAX,
+  TAIL_MESSAGE_CHARS,
+  type RichLogEntry,
+} from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
 
 scopeTempHome("argent-log-writer-home-");
 
 let writer: LogFileWriter;
+
+v8.setFlagsFromString("--expose-gc");
+const gc = vm.runInNewContext("gc") as () => void;
 
 function makeEntry(id: number, overrides: Partial<Omit<RichLogEntry, "marker">> = {}) {
   return {
@@ -159,39 +169,129 @@ describe("LogFileWriter", () => {
     expect(entries[2].id).toBe(2);
   });
 
-  it("readFiltered() filters by level", () => {
-    writer.write(makeEntry(0, { level: "log" }));
-    writer.write(makeEntry(1, { level: "error" }));
-    writer.write(makeEntry(2, { level: "log" }));
-    writer.write(makeEntry(3, { level: "error" }));
-
-    const { entries, total } = writer.readFiltered({ level: "error" });
-    expect(total).toBe(2);
-    expect(entries).toHaveLength(2);
-    expect(entries.every((e) => e.level === "error")).toBe(true);
-  });
-
-  it("readFiltered() limits results to last N", () => {
-    for (let i = 0; i < 10; i++) {
-      writer.write(makeEntry(i));
-    }
-
-    const { entries, total } = writer.readFiltered({ limit: 3 });
-    expect(total).toBe(10);
-    expect(entries).toHaveLength(3);
-    expect(entries[0].id).toBe(7);
-    expect(entries[2].id).toBe(9);
-  });
-
-  it("readFiltered() combines level and limit", () => {
+  it("tail() keeps the newest entries of the given levels, oldest first", () => {
     for (let i = 0; i < 10; i++) {
       writer.write(makeEntry(i, { level: i % 2 === 0 ? "error" : "log" }));
     }
 
-    const { entries, total } = writer.readFiltered({ level: "error", limit: 2 });
-    expect(total).toBe(5);
-    expect(entries).toHaveLength(2);
-    expect(entries.every((e) => e.level === "error")).toBe(true);
+    expect(writer.tail({ levels: ["error"], limit: 2 }).map((e) => e.id)).toEqual([6, 8]);
+    expect(writer.tail({ limit: 3 }).map((e) => e.id)).toEqual([7, 8, 9]);
+  });
+
+  it("tail() still finds an error buried under more than TAIL_MAX logs", () => {
+    writer.write(makeEntry(0, { level: "error" }));
+    for (let i = 1; i <= TAIL_MAX + 5; i++) writer.write(makeEntry(i));
+
+    expect(writer.tail({ levels: ["error"], limit: 5 }).map((e) => e.id)).toEqual([0]);
+    expect(writer.tail({ limit: TAIL_MAX })).toHaveLength(TAIL_MAX);
+  });
+
+  it("retainedTail() keeps an error buried under more than TAIL_MAX logs", () => {
+    writer.write(makeEntry(0, { level: "error" }));
+    for (let i = 1; i <= TAIL_MAX + 5; i++) writer.write(makeEntry(i));
+
+    const retained = writer.retainedTail();
+    expect(retained[0]).toEqual(expect.objectContaining({ id: 0, level: "error" }));
+    expect(retained).toHaveLength(TAIL_MAX + 1);
+  });
+
+  it("tail() keeps the newest entries after the file stops at 50,000", () => {
+    for (let i = 0; i < 50_003; i++) writer.write(makeEntry(i, { message: "m" }));
+
+    expect(writer.getStats().totalEntries).toBe(50_000);
+    expect(writer.getStats().droppedEntries).toBe(3);
+    expect(writer.tail({ limit: 3 }).map((e) => e.id)).toEqual([50_000, 50_001, 50_002]);
+  });
+
+  it("getStats() leaves droppedEntries out while the file still takes entries", () => {
+    writer.write(makeEntry(0));
+    expect(writer.getStats()).not.toHaveProperty("droppedEntries");
+  });
+
+  it("tail() reads a level listed twice once", () => {
+    for (let i = 0; i < 6; i++) writer.write(makeEntry(i, { level: i % 2 ? "error" : "log" }));
+
+    expect(writer.tail({ levels: ["error", "error"], limit: 10 }).map((e) => e.id)).toEqual([
+      1, 3, 5,
+    ]);
+    expect(writer.tail({ levels: ["error", "log", "error"], limit: 4 }).map((e) => e.id)).toEqual([
+      2, 3, 4, 5,
+    ]);
+  });
+
+  it("tail() keeps exactly the newest TAIL_MAX entries of one level", () => {
+    for (let i = 0; i < TAIL_MAX + 7; i++) writer.write(makeEntry(i, { level: "error" }));
+
+    const ids = writer.tail({ limit: TAIL_MAX + 7 }).map((e) => e.id);
+    expect(ids).toHaveLength(TAIL_MAX);
+    expect(ids[0]).toBe(7);
+    expect(ids.at(-1)).toBe(TAIL_MAX + 6);
+  });
+
+  it("tail() keeps each entry's level and timestamp as logged", () => {
+    writer.write(makeEntry(0, { level: "timeEnd" }));
+    writer.write(makeEntry(1, { level: "error" }));
+
+    expect(writer.tail({ limit: 2 })).toEqual([
+      expect.objectContaining({ level: "timeEnd", timestamp: makeEntry(0).timestamp }),
+      expect.objectContaining({ level: "error", timestamp: makeEntry(1).timestamp }),
+    ]);
+    expect(writer.tail({ levels: ["timeEnd"], limit: 1 }).map((e) => e.id)).toEqual([0]);
+  });
+
+  it("tail() orders entries logged in the same millisecond by id", () => {
+    const sameMs = makeEntry(5).timestamp;
+    writer.write(makeEntry(0, { level: "error" }));
+    writer.write({ ...makeEntry(1, { level: "log" }), timestamp: sameMs });
+    writer.write({ ...makeEntry(2, { level: "error" }), timestamp: sameMs });
+
+    expect(writer.tail({ limit: 3 }).map((e) => e.id)).toEqual([0, 1, 2]);
+  });
+
+  it("tail() does not keep the full long messages alive", () => {
+    const prefix = "p".repeat(80);
+    const heapAfterGc = () => {
+      gc();
+      return process.memoryUsage().heapUsed;
+    };
+    const before = heapAfterGc();
+    for (let i = 0; i < 50; i++) {
+      writer.write(makeEntry(i, { message: `${prefix}${String(i).padEnd(1_000_000, "x")}` }));
+    }
+
+    expect(heapAfterGc() - before).toBeLessThan(10_000_000);
+  });
+
+  it("caps tail at 100 entries and 300 chars, the numbers the skills promise", () => {
+    expect(TAIL_MAX).toBe(100);
+    expect(TAIL_MESSAGE_CHARS).toBe(300);
+  });
+
+  it("tail() cuts long messages without splitting a surrogate pair", () => {
+    const pad = "x".repeat(TAIL_MESSAGE_CHARS - 1);
+    writer.write(makeEntry(0, { message: `${pad}\u{1F600}tail` }));
+    writer.write(makeEntry(1, { message: "y".repeat(TAIL_MESSAGE_CHARS + 50) }));
+
+    const [emoji, long] = writer.tail({ limit: 2 }).map((e) => e.message);
+    expect(emoji).toBe(`${pad}…`);
+    expect(emoji.isWellFormed()).toBe(true);
+    expect(long).toBe(`${"y".repeat(TAIL_MESSAGE_CHARS)}…`);
+  });
+
+  it("tail() leaves a message of exactly TAIL_MESSAGE_CHARS uncut", () => {
+    const exact = "z".repeat(TAIL_MESSAGE_CHARS);
+    writer.write(makeEntry(0, { message: exact }));
+
+    expect(writer.tail({ limit: 1 })[0].message).toBe(exact);
+  });
+
+  it("tail() keeps a surrogate pair that ends right at the cut", () => {
+    const head = `${"x".repeat(TAIL_MESSAGE_CHARS - 2)}\u{1F600}`;
+    writer.write(makeEntry(0, { message: `${head}tail` }));
+
+    const { message } = writer.tail({ limit: 1 })[0];
+    expect(message).toBe(`${head}…`);
+    expect(message.isWellFormed()).toBe(true);
   });
 
   it("close() deletes the file", () => {
@@ -380,19 +480,20 @@ describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be cr
     unwritableWriter.close();
   });
 
-  it("keeps no copy of a line it could not write", () => {
+  it("writes no file and reads nothing back for a line it could not write", () => {
     unwritableWriter.write(makeEntry(0, { message: "unreadable line" }));
 
     expect(fs.existsSync(unwritableWriter.getFilePath())).toBe(false);
     expect(unwritableWriter.readAll()).toEqual([]);
-
-    const retainedLines = Object.values(unwritableWriter as unknown as Record<string, unknown>)
-      .filter((value): value is unknown[] => Array.isArray(value))
-      .flat();
-    expect(retainedLines).toEqual([]);
-
-    // The entry itself is still accounted for, through the counts and clusters.
     expect(unwritableWriter.getStats().totalEntries).toBe(1);
     expect(unwritableWriter.getClusters()[0].message).toBe("unreadable line");
+  });
+
+  it("still serves the entry through tail()", () => {
+    unwritableWriter.write(makeEntry(0, { level: "error", message: "unreadable line" }));
+
+    expect(unwritableWriter.tail({ levels: ["error"], limit: 5 })).toEqual([
+      expect.objectContaining({ id: 0, message: "unreadable line" }),
+    ]);
   });
 });

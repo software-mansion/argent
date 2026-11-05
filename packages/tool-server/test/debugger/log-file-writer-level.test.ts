@@ -8,7 +8,7 @@ scopeTempHome("argent-log-level-home-");
  * Regression for level truncation: CDP emits console levels longer than 5 chars
  * ("warning" from console.warn, "assert" from console.assert) that are not in
  * LEVEL_DISPLAY. The old fallback `.padEnd(5).slice(0, 5)` truncated them to
- * "warni"/"asser", so readAll()/readFiltered() returned the wrong level and
+ * "warni"/"asser", so readAll() returned the wrong level and
  * filtering by the canonical level found nothing. The level must round-trip
  * exactly for levels of any length while short levels keep working as before.
  */
@@ -40,8 +40,7 @@ describe("LogFileWriter round-trips levels of any length", () => {
       level: "warning",
       message: "x",
     });
-    const { total, entries } = w.readFiltered({ level: "warning" });
-    expect(total).toBe(1);
+    const entries = w.readAll().filter((e) => e.level === "warning");
     expect(entries).toHaveLength(1);
     expect(entries[0]!.level).toBe("warning");
   });
@@ -54,8 +53,7 @@ describe("LogFileWriter round-trips levels of any length", () => {
       level: "assert",
       message: "y",
     });
-    const { total, entries } = w.readFiltered({ level: "assert" });
-    expect(total).toBe(1);
+    const entries = w.readAll().filter((e) => e.level === "assert");
     expect(entries).toHaveLength(1);
   });
 

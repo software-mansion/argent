@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   recordReapedSession,
   takeReapedSession,
+  takeReapedSessionAnyId,
   describeReapedSession,
   __resetReapedSessionsForTesting,
 } from "../src/utils/reaped-sessions";
@@ -70,6 +71,15 @@ describe("the reaped-session key", () => {
     expect(takeReapedSession("js-runtime-debugger", "logical")?.salvage).toBe("old");
     expect(takeReapedSession("js-runtime-debugger", UDID)?.salvage).toBe("new");
     expect(takeReapedSession("js-runtime-debugger", "other")).toBeUndefined();
+  });
+
+  it("scopes a debugger record by Metro port, so another app on the device cannot take it", () => {
+    recordReapedSession("js-runtime-debugger", UDID, "app A", false, { port: 8081 });
+    recordReapedSession("js-runtime-debugger", UDID, "app B", false, { port: 8082 });
+
+    expect(takeReapedSessionAnyId("js-runtime-debugger", [UDID], 8082)?.salvage).toBe("app B");
+    expect(takeReapedSessionAnyId("js-runtime-debugger", [UDID], 8082)).toBeUndefined();
+    expect(takeReapedSessionAnyId("js-runtime-debugger", [UDID], 8081)?.salvage).toBe("app A");
   });
 
   it("does not pin the teardown on one caller the disposer cannot have seen", () => {

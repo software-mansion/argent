@@ -108,18 +108,29 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "electronAppPath and force: true), then retry once.",
 };
 
+/**
+ * The Metro port the resolve uses (caller, then provider-published, then
+ * 8081), or undefined for Chromium, whose CDP port lives in the device id.
+ */
+export function debuggerMetroPort(params: {
+  port?: number;
+  device_id?: string;
+}): number | undefined {
+  const isChromium = params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ?? false;
+  return isChromium ? undefined : metroPort(params);
+}
+
 export function buildNotConnected(
   reason: DebuggerNotConnectedReason,
   err: unknown,
   params: { port?: number; device_id?: string }
 ): DebuggerNotConnectedResult {
   const isChromium = params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ?? false;
+  const port = debuggerMetroPort(params);
   return {
     status: "not_connected",
     connected: false,
-    // Resolved through metroPort so the reported port is the one the resolve
-    // actually used (caller, then provider-published, then 8081).
-    ...(isChromium ? {} : { port: metroPort(params) }),
+    ...(port === undefined ? {} : { port }),
     reason,
     detail: err instanceof Error ? err.message : String(err),
     guidance: (isChromium ? CHROMIUM_GUIDANCE[reason] : undefined) ?? GUIDANCE[reason],

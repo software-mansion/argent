@@ -140,15 +140,8 @@ describe("Log Registry (integration)", () => {
     writeLog(3, { level: "error" });
     writeLog(4, { level: "log" });
 
-    // Simulates profiler-console-logs behavior
-    const { entries, total } = writer.readFiltered({
-      level: "error",
-      limit: 10,
-    });
-    expect(total).toBe(2);
-    expect(entries).toHaveLength(2);
-    expect(entries[0].level).toBe("error");
-    expect(entries[1].level).toBe("error");
+    const entries = writer.tail({ levels: ["error"], limit: 10 });
+    expect(entries.map((e) => e.id)).toEqual([1, 3]);
   });
 
   it("WebSocket replay simulation works", () => {
