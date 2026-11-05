@@ -40,6 +40,8 @@ import {
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
+import { showsSchemaKeywords } from "./keyword-facts.js";
+import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
 
@@ -240,22 +242,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     { name: "argent", version: getInstalledVersion() },
     {
       capabilities: { tools: {} },
-      instructions:
-        "Argent — iOS Simulator, Android Emulator, and Chromium app control for interacting, testing, profiling and debugging mobile and Chromium applications. " +
-        "Interaction tools return the screen after the action: a screenshot plus the accessibility element tree with normalized tap frames. Take coordinates from that tree; call describe (or debugger-component-tree) only when no fresh tree is available — never guess coordinates from pixels. " +
-        "Do not stop simulator servers when a task finishes: the next task reuses them. Call stop-all-simulator-servers when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services, always with devices: [...] naming the devices this session used. Never stop a Metro the user started unless they ask. " +
-        "One tool-server is shared by every agent using this argent install, so an unscoped call tears down their devices too — reserve it for a deliberate machine-wide cleanup. " +
-        "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
+      instructions: SERVER_INSTRUCTIONS,
     }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
-      const tools = toMcpToolList(await fetchTools());
+      // The handshake precedes tools/list, so the client is known by now.
+      const keywordFacts = !showsSchemaKeywords(server.getClientVersion()?.name);
+      const tools = toMcpToolList(await fetchTools(), { keywordFacts });
       await spyLog({
         ts: new Date().toISOString(),
         event: "list_tools",
         count: tools.length,
+        keywordFacts,
       });
       return { tools };
     } catch (err) {
@@ -297,7 +297,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         canonicalToolId(params.name) === "e2e-execute" &&
         result &&
         typeof result === "object" &&
-        "flow" in result &&
+        ("e2eTest" in result || "flow" in result) &&
         "steps" in result
       ) {
         content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);

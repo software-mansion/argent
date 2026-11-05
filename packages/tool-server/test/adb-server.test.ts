@@ -1,6 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import * as net from "node:net";
-import { adbServerAddress, adbServerShell, configuredAdbServerPort } from "../src/utils/adb-server";
+import {
+  adbCommandPrefix,
+  adbServerAddress,
+  adbServerShell,
+  configuredAdbServerPort,
+} from "../src/utils/adb-server";
 
 /**
  * A fake adb server speaking just enough of the real protocol (4-hex-digit
@@ -155,5 +160,48 @@ describe("configuredAdbServerPort", () => {
 
   it("returns null when nothing is configured", () => {
     expect(configuredAdbServerPort({}, null)).toBeNull();
+  });
+});
+
+describe("adbCommandPrefix", () => {
+  it.each([
+    { name: "adds nothing for adb's default server", env: {}, prefix: "" },
+    {
+      name: "adds nothing for the default port named explicitly",
+      env: { ANDROID_ADB_SERVER_PORT: "5037" },
+      prefix: "",
+    },
+    {
+      name: "adds nothing for the default host named explicitly",
+      env: { ANDROID_ADB_SERVER_ADDRESS: "localhost" },
+      prefix: "",
+    },
+    {
+      name: "names a non-default port",
+      env: { ANDROID_ADB_SERVER_PORT: "5038" },
+      prefix: "ANDROID_ADB_SERVER_PORT=5038 ",
+    },
+    {
+      name: "names a non-default port and host",
+      env: { ANDROID_ADB_SERVER_PORT: "6000", ANDROID_ADB_SERVER_ADDRESS: "10.0.0.2" },
+      prefix: "ANDROID_ADB_SERVER_PORT=6000 ANDROID_ADB_SERVER_ADDRESS=10.0.0.2 ",
+    },
+    {
+      name: "names a non-default host alone",
+      env: { ANDROID_ADB_SERVER_ADDRESS: "10.0.0.2" },
+      prefix: "ANDROID_ADB_SERVER_ADDRESS=10.0.0.2 ",
+    },
+    {
+      name: "mirrors ADB_SERVER_SOCKET verbatim",
+      env: { ADB_SERVER_SOCKET: "tcp:10.0.0.2:5555" },
+      prefix: "ADB_SERVER_SOCKET=tcp:10.0.0.2:5555 ",
+    },
+    {
+      name: "lets ADB_SERVER_SOCKET win over the port, as adb does",
+      env: { ADB_SERVER_SOCKET: "tcp:5555", ANDROID_ADB_SERVER_PORT: "5038" },
+      prefix: "ADB_SERVER_SOCKET=tcp:5555 ",
+    },
+  ])("$name", ({ env, prefix }) => {
+    expect(adbCommandPrefix(env)).toBe(prefix);
   });
 });

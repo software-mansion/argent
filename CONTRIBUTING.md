@@ -66,6 +66,12 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    PORT=4000 npm run dev
    ```
 
+   > **Note:** On a physical iPhone the tool-server builds the on-device XCUITest runner from `packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj`. A packaged tool-server finds that project next to its bundle; one started from source (`npm run dev`, `npm run start`, or `node packages/tool-server/dist/index.js start`) does not, and the first tool that drives the runner (`describe`, a gesture, `screenshot`) fails with "Could not locate the ios-device-runner Xcode project". Point it at the project:
+   >
+   > ```bash
+   > ARGENT_IOS_RUNNER_PROJECT="$PWD/packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj" npm run dev
+   > ```
+
 That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `npm run lint` from the root needs `npm install` run inside `packages/docs` first.
 
 ---
@@ -173,6 +179,22 @@ Run tests in watch mode during development:
 npm run test:watch -w @argent/registry
 npm run test:watch -w @argent/tool-server
 ```
+
+### Checking what coding agents see
+
+`npm run harness-check` runs real coding-agent CLIs (Codex, opencode, Gemini CLI, and
+optionally Claude Code and Kiro CLI) against your build. It reports which values from
+Argent's tool schemas reach each one's model. Run it by hand when you change tool schemas,
+tool descriptions or the MCP server's instructions. See
+[scripts/harness-check/README.md](scripts/harness-check/README.md).
+
+### Seeing what Argent sends to agents
+
+`npm run render:agent-context` renders what the MCP server sends for your checkout: each
+tool's `tools/list` entry and the server instructions, as markdown in
+`packages/tool-server/agent-context/` (not committed). Run it when you change tool
+descriptions, tool schemas or the server instructions. See
+[packages/tool-server/src/tools/README.md](packages/tool-server/src/tools/README.md).
 
 ---
 

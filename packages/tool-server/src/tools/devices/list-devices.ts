@@ -7,6 +7,7 @@ import {
   consolePortFromAdbSerial,
   ADB_DEVICES_TIMEOUT_MS,
 } from "../../utils/adb";
+import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
@@ -117,9 +118,10 @@ type ListDevicesResult = {
   devices: ListedDevice[];
   avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Rules for a provider's device, present only when one is listed. Most
-   * installs have no provider and the description is read once per session, so
-   * a provider appearing later would miss it. This is re-read per call.
+   * Rules for a provider's device, present only when one is listed, and how to
+   * reach the adb server, present only when it is not adb's default. Most
+   * installs need neither and the description is read once per session, so a
+   * provider appearing later would miss it. This is re-read per call.
    */
   hint?: string;
 };
@@ -134,6 +136,19 @@ const EXTERNAL_DEVICES_HINT =
   `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
   `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
+
+/**
+ * The agent's shell does not inherit the tool-server's environment, so its adb
+ * reaches the default server, where these serials do not exist. Given whenever
+ * the server differs, Android device or not: the agent may boot one next.
+ */
+function adbServerHint(prefix: string): string {
+  return (
+    `Argent reaches Android and Vega devices through an adb server other than adb's default, so ` +
+    `an adb command you run in your own shell does not see the serials listed here. Prefix every ` +
+    `adb command you run yourself: \`${prefix}adb -s <serial> ...\`.`
+  );
+}
 
 function sortIos(a: IosDevice, b: IosDevice): number {
   const aBooted = a.state === "Booted" ? 0 : 1;
@@ -482,10 +497,16 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       foldableAvds.has(a.name) ? { ...a, foldable: true as const } : a
     );
 
+    const adbPrefix = adbCommandPrefix(process.env);
+    const hints = [
+      ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
+      ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
+    ];
+
     return {
       devices,
       avds: avdsTagged,
-      ...(external.length > 0 ? { hint: EXTERNAL_DEVICES_HINT } : {}),
+      ...(hints.length > 0 ? { hint: hints.join(" ") } : {}),
     };
   },
 };

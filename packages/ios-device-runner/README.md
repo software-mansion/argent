@@ -21,8 +21,9 @@ ArgentRunner/
     ArgentRunnerSession+Commands.swift   Target resolution, exception guard,
                                          recorded-failure detection,
                                          button / shutdown
-    ArgentRunnerSession+Gestures.swift   tap / longPress / drag / viewport
+    ArgentRunnerSession+Gestures.swift   tap / longPress / drag / touchPaths / viewport
     ArgentRunnerSession+TextEntry.swift  type / keyboardReturn / keyboardDelete
+    ArgentRunnerSession+Quiescence.swift XCTest idle-wait skip + capped settle
     ArgentRunnerSession+Snapshot.swift   one-shot AX tree capture + flattening
     ArgentRunnerSession+Screenshot.swift inline base64 PNG
     RunnerProtocol.swift                 wire models (see PROTOCOL.md)
@@ -30,6 +31,8 @@ ArgentRunner/
     CommandJournal.swift                 send-once bookkeeping for lost replies
     MainThreadGate.swift                 watchdog + busy/wedged reporting
     ArgentExceptionGuard.{h,m}           @try/@catch shim for XCTest NSExceptions
+    ArgentTouchSynthesizer.{h,m}         multi-finger event synthesis (private XCTest
+                                         classes, resolved by name at runtime)
     Assets.xcassets                      runner app icon
 ```
 
@@ -40,9 +43,10 @@ The TypeScript side (build orchestration, transport, command client) lives in
 
 1. The tool-server builds this project lazily with `xcodebuild
 build-for-testing` (signed with the user's team; see the environment
-   variables below) into `~/.argent/ios-device-runner/derived`, stamped with
-   a fingerprint of sources + Xcode + signing; a stamp mismatch (an Argent or
-   Xcode update, a team change) rebuilds in place.
+   variables below) into `~/.argent/ios-device-runner/derived/<team>`, one
+   directory per team, stamped with a fingerprint of sources + Xcode + signing;
+   a stamp mismatch (an Argent or Xcode update) rebuilds in place. Switching to
+   a team reuses that team's build when it is still current.
 2. Per session it launches `xcodebuild test-without-building` detached;
    testmanagerd installs and starts the runner on the device. The runner
    binds a system-assigned loopback port and logs it as
@@ -60,9 +64,11 @@ The signing team resolves in two steps, and the environment variable wins:
   Apple ID and team) or at developer.apple.com/account under Membership.
 - When it is not set, the tool-server detects the team from the Mac's
   keychain: the Apple Development certificates name their team (and the
-  legacy iPhone Developer name is checked too), and with several teams the
-  one with the newest certificate wins. The detection result is memoized for
-  the tool-server process. With no certificate at all, the build fails with a
+  legacy iPhone Developer name is checked too). With several teams, the newest
+  one with a provisioning profile that lists the phone wins, and otherwise the
+  one with the newest certificate. The certificates found are memoized for
+  the tool-server process; profiles are read on every resolution, so a phone's
+  team can change once a build registers it. With no certificate at all, the build fails with a
   prompt to sign into Xcode and mint one (Manage Certificates > + > Apple
   Development).
 

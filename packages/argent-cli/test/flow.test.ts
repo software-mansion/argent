@@ -391,7 +391,7 @@ describe("argent e2e run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
       "e2e-execute",
       {
-        flow_path: path.join(runRoot, "checkout.yaml"),
+        e2e_test_path: path.join(runRoot, "checkout.yaml"),
         project_root: runRoot,
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -482,7 +482,7 @@ describe("argent e2e run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
       "e2e-execute",
       {
-        flow_path: checkoutPath,
+        e2e_test_path: checkoutPath,
         project_root: process.cwd(),
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -552,7 +552,7 @@ describe("argent e2e run", () => {
         // A name is sent as the path it resolves to, never as a `name` source:
         // one identity keys the report, __baselines__/, and --output whichever
         // form the operator typed.
-        flow_path: path.join(runRoot, ".argent", "flows", "saved.yaml"),
+        e2e_test_path: path.join(runRoot, ".argent", "flows", "saved.yaml"),
         project_root: runRoot,
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -561,12 +561,13 @@ describe("argent e2e run", () => {
     );
   });
 
-  it("resolves a name and its spelled-out path to the same flow_path", async () => {
+  it("resolves a name and its spelled-out path to the same e2e_test_path", async () => {
     const previousCwd = process.cwd();
     const sent = async (ref: string): Promise<unknown> => {
       toolsClientMock.callTool.mockClear();
       await expect(flow(["run", ref], opts)).rejects.toThrow("process.exit:0");
-      return (toolsClientMock.callTool.mock.calls[0]![1] as { flow_path: string }).flow_path;
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string })
+        .e2e_test_path;
     };
     try {
       process.chdir(tempRoot);
@@ -601,7 +602,8 @@ describe("argent e2e run", () => {
       } finally {
         process.chdir(previousCwd);
       }
-      return (toolsClientMock.callTool.mock.calls[0]![1] as { flow_path: string }).flow_path;
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string })
+        .e2e_test_path;
     }
 
     it("runs a name saved under .argent/e2e", async () => {
@@ -1198,7 +1200,7 @@ describe("argent e2e run", () => {
     }
   );
 
-  it("sends flow_path and project_root to e2e-execute", async () => {
+  it("sends e2e_test_path and project_root to e2e-execute", async () => {
     // The tool-server decides what a run can do, local or over a link: an
     // uploaded flow that is self-contained runs, one that reads beside its
     // file is refused there.
@@ -1207,7 +1209,7 @@ describe("argent e2e run", () => {
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
     expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("e2e-execute");
     expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
-      flow_path: checkoutPath,
+      e2e_test_path: checkoutPath,
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
@@ -2360,12 +2362,12 @@ describe("argent e2e run <dir>", () => {
     // never with onProgress (batch output is failures-only).
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
     expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(1, "e2e-execute", {
-      flow_path: path.join(flowsDir, "a-login.yaml"),
+      e2e_test_path: path.join(flowsDir, "a-login.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
     expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(2, "e2e-execute", {
-      flow_path: path.join(flowsDir, "b-checkout.yaml"),
+      e2e_test_path: path.join(flowsDir, "b-checkout.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
@@ -3068,7 +3070,7 @@ describe("argent e2e run <dir>", () => {
     await expect(flow(["run", flowsDir, "--recursive"], opts)).rejects.toThrow("process.exit:0");
 
     const flowPaths = toolsClientMock.callTool.mock.calls.map(
-      (c) => (c[1] as { flow_path: string }).flow_path
+      (c) => (c[1] as { e2e_test_path: string }).e2e_test_path
     );
     expect(flowPaths).toEqual([
       path.join(flowsDir, "a-login.yaml"),
@@ -3086,7 +3088,7 @@ describe("argent e2e run <dir>", () => {
     await expect(flow(["run", dirYaml], opts)).rejects.toThrow("process.exit:0");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith("e2e-execute", {
-      flow_path: path.join(dirYaml, "one.yaml"),
+      e2e_test_path: path.join(dirYaml, "one.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
@@ -3200,7 +3202,13 @@ describe("argent e2e run <dir>", () => {
     await expect(flow(["run", flowsDir, "--json", "-r"], opts)).rejects.toThrow("process.exit:1");
 
     // A single parseable object on stdout — no headers or verdict lines.
+    // `flows` is the deprecated spelling of `e2eTests`, with the same content.
     const parsed = JSON.parse(logs.join("\n")) as Record<string, unknown>;
+    const entries = [
+      { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
+      { path: "b-checkout.yaml", status: "fail", error: "boom" },
+      { path: path.join("sub", "c-search.yaml"), status: "skip" },
+    ];
     expect(parsed).toEqual({
       ok: false,
       total: 3,
@@ -3208,11 +3216,8 @@ describe("argent e2e run <dir>", () => {
       failed: 1,
       skipped: 1,
       durationMs: 5500,
-      flows: [
-        { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
-        { path: "b-checkout.yaml", status: "fail", error: "boom" },
-        { path: path.join("sub", "c-search.yaml"), status: "skip" },
-      ],
+      e2eTests: entries,
+      flows: entries,
     });
   });
 
@@ -3304,7 +3309,7 @@ describe("argent e2e run <dir>", () => {
       expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
       expect(toolsClientMock.callTool).toHaveBeenCalledWith(
         "e2e-execute",
-        expect.objectContaining({ flow_path: path.join(suiteDir, "open.yaml") })
+        expect.objectContaining({ e2e_test_path: path.join(suiteDir, "open.yaml") })
       );
       expect(errs.join("\n")).not.toContain("Could not read e2e test directory");
     } finally {
