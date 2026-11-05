@@ -130,43 +130,44 @@ describe("iOS app tools fail when the step before launch or install times out", 
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
   const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
   const cases = [
-    [
-      "reinstall-app",
-      () => reinstallAppTool.execute!({}, { udid: UDID, bundleId: "com.x", appPath: "/a.app" }),
-      "uninstall",
-      "install",
-      { reinstalled: true, bundleId: "com.x" },
-      /Uninstalling com\.x .* did not finish within 30s/,
-    ],
-    [
-      "launch-app",
-      () =>
+    {
+      id: "reinstall-app",
+      run: () =>
+        reinstallAppTool.execute!({}, { udid: UDID, bundleId: "com.x", appPath: "/a.app" }),
+      sub: "uninstall",
+      next: "install",
+      ok: { reinstalled: true, bundleId: "com.x" },
+      message: /Uninstalling com\.x .* did not finish within 30s/,
+    },
+    {
+      id: "launch-app",
+      run: () =>
         createLaunchAppTool(fakeRegistry).execute!(
           {},
           { udid: UDID, bundleId: "com.x", launchArgs: ["-a"] }
         ),
-      "terminate",
-      "launch",
-      { launched: true, bundleId: "com.x" },
-      /Terminating iOS app com\.x .* did not finish within 15s/,
-    ],
-    [
-      "restart-app",
-      () => createRestartAppTool(fakeRegistry).execute!({}, { udid: UDID, bundleId: "com.x" }),
-      "terminate",
-      "launch",
-      { restarted: true, bundleId: "com.x" },
-      /Terminating iOS app com\.x .* did not finish within 15s/,
-    ],
-  ] as const;
+      sub: "terminate",
+      next: "launch",
+      ok: { launched: true, bundleId: "com.x" },
+      message: /Terminating iOS app com\.x .* did not finish within 15s/,
+    },
+    {
+      id: "restart-app",
+      run: () => createRestartAppTool(fakeRegistry).execute!({}, { udid: UDID, bundleId: "com.x" }),
+      sub: "terminate",
+      next: "launch",
+      ok: { restarted: true, bundleId: "com.x" },
+      message: /Terminating iOS app com\.x .* did not finish within 15s/,
+    },
+  ];
 
   beforeEach(() => {
     calls.length = 0;
   });
 
   it.each(cases)(
-    "%s fails on a timed-out %s and never runs %s",
-    async (_id, run, sub, next, _ok, message) => {
+    "$id fails on a timed-out $sub and never runs $next",
+    async ({ run, sub, next, message }) => {
       failing = { sub, killed: true };
       await expect(run()).rejects.toThrow(message);
       const simctl = calls.filter((c) => c.cmd === "xcrun" && c.args.includes("simctl"));
@@ -175,8 +176,8 @@ describe("iOS app tools fail when the step before launch or install times out", 
   );
 
   it.each(cases)(
-    "%s still succeeds when %s fails without timing out",
-    async (_id, run, sub, _next, ok) => {
+    "$id still succeeds when $sub fails without timing out",
+    async ({ run, sub, ok }) => {
       failing = { sub, killed: false };
       await expect(run()).resolves.toMatchObject(ok);
     }

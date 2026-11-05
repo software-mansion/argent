@@ -85,8 +85,7 @@ async function runningExecutables(): Promise<string[]> {
 
 // Every Simulator.app copy shares one bundle id, so while any of them runs,
 // `open -a` of another copy hands off to it and the new process exits at once.
-const isSimulatorApp = (executable: string) =>
-  executable.endsWith(".app/contents/macos/simulator");
+const isSimulatorApp = (executable: string) => executable.endsWith(".app/contents/macos/simulator");
 
 async function survivesLaunch(executable: string): Promise<boolean> {
   const wanted = comparablePath(executable);
