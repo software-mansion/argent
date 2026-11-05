@@ -327,7 +327,7 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
   });
 
   // Documented in reference/e2e-yaml.mdx.
-  it("reads a container whose text is all in identified or password children as empty, so '^$' passes", () => {
+  it("reads a container whose text is all in identified, password or off-screen children as empty, so '^$' passes", () => {
     const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 <hierarchy rotation="0">
   <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
@@ -338,6 +338,9 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     <node index="1" class="android.view.ViewGroup" resource-id="plain" package="com.acme.app" bounds="[40,300][1040,380]">
       <node index="0" class="android.widget.TextView" package="com.acme.app" text="Hello" bounds="[40,300][1040,380]" />
     </node>
+    <node index="2" class="android.view.ViewGroup" resource-id="offscreen" package="com.acme.app" bounds="[40,400][1040,480]">
+      <node index="0" class="android.widget.TextView" package="com.acme.app" text="Hello" bounds="[1200,400][1400,480]" />
+    </node>
   </node>
 </hierarchy>`;
     const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
@@ -345,6 +348,7 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
       evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches");
     expect(emptyPasses("card")).toBe(true);
     expect(emptyPasses("plain")).toBe(false);
+    expect(emptyPasses("offscreen")).toBe(true);
   });
 
   it("never hoists a password field's text (placeholder only)", () => {

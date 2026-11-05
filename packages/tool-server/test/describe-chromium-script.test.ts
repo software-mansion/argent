@@ -806,11 +806,13 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(JSON.stringify(tree)).not.toContain("hunter2");
   });
 
-  it("still reads a non-password input's value as its accessible name", () => {
+  it("still reads a non-password input's or textarea's value as its accessible name", () => {
     const { tree } = run([
       inputEl({ type: "text", value: "typed text", attrs: { id: "txt" }, rect: BOX }),
+      textareaEl({ value: "typed text", attrs: { id: "ta" }, rect: BOX }),
     ]);
     expect(findById(tree, "txt")!.label).toBe("typed text");
+    expect(findById(tree, "ta")!.label).toBe("typed text");
   });
 
   // Documented in reference/e2e-yaml.mdx.
