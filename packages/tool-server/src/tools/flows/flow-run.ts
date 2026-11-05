@@ -1878,6 +1878,11 @@ async function resolveRunDevice(
     const leading = await leadingLaunch(flow, runStack, { registry, project });
     const spec = leading && chromiumBootSpec(leading.app, params.platform);
     if (spec) {
+      assertPlatformMeetsRequires(
+        "chromium",
+        flow.requires,
+        "the chromium app its leading launch boots"
+      );
       let booted: BootedChromium;
       try {
         booted = await bootChromiumForFlow(spec, flowDir, viaUpload);

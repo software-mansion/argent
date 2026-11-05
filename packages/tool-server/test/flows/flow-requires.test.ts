@@ -308,3 +308,20 @@ describe("a run: fragment with requirements", () => {
     expect((await run(registry, "root")).ok).toBe(true);
   });
 });
+
+describe("a test that boots its own Electron app", () => {
+  it.each([
+    ["platform", { platform: ["ios" as const] }],
+    ["runtimeKind", { runtimeKind: "tv" as const }],
+  ])("is refused before the boot when %s excludes chromium", async (_key, requires) => {
+    await writeFlow("electron", {
+      requires,
+      steps: [{ kind: "launch", app: { chromium: "/nonexistent/App.app" } }],
+    });
+    const { registry, invokeTool } = mockRegistry();
+    const err = await run(registry, "electron").catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect((err as Error).message).toContain("the chromium app its leading launch boots");
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+});
