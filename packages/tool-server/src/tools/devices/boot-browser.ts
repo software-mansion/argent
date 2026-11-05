@@ -69,8 +69,25 @@ function findBrowserExecutable(browser: BrowserName): string | null {
 }
 
 const PROFILE_PREFIX = "argent-browser-";
-/** Holds the browser's pid, so a later boot can tell a leftover profile from a live one. */
+/** Holds the booting tool-server's pid: it covers the profile until its browser takes the lock. */
 const PID_FILE = "argent-browser.pid";
+/** A relaunch (chrome://restart, an update) ends our process and starts a new browser on the profile. */
+const RELAUNCH_GRACE_MS = 5000;
+
+/**
+ * Whether a browser holds `dir`, by Chromium's own profile lock: on POSIX a
+ * `SingletonLock` symlink to `<host>-<pid>`, which a crash leaves behind; on
+ * Windows a `lockfile` deleted when its holder exits.
+ */
+function profileLocked(dir: string): boolean {
+  if (process.platform === "win32") return fs.existsSync(path.join(dir, "lockfile"));
+  try {
+    const owner = fs.readlinkSync(path.join(dir, "SingletonLock"));
+    return pidIsAlive(Number(owner.slice(owner.lastIndexOf("-") + 1)));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The snap a Linux launcher runs, if any. A snap sees a private /tmp, so a
@@ -103,7 +120,7 @@ export function snapName(executable: string): string | null {
   }
 }
 
-/** Deletes profiles whose browser is gone, e.g. left by a tool-server that exited first. */
+/** Deletes profiles nothing holds, e.g. left by a tool-server that exited first. */
 function removeStaleProfiles(root: string): void {
   let names: string[];
   try {
@@ -117,9 +134,9 @@ function removeStaleProfiles(root: string): void {
     try {
       pid = Number(fs.readFileSync(path.join(dir, PID_FILE), "utf8"));
     } catch {
-      continue; // still booting, or not ours
+      continue; // not ours
     }
-    if (!pidIsAlive(pid)) {
+    if (!pidIsAlive(pid) && !profileLocked(dir)) {
       fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => {});
     }
   }
@@ -186,6 +203,7 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
   fs.mkdirSync(root, { recursive: true });
   removeStaleProfiles(root);
   const profileDir = fs.mkdtempSync(path.join(root, PROFILE_PREFIX));
+  fs.writeFileSync(path.join(profileDir, PID_FILE), String(process.pid));
   const result = await bootElectronApp({
     appPath: executable,
     port: options.port,
@@ -198,14 +216,13 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
       ...(hasStartUrl ? [] : ["about:blank"]),
     ],
     onProcessGone: () => {
-      fs.rm(profileDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
+      setTimeout(() => {
+        if (!profileLocked(profileDir)) {
+          fs.rm(profileDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
+        }
+      }, RELAUNCH_GRACE_MS).unref();
     },
   });
-  try {
-    fs.writeFileSync(path.join(profileDir, PID_FILE), String(result.pid));
-  } catch {
-    // Not worth failing a running browser over: only the later sweep needs the file.
-  }
 
   const ours = await answersOnProfile(result.port, profileDir).catch((err: unknown) => {
     killChromiumByPort(result.port);

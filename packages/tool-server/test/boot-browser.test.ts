@@ -201,6 +201,11 @@ describe("bootBrowser", () => {
     expect(bootElectronAppMock.mock.calls[1]![0].appPath).toBe(chromeFallback);
   });
 
+  // Chromium's POSIX profile lock: a symlink to `<host>-<pid>` of the browser holding it.
+  const lockFor = (dir: string, pid: number) =>
+    fs.symlinkSync(`some-host-${pid}`, path.join(dir, "SingletonLock"));
+  const DEAD_PID = 2147483646;
+
   it("gives every launch its own profile and deletes it once the process is gone", async () => {
     installed.set(chrome!, "exec");
     await bootBrowser({ browser: "chrome" });
@@ -210,42 +215,107 @@ describe("bootBrowser", () => {
     const dirA = profileDirOf(a.extraArgs)!;
     expect(dirA).not.toBe(profileDirOf(b.extraArgs));
 
-    a.onProcessGone();
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      a.onProcessGone();
+      vi.advanceTimersByTime(4999);
+      expect(fs.existsSync(dirA)).toBe(true);
+      vi.advanceTimersByTime(1);
+    } finally {
+      vi.useRealTimers();
+    }
     await vi.waitFor(() => expect(fs.existsSync(dirA)).toBe(false));
   });
 
-  it("records the browser's pid in its profile", async () => {
+  it("keeps a profile that a relaunched browser holds once the process is gone", async () => {
     installed.set(chrome!, "exec");
     await bootBrowser({ browser: "chrome" });
+    await bootBrowser({ browser: "chrome" });
+    const [relaunched, crashed] = bootElectronAppMock.mock.calls.map((c) => c[0]);
+    const relaunchedDir = profileDirOf(relaunched.extraArgs)!;
+    const crashedDir = profileDirOf(crashed.extraArgs)!;
+    lockFor(relaunchedDir, process.pid);
+    lockFor(crashedDir, DEAD_PID);
+
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      relaunched.onProcessGone();
+      crashed.onProcessGone();
+      vi.advanceTimersByTime(5000);
+    } finally {
+      vi.useRealTimers();
+    }
+    await vi.waitFor(() => expect(fs.existsSync(crashedDir)).toBe(false));
+    expect(fs.existsSync(relaunchedDir)).toBe(true);
+  });
+
+  it("records the booting tool-server's pid in the profile before launching", async () => {
+    installed.set(chrome!, "exec");
+    bootElectronAppMock.mockImplementation(async (opts: { extraArgs: string[] }) => {
+      const dir = profileDirOf(opts.extraArgs)!;
+      expect(fs.readFileSync(path.join(dir, "argent-browser.pid"), "utf8")).toBe(
+        String(process.pid)
+      );
+      return { platform: "chromium", port: 9333, pid: 4242 };
+    });
+    await bootBrowser({ browser: "chrome" });
+    expect(bootElectronAppMock).toHaveBeenCalledTimes(1);
     const dir = profileDirOf(bootElectronAppMock.mock.calls[0]![0].extraArgs)!;
     expect(fs.readFileSync(path.join(dir, "argent-browser.pid"), "utf8")).toBe(String(process.pid));
   });
 
-  it("deletes only leftover profiles whose browser is gone", async () => {
-    const make = (name: string, pid?: string) => {
-      const dir = path.join(os.tmpdir(), name);
+  describe("sweeping leftover profiles", () => {
+    const platform = process.platform;
+    const made: string[] = [];
+    const tag = `${process.pid}-${Date.now()}`;
+    const make = (name: string, pid?: number) => {
+      const dir = path.join(os.tmpdir(), `${name}-${tag}`);
       fs.mkdirSync(dir, { recursive: true });
-      if (pid !== undefined) fs.writeFileSync(path.join(dir, "argent-browser.pid"), pid);
+      if (pid !== undefined) fs.writeFileSync(path.join(dir, "argent-browser.pid"), String(pid));
+      made.push(dir);
       return dir;
     };
-    const tag = `${process.pid}-${Date.now()}`;
-    const dead = make(`argent-browser-dead-${tag}`, "2147483646");
-    const live = make(`argent-browser-live-${tag}`, String(process.pid));
-    const booting = make(`argent-browser-booting-${tag}`);
-    const foreign = make(`other-dead-${tag}`, "2147483646");
-    try {
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: platform });
+      for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+    });
+
+    it("deletes only profiles that neither their tool-server nor a browser holds", async () => {
+      const dead = make("argent-browser-dead", DEAD_PID);
+      const crashed = make("argent-browser-crashed", DEAD_PID);
+      lockFor(crashed, DEAD_PID);
+      const live = make("argent-browser-live", process.pid);
+      const locked = make("argent-browser-locked", DEAD_PID);
+      lockFor(locked, process.pid);
+      const noPidFile = make("argent-browser-nopid");
+      const foreign = make("other-dead", DEAD_PID);
+
       installed.set(chrome!, "exec");
       await bootBrowser({ browser: "chrome" });
-      await vi.waitFor(() => expect(fs.existsSync(dead)).toBe(false));
-      expect([live, booting, foreign].filter((d) => fs.existsSync(d))).toEqual([
+      await vi.waitFor(() => expect([dead, crashed].filter((d) => fs.existsSync(d))).toEqual([]));
+      expect([live, locked, noPidFile, foreign].filter((d) => fs.existsSync(d))).toEqual([
         live,
-        booting,
+        locked,
+        noPidFile,
         foreign,
       ]);
-    } finally {
-      for (const d of [dead, live, booting, foreign])
-        fs.rmSync(d, { recursive: true, force: true });
-    }
+    });
+
+    it("treats a Windows lockfile as held", async () => {
+      const locked = make("argent-browser-winlocked", DEAD_PID);
+      fs.writeFileSync(path.join(locked, "lockfile"), "");
+      const dead = make("argent-browser-windead", DEAD_PID);
+      Object.defineProperty(process, "platform", { value: "win32" });
+      process.env["LOCALAPPDATA"] = "C:\\L";
+      installed.set(browserExecutableCandidates("chrome", "win32")[0]!, "exec");
+      try {
+        await bootBrowser({ browser: "chrome" });
+      } finally {
+        delete process.env["LOCALAPPDATA"];
+      }
+      await vi.waitFor(() => expect(fs.existsSync(dead)).toBe(false));
+      expect(fs.existsSync(locked)).toBe(true);
+    });
   });
 
   it("kills its browser and fails when another argent browser answers the port", async () => {
