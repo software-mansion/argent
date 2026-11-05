@@ -6,6 +6,7 @@ import { FAILURE_CODES, ServiceState, getFailureSignal, type Registry } from "@a
 import { createReactProfilerStopTool } from "../../src/tools/profiler/react/react-profiler-stop";
 import { profilerCommitQueryTool } from "../../src/tools/profiler/query/profiler-commit-query";
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
+import { reactProfilerRendersTool } from "../../src/tools/profiler/react/react-profiler-renders";
 import {
   cacheProfilerPaths,
   clearCachedProfilerPaths,
@@ -435,5 +436,15 @@ describe("profiler-load with and without a render summary", () => {
     const out = await load("20261103-120001");
     expect(out).toContain("Loaded React profiler session");
     expect(out).toContain("- Render counts over all commits: not saved");
+  });
+});
+
+// ── react-profiler-renders ────────────────────────────────────────────
+
+describe("react-profiler-renders", () => {
+  // It cannot reach screen content (top 30 fiber levels) and double-counts;
+  // HTTP and SDK callers keep it.
+  it("is hidden from MCP", () => {
+    expect(reactProfilerRendersTool.hideFromMcp).toBe(true);
   });
 });

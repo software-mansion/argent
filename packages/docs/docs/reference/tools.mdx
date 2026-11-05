@@ -203,7 +203,6 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 | `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                   |
 | `react-profiler-status`           | Check if a React profiler run records, was saved, was lost or taken over     |
 | `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree             |
 | `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
 | `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                              |
 | `react-profiler-component-source` | Find a component's source file, line, and memoization status                 |
@@ -212,9 +211,21 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 | `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                      |
 | `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                      |
 | `profiler-load`                   | Restore a previously captured session from disk so query tools can use it    |
-| `profiler-commit-query`           | Query React commit data for iterative render investigation                   |
+| `profiler-commit-query`           | Query React commit data, or the render counts of each component              |
 | `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
+
+`react-profiler-stop` stores the data of each component only for the hot commits and the commits next to them. A commit is hot when it takes 16 ms or more. `react-profiler-stop` also stores the render count and the render time of each component over all commits. `profiler-commit-query` with `mode: "render_counts"` returns these counts. A session that an older version of Argent stored does not have them.
+
+The report of `react-profiler-analyze` contains these items:
+
+- The `React commit time` line: the sum of the commit durations, the session length, the share of the session, and the number of commits.
+- "All clear" when no commit takes 16 ms or more and the share is less than 10%.
+- A warning when a commit takes 16 ms or more but has no component that Argent can name. Argent does not store this commit.
+- When no commit is hot and the share is 10% or more: a "Frequent Re-renders" table. The table lists up to 5 app components that re-render one or more times per second, sorted by render time per second. React Native components, list internals, animation wrappers, providers and development components are not in the table.
+- In the table of the hot commits, `Renders` shows two counts: the re-renders in the stored commits and the re-renders in all commits, for example `6 / 50`.
+
+When a session has no hot commits, the other modes of `profiler-commit-query` return a message that tells the agent to use `render_counts`.
 
 While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
 
@@ -285,6 +296,8 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
 
 `terminate-app`, `ui-tree`, `foreground-app`, `fill` and `gather-workspace-data` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
+
+`react-profiler-renders` is hidden from MCP. Call it with the [Argent SDK](./node-client.mdx). It reads only the top 30 levels of the React fiber tree and counts the mounted components, not the re-renders. For render counts, use `profiler-commit-query` with `mode: "render_counts"` after a profiling session.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
 

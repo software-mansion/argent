@@ -54,6 +54,8 @@ When the agent runs both profilers, the agent can also ask for a combined report
 
 The React report lists the hot commits. A commit is hot when it takes 16 ms or more. For each hot commit, the report shows which components rendered, which component triggered the cascade, and which props changed. The report ends with a table of the components that rendered most.
 
+The report also shows the share of the session that React spent in commits. Many fast commits can use as much time as one slow commit. When React spends 10% or more of the session in commits and no commit is hot, the report lists the app components that render most often.
+
 The native report lists the CPU hotspots, the hangs and the memory leaks. Each entry has a severity indicator and a suggestion.
 
 The agent can find the source of a component in the report. Argent returns the file, the line, the memoization status, and 50 lines of source. Thus the agent can propose a fix for the component.
@@ -64,7 +66,7 @@ After the report, the agent can query the stored data without a new recording.
 
 | Query         | Content                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------------------- |
-| Commits       | The commits of one component, the commits in a time window, or the cascade tree of a commit         |
+| Commits       | The commits of one component or of a time window, the cascade tree of a commit, or render counts    |
 | CPU           | The top functions, the CPU in a time window, the call tree of a function, or the CPU of a component |
 | Native stacks | The stacks during a hang, the callers of a function, the CPU of each thread, or the leaked objects  |
 
