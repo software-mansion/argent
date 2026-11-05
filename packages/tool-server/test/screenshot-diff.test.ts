@@ -169,6 +169,8 @@ describe("diffPngFiles", () => {
     expect(result.dimensionMismatch).toBeUndefined();
     expect(result.differentPixels).toBe(6);
     expect(result.diffPath).toBe(path.join(dir, "current-diff.png"));
+    expect(result.imageSize).toEqual({ width: 10, height: 20 });
+    expect(result.summary).toContain("- compared_at: 10x20");
   });
 
   it("merges same-line fragments but keeps separate rows distinct", async () => {
@@ -403,6 +405,28 @@ describe("diffPngFiles", () => {
     expect(analyzeScreenshotTextChangesMock).toHaveBeenCalledWith(
       expect.objectContaining({ textChangeMinConfidence: 0.7, ignoreTopPixels: 2 })
     );
+  });
+
+  // Font-change detection reads these images; without them it reports nothing.
+  it("passes both decoded images to OCR analysis", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 2, 20, { r: 0, g: 0, b: 0 });
+    await writePng(currentPath, 2, 20, { r: 0, g: 0, b: 0 }, [
+      { x: 1, y: 10, rgb: { r: 255, g: 0, b: 0 } },
+    ]);
+
+    await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    const options = (analyzeScreenshotTextChangesMock.mock.calls[0] as unknown[])[0] as {
+      baselineImage?: PNG;
+      currentImage?: PNG;
+    };
+    expect(options.baselineImage).toMatchObject({ width: 2, height: 20 });
+    expect(options.currentImage).toMatchObject({ width: 2, height: 20 });
+    expect(readRgb(options.baselineImage!, 1, 10)).toEqual({ r: 0, g: 0, b: 0 });
+    expect(readRgb(options.currentImage!, 1, 10)).toEqual({ r: 255, g: 0, b: 0 });
   });
 
   // diffPngFiles always calls the OCR/font pass, but tells it whether the pixel diff
