@@ -445,7 +445,6 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
     expect(res.recorded).toBeDefined();
   });
 
-  // Validation names what is missing; the args guard must not get in first.
   it("does not blame selector when the args JSON is null", async () => {
     const message = await record({ command: "gesture-tap", args: "null", delayMs: 10 }).then(
       () => "",
@@ -455,20 +454,40 @@ describe("flow-add-step records a caller-supplied tap selector", () => {
   });
 
   it.each([
-    ["ordinary", { text: "Save " }],
-    ["no-break", { text: "Save\u00a0" }],
-    ["blank", { identifier: "\u00a0" }],
-    ["leading", { role: " AXButton" }],
-  ])("refuses a value with %s whitespace at its end, running nothing", async (_, selector) => {
+    ["ends in a no-break space", { text: "Save\u00a0" }],
+    ["is blank", { identifier: "\u00a0" }],
+    ["holds a one-space line when folded", { text: `${"x".repeat(78)}\n \nb` }],
+  ])("refuses a value that %s, which the file does not keep", async (_, selector) => {
     const res = (await record({
       command: "gesture-tap",
       args: JSON.stringify({ udid: DEVICE, ...ON_ROW }),
       selector,
     })) as { message: string };
 
-    expect(res.message).toMatch(/has a value with whitespace at either end/);
+    expect(res.message).toMatch(/changes when an e2e test file is written and read back/);
     expect(registry.invokeTool).not.toHaveBeenCalled();
     expect(await recordedSteps()).toHaveLength(0);
+  });
+
+  it("records a value with ordinary whitespace at its end, which the file keeps", async () => {
+    setTree([n({ frame: { x: 0.1, y: 0.5, width: 0.4, height: 0.1 }, identifier: "row-3 " })]);
+    await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, ...ON_ROW }),
+      selector: { identifier: "row-3 " },
+    });
+    expect(await recordedSteps()).toEqual([{ kind: "tap", selector: { identifier: "row-3 " } }]);
+  });
+
+  it("says no element is at the point when neither the selector nor the point finds one", async () => {
+    const res = (await record({
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: DEVICE, x: 0.9, y: 0.02 }),
+      selector: { text: "Nope" },
+    })) as { message: string };
+
+    expect(res.message).toMatch(/No element in that tree is at this tap's point \(0\.9, 0\.02\)/);
+    expect(res.message).toMatch(/omit the selector if no element is there/);
   });
 
   it("offers a retry for a selector that matches nothing, since the screen may be moving", async () => {

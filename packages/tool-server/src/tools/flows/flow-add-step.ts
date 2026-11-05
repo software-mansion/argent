@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   canonicalToolArgs,
   canonicalToolId,
@@ -25,6 +26,7 @@ import {
   appIdForPlatform,
   authoringPlatform,
   parseFlow,
+  serializeFlow,
   assertSafeFlowName,
   describeSelector,
   foldStepFromArgs,
@@ -679,6 +681,20 @@ function innermostTreeReason(message: string): string {
 
 type TapCapture = { selector?: Selector; warning?: string; rejected?: string };
 
+/** Whether a tap on this selector reads back from an e2e test file as written. */
+function survivesFlowFile(selector: Selector): boolean {
+  try {
+    // No prerequisite: written after the steps, it would hide a trim at the file's end.
+    const flow = parseFlow(
+      serializeFlow({ executionPrerequisite: "", steps: [{ kind: "tap", selector }] })
+    );
+    const [step] = flow.steps;
+    return step?.kind === "tap" && isDeepStrictEqual(step.selector, selector);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * For a recorded `gesture-tap`, look up the element under the tapped point and
  * record a portable `tap: { selector }` step instead of raw coordinates.
@@ -740,6 +756,9 @@ async function captureTapSelector(
     const resolved = selectorToFrame(tree, selector, uiOrientation);
     if (supplied) {
       const tapped = nodeAtPoint(tree, point);
+      const noneAtPoint =
+        `No element in that tree is at this tap's point (${point.x}, ${point.y}); ` +
+        `x and y are fractions of the screen, from 0 to 1.`;
       // A derived selector passes with no check of its centre, so omitting is no
       // way out for a tapped element that another element covers at its centre.
       const otherwise = !tapped
@@ -750,8 +769,9 @@ async function captureTapSelector(
       if (!resolved) {
         return {
           rejected:
-            `${shown} matches no element in the tree a replay reads. If the screen was still ` +
-            `changing, record the tap again. ${otherwise}`,
+            `${shown} matches no element in the tree a replay reads. ` +
+            `${tapped ? "" : `${noneAtPoint} `}` +
+            `If the screen was still changing, record the tap again. ${otherwise}`,
         };
       }
       // Replay taps the resolved frame's centre, so the innermost element there
@@ -772,10 +792,7 @@ async function captureTapSelector(
           f.y === resolved.y &&
           f.width === resolved.width &&
           f.height === resolved.height;
-        const where = tapped
-          ? `, not at this tap's point.`
-          : `. No element in that tree is at this tap's point (${point.x}, ${point.y}); ` +
-            `x and y are fractions of the screen, from 0 to 1.`;
+        const where = tapped ? `, not at this tap's point.` : `. ${noneAtPoint}`;
         // The tree cannot say which of them takes a real touch: a label does not, a button does.
         const retap = sameFrame(replayed?.frame)
           ? `To tap that element, record the tap at ${at}.`
@@ -1468,18 +1485,17 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           "A `gesture-tap` recorded with `delayMs` keeps its coordinates, so `selector` would be dropped. Record the tap without `delayMs`."
         );
       }
-      // Re-reading the file can trim such a value, so a replay would resolve something else.
-      if (params.selector && Object.values(params.selector).some((v) => v !== v.trim())) {
-        return recordNothing(
-          session,
-          `\`selector\` ${JSON.stringify(params.selector)} has a value with whitespace at either end, which an e2e test file does not keep. Remove it.`
-        );
-      }
       // Appending this step would refuse it, after the tap had already run.
       if (params.selector && holdsOutputReference({ kind: "tap", selector: params.selector })) {
         return recordNothing(
           session,
           `\`selector\` ${JSON.stringify(params.selector)} uses unsupported template syntax. Replace it with the literal value the step needs.`
+        );
+      }
+      if (params.selector && !survivesFlowFile(params.selector)) {
+        return recordNothing(
+          session,
+          `\`selector\` ${JSON.stringify(params.selector)} changes when an e2e test file is written and read back, so a replay would resolve something else. Drop the whitespace at the ends of its values, or select by another field.`
         );
       }
 
@@ -1509,7 +1525,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
 
       // `gesture-tap`'s schema strips an unknown key, so the tap would run and
       // record a derived selector with no word about this one. `?.`: the JSON may
-      // be `null`, which the tool's own validation reports.
+      // be `null`.
       if (command === "gesture-tap" && args?.selector !== undefined) {
         return recordNothing(
           session,
