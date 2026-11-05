@@ -60,6 +60,8 @@ The file has three top-level keys:
 
 Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
 
+Argent releases from before the `version` key refuse a file that has the key. To run the file on such a release, delete the `version` line.
+
 An e2e test has one of two shapes:
 
 | Shape               | First step that is not `echo:` or `script:` | Start state                                             |
@@ -435,6 +437,7 @@ The outcome line of an e2e test that produced a report gives the result, the ste
 | Outcome line                        | Meaning                                                                                   |
 | ----------------------------------- | ----------------------------------------------------------------------------------------- |
 | `not run (invalid e2e test)`        | The tool-server rejected the e2e test file or one of its steps                            |
+| `not run (needs a newer Argent)`    | The e2e test file has a `version` that is higher than the version this Argent reads       |
 | `not run (no device resolved)`      | Argent did not resolve one device for the e2e test                                        |
 | `not run (rejected)`                | The tool-server rejected the e2e test for another reason                                  |
 | `not run (upload failed)`           | The upload of a `run:` fragment failed, so the CLI did not send the e2e test              |

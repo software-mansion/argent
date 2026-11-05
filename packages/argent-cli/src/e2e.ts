@@ -1291,6 +1291,8 @@ function rejectionVerdict(code: string | undefined): string {
     case FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED:
     case FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE:
       return "not run (invalid e2e test)";
+    case FAILURE_CODES.FLOW_FILE_NEWER_VERSION:
+      return "not run (needs a newer Argent)";
     case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
       return "not run (no device resolved)";
     case FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED:

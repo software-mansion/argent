@@ -1730,7 +1730,7 @@ function toYamlStep(step: FlowStep): YamlStep {
 // 200 chars still shows a genuine flow entry in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
-function badEntry(raw: unknown, detail: string): never {
+function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message. It also returns the *value*
   // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
@@ -1745,7 +1745,11 @@ function badEntry(raw: unknown, detail: string): never {
     const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
     rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
-  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${rendered}`, {
+  return rendered;
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${renderEntry(raw)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
@@ -3817,7 +3821,7 @@ export function parseFlow(content: string): FlowFile {
   const version: unknown = parsed.version ?? 1;
   if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
     throw new FailureError(
-      `Invalid e2e test file: version must be a positive integer, got ${JSON.stringify(version)}`,
+      `Invalid e2e test file: version must be a positive integer, got ${renderEntry(version)}`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_file_parse",
@@ -3828,9 +3832,9 @@ export function parseFlow(content: string): FlowFile {
   }
   if (version > FLOW_FILE_VERSION) {
     throw new FailureError(
-      `Invalid e2e test file: it is version ${version}, but this Argent reads up to version ${FLOW_FILE_VERSION}. Update Argent to run it.`,
+      `The e2e test file is version ${version}, but this Argent reads up to version ${FLOW_FILE_VERSION}. Update Argent to run it.`,
       {
-        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
         failure_stage: "flow_file_parse",
         failure_area: "tool_server",
         error_kind: "validation",
