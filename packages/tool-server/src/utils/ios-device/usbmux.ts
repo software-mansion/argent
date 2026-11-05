@@ -8,12 +8,18 @@ import {
   IosDeviceTransportError,
   readUsbmuxDeviceIdForSerial,
   readUsbmuxResultCode,
+  readUsbmuxSerials,
 } from "./usbmux-protocol";
+import { iosRelayFor, parseUsbmuxEndpoint } from "./relay";
 
 export { IosDeviceTransportError } from "./usbmux-protocol";
 
 /**
  * usbmuxd client. Opens a raw pipe to a TCP port on a physical device.
+ *
+ * The daemon is this Mac's own `/var/run/usbmuxd` for a cabled phone, or the
+ * endpoint a provider relays for a phone cabled elsewhere (see `relay.ts`).
+ * Both speak the same protocol; only the connect target differs.
  */
 
 const USBMUXD_SOCKET_PATH = "/var/run/usbmuxd";
@@ -42,7 +48,11 @@ interface OpenUsbmuxRunnerSocketOptions {
   port: number;
   /** Budget for the whole lookup + connect exchange. Default 5s. */
   timeoutMs?: number;
-  /** Test seam: a fake usbmuxd can listen on an alternative unix socket. */
+  /**
+   * Where usbmuxd listens: a unix socket path or `host:port`. Defaults to the
+   * device's relay endpoint when a provider relays it, else this Mac's own
+   * daemon. Also the test seam: a fake usbmuxd can listen anywhere.
+   */
   socketPath?: string;
 }
 
@@ -52,14 +62,38 @@ interface OpenUsbmuxRunnerSocketOptions {
 export async function openUsbmuxRunnerSocket(
   options: OpenUsbmuxRunnerSocketOptions
 ): Promise<net.Socket> {
-  const socketPath = options.socketPath ?? USBMUXD_SOCKET_PATH;
+  const relay = iosRelayFor(options.udid);
+  const socketPath = options.socketPath ?? relay?.endpoint ?? USBMUXD_SOCKET_PATH;
+  // A relayed phone is addressed by its `ext:` id; usbmuxd knows the hardware UDID.
+  const udid = relay?.udid ?? options.udid;
   const deadline = createDeadline(options.timeoutMs ?? USBMUX_DEFAULT_TIMEOUT_MS);
 
   // ListDevices on a throwaway socket resolves the mux DeviceID.
-  const deviceId = await resolveUsbmuxDeviceId(socketPath, options.udid, deadline);
+  const deviceId = await resolveUsbmuxDeviceId(socketPath, udid, deadline);
 
   // Connect on a fresh socket becomes the raw byte pipe to the runner.
-  return await connectToDevicePort(socketPath, options.udid, deviceId, options.port, deadline);
+  return await connectToDevicePort(socketPath, udid, deviceId, options.port, deadline);
+}
+
+/**
+ * The USB serials a usbmuxd currently lists. For a relayed phone this is the
+ * readiness check: the phone is offered while its UDID is in the list.
+ */
+export async function listUsbmuxSerials(
+  socketPath: string,
+  timeoutMs: number = USBMUX_DEFAULT_TIMEOUT_MS
+): Promise<string[]> {
+  const deadline = createDeadline(timeoutMs);
+  const socket = await connectToUsbmuxd(socketPath, deadline);
+
+  try {
+    await writePacket(socket, buildUsbmuxPlistMessage("ListDevices"), 1, deadline);
+    const payload = await readOnePacket(socket, deadline);
+
+    return readUsbmuxSerials(payload.toString("utf8"));
+  } finally {
+    socket.destroy();
+  }
 }
 
 /**
@@ -160,7 +194,10 @@ async function connectToDevicePort(
   }
 }
 
-/** Open a unix socket to the usbmuxd daemon within the remaining deadline. */
+/**
+ * Open a socket to the usbmuxd daemon within the remaining deadline: a unix
+ * socket for a path, TCP for `host:port`.
+ */
 async function connectToUsbmuxd(socketPath: string, deadline: Deadline): Promise<net.Socket> {
   const timeoutMs = deadline.remainingMs();
 
@@ -169,7 +206,7 @@ async function connectToUsbmuxd(socketPath: string, deadline: Deadline): Promise
   // `once` attaches its `connect` and `error` listeners synchronously, before
   // the first await, so an early socket error settles the wait rather than
   // surfacing as an unhandled `error` event.
-  const socket = net.createConnection(socketPath);
+  const socket = net.createConnection(parseUsbmuxEndpoint(socketPath));
   const abort = new AbortController();
   const timer = setTimeout(() => {
     abort.abort(
