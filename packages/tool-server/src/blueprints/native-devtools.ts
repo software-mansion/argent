@@ -60,8 +60,8 @@ export function isInjectableBundleId(bundleId: string): boolean {
  * *reports* `injectable: false` rather than throwing.
  */
 export const NON_INJECTABLE_NATIVE_WARNING =
-  "Do not fall back to the native-devtools feature tools (native-describe-screen, " +
-  "native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, " +
+  "Do not fall back to the native-devtools feature tools (native-find-views, " +
+  "native-full-hierarchy, native-network-logs, native-view-at-point, " +
   "native-user-interactable-view-at-point): they run the same injection precheck and fail " +
   "with the same non-injectable error.";
 
@@ -589,7 +589,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const { device } = opts;
     if (device.platform !== "ios" && device.platform !== "ios-remote") {
       throw new FailureError(
-        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`,
+        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-find-views, native-view-at-point, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`,
         {
           error_code: FAILURE_CODES.NATIVE_DEVTOOLS_WRONG_PLATFORM,
           failure_stage: "native_devtools_factory_options",
