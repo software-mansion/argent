@@ -27,6 +27,11 @@ import {
 } from "../../../utils/profiler-shared/capture-guard";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
+import {
+  parseRenderSummary,
+  formatCommitTime,
+  type RenderSummary,
+} from "../../../utils/react-profiler/render-summary";
 
 // session_id is interpolated into on-disk file paths, so restrict it to a token
 // that cannot traverse out of the debug dir.
@@ -216,6 +221,7 @@ async function loadReactSession(
   let deviceName: string | null = null;
   let projectRoot: string | null = null;
   let commitCount = 0;
+  let renderSummary: RenderSummary | null = null;
   let sampleInfo = "not available";
 
   if (hasCommits) {
@@ -230,6 +236,7 @@ async function loadReactSession(
         appName = onDisk.meta.appName ?? null;
         deviceName = onDisk.meta.deviceName ?? null;
         projectRoot = onDisk.meta.projectRoot ?? null;
+        renderSummary = parseRenderSummary(onDisk.meta.renderSummary);
       }
     } catch {
       // non-fatal — file may be corrupted
@@ -269,6 +276,10 @@ async function loadReactSession(
     `- CPU profile: ${sampleInfo}`,
     `- Commits persisted (hot ±1 margin, ≥16ms): ${commitCount}`,
     `- Total React commits: ${totalReactCommits ?? "unknown"}`,
+    // Older sessions lack the summary; say so rather than let render_counts fail later.
+    renderSummary
+      ? `- React commit time (all commits): ${formatCommitTime(renderSummary)}`
+      : `- Render counts over all commits: not saved (session predates them)`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
     "",
     "Query tools (`profiler-cpu-query`, `profiler-commit-query`) are now ready to use against this data.",

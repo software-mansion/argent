@@ -15,8 +15,23 @@ import {
   describeResolution,
 } from "../../../utils/react-profiler/component-names";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
+import {
+  parseRenderSummary,
+  hasUnnamedSlowCommit,
+  formatCommitTime,
+  formatCount,
+  formatRenderSummaryReason,
+  isCommitTimeAboveFloor,
+  type RenderSummary,
+} from "../../../utils/react-profiler/render-summary";
 
-async function getCommitTree(port: number, deviceId: string): Promise<DevToolsCommitTree> {
+interface StoredCommitData extends DevToolsCommitTree {
+  /** Null for sessions saved before react-profiler-stop wrote the summary. */
+  renderSummary: RenderSummary | null;
+  totalReactCommits: number | null;
+}
+
+async function getCommitData(port: number, deviceId: string): Promise<StoredCommitData> {
   const sessionPaths = getCachedProfilerPaths(port, deviceId);
   if (!sessionPaths?.commitsPath) {
     throw new FailureError(
@@ -30,18 +45,115 @@ async function getCommitTree(port: number, deviceId: string): Promise<DevToolsCo
     );
   }
   const onDisk = await readCommitTree(sessionPaths.commitsPath);
-  if (onDisk.commits.length === 0) {
-    throw new FailureError(
-      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first.",
-      {
-        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
-        failure_stage: "profiler_commit_query_load_data",
-        failure_area: "tool_server",
-        error_kind: "validation",
-      }
+  return {
+    commits: Array.isArray(onDisk.commits) ? onDisk.commits : [],
+    hookNames: new Map(),
+    renderSummary: parseRenderSummary(onDisk.meta?.renderSummary),
+    totalReactCommits: onDisk.meta?.totalReactCommits ?? sessionPaths.totalReactCommits ?? null,
+  };
+}
+
+/**
+ * A stopped session with no kept commit is the smooth outcome, not a missing
+ * session: stop keeps per-commit detail only for commits of 16ms or more and
+ * their neighbours. Say so instead of telling the caller to profile again.
+ */
+export function renderNoStoredCommits(data: StoredCommitData): string {
+  const summary = data.renderSummary;
+  const total = summary?.totalCommits ?? data.totalReactCommits;
+  if (total === 0) {
+    return "_No React commits were recorded in this session: nothing rendered while the profiler ran, so there is no commit data to query._";
+  }
+  const peak =
+    summary && summary.maxCommitMs > 0 ? ` (peak ${summary.maxCommitMs.toFixed(1)}ms)` : "";
+  const count = total !== null ? `its ${formatCount(total)} React commits` : "its React commits";
+  const unnamedSlowCommit = summary !== null && hasUnnamedSlowCommit(summary);
+  const lines = [
+    unnamedSlowCommit
+      ? `_No per-commit detail is stored for this session: among ${count}, those of 16ms or more${peak} have no component that could be named, ` +
+        `so react-profiler-stop kept none of them. This is not a missing session._`
+      : `_No per-commit detail is stored for this session: none of ${count} reached 16ms${peak}, ` +
+        `so react-profiler-stop kept none of them. This is not a missing session._`,
+    "",
+  ];
+  if (summary) {
+    // Same gate as the analyze report, so the two never disagree about "smooth".
+    const verdict = unnamedSlowCommit
+      ? "A commit was slow, but it has no breakdown."
+      : isCommitTimeAboveFloor(summary)
+        ? "No single commit was slow, but the cheap ones add up."
+        : "The run was smooth.";
+    lines.push(
+      `**React commit time:** ${formatCommitTime(summary)}. ${verdict}`,
+      "",
+      "Run `profiler-commit-query` mode=`render_counts` for render counts per component over all commits."
+    );
+  } else {
+    lines.push(
+      "This session was saved before render summaries existed, so mode=`render_counts` has no data for it either. Re-profile to get counts over all commits."
     );
   }
-  return { commits: onDisk.commits, hookNames: new Map() };
+  return lines.join("\n");
+}
+
+/** Per-component counts over all commits, from the summary react-profiler-stop saves. */
+export function renderRenderCounts(
+  summary: RenderSummary | null,
+  componentName: string | undefined,
+  topN: number
+): string {
+  if (!summary) {
+    return (
+      "_This session has no render summary: it was saved before react-profiler-stop wrote one. " +
+      "Re-profile to get render counts over all commits; the other modes still cover the commits of 16ms or more._"
+    );
+  }
+  const seconds = Math.max(summary.recordingMs / 1000, 0.001);
+  let rows = summary.components;
+  let heading = `## Render Counts — all ${formatCount(summary.totalCommits)} commits`;
+  const lines: string[] = [];
+  if (componentName) {
+    const resolution = resolveComponentName(
+      componentName,
+      summary.components.map((c) => c.name)
+    );
+    if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
+      return renderComponentNameMiss(resolution, {
+        fiberRenders: summary.fiberRenders,
+        commits: summary.totalCommits,
+      });
+    }
+    rows = summary.components.filter((c) => c.name === resolution.rawName);
+    heading = `## Render Counts for \`${resolution.rawName}\` — all ${formatCount(summary.totalCommits)} commits`;
+    const note = describeResolution(resolution);
+    if (note) lines.push(note, "");
+  }
+  const shown = rows.slice(0, topN);
+
+  lines.unshift(heading, "");
+  lines.push(
+    `**React commit time:** ${formatCommitTime(summary)}`,
+    `**Fiber renders:** ${formatCount(summary.fiberRenders)} (${formatCount(summary.rerenders)} re-renders, ` +
+      `${formatCount(summary.mounts)} mounts) across ${formatCount(summary.components.length)} components`,
+    "",
+    "Every component that rendered, library components included, by re-render self time. The other modes see " +
+      "only commits of 16ms or more and their neighbours; these counts cover every commit.",
+    "",
+    "| Component | Re-renders | Per second | Commits | Self total (ms) | Self ms/s | Max (ms) | Mounts | Reason |",
+    "|---|---|---|---|---|---|---|---|---|"
+  );
+  for (const c of shown) {
+    lines.push(
+      `| \`${c.name}\` | ${formatCount(c.rerenders)} | ${(c.rerenders / seconds).toFixed(1)} | ` +
+        `${formatCount(c.rerenderCommits)} | ${c.rerenderSelfMs.toFixed(1)} | ` +
+        `${(c.rerenderSelfMs / seconds).toFixed(1)} | ${c.maxRerenderSelfMs.toFixed(1)} | ` +
+        `${formatCount(c.mounts)} | ${formatRenderSummaryReason(c)} |`
+    );
+  }
+  if (rows.length > shown.length) {
+    lines.push("", `_Showing ${shown.length} of ${rows.length} components; raise top_n for more._`);
+  }
+  return lines.join("\n");
 }
 
 function formatReason(commit: DevToolsFiberCommit): string {
@@ -64,13 +176,30 @@ function formatReason(commit: DevToolsFiberCommit): string {
 function renderByComponent(
   commits: DevToolsFiberCommit[],
   componentName: string,
-  topN: number
+  topN: number,
+  summary: RenderSummary | null = null
 ): string {
   // Accept the display name the report prints, not just the raw DevTools name.
   const resolution = resolveComponentName(
     componentName,
     commits.map((c) => c.componentName)
   );
+  if (resolution.kind === "missing" && summary) {
+    // It may have rendered only in commits under 16ms, which stop does not keep.
+    const elsewhere = resolveComponentName(
+      componentName,
+      summary.components.map((c) => c.name)
+    );
+    if (elsewhere.kind === "exact" || elsewhere.kind === "display") {
+      const row = summary.components.find((c) => c.name === elsewhere.rawName)!;
+      const renders = row.rerenders + row.mounts;
+      return (
+        `_\`${row.name}\` rendered ${formatCount(renders)} ${renders === 1 ? "time" : "times"} in this session, ` +
+        `but never in a stored commit: only commits of 16ms or more and their neighbours are stored._\n\n` +
+        `Run \`profiler-commit-query\` mode=\`render_counts\` component_name=\`${row.name}\` for its counts over all commits.`
+      );
+    }
+  }
   if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
     return renderComponentNameMiss(resolution, {
       fiberRenders: commits.length,
@@ -342,9 +471,12 @@ const zodSchema = z.object({
     "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
   ),
   mode: z
-    .enum(["by_component", "by_time_range", "by_index", "cascade_tree"])
+    .enum(["by_component", "by_time_range", "by_index", "cascade_tree", "render_counts"])
     .describe("Query mode; see Modes in the tool description."),
-  component_name: z.string().optional().describe("Component name"),
+  component_name: z
+    .string()
+    .optional()
+    .describe("Component name; optional for render_counts, which it narrows to one component"),
   time_range_ms: timeRangeSchema
     .optional()
     .describe("Time range in ms since profiling started, the clock this tool prints"),
@@ -356,7 +488,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Max results to return. Defaults to 20 for by_component / by_time_range, which count " +
-        "commits. by_index counts individual fibers and returns all of them unless this is set; " +
+        "commits, and render_counts, which counts components. by_index counts individual fibers and returns all of them unless this is set; " +
         "a small cap there can show less than the analyze report it is meant to expand on."
     ),
 });
@@ -369,9 +501,10 @@ Modes:
 - by_time_range: What happened in time_range_ms.
 - by_index: Full detail dump of the commit at commit_index (all components, props changed, parent cascade).
 - cascade_tree: Parent-child cascade tree for the commit at commit_index, showing who triggered whom.
+- render_counts: Re-render count, rate and self time per component over ALL commits, including those under 16ms that the other modes cannot see. Library components included.
 Use when drilling into specific components or time windows after react-profiler-analyze.
 Returns a markdown table or tree of commit data matching the requested mode.
-Fails if react-profiler-stop has not been called or no commit data is stored.`,
+Fails if react-profiler-stop has not been called.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -385,7 +518,16 @@ Fails if react-profiler-stop has not been called or no commit data is stored.`,
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
-    const commitTree = await getCommitTree(metroPort(params), params.device_id);
+    const commitTree = await getCommitData(metroPort(params), params.device_id);
+
+    if (params.mode === "render_counts") {
+      return renderRenderCounts(
+        commitTree.renderSummary,
+        params.component_name,
+        params.top_n ?? 20
+      );
+    }
+    if (commitTree.commits.length === 0) return renderNoStoredCommits(commitTree);
 
     switch (params.mode) {
       case "by_component": {
@@ -397,7 +539,12 @@ Fails if react-profiler-stop has not been called or no commit data is stored.`,
             error_kind: "validation",
           });
         }
-        return renderByComponent(commitTree.commits, params.component_name, params.top_n ?? 20);
+        return renderByComponent(
+          commitTree.commits,
+          params.component_name,
+          params.top_n ?? 20,
+          commitTree.renderSummary
+        );
       }
 
       case "by_time_range": {
