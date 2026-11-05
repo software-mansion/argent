@@ -75,7 +75,7 @@ An entry with `"readOnly": true` is a tool that only reads state. The MCP adapte
 
 ## The e2e test file input
 
-Over a link, the client replaces the file argument with a file-input object. This is also true for a link to a tool-server on the same computer. `path` is an absolute path on the client. The client resolves a relative path against its working directory. For an input with `collect`, the object has three more fields:
+Over a link, the client replaces the file argument with a file-input object. This is also true for a link to a tool-server on the same computer. The client resolves a relative `path` against its working directory. It sends a `~`, variable, command or URL spelling as written, and the tool-server refuses it. For an input with `collect`, the object has three more fields:
 
 ```json
 {
