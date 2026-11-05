@@ -1734,10 +1734,11 @@ function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message. It also returns the *value*
   // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
-  // declared `string` return type hides.
+  // declared `string` return type hides. A bare number goes through String():
+  // JSON.stringify renders `.inf`/`.nan` as `null`.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw) ?? String(raw);
+    rendered = typeof raw === "number" ? String(raw) : (JSON.stringify(raw) ?? String(raw));
   } catch {
     rendered = "[cyclic entry]";
   }

@@ -1007,6 +1007,21 @@ describe("parseFlow", () => {
       );
     });
 
+    it.each([
+      [".inf", "Infinity"],
+      [".nan", "NaN"],
+    ])("names a non-finite version: %s as %s", async (v, shown) => {
+      expect(() => parseFlow(`version: ${v}\nsteps: []\n`)).toThrow(
+        `Invalid e2e test file: version must be a positive integer, got ${shown}`
+      );
+    });
+
+    it("names a non-finite step entry instead of null", async () => {
+      expect(() => parseFlow("steps:\n  - .inf\n")).toThrow(
+        "Unrecognized e2e test entry (step must be an object): Infinity"
+      );
+    });
+
     it.each([["0"], ["1.5"], ['"1"']])("rejects version: %s", async (v) => {
       expect(() => parseFlow(`version: ${v}\nsteps: []\n`)).toThrow(
         /version must be a positive integer/
