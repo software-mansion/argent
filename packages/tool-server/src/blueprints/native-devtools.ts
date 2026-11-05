@@ -355,7 +355,11 @@ export async function precheckNativeDevtools(
     await api.ensureEnvReady();
   } catch (err) {
     // Not a fault of the simulator, so not recorded as one: let it say what to do.
-    if (err instanceof XcodeFirstLaunchPendingError) throw err;
+    if (err instanceof XcodeFirstLaunchPendingError) {
+      // A connected app is read over its own socket, which needs no simctl.
+      if (bundleId !== undefined && api.isConnected(bundleId)) return null;
+      throw err;
+    }
     const failure = api.getInitFailure();
     if (failure) return buildInitFailedResult(udid, failure);
     return buildInitFailedResult(udid, {
