@@ -66,7 +66,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    PORT=4000 npm run dev
    ```
 
-   > **Note:** On a physical iPhone the tool-server builds the on-device XCUITest runner from `packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj`. A packaged tool-server finds that project next to its bundle; one started from source (`npm run dev`, `npm run start`, or `node packages/tool-server/dist/index.js start`) does not, and the first physical-device tool fails with "Could not locate the ios-device-runner Xcode project". Point it at the project:
+   > **Note:** On a physical iPhone the tool-server builds the on-device XCUITest runner from `packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj`. A packaged tool-server finds that project next to its bundle; one started from source (`npm run dev`, `npm run start`, or `node packages/tool-server/dist/index.js start`) does not, and the first tool that drives the runner (`describe`, a gesture, `screenshot`) fails with "Could not locate the ios-device-runner Xcode project". Point it at the project:
    >
    > ```bash
    > ARGENT_IOS_RUNNER_PROJECT="$PWD/packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj" npm run dev
