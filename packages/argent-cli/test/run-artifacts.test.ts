@@ -172,6 +172,44 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(fs.existsSync(ignored)).toBe(false);
   });
 
+  it.each([["--out="], ["--out", "   "], ["--out=   "]])(
+    "refuses a blank %s rather than dropping the payload's `out`",
+    async (...flag) => {
+      state.screenshotData = { image: await localScreenshotHandle() };
+      const own = join(outDir, "own.png");
+
+      await expect(
+        run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: own }), ...flag], opts)
+      ).rejects.toThrow("process.exit(2) called: Error: --out requires a path");
+      expect(fs.existsSync(own)).toBe(false);
+      expect(state.artifactHits).toBe(0);
+    }
+  );
+
+  it("trims a padded --out, like a payload `out`", async () => {
+    state.screenshotData = { image: await localScreenshotHandle() };
+    const flag = join(outDir, "flag.png");
+
+    await run(["screenshot", "--udid", "SIM-1", "--out", ` ${flag} `], opts);
+
+    expect(fs.readFileSync(flag)).toEqual(PNG);
+    expect(logs).toContain(`Wrote: ${flag}`);
+  });
+
+  it.each([
+    ["null", null],
+    ["a string", "no-image-here"],
+  ])("fails instead of claiming `Wrote:` when the result is %s", async (_label, data) => {
+    state.screenshotData = data;
+    const flag = join(outDir, "never.png");
+
+    await expect(run(["screenshot", "--udid", "SIM-1", "--out", flag], opts)).rejects.toThrow(
+      "process.exit(1) called: Failed to save image: Tool result did not include a `url`"
+    );
+    expect(fs.existsSync(flag)).toBe(false);
+    expect(logs.join("\n")).not.toContain("Wrote:");
+  });
+
   it("remote: downloads via /artifacts, writes --out from downloaded bytes", async () => {
     state.screenshotData = {
       image: {

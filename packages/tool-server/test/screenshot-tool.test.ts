@@ -116,7 +116,7 @@ describe("screenshot tool", () => {
     expect(result).not.toHaveProperty("url");
   });
 
-  it("accepts a trimmed, non-empty `out` and leaves it off the result", async () => {
+  it("accepts a trimmed, absolute `out` and leaves it off the result", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -130,17 +130,24 @@ describe("screenshot tool", () => {
     } as unknown as import("@argent/registry").Registry;
     const screenshotTool = createScreenshotTool(registry);
 
-    expect(screenshotTool.zodSchema!.parse({ udid: "ABC", out: " shots/base.png " })).toMatchObject(
-      {
-        out: "shots/base.png",
-      }
-    );
-    expect(() => screenshotTool.zodSchema!.parse({ udid: "ABC", out: "   " })).toThrow();
-    expect(() => screenshotTool.zodSchema!.parse({ udid: "ABC", out: "" })).toThrow();
+    const outOf = (out: string) => screenshotTool.zodSchema!.parse({ udid: "ABC", out }).out;
+    expect(outOf(" /shots/base.png ")).toBe("/shots/base.png");
+    expect(outOf("C:\\shots\\base.png")).toBe("C:\\shots\\base.png");
+    for (const out of [
+      "   ",
+      "",
+      "shots/base.png",
+      "./base.png",
+      "~",
+      "~/base.png",
+      "C:base.png",
+    ]) {
+      expect(() => outOf(out)).toThrow();
+    }
 
     const result = await screenshotTool.execute(
       {},
-      { udid: "ABC", includeImageInContext: true, out: "shots/base.png" },
+      { udid: "ABC", includeImageInContext: true, out: "/shots/base.png" },
       { artifacts: new ArtifactStore() }
     );
     expect(result).not.toHaveProperty("out");

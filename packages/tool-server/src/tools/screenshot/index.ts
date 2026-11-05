@@ -85,6 +85,8 @@ const zodSchema = z.object({
     .string()
     .trim()
     .min(1)
+    // win32 also accepts POSIX-absolute paths, and the client may run on either OS.
+    .refine((p) => path.win32.isAbsolute(p), "must be an absolute path")
     .optional()
     .describe(
       "Over MCP or `argent run`, also save the PNG at this absolute path on your machine, creating missing directories and replacing an existing file. Ignored in an e2e test step."

@@ -39,6 +39,12 @@ interface RunOptions {
   argvForFlags: string[];
 }
 
+function outFlagPath(value: string | undefined): string {
+  const out = value?.trim();
+  if (!out) throw new FlagParseException("--out requires a path");
+  return out;
+}
+
 function splitOptions(argv: string[]): RunOptions {
   // Consumed here rather than by the schema-driven flag parser, so a tool with its
   // own "json" or "out" property can't capture them.
@@ -53,14 +59,12 @@ function splitOptions(argv: string[]): RunOptions {
       continue;
     }
     if (tok === "--out") {
-      const v = argv[i + 1];
-      if (!v) throw new FlagParseException("--out requires a path");
-      outPath = v;
+      outPath = outFlagPath(argv[i + 1]);
       i += 1;
       continue;
     }
     if (tok.startsWith("--out=")) {
-      outPath = tok.slice("--out=".length);
+      outPath = outFlagPath(tok.slice("--out=".length));
       continue;
     }
     rest.push(tok);
@@ -109,10 +113,10 @@ function withoutGlobalFlags(schema: JsonSchema | undefined): JsonSchema | undefi
 }
 
 async function fetchImageToFile(
-  result: { url?: string; path?: string },
+  result: { url?: string; path?: string } | null,
   outPath: string
 ): Promise<void> {
-  const url = result.url;
+  const url = result?.url;
   if (!url) {
     throw new Error("Tool result did not include a `url`; cannot save image");
   }
@@ -391,8 +395,8 @@ Examples:
       if (images.length > 0) {
         fs.mkdirSync(path.dirname(path.resolve(imageOut)), { recursive: true });
         fs.writeFileSync(imageOut, images[0]!.data);
-      } else if (result && typeof result === "object") {
-        await fetchImageToFile(result as { url?: string; path?: string }, imageOut);
+      } else {
+        await fetchImageToFile(result as { url?: string; path?: string } | null, imageOut);
       }
     } catch (err) {
       console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);

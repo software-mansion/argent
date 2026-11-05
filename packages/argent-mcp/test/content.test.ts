@@ -386,6 +386,46 @@ describe("toMcpContent with artifact ctx", () => {
     expect(text).toMatch(/^Saved: .*shot\.png\nCould not save to /);
   });
 
+  it("says `out` was not written when the image download fails", async () => {
+    const out = join(root, "stale.png");
+    await fs.writeFile(out, "earlier capture");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img7", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: (async () => ({ ok: false, status: 404 })) as unknown as typeof fetch,
+      },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out, "utf8")).toBe("earlier capture");
+    expect(result).toEqual([
+      { type: "text", text: JSON.stringify({ image: null }, null, 2) },
+      {
+        type: "text",
+        text: `Could not save to ${out}: no image file came back, so any file already there is not this capture.`,
+      },
+    ]);
+  });
+
+  it("says `out` was not written for a legacy `{ url, path }` result", async () => {
+    const out = join(root, "legacy.png");
+
+    const result = await toMcpContent(
+      { url: "http://host/shot.png", path: "/host/shot.png" },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning([]) },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(result[0]).toEqual({ type: "text", text: "Saved: /host/shot.png" });
+    expect((result[1] as { text: string }).text).toContain(`Could not save to ${out}:`);
+  });
+
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
     const result = await toMcpContent(
       { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },

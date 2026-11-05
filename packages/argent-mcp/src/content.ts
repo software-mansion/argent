@@ -77,7 +77,11 @@ export async function toMcpContent(
         return blocks;
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      return legacyImageContent(rewritten, suppressImage);
+      const legacy = await legacyImageContent(rewritten, suppressImage);
+      const out = requestedOut(args);
+      if (!out) return legacy;
+      const notSaved = `Could not save to ${resolve(out)}: no image file came back, so any file already there is not this capture.`;
+      return [...legacy, { type: "text", text: notSaved }];
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
@@ -93,8 +97,12 @@ export async function toMcpContent(
   return [{ type: "text" as const, text: stringifyForText(result) }];
 }
 
+function requestedOut(args: unknown): string {
+  return isRecord(args) && typeof args.out === "string" ? args.out.trim() : "";
+}
+
 async function savedText(scratchPath: string, data: Buffer, args: unknown): Promise<string> {
-  const out = isRecord(args) && typeof args.out === "string" ? args.out.trim() : "";
+  const out = requestedOut(args);
   if (!out) return `Saved: ${scratchPath}`;
   const target = resolve(out);
   try {
