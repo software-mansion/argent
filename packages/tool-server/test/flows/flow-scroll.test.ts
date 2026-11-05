@@ -507,6 +507,44 @@ describe("scroll-to directive", () => {
     ]);
   });
 
+  it("keeps the anchor for a cut that moved closer to its window's start in a window as long", async () => {
+    // A row taller than one increment's travel: the first wheel shrinks its room
+    // from 0.35 to 0.15 in the same 0.4-0.8 window, the second clears the cut.
+    const cutAt = (y: number) =>
+      n({
+        identifier: "row",
+        frame: { x: 0.6, y, width: 0.3, height: 0.3 },
+        clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+        clipAnchors: { y: { x: 0.3, y: 0.45 } },
+      });
+    const states = [
+      cutAt(0.75),
+      cutAt(0.55),
+      n({ identifier: "row", frame: { x: 0.6, y: 0.45, width: 0.3, height: 0.3 } }),
+    ];
+    let wheels = 0;
+    currentTree = () => screen([states[Math.min(wheels, 2)]]);
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      wheels++;
+    });
+    await writeFlow("shrunk-cut", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "shrunk-cut", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes.map((sw) => [sw.fromX, sw.fromY])).toEqual([
+      [0.3, 0.45],
+      [0.3, 0.45],
+    ]);
+  });
+
   it("stops once a cut target keeps its place in the clip while the page moves both", async () => {
     // The list cannot scroll the row's cut away, so each wheel moves the page,
     // carrying the list window and the row up together.
