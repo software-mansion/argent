@@ -911,8 +911,8 @@ async function scrollToVisible(
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
     // changing on every read, so a container that stopped moving would never
     // read as "end of scroll" and the loop would burn all its iterations. The
-    // scope is the gesture's region when it is a container, otherwise
-    // the union of the visible scroll containers under the gesture anchor (not the innermost; see
+    // scope is \`region\` when \`within\` is named, otherwise the union of the
+    // visible scroll containers under region's centre (not the innermost; see
     // anchorScrollFrames). Only when the tree surfaces none there does the scope
     // stay the whole screen, where a screen-level animator can still mask
     // end-of-scroll and the loop falls back to the iteration cap. Text stays in
