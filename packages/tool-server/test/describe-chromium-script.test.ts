@@ -768,6 +768,41 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "btn")!.label).toBe("Save draft");
   });
 
+  it("reads an aria-labelledby target as Chrome names it, not as its textContent", () => {
+    const child = (
+      tag: string,
+      text: string,
+      style: Record<string, string> = {},
+      attrs: Record<string, string> = {}
+    ) =>
+      Object.assign(el({ tag, text, rect: BOX, style: { display: "inline", ...style }, attrs }), {
+        nodeType: 1,
+      });
+    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+      Record<string, unknown>;
+    Object.assign(label, { nodeType: 1, parentNode: { nodeType: 9 } });
+    label.childNodes = [
+      { nodeType: 3, nodeValue: "Plan" },
+      child("p", "Pro", { display: "block" }),
+      child("span", "HIDDEN", { display: "none" }),
+      child("span", "INVISIBLE", { visibility: "hidden" }),
+      child("span", "IGNORED", {}, { "aria-hidden": "true" }),
+      child("script", "var q = 1"),
+      child("style", ".z{}"),
+      child("b", "monthly"),
+      child("span", "inner", {}, { "aria-label": "billed" }),
+      child("img", "", { display: "inline-block" }, { alt: "now" }),
+      { nodeType: 3, nodeValue: "end" },
+    ];
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, label]);
+    expect(findById(tree, "btn")!.label).toBe("Plan Pro monthly billed now end");
+  });
+
   it("reads a <br> under a display:none element of an aria-labelledby target as nothing", () => {
     // Each <br> sits two elements below the target. Its own display stays inline under
     // the display:none span, as display does not inherit.

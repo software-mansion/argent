@@ -173,10 +173,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return s.replace(WHITESPACE, " ").trim();
   }
 
-  // An aria-labelledby target's textContent (text and CDATA), read like ownText. In a
-  // shown target, a <br> under a display:none element is not rendered, though its own
-  // display stays inline. In a hidden one every <br> is a space, as in Chrome's
-  // accessible name. Iterative: the target's depth has no MAX_DEPTH bound.
+  // An aria-labelledby target's text (text and CDATA), read like Chrome's accessible
+  // name: a non-inline element or a <br> parts the words around it, a descendant's
+  // aria-label or an <img>'s alt stands in for its content, and script/style never
+  // count. A shown target leaves out its display:none, visibility:hidden and
+  // aria-hidden subtrees; a hidden one reads them all. Iterative: the target's depth
+  // has no MAX_DEPTH bound.
   function labelText(root) {
     let shown = true;
     for (let n = root; n && getNodeType.call(n) === 1; n = getParentNode.call(n)) {
@@ -186,25 +188,53 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     }
     let s = "";
-    // Flat [node, underNone] pairs.
+    // Nodes, and SPACE where a non-inline element's content ends.
+    const SPACE = {};
     const stack = [];
-    const pushChildren = (node, underNone) => {
+    const pushChildren = (node) => {
       const kids = getChildNodes.call(node);
-      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i], underNone);
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
     };
-    pushChildren(root, false);
+    pushChildren(root);
     while (stack.length) {
-      const underNone = stack.pop();
       const node = stack.pop();
-      const type = getNodeType.call(node);
-      if (type === 3 || type === 4) s += getNodeValue.call(node);
-      else if (!underNone && isRenderedBr(node)) s += " ";
-      else if (type === 1) {
-        pushChildren(
-          node,
-          underNone || (shown && window.getComputedStyle(node).display === "none")
-        );
+      if (node === SPACE) {
+        s += " ";
+        continue;
       }
+      const type = getNodeType.call(node);
+      if (type === 3 || type === 4) {
+        s += getNodeValue.call(node);
+        continue;
+      }
+      if (type !== 1) continue;
+      if (isRenderedBr(node)) {
+        s += " ";
+        continue;
+      }
+      const html = getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml";
+      const tag = getLocalName.call(node);
+      if (html && /^(script|style|template|noscript)$/.test(tag)) continue;
+      const style = window.getComputedStyle(node);
+      if (
+        shown &&
+        (style.display === "none" ||
+          style.visibility === "hidden" ||
+          getAttr.call(node, "aria-hidden") === "true")
+      ) {
+        continue;
+      }
+      const label =
+        getAttr.call(node, "aria-label") || (html && tag === "img" && getAttr.call(node, "alt"));
+      if (label && label.trim()) {
+        s += " " + label + " ";
+        continue;
+      }
+      if (style.display !== "inline" && style.display !== "none") {
+        s += " ";
+        stack.push(SPACE);
+      }
+      pushChildren(node);
     }
     return s.replace(WHITESPACE, " ");
   }
