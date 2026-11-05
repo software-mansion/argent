@@ -319,7 +319,7 @@ describe("GET /artifacts/:id", () => {
     const realPath = process.env.PATH;
 
     // A `tar` on PATH that runs the real one, keeps the first FAKE_TAR_BYTES of
-    // its output, and exits 1 like tar abandoning or warning.
+    // its output, and exits 1.
     beforeEach(async () => {
       root = await mkdtemp(join(tmpdir(), "artifact-faketar-"));
       const realTar = execFileSync("sh", ["-c", "command -v tar"], { encoding: "utf8" }).trim();
@@ -360,29 +360,10 @@ describe("GET /artifacts/:id", () => {
       await expect(download()).rejects.toThrow();
     });
 
-    it("cuts the response off when tar abandoned the archive after zero-filled data", async () => {
-      await mkdir(join(root, "Z.trace"));
-      await writeFile(join(root, "Z.trace", "z"), Buffer.alloc(4096));
-      // Cut right after z's data, which ends in zeros, before the end marker. macOS
-      // tar may write xattr members first, so find z's header.
-      const tar = execFileSync("tar", ["-cf", "-", "-C", root, "Z.trace"], {
-        env: { ...process.env, PATH: realPath },
-      });
-      const header = tar.indexOf(Buffer.from("Z.trace/z\0"));
-      expect(header % 512).toBe(0);
-      process.env.FAKE_TAR_BYTES = String(header + 512 + 4096);
-      await expect(download("Z.trace")).rejects.toThrow();
-    });
-
-    it("completes the response when tar wrote the whole archive", async () => {
+    // tar skips an unreadable member, still writes the end-of-archive marker, and exits non-zero.
+    it("cuts the response off when tar wrote the whole archive", async () => {
       process.env.FAKE_TAR_BYTES = "100000000";
-      const res = await download();
-      expect(res.status).toBe(200);
-      process.env.PATH = realPath;
-      const archive = join(root, "out.archive");
-      await writeFile(archive, res.body);
-      const member = await safeExtractArchive(archive, await mkdtemp(join(root, "d-")), "B.trace");
-      expect(await readFile(join(member, "d"), "utf8")).toBe("d".repeat(512));
+      await expect(download()).rejects.toThrow();
     });
   });
 

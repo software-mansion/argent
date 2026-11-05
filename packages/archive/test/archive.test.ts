@@ -14,7 +14,6 @@ import {
   createTarArgs,
   pickArchiveFormat,
   safeExtractArchive,
-  trackTarEnd,
   type ArchiveFormat,
 } from "../src/index.js";
 
@@ -136,74 +135,6 @@ describe("createArchiveFile (zstd)", () => {
     await expect(
       safeExtractArchive(archivePath, await fs.mkdtemp(path.join(tmpDir, "dest-")), "C.app")
     ).rejects.toThrow(/checksum|corruption/);
-  });
-});
-
-describe("trackTarEnd", () => {
-  async function zeroFileTar(): Promise<{ tar: Buffer; dataEnd: number }> {
-    // Data that ends in 8 KiB of zeros, behind a marker byte that locates it.
-    await fs.writeFile(
-      path.join(tmpDir, "z.bin"),
-      Buffer.concat([Buffer.from("x"), Buffer.alloc(8191)])
-    );
-    const tarPath = path.join(tmpDir, "z.tar");
-    await execFileAsync("tar", ["-cf", tarPath, "-C", tmpDir, "z.bin"]);
-    const tar = await fs.readFile(tarPath);
-    let dataStart = 0;
-    while (tar[dataStart] !== 0x78 || tar.subarray(dataStart + 1, dataStart + 512).some((b) => b)) {
-      dataStart += 512;
-    }
-    return { tar, dataEnd: dataStart + 8192 };
-  }
-
-  function ended(bytes: Buffer, chunkSize = bytes.length): boolean {
-    const tracker = trackTarEnd();
-    for (let i = 0; i < bytes.length; i += chunkSize)
-      tracker.push(bytes.subarray(i, i + chunkSize));
-    return tracker.ended();
-  }
-
-  it("needs both zero blocks where a header is due", async () => {
-    const { tar, dataEnd } = await zeroFileTar();
-    expect(ended(tar)).toBe(true);
-    expect(ended(tar.subarray(0, dataEnd))).toBe(false);
-    expect(ended(tar.subarray(0, dataEnd + 512))).toBe(false);
-    expect(ended(tar.subarray(0, dataEnd + 1024))).toBe(true);
-  });
-
-  it("follows headers split across chunks", async () => {
-    const { tar, dataEnd } = await zeroFileTar();
-    expect(ended(tar, 7)).toBe(true);
-    expect(ended(tar.subarray(0, dataEnd), 7)).toBe(false);
-  });
-
-  it("skips the sparse-map blocks of a GNU sparse member", () => {
-    const header = Buffer.alloc(512);
-    header.write("sparse", 0);
-    header.write("00000001000\0", 124); // 512 bytes of data
-    header[156] = 0x53; // 'S'
-    header[482] = 1; // a sparse-map block follows
-    const map = Buffer.alloc(512);
-    map.write("00000000000\0", 0); // one region; byte 504 is 0, so the last block
-    const tar = Buffer.concat([header, map, Buffer.alloc(512), Buffer.alloc(1024)]);
-    expect(ended(tar.subarray(0, 512 * 3))).toBe(false);
-    expect(ended(tar.subarray(0, 512 * 4))).toBe(false);
-    expect(ended(tar)).toBe(true);
-  });
-
-  it("reads a base-256 size field", () => {
-    const header = Buffer.alloc(512);
-    header.write("big", 0);
-    header[124] = 0x80;
-    header.writeUInt32BE(1024, 132);
-    const tar = Buffer.concat([
-      header,
-      Buffer.alloc(1024),
-      Buffer.alloc(512, 1),
-      Buffer.alloc(1024),
-    ]);
-    expect(ended(tar.subarray(0, 512 + 1024 + 512))).toBe(false);
-    expect(ended(tar)).toBe(true);
   });
 });
 

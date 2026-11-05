@@ -18,7 +18,6 @@ import {
   createCompressor,
   createTarArgs,
   pickArchiveFormat,
-  trackTarEnd,
 } from "@argent/archive";
 import type { Request, Response } from "express";
 import type {
@@ -135,17 +134,15 @@ function streamDirectoryAsArchive(
     compressor.destroy();
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   });
-  // tar can exit non-zero after a whole archive (that live-trace warning), but an
-  // abandoned one lacks the end-of-archive marker. The compressor closes a valid
-  // frame either way, so destroy the response for the latter: the client's
-  // download then fails instead of extracting a partial bundle.
-  const tarEnd = trackTarEnd();
-  child.stdout.on("data", (chunk: Buffer) => tarEnd.push(chunk));
+  // The compressor closes a valid frame even around a tar that failed, and tar
+  // still writes the end-of-archive marker after skipping unreadable members, so
+  // only exit 0 ends the response; otherwise the client's download fails instead
+  // of extracting a partial bundle.
   const tarClosed = new Promise<number | null>((resolve) => child.on("close", resolve));
   compressor.on("error", () => res.destroy());
   compressor.on("end", () => {
     void tarClosed.then((code) => {
-      if (code === 0 || tarEnd.ended()) res.end();
+      if (code === 0) res.end();
       else res.destroy();
     });
   });

@@ -69,61 +69,6 @@ export function createTarArgs(sourcePath: string): string[] {
   return ["-cf", "-", "-C", dirname(sourcePath), basename(sourcePath)];
 }
 
-const TAR_BLOCK = 512;
-
-/** A tar header's size field: octal, or GNU base-256 when the high bit is set. */
-function tarMemberSize(header: Buffer): number {
-  const field = header.subarray(124, 136);
-  if (field[0]! & 0x80) return field.subarray(1).reduce((n, b) => n * 256 + b, field[0]! & 0x7f);
-  return parseInt(field.toString("latin1"), 8) || 0;
-}
-
-/**
- * Follow a tar stream's member headers to tell whether it reached the
- * end-of-archive marker: two zero blocks where a header is due. Zeros that end a
- * member's data don't count.
- */
-export function trackTarEnd(): { push(chunk: Buffer): void; ended(): boolean } {
-  const header = Buffer.alloc(TAR_BLOCK);
-  let filled = 0;
-  let seen = 0;
-  let nextHeader = 0;
-  let zeroBlocks = 0;
-  let dataSize = 0;
-  // A GNU sparse ('S') header can be followed by sparse-map blocks its size omits.
-  let sparseMap = false;
-  return {
-    push(chunk) {
-      for (let off = 0; off < chunk.length && zeroBlocks < 2;) {
-        if (seen < nextHeader) {
-          const skip = Math.min(nextHeader - seen, chunk.length - off);
-          seen += skip;
-          off += skip;
-          continue;
-        }
-        const n = chunk.copy(header, filled, off, off + TAR_BLOCK - filled);
-        filled += n;
-        seen += n;
-        off += n;
-        if (filled < TAR_BLOCK) return;
-        filled = 0;
-        if (sparseMap) {
-          sparseMap = header[504] !== 0;
-        } else if (header.every((b) => b === 0)) {
-          zeroBlocks++;
-          continue;
-        } else {
-          zeroBlocks = 0;
-          dataSize = tarMemberSize(header);
-          sparseMap = header[156] === 0x53 && header[482] !== 0;
-        }
-        if (!sparseMap) nextHeader = seen + Math.ceil(dataSize / TAR_BLOCK) * TAR_BLOCK;
-      }
-    },
-    ended: () => zeroBlocks >= 2,
-  };
-}
-
 /**
  * Archive `sourcePath` (file or directory) into `archivePath`. Removes the
  * partial archive on failure.
