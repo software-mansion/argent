@@ -1,5 +1,6 @@
 import * as zlib from "node:zlib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Registry, type ToolCapability } from "@argent/registry";
 import {
   findAndroidNativeRecord,
   type AndroidNativeRecord,
@@ -7,6 +8,10 @@ import {
   type AndroidNetworkInspectorApi,
 } from "../../src/blueprints/android-network-inspector";
 import { networkRequestTool } from "../../src/tools/network/network-request";
+import { networkLogsTool } from "../../src/tools/network/network-logs";
+import { createNativeNetworkLogsTool } from "../../src/tools/native-devtools/native-network-logs";
+import { assertSupported } from "../../src/utils/capability";
+import { resolveDevice } from "../../src/utils/device-info";
 
 /**
  * The record store is the inspector's; these tests cover how
@@ -666,10 +671,47 @@ describe("view-network-request-details: routing an android- ID", () => {
     expect(
       await networkRequestTool.execute!({ chromium }, { ...params, requestId: "android-1a2b-99" })
     ).toBe(
-      "Request android-1a2b-99 not found. Use native-network-logs to list the requests the Android native layer recorded."
+      "Request android-1a2b-99 not found. An android- ID comes from an Android device. Use view-network-logs to list this device's requests."
     );
     expect(get).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["the adb serial", SERIAL, "native-network-logs"],
+    ["an ext: spelling", "ext:acme-3f2a9c:emulator-5554", "native-network-logs"],
+    ["a Metro logicalDeviceId", "b1946ac92492d2347c6235b4d2611184", "native-network-logs"],
+    [
+      "a logicalDeviceId shaped like an iOS UDID",
+      "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "native-network-logs",
+    ],
+    [
+      "a remote iOS simulator",
+      "remote:6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "native-network-logs",
+    ],
+    ["a Chromium target", "chromium-cdp-9222", "view-network-logs"],
+    ["a Vega device", "amazon-4a27df03c9777152", "view-network-logs"],
+  ])(
+    "answers an unknown android- ID under %s with a tool that accepts it",
+    async (_, deviceId, tool) => {
+      serve(record());
+      const listingTools: Record<string, ToolCapability | undefined> = {
+        "native-network-logs": createNativeNetworkLogsTool(new Registry()).capability,
+        "view-network-logs": networkLogsTool.capability,
+      };
+
+      const answer = await networkRequestTool.execute!(
+        {},
+        { device_id: deviceId, requestId: "android-1a2b-99", includeBody: true }
+      );
+
+      expect(answer).toContain(`Use ${tool} to list`);
+      expect(() =>
+        assertSupported(tool, listingTools[tool], resolveDevice(deviceId))
+      ).not.toThrow();
+    }
+  );
 
   it("keeps a Chromium request ID on Chromium and any other ID on the JS layer", async () => {
     const params = { device_id: "chromium-cdp-9222", requestId: "1234.5", includeBody: false };
