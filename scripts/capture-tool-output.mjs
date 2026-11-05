@@ -25,11 +25,14 @@
  *   NN-<id>-imgK.png
  * and a table on stdout: characters of text and image sizes per call.
  *
+ * The checkout is compiled first, so the results come from its current code.
+ *
  * Devices are real: the calls act on the simulators, emulators and apps you name. The
  * script uses your HOME (device folders, Argent flags and config), sends no telemetry and
  * leaves no tool-server running when it exits.
  */
 
+import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -54,6 +57,11 @@ if (values.help || (values.call.length === 0 && !values.steps)) {
   process.stdout.write(header.replace(/^#!.*\n\/\*\*\n/, "").replace(/^ \* ?/gm, "") + "\n");
   process.exit(values.help ? 0 : 1);
 }
+
+// Workspace packages load from dist/, so stale output would capture old results.
+const tsc = createRequire(import.meta.url).resolve("typescript/bin/tsc");
+const projects = ["packages/tool-server", "packages/argent-tools-client", "packages/argent-mcp"];
+execFileSync(process.execPath, [tsc, "--build", ...projects], { cwd: REPO, stdio: "inherit" });
 
 function parseCall(spec) {
   const space = spec.indexOf(" ");
