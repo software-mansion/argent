@@ -70,6 +70,24 @@ describe("simulator-watcher with a hung simctl", () => {
     stop();
   });
 
+  it("skips ticks while the first poll, which ready waits on, has not answered", async () => {
+    let finishFirst: (stdout: string) => void = () => {};
+    execSimctlMock
+      .mockImplementationOnce(() => new Promise<string>((resolve) => (finishFirst = resolve)))
+      .mockResolvedValue('{"devices":{}}');
+
+    const { ready, stop } = startSimulatorWatcher(registry);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(execSimctlMock).toHaveBeenCalledTimes(1);
+
+    // Once it answers, the next tick polls again.
+    finishFirst('{"devices":{}}');
+    await ready;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(execSimctlMock).toHaveBeenCalledTimes(2);
+    stop();
+  });
+
   it("lets ready resolve when the first call times out, and says why once", async () => {
     execSimctlMock.mockRejectedValue(
       new SimctlTimeoutError(["simctl", "list", "devices", "--json"], 10_000)
