@@ -28,4 +28,15 @@ describe("buildToolsServerEnv", () => {
 
     expect(env[AUTH_TOKEN_ENV]).toBe("");
   });
+
+  it("exports the minted token over an inherited ARGENT_AUTH_TOKEN", () => {
+    const env = buildToolsServerEnv(
+      paths,
+      43123,
+      { [AUTH_TOKEN_ENV]: "developer-exported" },
+      { token: "minted" }
+    );
+
+    expect(env[AUTH_TOKEN_ENV]).toBe("minted");
+  });
 });
