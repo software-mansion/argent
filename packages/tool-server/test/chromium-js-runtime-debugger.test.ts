@@ -167,6 +167,8 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
     expect(reaped).toBeDefined();
     expect(reaped!.salvage).toContain("18 captured console entries");
+    expect(reaped!.salvage).toContain("the log file is deleted on teardown");
+    expect(reaped!.salvage).not.toContain("no log file held them");
     expect(fs.existsSync(instance.api.logWriter.getFilePath())).toBe(false);
   });
 

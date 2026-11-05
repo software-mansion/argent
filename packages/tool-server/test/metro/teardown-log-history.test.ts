@@ -145,6 +145,8 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
     expect(result.totalEntries).toBe(0);
     expect(result.note).toBeDefined();
     expect(result.note).toContain("60 captured console entries");
+    expect(result.note).toContain("the log file is deleted on teardown");
+    expect(result.note).not.toContain("no log file held them");
     expect(result.note).toContain("stop-all-simulator-servers");
     expect(result.note).toContain("torn down");
   });
