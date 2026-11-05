@@ -121,6 +121,8 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
       }
     );
   } catch (err) {
+    // Its message says what to do, and a flow step reports only the thrown message.
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
       `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
@@ -232,7 +234,7 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
     runningUserApps = enumerateRunningUserApps(udid);
   } catch (err) {
     // A refused `simctl` says nothing about the app, so this is not "it isn't running yet".
-    if (err instanceof Error && err.cause instanceof XcodeFirstLaunchPendingError) throw err;
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     return { executable: name, pid: null };
   }
   const matched = runningUserApps.find(
@@ -269,6 +271,7 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
       maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
       `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +

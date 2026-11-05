@@ -105,7 +105,7 @@ export function startSimulatorWatcher(registry: Registry): {
 
   /**
    * True while `simctl` would start Xcode's component install, so this tick must
-   * not call it. A tick like that spawns nothing and restarts no `xcodebuild`, so
+   * not call it. A tick like that calls no `simctl` and restarts no `xcodebuild`, so
    * it is no timeout: it also drops any backoff, or the first poll after the
    * install would wait out what is left of it.
    */

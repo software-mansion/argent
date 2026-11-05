@@ -11,7 +11,9 @@ import { execFileSync } from "node:child_process";
  * and leaves another password request behind.
  *
  * This module answers "would the wrapper start that install?" by reading the
- * same two files the wrapper reads, so asking never triggers a prompt.
+ * same two files the wrapper reads, so asking never triggers a prompt. The
+ * wrapper reads the plist with `PlistBuddy`, which takes XML and binary plists
+ * alike. This module reads an XML plist itself and a binary one with `plutil`.
  */
 export type XcodeWrapper = "simctl" | "devicectl";
 
@@ -153,19 +155,21 @@ function parseWrapper(file: string): WrapperCheck | null {
 
 /**
  * `CFBundleVersion` of a wrapper's plist. "missing" when the file does not
- * exist; null when it exists but no version can be read from it. Only
- * `devicectl` gets the `plutil` read: CoreDevice's plist is binary, and
- * `simctl`'s answer has to stay spawn-free.
+ * exist; null when it exists but no version can be read from it. Only a binary
+ * plist is handed to `plutil`: CoreDevice's is one, and so is the CoreSimulator
+ * one Xcode 16 installs, which an Xcode update leaves in place until the
+ * install. An XML one spawns nothing.
  */
-function readBundleVersion(plistPath: string, wrapper: XcodeWrapper): string | "missing" | null {
-  let text: string;
+function readBundleVersion(plistPath: string): string | "missing" | null {
+  let data: Buffer;
   try {
-    text = fs.readFileSync(plistPath, "utf8");
+    data = fs.readFileSync(plistPath);
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : null;
   }
-  const version = /<key>CFBundleVersion<\/key>\s*<string>([^<]+)<\/string>/.exec(text)?.[1] ?? null;
-  return version === null && wrapper === "devicectl" ? readBinaryPlistVersion(plistPath) : version;
+  if (data.toString("latin1", 0, 6) === "bplist") return readBinaryPlistVersion(plistPath);
+  const text = data.toString("utf8");
+  return /<key>CFBundleVersion<\/key>\s*<string>([^<]+)<\/string>/.exec(text)?.[1] ?? null;
 }
 
 /** It blocks the event loop while it runs, and normally takes about 2 ms. */
@@ -217,8 +221,9 @@ function isOlder(a: string, b: string): boolean {
  * newer than expected: the `!=` check runs the install then too, but
  * `xcodebuild -checkFirstLaunchStatus` finds nothing to install (seen on Xcode 26.6).
  *
- * Synchronous, and spawn-free for `simctl`. It reads both files on every call,
- * so an install finished mid-session is picked up on the next call.
+ * Synchronous. It reads both files on every call, so an install finished
+ * mid-session is picked up on the next call. It spawns nothing, except
+ * `plutil` for a binary plist.
  */
 export function xcodeFirstLaunchPending(wrapper: XcodeWrapper): boolean {
   if (process.platform !== "darwin") return false;
@@ -226,7 +231,7 @@ export function xcodeFirstLaunchPending(wrapper: XcodeWrapper): boolean {
   if (!devDir) return false;
   const check = parseWrapper(path.join(devDir, "usr", "bin", wrapper));
   if (!check) return false;
-  const installed = readBundleVersion(check.plistPath, wrapper);
+  const installed = readBundleVersion(check.plistPath);
   if (installed === null) return false;
   return installed === "missing" ? check.rule === "different" : isOlder(installed, check.expected);
 }

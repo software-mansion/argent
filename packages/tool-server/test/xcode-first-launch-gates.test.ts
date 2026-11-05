@@ -143,6 +143,7 @@ import { createLaunchAppTool } from "../src/tools/launch-app";
 import { openUrlTool } from "../src/tools/open-url";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { reinstallAppTool } from "../src/tools/reinstall-app";
+import { settingsPermissionsTool } from "../src/tools/settings-permissions";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "../src/utils/ax-prefs";
 import { pinStatusBar, restoreStatusBar } from "../src/utils/status-bar";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
@@ -294,7 +295,7 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
   const BUNDLE_ID = "com.example.app";
   let appPath: string;
 
-  function app() {
+  function tools() {
     __primeDepCacheForTests(["xcrun"]);
     const registry = new Registry();
     registry.registerBlueprint(nativeDevtoolsBlueprint);
@@ -303,8 +304,37 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
     registry.registerTool(openUrlTool as never);
     registry.registerTool(createRestartAppTool(registry) as never);
     registry.registerTool(reinstallAppTool as never);
-    return createHttpApp(registry).app;
+    registry.registerTool(settingsPermissionsTool as never);
+    return registry;
   }
+
+  function app() {
+    return createHttpApp(tools()).app;
+  }
+
+  // Armed while the install was done, so launch-app and restart-app pass the
+  // native-devtools precheck, which then runs no simctl, and reach `simctl launch`.
+  async function armedTools() {
+    pending.simctl = false;
+    const registry = tools();
+    const ref = nativeDevtoolsRef(SIMULATOR);
+    const api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+    expect(api.isEnvSetup()).toBe(true);
+    return registry;
+  }
+
+  // Each tool wraps a failed `simctl` call in its own error.
+  const WRAPPING = [
+    ["launch-app", { bundleId: BUNDLE_ID }, FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED, "launch"],
+    ["restart-app", { bundleId: BUNDLE_ID }, FAILURE_CODES.IOS_RESTART_LAUNCH_FAILED, "launch"],
+    ["open-url", { url: "https://example.com" }, FAILURE_CODES.IOS_OPEN_URL_FAILED, "openurl"],
+    [
+      "settings-permissions",
+      { action: "grant", permission: "camera", bundleId: BUNDLE_ID },
+      FAILURE_CODES.IOS_SETTINGS_PERMISSION_FAILED,
+      "privacy",
+    ],
+  ] as const;
 
   beforeEach(() => {
     // reinstall-app reads the bundle id of a real .app before it touches the device.
@@ -328,6 +358,10 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
     ["open-url", () => ({ url: "https://example.com" })],
     ["restart-app", () => ({ bundleId: BUNDLE_ID })],
     ["reinstall-app", () => ({ bundleId: BUNDLE_ID, appPath })],
+    [
+      "settings-permissions",
+      () => ({ action: "grant", permission: "contacts", bundleId: BUNDLE_ID }),
+    ],
   ] as const)("%s answers the refusal and spawns no xcrun", async (id, params) => {
     const res = await request(app())
       .post(`/tools/${id}`)
@@ -335,7 +369,53 @@ describe("a tool that runs simctl while Xcode's install is pending", () => {
 
     expect(res.status).toBe(424);
     expect(res.body.error).toMatch(/-runFirstLaunch/);
+    expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
     expect(xcrunCalls()).toEqual([]);
+  });
+
+  // A flow step's reason is the message of the error the tool throws, and nothing
+  // under it, so a tool's own wrapper would leave the agent without the fix.
+  it.each(WRAPPING)(
+    "%s throws the refusal itself on a service armed before the install went pending",
+    async (id, params) => {
+      const registry = await armedTools();
+      try {
+        pending.simctl = true;
+        execFileMock.mockClear();
+        const err = await registry
+          .invokeTool(id, { udid: SIMULATOR.id, ...params })
+          .catch((e: unknown) => e);
+
+        expect((err as Error).message).toBe(
+          `[Tool:${id}] ${new XcodeFirstLaunchPendingError("simctl").message}`
+        );
+        expect(getFailureSignal(err)?.error_code).toBe(
+          FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING
+        );
+        expect(xcrunCalls()).toEqual([]);
+      } finally {
+        await registry.dispose();
+      }
+    }
+  );
+
+  it.each(WRAPPING)("%s still wraps any other simctl failure", async (id, params, code, verb) => {
+    const registry = await armedTools();
+    try {
+      execFileMock.mockImplementation((...args: unknown[]) => {
+        const cb = args[args.length - 1] as (err: Error | null, out?: unknown) => void;
+        const failed = args[0] === "xcrun" && (args[1] as string[]).includes(verb);
+        cb(failed ? new Error("simctl failed") : null, { stdout: "", stderr: "" });
+      });
+      const err = await registry
+        .invokeTool(id, { udid: SIMULATOR.id, ...params })
+        .catch((e: unknown) => e);
+
+      expect((err as Error).message).toMatch(/^\[Tool:[a-z-]+\] Failed to /);
+      expect(getFailureSignal(err)?.error_code).toBe(code);
+    } finally {
+      await registry.dispose();
+    }
   });
 
   it("the status bar and accessibility helpers spawn no xcrun", async () => {
@@ -614,13 +694,46 @@ describe("a native-devtools tool while Xcode's install is pending", () => {
       agent.destroy();
     }
   );
+
+  // Only the app asked about may skip the refusal: another app's socket says nothing about it.
+  it.each(PRECHECKED_READS)(
+    "%s answers the refusal for an app that is not connected while another app is",
+    async (id, extra) => {
+      const device: DeviceInfo = { ...SIM, id: processScopedUdid("-1523-4000-8000-000000000005") };
+      pending.simctl = true;
+      const app = nativeApp();
+      const ref = nativeDevtoolsRef(device);
+      const api = await registry!.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+      expect(api.isEnvSetup()).toBe(false);
+
+      const agent = net.createConnection(api.socketPath, () => {
+        agent.write(
+          JSON.stringify({ type: "Control", payload: { bundleId: "com.other.app" } }) + "\n"
+        );
+      });
+      await vi.waitFor(() => expect(api.isConnected("com.other.app")).toBe(true));
+
+      execFileMock.mockClear();
+      const res = await request(app)
+        .post(`/tools/${id}`)
+        .send({ udid: device.id, bundleId: BUNDLE_ID, ...extra });
+
+      expect(res.status).toBe(424);
+      expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      expect(xcrunCalls()).toEqual([]);
+      agent.destroy();
+    }
+  );
 });
 
 describe("native-profiler-start while Xcode's install is pending", () => {
   it.each([
     ["detecting the app", {}],
     ["given an app_process, rather than saying to launch the app", { app_process: "Probe" }],
+    ["looking up an app to cold-launch", { app_process: "Probe", malloc_stack_logging: true }],
   ])("answers 424 %s", async (_case, params) => {
+    // Only `xctrace --device` can cold-launch an app for malloc_stack_logging.
+    if ("malloc_stack_logging" in params) vi.stubEnv("ARGENT_IOS_CAPTURE", "device");
     pending.simctl = true;
     __primeDepCacheForTests(["xcrun"]);
     const registry = new Registry();
@@ -633,8 +746,9 @@ describe("native-profiler-start while Xcode's install is pending", () => {
 
       expect(res.status).toBe(424);
       expect(res.body.error).toMatch(/-runFirstLaunch/);
-      expect(res.body.error_code).toBe(FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED);
+      expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
     } finally {
+      vi.unstubAllEnvs();
       await registry.dispose();
     }
   });
@@ -678,7 +792,11 @@ describe("the wait tools while Xcode's install is pending", () => {
   // Far past this test's own timeout, so running it out would fail the test.
   const NEVER = 60_000;
 
-  it("makes await-ui-element answer at once, not at its timeout", async () => {
+  // The accessibility service itself cannot start, with or without an app to measure.
+  it.each([
+    ["", {}],
+    [" with a bundleId", { bundleId: "com.example.app" }],
+  ])("makes await-ui-element%s answer at once, not at its timeout", async (_name, extra) => {
     pending.simctl = true;
     const tool = createAwaitUiElementTool(iosRegistry());
     const params = {
@@ -686,6 +804,7 @@ describe("the wait tools while Xcode's install is pending", () => {
       condition: "exists",
       selector: { text: "Done" },
       timeoutMs: NEVER,
+      ...extra,
     };
     await expect(tool.execute({}, params as never)).rejects.toSatisfy(isTheRefusal);
     expect(xcrunCalls()).toEqual([]);
@@ -779,17 +898,65 @@ describe("a warm session while Xcode's install is pending", () => {
     expect(xcrunCalls()).toEqual([]);
   });
 
-  // An empty accessibility read falls back to measuring the app, which needs simctl.
-  it("describe answers the refusal when the fallback's measurement is refused", async () => {
+  // An empty accessibility read falls back to measuring the app, which needs
+  // simctl. The accessibility read itself worked, so the refusal is the hint.
+  it("describe gives the refusal's reason when the fallback's measurement is refused", async () => {
     pending.simctl = true;
     const app = warmApp(async () => ({ alertVisible: false, elements: [] }));
     const res = await request(app)
       .post("/tools/describe")
       .send({ udid: SIMULATOR.id, bundleId: "com.example.app" });
 
-    // Read as an unmeasured app, it answered 200 with should_restart.
-    expect(res.status).toBe(424);
-    expect(res.body.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+    expect(res.status).toBe(200);
+    expect(res.body.data.hint).toContain("-runFirstLaunch");
+    // Read as an unmeasured app, it was told to restart, which is refused too.
+    expect(res.body.data.should_restart).toBeUndefined();
+    expect(xcrunCalls()).toEqual([]);
+  });
+
+  // Right after a launch the screen is still rendering, and the app has not connected yet.
+  it("await-ui-element with a bundleId waits past the fallback's refusal for the tree", async () => {
+    pending.simctl = true;
+    let reads = 0;
+    const app = warmApp(async () => ({
+      alertVisible: false,
+      elements: ++reads < 3 ? [] : [BUTTON],
+    }));
+    const res = await request(app)
+      .post("/tools/await-ui-element")
+      .send({
+        udid: SIMULATOR.id,
+        bundleId: "com.example.app",
+        condition: "exists",
+        selector: { text: "Done" },
+        pollIntervalMs: 50,
+        timeoutMs: 5_000,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ success: true });
+    expect(reads).toBe(3);
+    expect(xcrunCalls()).toEqual([]);
+  });
+
+  it("await-ui-element with a bundleId that runs out gives the refusal's reason", async () => {
+    pending.simctl = true;
+    const app = warmApp(async () => ({ alertVisible: false, elements: [] }));
+    const res = await request(app)
+      .post("/tools/await-ui-element")
+      .send({
+        udid: SIMULATOR.id,
+        bundleId: "com.example.app",
+        condition: "exists",
+        selector: { text: "Done" },
+        pollIntervalMs: 50,
+        timeoutMs: 300,
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ success: false, cause: "unreadable" });
+    expect(res.body.data.note).toContain("-runFirstLaunch");
+    expect(res.body.data.note).not.toContain("restart-app");
     expect(xcrunCalls()).toEqual([]);
   });
 });

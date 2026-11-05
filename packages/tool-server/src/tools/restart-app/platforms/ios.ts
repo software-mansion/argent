@@ -14,6 +14,7 @@ import {
 import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -58,6 +59,8 @@ export function makeIosImpl(
           await simctlArgsForUdid(udid, ["launch", udid, bundleId, ...(params.launchArgs ?? [])])
         );
       } catch (err) {
+        // Its message says what to do, and a flow step reports only the thrown message.
+        if (err instanceof XcodeFirstLaunchPendingError) throw err;
         throw new FailureError(
           `Failed to restart iOS app ${bundleId} on ${udid}.`,
           {

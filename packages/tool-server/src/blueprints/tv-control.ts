@@ -105,11 +105,11 @@ async function sendJson(socketPath: string, command: string, timeoutMs?: number)
 
 // Spawn the AX reader *inside* the simulator. It binds its own unix socket on
 // the host-shared /tmp, so the host connects to that path directly.
-function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
-  // The factory's device-list validation already learned this UDID's device
-  // set, so the synchronous cached lookup is warm here. Spawning the AX reader
-  // is the ax-service mechanism, so a provider's device needs that grant.
-  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
+function spawnAxDaemon(
+  udid: string,
+  socketPath: string,
+  axTarget: ReturnType<typeof simctlTargetForUdidSync>
+): ChildProcess {
   const proc = execFile(
     "xcrun",
     [
@@ -253,7 +253,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
 
     await ensureAutomationEnabled(udid);
 
-    let axProc = spawnAxDaemon(udid, axSock);
+    // The device-list validation above already learned this UDID's device set,
+    // so the synchronous cached lookup is warm. Spawning the AX reader is the
+    // ax-service mechanism, so a provider's device needs that grant.
+    const axTarget = () => simctlTargetForUdidSync(udid, { granted: "ax-service" });
+    let axProc = spawnAxDaemon(udid, axSock, axTarget());
     const hidProc = spawnHidDaemon(udid, hidSock);
 
     // Spawned via `simctl spawn`, not as a child of the app, so it survives
@@ -323,6 +327,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     // half-spawned daemon or double-spawn.
     let axRespawn: Promise<void> | null = null;
     async function spawnFreshAx(): Promise<void> {
+      // Built before the old daemon is killed, so a respawn that is refused
+      // (Xcode's component install is pending) leaves a working daemon in place.
+      const target = axTarget();
       if (axProc && !axProc.killed) {
         axProc.removeListener("exit", onAxExit);
         axProc.removeListener("error", onAxError);
@@ -335,14 +342,13 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         /* no stale socket to remove */
       }
       try {
-        axProc = spawnAxDaemon(udid, axSock);
+        axProc = spawnAxDaemon(udid, axSock, target);
         axProc.on("exit", onAxExit);
         axProc.on("error", onAxError);
         await waitForSocket(axSock, axProc, 15_000);
       } catch (err) {
         // The socket never came up (a bind that timed out, not a clean exit —
-        // `onAxExit` only fires for the latter), or the spawn was refused
-        // (Xcode's component install is pending). Mark the daemon dead so the
+        // `onAxExit` only fires for the latter). Mark the daemon dead so the
         // next `ensureAxAlive` respawns instead of connecting to a socket that
         // was unlinked and never rebound, and reap the half-spawned process.
         axExited = true;
