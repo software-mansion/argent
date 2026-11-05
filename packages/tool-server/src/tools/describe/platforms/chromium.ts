@@ -793,15 +793,26 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // Whether the page hit-tests el or its content outside \`clip\`, where the clip would
   // cut it: content slotted into a closed shadow root paints where its unseen slot sits,
-  // which may escape its host's clips. Integer client sizes put a clip edge up to a pixel
-  // inside the true one, so a point must lie more than a pixel outside.
+  // which may escape its host's clips. Chrome hit-tests clipped content across its
+  // clippers' borders too, so a point must lie outside their border boxes; and integer
+  // client sizes put a clip edge up to a pixel inside the true one, so more than a pixel
+  // outside.
   function paintsOutside(el, clip) {
     const v = intersect(getBCR.call(el), { left: 0, top: 0, right: w, bottom: h });
+    let borders = null;
+    for (let n = getParentNode.call(el); n && getNodeType.call(n) === 1; ) {
+      const st = window.getComputedStyle(n);
+      if (overflowApplies(n, st) && (overflowClips(st) || paintContained(st))) {
+        borders = intersect(borders, getBCR.call(n));
+      }
+      n = getParentNode.call(n);
+    }
+    const b = borders || clip;
     const e = {
-      left: clip.left - 1,
-      top: clip.top - 1,
-      right: clip.right + 1,
-      bottom: clip.bottom + 1,
+      left: Math.min(clip.left, b.left) - 1,
+      top: Math.min(clip.top, b.top) - 1,
+      right: Math.max(clip.right, b.right) + 1,
+      bottom: Math.max(clip.bottom, b.bottom) + 1,
     };
     const cx = (v.left + v.right) / 2;
     const cy = (v.top + v.bottom) / 2;

@@ -2151,6 +2151,40 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(card(), "popped").h).toBe(0);
   });
 
+  it("clips a custom element's light child that hit-tests only across its clipper's border", () => {
+    // A 12px-bordered clipper: the row overflows its padding box (y 12..112) to 127,
+    // and Chrome hit-tests the overflow up to the border box's bottom (124).
+    const host = () =>
+      el({
+        tag: "app-row",
+        rect: ZERO,
+        style: { display: "contents" },
+        children: [
+          el({
+            attrs: { id: "row" },
+            rect: { x: 12, y: 62, w: 300, h: 65 },
+            painted: { x: 12, y: 62, w: 300, h: 62 },
+          }),
+        ],
+      });
+    const bordered = { x: 0, y: 0, w: 324, h: 124 };
+    const padding = { left: 12, top: 12, width: 300, height: 100 };
+    const scrolled = run([
+      scroller([host()], {
+        rect: bordered,
+        client: padding,
+        offset: { width: 324, height: 124 },
+        scrollSize: { width: 300, height: 400 },
+      }),
+    ]).tree;
+    expect(pxFrame(scrolled, "row")).toEqual({ x: 12, y: 62, w: 300, h: 50 });
+    expect(findById(scrolled, "row")!.clipBounds).toBeDefined();
+    const contained = run([
+      el({ rect: bordered, client: padding, style: { contain: "paint" }, children: [host()] }),
+    ]).tree;
+    expect(pxFrame(contained, "row")).toEqual({ x: 12, y: 62, w: 300, h: 50 });
+  });
+
   it("frames closed-root popup content by where its descendants or a shadow tree hit-test", () => {
     const box = { x: 400, y: 400, w: 120, h: 40 };
     const popup = (child: MockElement) =>
