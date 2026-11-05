@@ -110,7 +110,30 @@ export function buildChromiumFillScript(text: string): string {
       control ? String(el.value == null ? "" : el.value) : trimEnd(String(el.innerText == null ? el.textContent || "" : el.innerText));
     // A number input showing text it cannot parse reads as "".
     const badInput = () => el.validity != null && el.validity.badInput === true;
-    const matches = () => (control ? read() === want && !badInput() : read() === trimEnd(want));
+    // Chrome stores an edited email address's non-ASCII domain in ASCII, by
+    // UTS #46 transitional processing: the URL parser's, once its deviations
+    // (ß, ς, ZWNJ, ZWJ) are mapped.
+    const asciiEmail = (a) => {
+      const at = a.indexOf("@");
+      if (at < 0 || !/[^\\x00-\\x7f]/.test(a)) return a;
+      const host = a.slice(at + 1).replace(/[\\u00df\\u1e9e]/g, "ss").replace(/\\u03c2/g, "\\u03c3").replace(/[\\u200c\\u200d]/g, "");
+      try {
+        const url = new URL("http://" + host);
+        // Not a bare host: it has a user, a port or a path.
+        if (url.href !== "http://" + url.hostname + "/") return a;
+        return a.slice(0, at + 1) + url.hostname;
+      } catch (e) {
+        return a;
+      }
+    };
+    const sameText = (got) => {
+      if (type !== "email") return got === want;
+      const split = (s) => (el.multiple === true ? s.split(",") : [s]);
+      const wants = split(want);
+      const gots = split(got);
+      return gots.length === wants.length && gots.every((g, i) => g === wants[i] || g === asciiEmail(wants[i]));
+    };
+    const matches = () => (control ? sameText(read()) && !badInput() : read() === trimEnd(want));
     const settle = async () => {
       for (let i = 0; i < 10; i++) {
         await sleep(i === 0 ? 0 : 50);
