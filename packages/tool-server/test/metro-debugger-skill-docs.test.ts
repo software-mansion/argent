@@ -54,7 +54,7 @@ const rows = new Map(
 
 const targetingClaim = (() => {
   const line = overviewSection.split("\n").find((l) => l.includes("AND `device_id`"));
-  expect(line, "no sentence in the overview states the targeting parameters").toBeDefined();
+  expect(line, 'no sentence in the overview contains "AND `device_id`"').toBeDefined();
   return line!;
 })();
 
@@ -70,20 +70,24 @@ describe("argent-metro-debugger tool overview", () => {
     });
     const exemptions = targetingClaim.match(/ except (.*?) accepts /)?.[1] ?? "";
     const exempted = [...exemptions.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]!);
-    expect(exempted.sort()).toEqual(outliers.map((t) => t.id).sort());
+    expect(exempted.sort(), "tools named in the claim's `except ... accepts` clause").toEqual(
+      outliers.map((t) => t.id).sort()
+    );
 
     for (const tool of outliers) {
       const { properties, required } = schemaOf(tool);
-      const [takes] = rows.get(tool.id)!.split(" not ");
+      const [takes, rejects = ""] = rows.get(tool.id)!.split(" not ");
       for (const param of required) {
         expect(takes, `${tool.id}'s row does not name its \`${param}\` parameter`).toContain(
           `\`${param}\``
         );
       }
-      for (const param of ["port", "device_id"].filter((p) => !(p in properties))) {
-        expect(takes, `${tool.id}'s row offers \`${param}\`, which it lacks`).not.toContain(
-          `\`${param}\``
-        );
+      for (const param of ["port", "device_id"]) {
+        const [clause, label] = param in properties ? [rejects, "rejects"] : [takes, "offers"];
+        expect(
+          clause,
+          `${tool.id}'s row ${label} \`${param}\`, contradicting its schema`
+        ).not.toContain(`\`${param}\``);
       }
     }
   });
@@ -91,7 +95,7 @@ describe("argent-metro-debugger tool overview", () => {
   it("names restart-app's required parameters where a recovery spells out its arguments", () => {
     const scenarios = readFileSync(path.join(SKILL_DIR, "references/failure-scenarios.md"), "utf8");
     const recoveries = [...scenarios.matchAll(/`restart-app` with ([^.]*)\./g)].map((m) => m[1]!);
-    expect(recoveries).not.toEqual([]);
+    expect(recoveries, "no recovery says `restart-app` with <arguments>.").not.toEqual([]);
 
     const { required } = schemaOf(OVERVIEW_TOOLS.find((t) => t.id === "restart-app")!);
     for (const recovery of recoveries) {
