@@ -692,7 +692,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return style.display !== "inline" && !/^table-(row|column|header|footer)/.test(style.display);
   }
 
-  function childClips(el, style, clips, clip) {
+  function childClips(el, style, clips, clip, legend) {
     if (style.display === "contents") return clips;
     let inner = clip;
     if (overflowApplies(el, style)) {
@@ -705,6 +705,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const cy = paint || style.overflowY !== "visible";
       if (cx || cy) {
         const p = paddingBox(el, style);
+        if (legend) belowLegend(p, style, legend);
         const ox = style.overflowX;
         const oy = style.overflowY;
         const own = {
@@ -739,8 +740,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     };
   }
 
-  // A fieldset's overflow clips its content box, never its rendered legend: the first
-  // <legend> child that is neither floated nor out of flow.
+  // A fieldset's rendered legend, which its overflow never clips: the first <legend>
+  // child that is neither floated nor out of flow.
   function renderedLegend(el, kids) {
     if (htmlTag(el) !== "FIELDSET") return null;
     for (const kid of kids) {
@@ -751,6 +752,23 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     }
     return null;
+  }
+
+  // A fieldset's overflow (but not its paint containment) clips its content no nearer
+  // its block-start side than where its rendered legend's margin box ends. A relative
+  // offset moves where the legend paints, not that edge; a transform is not undone.
+  function belowLegend(p, style, legend) {
+    const r = getBCR.call(legend);
+    const ls = window.getComputedStyle(legend);
+    const px = (prop) => parseFloat(ls[prop]) || 0;
+    const wm = style.writingMode;
+    if (wm === "horizontal-tb") {
+      if (style.overflowY === "visible") return;
+      p.top = Math.max(p.top, r.bottom + (px("marginBottom") - px("top")) * p.sy);
+    } else if (style.overflowX !== "visible") {
+      if (wm.endsWith("rl")) p.right = Math.min(p.right, r.left - (px("marginLeft") + px("left")) * p.sx);
+      else p.left = Math.max(p.left, r.right + (px("marginRight") - px("left")) * p.sx);
+    }
   }
 
   // Painted extent of an element's own inline TEXT. A box-less element (display:contents,
@@ -927,7 +945,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       clips = NO_CLIP;
       clip = null;
     }
-    const inner = childClips(el, style, clips, clip);
+    const kids = getChildrenEls.call(el);
+    const legend = renderedLegend(el, kids);
+    const inner = childClips(el, style, clips, clip, legend);
     if (htmlTag(el) === "SLOT") slotClips.set(el, inner);
     chains.set(el, inner.flow && inner.flow.scrollers);
 
@@ -949,8 +969,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
 
     const childResults = [];
-    const kids = getChildrenEls.call(el);
-    const legend = renderedLegend(el, kids);
     // A custom element with no open shadow root may have a closed one, whose slots the
     // walker cannot see.
     const closedHost = !shadow && getTagName.call(el).includes("-");

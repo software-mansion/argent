@@ -276,6 +276,7 @@ function el(opts: Opts = {}): MockElement {
     overflowY: "visible",
     position: "static",
     cssFloat: "none",
+    writingMode: "horizontal-tb",
   };
   const s = { ...baseStyle, ...(opts.style ?? {}) };
   if (opts.style?.overflow && !opts.style.overflowX) s.overflowX = opts.style.overflow;
@@ -2854,6 +2855,92 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "pinned")).toEqual({ x: 20, y: 500, w: 60, h: 10 });
     for (const id of ["floated", "placed", "second", "content"]) {
       expect(pxFrame(tree, id).h, id).toBe(0);
+    }
+  });
+
+  it("clips a fieldset's content by overflow where its rendered legend's margin box ends", () => {
+    // Each fieldset renders at 2x (a 150x120 layout box); "under" spans x 20..280, y 50..150.
+    const pad = { left: 0, top: 0, width: 150, height: 120 };
+    const sides = { marginLeft: "3px", marginRight: "5px" };
+    // A relative offset moves where the legend paints (here 8 or 20px), not the clip edge.
+    const shiftX = { ...sides, position: "relative", left: "4px" };
+    const shiftY = { position: "relative", top: "10px", marginBottom: "6px" };
+    const cases: [Record<string, string>, Rect, Record<string, string>, typeof pad, Rect][] = [
+      [
+        { overflow: "auto" },
+        { x: 0, y: 20, w: 300, h: 80 },
+        shiftY,
+        pad,
+        { x: 20, y: 92, w: 260, h: 58 },
+      ],
+      // A border wider than the legend keeps the padding box edge.
+      [
+        { overflow: "auto" },
+        { x: 0, y: 0, w: 300, h: 40 },
+        { marginBottom: "6px" },
+        { ...pad, top: 40, height: 80 },
+        { x: 20, y: 80, w: 260, h: 70 },
+      ],
+      // Paint containment clips at the padding box, legend or not.
+      [
+        { contain: "paint" },
+        { x: 0, y: 0, w: 300, h: 80 },
+        { marginBottom: "6px" },
+        pad,
+        { x: 20, y: 50, w: 260, h: 100 },
+      ],
+      // A vertical fieldset's legend sits at its block start: the right for -rl, the left for -lr.
+      [
+        { overflow: "auto", writingMode: "vertical-rl" },
+        { x: 248, y: 0, w: 60, h: 240 },
+        shiftX,
+        pad,
+        { x: 20, y: 50, w: 214, h: 100 },
+      ],
+      [
+        { overflow: "auto", writingMode: "vertical-rl" },
+        { x: 240, y: 0, w: 60, h: 240 },
+        sides,
+        { ...pad, width: 100 },
+        { x: 20, y: 50, w: 180, h: 100 },
+      ],
+      [
+        { overflow: "auto", writingMode: "sideways-lr" },
+        { x: 8, y: 0, w: 60, h: 240 },
+        shiftX,
+        pad,
+        { x: 70, y: 50, w: 210, h: 100 },
+      ],
+      [
+        { overflow: "auto", writingMode: "sideways-lr" },
+        { x: 0, y: 0, w: 60, h: 240 },
+        sides,
+        { ...pad, left: 50, width: 100 },
+        { x: 100, y: 50, w: 180, h: 100 },
+      ],
+      [
+        { contain: "paint", writingMode: "vertical-rl" },
+        { x: 240, y: 0, w: 60, h: 240 },
+        sides,
+        pad,
+        { x: 20, y: 50, w: 260, h: 100 },
+      ],
+    ];
+    for (const [style, legendRect, legendStyle, client, want] of cases) {
+      const { tree } = run([
+        el({
+          tag: "fieldset",
+          rect: { x: 0, y: 0, w: 300, h: 240 },
+          client,
+          offset: { width: 150, height: 120 },
+          style,
+          children: [
+            el({ tag: "legend", rect: legendRect, style: legendStyle }),
+            row("under", { x: 20, y: 50, w: 260, h: 100 }),
+          ],
+        }),
+      ]);
+      expect(pxFrame(tree, "under"), JSON.stringify([style, legendStyle, client])).toEqual(want);
     }
   });
 
