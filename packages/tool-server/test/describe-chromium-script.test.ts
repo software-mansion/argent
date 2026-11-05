@@ -1578,6 +1578,31 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(tree, "cut")!.clipAnchors).toEqual({ y: { x: 0.0295, y: 0.0108 } });
   });
 
+  it("clips a row cut inside a same-origin iframe but gives it no top-document wheel anchor", () => {
+    const area = { x: 0, y: 0, w: 300, h: 100 };
+    const innerHtml = el({
+      tag: "html",
+      rect: { x: 0, y: 0, w: W, h: H },
+      children: [
+        el({
+          tag: "body",
+          rect: { x: 0, y: 0, w: W, h: H },
+          children: [scroller([row("cut", { x: 1, y: 81, w: 285, h: 40 })], { painted: area })],
+        }),
+      ],
+    });
+    const innerDoc = { documentElement: innerHtml, compatMode: "CSS1Compat", body: null };
+    const own = (n: Record<string, unknown>) => {
+      n.ownerDocument = innerDoc;
+      for (const k of (n.__children as Record<string, unknown>[]) ?? []) own(k);
+    };
+    own(innerHtml as unknown as Record<string, unknown>);
+    const { tree } = run([el({ tag: "iframe", rect: area, painted: area, iframeDoc: innerHtml })]);
+    expect(pxFrame(tree, "cut")).toEqual({ x: 1, y: 81, w: 285, h: 18 });
+    expect(findById(tree, "cut")!.clipBounds).toBeDefined();
+    expect(findById(tree, "cut")!.clipAnchors).toBeUndefined();
+  });
+
   it("reports clipBounds only where a scroll container cuts by more than a pixel", () => {
     const tree = (
       style: Record<string, string>,
