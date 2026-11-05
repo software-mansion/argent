@@ -21,7 +21,7 @@ const track = (s: net.Server) => {
 
 // A unix socket path must fit sun_path (108 bytes on Linux, 104 on macOS), which
 // is why production pins the short `/tmp/argent-nd-<udid8>.sock`
-// (getNativeDevtoolsSocketPath). Root the fixtures at the same short base rather
+// (`nativeDevtoolsSocketPath`). Root the fixtures at the same short base rather
 // than os.tmpdir(): that honors an ambient $TMPDIR, and a long one — easily
 // reached by a CI workspace path — pushes these fixtures past the limit and
 // fails the bind with EINVAL, testing the host's TMPDIR instead of the code.
@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 // Production pins the socket under /tmp unconditionally
-// (getNativeDevtoolsSocketPath), so this path is POSIX-only by construction
+// (`nativeDevtoolsSocketPath`), so this path is POSIX-only by construction
 // and SOCK_ROOT above follows it. On win32 there is no /tmp to mkdtemp into.
 describe.skipIf(process.platform === "win32")("bindNativeDevtoolsUnixSocket", () => {
   it("binds cleanly on a free path", async () => {

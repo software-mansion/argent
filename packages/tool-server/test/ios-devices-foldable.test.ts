@@ -21,10 +21,31 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-// The profile plist is read from disk; the fake bundle paths below must exist.
+// The profile plist is read from disk; the fake bundle paths below must exist
+// and so must the provider's device set.
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  return { ...actual, existsSync: (p: string) => String(p).includes(".simdevicetype") };
+
+  return {
+    ...actual,
+    existsSync: (p: string) =>
+      String(p).includes(".simdevicetype") || String(p) === "/tmp/acme/Devices/iOS",
+  };
+});
+
+// The device set a provider declares for its devices, without a descriptor
+// file.
+vi.mock("../src/utils/ios-device-sets", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/ios-device-sets")>(
+    "../src/utils/ios-device-sets"
+  );
+
+  return {
+    ...actual,
+    deviceSetForUdid: vi.fn(async (udid: string) =>
+      udid.startsWith("ext:") ? "/tmp/acme/Devices/iOS" : actual.deviceSetForUdid(udid)
+    ),
+  };
 });
 
 import {
@@ -60,7 +81,10 @@ const DISPLAYS: Record<string, unknown[]> = {
 };
 
 function mockSimctl(): void {
-  execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+  execFileMock.mockImplementation((cmd: string, argv: readonly string[]) => {
+    /** The provider's set holds the same devices as the default one. */
+    const args = argv[1] === "--set" ? [argv[0]!, ...argv.slice(3)] : argv;
+
     if (cmd === "xcrun" && args[0] === "simctl" && args[1] === "list" && args[2] === "devices") {
       return {
         stdout: JSON.stringify({
@@ -150,6 +174,27 @@ describe("foldable simulators", () => {
     expect(await isFoldableSimulator(DUO)).toBe(true);
     expect(execFileMock).not.toHaveBeenCalled();
     expect(await isFoldableSimulator("00000000-0000-0000-0000-000000000000")).toBe(false);
+  });
+
+  it("shares one set listing between concurrent checks of devices the set does not list", async () => {
+    /**
+     * A provider lending two simulators its set does not list. Neither verdict
+     * is memoized, but checks that run together read the set once.
+     */
+    const missing = [
+      "ext:acme-3f2a9c:11111111-1111-1111-1111-111111111111",
+      "ext:acme-3f2a9c:22222222-2222-2222-2222-222222222222",
+    ];
+
+    const setListings = () =>
+      execFileMock.mock.calls.filter(([, args]) => (args as string[])[1] === "--set");
+
+    expect(await Promise.all(missing.map((id) => isFoldableSimulator(id)))).toEqual([false, false]);
+    expect(setListings()).toHaveLength(1);
+
+    /** A miss is not memoized, so the next round reads the set again, once. */
+    expect(await Promise.all(missing.map((id) => isFoldableSimulator(id)))).toEqual([false, false]);
+    expect(setListings()).toHaveLength(2);
   });
 
   it("answers no for an id that is not a local iOS simulator's without listing", async () => {

@@ -43,8 +43,32 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
-/** List one device set's iOS/tvOS simulators; [] on any failure. */
+/**
+ * The listing of each device set that is still running, by set path (`""` for
+ * the default set).
+ */
+const inFlightSetListings = new Map<string, Promise<IosSimulator[]>>();
+
+/**
+ * List one device set's iOS/tvOS simulators; `[]` on any failure.
+ *
+ * Callers that ask for the same set while its listing is still running share
+ * that one `simctl` call, such as the foldable checks of several simulators an
+ * external provider lends from one set. Each caller gets its own copies.
+ */
 async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
+  const key = deviceSet ?? "";
+  let listing = inFlightSetListings.get(key);
+
+  if (!listing) {
+    listing = readDeviceSetSimulators(deviceSet).finally(() => inFlightSetListings.delete(key));
+    inFlightSetListings.set(key, listing);
+  }
+
+  return (await listing).map((simulator) => ({ ...simulator }));
+}
+
+async function readDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
   // simctl materializes a missing `--set` directory as a side effect, so a
   // config typo would leave a stray directory on disk.
   if (deviceSet && !fs.existsSync(deviceSet)) return [];
