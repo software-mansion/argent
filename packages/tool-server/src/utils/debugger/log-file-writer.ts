@@ -118,9 +118,12 @@ export class LogFileWriter {
     // Nothing reopens the file, and readAll() serves it alone, so a line with
     // no file has no reader: the entry lives on only in the counts and clusters.
     if (this.ready && this.fd !== null) {
-      const buf = Buffer.from(line);
-      fs.writeSync(this.fd, buf);
-      this.bytesWritten += buf.length;
+      try {
+        // Short of the whole line at a file-size limit or on a full disk.
+        this.bytesWritten += fs.writeSync(this.fd, Buffer.from(line));
+      } catch {
+        // Past that limit it throws, and the entry is left to the counts and clusters.
+      }
     }
 
     this.entryCount++;
