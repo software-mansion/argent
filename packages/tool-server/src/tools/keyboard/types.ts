@@ -7,6 +7,8 @@ export interface KeyboardParams {
    */
   key?: string;
   delayMs?: number;
+  /** Android phones and tablets only; the TV backend ignores it. */
+  displayId?: number;
 }
 
 export interface KeyboardResult {

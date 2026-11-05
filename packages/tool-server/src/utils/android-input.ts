@@ -9,9 +9,28 @@
  * of `hw.keyboard`, and a non-zero exit surfaces as a thrown error. Touch
  * injection stays on the simulator-server.
  */
+import { z } from "zod";
 import { FAILURE_CODES } from "@argent/registry";
 import { adbShell, shellQuote } from "./adb";
 import { InvalidToolInputError } from "./capability";
+
+/** The optional `displayId` parameter of every tool whose Android path goes through `input`. */
+export const androidDisplayIdSchema = z
+  .number()
+  .int()
+  .min(0)
+  .optional()
+  .describe(
+    "Android only: id of the display to send the input to, e.g. a secondary display or a scrcpy " +
+      "virtual display (ids from `adb shell dumpsys display`; passed as `adb shell input -d <id>`). " +
+      "Omit it to keep Android's default routing (the focused display). Ignored on other platforms."
+  );
+
+// `input -d` (Android 10+) stamps the display on every injected event. Without it
+// a key event carries INVALID_DISPLAY and goes to whichever display has focus.
+function inputCommand(displayId: number | undefined): string {
+  return displayId === undefined ? "input" : `input -d ${displayId}`;
+}
 
 // android.view.KeyEvent keycodes; must cover every key in
 // ../tools/keyboard/key-codes.ts NAMED_KEYS.
@@ -106,24 +125,38 @@ function splitForVerbatimPercent(text: string): string[] {
 const ADB_INPUT_TIMEOUT_MS = 15_000;
 
 /** Type text into the focused field via `adb shell input text`. No-op for "". */
-export async function injectAndroidText(serial: string, text: string): Promise<void> {
+export async function injectAndroidText(
+  serial: string,
+  text: string,
+  displayId?: number
+): Promise<void> {
   assertTypeableAndroidText(text);
   // One call per segment (see `splitForVerbatimPercent`). "" yields no segments,
   // so the no-op for "" needs no separate guard.
   for (const segment of splitForVerbatimPercent(text)) {
-    await adbShell(serial, `input text ${shellQuote(segment)}`, {
+    await adbShell(serial, `${inputCommand(displayId)} text ${shellQuote(segment)}`, {
       timeoutMs: ADB_INPUT_TIMEOUT_MS,
     });
   }
 }
 
 /** Press a single android.view.KeyEvent keycode via `adb shell input keyevent`. */
-export async function injectAndroidKeycode(serial: string, keycode: number): Promise<void> {
-  await adbShell(serial, `input keyevent ${keycode}`, { timeoutMs: ADB_INPUT_TIMEOUT_MS });
+export async function injectAndroidKeycode(
+  serial: string,
+  keycode: number,
+  displayId?: number
+): Promise<void> {
+  await adbShell(serial, `${inputCommand(displayId)} keyevent ${keycode}`, {
+    timeoutMs: ADB_INPUT_TIMEOUT_MS,
+  });
 }
 
 /** Press a named key (keyboard tool `key` vocabulary) on Android. */
-export async function injectAndroidNamedKey(serial: string, name: string): Promise<void> {
+export async function injectAndroidNamedKey(
+  serial: string,
+  name: string,
+  displayId?: number
+): Promise<void> {
   const lower = name.toLowerCase();
   // Own-property check: `key` is a free string, so "constructor" would otherwise
   // pass the nullish guard with Object.prototype.constructor.
@@ -142,5 +175,5 @@ export async function injectAndroidNamedKey(serial: string, name: string): Promi
       }
     );
   }
-  await injectAndroidKeycode(serial, keycode);
+  await injectAndroidKeycode(serial, keycode, displayId);
 }

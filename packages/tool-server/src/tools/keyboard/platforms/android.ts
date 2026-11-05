@@ -17,13 +17,13 @@ async function typeAndroidPhone(
   // `text` and `key` are at-most-one (rejected in ../index.ts), so at most one
   // branch runs and there is no ordering to get right.
   if (params.text) {
-    await injectAndroidText(device.id, params.text);
+    await injectAndroidText(device.id, params.text, params.displayId);
     // `injectAndroidText` rejects non-ASCII, so `.length` is the codepoint count
     // (matching the tv / simulator-server backends).
     keysPressed += params.text.length;
   }
   if (params.key) {
-    await injectAndroidNamedKey(device.id, params.key);
+    await injectAndroidNamedKey(device.id, params.key, params.displayId);
     keysPressed++;
   }
   return { typed: params.text ?? params.key ?? "", keys: keysPressed };
