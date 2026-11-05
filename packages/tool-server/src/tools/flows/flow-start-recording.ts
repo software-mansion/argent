@@ -9,6 +9,9 @@ import {
   withFlowFileLock,
   writeNewFlowFile,
   clientFileDirective,
+  LAUNCH_PLATFORMS,
+  parseRequires,
+  RUNTIME_KINDS,
   serializeFlow,
   validateFlow,
   type FlowFile,
@@ -36,6 +39,19 @@ const zodSchema = z.object({
         "e2e test records as a fragment; add the `launch: { chromium: <app path> }` line to the YAML " +
         "afterward, deleting the executionPrerequisite line if you passed one, since an e2e test that starts " +
         "with a launch must not declare it."
+    ),
+  requires: z
+    .object({
+      platform: z
+        .union([z.enum(LAUNCH_PLATFORMS), z.array(z.enum(LAUNCH_PLATFORMS)).min(1)])
+        .optional(),
+      runtimeKind: z.enum(RUNTIME_KINDS).optional(),
+    })
+    .optional()
+    .describe(
+      "The e2e test's `requires:` block: the targets it supports, ANDed. `platform` is one platform or a list " +
+        "(`ios` also covers a remote simulator); `runtimeKind` is `tv` or `mobile`. Omit it for a test that runs " +
+        "on any target."
     ),
 });
 
@@ -103,7 +119,9 @@ wait DIRECTLY. A wait nested inside a recorded run-sequence gets neither warning
 (that tool reports its own shape), so for those, read \`toolResult\`. For a standalone
 e2e test, record a restart-app of the app under test as the FIRST step (captured
 as the e2e test's \`launch\` step); for a reusable fragment, skip that and pass
-executionPrerequisite instead. Use e2e-add-echo to add labels, and
+executionPrerequisite instead. Starting over an existing e2e test replaces the
+whole file, including its \`requires:\` block; pass \`requires\` to keep it.
+Use e2e-add-echo to add labels, and
 e2e-add-script to run a local .mjs file and record it as a \`script:\` step.
 Call e2e-finish-recording when done.
 
@@ -122,6 +140,7 @@ reports for those steps.`,
     // documents a fragment.
     const flow: FlowFile = {
       executionPrerequisite: params.executionPrerequisite ?? "",
+      ...(params.requires ? { requires: parseRequires(params.requires) } : {}),
       steps: [],
     };
     validateFlow(flow);

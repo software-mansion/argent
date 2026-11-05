@@ -798,7 +798,7 @@ function isFoldPosture(value: unknown): value is FoldPosture {
   return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
 }
 
-const RUNTIME_KINDS = ["mobile", "tv"] as const;
+export const RUNTIME_KINDS = ["mobile", "tv"] as const;
 export type FlowRuntimeKind = (typeof RUNTIME_KINDS)[number];
 
 /** The targets a flow supports. The keys are ANDed; `ios` covers a remote simulator. */
@@ -2322,7 +2322,7 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
  * The platforms an AUTHOR can name in a flow file: launch-map keys and
  * `when: { platform }` guards ({@link WhenPlatform}).
  */
-const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 
 /**
  * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
@@ -2355,7 +2355,7 @@ const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 
 const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
 
-function parseRequires(raw: unknown): FlowRequires {
+export function parseRequires(raw: unknown): FlowRequires {
   const bad = (detail: string): never => badEntry({ requires: raw }, detail);
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     bad(`requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
