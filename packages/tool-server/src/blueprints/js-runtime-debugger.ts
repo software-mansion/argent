@@ -386,18 +386,22 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         // — only when there was history, and under both ids, since
         // `forgetDeviceAlias` below drops the only join between them.
         const captured = logWriter.getStats().totalEntries;
-        const keepFile = captured > 0 && !cdp.isConnected();
+        const connectionLost = !cdp.isConnected();
+        const keepFile = captured > 0 && connectionLost && logWriter.hasFile();
         if (captured > 0) {
           const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
           const salvage = keepFile
             ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
-            : `The ${entries} went with it — the log file is deleted on teardown, so this ` +
-              `registry starts empty rather than the app having logged nothing.`;
+            : logWriter.hasFile()
+              ? `The ${entries} went with it — the log file is deleted on teardown, so this ` +
+                `registry starts empty rather than the app having logged nothing.`
+              : `The ${entries} went with it — no log file held them, so this ` +
+                `registry starts empty rather than the app having logged nothing.`;
           recordReapedSession(
             "js-runtime-debugger",
             [deviceId, api.logicalDeviceId],
             salvage,
-            keepFile
+            connectionLost
           );
         }
         forgetDeviceAlias(api.logicalDeviceId);

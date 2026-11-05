@@ -414,6 +414,34 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       expect(result.note).toContain(`stop-all-simulator-servers with devices: ["${LOGICAL_ID}"]`);
     });
 
+    it("names the session's connect id in the recovery scope when read by its logical id", async () => {
+      const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
+      makeArgentUnwritable();
+      const urn = await connectAndCapture(CONNECT_ID, 2);
+
+      const result = await readRegistry();
+
+      expect(result.note).toContain(`stop-all-simulator-servers with devices: ["${CONNECT_ID}"]`);
+      await registry.disposeService(urn);
+    });
+
+    it("says a crashed session's entries were in no log file, not that one was kept", async () => {
+      makeArgentUnwritable();
+      const urn = await connectAndCapture(LOGICAL_ID, 3);
+      appRunning = false;
+      for (const ws of wss.clients) ws.terminate();
+      await vi.waitFor(() =>
+        expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR)
+      );
+
+      const result = await readRegistry();
+
+      expect(result.status).toBe("not_connected");
+      expect(result.note).toContain("lost its connection");
+      expect(result.note).toContain("3 captured console entries went with it — no log file");
+      expect(result.note).not.toContain("kept at");
+    });
+
     it("keeps the reaped-session explanation alongside the missing-file one", async () => {
       const urn = await connectAndCapture(LOGICAL_ID, 7);
       await registry.disposeService(urn);
