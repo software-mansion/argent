@@ -97,6 +97,9 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
     failedMsg: ({ failureSignal }) => `Failed to pinch: ${failureSignal.error_code}`,
   },
   capability,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
     // No simulator-server controller exists for HarmonyOS.

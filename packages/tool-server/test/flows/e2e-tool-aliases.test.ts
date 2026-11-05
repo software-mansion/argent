@@ -122,7 +122,7 @@ describe("the former flow-* tool ids", () => {
       ["flow-execute", "e2e-execute"].map(async (id) => {
         const res = await request(app)
           .post(`/tools/${id}`)
-          .send({ ...args, flow_file: { [FILE_INPUT_MARKER]: true, path: flowFile } });
+          .send({ ...args, e2e_test_file: { [FILE_INPUT_MARKER]: true, path: flowFile } });
         expect(res.status, `${id}: ${JSON.stringify(res.body)}`).toBe(200);
         return runShape(res.body.data as FlowRunResult);
       })
@@ -283,7 +283,7 @@ describe("a nested run over a link, from the real argent client", () => {
           baseUrl: async () => ({ url: `http://127.0.0.1:${port}`, token: "", remote: true }),
           fetchImpl: async (target: string, init: RequestInit) => {
             if (target.endsWith("/tools/flow-execute")) {
-              members = JSON.parse(String(init.body)).flow_path.members;
+              members = JSON.parse(String(init.body)).e2e_test_path.members;
             }
             return fetch(target, init);
           },
@@ -291,7 +291,7 @@ describe("a nested run over a link, from the real argent client", () => {
 
         // The CLI still calls the tool by its former id.
         const { data } = await client.callTool("flow-execute", {
-          flow_path: parent,
+          e2e_test_path: parent,
           project_root: tmpDir,
           device: "00000000-0000-0000-0000-0000000000ab",
         });

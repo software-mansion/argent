@@ -87,6 +87,9 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
     failedMsg: ({ failureSignal }) => `Failed to rotate gesture: ${failureSignal.error_code}`,
   },
   capability,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
     return isIosPhysicalDevice(device)

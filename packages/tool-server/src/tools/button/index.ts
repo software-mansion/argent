@@ -101,6 +101,9 @@ Fails if the device backend is not reachable: the simulator-server for iOS, <fla
       `Failed to press ${params.button} button: ${failureSignal.error_code}`,
   },
   capability,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the press would land once per replay.
+  longRunning: true,
   // Declare only the service the resolved path actually consumes. The Android
   // path uses `adb`, so a sim-server here would spawn a service the tool never
   // uses (up to a 30s ready-wait) and could throw ServiceInitializationError

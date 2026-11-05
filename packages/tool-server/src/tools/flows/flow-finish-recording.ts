@@ -141,12 +141,14 @@ export const flowFinishRecordingTool: ToolDefinition<
     executionPrerequisite: string;
     steps: number;
     summary: string[];
+    e2eTestFile: string;
+    /** @deprecated Same value as `e2eTestFile`, kept for clients that predate it. */
     flowFile: string;
     savedTo: FlowSavedTo;
   }
 > = {
   id: "e2e-finish-recording",
-  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, flowFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
+  description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, e2eTestFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
 A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
@@ -222,6 +224,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
       executionPrerequisite: flow.executionPrerequisite,
       steps: flow.steps.length,
       summary,
+      e2eTestFile: flowFile,
       flowFile,
       savedTo,
     };

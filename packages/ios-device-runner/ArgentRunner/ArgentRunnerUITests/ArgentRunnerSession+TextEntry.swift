@@ -77,7 +77,7 @@ extension ArgentRunnerSession {
                 app.keyboards.keys.matching(submitKey).firstMatch,
             ] where candidate.exists && candidate.isHittable {
                 let label = candidate.label
-                candidate.tap()
+                skippingQuiescence(of: app) { candidate.tap() }
 
                 return .success(
                     MessagePayload(message: "pressed keyboard \(label)")
@@ -131,7 +131,7 @@ extension ArgentRunnerSession {
         }
 
         let exceptionDescription = ArgentExceptionGuard.runCatching {
-            app.typeText(text)
+            self.skippingQuiescence(of: app) { app.typeText(text) }
         }
 
         if let exceptionDescription {

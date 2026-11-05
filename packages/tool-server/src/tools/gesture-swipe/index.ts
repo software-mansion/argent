@@ -131,6 +131,9 @@ HarmonyOS: durationMs sets drag speed, clamped to uitest's 200-40000 px/s, so a 
 Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the simulator-server / emulator backend<flag:harmonyos>, or \`hdc\` on HarmonyOS,</flag:harmonyos> is not reachable for the given device.`,
   zodSchema,
   alwaysLoad: true,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   interaction: {
     startedMsg: ({ params }) =>

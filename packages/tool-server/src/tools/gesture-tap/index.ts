@@ -93,7 +93,7 @@ async function tapHarmony(
   clickCount: number,
   signal?: AbortSignal
 ): Promise<void> {
-  // One deadline for the whole multi-tap, under the MCP abort-and-replay cap.
+  // One deadline for the whole multi-tap.
   const deadline = Date.now() + HARMONY_INTERACTION_TIMEOUT_MS;
   // Prefilter without queueing; the trusted check is inside the hold.
   const display = await harmonyDisplay(connectKey);
@@ -140,8 +140,9 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Number of taps/clicks dispatched as ONE gesture inside the OS double-tap window (2 = double-tap / " +
-        "double-click), which two separate tap calls cannot guarantee. On physical iOS<flag:harmonyos> and " +
-        "HarmonyOS</flag:harmonyos>, counts above 2 land as separate taps. Default 1."
+        "double-click), which two separate tap calls cannot guarantee. On physical iOS, higher counts " +
+        "loop single taps, which a double-tap recognizer may pair.<flag:harmonyos> On HarmonyOS they " +
+        "land as separate taps.</flag:harmonyos> Default 1."
     ),
 });
 
@@ -156,6 +157,9 @@ On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-o
 Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\` (on an iOS simulator, also \`native-describe-screen\`); Chromium uses \`describe\` (the DOM walker)<flag:harmonyos> and HarmonyOS uses \`describe\` (the \`uitest\` layout dump)</flag:harmonyos>, since the native discovery tools don't apply<flag:harmonyos> to either</flag:harmonyos>. More information in \`argent-device-interact\` skill`,
   zodSchema,
   alwaysLoad: true,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   searchHint: "tap press button element device simulator emulator chromium touch down up click",
   interaction: {
     startedMsg: ({ params }) => tapDescription(params, "present"),
@@ -193,7 +197,7 @@ Before tapping, determine the correct coordinates by using discovery tools. Pick
       const viewport = await getViewport(runner, bundleId);
       const point = toPoints(viewport, params.x, params.y);
       // The whole count is one runner command: a double-tap must be the native one, and any loop
-      // above 2 stays on-device (separate taps either way, but without wire round trips between them).
+      // above 2 stays on-device (single taps either way, but without wire round trips between them).
       const tap = await tapAt(runner, bundleId, point, clickCount);
       // Either leg can be the one that re-fronted a backgrounded target: the
       // viewport read fronts it first, so the tap then finds it foreground.
