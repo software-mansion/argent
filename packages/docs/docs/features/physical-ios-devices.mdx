@@ -20,7 +20,7 @@ You do not need a paid Apple Developer account. A free Personal Team works, with
 
 Apple allows one kind of process to drive arbitrary apps on real hardware: a UI test. Argent builds a small test runner, signs it with your team, and installs it on the device. The runner receives commands over the cable and executes them on the device.
 
-Signing is automatic. Argent reads your Apple Development certificate from the keychain of the Mac and detects the team from it. When the keychain holds certificates from several teams, the team with the newest certificate wins, and the result names the choice and the alternatives. When the keychain holds no certificate, the error tells you to sign in to Xcode and create one: Xcode > Settings > Accounts, then Manage Certificates > + > Apple Development. To select a team yourself, set the `ARGENT_IOS_TEAM_ID` [environment variable](/docs/reference/configuration#devices) in the environment of the tool-server.
+Signing is automatic. Argent reads your Apple Development certificate from the keychain of the Mac and detects the team from it. When the keychain holds certificates from several teams, Argent prefers a team with a provisioning profile that lists the phone, and otherwise the team with the newest certificate. The result names the choice and the alternatives. When the keychain holds no certificate, the error tells you to sign in to Xcode and create one: Xcode > Settings > Accounts, then Manage Certificates > + > Apple Development. To select a team yourself, set the `ARGENT_IOS_TEAM_ID` [environment variable](/docs/reference/configuration#devices) in the environment of the tool-server.
 
 ## The first run
 
