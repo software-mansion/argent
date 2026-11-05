@@ -1650,7 +1650,55 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       ];
     };
     const builtin = run(page()).tree;
-    for (const globals of [{ Map: { tiles: [] }, Set: class {} }, { Map: class {} }]) {
+    // Immutable.Map's set returns a new map, leaving the receiver empty.
+    class PersistentMap {
+      get() {
+        return undefined;
+      }
+      has() {
+        return false;
+      }
+      set() {
+        return new PersistentMap();
+      }
+    }
+    class ArgMap extends Map {
+      constructor(entries: { length: number }) {
+        super();
+        void entries.length;
+      }
+    }
+    // Keys every element by the same string.
+    class StringKeyMap extends Map {
+      get(k: unknown) {
+        return super.get(String(k));
+      }
+      has(k: unknown) {
+        return super.has(String(k));
+      }
+      set(k: unknown, v: unknown) {
+        return super.set(String(k), v);
+      }
+    }
+    class NoGetMap extends Map {
+      get() {
+        return undefined;
+      }
+    }
+    class NoHasMap extends Map {
+      has() {
+        return false;
+      }
+    }
+    for (const globals of [
+      { Map: { tiles: [] }, Set: class {} },
+      { Map: class {} },
+      { Map: PersistentMap },
+      { Map: ArgMap },
+      { Map: StringKeyMap },
+      { Map: NoGetMap },
+      { Map: NoHasMap },
+    ]) {
       const replaced = run(page(), undefined, {}, "CSS1Compat", globals).tree;
       expect(replaced).toEqual(builtin);
     }

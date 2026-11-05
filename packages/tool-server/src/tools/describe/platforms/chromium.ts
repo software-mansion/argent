@@ -353,12 +353,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const NO_CLIP = { flow: null, abs: null, fixed: null };
 
   // An element-keyed map. A page's top-level \`class Map\` shadows only the bare name,
-  // but \`var Map = ...\` replaces globalThis.Map; then a linear list stands in.
+  // but \`var Map = ...\` replaces globalThis.Map (with Immutable.Map, say, whose set
+  // returns a copy); unless it keeps object keys in place, a linear list stands in.
   function nodeMap() {
-    const M = globalThis.Map;
-    const p = typeof M === "function" && M.prototype;
-    if (p && typeof p.get === "function" && typeof p.set === "function" && typeof p.has === "function") {
-      return new M();
+    try {
+      const m = new globalThis.Map();
+      const k = {};
+      m.set(k, 1);
+      if (m.has(k) && m.get(k) === 1 && !m.has({})) return m;
+    } catch (e) {
+      /* not a usable Map */
     }
     const keys = [];
     const vals = [];
