@@ -219,6 +219,10 @@ describe("bootBrowser", () => {
     try {
       a.onProcessGone();
       vi.advanceTimersByTime(4999);
+      // fs.rm completes off the event loop; give an early one time to land.
+      for (const end = Date.now() + 200; Date.now() < end;) {
+        await new Promise((r) => setImmediate(r));
+      }
       expect(fs.existsSync(dirA)).toBe(true);
       vi.advanceTimersByTime(1);
     } finally {
