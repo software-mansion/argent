@@ -121,7 +121,8 @@ run_phase() {
   if [ -n "$RID" ]; then
     assert_ok "$P" view-network-request-details netdetails "{$D,\"requestId\":\"$RID\"}"
   else
-    skip "$P" view-network-request-details netdetails "no captured request id"
+    # The fetch above is the harness's own, so a missing id is a capture regression.
+    fail "$P" view-network-request-details netdetails "no request id in view-network-logs: $(rt_detail 160)"
   fi
 
   run_tool react-profiler-start "{$D}"
