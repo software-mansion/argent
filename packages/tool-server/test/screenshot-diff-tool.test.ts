@@ -209,8 +209,8 @@ describe("screenshotDiffTool", () => {
 
   it("states the identical-dimensions requirement and labels diffPath by input size", async () => {
     const { captureBaseline, captureCurrent } = screenshotDiffTool.zodSchema!.shape;
-    expect(captureBaseline.description).toContain("live at full resolution");
-    expect(captureCurrent.description).toContain("live at full resolution");
+    expect(captureBaseline.description).toContain("live from the device, at full resolution");
+    expect(captureCurrent.description).toContain("live from the device, at full resolution");
     expect(screenshotDiffTool.description).toContain(
       "Both images must have identical dimensions: save baselines with screenshot scale: 1.0, one per device model, orientation and foldable posture."
     );

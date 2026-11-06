@@ -80,6 +80,15 @@ export async function resolveRunnerSigningConfig(udid?: string): Promise<RunnerS
   return signingConfigForTeam(winner.teamId);
 }
 
+/**
+ * For the failures a team choice can cause. The detection note carries this too,
+ * but only on a completed call, once per phone and team: a failed build, or a
+ * later session on the same tool-server, would never see it.
+ */
+const TEAM_OVERRIDE_HINT =
+  "To sign under a different team, set ARGENT_IOS_TEAM_ID in the tool-server's environment: " +
+  "argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach";
+
 /** Map xcodebuild output to a signing-recovery hint, or null. */
 export function resolveSigningHint(output: string): string | null {
   const lower = output.toLowerCase();
@@ -89,7 +98,7 @@ export function resolveSigningHint(output: string): string | null {
   if (lower.includes("team has no devices")) {
     return (
       "This team has no registered devices yet. Keep the phone connected and retry: " +
-      "building against the connected device registers it with the team."
+      `building against the connected device registers it with the team. ${TEAM_OVERRIDE_HINT}`
     );
   }
 
@@ -103,7 +112,7 @@ export function resolveSigningHint(output: string): string | null {
     // The derived bundle id is unique per team. This is a free-team app-id cap.
     return (
       "Registering the runner bundle id failed. On a free Personal Team, Apple limits " +
-      "new app ids; wait a few days and retry, or sign under a paid team."
+      `new app ids; wait a few days and retry, or sign under a paid team. ${TEAM_OVERRIDE_HINT}`
     );
   }
 
@@ -124,7 +133,7 @@ export function resolveSigningHint(output: string): string | null {
   if (lower.includes("no profiles for") || lower.includes("provisioning profile")) {
     return (
       "Provisioning failed. Check that this team's Apple ID is signed into Xcode " +
-      "(Xcode > Settings > Accounts), then retry."
+      `(Xcode > Settings > Accounts), then retry. ${TEAM_OVERRIDE_HINT}`
     );
   }
 

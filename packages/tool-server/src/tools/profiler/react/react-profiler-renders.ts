@@ -107,23 +107,24 @@ const zodSchema = z.object({
     .int()
     .positive()
     .default(20)
-    .describe("Number of top components to return, by self render time (default 20)"),
+    .describe("Number of components to return, by self render time"),
 });
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
+  description: `Scan the live React fiber tree and count the mounted instances of each component, with their last render durations.
+Returns a markdown table sorted by total self time, with each component's instance count and its largest instance's subtree time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
+Self time comes from each fiber's last render, often its mount, and subtree time from the last commit that reached it, so self time can exceed the subtree column: compare self time between rows.
+Use when you want a quick look at which mounted components are expensive in a live connected app, without a profiling session.
+Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: () => "Reading React render activity",
     completedMsg: () => "Read React render activity",
     failedMsg: ({ failureSignal }) =>
       `Failed to read React render activity: ${failureSignal.error_code}`,
   },
-  description: `Scan the live React fiber tree for the components with the most self render time.
-Returns a markdown table sorted by self time: how many instances of each component are mounted within the top 30 levels of the tree, the largest single instance's subtree time, and total self time. It is a snapshot, not a recording, so the instance count is how many exist, not how many times they re-rendered. Self time comes from each fiber's own last render, often its mount, and subtree time from the last commit that reached it, so self time can exceed subtree time. Compare self time between rows, not against the subtree column.
-Use for a quick read on which components are expensive without starting a profiling session; use react-profiler-start/stop when you need re-render counts and the reasons behind them.
-Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
-  readOnly: true,
-  zodSchema,
   // RN-only: queries the React DevTools backend hook on the live runtime.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
@@ -210,6 +211,6 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
       .sort((a, b) => b.selfBaseDuration_ms - a.selfBaseDuration_ms)
       .slice(0, params.top_n);
 
-    return `## React Component Renders\n\n${renderMarkdownTable(entries)}`;
+    return `## Mounted React Components\n\n${renderMarkdownTable(entries)}`;
   },
 };

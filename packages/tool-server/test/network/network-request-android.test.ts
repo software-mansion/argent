@@ -736,4 +736,58 @@ describe("view-network-request-details: routing an android- ID", () => {
     ).toEqual({ inspector: `NetworkInspector:8081:${SERIAL}` });
     expect(findAndroidNativeRecord).not.toHaveBeenCalled();
   });
+
+  describe.each(["android-", "android-26a0", "android-26a0-", "android-zz!!-x", "android-26A0-1"])(
+    "the malformed ID %s",
+    (requestId) => {
+      it.each([
+        ["the adb serial", SERIAL],
+        ["an ext: spelling", "ext:acme-3f2a9c:emulator-5554"],
+        ["a Metro logicalDeviceId", "b1946ac92492d2347c6235b4d2611184"],
+        ["a logicalDeviceId shaped like an iOS UDID", "6F9619FF-8B86-D011-B42D-00C04FC964FF"],
+        ["a remote iOS simulator", "remote:6F9619FF-8B86-D011-B42D-00C04FC964FF"],
+      ])("is not found under %s, with no debugger service", async (_, deviceId) => {
+        const params = { device_id: deviceId, requestId, includeBody: true };
+
+        expect(networkRequestTool.services!(params)).toEqual({});
+        expect(await networkRequestTool.execute!({}, params)).toBe(
+          `Request ${requestId} not found. Use native-network-logs to list the requests the Android native layer recorded.`
+        );
+      });
+
+      it("is not found on Vega, without naming the native tool Vega refuses", async () => {
+        const params = { device_id: "amazon-4a27df03c9777152", requestId, includeBody: true };
+
+        expect(networkRequestTool.services!(params)).toEqual({});
+        expect(await networkRequestTool.execute!({}, params)).toBe(
+          `Request ${requestId} not found. An android- ID comes from an Android device. Use view-network-logs to list this device's requests.`
+        );
+      });
+
+      it("stays Chromium's to answer, because a Chromium request ID is opaque", async () => {
+        const params = { device_id: "chromium-cdp-9222", requestId, includeBody: false };
+        expect(Object.keys(networkRequestTool.services!(params))).toEqual(["chromium"]);
+
+        const get = vi.fn();
+        const chromium = { server: { network: { get } } };
+        expect(await networkRequestTool.execute!({ chromium }, params)).toBe(
+          `Request ${requestId} not found. Use view-network-logs to list available requests.`
+        );
+
+        get.mockReturnValue({ requestId, method: "GET", url: "https://x.test/", status: 200 });
+        const out = (await networkRequestTool.execute!({ chromium }, params)) as Details;
+        expect(out.requestId).toBe(requestId);
+        expect(findAndroidNativeRecord).not.toHaveBeenCalled();
+      });
+    }
+  );
+
+  it.each(["not-an-android-id", "Android-26a0", "android", "rn-net-4", "1234.5"])(
+    "keeps %s on the JS layer: it does not start with android-",
+    (requestId) => {
+      expect(
+        networkRequestTool.services!({ device_id: SERIAL, requestId, includeBody: true })
+      ).toEqual({ inspector: `NetworkInspector:8081:${SERIAL}` });
+    }
+  );
 });

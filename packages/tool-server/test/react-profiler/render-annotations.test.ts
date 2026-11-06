@@ -148,6 +148,7 @@ describe("renderProfilingReport — reading grouped rows and instance counts", (
       debugDir: await makeDebugDir(),
     });
 
-    expect(report).toContain("Its instance column counts what is mounted — not re-renders");
+    expect(report).toContain("a live count of mounted instances per component");
+    expect(report).toContain("It does not count re-renders");
   });
 });
