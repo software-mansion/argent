@@ -23,6 +23,7 @@ import {
   RESOLVE_FIBER_META_SCRIPT,
   READ_STATE_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
+import { dropStaleLeadingGap } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 import { lastRunText } from "../../../utils/react-profiler/last-run";
 import type { ProfilerSessionOwner } from "../../../utils/react-profiler/session-ownership";
 import type { CDPClient } from "../../../utils/debugger/cdp-client";
@@ -359,6 +360,9 @@ Fails if no active profiling session exists, the CDP connection was lost during 
           }
         );
       }
+
+      // Before anything reads a duration or a sample time from it.
+      dropStaleLeadingGap(profile);
 
       // One round-trip: stop the backend profiler, read the live buffer, and resolve
       // every referenced fiberID to a display name.

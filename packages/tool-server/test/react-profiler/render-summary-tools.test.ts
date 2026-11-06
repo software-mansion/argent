@@ -15,7 +15,7 @@ import {
   clearCachedProfilerPaths,
   type ProfilerSessionPaths,
 } from "../../src/blueprints/react-profiler-session";
-import { readCommitTree } from "../../src/utils/react-profiler/debug/dump";
+import { readCommitTree, readCpuProfile } from "../../src/utils/react-profiler/debug/dump";
 import {
   parseRenderSummary,
   summarizeRenders,
@@ -92,8 +92,12 @@ function backend(cheap: number, withHotCommit: boolean): ProfilingDataBackend {
   return { dataForRoots: [{ commitData }] };
 }
 
-function stopRegistry(live: ProfilingDataBackend, recordingMs: number): Registry {
-  const profile = {
+function stopRegistry(
+  live: ProfilingDataBackend,
+  recordingMs: number,
+  cpuProfile?: object
+): Registry {
+  const profile = cpuProfile ?? {
     nodes: [{ id: 1, callFrame: {}, hitCount: 0 }],
     samples: [1],
     timeDeltas: [0],
@@ -146,15 +150,24 @@ function stopRegistry(live: ProfilingDataBackend, recordingMs: number): Registry
   } as unknown as Registry;
 }
 
-async function stop(live: ProfilingDataBackend, recordingMs: number) {
-  const response = await createReactProfilerStopTool(stopRegistry(live, recordingMs)).execute!(
-    {},
-    { port: PORT, device_id: "stop-device" }
+async function stop(live: ProfilingDataBackend, recordingMs: number, cpuProfile?: object) {
+  const response = await createReactProfilerStopTool(stopRegistry(live, recordingMs, cpuProfile))
+    .execute!({}, { port: PORT, device_id: "stop-device" });
+  const dir = join(scratch, "argent-profiler-cwd");
+  const files = await fs.readdir(dir);
+  const onDisk = await readCommitTree(
+    join(
+      dir,
+      files.find((f) => f.endsWith("_commits.json"))!
+    )
   );
-  const files = await fs.readdir(join(scratch, "argent-profiler-cwd"));
-  const commitsFile = files.find((f) => f.endsWith("_commits.json"))!;
-  const onDisk = await readCommitTree(join(scratch, "argent-profiler-cwd", commitsFile));
-  return { response, onDisk };
+  const cpuOnDisk = await readCpuProfile(
+    join(
+      dir,
+      files.find((f) => f.endsWith("_cpu.json"))!
+    )
+  );
+  return { response, onDisk, cpuOnDisk };
 }
 
 /** Commit timings for these durations, `gapMs` apart. */
@@ -211,6 +224,27 @@ describe("react-profiler-stop render summary", () => {
     expect(response["hot_commit_indices"]).toEqual([]);
     expect(response["selection_note"]).toContain("The slowest commit took 40.0ms");
     expect(response["selection_note"]).not.toContain("No commit reached 16ms");
+  });
+
+  it("measures the session from the first real sample of a profile with a stale first stamp", async () => {
+    // 200 commits × 5 ms in 2 s, under a profile whose first sample has no stamp:
+    // `startTime` is 0 and the first positive delta is the device clock.
+    const { response, onDisk, cpuOnDisk } = await stop(backend(200, false), 2000, {
+      nodes: [{ id: 1, callFrame: {}, hitCount: 0 }],
+      samples: [1, 1, 1],
+      timeDeltas: [0, 704_097_219_211, 2_000_000],
+      startTime: 0,
+      endTime: 704_099_219_211,
+    });
+    expect(response["duration_ms"]).toBe(2000);
+    expect(response["react_render_share_pct"]).toBe(50);
+    expect(parseRenderSummary(onDisk.meta?.renderSummary)!.recordingMs).toBe(2000);
+    // The saved profile is the repaired one, so analyze and the CPU queries agree.
+    expect(cpuOnDisk).toMatchObject({
+      startTime: 704_097_219_211,
+      endTime: 704_099_219_211,
+      timeDeltas: [0, 0, 2_000_000],
+    });
   });
 
   it("words a quiet session the same way, with no verdict", async () => {
