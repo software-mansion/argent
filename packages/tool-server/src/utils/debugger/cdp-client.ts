@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { FAILURE_CODES, FailureError, TypedEventEmitter } from "@argent/registry";
+import { FAILURE_CODES, FailureError, TypedEventEmitter, getFailureSignal } from "@argent/registry";
 import * as crypto from "node:crypto";
 
 export interface ScriptInfo {
@@ -121,7 +121,7 @@ export class CDPClient {
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
   private pendingBindings = new Map<string, PendingBinding>();
-  /** Set by addBinding when the runtime ACKs the command but installs nothing. */
+  /** Set by addBinding when the runtime rejects the command, or ACKs it but installs nothing. */
   private bindingUnavailable = false;
   private scripts = new Map<string, ScriptInfo>();
   private enabledDomains = new Set<string>();
@@ -397,13 +397,23 @@ export class CDPClient {
   }
 
   async addBinding(name: string): Promise<void> {
-    await this.send("Runtime.addBinding", { name });
+    try {
+      await this.send("Runtime.addBinding", { name });
+    } catch (error) {
+      // The legacy Hermes inspector of RN 0.73 - 0.75 has no such method and
+      // answers -32601.
+      if (getFailureSignal(error)?.error_code !== FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR) {
+        throw error;
+      }
+      this.bindingUnavailable = true;
+      return;
+    }
 
-    // The legacy Hermes inspector ACKs Runtime.addBinding and never installs the
-    // binding: no Runtime.bindingCalled fires, so waiters hang for the full
-    // timeout. Probe once here so evaluateWithBinding can fail fast. Only a
-    // positive observation of absence disables it — a probe that throws or
-    // answers unexpectedly leaves the binding assumed working.
+    // The legacy Hermes inspector of RN <= 0.72 ACKs Runtime.addBinding and never
+    // installs the binding: no Runtime.bindingCalled fires, so waiters hang for
+    // the full timeout. Probe once here so evaluateWithBinding can fail fast.
+    // Only a positive observation of absence disables it — a probe that throws
+    // or answers unexpectedly leaves the binding assumed working.
     const probe = await this.evaluate(`typeof ${name}`).catch(() => undefined);
     this.bindingUnavailable = probe === "undefined";
   }
@@ -423,8 +433,8 @@ export class CDPClient {
     if (this.bindingUnavailable) {
       return Promise.reject(
         new FailureError(
-          "This JS runtime acknowledges Runtime.addBinding but never installs the binding " +
-            "(legacy Hermes, React Native <= 0.72), so it cannot deliver a result over the " +
+          "This JS runtime has no working Runtime.addBinding (the legacy Hermes inspector " +
+            "rejects it or never installs the binding), so it cannot deliver a result over the " +
             "binding channel. Tools that read the React tree this way are unavailable here; " +
             "use `describe` to read on-screen structure.",
           {

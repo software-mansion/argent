@@ -58,6 +58,18 @@ describe("selectTarget", () => {
     expect(result.target.id).toBe("first");
   });
 
+  it("picks the legacy Hermes runtime over a worklet runtime listed before it", () => {
+    // /json/list of an RN 0.75 legacy-inspector app using Reanimated (#1836),
+    // minus the `don't use` page discoverMetro drops.
+    const reanimated = makeTarget({ id: "0-2", title: "Reanimated UI runtime" });
+    const custom = makeTarget({ id: "0-3", title: "my-worklet-runtime" });
+    const hermes = makeTarget({ id: "0-1", title: "Hermes React Native" });
+
+    const result = selectTarget([reanimated, custom, hermes], 8081);
+    expect(result.target.id).toBe("0-1");
+    expect(result.isNewDebugger).toBe(false);
+  });
+
   it("normalizes WebSocket URL to localhost with correct port", () => {
     const target = makeTarget({
       webSocketDebuggerUrl: "ws://10.0.2.2:9999/inspector/debug?device=0&page=1",
