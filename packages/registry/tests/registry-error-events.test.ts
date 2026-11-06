@@ -205,6 +205,61 @@ describe("Registry — failure signals", () => {
     });
   });
 
+  it("classifies a tool that throws on its caller's abort as cancelled", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "slow-tool",
+      services: () => ({}),
+      execute: async (_services: unknown, _params: unknown, ctx: { signal: AbortSignal }) => {
+        controller.abort();
+        const err = new Error(`aborted: ${ctx.signal.aborted}`);
+        err.name = "AbortError";
+        throw err;
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("slow-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("aborted: true");
+
+    expect(getFailureSignal(emittedError)).toEqual({
+      error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED,
+      failure_stage: "registry_tool_cancelled",
+      failure_area: "registry",
+      error_kind: "cancelled",
+    });
+  });
+
+  it("keeps the tool's own classification when the caller did not abort", async () => {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "failing-tool",
+      services: () => ({}),
+      execute: async () => {
+        throw new Error("boom");
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("failing-tool", {}, { signal: new AbortController().signal })
+    ).rejects.toThrow("boom");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_TOOL_EXECUTION_FAILED
+    );
+  });
+
   it("derives only safe subprocess metadata", () => {
     expect(
       subprocessFailureMetadata(

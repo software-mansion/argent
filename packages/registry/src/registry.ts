@@ -19,6 +19,7 @@ import {
   ToolExecutionError,
   FailureError,
   getFailureSignalOrFallback,
+  withFailureSignal,
 } from "./errors";
 import { FAILURE_CODES } from "./failure-codes";
 import { canonicalToolArgs, ToolParamAliasError } from "./tool-ids";
@@ -237,6 +238,8 @@ export class Registry {
           : new ToolExecutionError(toolId, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
+      // Whatever the tool threw on a caller's abort, the abort is the cause.
+      if (options?.signal?.aborted) withFailureSignal(wrappedError, CANCELLED_SIGNAL);
       const failureSignal = getFailureSignalOrFallback(wrappedError);
       const failedMsg = formatInteractionMessage(
         () =>
@@ -482,6 +485,13 @@ export class Registry {
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
 }
+
+const CANCELLED_SIGNAL = {
+  error_code: FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED,
+  failure_stage: "registry_tool_cancelled",
+  failure_area: "registry",
+  error_kind: "cancelled",
+} as const;
 
 /**
  * Cause for the ServiceInitializationErrors raised when a resolve races an
