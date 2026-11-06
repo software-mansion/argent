@@ -251,6 +251,35 @@ describe("list-devices", () => {
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
   });
 
+  it("tags each remote iOS and tvOS simulator with the runtime kind of its runtime", async () => {
+    const devices = {
+      "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [
+        { udid: "TV-1", name: "Apple TV", state: "Booted" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.iOS-18-0": [
+        { udid: "PHONE-1", name: "iPhone 16", state: "Booted" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.watchOS-11-0": [
+        { udid: "WATCH-1", name: "Apple Watch", state: "Booted" },
+      ],
+    };
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl") {
+        return { stderr: "", stdout: JSON.stringify({ devices }) };
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const remote = result.devices.filter((d) => d.platform === "ios-remote");
+    expect(remote.map((d) => [d.name, "runtimeKind" in d ? d.runtimeKind : "missing"])).toEqual([
+      ["Apple TV", "tv"],
+      ["iPhone 16", "mobile"],
+      ["Apple Watch", undefined],
+    ]);
+  });
+
   /**
    * The common case, which the suite-wide setup already models. No provider
    * registered, so the result must not carry a word about them.
