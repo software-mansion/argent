@@ -94,6 +94,7 @@ import { createRestartAppTool } from "../src/tools/restart-app";
 import { openUrlTool } from "../src/tools/open-url";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { resolveDevice } from "../src/utils/device-info";
+import { withFileLock, type FileLockOptions } from "../src/utils/file-lock";
 import {
   chromiumRefusal,
   findRunningCopies,
@@ -980,14 +981,64 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(helperRuns()).toBe(1);
   });
 
-  it("boot-device with force replaces argent's copy with another build of the app", async () => {
+  it("boot-device with force never quits argent's copy of another build, also from a tool-server that is not connected to it", async () => {
     const first = await run("boot-device", { macosAppPath: appPath });
     const otherBuild = writeBundle(path.join(root, `worktree-${Date.now()}`), BUNDLE_ID);
-    const booted = await run("boot-device", { macosAppPath: otherBuild, force: true });
-    expect(booted.note).toBeUndefined();
-    expect(pidAlive(first.pid)).toBe(false);
-    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({ pid: booted.pid, appPath: otherBuild });
-    await expect((await macosApp()).call("Echo")).resolves.toMatchObject({ pid: booted.pid });
+    const expectRefused = (err: unknown) => {
+      expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_ALREADY_RUNNING);
+      expect((err as Error).message).toContain(`already runs from ${appPath} (pid ${first.pid})`);
+      expect((err as Error).message).toContain("Quit that copy if it is yours");
+      expect((err as Error).message).not.toContain("force");
+      expect(pidAlive(first.pid)).toBe(true);
+    };
+    // The same tool-server, which the agents of a user share: the copy may be another agent's.
+    expectRefused(
+      await run("boot-device", { macosAppPath: otherBuild, force: true }).catch((e) => e)
+    );
+    await expect((await macosApp()).call("Echo")).resolves.toMatchObject({ pid: first.pid });
+
+    // A second tool-server once the first one has closed its connection (a stop, a crash).
+    await registry.disposeService(macosAppRef(resolveDevice(DEVICE_ID)).urn);
+    const other = new Registry();
+    other.registerBlueprint(macosAppBlueprint);
+    other.registerTool(createBootDeviceTool(other));
+    try {
+      expectRefused(
+        await other
+          .invokeTool("boot-device", { macosAppPath: otherBuild, force: true })
+          .catch((e) => e)
+      );
+    } finally {
+      await other.dispose();
+    }
+    expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({ pid: first.pid, appPath });
+    expect(helperRuns()).toBe(1);
+  });
+
+  it("a start waits while another tool-server starts or quits the app, and not for a lock that a crashed one left", async () => {
+    const lock = path.join(process.env.HOME!, ".argent", "macos", `${BUNDLE_ID}.launch.lock`);
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    // Another tool-server's launch: a live process holds the lock.
+    const holder = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+    leftovers.push(holder.pid!);
+    fs.writeFileSync(lock, JSON.stringify({ pid: holder.pid }));
+    const booting = run("boot-device", { macosAppPath: appPath });
+    await new Promise((r) => setTimeout(r, 500));
+    expect(helperRuns()).toBe(0);
+    fs.rmSync(lock);
+    const booted = await booting;
+    expect(fakeAppPids()).toEqual([booted.pid]);
+    expect(fs.existsSync(lock)).toBe(false);
+
+    // A tool-server killed during its launch leaves its lock behind.
+    holder.kill("SIGKILL");
+    await waitUntil(() => !pidAlive(holder.pid!));
+    fs.writeFileSync(lock, JSON.stringify({ pid: holder.pid }));
+    const started = Date.now();
+    const restarted = await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+    expect(restarted.restarted).toBe(true);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(fs.existsSync(lock)).toBe(false);
   });
 
   it("a refused restart-app or forced boot leaves argent's copy running", async () => {
@@ -1132,7 +1183,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
   });
 
   it("never lists, connects to or signals a recorded pid that now belongs to another process", async () => {
-    recordTrackedMacosApp({
+    await recordTrackedMacosApp({
       bundleId: BUNDLE_ID,
       appPath,
       executable,
@@ -1349,6 +1400,158 @@ function appInfo(hardenedRuntime: boolean, keys: string[], teamId?: string): Mac
     }),
   };
 }
+
+describe("locks between tool-servers", () => {
+  let dir = "";
+  const sleepers: ReturnType<typeof spawn>[] = [];
+  beforeEach(() => {
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-lock-")));
+    vi.stubEnv("HOME", path.join(dir, "home"));
+    fs.mkdirSync(process.env.HOME!);
+  });
+  afterEach(() => {
+    for (const s of sleepers.splice(0)) s.kill("SIGKILL");
+    vi.unstubAllEnvs();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A lock file as another process leaves it, held by a live process unless `pid` is given. */
+  function foreignLock(lockPath: string, pid?: number): number {
+    if (pid === undefined) {
+      const holder = spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+      sleepers.push(holder);
+      pid = holder.pid!;
+    }
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, JSON.stringify({ pid }));
+    return pid;
+  }
+
+  async function deadPid(): Promise<number> {
+    const gone = spawn("/bin/sleep", ["0"], { stdio: "ignore" });
+    await new Promise((r) => gone.on("exit", r));
+    return gone.pid!;
+  }
+
+  const options = (overrides: Partial<FileLockOptions> = {}): FileLockOptions => ({
+    staleMs: 5_000,
+    timeoutMs: 5_000,
+    timeoutError: (holder) => new Error(`timed out, holder ${holder}`),
+    ...overrides,
+  });
+
+  it("lets one holder in at a time and removes the lock at the end", async () => {
+    const lock = path.join(dir, "a.lock");
+    const events: string[] = [];
+    const hold = (name: string) =>
+      withFileLock(lock, options(), async () => {
+        events.push(`${name} in`);
+        expect(JSON.parse(fs.readFileSync(lock, "utf8"))).toEqual({ pid: process.pid });
+        await new Promise((r) => setTimeout(r, 150));
+        events.push(`${name} out`);
+        return name;
+      });
+    expect(await Promise.all([hold("a"), hold("b")])).toEqual(["a", "b"]);
+    expect(events).toEqual(["a in", "a out", "b in", "b out"]);
+    expect(fs.existsSync(lock)).toBe(false);
+    // A failure releases the lock too.
+    await expect(
+      withFileLock(lock, options(), () => Promise.reject(new Error("boom")))
+    ).rejects.toThrow("boom");
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it("waits for a live holder in another process, and times out with its pid", async () => {
+    const lock = path.join(dir, "b.lock");
+    const holder = foreignLock(lock);
+    const started = Date.now();
+    const fn = vi.fn();
+    await expect(withFileLock(lock, options({ timeoutMs: 400 }), fn)).rejects.toThrow(
+      `timed out, holder ${holder}`
+    );
+    expect(Date.now() - started).toBeGreaterThanOrEqual(400);
+    expect(fn).not.toHaveBeenCalled();
+    // The holder's lock is left as it was.
+    expect(JSON.parse(fs.readFileSync(lock, "utf8"))).toEqual({ pid: holder });
+
+    // Once the holder releases it, the waiter gets in.
+    const waiting = withFileLock(lock, options(), () => "in");
+    await new Promise((r) => setTimeout(r, 200));
+    fs.rmSync(lock);
+    await expect(waiting).resolves.toBe("in");
+  });
+
+  it("takes over a lock whose holder is gone, or that its holder no longer refreshes", async () => {
+    const lock = path.join(dir, "c.lock");
+    foreignLock(lock, await deadPid());
+    const started = Date.now();
+    await expect(withFileLock(lock, options(), () => "after a crash")).resolves.toBe(
+      "after a crash"
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+
+    // A holder that hangs, or a pid that another process has by now.
+    foreignLock(lock);
+    const old = Date.now() / 1000 - 10;
+    fs.utimesSync(lock, old, old);
+    await expect(withFileLock(lock, options(), () => "after a hang")).resolves.toBe("after a hang");
+    // So does a lock that names no pid, once it is old.
+    fs.writeFileSync(lock, "");
+    fs.utimesSync(lock, old, old);
+    await expect(withFileLock(lock, options(), () => "unnamed")).resolves.toBe("unnamed");
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it("keeps a hold longer than staleMs valid, and never removes a lock that is another's by then", async () => {
+    const lock = path.join(dir, "d.lock");
+    const opts = options({ staleMs: 300, timeoutMs: 5_000 });
+    const events: string[] = [];
+    const long = withFileLock(lock, opts, async () => {
+      events.push("long in");
+      await new Promise((r) => setTimeout(r, 1_000));
+      events.push("long out");
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    await withFileLock(lock, opts, () => events.push("second in"));
+    await long;
+    expect(events).toEqual(["long in", "long out", "second in"]);
+
+    // Another process took the lock over meanwhile: its lock stays.
+    await withFileLock(lock, opts, () => {
+      fs.rmSync(lock);
+      foreignLock(lock);
+    });
+    expect(fs.existsSync(lock)).toBe(true);
+  });
+
+  it("records an app without dropping the record another tool-server writes at the same moment", async () => {
+    const file = path.join(process.env.HOME!, ".argent", "macos-apps.json");
+    const record = (bundleId: string) => ({
+      bundleId,
+      appPath: `/x/${bundleId}.app`,
+      executable: `/x/${bundleId}.app/Contents/MacOS/X`,
+      name: "X",
+      pid: 4242,
+      sandboxed: false,
+      userSelectedReadOnly: false,
+      listenSocket: null,
+      logPath: "/dev/null",
+      args: [],
+      startedAt: 1,
+    });
+    // The other tool-server holds the lock: it has read the file and is about to write it.
+    foreignLock(`${file}.lock`);
+    const recording = recordTrackedMacosApp(record("com.argent.mine"));
+    await new Promise((r) => setTimeout(r, 200));
+    fs.writeFileSync(file, JSON.stringify([record("com.argent.theirs")]));
+    fs.rmSync(`${file}.lock`);
+    await recording;
+    expect(
+      (JSON.parse(fs.readFileSync(file, "utf8")) as { bundleId: string }[]).map((a) => a.bundleId)
+    ).toEqual(["com.argent.theirs", "com.argent.mine"]);
+    expect(fs.readdirSync(path.dirname(file))).toEqual(["macos-apps.json"]);
+  });
+});
 
 describe("stageMacosLibraries", () => {
   let dir = "";

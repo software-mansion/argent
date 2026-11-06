@@ -37,7 +37,7 @@ When the tool-server disconnects from the app, for example when the tool-server 
 ## One app is one device
 
 - The device id is `macos-app-` followed by the bundle id, for example `macos-app-com.example.notes`. `list-devices` shows the apps that Argent started and that still run.
-- Argent runs one copy of an app at a time. Argent does not attach to a copy that runs without the Argent library, for example a copy that Xcode Run started. A restart quits such a copy of the same build, and the unsaved changes of that copy are lost.
+- Argent runs one copy of an app at a time. Argent does not attach to a copy that runs without the Argent library, for example a copy that Xcode Run started. A restart quits such a copy of the same build, and the unsaved changes of that copy are lost. Argent never quits a copy of a different build, because that copy can belong to another agent.
 - Argent does not install a Mac app. After a change in the code, build the app again and ask the agent to restart the app.
 - At the end of a session, the agent closes the connection to the app. The app continues to run.
 
@@ -129,7 +129,7 @@ Argent does not start an Electron app or a Chromium browser as a Mac app. Argent
 | The start fails because of the hardened runtime                                  | For a Debug build, do one of the steps in [The hardened runtime](#the-hardened-runtime). A Release build cannot work.                                                                          |
 | The start fails because a different build runs                                   | Quit that copy if it is yours. To run both builds, give this build a bundle id of its own. See [Several agents and git worktrees](#several-agents-and-git-worktrees).                          |
 | A call fails because another tool-server drives the app                          | Stop the other Argent tool-server, or give this build a bundle id of its own.                                                                                                                  |
-| An e2e test launch warns that it started another worktree's build                | Ask the agent to start the build of this worktree first. Then run the e2e test again.                                                                                                          |
+| An e2e test launch warns that it started another worktree's build                | Quit the copy of the other build if it is yours. Then ask the agent to start the build of this worktree, and run the e2e test again.                                                           |
 | A call says that Argent reaches the app only through the connection of its start | Quit the app, or ask the agent to start the app again with `force`. To prevent this, give the build a shorter bundle id. See [Limits](#limits).                                                |
 | The app starts, but the Argent library does not connect                          | Read the app log in `~/.argent/macos/logs/`. The executable of the bundle must be the app, not a launcher script. Make sure that nothing blocks the main thread of the app while it launches.  |
 | A restart fails because the app shows a prompt                                   | The app asks a question before it quits, for example whether to save changes. Ask the agent to answer the prompt, then to restart the app.                                                     |

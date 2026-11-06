@@ -35,6 +35,7 @@ import {
   recordTrackedMacosApp,
   runningTrackedApp,
   stageLibraryFor,
+  withMacosLaunchLock,
 } from "../utils/macos-apps";
 import {
   isInjectableBundleId,
@@ -82,7 +83,7 @@ interface MacosLaunchOptions {
   /**
    * The `.app` bundle, resolved through symlinks. Defaults to the tracked path,
    * then to the Spotlight lookup of the bundle id. While argent runs a copy
-   * from another path, a launch without `takeOver` is refused.
+   * from another path, a launch is refused, also with `takeOver`.
    */
   appPath?: string;
   /**
@@ -102,6 +103,7 @@ interface MacosLaunchOptions {
    * instead of handing it back, and the copies that run without the argent
    * library (the user opened the app, or Xcode Run started it), instead of
    * refusing. They are quit only after every check that can refuse the start.
+   * A copy of another build is never quit, argent's own included.
    */
   takeOver?: boolean;
   /**
@@ -895,18 +897,26 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         "unsupported"
       );
     }
+    // Another tool-server's start would otherwise pass the same checks and start a second copy.
+    return withMacosLaunchLock(bundleId, () => launchLocked(opts));
+  };
+
+  const launchLocked = async (opts: MacosLaunchOptions): Promise<MacosLaunchResult> => {
     const own = await runningTrackedApp(bundleId);
     const refuse = (message: string, code: FailureCode) =>
       macosFailure(message, code, "macos_app_launch", "validation");
 
     if (own) {
-      // Returning that copy would let the caller test another build without knowing.
-      if (!opts.takeOver && opts.appPath && opts.appPath !== own.appPath) {
+      // Returning that copy would let the caller test another build without knowing, and a
+      // take-over would quit a build that may be another agent's: every tool-server of the
+      // user shares the record, and the agents of a user normally share one tool-server.
+      if (opts.appPath && opts.appPath !== own.appPath) {
         throw refuse(
           `${bundleId} already runs from ${own.appPath} (pid ${own.pid}), a different build ` +
             `than ${opts.appPath}. argent runs one copy of a bundle id at a time, and that copy ` +
-            `may belong to another agent or worktree, so argent does not replace it. To run ` +
-            `this build next to it, start it under a bundle id of its own.`,
+            `may belong to another agent or worktree, so argent does not replace it. Quit that ` +
+            `copy if it is yours (menu-bar can choose its Quit command), or start this build ` +
+            `under a bundle id of its own to run both.`,
           FAILURE_CODES.MACOS_APP_ALREADY_RUNNING
         );
       }
@@ -1008,7 +1018,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     }
     // A copy of another build is refused even on a take-over: it may be another
     // agent's, and a second copy beside it would take over its socket and its log.
-    // argent's own copy is not one of them: the take-over replaces it.
+    // argent's own copy runs this build (another one is refused above): the take-over replaces it.
     const copies = await findRunningCopies(bundleId, info.executable, own?.pid);
     if (copies.otherBuilds.length > 0) {
       const where = copies.otherBuilds.map((b) => `${b.appPath} (pid ${b.pid})`).join(", ");
@@ -1119,19 +1129,26 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
     // Recorded before the handshake: if this tool-server dies now, the next
     // one still knows which process to stop.
-    recordTrackedMacosApp({
-      bundleId,
-      appPath: info.appPath,
-      executable: info.executable,
-      name: info.name,
-      pid,
-      sandboxed: info.sandboxed,
-      userSelectedReadOnly: info.userSelectedReadOnly,
-      listenSocket: listen?.path ?? null,
-      logPath,
-      args,
-      startedAt: Date.now(),
-    });
+    try {
+      await recordTrackedMacosApp({
+        bundleId,
+        appPath: info.appPath,
+        executable: info.executable,
+        name: info.name,
+        pid,
+        sandboxed: info.sandboxed,
+        userSelectedReadOnly: info.userSelectedReadOnly,
+        listenSocket: listen?.path ?? null,
+        logPath,
+        args,
+        startedAt: Date.now(),
+      });
+    } catch (err) {
+      // A copy that no record names is one that no tool-server lists or stops.
+      ch.close();
+      await stopProcesses([pid], null, true);
+      throw err;
+    }
 
     let hello: MacosLibraryHandshake;
     try {

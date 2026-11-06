@@ -738,8 +738,9 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
     if (other) {
       warnings.push(
         `launch started ${bundleId} from ${appPath}, a build of another worktree (${other}), ` +
-          `so this e2e test may run that worktree's code. Boot this worktree's build first ` +
-          `(boot-device with macosAppPath and force: true), or give each worktree's build a ` +
+          `so this e2e test may run that worktree's code. argent does not replace a copy of ` +
+          `another build: quit that copy if it is yours (menu-bar can choose its Quit command), ` +
+          `then boot this worktree's build with boot-device. Give each worktree's build a ` +
           `bundle id of its own when several run at once.`
       );
     }

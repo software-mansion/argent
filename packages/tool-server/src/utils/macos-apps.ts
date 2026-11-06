@@ -25,6 +25,7 @@ import {
   macosAppIdFromBundleId,
   parseMacosAppBundleId,
 } from "./device-info";
+import { withFileLock } from "./file-lock";
 import { PS_BIN } from "./vega-process";
 
 const execFileAsync = promisify(execFile);
@@ -370,15 +371,64 @@ function readTrackedApps(): TrackedMacosApp[] {
   return Array.isArray(raw) ? raw.filter(isTrackedMacosApp) : [];
 }
 
-/** Adds or replaces the record for `app.bundleId`. */
-export function recordTrackedMacosApp(app: TrackedMacosApp): void {
+/**
+ * Adds or replaces the record for `app.bundleId`. The read and the write run
+ * under a lock: every tool-server of the user writes the file, and two that
+ * record at the same moment would each drop the other's record.
+ */
+export async function recordTrackedMacosApp(app: TrackedMacosApp): Promise<void> {
   const file = trackedAppsFile();
-  const others = readTrackedApps().filter((a) => a.bundleId !== app.bundleId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  // tmp+rename so a concurrent reader never sees a torn file.
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify([...others, app], null, 2) + "\n");
-  fs.renameSync(tmp, file);
+  // The hold is a read and a write.
+  const timeoutMs = 10_000;
+  const lock = {
+    staleMs: 5_000,
+    timeoutMs,
+    timeoutError: (holder: number | null) =>
+      macosFailure(
+        `argent could not record ${app.bundleId} in ${file}: another process` +
+          `${holder === null ? "" : ` (pid ${holder})`} has held ${file}.lock for more than ` +
+          `${timeoutMs / 1000} s. If that process hangs, stop it, then start the app again.`,
+        FAILURE_CODES.MACOS_APP_IN_USE,
+        "macos_app_record",
+        "timeout"
+      ),
+  };
+  await withFileLock(`${file}.lock`, lock, () => {
+    const others = readTrackedApps().filter((a) => a.bundleId !== app.bundleId);
+    // tmp+rename so a concurrent reader never sees a torn file.
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify([...others, app], null, 2) + "\n");
+    fs.renameSync(tmp, file);
+  });
+}
+
+/**
+ * Runs `fn`, a start or a restart of `bundleId`, while no other tool-server
+ * starts or quits that app: the checks for a running copy, the quit, the spawn,
+ * the record and the handshake, after which a second tool-server finds the app
+ * in use. The in-process launch queue does the same within one tool-server only.
+ */
+export async function withMacosLaunchLock<T>(bundleId: string, fn: () => Promise<T>): Promise<T> {
+  fs.mkdirSync(macosArgentDir(), { recursive: true, mode: 0o700 });
+  const timeoutMs = 60_000;
+  return withFileLock(
+    path.join(macosArgentDir(), `${bundleId}.launch.lock`),
+    {
+      staleMs: 10_000,
+      timeoutMs,
+      timeoutError: (holder) =>
+        macosFailure(
+          `Another argent tool-server${holder === null ? "" : ` (pid ${holder})`} is starting ` +
+            `or quitting ${bundleId} and has not finished within ${timeoutMs / 1000} s. Try ` +
+            `again once it has finished: that tool-server drives the app then.`,
+          FAILURE_CODES.MACOS_APP_IN_USE,
+          "macos_app_launch_lock",
+          "timeout"
+        ),
+    },
+    fn
+  );
 }
 
 /**

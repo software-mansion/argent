@@ -352,6 +352,9 @@ describe("the launch step on a Mac app", () => {
         `from ${tracked.appPath}, a build of another worktree (${path.join(tmpDir, "b")})`
       ),
     });
+    // A forced boot of this worktree's build is refused while the other build runs.
+    expect(result.steps[0].warning).toContain("quit that copy if it is yours");
+    expect(result.steps[0].warning).not.toContain("force");
     expect(result.steps[1]).toMatchObject({ status: "pass" });
   });
 });

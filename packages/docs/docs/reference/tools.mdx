@@ -231,7 +231,7 @@ The device id is `macos-app-<bundle id>`. Argent accepts a bundle id that has on
 | `macosAppPath` | The path of the `.app` bundle. Argent starts the app in the background with the Argent library                                                                 |
 | `macosAppArgs` | Extra arguments for the executable of the app. Without this parameter, the app starts with no arguments, also after an earlier start with arguments            |
 | `udid`         | A Mac app id instead of `macosAppPath`. Argent starts the app from the path of the last start, or from the newest app with this bundle id that Spotlight finds |
-| `force`        | Quit the running app and start it again. Also quit a copy of the same build that runs without the Argent library                                               |
+| `force`        | Quit the running app and start it again. Also quit a copy of the same build that runs without the Argent library. Never quit a copy of a different build       |
 
 The result is `{ platform: "macos", id, bundleId, pid, appPath, sandboxed, logPath, args, booted }`:
 
@@ -255,7 +255,7 @@ After a start, `boot-device`, `launch-app` and `restart-app` wait up to 10 secon
 - A copy of the app runs already without the Argent library, and `force` is not `true`. The error names `force: true`.
 - With `force`, a copy of the app without the Argent library does not quit, for example a process of a different user. Argent does not start the app.
 - A copy of a different build of the app runs without the Argent library, for example the build of another git worktree. This also fails with `force`. The error names the bundle path and the process id of the copy.
-- The app runs already with the Argent library from a different bundle path, and `force` is not `true`. Argent does not return that copy and does not replace it, because the copy can belong to another agent.
+- The app runs already with the Argent library from a different bundle path. This also fails with `force`. Argent does not return that copy and does not replace it, because the copy can belong to another agent. The error names the bundle path and the process id of the copy.
 - The Argent library does not connect within 20 seconds, for example because something blocks the main thread of the app while it launches. Argent stops the app again, and the error shows the last lines of the app log.
 - The app shows no window that Argent can drive: a menu bar app without a standard window, or an app that shows only panels or borderless windows. Argent stops the app again.
 - With `udid`, the path of the last start no longer exists. The error tells you to give `macosAppPath`. This also applies to `launch-app` and `restart-app`.
@@ -282,7 +282,7 @@ The other app tools on a Mac app:
 
 On a Mac app, the results of `launch-app` and `restart-app` have `appPath`, the `.app` bundle that runs, and `args`, the arguments it runs with. When several folders, for example git worktrees, build the same app, `appPath` shows which build runs.
 
-One tool-server at a time drives a Mac app. While one tool-server is connected, each call of a second tool-server fails with `MACOS_APP_IN_USE`. The call also fails with `MACOS_APP_IN_USE` while a different program holds the connection to the Argent library. This also applies to `boot-device` with `force`, to `restart-app`, to `open-url` and to a `launch` step of an e2e test. The second tool-server does not quit the app. When the first tool-server stops, the next tool-server connects.
+One tool-server at a time drives a Mac app. While one tool-server is connected, each call of a second tool-server fails with `MACOS_APP_IN_USE`. The call also fails with `MACOS_APP_IN_USE` while a different program holds the connection to the Argent library. This also applies to `boot-device` with `force`, to `restart-app`, to `open-url` and to a `launch` step of an e2e test. The second tool-server does not quit the app. When the first tool-server stops, the next tool-server connects. A start or a restart from a second tool-server waits while the first tool-server starts or quits the app. Thus two tool-servers never start two copies of the app. When the wait takes more than 60 seconds, the call fails with `MACOS_APP_IN_USE`.
 
 A sandboxed app has no listening socket when its bundle id and the path of your home folder together have more than 59 characters. For example, with the home folder `/Users/anna`, the limit is 48 characters. Argent then reaches the app only through the connection of its start. Another tool-server cannot reach the app. When the connection closes, for example after `stop-simulator-server`, `stop-all-simulator-servers` or a restart of the tool-server, no tool-server can reach the app. Then:
 
