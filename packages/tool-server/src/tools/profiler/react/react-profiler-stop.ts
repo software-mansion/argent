@@ -145,6 +145,12 @@ export function flattenProfilingData(
   return { commits, totalCommits: flatCommitIndex, unattributedByCommit };
 }
 
+/**
+ * For the two calls a stop cannot do without. A long recording can outlast
+ * `send`'s 10 s default, and a timed-out call drops the reply, which is the data.
+ */
+const COLLECT_TIMEOUT_MS = 60_000;
+
 function stopInProgressError(): FailureError {
   return new FailureError(STOP_IN_PROGRESS_NOTE, {
     error_code: FAILURE_CODES.REACT_PROFILER_STOP_IN_PROGRESS,
@@ -307,7 +313,7 @@ Fails if no active profiling session exists, another stop is running, the CDP co
       api.stopping = true;
 
       try {
-        const cpuResult = (await cdp.send("Profiler.stop")) as {
+        const cpuResult = (await cdp.send("Profiler.stop", undefined, COLLECT_TIMEOUT_MS)) as {
           profile?: HermesCpuProfile;
         };
         if (!cpuResult?.profile) {
@@ -343,11 +349,11 @@ Fails if no active profiling session exists, another stop is running, the CDP co
 
         // One round-trip: stop the backend profiler, read the live buffer, and resolve
         // every referenced fiberID to a display name.
-        const stopReadStr = (await cdp.send("Runtime.evaluate", {
-          expression: STOP_AND_READ_SCRIPT,
-          returnByValue: true,
-          timeout: 60000,
-        })) as { result?: { value?: string }; exceptionDetails?: { text?: string } };
+        const stopReadStr = (await cdp.send(
+          "Runtime.evaluate",
+          { expression: STOP_AND_READ_SCRIPT, returnByValue: true },
+          COLLECT_TIMEOUT_MS
+        )) as { result?: { value?: string }; exceptionDetails?: { text?: string } };
         if (stopReadStr.exceptionDetails) {
           throw new FailureError(
             `Runtime exception while reading profiling data: ${stopReadStr.exceptionDetails.text ?? "unknown"}`,
@@ -379,11 +385,11 @@ Fails if no active profiling session exists, another stop is running, the CDP co
         let fiberMeta: FiberMetaMap = {};
         if (backendCommitCount > 0) {
           try {
-            const metaStr = (await cdp.send("Runtime.evaluate", {
-              expression: RESOLVE_FIBER_META_SCRIPT,
-              returnByValue: true,
-              timeout: 15000,
-            })) as { result?: { value?: string } };
+            const metaStr = (await cdp.send(
+              "Runtime.evaluate",
+              { expression: RESOLVE_FIBER_META_SCRIPT, returnByValue: true },
+              15_000
+            )) as { result?: { value?: string } };
             if (metaStr.result?.value) {
               fiberMeta = JSON.parse(metaStr.result.value) as FiberMetaMap;
             }

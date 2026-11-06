@@ -31,6 +31,7 @@ import {
 } from "../../src/utils/react-profiler/session-ownership";
 import {
   READ_STATE_SCRIPT,
+  RESOLVE_FIBER_META_SCRIPT,
   STOP_AND_READ_SCRIPT,
   STOP_FOR_TAKEOVER_SCRIPT,
 } from "../../src/utils/react-profiler/scripts";
@@ -1028,6 +1029,21 @@ describe("the run lifecycle, on the real session and scripts", () => {
       await failure(stopping);
 
       expect(getLostProfilerRun(PORT, DEVICE)?.cause).toBe("cdp_disconnected");
+    });
+
+    it("gives the calls that collect the data a minute, and the optional read 15 s", async () => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.commit("Screen");
+
+      await ts.stop();
+
+      const timeoutOf = (found: (c: Rig["sent"][number]) => boolean) =>
+        ts.rig.sent.find(found)?.timeout;
+      expect(timeoutOf((c) => c.method === "Profiler.stop")).toBe(60_000);
+      expect(timeoutOf((c) => c.expression === STOP_AND_READ_SCRIPT)).toBe(60_000);
+      expect(timeoutOf((c) => c.expression === RESOLVE_FIBER_META_SCRIPT)).toBe(15_000);
     });
   });
 
