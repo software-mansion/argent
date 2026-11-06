@@ -42,8 +42,7 @@ import {
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
-import { showsSchemaKeywords } from "./keyword-facts.js";
-import { autoScreenshotForm, screenshotForm } from "./client-images.js";
+import { clientProfile, type ClientProfile } from "./clients/profiles.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
@@ -114,6 +113,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     if (aiClient) return { "X-Argent-AI-Client": aiClient };
     if (rawName) return { "X-Argent-AI-Client": "other" };
     return {};
+  }
+
+  // What this server does differently for the client named in the handshake
+  // (clients/README.md). Read on each use: it is cheap, and it cannot go stale.
+  function currentClient(): ClientProfile {
+    return clientProfile(server.getClientVersion()?.name);
   }
 
   let reconnectPromise: Promise<void> | null = null;
@@ -198,7 +203,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         "image",
         { toolsUrl: TOOLS_URL, authToken: AUTH_TOKEN, deviceId: udid },
         undefined,
-        autoScreenshotForm(server.getClientVersion()?.name)
+        currentClient().autoScreenshot
       );
       if (!blocks.some(isScreenshotBlock)) return [];
       return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
@@ -256,12 +261,13 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     try {
       // The handshake precedes tools/list, so the client is known by now.
-      const keywordFacts = !showsSchemaKeywords(server.getClientVersion()?.name);
+      const { id: client, keywordFacts } = currentClient();
       const tools = toMcpToolList(await fetchTools(), { keywordFacts });
       await spyLog({
         ts: new Date().toISOString(),
         event: "list_tools",
         count: tools.length,
+        client,
         keywordFacts,
       });
       return { tools };
@@ -320,7 +326,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           outputHint,
           ctx,
           params.arguments,
-          screenshotForm(server.getClientVersion()?.name)
+          currentClient().screenshot
         );
       }
 

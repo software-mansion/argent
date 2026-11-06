@@ -1,34 +1,6 @@
 type Schema = Record<string, unknown>;
 
 /**
- * Per-client schema keyword handling. Defaults and the full agent matrix: CLIENTS.md.
- *
- * The MCP `clientInfo.name` of the clients whose model sees the schema keywords, on every
- * model they were checked with: Claude Code, Gemini CLI, Zed, Kiro IDE (`kiro`) and Kiro
- * CLI (`Q DEV CLI`). VS Code's agent host (`copilot-cli`) writes the keywords into the
- * description itself. For these the copy would only repeat a fact.
- *
- * Every other client gets the copy (the default), an unknown one included. Codex drops the
- * keywords; opencode drops them on OpenAI and Google models, and VS Code's chat on gpt-4
- * models. Cursor, Devin and Hermes were checked on one model at most, and Devin and Hermes
- * send their SDK's default name. A repeated fact costs less than a missing one.
- */
-const SHOWS_KEYWORDS = [
-  /^claude-code\b/,
-  /^gemini-cli-mcp-client\b/,
-  /^zed\b/,
-  /^kiro\b/,
-  /^q dev cli\b/,
-  /^copilot-cli\b/,
-];
-
-/** True when the client named in the MCP handshake shows schema keywords to its model. */
-export function showsSchemaKeywords(clientName: string | undefined): boolean {
-  const name = clientName?.trim().toLowerCase() ?? "";
-  return SHOWS_KEYWORDS.some((pattern) => pattern.test(name));
-}
-
-/**
  * A fact that only a schema keyword states never reaches the model of a client that drops
  * the keyword. This copies each such fact into the description of the property it
  * constrains, unless that description already states it. The keywords stay, for the
@@ -37,6 +9,8 @@ export function showsSchemaKeywords(clientName: string | undefined): boolean {
  * Left out on purpose: `pattern`, `minLength: 1` and `minItems: 1` (input guards the
  * tool-server enforces with a clear error), and `enum` (every client keeps it). Bounds on
  * scalar array items are not copied either; no tool declares any.
+ *
+ * Which clients get the copy: `keywordFacts` in clients/profiles.ts.
  */
 export function withKeywordFacts(schema: Schema): Schema {
   const properties = asSchema(schema.properties);
