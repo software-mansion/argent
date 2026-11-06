@@ -68,24 +68,32 @@ let state: UpdateState = {
 };
 
 let interval: ReturnType<typeof setInterval> | null = null;
-let suppressUntil = loadSuppressUntil();
+// Only an end time the file refused. With a writable ~/.argent the file is the
+// whole state, so every tool-server on the machine honours one dismissal.
+let unpersistedUntil = 0;
 
 export function getUpdateState(): Readonly<UpdateState> {
   return { ...state };
 }
 
 export function isUpdateNoteSuppressed(): boolean {
-  return Date.now() < suppressUntil;
+  return Date.now() < Math.max(loadSuppressUntil(), unpersistedUntil);
 }
 
 /**
- * Suppress update notifications for `durationMs`, persisted across restarts.
- * @throws if the suppression file cannot be written.
+ * Suppress update notifications for `durationMs`. `persisted: false` means the
+ * file could not be written, so it holds only in this process until it exits.
  */
-export function suppressUpdateNote(durationMs: number): void {
-  const next = Date.now() + durationMs;
-  persistSuppressUntil(next);
-  suppressUntil = next;
+export function suppressUpdateNote(durationMs: number): { until: number; persisted: boolean } {
+  const until = Date.now() + durationMs;
+  try {
+    persistSuppressUntil(until);
+    unpersistedUntil = 0;
+    return { until, persisted: true };
+  } catch {
+    unpersistedUntil = until;
+    return { until, persisted: false };
+  }
 }
 
 function isNewerVersion(latest: string, current: string): boolean {
