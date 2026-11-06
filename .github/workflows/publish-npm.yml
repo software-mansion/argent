@@ -1,4 +1,7 @@
 name: Publish npm package
+# sync-next-tag.yml reads this title to skip dry runs: `inputs` never reach a
+# workflow_run listener. Blank falls back to the default title.
+run-name: ${{ inputs.dry_run && 'Publish npm package (dry run)' || '' }}
 
 # One file, because npm trusted publishing registers a single workflow filename
 # as the package's trusted publisher.
