@@ -426,17 +426,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // A point where a wheel scrolls the element (visible part r) against a scroller
   // cutting it along the axis: one on its chain from the outermost cutter in, of
   // scrollers \`scs\`. Elsewhere the wheel may move an overlay's scroller, the element's
-  // own, or one holding the cutter. The innermost cutter's window is tried first, its
-  // points farthest along the axis first: content scrolling under the point mid-wheel
-  // takes the rest of it. With no such point on screen, the centre of the cut window
-  // \`win\` across the element.
+  // own, or one holding the cutter. The shown part of the innermost cutter's window is
+  // tried first, its points farthest along the axis first: content scrolling under the
+  // point mid-wheel takes the rest of it. With no such point on screen, the centre of
+  // the cut window \`win\` across the element.
   function wheelAnchor(r, scs, cutters, win, axis) {
     const movers = scs.slice(scs.indexOf(cutters[0])).filter((s) => s[axis]);
     const away = ([x, y]) =>
       axis === "sx" ? Math.max(r.left - x, x - r.right) : Math.max(r.top - y, y - r.bottom);
     const points = [];
     for (let i = cutters.length - 1; i >= 0; i--) {
-      const v = intersect(cutters[i].win, { left: 0, top: 0, right: w, bottom: h });
+      const v = intersect(cutters[i].shown, { left: 0, top: 0, right: w, bottom: h });
       const grid = [];
       for (const f of [0.1, 0.5, 0.9]) {
         for (const g of [0.1, 0.5, 0.9]) {
@@ -716,7 +716,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         };
         inner = intersect(clip, own);
         // inner.scrollers lists, outermost first, the clippers on the chain that a user
-        // can scroll content past, with the axes they scroll along.
+        // can scroll content past, with the axes they scroll along and the part of their
+        // window the clips above leave showing.
         const sx =
           (ox === "auto" || ox === "scroll") && getScrollWidth.call(el) > getClientWidth.call(el);
         const sy =
@@ -724,7 +725,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           getScrollHeight.call(el) > getClientHeight.call(el);
         const scrollers = clip && clip.scrollers;
         inner.scrollers =
-          sx || sy ? (scrollers || []).concat([{ el, sx, sy, win: own }]) : scrollers;
+          sx || sy ? (scrollers || []).concat([{ el, sx, sy, win: own, shown: inner }]) : scrollers;
       }
     }
     return clipsWithin(el, style, clips, inner);

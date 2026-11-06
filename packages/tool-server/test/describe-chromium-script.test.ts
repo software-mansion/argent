@@ -3335,3 +3335,52 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "abs")).toEqual({ x: 10, y: 150, w: 80, h: 20 });
   });
 });
+
+describe("DESCRIBE_DOM_SCRIPT wheel anchors", () => {
+  it("anchors a cut only where the clips above its innermost cutter leave that cutter showing", () => {
+    // An outer pane holds a 100px clipper over a list that cuts the button; the pane's
+    // next child shows below the clipper, where a wheel scrolls only the pane.
+    const nested = (overflow: string) =>
+      el({
+        rect: { x: 0, y: 0, w: 300, h: 400 },
+        client: { left: 0, top: 0, width: 300, height: 400 },
+        offset: { width: 300, height: 400 },
+        scrollSize: { width: 300, height: 700 },
+        style: { overflow: "auto" },
+        painted: { x: 0, y: 0, w: 300, h: 400 },
+        children: [
+          el({
+            rect: { x: 0, y: 0, w: 300, h: 100 },
+            client: { left: 0, top: 0, width: 300, height: 100 },
+            offset: { width: 300, height: 100 },
+            scrollSize: { width: 300, height: 300 },
+            style: { overflow },
+            painted: { x: 0, y: 0, w: 300, h: 100 },
+            children: [
+              el({
+                rect: { x: 0, y: 0, w: 300, h: 300 },
+                client: { left: 0, top: 0, width: 300, height: 300 },
+                offset: { width: 300, height: 300 },
+                scrollSize: { width: 300, height: 520 },
+                style: { overflow: "auto" },
+                painted: { x: 0, y: 0, w: 300, h: 100 },
+                children: [
+                  el({
+                    attrs: { id: "cut" },
+                    rect: { x: 0, y: -20, w: 300, h: 500 },
+                    painted: { x: 0, y: 0, w: 300, h: 100 },
+                  }),
+                ],
+              }),
+            ],
+          }),
+          el({ rect: { x: 0, y: 100, w: 300, h: 600 }, painted: { x: 0, y: 100, w: 300, h: 300 } }),
+        ],
+      });
+    for (const overflow of ["auto", "hidden"]) {
+      expect(findById(run([nested(overflow)]).tree, "cut")!.clipAnchors).toEqual({
+        y: { x: 0.03, y: 0.01 },
+      });
+    }
+  });
+});
