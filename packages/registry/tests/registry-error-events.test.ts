@@ -300,6 +300,40 @@ describe("Registry — failure signals", () => {
     );
   });
 
+  it("classifies a tool's own AbortError as cancelled even when a classified failure is its cause", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "gesture-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        const liftFailure = withFailureSignal(new Error("lift refused"), {
+          error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+          failure_stage: "simulator_server_network",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        });
+        const abortError = new Error("gesture cancelled", { cause: liftFailure });
+        abortError.name = "AbortError";
+        throw abortError;
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("gesture-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("gesture cancelled");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED
+    );
+  });
+
   it("keeps a tool's own timeout that Node raised as an AbortError after the caller aborted", async () => {
     const registry = new Registry();
     const controller = new AbortController();

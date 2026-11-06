@@ -239,10 +239,15 @@ export class Registry {
           : new ToolExecutionError(toolId, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
-      // After the caller's abort, a failure the tool did not classify, or one
-      // carrying the abort's reason in its cause chain, is the cancel.
+      // After the caller's abort, the cancel is a failure the tool did not
+      // classify, an AbortError it threw, or one carrying the abort's reason.
       const signal = options?.signal;
-      if (signal?.aborted && (!getFailureSignal(error) || hasCause(error, signal.reason))) {
+      if (
+        signal?.aborted &&
+        (!getFailureSignal(error) ||
+          (error instanceof Error && error.name === "AbortError") ||
+          hasCause(error, signal.reason))
+      ) {
         withFailureSignal(wrappedError, CANCELLED_SIGNAL);
       }
       const failureSignal = getFailureSignalOrFallback(wrappedError);
