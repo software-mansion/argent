@@ -48,11 +48,11 @@ describe("nativeDevtoolsBlueprint factory — tcp transport", () => {
     let boundPort = 0;
     startProxy.mockImplementation(async (_udid: string, port: number) => {
       boundPort = port;
-      throw new Error("sim-remote proxy start refused");
+      throw new Error("sim-remote reverse start refused");
     });
 
     await expect(nativeDevtoolsBlueprint.factory({}, device, { device })).rejects.toThrow(
-      /proxy start refused/
+      /reverse start refused/
     );
 
     expect(boundPort).toBeGreaterThan(0);
