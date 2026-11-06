@@ -1,7 +1,9 @@
 import { TypedEventEmitter } from "./event-emitter";
 import {
   ServiceState,
+  isLiveServiceState,
   ServiceNode,
+  ServiceSnapshot,
   ServiceInstance,
   ServiceBlueprint,
   ToolDefinition,
@@ -38,12 +40,26 @@ type ZodIssue = z.core.$ZodIssue;
  */
 const resolvedDuringInvocation = new AsyncLocalStorage<Set<URN>>();
 
+/**
+ * The use sets of the running tool call and of every call that dispatched it
+ * (run-sequence, flow steps), so a device a step used stays in use until the
+ * outermost call ends.
+ */
+const usedByCallChain = new AsyncLocalStorage<readonly Set<URN>[]>();
+
 export class Registry {
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
   /** Alias → the id of the tool that declares it in `aliases`. */
   private toolAliases = new Map<string, string>();
+  /**
+   * Epoch ms a tool call last used each live service. Background and dependency
+   * resolves don't count, and the entry goes when the service stops being live.
+   */
+  private lastUsedAt = new Map<URN, number>();
+  /** The services each in-flight tool call, or a call it dispatched, has resolved so far. */
+  private inFlightCalls = new Set<ReadonlySet<URN>>();
   /**
    * Injected so the registry needs no dependency on the flag store; the
    * tool-server wires the real check. The default enables every flag, so a
@@ -89,6 +105,7 @@ export class Registry {
      * of those can be holding just as dead a handle as a declared one.
      */
     resolvedDuringInvocation.getStore()?.add(urn);
+    for (const used of usedByCallChain.getStore() ?? []) used.add(urn);
     return this._resolve<T>(urn, [], options);
   }
 
@@ -190,15 +207,29 @@ export class Registry {
       let lazilyResolved = new Set<URN>();
 
       const runOnce = async (): Promise<TResult> => {
-        lazilyResolved = new Set<URN>();
+        const resolved = new Set<URN>();
+        lazilyResolved = resolved;
+        const used = new Set<URN>();
+        this.inFlightCalls.add(used);
 
-        return resolvedDuringInvocation.run(lazilyResolved, async () => {
-          const resolvedServices: Record<string, unknown> = {};
-          for (const { alias, urn, options: resolveOptions } of refs) {
-            resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+        try {
+          return await usedByCallChain.run([used, ...(usedByCallChain.getStore() ?? [])], () =>
+            resolvedDuringInvocation.run(resolved, async () => {
+              const resolvedServices: Record<string, unknown> = {};
+              for (const { alias, urn, options: resolveOptions } of refs) {
+                resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+              }
+              return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+            })
+          );
+        } finally {
+          this.inFlightCalls.delete(used);
+          const now = Date.now();
+          for (const urn of used) {
+            const node = this.services.get(urn);
+            if (node && isLiveServiceState(node.state)) this.lastUsedAt.set(urn, now);
           }
-          return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
-        });
+        }
       };
 
       let result: TResult;
@@ -268,15 +299,20 @@ export class Registry {
   }
 
   getSnapshot(): {
-    services: Map<string, { state: ServiceState; dependents: string[] }>;
+    services: Map<string, ServiceSnapshot>;
     namespaces: string[];
     tools: string[];
   } {
-    const services = new Map<string, { state: ServiceState; dependents: string[] }>();
+    const now = Date.now();
+    const inUse = new Set<URN>();
+    for (const call of this.inFlightCalls) for (const urn of call) inUse.add(urn);
+    const services = new Map<string, ServiceSnapshot>();
     for (const [urn, node] of this.services) {
+      const lastUsedAt = inUse.has(urn) ? now : this.lastUsedAt.get(urn);
       services.set(urn, {
         state: node.state,
         dependents: [...node.dependents],
+        ...(lastUsedAt !== undefined ? { lastUsedAt } : {}),
       });
     }
     return {
@@ -439,6 +475,7 @@ export class Registry {
   private _transition(node: ServiceNode, to: ServiceState, cause?: Error): void {
     const from = node.state;
     node.state = to;
+    if (!isLiveServiceState(to)) this.lastUsedAt.delete(node.urn);
     this.events.emit("serviceStateChange", node.urn, from, to);
     if (to === ServiceState.ERROR) {
       const err = cause

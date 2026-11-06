@@ -13,6 +13,7 @@ import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debug
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
+import { isLiveServiceState, type ServiceSnapshot } from "@argent/registry";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
 import { externalNativeId } from "../../utils/external-devices";
 
@@ -217,4 +218,35 @@ function deviceIdOfUrn(urn: string, namespaces: readonly string[]): string | und
  */
 export function unnameableSessionUrns(urns: readonly string[]): string[] {
   return urns.filter((urn) => isLogicalKeyedDevice(deviceIdOfUrn(urn, PORT_KEYED_NAMESPACES)));
+}
+
+/**
+ * Device-owned services whose use marks the device. The excluded ones stay
+ * RUNNING after their device goes away, so their stamp would carry over to the
+ * next device that gets the same serial.
+ */
+const DEVICE_USE_NAMESPACES = DEVICE_OWNED_NAMESPACES.filter(
+  (namespace) =>
+    namespace !== SCREEN_RECORDING_SESSION_NAMESPACE &&
+    namespace !== NATIVE_PROFILER_SESSION_NAMESPACE &&
+    namespace !== ANDROID_TV_CONTROL_NAMESPACE &&
+    namespace !== ANDROID_NETWORK_INSPECTOR_NAMESPACE
+);
+
+/**
+ * When a tool last used each of `deviceIds` through a still-live service, keyed
+ * in the caller's spelling. The simulator watcher's own attach is not use.
+ */
+export function lastDeviceUse(
+  services: ReadonlyMap<string, ServiceSnapshot>,
+  deviceIds: readonly string[]
+): Map<string, number> {
+  const lastUse = new Map<string, number>();
+  for (const [urn, { state, lastUsedAt }] of services) {
+    if (lastUsedAt === undefined || !isLiveServiceState(state)) continue;
+    const owner = deviceIdOwningUrn(urn, DEVICE_USE_NAMESPACES, deviceIds);
+    if (owner === undefined) continue;
+    lastUse.set(owner, Math.max(lastUse.get(owner) ?? 0, lastUsedAt));
+  }
+  return lastUse;
 }
