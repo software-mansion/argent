@@ -594,32 +594,103 @@ describe("scroll-to directive", () => {
     }
   );
 
-  it("retries a stuck cut off a scrollable target that covers its window's centre", async () => {
-    // A wheel on the target (a textarea, a nested list) scrolls the target's own
-    // content, not the window that cuts it.
-    const target = n({
-      identifier: "editor",
-      scrollable: true,
-      frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.3 },
-      clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
-      clipAnchors: { y: { x: 0.5, y: 0.45 } },
-    });
-    currentTree = () => screen([target]);
+  it.each([undefined, "pane"])(
+    "accepts a stuck cut whose target lies under the retry's centre (within: %s)",
+    async (within) => {
+      // A wheel on the target (a textarea, a nested list) could scroll the target's
+      // own content instead of the window that cuts it.
+      const target = n({
+        identifier: "editor",
+        scrollable: true,
+        frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.3 },
+        clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+        clipAnchors: { y: { x: 0.5, y: 0.45 } },
+      });
+      const pane = n({
+        identifier: "pane",
+        scrollable: true,
+        frame: { x: 0, y: 0.4, width: 1, height: 0.4 },
+      });
+      currentTree = () => screen([pane, target]);
+      const swipes: SwipeCall[] = [];
+      await writeFlow("target-under-retry", {
+        executionPrerequisite: "",
+        steps: [
+          {
+            kind: "scroll-to",
+            direction: "down",
+            target: { identifier: "editor" },
+            within: within ? { identifier: within } : undefined,
+          },
+        ],
+      });
+      const result = asRun(
+        await createRunFlowTool(mockRegistry(swipes, () => {})).execute(
+          {},
+          { name: "target-under-retry", project_root: tmpDir, device: DEVICE }
+        )
+      );
+      expect(result.steps[0].status).toBe("pass");
+      expect(swipes).toHaveLength(1);
+    }
+  );
+
+  it("keeps scrolling a target the retry uncut while the screen still cuts it", async () => {
+    // The anchor's wheel is held, the retry scrolls the list past its end of the row
+    // cut, and the row then runs past the screen's bottom edge across its centre.
+    let wheels = 0;
+    const row = (): DescribeNode =>
+      wheels < 2
+        ? n({
+            identifier: "row",
+            frame: { x: 0.6, y: 0.75, width: 0.3, height: 0.05 },
+            clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+            clipAnchors: { y: { x: 0.3, y: 0.45 } },
+          })
+        : wheels === 2
+          ? n({ identifier: "row", frame: { x: 0, y: 0.3, width: 1, height: 0.8 } })
+          : n({ identifier: "row", frame: { x: 0, y: 0.3, width: 1, height: 0.3 } });
+    currentTree = () => screen([row()]);
     const swipes: SwipeCall[] = [];
-    await writeFlow("scrollable-target", {
+    await writeFlow("uncut-then-offscreen", {
       executionPrerequisite: "",
-      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "editor" } } as never],
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
     });
     const result = asRun(
-      await createRunFlowTool(mockRegistry(swipes, () => {})).execute(
+      await createRunFlowTool(mockRegistry(swipes, () => wheels++)).execute(
         {},
-        { name: "scrollable-target", project_root: tmpDir, device: DEVICE }
+        { name: "uncut-then-offscreen", project_root: tmpDir, device: DEVICE }
       )
     );
     expect(result.steps[0].status).toBe("pass");
-    expect(swipes).toHaveLength(2);
-    expect(swipes[1].fromX).toBeCloseTo(0.5);
-    expect(swipes[1].fromY).toBeCloseTo(0.475);
+    expect(swipes).toHaveLength(3);
+  });
+
+  it("fails a scroll-to whose target stops resolving after its anchor is spent", async () => {
+    // The first wheel is held; the retry scrolls the list, and the row's label changes.
+    let wheels = 0;
+    currentTree = () =>
+      screen([
+        n({ identifier: "list", scrollable: true, frame: { x: 0, y: 0.4, width: 1, height: 0.4 } }),
+        n({
+          label: wheels < 2 ? "Load more" : "Loading…",
+          frame: { x: 0.6, y: 0.75, width: 0.3, height: 0.05 },
+          clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+          clipAnchors: { y: { x: 0.3, y: 0.45 } },
+        }),
+      ]);
+    const swipes: SwipeCall[] = [];
+    await writeFlow("vanishing-target", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { text: "Load more" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(swipes, () => wheels++)).execute(
+        {},
+        { name: "vanishing-target", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("fail");
   });
 
   it("keeps the anchor for a cut whose room recurs in a window of another length", async () => {
