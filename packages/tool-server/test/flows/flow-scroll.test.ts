@@ -754,6 +754,40 @@ describe("scroll-to directive", () => {
     expect(swipes).toHaveLength(1);
   });
 
+  it("keeps the anchor for a cut each wheel moves only slightly into its window", async () => {
+    // Each wheel moves the row 0.0015 of the screen further into the window.
+    const cutAt = (y: number) =>
+      n({
+        identifier: "row",
+        frame: { x: 0.6, y, width: 0.3, height: 0.8 - y },
+        clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+        clipAnchors: { y: { x: 0.3, y: 0.45 } },
+      });
+    const states = [
+      cutAt(0.75),
+      cutAt(0.7485),
+      n({ identifier: "row", frame: { x: 0.6, y: 0.6, width: 0.3, height: 0.1 } }),
+    ];
+    let wheels = 0;
+    currentTree = () => screen([states[Math.min(wheels, 2)]]);
+    const swipes: SwipeCall[] = [];
+    await writeFlow("creeping-cut", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(swipes, () => wheels++)).execute(
+        {},
+        { name: "creeping-cut", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes.map((sw) => [sw.fromX, sw.fromY])).toEqual([
+      [0.3, 0.45],
+      [0.3, 0.45],
+    ]);
+  });
+
   it("scrolls a target cut by a scroller whose window spans the whole screen on the axis", async () => {
     // A full-height side pane cuts the target at the screen's bottom edge.
     const swipes = await scrollTo(
