@@ -319,8 +319,7 @@ function strayCount(pattern: string): number {
   }
 }
 
-// Poll `read` until it returns `want`, or the deadline passes. Returns the final count, so
-// the caller asserts on a number rather than on having timed out.
+// Returns the final count, so callers assert on the number rather than on a timeout.
 async function pollCount(read: () => number, want: number, timeoutMs: number): Promise<number> {
   const deadline = Date.now() + timeoutMs;
   let count = read();
