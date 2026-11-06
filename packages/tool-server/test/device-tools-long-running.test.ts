@@ -196,3 +196,56 @@ describe("iOS app tools fail when the step before launch or install times out", 
     }
   );
 });
+
+describe("iOS app tools report a timed-out launch or install as a timeout", () => {
+  const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+  const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
+
+  beforeEach(() => {
+    calls.length = 0;
+  });
+
+  it.each([
+    {
+      id: "reinstall-app",
+      run: () =>
+        reinstallAppTool.execute!({}, { udid: UDID, bundleId: "com.x", appPath: "/a.app" }),
+      sub: "install",
+      message: `Installing the iOS app bundle on ${UDID} did not finish within 180s.`,
+      code: "IOS_REINSTALL_INSTALL_FAILED",
+      stage: "ios_reinstall_app_simctl_install",
+    },
+    {
+      id: "launch-app",
+      run: () => createLaunchAppTool(fakeRegistry).execute!({}, { udid: UDID, bundleId: "com.x" }),
+      sub: "launch",
+      message: `Launching iOS app com.x on ${UDID} did not finish within 30s.`,
+      code: "IOS_LAUNCH_SIMCTL_FAILED",
+      stage: "ios_launch_app_simctl_launch",
+    },
+    {
+      id: "restart-app",
+      run: () => createRestartAppTool(fakeRegistry).execute!({}, { udid: UDID, bundleId: "com.x" }),
+      sub: "launch",
+      message: `Relaunching iOS app com.x on ${UDID} did not finish within 30s.`,
+      code: "IOS_RESTART_LAUNCH_FAILED",
+      stage: "ios_restart_app_simctl_launch",
+    },
+  ])("$id: a timed-out $sub", async ({ run, sub, message, code, stage }) => {
+    failing = { sub, killed: true };
+    const err = await run().catch((e: unknown) => e);
+    expect((err as Error).message).toBe(message);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: code,
+      failure_stage: stage,
+      error_kind: "timeout",
+    });
+
+    failing = { sub, killed: false };
+    expect(getFailureSignal(await run().catch((e: unknown) => e))).toMatchObject({
+      error_code: code,
+      failure_stage: stage,
+      error_kind: "subprocess",
+    });
+  });
+});

@@ -20,6 +20,7 @@ import {
   FailureError,
   ServiceNotFoundError,
   getFailureSignal,
+  subprocessFailureMetadata,
   type Registry,
   type ToolCapability,
   type ToolDefinition,
@@ -628,6 +629,32 @@ async function pickOwnSerial(avdName: string, newSerials: string[]): Promise<str
   return findSerialByAvdName(avdName, Date.now() + 3_000);
 }
 
+async function bootSimctl(
+  prefix: string[],
+  [sub, udid, ...rest]: ["shutdown" | "boot" | "bootstatus", string, ...string[]],
+  timeoutMs: number
+): Promise<void> {
+  try {
+    await execFileAsync("xcrun", [...prefix, sub, udid, ...rest], {
+      timeout: timeoutMs,
+      killSignal: SIMCTL_KILL_SIGNAL,
+    });
+  } catch (err) {
+    if (!(err as { killed?: boolean }).killed) throw err;
+    throw new FailureError(
+      `simctl ${sub} of iOS simulator ${udid} did not finish within ${timeoutMs / 1000}s.`,
+      {
+        error_code: FAILURE_CODES.BOOT_IOS_SIMCTL_TIMEOUT,
+        failure_stage: `boot_ios_simctl_${sub}`,
+        failure_area: "tool_server",
+        error_kind: "timeout",
+        ...subprocessFailureMetadata(err, "xcrun_simctl"),
+      },
+      { cause: err as Error }
+    );
+  }
+}
+
 async function bootIos(
   udid: string,
   registry: Registry,
@@ -676,10 +703,7 @@ async function bootIos(
 
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
   if (force && simState === "Booted") {
-    await execFileAsync("xcrun", [...prefix, "shutdown", udid], {
-      timeout: 30_000,
-      killSignal: SIMCTL_KILL_SIGNAL,
-    });
+    await bootSimctl(prefix, ["shutdown", udid], 30_000);
   }
 
   const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
@@ -693,19 +717,13 @@ async function bootIos(
     });
   }
 
-  await execFileAsync("xcrun", [...prefix, "boot", udid], {
-    timeout: 120_000,
-    killSignal: SIMCTL_KILL_SIGNAL,
-  }).catch((err: unknown) => {
+  await bootSimctl(prefix, ["boot", udid], 120_000).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-  await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"], {
-    timeout: 480_000,
-    killSignal: SIMCTL_KILL_SIGNAL,
-  });
+  await bootSimctl(prefix, ["bootstatus", udid, "-b"], 480_000);
 
   // tvOS only: a boot transition orphans the host-side tvos-hid-daemon, which
   // holds a SimDeviceLegacyClient bound to the previous boot for its whole

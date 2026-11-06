@@ -79,13 +79,16 @@ export function makeIosImpl(
       } catch (err) {
         // Its message says what to do, and a flow step reports only the thrown message.
         if (err instanceof XcodeFirstLaunchPendingError) throw err;
+        const timedOut = (err as { killed?: boolean }).killed === true;
         throw new FailureError(
-          `Failed to restart iOS app ${bundleId} on ${udid}.`,
+          timedOut
+            ? `Relaunching iOS app ${bundleId} on ${udid} did not finish within 30s.`
+            : `Failed to restart iOS app ${bundleId} on ${udid}.`,
           {
             error_code: FAILURE_CODES.IOS_RESTART_LAUNCH_FAILED,
             failure_stage: "ios_restart_app_simctl_launch",
             failure_area: "tool_server",
-            error_kind: "subprocess",
+            error_kind: timedOut ? "timeout" : "subprocess",
             ...subprocessFailureMetadata(err, "xcrun_simctl"),
           },
           { cause: err instanceof Error ? err : new Error(String(err)) }

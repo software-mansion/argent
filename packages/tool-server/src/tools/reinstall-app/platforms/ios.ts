@@ -44,13 +44,16 @@ export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Rei
         killSignal: SIMCTL_KILL_SIGNAL,
       });
     } catch (err) {
+      const timedOut = (err as { killed?: boolean }).killed === true;
       throw new FailureError(
-        `Failed to install iOS app bundle on ${udid}.`,
+        timedOut
+          ? `Installing the iOS app bundle on ${udid} did not finish within 180s.`
+          : `Failed to install iOS app bundle on ${udid}.`,
         {
           error_code: FAILURE_CODES.IOS_REINSTALL_INSTALL_FAILED,
           failure_stage: "ios_reinstall_app_simctl_install",
           failure_area: "tool_server",
-          error_kind: "subprocess",
+          error_kind: timedOut ? "timeout" : "subprocess",
           ...subprocessFailureMetadata(err, "xcrun_simctl"),
         },
         { cause: err instanceof Error ? err : new Error(String(err)) }

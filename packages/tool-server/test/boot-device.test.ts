@@ -558,6 +558,57 @@ describe("boot-device — iOS path", () => {
     }
   });
 
+  it.each([
+    ["shutdown", 30, "boot"],
+    ["boot", 120, "bootstatus"],
+    ["bootstatus", 480, null],
+  ])(
+    "a timed-out simctl %s fails as a timeout and runs nothing after it",
+    async (sub, secs, next) => {
+      const registry = {
+        resolveService: vi.fn(async () => ({
+          getInitFailure: () => null,
+          reverifyEnv: async () => {},
+        })),
+      } as unknown as Registry;
+      mockExecFile.mockImplementation((...args: unknown[]) => {
+        const [file, argv] = args as [string, string[]];
+        if (file === "xcrun" && argv[1] === sub) {
+          getCallback(args)(
+            Object.assign(new Error(`Command failed: xcrun simctl ${sub}`), {
+              killed: true,
+              signal: "SIGKILL",
+            })
+          );
+          return {} as never;
+        }
+        const stdout = file === "xcode-select" ? `${DEVELOPER_DIR}\n` : "";
+        getCallback(args)(null, { stdout, stderr: "" } as never);
+        return {} as never;
+      });
+
+      const err = await createBootDeviceTool(registry).execute!(
+        {},
+        { udid: "22222222-2222-2222-2222-222222222222", force: true }
+      ).catch((e: unknown) => e);
+
+      expect((err as Error).message).toBe(
+        `simctl ${sub} of iOS simulator 22222222-2222-2222-2222-222222222222 did not finish within ${secs}s.`
+      );
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.BOOT_IOS_SIMCTL_TIMEOUT,
+        failure_stage: `boot_ios_simctl_${sub}`,
+        error_kind: "timeout",
+      });
+      const subs = mockExecFile.mock.calls
+        .filter(([file, args]) => file === "xcrun" && args[0] === "simctl")
+        .map(([, args]) => args[1]);
+      expect(subs.at(-1)).toBe(sub);
+      if (next) expect(subs).not.toContain(next);
+      expect(launchSimulatorAppMock).not.toHaveBeenCalled();
+    }
+  );
+
   it("force=true on a Booted sim triggers shutdown → pre-boot write → boot", async () => {
     const resolveService = vi.fn(async () => ({
       getInitFailure: () => null,

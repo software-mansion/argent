@@ -89,13 +89,16 @@ export function makeIosImpl(
       } catch (err) {
         // Its message says what to do, and a flow step reports only the thrown message.
         if (err instanceof XcodeFirstLaunchPendingError) throw err;
+        const timedOut = (err as { killed?: boolean }).killed === true;
         throw new FailureError(
-          `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,
+          timedOut
+            ? `Launching iOS app ${params.bundleId} on ${params.udid} did not finish within 30s.`
+            : `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,
           {
             error_code: FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED,
             failure_stage: "ios_launch_app_simctl_launch",
             failure_area: "tool_server",
-            error_kind: "subprocess",
+            error_kind: timedOut ? "timeout" : "subprocess",
             ...subprocessFailureMetadata(err, "xcrun_simctl"),
           },
           { cause: err instanceof Error ? err : new Error(String(err)) }
