@@ -854,25 +854,50 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
   }, 20_000);
 
-  it("restart-app leaves an app that asks to save to the agent, but not a prompt open before", async () => {
+  it("restart-app and boot-device force leave an app that asks to save to the agent, also on a retry", async () => {
     const { pid } = await run("boot-device", {
       macosAppPath: appPath,
       macosAppArgs: ["--mode=ask-save"],
     });
-    const err = await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID }).catch(
-      (e: unknown) => e
-    );
-    expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_TERMINATE_FAILED);
-    expect((err as Error).message).toMatch(/shows a prompt.*describe/);
-    expect(fakeAppPids()).toEqual([pid]);
+    const expectRefused = async (attempt: () => Promise<unknown>) => {
+      const err = await attempt().catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_TERMINATE_FAILED);
+      expect((err as Error).message).toMatch(/shows a prompt.*describe/);
+      expect(fakeAppPids()).toEqual([pid]);
+    };
+    const restart = () => run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
+    await expectRefused(restart);
 
-    // The prompt that was open before does not stop the quit, but the agent learns of it.
-    expect(await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
-      note: expect.stringMatching(/force-quit .*a dialog it showed kept it from quitting/),
-    });
-    expect(pidAlive(pid)).toBe(false);
-    expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
+    // The prompt still waits for its answer: asked to quit again, the app would quit without saving.
+    await expectRefused(restart);
+    await expectRefused(() => run("boot-device", { udid: DEVICE_ID, force: true }));
+
+    // The agent cancels the prompt: the next restart asks the app again.
+    await (await macosApp()).call("Prompt.cancel");
+    await expectRefused(restart);
   }, 30_000);
+
+  it("force-quits an app that a dialog of its own keeps from quitting, and notes a quit with a dialog open", async () => {
+    const { pid } = await run("boot-device", {
+      macosAppPath: appPath,
+      macosAppArgs: ["--mode=ignore-terminate", "--alert"],
+    });
+    const restarted = await run("restart-app", {
+      udid: DEVICE_ID,
+      bundleId: BUNDLE_ID,
+      launchArgs: ["--alert"],
+    });
+    expect(restarted.note).toMatch(/force-quit .*a dialog it showed kept it from quitting/);
+    expect(pidAlive(pid)).toBe(false);
+
+    // The dialog may be a save prompt that argent did not ask for: the quit closed it without saving.
+    const second = getTrackedMacosApp(BUNDLE_ID)!.pid;
+    expect(await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID })).toMatchObject({
+      note: expect.stringMatching(/quit .* while it showed a dialog\. Unsaved changes/),
+    });
+    expect(pidAlive(second)).toBe(false);
+    expect(fakeAppPids()).toEqual([getTrackedMacosApp(BUNDLE_ID)!.pid]);
+  }, 20_000);
 
   it.each([
     [

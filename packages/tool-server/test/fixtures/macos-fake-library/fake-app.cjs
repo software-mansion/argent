@@ -3,8 +3,10 @@
 // descriptor and on the listening socket, and turns away a second client while
 // one is connected, as the library does.
 // `--mode=<m>` picks a misbehaviour: crash, silent, bad-protocol,
-// ignore-terminate, ask-save (answers quit with an alert), windowless,
-// minimized, panel-only. Its one window appears
+// ignore-terminate, ask-save (answers quit with an alert; asked to quit again
+// while it shows it, it quits without saving, as AppKit does; `Prompt.cancel`
+// answers it), windowless, minimized, panel-only. `--alert` shows an alert of
+// the app's own from the start. Its one window appears
 // 200 ms after the handshake, as a real app's first window comes after its launch.
 //
 // Network capture: like the real library, it reports requests as CDP events
@@ -111,9 +113,12 @@ function handle(socket, msg) {
       return reply({ result: { windows: windows() } });
     case "Application.terminate":
       reply({ result: { terminating: true } });
-      if (mode === "ask-save") askingToSave = true;
+      if (mode === "ask-save" && !askingToSave) askingToSave = true;
       else if (mode !== "ignore-terminate") setTimeout(() => process.exit(0), 50);
       return;
+    case "Prompt.cancel":
+      askingToSave = false;
+      return reply({ result: {} });
     default:
       return reply({ error: { message: `Unsupported method: ${method}` } });
   }
@@ -123,6 +128,7 @@ function windows() {
   if (mode === "windowless" || Date.now() - startedAt < 200) return [];
   const panel = mode === "panel-only";
   const alert = { number: 2, kind: "alert", isVisible: true, isMiniaturized: false };
+  const ownAlert = { ...alert, number: 3 };
   return [
     {
       number: 1,
@@ -132,6 +138,7 @@ function windows() {
       isReference: !panel,
     },
     ...(askingToSave ? [alert] : []),
+    ...(process.argv.includes("--alert") ? [ownAlert] : []),
   ];
 }
 

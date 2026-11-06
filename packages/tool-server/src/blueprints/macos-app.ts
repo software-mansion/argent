@@ -204,6 +204,20 @@ function shownPrompts(reply: unknown): MacosListedWindow[] {
   );
 }
 
+function quitPromptRefusal(bundleId: string, prompt: MacosListedWindow): FailureError {
+  return macosFailure(
+    prompt.kind === "file-panel"
+      ? `${bundleId} did not quit: it shows a file panel, probably asking whether to keep ` +
+          `a new document. Answer it with file-panel (discard closes the document without ` +
+          `saving), then try again.`
+      : `${bundleId} did not quit: it shows a prompt, probably asking whether to save ` +
+          `changes. Answer it (describe shows it), then try again.`,
+    FAILURE_CODES.MACOS_APP_TERMINATE_FAILED,
+    "macos_app_terminate",
+    "validation"
+  );
+}
+
 function notRunningError(bundleId: string): FailureError {
   return macosFailure(
     `${bundleId} is not running. Start it with boot-device (macosAppPath) or launch-app ` +
@@ -624,6 +638,15 @@ const lifecycles = new Map<
   { key: string; run: Promise<MacosLaunchResult>; settled: Promise<unknown>; pending: boolean }
 >();
 
+/**
+ * The quit of argent's own copy that a prompt holds up, by bundle id: the pid
+ * and the prompts that were open before argent asked the app to quit. Asked
+ * again while it waits for that answer, AppKit quits without saving, so a retry
+ * is refused while the app shows a prompt that was not open before. Module-wide,
+ * as a stop-simulator-server between the two calls disposes the service instance.
+ */
+const heldQuits = new Map<string, { pid: number; openBefore: Set<unknown> }>();
+
 function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () => void } {
   let channel: LibraryChannel | null = null;
   let connecting: Promise<LibraryChannel> | null = null;
@@ -783,9 +806,11 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
 
   /**
    * Quits argent's own copy: `Application.terminate`, then the signals. An app
-   * that answers with a new prompt (save changes?) is left to the agent; a
-   * dialog that was open before does not keep it from being signalled. Returns
-   * a note when the signals stopped it, which a clean quit does not need.
+   * that answers with a new prompt (save changes?) is left to the agent, also
+   * on a retry while that prompt waits for its answer; a dialog that was open
+   * before does not keep it from being signalled. Returns a note when the
+   * signals stopped it or it quit while a dialog was open, which a clean quit
+   * does not need.
    */
   const terminate = async (app: {
     pid: number;
@@ -793,19 +818,29 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   }): Promise<string | undefined> => {
     let ch: LibraryChannel | null;
     let open = new Set<unknown>();
+    let unanswered: MacosListedWindow | undefined;
     try {
       ch = await ensureChannel();
       // The app runs requests one at a time and drops one that waited past its
       // deadline: the list waits for a call in progress, the quit then gets its turn.
       const before = await ch.request("Window.list", {}, TERMINATE_GRACE_MS).catch(() => null);
-      open = new Set(shownPrompts(before).map((w) => w.number));
-      await ch.request("Application.terminate", {}, 2_000);
+      const shown = shownPrompts(before);
+      const held = heldQuits.get(bundleId);
+      unanswered =
+        held?.pid === app.pid ? shown.find((w) => !held.openBefore.has(w.number)) : undefined;
+      if (!unanswered) {
+        open = new Set(shown.map((w) => w.number));
+        await ch.request("Application.terminate", {}, 2_000);
+      }
     } catch (err) {
       // Another tool-server drives the app: quitting it would stop that agent's work.
       if (errorCode(err) === FAILURE_CODES.MACOS_APP_IN_USE) throw err;
       // No channel, or no answer even after the wait: the signals stop it.
       ch = null;
     }
+    // The prompt of argent's last quit still waits for its answer.
+    if (unanswered) throw quitPromptRefusal(bundleId, unanswered);
+    heldQuits.delete(bundleId);
     const left = ch
       ? await pollPidsUntilGone([app.pid], {
           timeoutMs: TERMINATE_GRACE_MS,
@@ -816,17 +851,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       const after = await ch.request("Window.list", {}, 2_000).catch(() => null);
       const prompt = shownPrompts(after).find((w) => !open.has(w.number));
       if (prompt) {
-        throw macosFailure(
-          prompt.kind === "file-panel"
-            ? `${bundleId} did not quit: it shows a file panel, probably asking whether to keep ` +
-                `a new document. Answer it with file-panel (discard closes the document without ` +
-                `saving), then try again.`
-            : `${bundleId} did not quit: it shows a prompt, probably asking whether to save ` +
-                `changes. Answer it (describe shows it), then try again.`,
-          FAILURE_CODES.MACOS_APP_TERMINATE_FAILED,
-          "macos_app_terminate",
-          "validation"
-        );
+        heldQuits.set(bundleId, { pid: app.pid, openBefore: open });
+        throw quitPromptRefusal(bundleId, prompt);
       }
     }
     const { signalled, survivors } = await stopProcesses(left, app.executable, true);
@@ -839,7 +865,14 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         "unknown"
       );
     }
-    if (signalled.length === 0) return undefined;
+    if (signalled.length === 0) {
+      // The dialog may ask about a quit that this tool-server does not know of,
+      // such as another tool-server's: asked to quit again, AppKit quits without saving.
+      return open.size > 0
+        ? `argent quit ${bundleId} (pid ${app.pid}) while it showed a dialog. Unsaved ` +
+            `changes in it may be lost.`
+        : undefined;
+    }
     const reason =
       open.size > 0
         ? "a dialog it showed kept it from quitting"
