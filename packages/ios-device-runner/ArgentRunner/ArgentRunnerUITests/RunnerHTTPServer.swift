@@ -1,8 +1,11 @@
 import Foundation
 import Network
 
-/// Minimal single-purpose HTTP/1.1 endpoint on NWListener: each connection
-/// carries one POSTed JSON command and receives one JSON reply, then closes.
+/// Minimal single-purpose HTTP/1.1 endpoint on NWListener: each request is
+/// one POSTed JSON command and receives one JSON reply. The connection closes
+/// after the reply unless the request asked for `Connection: keep-alive`; then
+/// it waits for the next request. Every usbmux connection costs the host a
+/// round trip to usbmuxd, which is slow when the device is reached remotely.
 ///
 /// The listener is unauthenticated, so it binds loopback-only. The host
 /// reaches the runner through a usbmux forwarded stream that terminates on
@@ -127,8 +130,15 @@ final class RunnerHTTPServer {
 
             switch Self.requestVerdict(in: buffer) {
             case .complete(let body):
+                // The host never pipelines, so the buffer holds exactly this
+                // request and the next one starts from an empty buffer.
+                let keepAlive = Self.requestsKeepAlive(in: buffer)
                 self.dispatch(body) { reply in
-                    self.send(reply, over: connection)
+                    self.send(
+                        reply,
+                        over: connection,
+                        keepAlive: keepAlive && !reply.finishAfterSend
+                    )
                 }
             case .incomplete:
                 self.receive(on: connection, buffered: buffer)
@@ -151,14 +161,19 @@ final class RunnerHTTPServer {
         }
     }
 
-    /// Writes the HTTP reply, closes the connection, and triggers `onFinish`
-    /// for a reply marked `finishAfterSend`.
-    private func send(_ reply: Reply, over connection: NWConnection) {
+    /// Writes the HTTP reply, then either waits for the next request on the
+    /// same connection (`keepAlive`) or closes it. Triggers `onFinish` for a
+    /// reply marked `finishAfterSend`.
+    private func send(
+        _ reply: Reply,
+        over connection: NWConnection,
+        keepAlive: Bool = false
+    ) {
         let head = [
             "HTTP/1.1 \(reply.status) \(reply.status == 200 ? "OK" : "Error")",
             "Content-Type: application/json",
             "Content-Length: \(reply.body.count)",
-            "Connection: close",
+            keepAlive ? "Connection: keep-alive" : "Connection: close",
             "",
             "",
         ].joined(separator: "\r\n")
@@ -175,6 +190,11 @@ final class RunnerHTTPServer {
                         "ARGENT_RUNNER_SEND_FAILED error=%@",
                         String(describing: error)
                     )
+                }
+
+                if keepAlive, error == nil, let self {
+                    self.receive(on: connection, buffered: Data())
+                    return
                 }
 
                 connection.cancel()
@@ -246,6 +266,35 @@ final class RunnerHTTPServer {
                 in: bodyStart..<buffer.index(bodyStart, offsetBy: contentLength)
             )
         )
+    }
+
+    /// True when the request's header block carries `Connection: keep-alive`.
+    /// Only an explicit opt-in keeps the connection open, so a client that
+    /// sends nothing (or `close`) gets the one-request connection it expects.
+    static func requestsKeepAlive(in buffer: Data) -> Bool {
+        guard let headEnd = buffer.range(of: Data("\r\n\r\n".utf8)) else {
+            return false
+        }
+
+        let head = String(
+            decoding: buffer.subdata(
+                in: buffer.startIndex..<headEnd.lowerBound
+            ),
+            as: UTF8.self
+        )
+
+        for line in head.split(separator: "\r\n") {
+            let parts = line.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+
+            if parts[0].trimmingCharacters(in: .whitespaces).lowercased()
+                == "connection"
+            {
+                return parts[1].lowercased().contains("keep-alive")
+            }
+        }
+
+        return false
     }
 
     /// The INVALID_REQUEST body for a request that exceeds the size limit.

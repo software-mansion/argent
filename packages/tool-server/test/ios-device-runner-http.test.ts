@@ -1,7 +1,7 @@
 import http from "node:http";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
-import { postRunnerCommand } from "../src/utils/ios-device/runner-http";
+import { createRunnerKeepAliveAgent, postRunnerCommand } from "../src/utils/ios-device/runner-http";
 import { createDeadline } from "../src/utils/ios-device/usbmux";
 import { IosDeviceTransportError } from "../src/utils/ios-device/usbmux-protocol";
 
@@ -228,4 +228,99 @@ describe("postRunnerCommand over a paused usbmux-style socket", () => {
     expect(error.retryable).toBe(false);
     expect(error.message).toBe(`Runner response exceeded ${MAX_RESPONSE_BYTES} bytes`);
   }, 15_000);
+});
+
+describe("postRunnerCommand with a keep-alive agent", () => {
+  const openAgents: http.Agent[] = [];
+
+  afterEach(() => {
+    for (const agent of openAgents.splice(0)) agent.destroy();
+  });
+
+  /** Counts the usbmux connections the agent asks for. */
+  const countingFactory = (port: number) => {
+    const opened: net.Socket[] = [];
+    return {
+      opened,
+      socketFactory: async () => {
+        const socket = await connectPaused(port);
+        opened.push(socket);
+        return socket;
+      },
+    };
+  };
+
+  const send = (agent: http.Agent, socketFactory: () => Promise<net.Socket>, n: number) =>
+    postRunnerCommand({
+      socketFactory,
+      body: { command: "status", commandId: `argent-${n}` },
+      deadline: createDeadline(5_000),
+      keepAliveAgent: agent,
+    });
+
+  it("reuses one connection for consecutive commands while the runner keeps it alive", async () => {
+    const { port, requests } = await startRunnerServer((request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ ok: true, data: { connection: request.headers.connection } }));
+    });
+    const agent = createRunnerKeepAliveAgent();
+    openAgents.push(agent);
+    const { opened, socketFactory } = countingFactory(port);
+
+    const results = [];
+    for (let n = 1; n <= 3; n += 1) results.push(await send(agent, socketFactory, n));
+
+    expect(opened).toHaveLength(1);
+    expect(requests.map((r) => JSON.parse(r.body).commandId)).toEqual([
+      "argent-1",
+      "argent-2",
+      "argent-3",
+    ]);
+    // The request opts in explicitly; the runner keeps a connection open only on that header.
+    expect(results).toEqual(Array(3).fill({ ok: true, data: { connection: "keep-alive" } }));
+  });
+
+  it("opens a new connection per command when the runner answers Connection: close", async () => {
+    const { port } = await startRunnerServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json", "Connection": "close" });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    const agent = createRunnerKeepAliveAgent();
+    openAgents.push(agent);
+    const { opened, socketFactory } = countingFactory(port);
+
+    for (let n = 1; n <= 3; n += 1) await send(agent, socketFactory, n);
+
+    expect(opened).toHaveLength(3);
+  });
+
+  it("opens a new connection after the runner drops an idle one", async () => {
+    const { port } = await startRunnerServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ ok: true }));
+    });
+    const agent = createRunnerKeepAliveAgent();
+    openAgents.push(agent);
+    const { opened, socketFactory } = countingFactory(port);
+
+    await send(agent, socketFactory, 1);
+    // An idle connection that closes (the runner restarted, a relay dropped it) leaves the pool.
+    opened[0]!.destroy();
+    await new Promise((resolve) => setImmediate(resolve));
+    await send(agent, socketFactory, 2);
+
+    expect(opened).toHaveLength(2);
+  });
+
+  it("passes a usbmux failure from the socket factory through unchanged", async () => {
+    const agent = createRunnerKeepAliveAgent();
+    openAgents.push(agent);
+    const unattached = new IosDeviceTransportError("device-unattached", "gone", {
+      retryable: false,
+    });
+
+    const error = await errorFrom(send(agent, () => Promise.reject(unattached), 1));
+
+    expect(error).toBe(unattached);
+  });
 });
