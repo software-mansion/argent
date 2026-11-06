@@ -224,9 +224,11 @@ async function stopAndroidNative(
 ): Promise<AndroidNativeStopped> {
   const device = resolveDevice(params.udid);
   if (device.platform !== "android") {
-    // The iOS devtools can turn network inspection on for an app, never off.
+    // The iOS devtools and the Mac library can turn network inspection on for an app, never off.
     throw new FailureError(
-      "stop applies to Android only. On iOS, network capture stays on for the app until stop-all-simulator-servers stops this device's services and the app restarts.",
+      device.platform === "macos"
+        ? "stop applies to Android only. On a Mac app, network capture stays on until stop-all-simulator-servers stops this device's services or the tool-server stops."
+        : "stop applies to Android only. On iOS, network capture stays on for the app until stop-all-simulator-servers stops this device's services and the app restarts.",
       {
         error_code: FAILURE_CODES.NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED,
         failure_stage: "native_network_logs_stop",
