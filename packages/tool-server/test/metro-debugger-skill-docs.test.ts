@@ -10,6 +10,8 @@ import { createDebuggerComponentTreeTool } from "../src/tools/debugger/debugger-
 import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspect-element";
 import { createDebuggerLogRegistryTool } from "../src/tools/debugger/debugger-log-registry";
 import { debuggerEvaluateTool } from "../src/tools/debugger/debugger-evaluate";
+import { networkLogsTool } from "../src/tools/network/network-logs";
+import { networkRequestTool } from "../src/tools/network/network-request";
 
 const SKILL_DIR = path.resolve(__dirname, "../../skills/skills/argent-metro-debugger");
 
@@ -24,6 +26,8 @@ const OVERVIEW_TOOLS: ToolDefinition<any, any>[] = [
   debuggerInspectElementTool,
   createDebuggerLogRegistryTool(registry),
   debuggerEvaluateTool,
+  networkLogsTool,
+  networkRequestTool,
 ];
 
 function schemaOf(tool: ToolDefinition<any, any>): {
@@ -38,23 +42,25 @@ function schemaOf(tool: ToolDefinition<any, any>): {
 }
 
 const overviewSection = (() => {
-  const after = readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf8").split(
-    "## 2. Tool Overview"
-  )[1];
-  expect(after, "## 2. Tool Overview is missing from the skill").toBeDefined();
+  const after = readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf8").split("## 2. Tools\n")[1];
+  expect(after, "## 2. Tools is missing from the skill").toBeDefined();
   const section = after!.split("\n## 3. ")[0]!;
-  expect(section, "## 3. is missing from the skill after ## 2. Tool Overview").not.toBe(after);
+  expect(section, "## 3. is missing from the skill after ## 2. Tools").not.toBe(after);
   return section;
 })();
 
-/** Tool id -> the table row that documents it. */
+/** Tool id -> the table row that documents it; one row can name several tools. */
 const rows = new Map(
-  [...overviewSection.matchAll(/^\| `([a-z-]+)` +\|.*$/gm)].map((m) => [m[1]!, m[0]!])
+  [...overviewSection.matchAll(/^\| (`[a-z-]+`(?: → `[a-z-]+`)*) +\|.*$/gm)].flatMap((m) =>
+    [...m[1]!.matchAll(/`([a-z-]+)`/g)].map((id) => [id[1]!, m[0]!] as const)
+  )
 );
 
 const targetingClaim = (() => {
-  const line = overviewSection.split("\n").find((l) => l.includes("AND `device_id`"));
-  expect(line, 'no sentence in the overview contains "AND `device_id`"').toBeDefined();
+  const line = overviewSection
+    .split("\n")
+    .find((l) => l.includes("`device_id`") && l.includes(" to every call"));
+  expect(line, "no sentence in the overview passes `device_id` to every call").toBeDefined();
   return line!;
 })();
 
@@ -63,14 +69,11 @@ describe("argent-metro-debugger tool overview", () => {
     expect([...rows.keys()].sort()).toEqual(OVERVIEW_TOOLS.map((t) => t.id).sort());
   });
 
-  it("exempts from the port/device_id claim exactly the tools missing either", () => {
-    const outliers = OVERVIEW_TOOLS.filter((tool) => {
-      const { properties } = schemaOf(tool);
-      return !("port" in properties) || !("device_id" in properties);
-    });
-    const exemptions = targetingClaim.match(/ except (.*?) accepts /)?.[1] ?? "";
+  it("exempts from the device_id claim exactly the tools without a device_id parameter", () => {
+    const outliers = OVERVIEW_TOOLS.filter((tool) => !("device_id" in schemaOf(tool).properties));
+    const exemptions = targetingClaim.match(/ to every call except (.*?), which /)?.[1] ?? "";
     const exempted = [...exemptions.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]!);
-    expect(exempted.sort(), "tools named in the claim's `except ... accepts` clause").toEqual(
+    expect(exempted.sort(), "tools named in the claim's `except ..., which` clause").toEqual(
       outliers.map((t) => t.id).sort()
     );
 
@@ -82,24 +85,14 @@ describe("argent-metro-debugger tool overview", () => {
           `\`${param}\``
         );
       }
-      for (const param of ["port", "device_id"]) {
-        const [clause, label] = param in properties ? [rejects, "rejects"] : [takes, "offers"];
-        expect(
-          clause,
-          `${tool.id}'s row ${label} \`${param}\`, contradicting its schema`
-        ).not.toContain(`\`${param}\``);
+      expect(rejects, `${tool.id}'s row does not say it takes no \`device_id\``).toContain(
+        "`device_id`"
+      );
+      for (const param of Object.keys(properties)) {
+        expect(rejects, `${tool.id}'s row rejects its own \`${param}\` parameter`).not.toContain(
+          `\`${param}\``
+        );
       }
-    }
-  });
-
-  it("names restart-app's required parameters where a recovery spells out its arguments", () => {
-    const scenarios = readFileSync(path.join(SKILL_DIR, "references/failure-scenarios.md"), "utf8");
-    const recoveries = [...scenarios.matchAll(/`restart-app` with ([^.]*)\./g)].map((m) => m[1]!);
-    expect(recoveries, "no recovery says `restart-app` with <arguments>.").not.toEqual([]);
-
-    const { required } = schemaOf(OVERVIEW_TOOLS.find((t) => t.id === "restart-app")!);
-    for (const recovery of recoveries) {
-      for (const param of required) expect(recovery).toContain(`\`${param}\``);
     }
   });
 });

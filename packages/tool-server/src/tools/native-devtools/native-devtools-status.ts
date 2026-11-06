@@ -12,13 +12,8 @@ import {
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
+import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 
-const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("Bundle ID of the app to check (e.g. com.example.MyApp)"),
-});
-
-type Params = z.infer<typeof zodSchema>;
 type Result =
   | NativeDevtoolsInitFailedResult
   | {
@@ -47,38 +42,39 @@ type Result =
  * clears that record). Only `appConnectionState`'s unconnected path re-applies
  * the env, so for a connected or non-injectable app the record is whatever an
  * earlier call for another bundle left — and a live connection is the better
- * evidence: the process reached this endpoint, so the env was in place.
+ * evidence: the process reached this endpoint, so the env was in place. That
+ * holds even before this service applied the env itself, on a server started
+ * after an earlier one armed the simulator.
  */
 function envSetupReading(api: NativeDevtoolsApi, connected: boolean): boolean {
-  return api.isEnvSetup() && (connected || api.getInitFailure() === null);
+  return connected || (api.isEnvSetup() && api.getInitFailure() === null);
 }
+
+const zodSchema = z.object({
+  udid: z.string().describe("Simulator UDID"),
+  bundleId: z.string().describe("Bundle ID of the app to check (e.g. com.example.MyApp)"),
+});
+
+type Params = z.infer<typeof zodSchema>;
 
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
-  interaction: {
-    startedMsg: ({ params }) => `Checking native inspection for ${params.bundleId}`,
-    completedMsg: ({ params }) => `Checked native inspection for ${params.bundleId}`,
-    failedMsg: ({ params, failureSignal }) =>
-      `Failed to check native inspection for ${params.bundleId}: ${failureSignal.error_code}`,
-  },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   // The "injectable is false" recovery sentence inlines NON_INJECTABLE_RECOVERY
   // verbatim (pinned by native-devtools-status.test.ts): the description must stay
   // a plain literal for scripts/extract-tools.mjs to read statically.
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
-Use when you need to verify native devtools readiness on iOS before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
+Use when verifying readiness on iOS, before app-scoped native hierarchy tools or native-network-logs.
 
 Returns { envSetup, appRunning, connected, requiresRestart, state, message, nextLaunchWillBeInjected, injectable }:
 - envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment
 - appRunning: the target bundle currently has a running UIKit process on the simulator
 - connected: the dylib is active in the current running process for this bundleId
-- requiresRestart: the app is already running and a fresh process would reach this simulator's devtools endpoint where the current one does not: it carries no argent injection, was pointed at an earlier tool-server's listener, or could not be inspected to tell. Always false for a non-injectable app, and false when state is unregistered or connecting, where a relaunch cannot help.
-- state: why devtools are or aren't live, measured from the running process. "connected"; "not_running"; "stale_process" (the process cannot reach this simulator's devtools endpoint, launched either before argent's instrumentation was in place or against an earlier tool-server's listener, so restart-app fixes it); "unregistered" (the process IS injected and pointed at this simulator's devtools endpoint yet the service never registered it, so restarting the app cannot help); "connecting" (the process IS injected but launched moments ago and is still connecting, so waiting is what helps); "indeterminate" (the process could not be inspected). Omitted when injectable is false, which is terminal on its own.
+- requiresRestart: the app is running and a fresh process may reach this simulator's devtools endpoint where the current one does not: true exactly when state is stale_process or indeterminate. Always false for a non-injectable app.
+- state: why devtools are or aren't live, measured from the running process. "connected"; "not_running"; "stale_process" (the process cannot reach this simulator's devtools endpoint: it launched before argent's instrumentation was in place or against an earlier tool-server's listener); "unregistered" (the process IS injected and pointed at this endpoint, yet the service never registered it); "connecting" (the process IS injected, launched moments ago and is still connecting); "indeterminate". Omitted when injectable is false.
 - message: the remedy for that state, in full, including for a state not listed above. Omitted when connected or non-injectable. Prefer it over inferring one from the booleans: it is the only field that can tell you to stop restarting the app.
 - nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place (always false for a non-injectable app)
-- injectable: whether this app is a supported target for Argent native devtools. Apple system apps (bundle ids under com.apple.) are not: they are never the app under test, so the native tools refuse to read one.
+- injectable: false for Apple system apps (bundle ids under com.apple.), which the native tools refuse to read.
 
-Call this before using app-scoped native hierarchy tools or native-network-logs on iOS. On Android, call native-network-logs directly: it reports its own status, and this tool does not run there.
 If injectable is false: treat this as TERMINAL. The app is not a supported native-devtools target, and no relaunch changes that. Do NOT restart/retry. Use the standard \`describe\` tool (its accessibility path reads the screen without injection) or \`screenshot\` (then interact by coordinate). Do not fall back to the native-devtools feature tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point): they run the same injection precheck and fail with the same non-injectable error.
 If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app once, then proceed with the native feature. Read state before acting on a second such reading. Indeterminate reaches this rule too, and its line below bounds it at that one restart.
@@ -87,8 +83,15 @@ If state is connecting: do NOT restart the app. Launching it is what starts the 
 If state is indeterminate: the process could not be inspected, so restart-app is worth one attempt. If this call still reports it after that restart, do NOT restart the app again: the service is stale rather than the app uninjected, so restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. Remote simulators can never inspect the process, so this is the only unconnected state a running app reaches there.
 Returns { status: "init_failed", message, attempts } instead when the simulator's native-devtools environment failed to initialize.
 Fails if the simulator server is not running for the given UDID.`,
-  readOnly: true,
   zodSchema,
+  readOnly: true,
+  interaction: {
+    startedMsg: ({ params }) => `Checking native inspection for ${params.bundleId}`,
+    completedMsg: ({ params }) => `Checked native inspection for ${params.bundleId}`,
+    failedMsg: ({ params, failureSignal }) =>
+      `Failed to check native inspection for ${params.bundleId}: ${failureSignal.error_code}`,
+  },
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
@@ -117,6 +120,8 @@ Fails if the simulator server is not running for the given UDID.`,
         // IS corrective) over a raw subprocess error. This branch runs no env
         // work of its own, so a sim that died after the construction-time latch
         // records nothing — there the probe's error is the honest answer.
+        // The refusal is neither: re-booting cannot help, and is itself refused.
+        if (err instanceof XcodeFirstLaunchPendingError) throw err;
         const failure = api.getInitFailure();
         if (failure) return buildInitFailedResult(params.udid, failure);
         throw err;
@@ -131,16 +136,33 @@ Fails if the simulator server is not running for the given UDID.`,
       };
     }
 
-    const blocked = await precheckNativeDevtools(api, params.udid);
+    let blocked: NativeDevtoolsInitFailedResult | null;
+    try {
+      blocked = await precheckNativeDevtools(api, params.udid);
+    } catch (err) {
+      // The 2-arg precheck has no app to make an exception for, so it refuses
+      // while Xcode's component install is pending even when the app asked
+      // about is connected. That app is read over its own socket, which needs
+      // no simctl, and `appConnectionState` below answers it before any simctl
+      // call. Answering the refusal instead would tell the agent to wait for
+      // the install while the native tools serve this very app.
+      if (!(err instanceof XcodeFirstLaunchPendingError) || !api.isConnected(params.bundleId)) {
+        throw err;
+      }
+      blocked = null;
+    }
     if (blocked) return blocked;
 
     // Re-applies the launchd env on its way to a verdict, repairing (and
     // recording) an out-of-band reboot that wiped DYLD_INSERT_LIBRARIES — which
     // is why envSetup / nextLaunchWillBeInjected are read after it rather than
     // off a latch stamped before.
-    const measured = await api
-      .appConnectionState(params.bundleId)
-      .catch(() => "indeterminate" as const);
+    const measured = await api.appConnectionState(params.bundleId).catch((err: unknown) => {
+      // The refusal is not an unmeasured app, and the failure fallback below would
+      // read it as a dead simulator and prescribe a reboot.
+      if (err instanceof XcodeFirstLaunchPendingError) throw err;
+      return "indeterminate" as const;
+    });
     const connected = measured === "connected";
 
     // Running-ness comes out of the same measurement rather than a second
