@@ -288,7 +288,10 @@ describe("GET /artifacts/:id", () => {
     }
   });
 
-  it("answers a plain JSON 500 when the file cannot be read", async () => {
+  // Mode bits do not bite on Windows, nor for uid 0.
+  const enforcesMode = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.skipIf(!enforcesMode)("answers a plain JSON 500 when the file cannot be read", async () => {
     const dir = await mkdtemp(join(tmpdir(), "artifact-unreadable-"));
     try {
       const filePath = join(dir, "img.png");
