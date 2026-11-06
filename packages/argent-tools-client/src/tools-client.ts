@@ -23,6 +23,7 @@ import {
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
+  callerPath,
   prepareFileInputs,
   applyClientFileDirectives,
   FILE_INPUT_MARKER,
@@ -126,6 +127,13 @@ export interface CreateToolsClientOptions {
    * secrets is checked against.
    */
   headers?: () => Record<string, string>;
+  /**
+   * Refuse a relative `project_root` instead of resolving it against
+   * `process.cwd()`. For a client whose working directory need not be the
+   * project, such as the MCP server, which runs where the editor started it:
+   * a recording would be saved there without any error.
+   */
+  refuseRelativeProjectRoot?: boolean;
 }
 
 function authHeaders(token: string | undefined): Record<string, string> {
@@ -442,6 +450,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Throws when `args` sets a relative `project_root` that a file input of `meta` resolves. */
+function assertAbsoluteProjectRoot(meta: ToolMeta | null, args: unknown): void {
+  const root = isRecord(args) ? args.project_root : undefined;
+  if (typeof root !== "string" || callerPath(root) === root) return;
+  if (!meta?.fileInputs?.some((spec) => spec.path.includes("${project_root}"))) return;
+  throw new Error(
+    `project_root must be an absolute path (got "${root}"). Pass the absolute path to the ` +
+      `project root directory - the same cwd the calling agent is working in.`
+  );
+}
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -509,6 +528,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     let finalArgs = canonicalToolArgs(name, args);
     const tools = await fetchTools({ signal: opts?.signal });
     const meta = findTool(tools, name);
+    if (options.refuseRelativeProjectRoot) assertAbsoluteProjectRoot(meta, finalArgs);
     // An older tool-server reads saved tests only from `.argent/flows/`, and
     // lists its tools by their `flow-*` ids only.
     const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));

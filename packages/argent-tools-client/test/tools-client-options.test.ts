@@ -429,3 +429,58 @@ describe("createToolsClient options", () => {
     expect(streamed).toEqual({ data: { ok: true }, outputHint: "image" });
   });
 });
+
+describe("refuseRelativeProjectRoot", () => {
+  const recordBodies = () =>
+    requests
+      .filter((r) => r.url === "/tools/record")
+      .map((r) => JSON.parse(r.body) as Record<string, unknown>);
+
+  it("refuses a relative project_root without calling the tool", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectRoot: true,
+    });
+
+    await expect(callTool("record", { project_root: "." })).rejects.toThrow(
+      'project_root must be an absolute path (got ".")'
+    );
+    expect(recordBodies()).toEqual([]);
+  });
+
+  it("sends an absolute project_root", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectRoot: true,
+    });
+
+    await callTool("record", { project_root: TEST_HOME });
+
+    expect(recordBodies()).toEqual([
+      { project_root: { __argentFileInput: true, path: TEST_HOME } },
+    ]);
+  });
+
+  it("leaves project_root alone for a tool whose file inputs do not name it", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectRoot: true,
+    });
+
+    await expect(callTool("slow", { project_root: "." })).resolves.toMatchObject({
+      data: { ok: true },
+    });
+  });
+
+  it("resolves a relative project_root against the cwd without the option", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    await callTool("record", { project_root: "." });
+
+    expect(recordBodies()).toEqual([
+      { project_root: { __argentFileInput: true, path: process.cwd() } },
+    ]);
+  });
+});
