@@ -4,10 +4,13 @@ import {
   IOS_NATIVE_REQUEST_ID,
   createIosNetworkRecords,
   findIosNativeRecord,
+  liveIosNetworkCaptureDevices,
+  liveIosNetworkCaptures,
   registerIosNetworkCaptures,
   type ClosedConnectionCheck,
   type IosNetworkRecordStore,
 } from "../src/blueprints/ios-network-records";
+import { rememberDeviceAlias, resetDeviceAliases } from "../src/utils/debugger/device-alias";
 import {
   MAX_RECORDS,
   NOT_RECONNECTED,
@@ -35,6 +38,7 @@ const unregisters: Array<() => void> = [];
 
 afterEach(() => {
   for (const unregister of unregisters.splice(0)) unregister();
+  resetDeviceAliases();
   vi.restoreAllMocks();
 });
 
@@ -718,5 +722,64 @@ describe("iOS native network records: events that name no open request", () => {
     expect(store.records(8081)[0]!.state).toBe("pending");
     expect(store.hasOpenRecords(CONN)).toBe(true);
     expect(store.hasOpenRecords(OTHER_CONN)).toBe(false);
+  });
+});
+
+describe("iOS native network capture lookups", () => {
+  const EXT = `ext:acme-1:${UDID}`;
+  const LOGICAL = "metro-logical-1";
+  /** Sorts before UDID. */
+  const OTHER_UDID = "0F1E2D3C-0000-4000-8000-00000000BBBB";
+
+  function captureOn(udid: string, bundleIds: string[]): () => void {
+    const unregister = registerIosNetworkCaptures({
+      udid,
+      bundleIds: new Set(bundleIds),
+      stores: new Map(),
+    });
+    unregisters.push(unregister);
+    return unregister;
+  }
+
+  it("finds a device's captures by its udid, an ext: id with that udid behind it, or a Metro logicalDeviceId aliased to it", () => {
+    captureOn(UDID, [BUNDLE]);
+    rememberDeviceAlias(LOGICAL, UDID);
+
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptures(EXT)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptures(LOGICAL)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptures(OTHER_UDID)).toEqual([]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([UDID]);
+  });
+
+  it("finds a service registered under an ext: id by the udid behind it, and names the device by that ext: id", () => {
+    captureOn(EXT, [BUNDLE]);
+    rememberDeviceAlias(LOGICAL, EXT);
+
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptures(EXT)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptures(LOGICAL)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([EXT]);
+    expect(liveIosNetworkCaptureDevices("com.example.other")).toEqual([]);
+  });
+
+  it("sorts and de-duplicates across services, and drops a service from both lookups once it is unregistered", () => {
+    const first = captureOn(UDID, ["com.example.zeta", BUNDLE]);
+    const second = captureOn(UDID, [BUNDLE, "com.example.alpha"]);
+    captureOn(OTHER_UDID, [BUNDLE]);
+
+    expect(liveIosNetworkCaptures(UDID)).toEqual(["com.example.alpha", BUNDLE, "com.example.zeta"]);
+    expect(liveIosNetworkCaptures(OTHER_UDID)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([OTHER_UDID, UDID]);
+    expect(liveIosNetworkCaptureDevices("com.example.alpha")).toEqual([UDID]);
+
+    second();
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE, "com.example.zeta"]);
+    expect(liveIosNetworkCaptureDevices("com.example.alpha")).toEqual([]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([OTHER_UDID, UDID]);
+
+    first();
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([OTHER_UDID]);
   });
 });

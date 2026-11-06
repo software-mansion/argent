@@ -300,6 +300,42 @@ describe("a provider that lends its native-devtools agent", () => {
   });
 
   /**
+   * The stand-in agent answers any CDP request, so only the methods it
+   * received show that capture was really asked for over the lent connection.
+   */
+  it("arms capture by sending Network.enable over the lent connection", async () => {
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+    const cdpMethods = () =>
+      agent.received
+        .filter((message) => message.type === "CDP")
+        .map((message) => message.payload.method);
+
+    expect(cdpMethods()).not.toContain("Network.enable");
+
+    const listing = (await nativeNetworkLogsTool.execute(
+      { nativeDevtools: instance.api },
+      { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+    )) as { armed: boolean; header: string; status: string };
+
+    expect(cdpMethods()).toContain("Network.enable");
+    expect(listing.status).toBe("ok");
+    expect(listing.armed).toBe(true);
+    expect(listing.header).toMatch(/^ios-native: armed, 0 requests/);
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  /**
    * We are the client on this path, so nothing re-dials on its own. Without a
    * terminated signal the registry would keep serving this instance and its
    * dead socket for the rest of the session, and an app relaunch would never

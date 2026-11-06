@@ -23,7 +23,13 @@ describe("native-network-logs before the app is instrumented", () => {
     __primeDepCacheForTests(["xcrun"]);
   });
 
-  it("registers network capture before answering restart_required", async () => {
+  it.each([
+    { status: "restart_required", message: "restart the app" },
+    { status: "service_stale", message: "restart the tool-server" },
+    { status: "connect_pending", message: "wait and retry" },
+  ] as const)("registers network capture before answering $status", async (block) => {
+    const { precheckNativeDevtools } = await import("../src/blueprints/native-devtools");
+    vi.mocked(precheckNativeDevtools).mockResolvedValueOnce(block);
     const activateNetworkInspection = vi.fn();
     const api = { activateNetworkInspection } as any;
     const { createNativeNetworkLogsTool } =
@@ -36,8 +42,8 @@ describe("native-network-logs before the app is instrumented", () => {
       { udid: UDID, bundleId: "com.example.app", limit: 50, clear: false }
     );
 
-    expect(result).toMatchObject({ status: "restart_required" });
-    // So the relaunched app starts capturing at its handshake.
+    expect(result).toEqual(block);
+    // So the app starts capturing as soon as it connects, whatever the block asked for.
     expect(activateNetworkInspection).toHaveBeenCalledWith("com.example.app");
   });
 

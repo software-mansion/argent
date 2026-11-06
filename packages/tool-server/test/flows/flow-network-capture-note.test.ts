@@ -230,12 +230,18 @@ const IOS_UDID = "00000000-0000-0000-0000-0000000000cd";
 /**
  * restart-app and launch-app answer like the iOS simulator tools do while
  * native network capture is on for APP, the pid changing with each launch;
- * the native devtools the iOS launch gate waits for are connected.
+ * the native devtools the iOS launch gate waits for are connected. Launch `n`
+ * returns `notes[n]` when given, otherwise the note of an armed capture.
  */
-function iosRegistry(): { registry: Registry; launches: () => number } {
+function iosRegistry(notes?: string[]): { registry: Registry; launches: () => number } {
   let launches = 0;
-  const note = () =>
-    `native network capture is armed for ${APP} (pid ${4101 + 87 * launches++}); stop-all-simulator-servers for this device, then restart-app, ends it`;
+  const note = () => {
+    const n = launches++;
+    return (
+      notes?.[n] ??
+      `native network capture is armed for ${APP} (pid ${4101 + 87 * n}); stop-all-simulator-servers for this device, then restart-app, ends it`
+    );
+  };
   const registry = {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
@@ -295,5 +301,29 @@ describe("flow-execute reports native network capture on iOS simulator launches"
     expect(result.steps[0]!.result).toMatchObject({
       networkCapture: result.steps[0]!.warning,
     });
+  });
+
+  it("warns again when a later launch's note differs, and not when only the pid changes", async () => {
+    const pending = (pid: number) =>
+      `native network capture is on for ${APP}, and its new process (pid ${pid}) has not acknowledged Network.enable yet; native-network-logs shows when it is armed`;
+    const armed = (pid: number) =>
+      `native network capture is armed for ${APP} (pid ${pid}); stop-all-simulator-servers for this device, then restart-app, ends it`;
+    const notes = [pending(4101), armed(4188), armed(4275), pending(4362)];
+    await writeFlow("ios-notes-change", {
+      executionPrerequisite: "",
+      steps: notes.map(() => ({ kind: "launch" as const, app: APP })),
+    });
+    const { registry, launches } = iosRegistry(notes);
+
+    const result = await run("ios-notes-change", registry, IOS_UDID);
+
+    expect(launches()).toBe(4);
+    expect(outline(result)).toEqual([
+      "launch:pass!",
+      "launch:pass!",
+      "launch:pass",
+      "launch:pass!",
+    ]);
+    expect(result.steps.map((s) => s.warning)).toEqual([notes[0], notes[1], undefined, notes[3]]);
   });
 });

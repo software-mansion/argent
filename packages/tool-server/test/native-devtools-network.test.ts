@@ -64,7 +64,14 @@ function appGone(): void {
 
 interface Frame {
   type: string;
-  payload: { id?: number; method?: string; params?: unknown; result?: unknown; bundleId?: string };
+  payload: {
+    id?: number;
+    method?: string;
+    params?: unknown;
+    result?: unknown;
+    error?: { message: string };
+    bundleId?: string;
+  };
 }
 
 interface FakeApp {
@@ -242,6 +249,35 @@ describe("native-devtools network capture", () => {
     app.reply(enableRequests(app)[0]!.payload.id!);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(api.isConnected(BUNDLE)).toBe(true);
+  });
+
+  it("keeps an app that answers Network.enable with an error connected and unarmed, and asks again on the next call", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    const arming = api.activateNetworkInspection(BUNDLE);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    app.send({
+      type: "CDP",
+      payload: {
+        id: enableRequests(app)[0]!.payload.id,
+        error: { message: "capture unavailable" },
+      },
+    });
+    await expect(arming).resolves.toBe(false);
+
+    expect(api.isConnected(BUNDLE)).toBe(true);
+    expect(api.networkRecords(BUNDLE)!.state()).toEqual({
+      armed: false,
+      note: `the agent did not enable capture (native-devtools ${BUNDLE}: Network.enable failed: capture unavailable); the next call asks again`,
+    });
+
+    const again = api.activateNetworkInspection(BUNDLE);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(2));
+    app.reply(enableRequests(app)[1]!.payload.id!, {});
+    await expect(again).resolves.toBe(true);
+    expect(api.networkRecords(BUNDLE)!.state()).toEqual({ armed: true });
   });
 
   it("still answers view reads while capture replies and events flow, and drops a reply with an unknown id", async () => {
