@@ -239,9 +239,10 @@ export class Registry {
           : new ToolExecutionError(toolId, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
-      // An unclassified failure after the caller's abort is the abort; a tool's
-      // own classification still wins.
-      if (options?.signal?.aborted && !getFailureSignal(error)) {
+      // After the caller's abort, a failure the tool did not classify, or one
+      // that grew out of an AbortError, is the abort; any other classification
+      // stands.
+      if (options?.signal?.aborted && (!getFailureSignal(error) || causedByAbort(error))) {
         withFailureSignal(wrappedError, CANCELLED_SIGNAL);
       }
       const failureSignal = getFailureSignalOrFallback(wrappedError);
@@ -488,6 +489,15 @@ export class Registry {
     node.dependents.clear();
     this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
+}
+
+function causedByAbort(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; current instanceof Error && depth < 16; depth++) {
+    if (current.name === "AbortError") return true;
+    current = current.cause;
+  }
+  return false;
 }
 
 const CANCELLED_SIGNAL = {

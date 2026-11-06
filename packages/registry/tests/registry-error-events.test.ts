@@ -266,6 +266,39 @@ describe("Registry — failure signals", () => {
     expect(getFailureSignal(emittedError)).toEqual(ownSignal);
   });
 
+  it("classifies an abort the tool wrapped in its own failure as cancelled", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "fetching-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        const abortError = new Error("This operation was aborted");
+        abortError.name = "AbortError";
+        throw withFailureSignal(new Error("request timed out", { cause: abortError }), {
+          error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+          failure_stage: "simulator_server_network",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        });
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("fetching-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("request timed out");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED
+    );
+  });
+
   it("keeps the tool's own classification when the caller did not abort", async () => {
     const registry = new Registry();
     registry.registerTool({
