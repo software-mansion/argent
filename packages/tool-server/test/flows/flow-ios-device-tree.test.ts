@@ -271,4 +271,71 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
     // Siblings outside the scroller are never clipped by it.
     expect(findAll(tree, { text: "Continue" })).toHaveLength(1);
   });
+
+  // Documented in reference/e2e-yaml.mdx.
+  it("reads an unlabelled element's value, so '^$' fails on a switch", async () => {
+    const tree = await flowTree([
+      node({ index: 0, depth: 0, type: "Application" }),
+      node({
+        index: 1,
+        depth: 1,
+        parentIndex: 0,
+        type: "Switch",
+        identifier: "notifications",
+        value: "1",
+        rect: { x: 16, y: 120, width: 51, height: 31 },
+      }),
+    ]);
+    const sw = findAll(tree, { identifier: "notifications" });
+    expect(assertText(sw[0]!)).toBe("1");
+    expect(evaluateCondition("text", "^$", sw, "matches")).toBe(false);
+  });
+
+  // Documented in reference/e2e-yaml.mdx.
+  it("never passes '^$' on an empty, unlabelled text, secure, search field or text view", async () => {
+    const tree = await flowTree([
+      node({ index: 0, depth: 0, type: "Application" }),
+      node({
+        index: 1,
+        depth: 1,
+        parentIndex: 0,
+        type: "TextField",
+        identifier: "email",
+        value: "",
+        rect: { x: 16, y: 120, width: 358, height: 44 },
+      }),
+      node({
+        index: 2,
+        depth: 1,
+        parentIndex: 0,
+        type: "TextView",
+        identifier: "notes",
+        value: "",
+        rect: { x: 16, y: 200, width: 358, height: 88 },
+      }),
+      node({
+        index: 3,
+        depth: 1,
+        parentIndex: 0,
+        type: "SecureTextField",
+        identifier: "password",
+        value: "",
+        rect: { x: 16, y: 300, width: 358, height: 44 },
+      }),
+      node({
+        index: 4,
+        depth: 1,
+        parentIndex: 0,
+        type: "SearchField",
+        identifier: "search",
+        value: "",
+        rect: { x: 16, y: 360, width: 358, height: 44 },
+      }),
+    ]);
+    for (const id of ["email", "notes", "password", "search"]) {
+      expect(evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches")).toBe(
+        false
+      );
+    }
+  });
 });

@@ -99,6 +99,72 @@ describe("describe full-hierarchy adapter", () => {
     expect(tree.children).toHaveLength(5);
   });
 
+  // Documented in reference/e2e-yaml.mdx.
+  it("never passes '^$' on an empty single-line or multiline text field", () => {
+    const view = (className: string, identifier: string, y: number) => ({
+      className,
+      identifier,
+      windowFrame: { x: 0, y, width: 400, height: 40 },
+      children: [],
+    });
+    const tree = adaptFullHierarchyToDescribeResult({
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            view("UITextField", "single", 100),
+            view("UITextView", "multi", 200),
+            view("RCTUITextView", "rn-multi", 300),
+            view("UILabel", "label", 400),
+          ],
+        },
+      ],
+    });
+    const emptyPasses = (id: string) =>
+      evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches");
+    expect(["single", "multi", "rn-multi", "label"].map(emptyPasses)).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  // Documented in reference/e2e-yaml.mdx.
+  it("reads a container whose only text is off screen as empty, so '^$' passes", () => {
+    const container = (
+      identifier: string,
+      y: number,
+      label: { width: number; height: number }
+    ) => ({
+      className: "UIView",
+      identifier,
+      windowFrame: { x: 0, y, width: 400, height: 40 },
+      children: [
+        { className: "UILabel", label: "Hello", windowFrame: { x: 0, y, ...label }, children: [] },
+      ],
+    });
+    const tree = adaptFullHierarchyToDescribeResult({
+      windows: [
+        {
+          className: "UIWindow",
+          frame: SCREEN,
+          windowFrame: SCREEN,
+          children: [
+            container("offscreen", 100, { width: 0, height: 0 }),
+            container("plain", 200, { width: 400, height: 40 }),
+          ],
+        },
+      ],
+    });
+    const emptyPasses = (id: string) =>
+      evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches");
+    expect(emptyPasses("offscreen")).toBe(true);
+    expect(emptyPasses("plain")).toBe(false);
+  });
+
   it("drops hidden / transparent subtrees", () => {
     const raw = payload();
     raw.windows[0]!.children[0]!.children[0] = {

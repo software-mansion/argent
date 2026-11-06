@@ -122,6 +122,59 @@ describe("adaptChromiumTreeForFlows", () => {
     expect(assertText(pw[0]!)).not.toContain("hunter2");
   });
 
+  it("reads an empty password input as [password], also when labelled, so '^$' fails on it", () => {
+    // The walker gives an empty, unlabelled password input no text at all.
+    const frame = { x: 0.1, y: 0.1, width: 0.5, height: 0.04 };
+    const tree = adaptChromiumTreeForFlows(
+      el({
+        role: "html",
+        children: [
+          el({ role: "input", identifier: "pw", password: true, clickable: true, frame }),
+          el({
+            role: "input",
+            identifier: "pw-labelled",
+            label: "Password",
+            password: true,
+            clickable: true,
+            frame,
+          }),
+        ],
+      })
+    );
+    const pw = findAll(tree, { identifier: "pw" });
+    expect(pw[0]!.label).toBe("[password]");
+    expect(evaluateCondition("text", "^$", pw, "matches")).toBe(false);
+    expect(assertText(findAll(tree, { identifier: "pw-labelled" })[0]!)).toBe("[password]");
+  });
+
+  // Documented in reference/e2e-yaml.mdx.
+  it("reads a container whose text is all in identified or off-screen children as empty, so '^$' passes", () => {
+    const row = { x: 0.1, y: 0.1, width: 0.5, height: 0.04 };
+    const tree = adaptChromiumTreeForFlows(
+      el({
+        role: "html",
+        children: [
+          el({
+            identifier: "box",
+            frame: row,
+            children: [el({ identifier: "msg", value: "Hi", frame: row })],
+          }),
+          el({ identifier: "plain", frame: row, children: [el({ value: "Hi", frame: row })] }),
+          el({
+            identifier: "offscreen",
+            frame: row,
+            children: [el({ value: "Hi", frame: { x: 0, y: 0, width: 0, height: 0 } })],
+          }),
+        ],
+      })
+    );
+    const emptyPasses = (id: string) =>
+      evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches");
+    expect(emptyPasses("box")).toBe(true);
+    expect(emptyPasses("plain")).toBe(false);
+    expect(emptyPasses("offscreen")).toBe(true);
+  });
+
   it("never emits the root as a leaf, even when <html> carries an identifier", () => {
     // The walker reads id/data-testid off every element including <html>; the
     // iOS/Android adapters iterate children only and never project their root.
