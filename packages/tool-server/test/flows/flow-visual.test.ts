@@ -204,7 +204,7 @@ describe("runSnapshot baselines", () => {
   });
 
   it("captures at full resolution, kept out of the agent context", async () => {
-    // The differ compares only equal-size images, so any other scale misses
+    // The baseline key carries the capture's WxH, so any other scale misses
     // every baseline committed at full resolution.
     vi.mocked(invokeOnDevice).mockClear();
     await runSnapshot(env, opts());
