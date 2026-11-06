@@ -909,6 +909,37 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([text("Qty"), area, text("items")])).toBe("Qty typed items");
   });
 
+  it("reads an <svg> in an aria-labelledby target as Chrome names it", () => {
+    // The class is what Object.prototype.toString reports: a plain SVGElement is an
+    // element SVG does not know.
+    const svg = (tag: string, kids: unknown[], kind = "SVGGraphicsElement") => {
+      const node = elementNode(tag, kids, {
+        namespaceURI: "http://www.w3.org/2000/svg",
+        [Symbol.toStringTag]: kind,
+      });
+      (node.__style as Record<string, string>).display = "inline";
+      return node;
+    };
+    const unknown = (kids: unknown[]) => svg("select", kids, "SVGElement");
+    const pick = (kids: unknown[], style?: Record<string, string>) =>
+      labelledBy([text("Pick"), svg("svg", kids), text("end")], style);
+    expect(pick([unknown([unknown([text("Opt")])])])).toBe("Pick end");
+    expect(pick([unknown([])])).toBe("Pick end");
+    expect(pick([text(" ")])).toBe("Pick end");
+    expect(pick([])).toBe("Pickend");
+    expect(pick([svg("metadata", [text("md")], "SVGMetadataElement")])).toBe("Pick end");
+    expect(pick([svg("script", [text("var a")], "SVGScriptElement")])).toBe("Pick end");
+    expect(pick([svg("style", [text(".a{}")], "SVGStyleElement"), svg("text", [text("T")])])).toBe(
+      "Pick T end"
+    );
+    expect(pick([svg("circle", [text("craw")])])).toBe("Pick craw end");
+    // A hidden target reads unrendered SVG content too, but never an SVG <style>.
+    const none = { display: "none" };
+    expect(pick([unknown([text("selraw")])], none)).toBe("Pick selraw end");
+    expect(pick([svg("script", [text("var a")], "SVGScriptElement")], none)).toBe("Pick var a end");
+    expect(pick([svg("style", [text(".x{}")], "SVGStyleElement")], none)).toBe("Pick end");
+  });
+
   it("parts words at every element under display:none, which has no inline layout", () => {
     const span = (t: string) => elementNode("span", [text(t)]);
     const none = { display: "none" };

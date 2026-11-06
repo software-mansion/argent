@@ -175,12 +175,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // An aria-labelledby target's text (text and CDATA), read by a subset of Chrome's
   // accessible-name rules: an aria-label, or an <img>'s alt, stands in for an element's
-  // content, a <select> or <textarea> reads as it shows, a non-inline element or a <br>
-  // parts the words around it, and script, style and noscript text never counts. A shown
-  // target leaves out its display:none, visibility:hidden and aria-hidden subtrees; a
-  // hidden one reads them all, and there a script-like element parts words, as does every
-  // element under display:none, which has no layout to run inline in. An <input>'s value
-  // is not read. Iterative: the target's depth has no MAX_DEPTH bound.
+  // content, a <select> or <textarea> reads as it shows, a non-inline element, an <svg>
+  // with content or a <br> parts the words around it, and script, style and noscript text
+  // never counts. A shown target leaves out its display:none, visibility:hidden and
+  // aria-hidden subtrees, and SVG content SVG never renders (an element it does not know,
+  // <metadata>, <script>); a hidden one reads them all, and there a script-like element
+  // parts words, as does every element under display:none, which has no layout to run
+  // inline in. An <input>'s value is not read. Iterative: the target's depth has no
+  // MAX_DEPTH bound.
   function labelText(root) {
     const own = controlText(root) ?? altText(root);
     if (own !== null) return own;
@@ -227,11 +229,18 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         continue;
       }
       const style = window.getComputedStyle(node);
+      const ns = getNamespaceURI.call(node);
+      const tag = getLocalName.call(node);
+      const svg = ns === "http://www.w3.org/2000/svg";
       if (
         shown &&
         (style.display === "none" ||
           style.visibility === "hidden" ||
-          getAttr.call(node, "aria-hidden") === "true")
+          getAttr.call(node, "aria-hidden") === "true" ||
+          (svg &&
+            (tag === "metadata" ||
+              tag === "script" ||
+              Object.prototype.toString.call(node) === "[object SVGElement]")))
       ) {
         continue;
       }
@@ -241,9 +250,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         continue;
       }
       const rawText =
-        getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml" &&
-        /^(script|style|noscript)$/.test(getLocalName.call(node));
-      if (style.display !== "inline" || (rawText && !shown) || unrendered) {
+        (ns === "http://www.w3.org/1999/xhtml" && /^(script|style|noscript)$/.test(tag)) ||
+        (svg && tag === "style");
+      if (
+        style.display !== "inline" ||
+        (svg && tag === "svg" && hasContent(node)) ||
+        (rawText && !shown) ||
+        unrendered
+      ) {
         s += " ";
         stack.push(SPACE);
       }
@@ -254,6 +268,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (!rawText) pushChildren(node);
     }
     return s.replace(WHITESPACE, " ");
+  }
+
+  // Whether a node has an element or non-blank text child.
+  function hasContent(node) {
+    for (const child of getChildNodes.call(node)) {
+      const type = getNodeType.call(child);
+      if (type === 1 || ((type === 3 || type === 4) && getNodeValue.call(child).trim())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // What a <select> or <textarea> shows, which its child text is not; null for others.
