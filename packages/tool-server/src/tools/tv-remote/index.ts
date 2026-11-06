@@ -75,7 +75,7 @@ export function createTvRemoteTool(registry: Registry): ToolDefinition<Params, T
     id: "tv-remote",
     description: `Press a TV remote / D-pad button (or a whole path of them) on a TV device: Apple TV (tvOS), Android TV (leanback), or Vega (Fire TV).
 A TV is navigated with a directional remote, not touch. Use when you need to move focus or press a key on a TV, instead of gesture-tap/swipe (which do not apply on a TV).
-Read the screen with \`describe\` before and after to see where focus landed.
+Call \`describe\` before the first press to find the cursor. Read where focus landed from the element tree in this result, or call \`describe\` again when it is missing.
 Returns { pressed, count }. Fails on a target that is not a TV, and on the Apple TV simulator for rewind, fastForward, next, previous, volumeUp, volumeDown and mute (its HID stack ignores them); every other button works on all three platforms.`,
     zodSchema,
     searchHint:

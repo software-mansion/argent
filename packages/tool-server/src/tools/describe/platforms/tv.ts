@@ -21,13 +21,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const EMPTY_RETRY_ATTEMPTS = 3;
 const EMPTY_RETRY_DELAY_MS = 600;
 const EMPTY_HINT =
-  "No focusable elements after retrying and recycling the read path. The app is most likely " +
-  "still launching (splash / loading screen) or mid-transition — this is normal right after " +
-  "launch-app / restart-app. Wait ~2-3s and call describe again; a React Native app only " +
-  "exposes focus once its JS bundle has loaded. If it stays empty, take a screenshot to confirm " +
-  "what's actually on screen.";
+  "No focusable elements after retrying and recycling the read path. Either the app is still " +
+  "loading or mid-transition (after launch-app / restart-app, or a press that opened an app), " +
+  "or the screen has nothing focusable (sleep, screensaver, video playback). Wait ~2-3s and " +
+  "call describe again; a React Native app only exposes focus once its JS bundle has loaded. " +
+  "If it stays empty, take a screenshot to confirm what's actually on screen.";
 
-// Android TV reads focus from the OS accessibility tree (uiautomator), which
+// Android TV reads focus from the OS accessibility tree, which
 // does not expose focus driven by react-native-tvos's own focus engine — so the
 // focus view can be empty on a screen that visibly has selectable tiles.
 const ANDROID_FOCUS_EMPTY_HINT =
@@ -83,15 +83,14 @@ function renderFocusView(res: TvDescribeResponse): string {
 /**
  * `describe` for a TV target (Apple TV simulator or Android TV / leanback
  * device): the focus-driven view instead of the touch element tree, since a TV
- * UI has no tap coordinates — the agent moves the highlight with `tv-remote`
- * and re-reads with `describe`.
+ * UI has no tap coordinates — the agent moves the highlight with `tv-remote`.
  */
 export async function describeTv(registry: Registry, device: DeviceInfo): Promise<DescribeResult> {
   const api: TvControlApi = await resolveTvApi(registry, device.id);
 
   // Ride out a brief post-launch transition window (see EMPTY_RETRY_*). Apple TV
   // only: on Android TV an empty focus set is steady state for react-native-tvos
-  // screens, not a transition, so retrying would just burn uiautomator dumps
+  // screens, not a transition, so retrying would just burn reads
   // before the empty-focus fallback below.
   let res = await api.describe();
   if (device.platform !== "android") {
@@ -104,14 +103,14 @@ export async function describeTv(registry: Registry, device: DeviceInfo): Promis
   // Still empty: on Apple TV the daemon may hold a stale primaryApp cache from a
   // killed app, and a fresh daemon rebinds to the current foreground app.
   // Skipped on Android TV, where `recycleAx` is a no-op and the re-probe would
-  // only repeat the dump the retry loop already found empty.
+  // only repeat the read that just came back empty.
   if (isEmpty(res) && device.platform !== "android") {
     await api.recycleAx();
     res = await api.describe();
   }
 
   // Android TV with a still-empty focus engine: fall back to the full
-  // uiautomator tree so describe stays useful on RN-focus-engine screens.
+  // UI tree so describe stays useful on RN-focus-engine screens.
   if (isEmpty(res) && device.platform === "android") {
     // The dispatcher routed us here via isAndroidTv, so pass isTv through to
     // skip a redundant probe. Let a capture failure propagate: describeAndroid
