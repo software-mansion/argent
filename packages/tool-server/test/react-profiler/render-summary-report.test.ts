@@ -141,6 +141,26 @@ describe("report with no hot commit", () => {
     expect(report).toContain("**Cut re-renders**");
   });
 
+  it("calls rows app components only when the source index placed them", async () => {
+    const placed = await render({
+      renderSummary: CLOCK,
+      componentOrigin: createComponentOriginClassifier(FIXTURE_INDEX),
+    });
+    expect(placed).toContain("App components that re-rendered in at least 10 of the 468 commits");
+    expect(placed).not.toContain("library components may be listed");
+
+    const unplaced = await render({
+      renderSummary: CLOCK,
+      componentOrigin: createComponentOriginClassifier(new Map()),
+    });
+    expect(unplaced).not.toContain("App components");
+    expect(unplaced).toContain("Components that re-rendered in at least 10 of the 468 commits");
+    expect(unplaced).toContain("library components may be listed");
+    expect(unplaced).toContain("`project_root`");
+    const rows = unplaced.split("\n").filter((l) => l.startsWith("| `"));
+    expect(rows.map((r) => r.split("`")[1])).toEqual(["ClockRow", "ClockScreen", "ClockHeader"]);
+  });
+
   it("lists a burst that idle time pushes down to a low share of the recording", async () => {
     // 3 s of the clock in a 70 s recording: 1.6% of it, no share floor to pass.
     const report = await render({

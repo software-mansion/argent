@@ -10,6 +10,8 @@
  * 1. Role. Animation wrappers (the 03-tag pattern), providers and contexts, and
  *    dev-only views are left out whoever defines them: they re-render to pass a
  *    value or drive a frame, and the cost that matters shows in what they render.
+ *    `Anonymous` goes too, under any wrapper: it is a label, not a name, so its
+ *    row would sum unrelated components.
  * 2. React Native core and list-internal names (`View`, `Text`, `ScrollView`,
  *    `VirtualizedList`, `CellRenderer`, ...) are library, unless DevTools marks the
  *    fiber `Forget(...)`: the React Compiler compiles the app's code, not
@@ -78,8 +80,7 @@ const RN_CORE_NAMES = new Set([
   "TouchableOpacity",
   "TouchableWithoutFeedback",
   "View",
-  // React built-ins and the label DevTools gives an unnamed function.
-  "Anonymous",
+  // React built-ins.
   "Fragment",
   "Profiler",
   "StrictMode",
@@ -96,8 +97,12 @@ const PROVIDER_PATTERN = /(Provider|Context|\.Consumer)$/;
 const DEV_ONLY_PATTERN =
   /^(PressabilityDebugView|LogBox\w*|DebuggingOverlay\w*|ReactDevToolsOverlay|Inspector\w*|DebugContainer)$/;
 
+/** What DevTools calls a component with no display name. */
+const UNRESOLVED_NAME = "Anonymous";
+
 function isRoleExcluded(baseName: string): boolean {
   return (
+    baseName === UNRESOLVED_NAME ||
     ANIMATED_PATTERN.test(baseName) ||
     PROVIDER_PATTERN.test(baseName) ||
     DEV_ONLY_PATTERN.test(baseName)

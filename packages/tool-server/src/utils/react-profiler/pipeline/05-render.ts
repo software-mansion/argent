@@ -186,12 +186,14 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
       )
     : [];
   if (summary && rows.length > 0) {
+    // With no source index, names alone cannot tell the app's components from a library's.
+    const unplaced = rows.some((row) => row.origin.origin === "unknown");
     lines.push(
       ``,
       `---`,
       `## Most Frequent Re-renders`,
       ``,
-      `App components that re-rendered in at least 10 of the ${formatCount(summary.totalCommits)} commits, by self time per second. This shows what re-rendered most, not that it is a problem. React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
+      `${unplaced ? "Components" : "App components"} that re-rendered in at least 10 of the ${formatCount(summary.totalCommits)} commits, by self time per second. This shows what re-rendered most, not that it is a problem. ${unplaced ? "The project source could not be indexed (check `project_root`), so library components may be listed. " : ""}React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
       ``,
       `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
       `|---|---|---|---|---|---|---|`

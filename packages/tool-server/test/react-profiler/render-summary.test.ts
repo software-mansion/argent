@@ -335,6 +335,19 @@ describe("component origin", () => {
     }
   });
 
+  it("leaves unresolved names out, under a compiler wrapper too", () => {
+    for (const name of [
+      "Anonymous",
+      "Memo(Anonymous)",
+      "Forget(Anonymous)",
+      "Forget(Memo(Anonymous))",
+      "Forget(ForwardRef(Anonymous))",
+    ]) {
+      expect(classify(name).origin, name).toBe("library");
+      expect(createComponentOriginClassifier(null)(name).origin, name).toBe("library");
+    }
+  });
+
   it("treats a React Compiler fiber with a React Native name as the app's own", () => {
     // Bluesky defines its own Text; the compiler only compiles app code.
     expect(classify("Forget(Text)")).toEqual({
