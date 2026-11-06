@@ -274,14 +274,15 @@ describe("Registry — failure signals", () => {
       services: () => ({}),
       execute: async () => {
         controller.abort();
-        const abortError = new Error("This operation was aborted");
-        abortError.name = "AbortError";
-        throw withFailureSignal(new Error("request timed out", { cause: abortError }), {
-          error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
-          failure_stage: "simulator_server_network",
-          failure_area: "tool_server",
-          error_kind: "timeout",
-        });
+        throw withFailureSignal(
+          new Error("request timed out", { cause: controller.signal.reason }),
+          {
+            error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+            failure_stage: "simulator_server_network",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          }
+        );
       },
     } as never);
 
@@ -296,6 +297,41 @@ describe("Registry — failure signals", () => {
 
     expect(getFailureSignal(emittedError)?.error_code).toBe(
       FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED
+    );
+  });
+
+  it("keeps a tool's own timeout that Node raised as an AbortError after the caller aborted", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    const ownTimeout = AbortSignal.timeout(1);
+    await new Promise((resolve) => ownTimeout.addEventListener("abort", resolve));
+    registry.registerTool({
+      id: "runner-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        const nodeAbort = new Error("The operation was aborted", { cause: ownTimeout.reason });
+        nodeAbort.name = "AbortError";
+        throw withFailureSignal(new Error("runner request timed out", { cause: nodeAbort }), {
+          error_code: FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT,
+          failure_stage: "simulator_server_network",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        });
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("runner-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("runner request timed out");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.SIMULATOR_NETWORK_TIMEOUT
     );
   });
 

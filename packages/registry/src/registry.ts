@@ -240,9 +240,9 @@ export class Registry {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
       // After the caller's abort, a failure the tool did not classify, or one
-      // that grew out of an AbortError, is the abort; any other classification
-      // stands.
-      if (options?.signal?.aborted && (!getFailureSignal(error) || causedByAbort(error))) {
+      // carrying the abort's reason in its cause chain, is the cancel.
+      const signal = options?.signal;
+      if (signal?.aborted && (!getFailureSignal(error) || hasCause(error, signal.reason))) {
         withFailureSignal(wrappedError, CANCELLED_SIGNAL);
       }
       const failureSignal = getFailureSignalOrFallback(wrappedError);
@@ -491,10 +491,10 @@ export class Registry {
   }
 }
 
-function causedByAbort(error: unknown): boolean {
+function hasCause(error: unknown, cause: unknown): boolean {
   let current = error;
   for (let depth = 0; current instanceof Error && depth < 16; depth++) {
-    if (current.name === "AbortError") return true;
+    if (current === cause) return true;
     current = current.cause;
   }
   return false;
