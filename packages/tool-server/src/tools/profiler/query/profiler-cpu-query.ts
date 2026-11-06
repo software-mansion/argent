@@ -456,6 +456,7 @@ Modes:
 In top_functions and time_window, self-times are the summed sampling intervals of the samples that
 landed in the window, so they measure sampled coverage rather than the window's width and do not
 change if you widen the query. Their tables state how many samples they cover and how much was idle.
+Each row is one call path, so a function can have several rows and top_n counts rows.
 Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
 Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
 Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-profiler-analyze) first.`,
