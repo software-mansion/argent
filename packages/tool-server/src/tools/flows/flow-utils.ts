@@ -1782,7 +1782,7 @@ function validatePattern(raw: unknown, pattern: string, where: string): void {
   } catch (err) {
     badEntry(
       raw,
-      `${where} \`matches\` is not a valid regular expression: ${err instanceof Error ? err.message : String(err)}`
+      `${where} \`matches\` is not a valid regular expression: ${escapeInline(err instanceof Error ? err.message : String(err))}`
     );
   }
 }

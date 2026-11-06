@@ -392,12 +392,12 @@ On Chromium, Argent boots the app before step 1 only when the run has no `device
 
 `argent e2e run` replays an e2e test without an agent and exits non-zero on failure. The command sends the e2e test to the tool-server that the CLI uses. See [E2E tests over a link](#e2e-tests-over-a-link).
 
-| Command                      | Description                                                                                      |
-| ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist |
-| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                            |
-| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                         |
-| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`                                     |
+| Command                      | Description                                                                                                     |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `argent e2e run <name>`      | Run `.argent/e2e/<name>.yaml`, or `.argent/flows/<name>.yaml` when the first file does not exist                |
+| `argent e2e run <path>.yaml` | Run any e2e test file. The path must not contain `..`                                                           |
+| `argent e2e run <dir>`       | Run every e2e test in the directory, one after the other                                                        |
+| `argent e2e list`            | List the e2e test files in `.argent/e2e` and `.argent/flows`. A directory that cannot be read gives exit code 2 |
 
 | Option               | Description                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
