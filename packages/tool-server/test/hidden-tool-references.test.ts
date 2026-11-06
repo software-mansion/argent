@@ -92,7 +92,7 @@ describe("text the agent reads names no tool hidden from MCP", () => {
       "react-profiler-component-source",
     ]);
     expect(hiddenMentions("fill in the form")).toEqual([]);
-    expect(hiddenMentions("Call mcp__argent__dismiss-update")).toEqual(["dismiss-update"]);
+    expect(hiddenMentions("Call mcp__argent__terminate-app")).toEqual(["terminate-app"]);
     expect(hiddenMentions("Call mcp__argent__fill")).toEqual(["fill"]);
     expect(hiddenMentions("Do not call `mcp__argent__*` tools")).toEqual([]);
     expect(hiddenMentions("Call flow-execute to run it")).toEqual(["flow-execute"]);

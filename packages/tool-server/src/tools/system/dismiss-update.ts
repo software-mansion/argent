@@ -6,7 +6,12 @@ import { getUpdateState, suppressUpdateNote } from "../../utils/update-checker";
 const MAX_HOURS = 24 * 365 * 10;
 
 const zodSchema = z.object({
-  hours: z.number().min(0).describe("Number of hours to suppress the update notification"),
+  hours: z
+    .number()
+    .min(0)
+    .describe(
+      "Hours until reminders resume: 168 is a week, 87600 is the longest, 0 turns them back on"
+    ),
 });
 
 interface DismissUpdateResult {
@@ -22,12 +27,8 @@ interface DismissUpdateResult {
 export const dismissUpdateTool: ToolDefinition<{ hours: number }, DismissUpdateResult> = {
   id: "dismiss-update",
   description:
-    "Clear the Argent update notification for a number of hours. Use when the user asks to postpone or silence update reminders. Returns { message } confirming the suppression duration. Fails if the suppression state cannot be persisted.",
+    "Postpone the Argent update reminder, on every tool-server on this machine, when the user wants it later or tomorrow, wants it stopped, or never wants it (87600 hours). Installs nothing. A memory or a reminder of your own does not change it. Returns { message, remindersResumeAt, persisted, pendingVersion }: tell the user when reminders resume, and if persisted is false, that it did not fully hold.",
   zodSchema,
-  // The tool-server already suppresses the update note for 30 minutes each
-  // time it shows it (http.ts), so agents need no call. `argent run` and the
-  // SDK still call it.
-  hideFromMcp: true,
   interaction: {
     startedMsg: () => "Dismissing Argent update",
     completedMsg: () => "Dismissed Argent update",

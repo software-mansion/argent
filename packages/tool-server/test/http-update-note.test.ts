@@ -168,8 +168,7 @@ describe("HTTP update note injection", () => {
     expect(res.body.note).toContain("update-argent");
   });
 
-  // dismiss-update is hidden from MCP; the note suppresses itself for 30 minutes.
-  it("note names no tool hidden from MCP and says when it repeats", async () => {
+  it("note names the postpone tool, which agents can reach, and says when it repeats", async () => {
     mockGetUpdateState.mockReturnValue(
       mkState({
         updateAvailable: true,
@@ -183,12 +182,15 @@ describe("HTTP update note injection", () => {
 
     const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
-    expect(dismissUpdateTool.hideFromMcp).toBe(true);
-    expect(res.body.note).not.toContain("dismiss-update");
+    expect(dismissUpdateTool.hideFromMcp).toBeUndefined();
+    expect(res.body.note).toContain("`dismiss-update`");
     expect(res.body.note).toContain("will not repeat for the next 30 minutes");
   });
 
-  it("note instructs agent to persist the update info", async () => {
+  // Agents read "save a note" as an instruction from tool output and refuse it,
+  // and a reminder they think they own gets answered with their own memory or
+  // cron job, which leaves this note running.
+  it("note says the reminder is Argent's own and gives the agent nothing to save", async () => {
     mockGetUpdateState.mockReturnValue(
       mkState({
         updateAvailable: true,
@@ -202,7 +204,9 @@ describe("HTTP update note injection", () => {
 
     const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
-    expect(res.body.note).toContain("Save a note");
+    expect(res.body.note).toContain("comes from Argent itself");
+    expect(res.body.note).toContain("needs no task, memory entry or scheduled reminder");
+    expect(res.body.note).not.toContain("ACTION REQUIRED");
   });
 
   it("does NOT include a note on 500 error responses", async () => {
