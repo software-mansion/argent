@@ -203,6 +203,17 @@ describe("runSnapshot baselines", () => {
     expect(plain).not.toHaveProperty("warning");
   });
 
+  it("captures at full resolution, kept out of the agent context", async () => {
+    // The differ compares only equal-size images, so any other scale misses
+    // every baseline committed at full resolution.
+    vi.mocked(invokeOnDevice).mockClear();
+    await runSnapshot(env, opts());
+    expect(vi.mocked(invokeOnDevice)).toHaveBeenCalledWith(env, "screenshot", {
+      scale: 1.0,
+      includeImageInContext: false,
+    });
+  });
+
   it("fails a missing baseline without seeding one", async () => {
     const r = await runSnapshot(env, opts());
 
