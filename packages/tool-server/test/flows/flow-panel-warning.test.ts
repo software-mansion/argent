@@ -130,11 +130,12 @@ describe("a gesture tool's panel warning reaches the flow step report", () => {
     expect(warned.steps[0]).toMatchObject({ status: "pass", warning: `${WARNING} (swipe 1)` });
   });
 
-  it("dispatches every gesture of a chained pinch after a warned one", async () => {
+  it("dispatches every gesture of a chained pinch after a warned one and reports the first warning", async () => {
     await writeFlow("pinch-20", [{ kind: "pinch", scale: 20 }]);
-    const warned = await run("pinch-20", true);
+    let pinches = 0;
+    const warned = await run("pinch-20", () => `${WARNING} (pinch ${++pinches})`);
     expect(warned.calls).toEqual(["gesture-pinch", "gesture-pinch", "gesture-pinch"]);
-    expect(warned.steps[0]).toMatchObject({ status: "pass", warning: WARNING });
+    expect(warned.steps[0]).toMatchObject({ status: "pass", warning: `${WARNING} (pinch 1)` });
   });
 
   it("leaves a step without a warning when the tool had none", async () => {
