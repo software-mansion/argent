@@ -8,7 +8,7 @@
  * long gap still shows causality.
  */
 import { promises as fs } from "fs";
-import { join } from "path";
+import { isAbsolute, join, relative, sep } from "path";
 import type { HotCommitSummary, ComponentFinding } from "../types/output";
 import type { SessionContext } from "../types/pipeline";
 import { annotateComponentName } from "../component-names";
@@ -170,7 +170,7 @@ function buildFullMarkdown(
     lines.push("|---|---|---|---|---|---|---|");
     for (const f of input.componentFindings) {
       const file = f.sourceLocation
-        ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
+        ? `\`${pathFromProject(f.sourceLocation.file, sessionContext.projectRoot)}:${f.sourceLocation.line}\``
         : "—";
       const reasonStr = formatReason(f.dominantReason, f.topChangedProps, f.topChangedHookNames);
       const compilerFlag = f.compilerBailoutSuspected ? " ⚠️" : f.isCompilerOptimized ? " ✓" : "";
@@ -191,7 +191,8 @@ function buildFullMarkdown(
 
   const suggestionsSection = renderSuggestedImprovements(
     input.componentFindings,
-    sessionContext.reactCompilerEnabled
+    sessionContext.reactCompilerEnabled,
+    sessionContext.projectRoot
   );
   if (suggestionsSection) {
     lines.push(suggestionsSection);
@@ -410,7 +411,8 @@ function findPriorAnnotation(
 
 function renderSuggestedImprovements(
   findings: ComponentFinding[],
-  compilerEnabled: boolean
+  compilerEnabled: boolean,
+  projectRoot: string
 ): string {
   if (findings.length === 0) return "";
 
@@ -423,7 +425,7 @@ function renderSuggestedImprovements(
 
   for (const f of topFindings) {
     const loc = f.sourceLocation
-      ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
+      ? `\`${pathFromProject(f.sourceLocation.file, projectRoot)}:${f.sourceLocation.line}\``
       : null;
     const ann = annotateComponentName(f.component);
     const heading = `\`${ann.displayName}\`${ann.tag}`;
@@ -504,7 +506,7 @@ function renderSuggestedImprovements(
     }
 
     if (f.sourceSnippet && f.sourceLocation) {
-      const snippetPath = `${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}`;
+      const snippetPath = `${pathFromProject(f.sourceLocation.file, projectRoot)}:${f.sourceLocation.line}`;
       lines.push("");
       lines.push(`<details><summary>Source — \`${snippetPath}\`</summary>`);
       lines.push("");
@@ -521,9 +523,17 @@ function renderSuggestedImprovements(
   return lines.join("\n");
 }
 
+/** For a CPU frame's bundle url, where the end of the path is all that helps. */
 function shortenPath(file: string): string {
   const parts = file.replace(/\\/g, "/").split("/");
   return parts.slice(-2).join("/");
+}
+
+/** A path that an agent can open, unlike the end of the path. */
+function pathFromProject(file: string, projectRoot: string): string {
+  const fromRoot = relative(projectRoot, file);
+  const outsideRoot = !fromRoot || fromRoot.split(sep)[0] === ".." || isAbsolute(fromRoot);
+  return outsideRoot ? file : fromRoot;
 }
 
 async function writeReport(path: string, content: string): Promise<boolean> {

@@ -87,7 +87,7 @@ To revisit earlier data, e.g. to compare before and after a fix: `profiler-load`
 
 ### Step 8: Apply fix and re-profile
 
-Read the bottleneck's source (the report gives the end of its path and the line), apply the fix, then re-profile the same scenario (Step 1 → interaction → Steps 2-4). Report honestly whether the target metric improved, stayed flat, or regressed, and whether any _other_ metric got worse (e.g. fewer renders but more CPU time, or a different component now re-renders more). If the fix brought no net benefit or unacceptable tradeoffs, revert and reconsider.
+Read the bottleneck's source (the report gives its path from `project_root` and the line), apply the fix, then re-profile the same scenario (Step 1 → interaction → Steps 2-4). Report honestly whether the target metric improved, stayed flat, or regressed, and whether any _other_ metric got worse (e.g. fewer renders but more CPU time, or a different component now re-renders more). If the fix brought no net benefit or unacceptable tradeoffs, revert and reconsider.
 
 If the interaction was recorded as an e2e test, replay it with `e2e-execute` instead of repeating the steps by hand. If the replay fails (e.g. a UI fix changed the layout), follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure) before retrying the profiling cycle.
 
