@@ -217,6 +217,19 @@ describe("react-profiler-status: nothing recording", () => {
     expect(res.lost_run).toEqual({ session_id: "uuid-mine", cause: "stop_failed" });
   });
 
+  it("says a failed stop's run is still recording, and that start can replace it", async () => {
+    const { api } = buildApi({
+      sessionId: "uuid-mine",
+      profilingActive: false,
+      state: inApp(true, buildOwner("uuid-mine")),
+    });
+    const res = await runStatus(api);
+    expect(res.session_status).toBe("lost");
+    expect(res.lost_run).toMatchObject({ cause: "stop_failed" });
+    expect(res.note).toContain("The app is still recording it");
+    expect(res.note).toContain("no force needed");
+  });
+
   it("returns 'lost' when the app stopped recording a run this tool-server still tracks", async () => {
     const { api } = buildApi({
       sessionId: "uuid-mine",
@@ -276,6 +289,42 @@ describe("react-profiler-status: another session recording", () => {
   });
 });
 
+describe("react-profiler-status: a session loaded from disk", () => {
+  const loaded = { ...savedPaths("20261001-090000"), loadedFromDisk: true };
+
+  it("does not claim it as a run of this tool-server", async () => {
+    cacheProfilerPaths(PORT, loaded, DEVICE);
+    const { api } = buildApi({ sessionId: null, state: inApp(false) });
+    const res = await runStatus(api);
+    expect(res.session_status).toBe("saved");
+    expect(res.saved_session).toMatchObject({
+      session_id: "20261001-090000",
+      loaded_from_disk: true,
+    });
+    expect(res.note).toContain("loaded from disk");
+    expect(res.note).not.toContain("Your last run");
+  });
+
+  it("keeps reporting the lost run it was loaded after", async () => {
+    // Comparing against an earlier baseline is the usual reason to load one.
+    recordLost("uuid-mine", "js_reload");
+    cacheProfilerPaths(PORT, loaded, DEVICE);
+    const { api } = buildApi({ sessionId: null, state: inApp(false) });
+    const res = await runStatus(api);
+    expect(res.session_status).toBe("lost");
+    expect(res.lost_run).toMatchObject({ session_id: "uuid-mine", cause: "js_reload" });
+    expect(res.note).not.toContain("saved as session");
+  });
+
+  it("still recognises its lost run that the app keeps recording", async () => {
+    recordLost("uuid-mine", "cdp_disconnected");
+    cacheProfilerPaths(PORT, loaded, DEVICE);
+    const { api } = buildApi({ sessionId: null, state: inApp(true, buildOwner("uuid-mine")) });
+    const res = await runStatus(api);
+    expect(res.session_status).toBe("lost");
+  });
+});
+
 describe("react-profiler-status: lookup", () => {
   it("reads the run under the id react-profiler-start keyed it by", async () => {
     // A forwarded logicalDeviceId must not mint a second session (and a second
@@ -288,6 +337,18 @@ describe("react-profiler-status: lookup", () => {
     const res = await tool.execute({}, { port: PORT, device_id: "logical-123" });
     expect(resolved).toEqual([`ReactProfilerSession:${PORT}:${DEVICE}`]);
     expect(res.session_status).toBe("saved");
+  });
+
+  it("reports a lost run under the logicalDeviceId after the alias is gone", async () => {
+    // The form this tool's schema documents, and a dropped connection forgets
+    // the alias: it used to answer not_started here and lost for the UDID.
+    rememberDeviceAlias("logical-123", DEVICE);
+    recordLost("uuid-mine", "cdp_disconnected");
+    resetDeviceAliases();
+    const { api } = buildApi({ sessionId: null, state: inApp(false) });
+    const res = await runStatus(api, "logical-123");
+    expect(res.session_status).toBe("lost");
+    expect(res.lost_run).toMatchObject({ session_id: "uuid-mine", cause: "cdp_disconnected" });
   });
 
   it("still reports a saved session when the React runtime cannot be read", async () => {

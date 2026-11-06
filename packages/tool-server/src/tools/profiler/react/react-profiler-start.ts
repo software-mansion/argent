@@ -143,6 +143,11 @@ function describeTakeover(input: {
       };
 }
 
+function failedTakeoverText({ session_id, reason }: TakeoverReport): string {
+  const run = session_id ? `session ${session_id}` : "a recording with no owner record";
+  return `Before it failed, this start stopped ${run} (reason: ${reason}), and nothing is recording now.`;
+}
+
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
   try {
     return registry.getServiceState(urn);
@@ -350,6 +355,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // Set when this start replaces a running session, so the result says so.
       let tookOver: TakeoverReport | undefined;
 
+      // A start that fails after that has still stopped the other recording.
+      const withTakeover = (message: string): string =>
+        tookOver ? `${message} ${failedTakeoverText(tookOver)}` : message;
+      const rethrowWithTakeover = (err: unknown): never => {
+        if (err instanceof Error) err.message = withTakeover(err.message);
+        throw err;
+      };
+
       if (state.isRunning) {
         const owner: ProfilerSessionOwner | null = state.owner;
         const staleness = classifyStaleness({
@@ -425,17 +438,23 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       };
 
       await cdp.send("Profiler.enable").catch(ignore);
-      await cdp.send("Profiler.start", { interval: params.sample_interval_us });
+      await cdp
+        .send("Profiler.start", { interval: params.sample_interval_us })
+        .catch(rethrowWithTakeover);
 
-      const startJson = (await cdp.evaluate(buildStartScript(JSON.stringify(ownerPayload)))) as
-        string | undefined;
+      const startJson = (await cdp
+        .evaluate(buildStartScript(JSON.stringify(ownerPayload)))
+        .catch(rethrowWithTakeover)) as string | undefined;
       if (!startJson) {
-        throw new FailureError("Failed to start React profiler (no value returned from runtime).", {
-          error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
-          failure_stage: "react_profiler_start_runtime_start",
-          failure_area: "tool_server",
-          error_kind: "subprocess",
-        });
+        throw new FailureError(
+          withTakeover("Failed to start React profiler (no value returned from runtime)."),
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
+            failure_stage: "react_profiler_start_runtime_start",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          }
+        );
       }
       const startResult = JSON.parse(startJson) as {
         ok: boolean;
@@ -450,9 +469,11 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         // Roll back the CPU sampler.
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
-          `React profiler failed to start (${startResult.reason ?? "unknown"}${
-            startResult.message ? `: ${startResult.message}` : ""
-          })`,
+          withTakeover(
+            `React profiler failed to start (${startResult.reason ?? "unknown"}${
+              startResult.message ? `: ${startResult.message}` : ""
+            })`
+          ),
           {
             error_code: FAILURE_CODES.REACT_PROFILER_START_FAILED,
             failure_stage: "react_profiler_start_runtime_start",
@@ -465,7 +486,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       if (startResult.isProfilingFlagSet !== true || startResult.ownerInstalled !== true) {
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
-          `React profiler failed to start (post-start verification failed: isProfilingFlagSet=${startResult.isProfilingFlagSet === true}, ownerInstalled=${startResult.ownerInstalled === true})`,
+          withTakeover(
+            `React profiler failed to start (post-start verification failed: isProfilingFlagSet=${startResult.isProfilingFlagSet === true}, ownerInstalled=${startResult.ownerInstalled === true})`
+          ),
           {
             error_code: FAILURE_CODES.REACT_PROFILER_START_VERIFY_FAILED,
             failure_stage: "react_profiler_start_verify",
@@ -484,10 +507,12 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         await cdp.evaluate(STOP_FOR_TAKEOVER_SCRIPT).catch(ignore);
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
-          `The React profiler session for ${api.deviceId} was torn down while the profiler was ` +
-            `starting, so nothing is recorded. One tool-server serves every agent using this ` +
-            `argent install, so another agent may have run stop-all-simulator-servers. Call ` +
-            `react-profiler-start again.`,
+          withTakeover(
+            `The React profiler session for ${api.deviceId} was torn down while the profiler was ` +
+              `starting, so nothing is recorded. One tool-server serves every agent using this ` +
+              `argent install, so another agent may have run stop-all-simulator-servers. Call ` +
+              `react-profiler-start again.`
+          ),
           {
             error_code: FAILURE_CODES.REACT_PROFILER_SESSION_TORN_DOWN,
             failure_stage: "react_profiler_start_session_torn_down",

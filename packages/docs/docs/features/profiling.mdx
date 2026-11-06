@@ -82,7 +82,7 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 - The React profiler is available in React Native apps with Hermes only. Argent does not profile Chromium and Electron apps.
 - Argent records the data from the start of the session only. Start the session before you do the interaction.
 - One session at a time can own the React profiler of an app. If another agent owns the session, Argent tells the agent who the owner is. The agent must ask you before it takes over the session.
-- A session is stale when its owner does not use it for 5 minutes. Another agent can take over a stale session without asking you. Argent tells both agents about the takeover.
+- A session is stale after 5 minutes without a heartbeat. Only a `react-profiler-status` call refreshes the heartbeat reliably, so a long recording can go stale while you use the app. An agent on another tool-server can take over a stale session without asking you. Argent tells both agents about the takeover.
 - A JavaScript reload or a lost debugger connection ends a React recording, and Argent does not keep its data. The agent can ask Argent if the last recording was saved or lost.
 - A component that unmounts before the session stops can lose its name in the report. The report shows the duration of this work under "unattributed".
 - The memory leak data is available on iOS only. On Android, Argent reports memory growth as a weak signal.

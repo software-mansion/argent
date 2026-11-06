@@ -228,18 +228,18 @@ When Argent finds no device, interaction tools on the device keep the automatic 
 
 One React profiler run at a time can record in an app. `react-profiler-status` returns one of these `session_status` values:
 
-| Value              | Meaning                                                                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------ |
-| `active`           | A run that this tool-server started records                                                            |
-| `saved`            | No run records. The last run stopped, and `saved_session` names its files for `react-profiler-analyze` |
-| `lost`             | The last run of this tool-server ended without its data. `lost_run.cause` gives the reason             |
-| `taken_over`       | Another session records, or another session replaced the run of this tool-server                       |
-| `not_started`      | No run records, and this tool-server has no run on record for the device                               |
-| `no_react_runtime` | Argent cannot read the React runtime of the app                                                        |
+| Value              | Meaning                                                                                               |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| `active`           | A run that this tool-server started records                                                           |
+| `saved`            | No run records. `saved_session` names the files of the last run, or of a session from `profiler-load` |
+| `lost`             | The last run of this tool-server ended without its data. `lost_run.cause` gives the reason            |
+| `taken_over`       | Another session records, or another session replaced the run of this tool-server                      |
+| `not_started`      | No run records, and this tool-server has no run on record for the device                              |
+| `no_react_runtime` | Argent cannot read the React runtime of the app                                                       |
 
 The `lost_run.cause` values are `js_reload`, `cdp_disconnected`, `session_torn_down`, `taken_over`, `stop_failed` and `ended_in_app`. The tool-server keeps this record in memory only. After a restart, it shows a run that it started before as `taken_over`.
 
-A run is stale when its heartbeat is older than 5 minutes. `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` refresh the heartbeat of a run that their tool-server records. `react-profiler-start` handles a run that records:
+A run is stale when its heartbeat is older than 5 minutes, also while you use the app during a long recording. `react-profiler-status` refreshes the heartbeat of a run that its tool-server records. `react-profiler-renders` and `react-profiler-fiber-tree` can also refresh a heartbeat, but they do not check which session owns the run, so do not rely on them to keep a run fresh. `react-profiler-start` handles a run that records:
 
 - A run that this tool-server records: `react-profiler-start` returns `already_running` with `mine: true`. Call `react-profiler-stop` to collect it.
 - A fresh run of another session: `react-profiler-start` returns `already_running` with `mine: false`. Ask the user before you pass `force: true`.
