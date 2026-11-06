@@ -67,22 +67,22 @@ YAML selectors and live discovery use different screen projections:
 
 | Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                   |
 | -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
-| iOS      | projected UIView hierarchy                                | accessibility tree              | `native-full-hierarchy` is raw; nodes and roles differ |
+| iOS sim  | projected UIView hierarchy                                | accessibility tree              | `native-full-hierarchy` is raw; nodes and roles differ |
 | Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes    |
 | Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)  |
 | Vega     | toolkit page source                                       | same source                     | Same elements, different shape                         |
 
-On iOS, Android, and Chromium, an id absent from `describe` can still resolve in an e2e test. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
+On an iOS simulator, Android, and Chromium, an id absent from `describe` can still resolve in an e2e test. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
-The recorder rechecks each successful `await-ui-element` against the runner tree. Follow any `message` warning and replay each conversion. On Vega, a mismatch usually means the screen changed. A `text` check can also select different elements from the same source. See [Live waits and checks](live-authoring.md#live-waits-and-checks).
+For the recorder's cross-tree warning on a recorded wait, see [Live waits and checks](live-authoring.md#live-waits-and-checks). On Vega both read the same source, so a mismatch usually means the screen changed or a `text` check selected a different element.
 
-**On iOS, a `launch:` step also decides which app the runner reads.** A successful `launch:` pins later runner-tree reads to that app, so a read probes only that app instead of fanning out over every connected one to find the frontmost. A pinned read still refuses, naming the reason, when the app has no foreground presence left, when it stops answering after an earlier read got through, when its devtools connection dropped, or when the pinned id is a `com.apple.*` system app.
+**On an iOS simulator, a `launch:` step also decides which app the runner reads.** A successful `launch:` pins later runner-tree reads to that app, so a read probes only that app instead of fanning out over every connected one to find the frontmost. A pinned read still refuses, naming the reason, when the app has no foreground presence left, when it stops answering after an earlier read got through, when its devtools connection dropped, or when the pinned id is a `com.apple.*` system app.
 
 Any raw `tool:` step ends the pin, because its effect on the screen is opaque to the runner, and reads auto-detect the frontmost app again until the next `launch:` re-pins. A tool that cannot change the foreground app leaves the launched id as an unpinned fallback, which takes the read only when auto-detection times out and the launched app vouches for itself with a probe of its own. `launch-app`, `restart-app`, `reinstall-app`, `open-url`, and `button` drop even that; `launch-app` and `restart-app` replace it with the app they just started, still unpinned. Nested `run:` fragments inherit both the pin and its clearing.
 
-So on iOS recording and replay can read different apps, not only different projections: recording has no run state and always auto-detects the frontmost connected app, while a replay read between a `launch:` and the next raw `tool:` step reads the launched app.
+So on an iOS simulator, recording and replay can read different apps, not only different projections: recording has no run state and always auto-detects the frontmost connected app, while a replay read between a `launch:` and the next raw `tool:` step reads the launched app.
 
-**On iOS, never copy a `role` from `describe` into a YAML selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
+**On an iOS simulator, never copy a `role` from `describe` into a YAML selector.** The runner derives iOS roles from the UIView class name and `describe` from accessibility traits, so a React Native `Pressable` (class `RCTView`) is `AXGroup` to the runner and `AXButton` to `describe`. Select on `id`/`text`, or confirm the role against the runner's own tree.
 
 When several nodes match, the directive decides:
 
@@ -118,7 +118,7 @@ Directives stop the test on failure and skip later steps. The available directiv
 - iOS: unfolded, the UI is landscape. `swipe` and `scroll-to` directions and the reading order stay as the user sees the UI. Coordinates stay in the space of the `describe` frames.
 - iOS: a fold between two angles that are not `closed` or `open` can keep the current panel. The step passes, and the report names the panel. To change panels, fold to `closed` or `open`.
 
-Use the launch map for cross-platform tests. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; a simulator passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no test needs a key for a remote run. On iOS, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
+Use the launch map for cross-platform tests. A bare launch applies everywhere and becomes an app path on Chromium. The map takes `native:`, `ios:`, `android:`, `vega:`, and `chromium:`. `native:` is one id shared by iOS, Android, and Vega, and a per-platform key overrides it for that platform. `chromium:` accepts a relative or absolute app path. `ios:` also accepts `{ app, args }`; Argent passes `args` to the app at launch. A launch that declares no id for the run's platform is an error, not a cue to switch platforms. A run on a remote simulator uses the `ios:` id, or the `native:` id when the map has no `ios:` key, so no test needs a key for a remote run. On an iOS simulator, a successful launch also pins later tree reads to that app until the next raw `tool:` step, so read [The runner tree is not the discovery tree](#the-runner-tree-is-not-the-discovery-tree) when a read describes the wrong screen.
 
 ```yaml
 - launch: { native: com.acme.app, chromium: ../../app }
@@ -156,9 +156,9 @@ Only the direction presets carry OS-edge margins. A resolved `from` point is use
 
 On Chromium a swipe is a mouse drag (`gesture-drag`), so a `from` on an `<img>`, an `<a href>` or a `draggable="true"` node starts the browser's native drag-and-drop: the page gets `pointerdown` then `pointercancel` and sees no travel. On Vega, `swipe` fails upfront like the other touch directives.
 
-`type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`. The runner uses the first source that defines the name: environment `ARGENT_SECRET_NAME`; project `.argent/secrets.env`; project `.env.local`, then `.env`; then `~/.argent/secrets.env`. Over a link with `forward-secrets` on, the same sources on the client's machine come first. The two `secrets.env` files accept the bare `NAME`, but the shared dotenv files expose only `ARGENT_SECRET_`-prefixed keys, so a bare `NAME=…` in `.env` or `.env.local` stays unresolved. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
+`type` presses Enter in a second `keyboard` call unless `submit: false`. A polished focus tap plus one text-only `keyboard` call usually needs `submit: false`. Store external values as `{{secret:NAME}}`; the runner resolves them from the same sources as the `keyboard` tool. The runner redacts every resolved value, so do not use a placeholder for content a report must show.
 
-A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition. The first such gesture proves the outage and later ones spend that verdict without paying the settle window again. A tree read that comes back, or a relaunch, retires that verdict, which only makes the next gesture pay a fresh window, and it warns again if the source is still down.
+A **selector-less gesture** (a coordinate `tap`/`long-press`/`swipe`, or a `pinch`/`rotate` with no `on:`) resolves no frame, so a tree source it cannot read does not fail it. It settles best effort, dispatches anyway, and the step **passes carrying a warning** that quotes the source's own error. That green says the gesture was sent, not that it landed: one aimed at a moving element can miss it entirely. Restore the tree source, usually by relaunching the app so the instrumentation loads. Accept the warning only where the app serves no tree at all, and put an explicit `wait:` before a gesture that follows a transition: after the first such gesture, later ones skip the settle window until a tree read succeeds again or the app relaunches.
 
 ## Verification conditions
 
@@ -209,7 +209,7 @@ It **never fails a run.** Every outcome short of a clean settle passes with a wa
 - **a small part of it was still changing**: a spinner, caret, or progress dot moved through the hold. Too small to count as the screen moving, so the settle completed anyway.
 - **the screen was still for the last Nms**: the wait ran out mid-hold, so no settle was confirmed. It names the term that was short: a second agreeing interval, or the rest of `stableFor`. Raise this step's `timeout:`, because the wait was too short rather than the screen too busy.
 - **the tree stayed empty**: the screen rendered no accessible content: a canvas or video surface, or a screen that never arrived.
-- **settled on the UI tree alone**: no screenshot pair could be read, so presentation-layer animation was never waited out.
+- **settled on the UI tree alone**: no screenshot pair could be read, so presentation-layer animation was never waited out. Inspect the capture path rather than the app's rendering.
 - **too few reads**: a settle needs three reads across two intervals and this step got fewer, so it ended with no evidence either way.
 
 Only a tree source this step could not read stops the run, as an errored step: one still failing when the wait ends, one that wedges after answering, one that answers with an empty tree it flags as degraded (an unattached Vega toolkit, an AX service asking to be relaunched), or one that never answers (raise `timeout` before suspecting the app). The run is then not ok and every later step is skipped. A single failed read is not that: the hold restarts from the next good read. The same outage stops no [selector-less gesture](#directives), which needs no frame and passes with its own warning instead.
@@ -241,8 +241,6 @@ A `run:` target is a YAML path resolved against the directory of the test file c
 
 ## Local scripts
 
-Use a local `.mjs` script only when the user requests one. Record it with `e2e-add-script` at the point where it must run.
-
 ```yaml
 - script: { path: ../../scripts/seed-order.mjs }
 - script: { path: ../../scripts/seed-order.mjs, timeout: 60000 }
@@ -250,12 +248,9 @@ Use a local `.mjs` script only when the user requests one. Record it with `e2e-a
 
 Use the map form shown above. A bare `script: scripts/seed.mjs` is invalid.
 
-- **`path`** is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case.
-- **`timeout`** is optional and uses milliseconds. The default is 30000. The minimum is 100.
+`path` is relative to the test file that contains the step. Include `.mjs` and match the file name's letter case. `timeout` is in milliseconds, as in `e2e-add-script`.
 
 Over a link (`argent link` or `ARGENT_TOOLS_URL`, also to 127.0.0.1), `e2e-add-script` refuses the call, and a replay rejects a test with a `script:` step. Record and replay a test with a script without a link.
-
-If a script fails, check its changes before you retry.
 
 ## Snapshots and CLI runs
 
@@ -267,7 +262,7 @@ Do not use a snapshot as the only proof of navigation, persistence, data, access
 
 Baselines live beside the test, under `.argent/e2e/__baselines__/<name>/` and are keyed by platform and full-capture geometry; `cropOn` also contributes its selector. A run on a remote simulator uses `ios` in the key, so it uses the same baseline as a local iOS run with the same capture geometry. Seed from a known-good state with `--update-baselines`. A test that a `tool: e2e-execute` step runs keeps its own baselines, and `--update-baselines` updates them too unless the step sets `updateBaselines` itself. A run on a remote simulator with `--update-baselines` rewrites the same baseline file that a local run uses, and its step reason says that a remote simulator wrote it. Inspect every baseline and require user review. Do not commit it yourself. Baseline creation or update is not a test pass. Never update a baseline only to make a diff pass. The default `maxMismatch` is 0.5 percent.
 
-Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed baseline, current, and diff images under `<dir>/<name>/` for CI artifact upload.
+Pin `--platform` and `--device` for iOS, Android, or Vega. For Chromium the device class is the window's own pixel size, which the app sets and no launch argument changes: pass `--platform chromium` and omit `--device` so the runner boots the declared app path instead of attaching to a running window of another size. A window sized from host or session state produces a key CI cannot reproduce, and the step fails for a missing baseline. The runner pins mobile status bars during visual runs. `--output <dir>` writes failed snapshots' images and failed steps' screenshots under `<dir>/<name>/` for CI artifact upload.
 
 ## YAML safety
 

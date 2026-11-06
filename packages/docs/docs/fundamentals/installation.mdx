@@ -11,7 +11,7 @@ sidebar_custom_props:
 
 - **Node.js 20.12** or later
 - **iOS / tvOS**: macOS with **Xcode** installed. Apple TV uses tvOS simulators, and Xcode downloads the tvOS runtime on demand.
-- **Android / Android TV**: **Android SDK Platform Tools** (`adb`) on `PATH`, plus the **Android Emulator** package to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
+- **Android / Android TV**: **Android SDK Platform Tools** (`adb`), plus the **Android Emulator** package to boot AVDs from Argent. Argent finds the SDK on `PATH`, in `$ANDROID_HOME`, or in the default SDK folder. The `android.sdkRoot` config key sets another location. Create AVDs via Android Studio or `avdmanager`.
 - **Fire TV (Vega)**: the **Vega SDK** (`vega` CLI) on `PATH`, plus **Android SDK Platform Tools** (`adb`) on `PATH`. Most Vega tools, including UI inspection and screenshots, run over `adb`.
 - **HarmonyOS**: **DevEco Studio**, which ships `hdc` (the device connector) and the `Emulator` manager. Argent looks for both in `$DEVECO_STUDIO_HOME` first, then in `/Applications/DevEco-Studio.app` on macOS. Argent also finds `hdc` on `PATH`, for hosts that installed the OpenHarmony command-line tools without the IDE. A phone needs only `hdc`. Run `argent enable harmonyos` to turn on HarmonyOS support.
 - **Electron / Chromium**: nothing extra to control an already running app. Launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you.
@@ -40,7 +40,7 @@ The installation wizard:
 
 - installs `@swmansion/argent` globally,
 - detects your editor and registers the MCP server,
-- copies skills, rules and agent definitions into your workspace.
+- copies skills and rules into your workspace.
 
 <Video
   src="/video/installation-wizard.mp4"
@@ -75,7 +75,7 @@ By default Argent installs **globally**. To version Argent with your repo, so ev
 npx @swmansion/argent@latest init --local
 ```
 
-This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP configs that launch the project-local copy. Commit `package.json` and your lockfile, the generated MCP config (`.mcp.json`, `.cursor/mcp.json`, and so on), `.argent/install.json`, and the skills, rules and agents files. Teammates then run `npm install`.
+This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP configs that launch the project-local copy. Commit `package.json` and your lockfile, the generated MCP config (`.mcp.json`, `.cursor/mcp.json`, and so on), `.argent/install.json`, and the skills and rules files. Teammates then run `npm install`.
 
 Pass `--global` to force the default mode in scripts. `--local` and `--global` are mutually exclusive. A non-interactive (`--yes`) run defaults to global unless the project already opted into local mode.
 

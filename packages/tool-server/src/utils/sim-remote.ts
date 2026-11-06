@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
  */
 
 import { stripRemotePrefix } from "./device-info";
+import { simulatorRuntimeKind } from "./ios-devices";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -96,7 +97,8 @@ export async function isRemoteTvOsSimulator(
     const { devices } = await simctlListDevices(options);
     for (const [runtime, entries] of Object.entries(devices)) {
       if (!entries.some((d) => d.udid === id)) continue;
-      const kind = runtime.includes("tvOS") ? "tv" : "mobile";
+      const kind = simulatorRuntimeKind(runtime);
+      if (!kind) return false;
       remoteRuntimeKindCache.set(id, kind);
       return kind === "tv";
     }
