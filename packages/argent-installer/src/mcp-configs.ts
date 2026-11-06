@@ -94,7 +94,7 @@ export interface McpConfigAdapter {
   // the entry written at `writtenScope` from taking effect.
   findShadowingConfigs?(root: string, writtenScope: "local" | "global"): ShadowingConfigFinding[];
   addAllowlist?(root: string, scope: "local" | "global"): void;
-  removeAllowlist?(root: string, scope: "local" | "global"): void;
+  removeAllowlist?(root: string, scope: "local" | "global"): boolean;
 }
 
 type CodexConfig = {
@@ -692,19 +692,20 @@ const cursorAdapter: McpConfigAdapter = {
     editJsoncFile(permPath, ["mcpAllowlist"], [...list, CURSOR_ALLOWLIST_PATTERN]);
   },
 
-  removeAllowlist(_root: string, scope: "local" | "global"): void {
+  removeAllowlist(_root: string, scope: "local" | "global"): boolean {
     // The allowlist lives ONLY in the machine-global permissions file, which a
     // retained global install still depends on.
-    if (scope !== "global") return;
+    if (scope !== "global") return false;
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
-    if (!fs.existsSync(permPath)) return;
+    if (!fs.existsSync(permPath)) return false;
     const config = readJsonc(permPath);
     const list = Array.isArray(config.mcpAllowlist) ? (config.mcpAllowlist as string[]) : undefined;
-    if (!list || !list.includes(CURSOR_ALLOWLIST_PATTERN)) return;
+    if (!list || !list.includes(CURSOR_ALLOWLIST_PATTERN)) return false;
     const next = list.filter((rule) => rule !== CURSOR_ALLOWLIST_PATTERN);
     // undefined deletes the emptied key; editJsoncFile prunes it and removes the
     // file if the document collapses to {}.
     editJsoncFile(permPath, ["mcpAllowlist"], next.length > 0 ? next : undefined);
+    return true;
   },
 };
 
@@ -902,8 +903,8 @@ const claudeAdapter: McpConfigAdapter = {
     addClaudePermission(root, scope);
   },
 
-  removeAllowlist(root: string, scope: "local" | "global"): void {
-    removeClaudePermission(root, scope);
+  removeAllowlist(root: string, scope: "local" | "global"): boolean {
+    return removeClaudePermission(root, scope);
   },
 };
 
@@ -1075,18 +1076,19 @@ const windsurfAdapter: McpConfigAdapter = {
     addAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
   },
 
-  removeAllowlist(_root: string, scope: "local" | "global"): void {
+  removeAllowlist(_root: string, scope: "local" | "global"): boolean {
     // Global-only client: a scope-"local" cleanup must not touch the
     // machine-global config a retained global install depends on.
-    if (scope !== "global") return;
-    removeAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
+    if (scope !== "global") return false;
+    const removedRule = removeAllowRule(devinUserConfigPath(), DEVIN_PERMISSION_RULE);
     const configPath = path.join(homedir(), ".codeium", "windsurf", "mcp_config.json");
-    if (!fs.existsSync(configPath)) return;
+    if (!fs.existsSync(configPath)) return removedRule;
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
-    if (!entry?.alwaysAllow) return;
+    if (!entry?.alwaysAllow) return removedRule;
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "alwaysAllow"], undefined);
+    return true;
   },
 };
 
@@ -1150,17 +1152,18 @@ const zedAdapter: McpConfigAdapter = {
     editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "allow");
   },
 
-  removeAllowlist(root: string, scope: "local" | "global"): void {
+  removeAllowlist(root: string, scope: "local" | "global"): boolean {
     const settingsPath =
       scope === "global"
         ? path.join(homedir(), ".config", "zed", "settings.json")
         : path.join(root, ".zed", "settings.json");
-    if (!fs.existsSync(settingsPath)) return;
+    if (!fs.existsSync(settingsPath)) return false;
     const config = readJsonc(settingsPath);
     const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
       Record<string, unknown> | undefined;
-    if (!perms || perms.default !== "allow") return;
+    if (!perms || perms.default !== "allow") return false;
     editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "confirm");
+    return true;
   },
 };
 
@@ -1228,18 +1231,19 @@ const geminiAdapter: McpConfigAdapter = {
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "trust"], true);
   },
 
-  removeAllowlist(root: string, scope: "local" | "global"): void {
+  removeAllowlist(root: string, scope: "local" | "global"): boolean {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
     if (!configPath || !fs.existsSync(configPath)) {
-      return;
+      return false;
     }
 
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
-    if (!entry?.trust) return;
+    if (!entry?.trust) return false;
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "trust"], undefined);
+    return true;
   },
 };
 
@@ -1323,11 +1327,11 @@ const codexAdapter: McpConfigAdapter = {
     writeToml(configPath, config);
   },
 
-  removeAllowlist(root, scope): void {
+  removeAllowlist(root, scope): boolean {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
 
     if (!configPath) {
-      return;
+      return false;
     }
 
     const tools = getAvailableToolIds();
@@ -1335,16 +1339,19 @@ const codexAdapter: McpConfigAdapter = {
     const toolsConfig = config?.mcp_servers?.argent?.tools;
 
     if (toolsConfig === undefined) {
-      return;
+      return false;
     }
 
+    let removed = false;
     for (const tool of tools) {
       if (tool in toolsConfig) {
         delete toolsConfig[tool];
+        removed = true;
       }
     }
 
-    writeToml(configPath, config);
+    if (removed) writeToml(configPath, config);
+    return removed;
   },
 };
 
@@ -1493,13 +1500,14 @@ const openCodeAdapter: McpConfigAdapter = {
     editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], true);
   },
 
-  removeAllowlist(root: string, scope: "local" | "global"): void {
+  removeAllowlist(root: string, scope: "local" | "global"): boolean {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
-    if (!configPath || !fs.existsSync(configPath)) return;
+    if (!configPath || !fs.existsSync(configPath)) return false;
     const config = readJsonc(configPath);
     const tools = config.tools as Record<string, unknown> | undefined;
-    if (!tools || !(OPENCODE_ALLOWLIST_PATTERN in tools)) return;
+    if (!tools || !(OPENCODE_ALLOWLIST_PATTERN in tools)) return false;
     editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], undefined);
+    return true;
   },
 };
 
@@ -1575,14 +1583,15 @@ const kiroAdapter: McpConfigAdapter = {
     );
   },
 
-  removeAllowlist(root: string, scope: "local" | "global"): void {
+  removeAllowlist(root: string, scope: "local" | "global"): boolean {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
-    if (!configPath || !fs.existsSync(configPath)) return;
+    if (!configPath || !fs.existsSync(configPath)) return false;
     const config = readJsonc(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
-    if (!entry?.autoApprove) return;
+    if (!entry?.autoApprove) return false;
     editJsoncFile(configPath, ["mcpServers", MCP_SERVER_KEY, "autoApprove"], undefined);
+    return true;
   },
 };
 
@@ -1659,18 +1668,19 @@ function addAllowRule(settingsPath: string, rule: string): void {
   editJsoncFile(settingsPath, ["permissions", "allow"], [...allow, rule]);
 }
 
-function removeAllowRule(settingsPath: string, rule: string): void {
-  if (!fs.existsSync(settingsPath)) return;
+function removeAllowRule(settingsPath: string, rule: string): boolean {
+  if (!fs.existsSync(settingsPath)) return false;
   const config = readJsonc(settingsPath);
   const permissions = config?.permissions as Record<string, unknown> | undefined;
   const allow = permissions?.allow;
-  if (!permissions || !Array.isArray(allow)) return;
-  if (!allow.includes(rule)) return;
+  if (!permissions || !Array.isArray(allow)) return false;
+  if (!allow.includes(rule)) return false;
   const next = (allow as string[]).filter((r) => r !== rule);
   // undefined deletes the emptied `allow`; editJsoncFile then prunes an emptied
   // `permissions` and removes the file if the document collapses to {}, while a
   // comment or foreign permission keeps the file and survives byte-intact.
   editJsoncFile(settingsPath, ["permissions", "allow"], next.length > 0 ? next : undefined);
+  return true;
 }
 
 function claudeSettingsPath(root: string, scope: "local" | "global"): string {
@@ -1683,8 +1693,8 @@ export function addClaudePermission(root: string, scope: "local" | "global"): vo
   addAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
 }
 
-export function removeClaudePermission(root: string, scope: "local" | "global"): void {
-  removeAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
+export function removeClaudePermission(root: string, scope: "local" | "global"): boolean {
+  return removeAllowRule(claudeSettingsPath(root, scope), PERMISSION_RULE);
 }
 
 type ManagedContentScope = "local" | "global";
