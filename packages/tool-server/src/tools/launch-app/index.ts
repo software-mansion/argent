@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
+import { macosAppRef } from "../../blueprints/macos-app";
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
@@ -18,6 +19,7 @@ import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
 import { vegaImpl } from "./platforms/vega";
 import { harmonyImpl } from "./platforms/harmony";
+import { macosImpl } from "./platforms/macos";
 
 // The bundleId alphabet plus `/` as the package/activity separator, with `.`
 // allowed as the head so `.MainActivity` works. Leading `-` is excluded for the
@@ -31,6 +33,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 const zodSchema = z.object({
@@ -57,7 +60,7 @@ const zodSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them.'
+      'Apple simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them<flag:macos-apps>, except a Mac app: use restart-app for that. Omitted on a Mac app, a stopped app gets the arguments of its last start</flag:macos-apps>.'
     ),
 });
 
@@ -96,6 +99,7 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       const device = resolveDevice(params.udid);
       if (device.platform === "ios-remote") return { nativeDevtools: nativeDevtoolsRef(device) };
       if (device.platform === "chromium") return { chromium: chromiumCdpRef(device) };
+      if (device.platform === "macos") return { macosApp: macosAppRef(device) };
       return {};
     },
     execute: dispatchByPlatform<
@@ -117,6 +121,7 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       chromium: chromiumImpl,
       vega: vegaImpl,
       harmony: harmonyImpl,
+      macos: macosImpl,
     }),
   };
 }

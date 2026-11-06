@@ -57,13 +57,15 @@ const capability: ToolCapability = {
   vega: { vvd: true },
   // Same for HarmonyOS.
   harmony: { device: true },
+  // A Mac app takes the mouse and keyboard steps; touch-only steps fail at their own gate.
+  macos: { app: true },
 };
 
 const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id), shared across all steps."
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id), shared across all steps."
     ),
   steps: z
     .array(
@@ -98,17 +100,17 @@ One screenshot and element tree are captured after the whole sequence, not per s
 On a TV target (Apple TV / Android TV / Vega) use tv-remote for remote presses and keyboard for text.
 
 Allowed tools, their args (? = optional) and targets. Positions and distances are 0–1 fractions of the screen (window on Chromium), not pixels; angles are in degrees, durations in ms.
-  gesture-tap: x, y, clickCount?  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos>]
+  gesture-tap: x, y, clickCount?<flag:macos-apps>, button? "left"|"right" (macos)</flag:macos-apps>  [ios/android/chromium<flag:harmonyos>/harmony</flag:harmonyos><flag:macos-apps>/macos</flag:macos-apps>]
   gesture-swipe: fromX, fromY, toX, toY, durationMs?, momentum?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
-  gesture-scroll: x, y, deltaX?, deltaY? (signed; positive scrolls down), durationMs?  [chromium]
-  gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium]
+  gesture-scroll: x, y, deltaX?, deltaY? (signed; positive scrolls down), durationMs?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
+  gesture-drag: fromX, fromY, toX, toY, durationMs?, momentum?  [chromium<flag:macos-apps>/macos</flag:macos-apps>]
   gesture-custom: events: [{ type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }], interpolate?  [ios/android]
   gesture-pinch: centerX, centerY, startDistance, endDistance, endCenterX?, endCenterY?, angle?, durationMs?  [ios/android<flag:harmonyos>/harmony</flag:harmonyos>]
   gesture-rotate: centerX, centerY, startAngle, endAngle, radius (or radiusX + radiusY), durationMs?  [ios/android]
   button: button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton"  [ios/android<flag:harmonyos>; harmony: home/back/power</flag:harmonyos>]
   keyboard: text? or key? (one per step; key e.g. "enter"), delayMs?  [all; Apple TV / Android TV: text only<flag:harmonyos>; harmony keys: enter/return, backspace/delete, space, arrow-left, arrow-right</flag:harmonyos>]
     text may hold {{secret:<NAME>}} placeholders, resolved server-side from ARGENT_SECRET_<NAME> or an argent secrets file (over a forward-secrets link, the client's first), so a credential never enters your context
-  paste: text (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP, else keyboard)  [ios sim/android emu]
+  paste: text (device clipboard + paste shortcut; only where a user would paste, e.g. an OTP, else keyboard)  [ios sim/android emu<flag:macos-apps>/macos</flag:macos-apps>]
   rotate: orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown"  [ios sim/android]
   shake: count?  [ios sim/android emu]
   fold: posture? "closed"|"half-open"|"open", or angle? 0–180, exactly one (later steps land on the new panel, whose coordinates differ)  [foldable ios sim/android emu]

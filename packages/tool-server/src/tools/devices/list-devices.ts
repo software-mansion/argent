@@ -13,9 +13,19 @@ import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
 import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
-import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
+import {
+  withRemotePrefix,
+  harmonyDeviceId,
+  harmonyEmulatorId,
+  macosAppIdFromBundleId,
+} from "../../utils/device-info";
 import { listHarmonyInstances, listHarmonyHdcTargets } from "../../utils/harmony-devices";
 import { isHarmonyEnabled } from "../../utils/harmony-flag";
+import {
+  isMacosAppsEnabled,
+  listTrackedMacosApps,
+  noListenSocketNote,
+} from "../../utils/macos-apps";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
 import {
   listVegaDevices,
@@ -105,6 +115,20 @@ type ExternalListedDevice = {
   udid?: string;
 };
 
+/** A native Mac app that argent started and that still runs. */
+type MacosAppDevice = {
+  platform: "macos";
+  kind: "app";
+  id: string;
+  name: string;
+  bundleId: string;
+  appPath: string;
+  pid: number;
+  state: "Running";
+  /** The app has no listening socket. */
+  note?: string;
+};
+
 type ListedDevice =
   | AndroidDevice
   | ChromiumDevice
@@ -113,6 +137,7 @@ type ListedDevice =
   | IosDevice
   | IosPhysicalDevice
   | IosRemoteDevice
+  | MacosAppDevice
   | VegaDevice;
 
 type ListDevicesResult = {
@@ -184,6 +209,7 @@ function readinessRank(d: ListedDevice): number {
   if (d.platform === "chromium") return 0; // Chromium entries are only listed when their CDP is responsive
   // A `Connected` target or a `running` instance is ready.
   if (d.platform === "harmony") return d.state === "Connected" || d.state === "running" ? 0 : 1;
+  if (d.platform === "macos") return 0; // Mac apps are only listed while their process runs
   // Physical iOS: paired-but-unreachable ranks with shut-down devices.
   if ("kind" in d && d.kind === "device") return d.state === "connected" ? 0 : 1;
   return d.state === "Booted" ? 0 : 1; // ios + ios-remote
@@ -213,6 +239,22 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
   } catch {
     return [];
   }
+}
+
+async function listMacosApps(): Promise<MacosAppDevice[]> {
+  if (process.platform !== "darwin" || !isMacosAppsEnabled()) return [];
+  const apps = await listTrackedMacosApps();
+  return apps.map((app) => ({
+    platform: "macos",
+    kind: "app",
+    id: macosAppIdFromBundleId(app.bundleId),
+    name: app.name,
+    bundleId: app.bundleId,
+    appPath: app.appPath,
+    pid: app.pid,
+    state: "Running",
+    ...(app.listenSocket ? {} : { note: noListenSocketNote(app.bundleId) }),
+  }));
 }
 
 function sortIosRemote(a: IosRemoteDevice, b: IosRemoteDevice): number {
@@ -325,7 +367,8 @@ TV targets are tagged with runtimeKind 'tv' (Apple TV simulators, Android TV / l
 iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are tagged with their 'deviceSet' path; the same tools drive them by udid, but they run headless (no Simulator.app window).
 A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'; use the \`fold\` tool to fold or unfold it.
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
-Booted/ready devices are listed first, but use a physical phone (kind 'device') only when the user asks for one. A platform is silently omitted when its CLI is not found; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
+<flag:macos-apps>Mac apps that argent started (boot-device with macosAppPath) are listed while they run, as platform 'macos' with the 'id' macos-app-<bundle id>.
+</flag:macos-apps>Booted/ready devices are listed first, but use a physical phone (kind 'device') only when the user asks for one. A platform is silently omitted when its CLI is not found; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
   zodSchema,
   alwaysLoad: true,
   searchHint:
@@ -359,6 +402,7 @@ Booted/ready devices are listed first, but use a physical phone (kind 'device') 
       harmony,
       harmonyTargets,
       external,
+      macos,
     ] = await Promise.all([
       xcodeInstallPending.includes("simctl") ? [] : withDeadline(listIosSimulators(), [], "ios"),
       withDeadline(
@@ -410,6 +454,11 @@ Booted/ready devices are listed first, but use a physical phone (kind 'device') 
         listExternalDevices().catch(() => []),
         [],
         "external"
+      ),
+      withDeadline(
+        listMacosApps().catch(() => []),
+        [],
+        "macos"
       ),
     ]);
 
@@ -491,6 +540,7 @@ Booted/ready devices are listed first, but use a physical phone (kind 'device') 
       ...iosRemote,
       ...androidDeduped,
       ...chromium,
+      ...macos,
       ...vega,
       ...harmonyTagged,
       ...external.map(toListedExternal),

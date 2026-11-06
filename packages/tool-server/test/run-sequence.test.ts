@@ -13,6 +13,7 @@ import { gestureTapTool } from "../src/tools/gesture-tap";
 import { gestureRotateTool } from "../src/tools/gesture-rotate";
 import { assertSupported } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
+import { renderFlagGated } from "../src/utils/flag-gated-text";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -136,6 +137,16 @@ describe("run-sequence", () => {
     // The registry resolves each step's services lazily; run-sequence itself
     // declares none — declaring simulator-server would hang for a tvOS udid.
     expect(tool.services({ udid: TVOS_UDID, steps: [] } as any)).toEqual({});
+  });
+
+  it("keeps the await-ui-element row inside the 4096 chars Claude Code shows, with macos-apps on", () => {
+    const text = renderFlagGated(
+      createRunSequenceTool(mockRegistry()).description ?? "",
+      (flag) => flag === "macos-apps"
+    );
+    const row = text.indexOf("  await-ui-element:");
+    expect(row).toBeGreaterThan(0);
+    expect(text.indexOf("\n", row)).toBeLessThanOrEqual(4096);
   });
 
   it("runs each step in order, injecting the shared udid", async () => {

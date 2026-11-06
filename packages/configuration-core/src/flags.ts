@@ -78,6 +78,12 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",
     defaultEnabled: true,
   },
+  {
+    name: "macos-apps",
+    description:
+      "Drive native Mac apps (AppKit, SwiftUI, react-native-macos) from inside the app. " +
+      "Adds the macos platform to list-devices and boot-device, and the file-panel and menu-bar tools. Off by default.",
+  },
 ];
 
 export function getFlagDefinition(

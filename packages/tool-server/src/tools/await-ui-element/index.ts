@@ -22,9 +22,11 @@ import { describeAndroid, androidRequires } from "../describe/platforms/android"
 import { describeChromium } from "../describe/platforms/chromium";
 import { describeVega, vegaRequires } from "../describe/platforms/vega";
 import { pollHarmonyTree, harmonyRequires } from "../describe/platforms/harmony";
+import { describeMacosForJudging } from "../flows/flow-macos-tree";
 import {
   selectorSchema,
-  nodeText,
+  assertText,
+  macFieldText,
   findAll,
   isVisible,
   firstInReadingOrder,
@@ -194,13 +196,25 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 // The matching engine lives in utils/ui-tree-match so the flow directives and
 // recorder reuse the exact selector semantics; `evaluateMatches` is a
 // params-shaped wrapper for this tool and its tests.
 export function evaluateMatches(params: Params, matches: DescribeNode[]): boolean {
-  return evaluateCondition(params.condition, params.expectedText, matches, params.textMatch);
+  return evaluateCondition(
+    params.condition,
+    params.expectedText,
+    matches,
+    params.textMatch,
+    undefined,
+    isMacos(params)
+  );
+}
+
+function isMacos(params: Params): boolean {
+  return params.udid !== undefined && resolveDevice(params.udid).platform === "macos";
 }
 
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
@@ -229,11 +243,12 @@ function timeoutNote(
   switch (params.condition) {
     case "text": {
       // Visible-first, mirroring evaluateCondition, so the note quotes the
-      // element the check read.
+      // element the check read, and the text it read (a Mac app's container
+      // is checked against its subtree text).
       const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       base = first
-        ? `element matched but its text was "${nodeText(first)}" (wanted to ${wanted} "${params.expectedText}")`
+        ? `element matched but its text was "${macFieldText(first, isMacos(params)) ?? assertText(first)}" (wanted to ${wanted} "${params.expectedText}")`
         : "no element matched the selector before timeout";
       break;
     }
@@ -260,7 +275,7 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id; not Apple TV, whose tree it cannot read)."
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id; not Apple TV, whose tree it cannot read)."
       ),
     condition: z
       .enum(["exists", "visible", "hidden", "text"])
@@ -270,7 +285,8 @@ const zodSchema = z
           "or only a zero-area element (e.g. a spinner that went away). `text`: the first visible match in reading order " +
           "(topmost, then leftmost; the first match overall if none is visible) contains expectedText, or equals it " +
           "with textMatch `equals`. Only that match is checked, so if a loose selector hits several elements, " +
-          "narrow it to the one holding the text."
+          "narrow it to the one holding the text.<flag:macos-apps> On a Mac app, a match in an open menu comes first, " +
+          "then one in an alert, sheet or popover, then one in the window.</flag:macos-apps>"
       ),
     selector: selectorSchema.describe(
       "Element to match. Give at least one field; every given field must match."
@@ -352,6 +368,12 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     if (device.platform === "harmony") {
       return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
     }
+    if (device.platform === "macos") {
+      // A read known to miss content (a web view, an element that did not
+      // answer) cannot judge `hidden`: the failed fetch is retried, and
+      // reported as unreadable at the deadline.
+      return describeMacosForJudging(registry, device, AWAIT_UI_ELEMENT_TOOL_ID);
+    }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
 
@@ -425,7 +447,7 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
         onSample: (data, nowMs) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
-          const blind = isBlindRead(data, everMatched);
+          const blind = isBlindRead(data, everMatched, params.condition);
           if (!blind && !data.stale) lastTrustedReadAt = nowMs;
           if (!blind && evaluateMatches(params, matches)) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
@@ -458,7 +480,7 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
           : poll.lastAttempt === "tree" &&
               poll.lastData !== null &&
               !poll.lastData.stale &&
-              !isBlindRead(poll.lastData, everMatched)
+              !isBlindRead(poll.lastData, everMatched, params.condition)
             ? "trusted"
             : "untrusted";
       return {
