@@ -20,20 +20,40 @@ import {
   renderComponentNameMiss,
   describeResolution,
 } from "../../../utils/react-profiler/component-names";
+import {
+  parseRenderSummary,
+  renderNameOutsideStoredCommits,
+  type RenderSummary,
+} from "../../../utils/react-profiler/render-summary";
 import { promises as fs } from "fs";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
+interface StoredCommits {
+  commits: {
+    commitIndex: number;
+    timestamp: number;
+    commitDuration: number;
+    componentName: string;
+  }[];
+  /** Null for sessions saved before react-profiler-stop wrote the summary. */
+  renderSummary: RenderSummary | null;
+}
+
+async function readStoredCommits(
+  sessionPaths: ProfilerSessionPaths
+): Promise<StoredCommits | null> {
+  if (!sessionPaths.commitsPath) return null;
+  const onDisk = await readCommitTree(sessionPaths.commitsPath);
+  return {
+    commits: onDisk.commits,
+    renderSummary: parseRenderSummary(onDisk.meta?.renderSummary),
+  };
+}
+
 async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
   index: CpuSampleIndex;
-  commitTree: {
-    commits: {
-      commitIndex: number;
-      timestamp: number;
-      commitDuration: number;
-      componentName: string;
-    }[];
-  } | null;
+  commitTree: StoredCommits | null;
 }> {
   if (!sessionPaths?.cpuProfilePath) {
     throw new FailureError(
@@ -52,25 +72,17 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
     try {
       const raw = JSON.parse(await fs.readFile(sessionPaths.cpuSampleIndexPath, "utf8"));
       const index = deserializeCpuSampleIndex(raw);
-      let commitTree = null;
-      if (sessionPaths.commitsPath) {
-        const onDisk = await readCommitTree(sessionPaths.commitsPath);
-        commitTree = { commits: onDisk.commits };
-      }
-      return { index, commitTree };
+      return { index, commitTree: await readStoredCommits(sessionPaths) };
     } catch {
       // Fall through to building from the raw profile.
     }
   }
 
   const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
-  let commitTree = null;
-  if (sessionPaths.commitsPath) {
-    const onDisk = await readCommitTree(sessionPaths.commitsPath);
-    commitTree = { commits: onDisk.commits };
-  }
-
-  return { index: buildCpuSampleIndex(cpuProfile), commitTree };
+  return {
+    index: buildCpuSampleIndex(cpuProfile),
+    commitTree: await readStoredCommits(sessionPaths),
+  };
 }
 
 /**
@@ -282,14 +294,7 @@ function renderCallTree(
 
 function renderComponentCpu(
   index: CpuSampleIndex,
-  commitTree: {
-    commits: {
-      commitIndex: number;
-      timestamp: number;
-      commitDuration: number;
-      componentName: string;
-    }[];
-  } | null,
+  commitTree: StoredCommits | null,
   componentName: string,
   topN: number
 ): string {
@@ -306,6 +311,13 @@ function renderComponentCpu(
     componentName,
     commitTree.commits.map((c) => c.componentName)
   );
+  if (resolution.kind === "missing" && commitTree.renderSummary) {
+    return renderNameOutsideStoredCommits(
+      componentName,
+      commitTree.renderSummary,
+      " Use mode=`top_functions` for JS CPU over the whole session."
+    );
+  }
   if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
     return renderComponentNameMiss(resolution, {
       fiberRenders: commitTree.commits.length,

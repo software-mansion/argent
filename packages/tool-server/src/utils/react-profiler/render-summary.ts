@@ -16,6 +16,11 @@ import type { DevToolsFiberCommit } from "./types/input";
 import type { ReRenderReason } from "./types/output";
 import { deriveReason } from "./pipeline/utils";
 import type { ComponentOriginResult } from "./component-origin";
+import {
+  renderComponentNameMiss,
+  resolveComponentName,
+  type ComponentNameResolution,
+} from "./component-names";
 
 export const RENDER_SUMMARY_VERSION = 1;
 
@@ -365,6 +370,45 @@ export function formatRenderTime(summary: RenderSummary): string {
   return (
     `${formatMs(summary.totalRenderMs)} of ${(summary.recordingMs / 1000).toFixed(1)} s ` +
     `(${formatShare(renderTimeShare(summary))})${peak}, ${formatCount(summary.totalCommits)} ${commits}`
+  );
+}
+
+/** A name miss against every commit, where `render_counts` lists each name. */
+export function renderSummaryNameMiss(
+  resolution: Extract<ComponentNameResolution, { kind: "ambiguous" | "missing" }>,
+  summary: RenderSummary
+): string {
+  return renderComponentNameMiss(resolution, {
+    fiberRenders: summary.fiberRenders,
+    commits: summary.totalCommits,
+    nextStep:
+      "Run `profiler-commit-query` mode=`render_counts` without `component_name` to list every component.",
+  });
+}
+
+/**
+ * For a name the stored commits do not hold. It may have rendered only in commits
+ * under 16ms, which stop does not keep, so answer from the summary: a component
+ * `render_counts` lists must not read as missing from the session.
+ */
+export function renderNameOutsideStoredCommits(
+  query: string,
+  summary: RenderSummary,
+  nextStep = ""
+): string {
+  const resolution = resolveComponentName(
+    query,
+    summary.components.map((c) => c.name)
+  );
+  if (resolution.kind !== "exact" && resolution.kind !== "display") {
+    return renderSummaryNameMiss(resolution, summary);
+  }
+  const row = summary.components.find((c) => c.name === resolution.rawName)!;
+  const renders = row.rerenders + row.mounts + row.untrackedRenders;
+  return (
+    `_\`${row.name}\` rendered ${formatCount(renders)} ${renders === 1 ? "time" : "times"} in this session, ` +
+    `but never in a stored commit: only commits of 16ms or more and their neighbours are stored._\n\n` +
+    `Run \`profiler-commit-query\` mode=\`render_counts\` component_name=\`${row.name}\` for its counts over all commits.${nextStep}`
   );
 }
 

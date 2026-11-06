@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { FAILURE_CODES, ServiceState, getFailureSignal, type Registry } from "@argent/registry";
 import { createReactProfilerStopTool } from "../../src/tools/profiler/react/react-profiler-stop";
 import { profilerCommitQueryTool } from "../../src/tools/profiler/query/profiler-commit-query";
+import { profilerCpuQueryTool } from "../../src/tools/profiler/query/profiler-cpu-query";
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
 import { reactProfilerRendersTool } from "../../src/tools/profiler/react/react-profiler-renders";
 import {
@@ -244,14 +245,15 @@ function fiber(name: string, commitIndex: number, selfDuration: number): DevTool
 async function cacheSession(
   deviceId: string,
   commits: DevToolsFiberCommit[],
-  meta: Record<string, unknown>
+  meta: Record<string, unknown>,
+  cpuProfilePath: string | null = null
 ): Promise<void> {
   const commitsPath = join(scratch, `${deviceId}_commits.json`);
   await fs.writeFile(commitsPath, JSON.stringify({ commits, meta }));
   const paths: ProfilerSessionPaths = {
     sessionId: deviceId,
     debugDir: scratch,
-    cpuProfilePath: null,
+    cpuProfilePath,
     commitsPath,
     cpuSampleIndexPath: null,
     detectedArchitecture: null,
@@ -461,6 +463,110 @@ describe("profiler-commit-query render_counts", () => {
       component_name: "Nope",
     });
     expect(out).toContain("recorded 2 fiber renders across 3 commits");
+    expect(out).toContain("mode=`render_counts` without `component_name`");
+    expect(out).not.toContain("by_index");
+  });
+
+  it("by_component finds a cold component by its name without wrappers", async () => {
+    await cacheSession("cold-display-device", [fiber("Hot", 5, 30)], {
+      hotCommitIndices: [5],
+      renderSummary: summarizeRenders(
+        [fiber("Hot", 5, 30), fiber("Memo(Ticker)", 1, 1)],
+        timings([3, 30]),
+        1000
+      ),
+    });
+    const out = await query("cold-display-device", {
+      mode: "by_component",
+      component_name: "Ticker",
+    });
+    expect(out).toContain("`Memo(Ticker)` rendered 1 time in this session");
+  });
+
+  it("a name render_counts cannot find points at the full list, not at by_index", async () => {
+    await cacheSession("counts-miss-device", [], {
+      hotCommitIndices: [],
+      totalReactCommits: 468,
+      renderSummary: clockSummary(),
+    });
+    const out = await query("counts-miss-device", {
+      mode: "render_counts",
+      component_name: "Nope",
+    });
+    expect(out).toContain("not found in this profiling session");
+    expect(out).toContain("mode=`render_counts` without `component_name`");
+    expect(out).not.toContain("by_index");
+  });
+});
+
+// ── profiler-cpu-query ────────────────────────────────────────────────
+
+describe("profiler-cpu-query component_cpu", () => {
+  async function cacheCpuSession(
+    deviceId: string,
+    commits: DevToolsFiberCommit[],
+    meta: Record<string, unknown>
+  ): Promise<void> {
+    const cpuProfilePath = join(scratch, `${deviceId}_cpu.json`);
+    const root = {
+      id: 1,
+      callFrame: { functionName: "[root]", scriptId: "0", url: "", lineNumber: 0, columnNumber: 0 },
+    };
+    await fs.writeFile(
+      cpuProfilePath,
+      JSON.stringify({
+        startTime: 1000,
+        endTime: 2000,
+        nodes: [root],
+        samples: [1, 1],
+        timeDeltas: [0, 1000],
+      })
+    );
+    await cacheSession(deviceId, commits, meta, cpuProfilePath);
+  }
+
+  function componentCpu(deviceId: string, componentName: string): Promise<string> {
+    return profilerCpuQueryTool.execute!({}, {
+      port: PORT,
+      device_id: deviceId,
+      mode: "component_cpu",
+      component_name: componentName,
+      top_n: 15,
+    } as never) as Promise<string>;
+  }
+
+  it("does not deny a component that rendered only in commits that were not stored", async () => {
+    await cacheCpuSession("cpu-cold-device", [fiber("Hot", 7, 30)], {
+      hotCommitIndices: [7],
+      totalReactCommits: 468,
+      renderSummary: clockSummary(),
+    });
+    const out = await componentCpu("cpu-cold-device", "ClockRow");
+    expect(out).toContain("`ClockRow` rendered 14,040 times in this session");
+    expect(out).toContain("mode=`render_counts` component_name=`ClockRow`");
+    expect(out).toContain("mode=`top_functions`");
+    expect(out).not.toContain("not found");
+  });
+
+  it("counts a missing name against the whole session", async () => {
+    await cacheCpuSession("cpu-miss-device", [fiber("Hot", 7, 30)], {
+      hotCommitIndices: [7],
+      totalReactCommits: 468,
+      renderSummary: clockSummary(),
+    });
+    const out = await componentCpu("cpu-miss-device", "Nope");
+    expect(out).toContain("not found in this profiling session");
+    expect(out).toContain("mode=`render_counts` without `component_name`");
+  });
+
+  it("keeps the stored-commit answer for a session without a summary", async () => {
+    await cacheCpuSession("cpu-old-miss-device", [fiber("Hot", 7, 30)], {
+      hotCommitIndices: [7],
+      totalReactCommits: 12,
+    });
+    const out = await componentCpu("cpu-old-miss-device", "Nope");
+    expect(out).toContain("across 1 commits");
+    expect(out).toContain("mode=by_index");
   });
 });
 

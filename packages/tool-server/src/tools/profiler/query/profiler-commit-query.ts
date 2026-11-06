@@ -22,6 +22,8 @@ import {
   formatCount,
   formatPeakCommit,
   formatRenderSummaryReason,
+  renderNameOutsideStoredCommits,
+  renderSummaryNameMiss,
   type RenderSummary,
 } from "../../../utils/react-profiler/render-summary";
 
@@ -113,10 +115,7 @@ export function renderRenderCounts(
       summary.components.map((c) => c.name)
     );
     if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
-      return renderComponentNameMiss(resolution, {
-        fiberRenders: summary.fiberRenders,
-        commits: summary.totalCommits,
-      });
+      return renderSummaryNameMiss(resolution, summary);
     }
     rows = summary.components.filter((c) => c.name === resolution.rawName);
     heading = `## Render Counts for \`${resolution.rawName}\` — all ${formatCount(summary.totalCommits)} commits`;
@@ -181,24 +180,7 @@ function renderByComponent(
     commits.map((c) => c.componentName)
   );
   if (resolution.kind === "missing" && summary) {
-    // It may have rendered only in commits under 16ms, which stop does not keep.
-    const elsewhere = resolveComponentName(
-      componentName,
-      summary.components.map((c) => c.name)
-    );
-    if (elsewhere.kind === "exact" || elsewhere.kind === "display") {
-      const row = summary.components.find((c) => c.name === elsewhere.rawName)!;
-      const renders = row.rerenders + row.mounts + row.untrackedRenders;
-      return (
-        `_\`${row.name}\` rendered ${formatCount(renders)} ${renders === 1 ? "time" : "times"} in this session, ` +
-        `but never in a stored commit: only commits of 16ms or more and their neighbours are stored._\n\n` +
-        `Run \`profiler-commit-query\` mode=\`render_counts\` component_name=\`${row.name}\` for its counts over all commits.`
-      );
-    }
-    return renderComponentNameMiss(elsewhere, {
-      fiberRenders: summary.fiberRenders,
-      commits: summary.totalCommits,
-    });
+    return renderNameOutsideStoredCommits(componentName, summary);
   }
   if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
     return renderComponentNameMiss(resolution, {
