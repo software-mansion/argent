@@ -46,6 +46,14 @@ On Android, Argent also checks the device after the uninstall. If the package is
 
 On a local iOS simulator, the tool fails and does not install the `.app` if the uninstall does not finish within 30 seconds.
 
+On a local iOS simulator, `boot-device`, `launch-app`, `restart-app` and `reinstall-app` give `error_kind: "timeout"` when a `simctl` step does not finish within its time limit. The message names the step and the limit.
+
+On a local iOS simulator, `boot-device` fails if `simctl list` does not answer within 10 seconds, because Argent cannot read the state of the simulator. In that case, `list-devices` returns a `hint` that says that the list can be incomplete.
+
+On Chromium, `open-url` fails when Chromium does not load the URL in the page. Examples are an unknown scheme, `tel:`, `mailto:`, a host that does not resolve and a response with no content. An HTTP error status, for example 404, does not make the tool fail.
+
+`stop-metro` returns `stopped: false` only when no process listens on the port. The tool fails if it cannot read the port, or if it finds a listener but not the process that owns it.
+
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
 - Closed, the cover panel shows the UI. Half-open and open, the inner panel shows the UI. The panel that shows the UI is the active panel.
