@@ -51,6 +51,9 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
   return result;
 }
 
+/** Every Android native ID starts with this, and so does a truncated or mistyped one. */
+const ANDROID_ID_PREFIX = "android-";
+
 /** Body chars kept, of a request or a response; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
 
@@ -89,22 +92,6 @@ function truncatePostData(postData: string | undefined, truncated?: boolean): st
   const fullSize = truncated ? `more than ${postData.length} chars` : `${postData.length} chars`;
   return `${cutMarker(fullSize)}\n${postData.slice(0, MAX_BODY_SIZE)}...`;
 }
-
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: z
-    .string()
-    .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect. An android- ID needs no debugger connection."
-    ),
-  requestId: z
-    .string()
-    .describe("The requestId from view-network-logs, or an android- ID from native-network-logs"),
-  includeBody: z
-    .boolean()
-    .default(true)
-    .describe("Whether to include the response body (if captured). Defaults to true."),
-});
 
 interface RawEntry {
   id: number;
@@ -180,23 +167,39 @@ interface NetworkRequestDetails {
   initiator?: { type: string; url?: string; lineNumber?: number };
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: z
+    .string()
+    .describe(
+      "Device id from list-devices (iOS simulator UDID or Android serial), the same id used with debugger-connect. An android- ID needs no debugger connection."
+    ),
+  requestId: z
+    .string()
+    .describe("The requestId from view-network-logs, or an android- ID from native-network-logs."),
+  includeBody: z
+    .boolean()
+    .default(true)
+    .describe("Whether to include the response body (if captured)."),
+});
+
 export const networkRequestTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
+  description: `Get full details of a specific network request by its requestId.
+Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
+Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted. Use when you need headers, body, or timing for a specific request after listing logs.
+Returns an error message string if the requestId is not found.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Reading network request ${params.requestId}`,
     completedMsg: ({ params }) => `Read network request ${params.requestId}`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read network request ${params.requestId}: ${failureSignal.error_code}`,
   },
-  description: `Get full details of a specific network request by its requestId (from view-network-logs, or an android- ID from native-network-logs on Android).
-Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
-Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is replaced by "[body omitted: binary <mime>, N bytes]". Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found: use view-network-logs, or native-network-logs for an android- ID, to get valid requestId values.`,
-  readOnly: true,
-  zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params): Record<string, ServiceRef> => {
     /**
@@ -211,6 +214,13 @@ Returns an error message string if the requestId is not found: use view-network-
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    /**
+     * An android- ID in any other shape was not issued by the native layer, and
+     * the JS layer names its requests rn-net-<n>. No layer can hold it, so saying
+     * that needs no debugger. Chromium's IDs are opaque, so Chromium, above, still
+     * gets to answer for itself.
+     */
+    if (params.requestId.startsWith(ANDROID_ID_PREFIX)) return {};
     return {
       inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
     };
@@ -271,6 +281,10 @@ Returns an error message string if the requestId is not found: use view-network-
         details.response = resp;
       }
       return details;
+    }
+
+    if (params.requestId.startsWith(ANDROID_ID_PREFIX)) {
+      return androidNativeNotFound(params.requestId, params.device_id);
     }
 
     const api = services.inspector as NetworkInspectorApi;

@@ -85,7 +85,7 @@ interface RenderEntry {
 function renderMarkdownTable(entries: RenderEntry[]): string {
   if (entries.length === 0)
     return "_No render data found. Ensure React DevTools global hook is present._";
-  const header = "| Component | Renders | Total (ms) | Self Base (ms) |";
+  const header = "| Component | Instances | Total (ms) | Self Base (ms) |";
   const sep = "|---|---|---|---|";
   const rows = entries.map(
     (e) =>
@@ -101,28 +101,23 @@ const zodSchema = z.object({
     .describe(
       "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
     ),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(20)
-    .describe("Number of top re-rendering components to return (default 20)"),
+  top_n: z.coerce.number().int().positive().default(20).describe("Number of components to return"),
 });
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
+  description: `Scan the live React fiber tree and count the mounted instances of each component, with their last render durations.
+Returns a markdown table of the components with the longest total render time. It reads the top 30 levels of the tree and does not count re-renders: record a profiling session for that.
+Use when you want a quick look at what is mounted in a live connected app, without a profiling session.
+Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: () => "Reading React render activity",
     completedMsg: () => "Read React render activity",
     failedMsg: ({ failureSignal }) =>
       `Failed to read React render activity: ${failureSignal.error_code}`,
   },
-  description: `Scan the live React fiber tree to collect component render counts and durations.
-Returns a markdown table of the top re-rendering components. No profiling session required; works on a live connected app.
-Use when you want a quick snapshot of render counts without a full profiling session.
-Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
-  readOnly: true,
-  zodSchema,
   // RN-only: queries the React DevTools backend hook on the live runtime.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
@@ -209,6 +204,6 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
       .sort((a, b) => b.totalActualDuration_ms - a.totalActualDuration_ms)
       .slice(0, params.top_n);
 
-    return `## React Component Renders\n\n${renderMarkdownTable(entries)}`;
+    return `## Mounted React Components\n\n${renderMarkdownTable(entries)}`;
   },
 };
