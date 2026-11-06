@@ -14,6 +14,7 @@ export const FAILURE_KINDS = [
   "network",
   "subprocess",
   "crash",
+  "cancelled",
   "unknown",
 ] as const;
 

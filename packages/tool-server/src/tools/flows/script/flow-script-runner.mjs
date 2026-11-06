@@ -571,8 +571,14 @@ function describeValue(value) {
   if (type === "string") return "a string";
   if (type === "boolean") return "a boolean";
   if (Array.isArray(value)) return "an array";
-  const name = value.constructor && value.constructor.name;
-  return name ? `a ${name}` : "an object with an unusual prototype";
+  // `constructor` is inherited: on `Object.create({})` it is Object, the one
+  // class such a value is not.
+  const ctor = value.constructor;
+  const name =
+    typeof ctor === "function" && ctor.prototype === Object.getPrototypeOf(value) ? ctor.name : "";
+  if (!name) return "an object with an unusual prototype";
+  // `U` takes "a": Uint8Array, URL, User.
+  return `${/^[aeio]/i.test(name) ? "an" : "a"} ${name}`;
 }
 
 function describeBytes(bytes) {

@@ -44,9 +44,10 @@ only when you name it (`--phase ios-duo`) and give it a booted iPhone Duo.
 
 ## Isolation
 
-Everything runs under a throwaway `HOME` and npm prefix (`$(mktemp -d)`), so the
-real machine's `~/.argent`, editor MCP configs, and global packages are never
-touched — safe to run on a shared box. Add `--keep` to inspect the sandbox after.
+Everything runs under a throwaway `HOME` (the XDG base directories included) and
+npm prefix (`$(mktemp -d)`), so the real machine's `~/.argent`, editor MCP
+configs, and global packages are never touched — safe to run on a shared box.
+Add `--keep` to inspect the sandbox after.
 
 ## Providing a device
 

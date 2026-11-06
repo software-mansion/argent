@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Copies skills/ and agents/ into .claude/ at the nearest git root (cwd if none). */
 import { execSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,16 +17,22 @@ function gitRoot() {
   }
 }
 
+// cpSync refuses a symlinked destination dir (ERR_FS_CP_DIR_TO_NON_DIR), so copy
+// into the directory the link points at.
+function copyInto(src, dest) {
+  const target = existsSync(dest) ? realpathSync(dest) : dest;
+  mkdirSync(target, { recursive: true });
+  cpSync(src, target, { recursive: true });
+}
+
 const root = gitRoot();
 
 const skillsTarget = join(root, ".claude", "skills");
-mkdirSync(skillsTarget, { recursive: true });
-cpSync(skillsDir, skillsTarget, { recursive: true });
+copyInto(skillsDir, skillsTarget);
 console.log(`Installed skills to ${skillsTarget}`);
 
 if (existsSync(agentsDir)) {
   const agentsTarget = join(root, ".claude", "agents");
-  mkdirSync(agentsTarget, { recursive: true });
-  cpSync(agentsDir, agentsTarget, { recursive: true });
+  copyInto(agentsDir, agentsTarget);
   console.log(`Installed agents to ${agentsTarget}`);
 }

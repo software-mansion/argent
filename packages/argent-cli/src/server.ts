@@ -98,7 +98,14 @@ function logsCmd(follow: boolean): void {
     return;
   }
   if (!follow) {
-    process.stdout.write(fs.readFileSync(LOG_FILE, "utf8"));
+    let log: string;
+    try {
+      log = fs.readFileSync(LOG_FILE, "utf8");
+    } catch (err) {
+      console.error(`argent server logs: cannot read ${LOG_FILE} (${(err as Error).message}).`);
+      process.exit(1);
+    }
+    process.stdout.write(log);
     return;
   }
   // Delegate follow to `tail` rather than reimplementing it; Ctrl-C then exits

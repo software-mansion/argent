@@ -244,6 +244,22 @@ describe("global-only allowlists honor the cleanup scope", () => {
   });
 });
 
+describe("removeAllowlist reports whether it removed anything", () => {
+  it.each(ALL_ADAPTERS.filter((a) => a.removeAllowlist).map((a) => [a.name, a] as const))(
+    "%s returns true once after addAllowlist, then false",
+    (_name, adapter) => {
+      homedirOverride = tmpDir;
+      const root = path.join(tmpDir, "proj");
+      expect(adapter.removeAllowlist!(root, "global")).toBe(false);
+      adapter.write(adapter.globalPath()!, getMcpEntry());
+      adapter.addAllowlist!(root, "global");
+
+      expect(adapter.removeAllowlist!(root, "global")).toBe(true);
+      expect(adapter.removeAllowlist!(root, "global")).toBe(false);
+    }
+  );
+});
+
 // ── getArgentEntry env passthrough ────────────────────────────────────────────
 
 describe("getArgentEntry env passthrough", () => {
@@ -643,6 +659,20 @@ describe("Windsurf adapter", () => {
 
       adapter.removeAllowlist!(tmpDir, "global");
 
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
+
+    it.each([
+      ["without alwaysAllow", () => {}],
+      [
+        "without mcp_config.json",
+        () => fs.rmSync(path.join(home, ".codeium"), { recursive: true, force: true }),
+      ],
+    ])("reports removing the Devin rule alone, %s", (_label, stage) => {
+      writeJsonFile(devinConfig, { permissions: { allow: ["mcp__argent__*"] } });
+      stage();
+
+      expect(adapter.removeAllowlist!(tmpDir, "global")).toBe(true);
       expect(fs.existsSync(devinConfig)).toBe(false);
     });
 

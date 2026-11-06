@@ -37,6 +37,7 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
+  escapeInline,
   flowNameCasingError,
   iosLaunchArgs,
   isBlockStep,
@@ -2283,6 +2284,9 @@ function summarize(
  */
 function pushReport(state: ExecState, report: StepReport): void {
   if (report.e2eTest !== undefined) report.flow = report.e2eTest;
+  // Renderers print these in the target's place, on one line.
+  if (report.tool !== undefined) report.tool = escapeInline(String(report.tool));
+  if (report.message !== undefined) report.message = escapeInline(report.message);
   state.reports.push(report);
   state.onStepReport?.(report);
 }

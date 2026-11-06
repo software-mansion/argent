@@ -483,6 +483,40 @@ describe("flow step definitions", () => {
     );
   });
 
+  it("escapes DEL and C1 controls inside JSON-quoted values", () => {
+    // JSON.stringify escapes C0 only; U+009B is a one-byte CSI to a terminal.
+    const raw = "a\u009b2J\u007f";
+    const esc = "a\\u009b2J\\u007f";
+    const summary = (step: FlowStep) =>
+      summarizeSteps({ executionPrerequisite: "", steps: [step] })[0];
+    const status = { kind: "assert", condition: "text", selector: { identifier: "s" } } as const;
+
+    expect(summary({ kind: "launch", app: { ios: raw } })).toBe(`1. launch: {"ios":"${esc}"}`);
+    expect(summary({ kind: "tap", selector: { text: raw } })).toBe(`1. tap: {"text":"${esc}"}`);
+    expect(summary({ kind: "tap", selector: { text: raw, loose: true } })).toBe(`1. tap: "${esc}"`);
+    expect(summary({ kind: "tool", name: "keyboard", args: { text: raw } })).toBe(
+      `1. tool: keyboard {"text":"${esc}"}`
+    );
+    const type: FlowStep = { kind: "type", into: { identifier: "bio" }, text: raw };
+    expect(summary(type)).toBe(`1. type: {"id":"bio"} ← "${esc}"`);
+    expect(stepTarget(type)).toBe(`into id=bio ← "${esc}"`);
+    expect(stepTarget({ ...type, text: raw.repeat(60) })).toBe(
+      `into id=bio ← "${esc.repeat(40)}"…(+100 chars)`
+    );
+    for (const [textMatch, mode, op] of [
+      ["equals", "equals", "=="],
+      ["contains", "contains", "contains"],
+    ] as const) {
+      const step: FlowStep = { ...status, expectedText: raw, textMatch };
+      expect(summary(step)).toBe(`1. assert: text {"id":"s"} ${op} "${esc}"`);
+      expect(stepTarget(step)).toBe(`id=s ${mode} "${esc}"`);
+    }
+    expect(stepTarget({ kind: "tap", selector: { text: raw } })).toBe(`"${esc}"`);
+    expect(
+      describeWhenCondition({ kind: "ui", condition: "visible", selector: { identifier: raw } })
+    ).toBe(`visible id="${esc}"`);
+  });
+
   it("bounds the typed text a report target quotes, and only there", () => {
     // The summary runs once at authoring time and is the step anchor, so it
     // carries the text whole; the target is emitted on every replay, into the
