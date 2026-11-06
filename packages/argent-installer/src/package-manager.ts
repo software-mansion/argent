@@ -35,7 +35,9 @@ export function detectPackageManager(): PackageManager {
 // does not own, where it would add a second argent to PATH and leave the first in
 // place. `yarn` then fails without installing anything. npm's layout puts
 // <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent. A live
-// bin that resolves to no package (a version-manager shim) keeps npm.
+// bin that resolves to no package keeps npm, since that is mostly a version-manager
+// shim over an npm global; a pnpm shim or any Windows .cmd is one too, so npm can
+// still add a second copy over a pnpm global, or over a Yarn global on Windows.
 export function detectGlobalPackageManager(): PackageManager {
   const pm = detectPackageManager();
   const agent = process.env.npm_config_user_agent ?? "";

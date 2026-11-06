@@ -699,6 +699,8 @@ export async function uninstall(args: string[]): Promise<void> {
       );
     }
 
+    // One install failing still leaves the other target to remove.
+    let packageFailed = false;
     for (const removable of removables) {
       let shouldRemove = nonInteractive || removePreconfirmed;
       if (!nonInteractive && !removePreconfirmed) {
@@ -757,14 +759,18 @@ export async function uninstall(args: string[]): Promise<void> {
         }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);
-        await finalizeUninstallTelemetry(
-          hasPrunedContent,
-          hasUninstalledPackage,
-          UNINSTALL_PACKAGE_ACTION_FAILED
-        );
-        process.exitCode = 1;
-        return;
+        packageFailed = true;
       }
+    }
+
+    if (packageFailed) {
+      await finalizeUninstallTelemetry(
+        hasPrunedContent,
+        hasUninstalledPackage,
+        UNINSTALL_PACKAGE_ACTION_FAILED
+      );
+      process.exitCode = 1;
+      return;
     }
 
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);

@@ -235,6 +235,25 @@ describe("uninstall — telemetry consent preservation", () => {
       );
     });
 
+    it("keeps the CLI record of a global the uninstall left in place", async () => {
+      childProcessMock.versionProbe.mockImplementation(() => {
+        throw Object.assign(new Error("exit 1"), { status: 1 });
+      });
+      const record = path.join(tmpDir, ".argent", "cli.json");
+      writeFile(
+        record,
+        JSON.stringify({
+          cli: path.join(fs.realpathSync(globalPkg), "bin", "argent"),
+          node: process.execPath,
+        })
+      );
+
+      await uninstall(["--yes"]);
+
+      expect(process.exitCode).toBe(1);
+      expect(fs.existsSync(record)).toBe(true);
+    });
+
     it("reports a failure when the uninstall exits 0 and leaves the package", async () => {
       const clack = await import("@clack/prompts");
       // Resolving to the package is enough: a probe that fails does not clear it.
@@ -394,6 +413,42 @@ describe("uninstall — telemetry consent preservation", () => {
         "Remove it with the package manager that installed it."
     );
     expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("still removes the local install when a second global stays on PATH", async () => {
+    const clack = await import("@clack/prompts");
+    const npmBin = path.join(tmpDir, "npm-prefix", "bin", "argent");
+    const yarnBin = path.join(tmpDir, "yarn-bin", "argent");
+    writeFile(npmBin);
+    writeFile(yarnBin);
+    childProcessMock.which.mockImplementation(() => `${npmBin}\n${yarnBin}\n`);
+    const projectDir = path.join(tmpDir, "project");
+    writeFile(
+      path.join(projectDir, "package.json"),
+      JSON.stringify({ devDependencies: { "@swmansion/argent": "1.0.0" } })
+    );
+    const localPkg = path.join(projectDir, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "1.0.0" })
+    );
+    childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+      if (bin === "npm" && args.includes("-g")) fs.rmSync(npmBin);
+      else if (bin === "npm") fs.rmSync(localPkg, { recursive: true });
+      return undefined;
+    });
+    process.chdir(projectDir);
+
+    await uninstall(["--yes", "--global", "--local"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${yarnBin} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed local package.");
+    expect(fs.existsSync(localPkg)).toBe(false);
+    expect(vi.mocked(clack.outro)).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 
