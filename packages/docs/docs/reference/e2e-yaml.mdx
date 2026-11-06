@@ -141,7 +141,7 @@ On a Mac app:
 - The runner reads the tree again when elements did not answer or Argent could not read the web content.
 - The runner calls a password field `[password]`, so only an `id` or `role` selector matches it.
 - When several elements match, an action and a `text` condition choose one of them. A match in an open menu or an open combo box list comes first. A match in an alert, a sheet or a popover comes next, the upper one first when one lies over another. A match in a window comes last.
-- A recorded click that is not at the center of an element can keep its coordinates. This applies to a slider, a stepper and a text area. It also applies to an element that is not clickable and is not text. Examples are a click on a canvas, a chart, a map, a seek bar or the empty space of a container. A replay of a selector clicks the center, and there the click does something else. A click on text keeps its coordinates only when another element is at the center of the text.
+- A recorded click that is not at the center of an element can keep its coordinates. This applies to a slider, a stepper, a text area and a disclosure triangle, for example a SwiftUI `DisclosureGroup`. It also applies to an element that is not clickable and is not text. Examples are a click on a canvas, a chart, a map, a seek bar or the empty space of a container. A replay of a selector clicks the center, and there the click does something else. A click on text keeps its coordinates only when another element is at the center of the text.
 
 ## Directives
 
@@ -212,6 +212,8 @@ steps:
   - tool: file-panel
     args: { action: choose, path: ~/Documents/note.txt }
 ```
+
+When the agent records a `file-panel` `stub` with no `panelKind`, Argent saves the `panelKind` that the stub used. The app writes the file when the save panel gets the answer. Without `panelKind`, a replay finds that file and keeps the answer for the next open panel.
 
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the e2e test as a fragment.
 

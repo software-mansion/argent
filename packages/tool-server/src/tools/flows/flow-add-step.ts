@@ -695,6 +695,12 @@ function roleOnlySelectorWarning(selector: Selector): string | undefined {
 
 /** Mac controls that act on where in them a click lands. */
 const MACOS_POINT_ROLES: ReadonlySet<string> = new Set(["AXSlider", "AXIncrementor", "AXTextArea"]);
+/**
+ * Mac controls that take a click only at one part of them: a SwiftUI
+ * DisclosureGroup is one element over its chevron and its label, and opens only
+ * at the chevron.
+ */
+const MACOS_PART_ROLES: ReadonlySet<string> = new Set(["AXDisclosureTriangle"]);
 /** Mac text, which takes a click the same anywhere in it. */
 const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"]);
 
@@ -783,11 +789,14 @@ async function captureTapSelector(
       };
     }
     // Replay clicks the centre. On a Mac app, a click anywhere else on a slider,
-    // a stepper, a text view, a canvas, chart, map or seek bar, or a container's
-    // empty space does something else there. So does a click on any element that
-    // is not clickable, text included, when another element lies at its centre.
+    // a stepper, a text view, a disclosure group, a canvas, chart, map or seek
+    // bar, or a container's empty space does something else there. So does a
+    // click on any element that is not clickable, text included, when another
+    // element lies at its centre.
     const pointMatters =
-      MACOS_POINT_ROLES.has(node.role) || (!node.clickable && !MACOS_TEXT_ROLES.has(node.role));
+      MACOS_POINT_ROLES.has(node.role) ||
+      MACOS_PART_ROLES.has(node.role) ||
+      (!node.clickable && !MACOS_TEXT_ROLES.has(node.role));
     if (
       device.platform === "macos" &&
       // Coordinates on a slider replay the same point, so it keeps them for any click
@@ -1395,6 +1404,24 @@ function replayRefusal(
 }
 
 /**
+ * The args of a recorded `file-panel` stub, with the panel kind the call used.
+ * Without `panelKind` the tool infers the kind from the file system: one path
+ * that does not exist yet is a save panel's file. The answer writes that file,
+ * so a replay would infer an open panel, and the save panel would stay open.
+ */
+function withRecordedPanelKind(
+  command: string,
+  args: Record<string, unknown>,
+  toolResult: unknown
+): Record<string, unknown> {
+  if (command !== "file-panel" || args.action !== "stub" || args.panelKind !== undefined) {
+    return args;
+  }
+  const panelKind = (toolResult as { panelKind?: unknown } | null)?.panelKind;
+  return panelKind === "open" || panelKind === "save" ? { ...args, panelKind } : args;
+}
+
+/**
  * Over a link, the argent client sends with the call the files the one
  * recorded step makes this tool read, as a replay over the same link reads
  * them: the file arguments of the step, the flow a nested `flow-execute` names
@@ -1764,7 +1791,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = {
           kind: "tool",
           name: command,
-          args: strippedArgs,
+          args: withRecordedPanelKind(command, strippedArgs, toolResult),
           delayMs: params.delayMs,
         };
       }

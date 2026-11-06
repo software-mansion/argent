@@ -27,6 +27,7 @@ import {
   BLOCK_DIRECTIVE_KEYS,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
+import { scopeTempFlags } from "../helpers/macos-apps-flag";
 
 // ── serializeFlow ────────────────────────────────────────────────────
 
@@ -1622,6 +1623,10 @@ describe("native launch shorthand", () => {
 // ── the authoring platform fold ──────────────────────────────────────
 
 describe("the authoring platform fold", () => {
+  // The allowed launch keys include macos while the macos-apps flag is on, so
+  // the developer's own flags must not reach the message.
+  scopeTempFlags();
+
   it("folds only ios-remote, and leaves every writable platform alone", async () => {
     expect(authoringPlatform("ios-remote")).toBe("ios");
     for (const p of ["ios", "android", "chromium", "vega"]) {

@@ -244,8 +244,21 @@ describe("a tap recorded at a point of a Mac app element", () => {
       0.2,
       { selector: { identifier: "seek" } },
     ],
+    [
+      "keeps the coordinates of a click on the chevron at the left end of a disclosure group",
+      "AXDisclosureTriangle",
+      0.12,
+      { x: 0.12, y: 0.25 },
+    ],
+    [
+      "keeps the selector of a click at the centre of a disclosure triangle",
+      "AXDisclosureTriangle",
+      0.405,
+      { selector: { identifier: "seek" } },
+    ],
   ])("%s", async (_label, role, x, step) => {
-    serve([n({ ...SEEK, role, clickable: role === "AXSlider" })], "macos-devtools");
+    const clickable = role === "AXSlider" || role === "AXDisclosureTriangle";
+    serve([n({ ...SEEK, role, clickable })], "macos-devtools");
     await start("seek");
 
     await record("seek", "gesture-tap", { x, y: 0.25 });
@@ -288,6 +301,48 @@ describe("a right tap recorded on a Mac app", () => {
 
     expect(await recordedSteps("ctx")).toEqual([step]);
     if (extra.button === "right") expect(result.recorded).toMatch(/\(right button\)$/);
+  });
+});
+
+describe("a file-panel stub recorded on a Mac app", () => {
+  const FILE = "/tmp/argent-recorded-stub.txt";
+
+  it.each([
+    [
+      "keeps the save panel it inferred for a new file, which the answer writes",
+      { action: "stub", path: FILE },
+      { armed: true, mode: "answer", panelKind: "save" },
+      { action: "stub", path: FILE, panelKind: "save" },
+    ],
+    [
+      "keeps the open panel it inferred for an existing file",
+      { action: "stub", path: FILE },
+      { armed: true, mode: "answer", panelKind: "open" },
+      { action: "stub", path: FILE, panelKind: "open" },
+    ],
+    [
+      "keeps the panel kind the call names",
+      { action: "stub", path: FILE, panelKind: "save" },
+      { armed: true, mode: "answer", panelKind: "save" },
+      { action: "stub", path: FILE, panelKind: "save" },
+    ],
+    [
+      "adds no panel kind to a stub that cancels",
+      { action: "stub", stubMode: "cancel" },
+      { armed: true, mode: "cancel" },
+      { action: "stub", stubMode: "cancel" },
+    ],
+  ])("%s", async (_label, args, toolResult, recorded) => {
+    serve([], "macos-devtools");
+    await start("panel");
+    const reg = registry();
+    vi.mocked(reg.invokeTool).mockResolvedValueOnce(toolResult);
+
+    await record("panel", "file-panel", args, reg);
+
+    expect(await recordedSteps("panel")).toEqual([
+      { kind: "tool", name: "file-panel", args: recorded },
+    ]);
   });
 });
 
