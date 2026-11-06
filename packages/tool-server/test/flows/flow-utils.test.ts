@@ -753,6 +753,16 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([{ kind: "snapshot", name: "home", maxMismatch: 1.5 }]);
   });
 
+  it.each([
+    ['" 1.5 "', 1.5],
+    ['".5"', 0.5],
+    ['"+1"', 1],
+    ['"5."', 5],
+  ])("accepts the quoted decimal maxMismatch %s", (quoted, expected) => {
+    const flow = parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${quoted} }\n`);
+    expect(flow.steps).toEqual([{ kind: "snapshot", name: "home", maxMismatch: expected }]);
+  });
+
   it("rejects a non-numeric, negative, or out-of-range maxMismatch", async () => {
     for (const bad of ['"5%"', "-1", "101", ".nan"]) {
       expect(() =>
