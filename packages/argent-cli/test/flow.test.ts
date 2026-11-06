@@ -1585,9 +1585,10 @@ describe("argent e2e run", () => {
     expect(out).toContain("FAIL — 1 passed, 1 failed, 0 errored, 1 skipped");
   });
 
-  it("fails a passing run over a link whose baselines were not all written, naming each", async () => {
+  it("names each baseline a run could not write in its recap", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: report({
+        ok: false,
         baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
       }),
     });
@@ -1623,22 +1624,6 @@ describe("argent e2e run", () => {
       "FAIL — 0 passed, 1 failed, 0 errored, 0 skipped",
     ]);
   });
-
-  it.each(["--json", "--json-stream"])(
-    "reports ok: false with %s when a baseline was not written",
-    async (flag) => {
-      toolsClientMock.callTool.mockResolvedValue({
-        data: report({
-          baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }],
-        }),
-      });
-
-      await expect(flow(["run", checkoutPath, flag], opts)).rejects.toThrow("process.exit:1");
-      expect(logs).toHaveLength(1);
-      const record = JSON.parse(logs[0]!);
-      expect((flag === "--json" ? record : record.data).ok).toBe(false);
-    }
-  );
 
   it("renders legacy warnings with the ⚠ glyph and counts them in the summary", async () => {
     toolsClientMock.callTool.mockResolvedValue({
@@ -2801,9 +2786,12 @@ describe("argent e2e run <dir>", () => {
     });
   });
 
-  it("fails a flow whose baselines were not written on its own line and in the recap", async () => {
+  it("names a baseline a flow could not write on its own line and in the recap", async () => {
     toolsClientMock.callTool.mockResolvedValueOnce({
-      data: report({ baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }] }),
+      data: report({
+        ok: false,
+        baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }],
+      }),
     });
 
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
@@ -2821,19 +2809,6 @@ describe("argent e2e run <dir>", () => {
     ]);
   });
 
-  it("fails the report of a flow whose baselines were not written in the --json aggregate", async () => {
-    toolsClientMock.callTool.mockResolvedValueOnce({
-      data: report({ baselineWrites: [{ path: "/p/b.png", error: "EACCES: permission denied" }] }),
-    });
-
-    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
-    const { flows } = JSON.parse(logs[0]!);
-    expect(flows[0]).toMatchObject({ path: "a-login.yaml", status: "fail", report: { ok: false } });
-    expect(flows[1]).toMatchObject({ status: "pass", report: { ok: true } });
-  });
-
-  // Every verdict is stdout prose, so --json must emit the aggregate alone —
-  // one `| jq` away from a parse error otherwise.
   it("keeps --json a single document when a flow returns no report", async () => {
     toolsClientMock.callTool.mockResolvedValueOnce({
       data: { flow: "a-login", notice: "prerequisite" },

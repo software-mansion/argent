@@ -438,6 +438,10 @@ export function secretsTransportRefusal(url: string): string | undefined {
 /** Upper bound of the head bytes fetch adds to a call's own headers and URL. */
 const FETCH_HEAD_BYTES = 256;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
   const doFetch = options.fetchImpl ?? ((url, init) => fetch(url, init));
@@ -553,7 +557,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
           }
         }
       }
-      const result = applied.result;
+      const result =
+        applied.failed.length > 0 && isRecord(applied.result) && applied.result.ok === true
+          ? { ...applied.result, ok: false }
+          : applied.result;
       if (
         shadowWarning === undefined ||
         typeof result !== "object" ||

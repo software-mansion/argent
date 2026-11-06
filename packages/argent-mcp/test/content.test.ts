@@ -390,10 +390,10 @@ describe("flowRunToMcpContent", () => {
     ]);
   });
 
-  it("fails a passing run whose baselines were not all written", async () => {
+  it("names each baseline the client could not write", async () => {
     const blocks = await flowRunToMcpContent({
       flow: "f",
-      ok: true,
+      ok: false,
       passed: 1,
       failed: 0,
       errored: 0,

@@ -1486,7 +1486,6 @@ async function runFlowDirectory(
       flowPath,
       baseUrl
     );
-    if (unwrittenBaselines(report).length) report.ok = false;
     results.push({ path: rel, status: report.ok ? "pass" : "fail", report });
     if (!report.ok) failures.push({ path: rel, ...summarizeFailure(report), rerun });
     if (!args.json) {
@@ -1924,7 +1923,6 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
     return fail(err instanceof Error ? err.message : String(err), 2, err);
   }
 
-  if (unwrittenBaselines(report).length) report.ok = false;
   if (args.jsonStream) {
     writeJsonStreamRecord({ event: "result", data: report });
   } else if (args.json) {

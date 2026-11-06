@@ -68,6 +68,12 @@ beforeEach(async () => {
             fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
           },
           {
+            name: "record",
+            description: "",
+            inputSchema: {},
+            fileInputs: [{ target: "project_root", path: "${project_root}", kind: "probe" }],
+          },
+          {
             name: "run-flow",
             description: "",
             inputSchema: {},
@@ -97,6 +103,8 @@ beforeEach(async () => {
       return json({ data: { reinstalled: true } });
     }
     if (req.method === "POST" && req.url === "/tools/run-flow") return json({ data: runFlowData });
+    if (req.method === "POST" && req.url === "/tools/record")
+      return json({ data: { recorded: true } });
     if (req.method === "POST" && req.url === "/tools/proxy-page") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html>Sign in</html>");
@@ -133,7 +141,7 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: false }),
     });
     const tools = await withOverride.fetchTools();
-    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app", "run-flow"]);
+    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app", "record", "run-flow"]);
 
     const withoutOverride = createToolsClient();
     await expect(withoutOverride.fetchTools()).rejects.toThrow(
@@ -320,7 +328,36 @@ describe("createToolsClient options", () => {
       inside,
       { path: outside, error: `${outside} is not a baseline of this call (${dir}/<name>.png)` },
     ]);
+    expect((data as { ok: unknown }).ok).toBe(false);
     expect(existsSync(outside)).toBe(false);
+  });
+
+  it("keeps ok: true when it writes every baseline the run returns", async () => {
+    const flowPath = join(TEST_HOME, "allwritten.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const inside = join(realpathSync(TEST_HOME), "__baselines__", "allwritten", "t__ios-30x60.png");
+    runFlowData = {
+      ok: true,
+      baselineWrites: [
+        {
+          __argentClientFile: true,
+          path: inside,
+          content: Buffer.from("png").toString("base64"),
+          encoding: "base64",
+        },
+      ],
+    };
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    const { data } = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+      updateBaselines: true,
+    });
+
+    expect(data).toEqual({ ok: true, baselineWrites: [inside] });
   });
 
   it("logs each baseline it writes under the [e2e-files] tag", async () => {
