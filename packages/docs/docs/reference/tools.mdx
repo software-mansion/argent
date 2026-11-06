@@ -282,7 +282,7 @@ The other app tools on a Mac app:
 
 On a Mac app, the results of `launch-app` and `restart-app` have `appPath`, the `.app` bundle that runs, and `args`, the arguments it runs with. When several folders, for example git worktrees, build the same app, `appPath` shows which build runs.
 
-One tool-server at a time drives a Mac app. While one tool-server is connected, each call of a second tool-server fails with `MACOS_APP_IN_USE`. The call also fails with `MACOS_APP_IN_USE` while a different program holds the connection to the Argent library. This also applies to `boot-device` with `force`, to `restart-app`, to `open-url` and to a `launch` step of an e2e test. The second tool-server does not quit the app. When the first tool-server stops, the next tool-server connects. A start or a restart from a second tool-server waits while the first tool-server starts or quits the app. Thus two tool-servers never start two copies of the app. When the wait takes more than 60 seconds, the call fails with `MACOS_APP_IN_USE`.
+One tool-server at a time drives a Mac app. While one tool-server is connected, each call of a second tool-server fails with `MACOS_APP_IN_USE`. The call also fails with `MACOS_APP_IN_USE` while a different program holds the connection to the Argent library. This also applies to `boot-device` with `force`, to `restart-app`, to `open-url` and to a `launch` step of an e2e test. The second tool-server does not quit the app. When the first tool-server stops, the next tool-server connects. A start or a restart from a second tool-server waits while the first tool-server starts or quits the app. After the wait, the call fails with `MACOS_APP_IN_USE` while the first tool-server stays connected. When the wait takes more than 60 seconds, the call also fails with `MACOS_APP_IN_USE`. Thus two tool-servers usually do not start two copies of the app. Two copies can start when the first tool-server pauses for more than 10 seconds during the start, for example in a debugger. Two copies can also start when one of the tool-servers is an Argent version without this wait.
 
 A sandboxed app has no listening socket when its bundle id and the path of your home folder together have more than 59 characters. For example, with the home folder `/Users/anna`, the limit is 48 characters. Argent then reaches the app only through the connection of its start. Another tool-server cannot reach the app. When the connection closes, for example after `stop-simulator-server`, `stop-all-simulator-servers` or a restart of the tool-server, no tool-server can reach the app. Then:
 
@@ -302,7 +302,7 @@ Coordinates are fractions of the app window, title bar included, with the origin
 | `screenshot-diff`                       | A live capture is the app window at scale `1.0`. Save the baseline with `screenshot` at scale `1.0`. Argent masks no top band, because the top of a window is its title bar                                                                                                                                                                                                                                                                |
 | `gesture-tap`                           | A left click. `button: "right"` is a right-click, which opens a context menu. The tree then shows the items of the menu. `clickCount: 2` is a double-click. The tool waits 150 ms after the click                                                                                                                                                                                                                                          |
 | `gesture-drag`                          | A drag with the left button. The same start and end point is a long press. The `durationMs` default is 300 ms for a drag and 800 ms for a long press. Fails when the dragged data is a file promise, or when the app throws an exception while it takes the drop                                                                                                                                                                           |
-| `gesture-scroll`                        | Scrolls the full delta in one step, as a wheel does: the nearest scroll view or web element under the point that scrolls on that axis, or a view or web element that scrolls itself, such as a map. `durationMs` has no effect. Fails when nothing under the point scrolls. `scrolled: true` does not mean that the content moved. See below the table                                                                                     |
+| `gesture-scroll`                        | Scrolls the full delta in one step, as a wheel does: the nearest scroll view or web element under the point that can move on that axis, or a view or web element that scrolls itself, such as a map. `durationMs` has no effect. `scrolled: true` does not mean that the content moved. The lists below the table tell which view gets the scroll and when the tool fails                                                                  |
 | `keyboard`                              | `text` types each character. `key` also takes `delete`, `home`, `end`, `page-up`, `page-down`, and a key or one character after modifiers joined with `+`: `command`, `shift`, `option`, `control`. Examples: `command+a`, `shift+tab`                                                                                                                                                                                                     |
 | `paste`                                 | Inserts the text at the focused element as typed text: the paste handling of the app does not run, and the clipboard does not change. Fails when the focused element does not accept text, for example read-only text or a page with no field focused                                                                                                                                                                                      |
 | `run-sequence`                          | Runs `gesture-tap`, `gesture-scroll`, `gesture-drag`, `keyboard`, `paste` and `await-ui-element` steps                                                                                                                                                                                                                                                                                                                                     |
@@ -314,10 +314,17 @@ A `text` check on a container reads the text of the container and of the element
 - The check skips an element that has its own identifier, together with the elements under that element.
 - A web element, and a view that has an identifier but is not an accessibility element, have no elements under them in the tree. The check reads all the text that the element shows.
 
+Over a web view, the page gets the scroll first. When the page is at its end or cannot move on that axis, the nearest scroll view around the web view that can move on that axis gets the scroll.
+
 `gesture-scroll` returns `scrolled: true` also when the content does not move:
 
 - The content is at its end, for example at the end of a list.
-- In native content, no scroll view under the point scrolls on that axis. Then the nearest scroll view gets the scroll.
+- In native content, no scroll view under the point can move on that axis. Then the nearest scroll view gets the scroll.
+
+`gesture-scroll` fails in these conditions:
+
+- Nothing under the point scrolls, for example over a button outside a scroll view.
+- Over a web view, nothing on the page and no scroll view around the web view can move on that axis.
 
 To find the end of a list, compare the tree before and after the scroll.
 
@@ -346,6 +353,7 @@ Use `gesture-drag` to drag and `gesture-scroll` to scroll.
 - The tree leaves out each element outside the app window and its sheets, popovers, alerts and menus, and the hint gives the count.
 - The tree leaves out each element that does not show:
   - An element that another window of the app covers.
+  - A native element of a window that has its centre under a sheet of the window, because a click there goes to the sheet. An element that holds elements beside the sheet stays in the tree. Web content under a sheet stays in the tree.
   - The content of a window tab that is not the selected tab.
   - A view with an opacity of 0, or a view that a transform moves out of the window.
   - A hidden web view, or a web view behind a different web view that shows at the same place.

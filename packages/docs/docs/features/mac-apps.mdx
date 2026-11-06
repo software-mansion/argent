@@ -91,16 +91,16 @@ An e2e test for a Mac app starts with a `launch` step that names the bundle id. 
 
 macOS loads the Argent library only into a build that allows it:
 
-| Build   | Hardened runtime off | Hardened runtime on                                            |
-| ------- | -------------------- | -------------------------------------------------------------- |
-| Debug   | Works                | Works after one step                                           |
-| Release | Works                | Only with an entitlement that allows code injection. See below |
+| Build   | Hardened runtime off | Hardened runtime on                                         |
+| ------- | -------------------- | ----------------------------------------------------------- |
+| Debug   | Works                | Works after one step                                        |
+| Release | Works                | Only with entitlements that allow code injection. See below |
 
 The App Sandbox does not change this table. The macOS app templates of Xcode and of react-native-macos do not turn on the hardened runtime.
 
 With the hardened runtime, macOS loads the Argent library only into a build that allows debugging or that has the entitlement `com.apple.security.cs.allow-dyld-environment-variables`. Xcode adds the permission to debug only to a Debug build. With the hardened runtime, macOS also loads only a library that the team of the app signed, unless the build turns off library validation.
 
-Thus a Release build with the hardened runtime works only with the entitlement `com.apple.security.cs.allow-dyld-environment-variables`. Together with `com.apple.security.cs.disable-library-validation`, this entitlement lets any program that starts the app load its own code into the app. Do not add these entitlements to a build that you ship. Start the Debug build instead.
+Thus a Release build with the hardened runtime works only with the entitlement `com.apple.security.cs.allow-dyld-environment-variables`. macOS must also accept the library: the build has the entitlement `com.apple.security.cs.disable-library-validation`, or your team signs the Argent library as in the steps below. Argent refuses an ad hoc signed Release build that has only `com.apple.security.cs.allow-dyld-environment-variables`. These entitlements let other programs load their own code into the app. Do not add these entitlements to a build that you ship. Start the Debug build instead.
 
 For a Debug build with the hardened runtime, do one of these steps:
 

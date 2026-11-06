@@ -136,8 +136,8 @@ On an iOS simulator and Android, an id absent from `describe` can still resolve 
 
 On a Mac app:
 
-- The runner and `describe` read the same app tree. Copy ids and roles from `describe` for the elements that the runner keeps. The table above gives these elements.
-- The runner does not keep a window, a sheet, an alert, a popover or a scroll bar, also when it has an id or a label. Thus `role: AXSheet` does not match an open sheet, also in `within`. To wait for a sheet, select an element in the sheet, for example its button.
+- The runner and `describe` read the same app tree. The runner keeps the elements that the table above names, except a window, a sheet, an alert, a popover and a scroll bar. The runner does not keep these, also when they have an id or a label. Copy ids and roles from `describe` only for the elements that the runner keeps.
+- Thus `role: AXSheet` does not match an open sheet, also in `within`. To wait for a sheet, select an element in the sheet, for example its button.
 - The runner reads up to 12000 elements, and `describe` reads up to 3000.
 - The runner reads the tree again when elements did not answer or Argent could not read the web content.
 - The runner calls a password field `[password]`, so only an `id` or `role` selector matches it.
