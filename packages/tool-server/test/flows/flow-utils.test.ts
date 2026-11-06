@@ -40,9 +40,9 @@ describe("serializeFlow", () => {
       executionPrerequisite: "App on home screen",
       steps: [],
     };
-    const result = serializeFlow(flow);
-    expect(result).toContain("executionPrerequisite: App on home screen");
-    expect(result).toContain("steps: []");
+    expect(serializeFlow(flow)).toBe(
+      "version: 1\nsteps: []\nexecutionPrerequisite: App on home screen\n"
+    );
   });
 
   it("serializes echo steps", async () => {
@@ -891,7 +891,11 @@ describe("parseFlow", () => {
       expect((err as Error).message).toBe(
         `The e2e test file is version ${v}, but this Argent reads up to version 1. Update Argent to run it.`
       );
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_NEWER_VERSION);
+      // `validation` is what lets `argent e2e run <dir>` move on to the next file.
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+        error_kind: "validation",
+      });
     });
 
     it.each([
@@ -915,8 +919,20 @@ describe("parseFlow", () => {
       expect((err as Error).message).toBe(
         `Invalid e2e test file: version must be a positive integer, got ${shown}`
       );
-      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        error_kind: "validation",
+      });
     });
+
+    it.each([["version:"], ["version: ~"], ["version: null"]])(
+      "reads %j as version 1",
+      async (line) => {
+        expect(parseFlow(`${line}\nsteps:\n  - echo: hi\n`)).toEqual(
+          parseFlow("steps:\n  - echo: hi\n")
+        );
+      }
+    );
 
     it("caps an oversized version in the message", async () => {
       expect(() => parseFlow(`version: ${"x".repeat(300)}\nsteps: []\n`)).toThrow(
@@ -1027,6 +1043,15 @@ describe("parseFlow", () => {
       expect(() =>
         parseFlow("executionPrerequisit: Settings open\nsteps:\n  - echo: hi\n")
       ).toThrow(/unknown key `executionPrerequisit` \(did you mean `executionPrerequisite`\?\)/);
+    });
+
+    it.each([
+      ["verison: 1", "unknown key `verison` (did you mean `version`?)"],
+      ["metadata: x", "unknown key `metadata`"],
+    ])("names the allowed top-level keys for %j", async (line, unknown) => {
+      expect(() => parseFlow(`${line}\nsteps: []\n`)).toThrow(
+        `Invalid e2e test file: ${unknown} — allowed top-level keys: version, executionPrerequisite, steps`
+      );
     });
   });
 

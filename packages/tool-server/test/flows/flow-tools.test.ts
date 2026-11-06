@@ -105,9 +105,7 @@ describe("flow-start-recording", () => {
     expect(result.message).toContain("test-flow");
 
     const content = await readFlowFile("test-flow");
-    const flow = parseFlow(content);
-    expect(flow.executionPrerequisite).toBe(PREREQ);
-    expect(flow.steps).toEqual([]);
+    expect(content).toBe(`version: 1\nsteps: []\nexecutionPrerequisite: ${PREREQ}\n`);
   });
 
   it("opens a recording addressable by name + project_root", async () => {

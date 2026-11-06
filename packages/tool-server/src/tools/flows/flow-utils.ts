@@ -3752,7 +3752,7 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
  */
 const FLOW_FILE_VERSION = 1;
 
-/** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
+/** Serialize a full flow file to YAML: `version` always, other fields only when not empty or defaulted. */
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = { version: FLOW_FILE_VERSION, steps: flow.steps.map(toYamlStep) };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
