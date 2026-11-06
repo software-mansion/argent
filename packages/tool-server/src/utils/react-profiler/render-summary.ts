@@ -354,7 +354,7 @@ export function formatPeakCommit(ms: number): string {
   return `${(Math.floor(ms * 10) / 10).toFixed(1)}ms`;
 }
 
-export function formatMs(ms: number): string {
+function formatMs(ms: number): string {
   return ms >= 10 ? `${Math.round(ms).toLocaleString("en-US")} ms` : `${ms.toFixed(1)} ms`;
 }
 

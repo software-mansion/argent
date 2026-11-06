@@ -98,7 +98,7 @@ export function renderNoStoredCommits(
 }
 
 /** Per-component counts over all commits, from the summary react-profiler-stop saves. */
-export function renderRenderCounts(
+function renderRenderCounts(
   summary: RenderSummary | null,
   componentName: string | undefined,
   topN: number

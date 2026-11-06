@@ -40,7 +40,7 @@
 import { ANIMATED_PATTERN } from "./pipeline/03-tag";
 import { astLookupCandidates, stripComponentWrappers } from "./component-names";
 
-export type ComponentOrigin = "app" | "library" | "unknown";
+type ComponentOrigin = "app" | "library" | "unknown";
 
 export interface ComponentOriginResult {
   origin: ComponentOrigin;
