@@ -486,6 +486,36 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       expect(result.note).not.toContain("kept at");
     });
 
+    it("says a live session's log file holds none of its entries when every write failed", async () => {
+      vi.mocked(fs.writeSync).mockImplementation(() => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      });
+      try {
+        await connectAndCapture(LOGICAL_ID, 3);
+      } finally {
+        vi.mocked(fs.writeSync).mockReset();
+      }
+
+      const result = await readRegistry();
+
+      expect(result.status).toBe("connected");
+      expect(fs.statSync(result.file).size).toBe(0);
+      expect(result.note).toContain(
+        `The log file at ${result.file} holds none of the 3 captured entries`
+      );
+    });
+
+    it("adds no file note once some entries reached the log file", async () => {
+      await connectAndCapture(LOGICAL_ID, 3);
+
+      const result = await readRegistry();
+
+      expect(fs.statSync(result.file).size).toBeGreaterThan(0);
+      expect(result.note).toBeUndefined();
+    });
+
     it("keeps the reaped-session explanation alongside the missing-file one", async () => {
       const urn = await connectAndCapture(LOGICAL_ID, 7);
       await registry.disposeService(urn);
