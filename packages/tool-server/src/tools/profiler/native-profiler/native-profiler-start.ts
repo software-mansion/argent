@@ -74,7 +74,7 @@ export const nativeProfilerStartTool: ToolDefinition<
 Auto-detects the running app process unless app_process is explicitly provided.
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
-Returns { status, pid, traceFile } confirming the recording has started. On Android, a warning names the apps with native network capture on (started by native-network-logs): Argent attaches its in-app agent to their processes, so their timings in the profile can differ.
+Returns { status, pid, traceFile, warning? } confirming the recording has started. warning says when the device cannot record part of the data and, on Android, names the apps with native network capture on (started by native-network-logs): Argent attaches its in-app agent to their processes, so their timings in the profile can differ.
 Fails if no app is running on the device, or the profiler cannot attach to the process.`,
   zodSchema,
   services: (params) => ({
@@ -88,16 +88,17 @@ Fails if no app is running on the device, or the profiler cannot attach to the p
     // Dispatch on the session's platform, not the udid shape: tests pair a
     // synthetic platform with a fake udid that fails the iOS-UDID regex.
     let started: Awaited<ReturnType<typeof startNativeProfilerAndroid>>;
-    let warning: string | undefined;
+    let captureWarning: string | undefined;
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
       started = await startNativeProfilerIos(api, params);
     } else {
       await ensureDeps(["adb"]);
       started = await startNativeProfilerAndroid(api, params);
-      warning = nativeNetworkCaptureWarning(params.device_id);
+      captureWarning = nativeNetworkCaptureWarning(params.device_id);
     }
     trackProfilingRun(device.id, api);
+    const warning = [started.warning, captureWarning].filter(Boolean).join(" ");
     return warning ? { ...started, warning } : started;
   },
 };

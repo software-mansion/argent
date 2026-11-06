@@ -104,6 +104,8 @@ export interface NativeProfilerSessionApi {
   lastExitInfo: { code: number | null; signal: string | null } | null;
   /** Android-only: path of the .pftrace on the device. */
   androidOnDeviceTracePath: string | null;
+  /** False when the capture ran without the CPU sampling data source. */
+  androidCpuSampling: boolean;
 }
 
 // Dispose runs on process shutdown and on `stop-all-simulator-servers`, so an
@@ -224,6 +226,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       recordingExitedUnexpectedly: false,
       lastExitInfo: null,
       androidOnDeviceTracePath: null,
+      androidCpuSampling: true,
     };
 
     const events = new TypedEventEmitter<ServiceEvents>();

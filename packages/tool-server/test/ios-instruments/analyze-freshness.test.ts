@@ -59,6 +59,7 @@ function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
     recordingExitedUnexpectedly: false,
     lastExitInfo: null,
     androidOnDeviceTracePath: null,
+    androidCpuSampling: true,
   };
 }
 

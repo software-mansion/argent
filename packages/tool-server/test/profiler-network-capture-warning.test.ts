@@ -33,6 +33,7 @@ vi.mock("../src/tools/profiler/native-profiler/platforms/ios", () => ({
 
 import { nativeNetworkCaptureWarning } from "../src/utils/profiler-shared/network-capture-warning";
 import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
+import { startNativeProfilerAndroid } from "../src/tools/profiler/native-profiler/platforms/android";
 import { createReactProfilerStartTool } from "../src/tools/profiler/react/react-profiler-start";
 import {
   READ_STATE_SCRIPT,
@@ -183,6 +184,38 @@ describe("native-profiler-start", () => {
     });
 
     expect(result).toEqual({ status: "recording", pid: 2, traceFile: "/android.pftrace" });
+  });
+
+  it("keeps the device's own warning alongside the capture warning", async () => {
+    live.mockReturnValue([PKG]);
+    vi.mocked(startNativeProfilerAndroid).mockResolvedValueOnce({
+      status: "recording",
+      pid: 2,
+      traceFile: "/android.pftrace",
+      warning: "This trace will have no CPU hotspots.",
+    } as never);
+
+    const result = await nativeProfilerStartTool.execute({ session: session("android") } as never, {
+      device_id: SERIAL,
+    });
+
+    expect(result.warning).toContain("This trace will have no CPU hotspots.");
+    expect(result.warning).toContain(`Native network capture is on for ${PKG}`);
+  });
+
+  it("keeps the device's own warning when no capture is live", async () => {
+    vi.mocked(startNativeProfilerAndroid).mockResolvedValueOnce({
+      status: "recording",
+      pid: 2,
+      traceFile: "/android.pftrace",
+      warning: "This trace will have no CPU hotspots.",
+    } as never);
+
+    const result = await nativeProfilerStartTool.execute({ session: session("android") } as never, {
+      device_id: SERIAL,
+    });
+
+    expect(result.warning).toBe("This trace will have no CPU hotspots.");
   });
 
   it("does not look for Android capture on iOS", async () => {

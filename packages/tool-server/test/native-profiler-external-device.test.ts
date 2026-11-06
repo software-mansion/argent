@@ -132,6 +132,7 @@ function publishDescriptor(): void {
 function newSession(): NativeProfilerSessionApi {
   return {
     androidOnDeviceTracePath: null,
+    androidCpuSampling: true,
     appProcess: null,
     capturePid: null,
     captureProcess: null,

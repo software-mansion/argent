@@ -79,7 +79,8 @@ interface AndroidPipelineResult {
  */
 export async function runAndroidProfilerPipeline(
   tracePath: string,
-  appPackage: string
+  appPackage: string,
+  options: { cpuSampling?: boolean } = {}
 ): Promise<AndroidPipelineResult> {
   // Load the trace up front so every query below reuses one warm engine. A
   // TraceProcessorUnavailableError propagates to the analyze handler, which
@@ -122,7 +123,12 @@ export async function runAndroidProfilerPipeline(
     exportErrors.rss = msg;
   });
 
-  if (cpuRows.length === 0 && hangRows.length === 0 && !exportErrors.cpu) {
+  if (options.cpuSampling === false) {
+    exportErrors.cpu =
+      `This trace has no CPU samples: perfetto on this device cannot sample CPU callstacks ` +
+      `(Android 11 and older). Rebuilding the app will not change that. Profile on Android 12 ` +
+      `or newer for CPU hotspots.`;
+  } else if (cpuRows.length === 0 && hangRows.length === 0 && !exportErrors.cpu) {
     exportErrors.cpu =
       `No CPU samples were captured for cmdline \`${appPackage}\`. ` +
       `The trace contains no perf_sample rows for a process with that name, so no CPU ` +
