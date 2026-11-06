@@ -101,6 +101,12 @@ Through the MCP server, an interaction tool and `await-ui-element` return a scre
 
 Call `screenshot` or `describe` to read the screen again.
 
+The MCP server picks how a screenshot reaches the agent:
+
+- Claude Code, Codex, Cursor, opencode, Gemini CLI, Zed, VS Code, Kiro, and Kiro CLI with the v3 engine pass the image to the model. After an interaction, they get the image without its file path. `screenshot` still returns the path after the image.
+- Kiro CLI with the v1 or v2 engine passes an image to the model as base64 text. It gets the file path and a note to open the PNG with its read tool, in place of the image. This applies to the automatic screenshot and to `screenshot`.
+- Any other client gets the image and then `Saved: <path>`.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |

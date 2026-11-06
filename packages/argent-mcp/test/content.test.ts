@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { mkdtemp, rm } from "node:fs/promises";
 import {
   toMcpContent,
+  describeResultText,
+  screenshotPathNote,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
   flowRunToMcpContent,
@@ -35,7 +37,41 @@ const mockOk = (bytes: number[]) =>
 describe("toMcpContent", () => {
   it("returns JSON text block for plain results", async () => {
     const result = await toMcpContent({ foo: "bar" });
-    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) }]);
+    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }) }]);
+  });
+
+  it("returns a string result as-is, not as a JSON-quoted line", async () => {
+    const report = 'Screen: 402x874\n\nView "Home" (tap: 0.12,0.93)';
+    expect(await toMcpContent(report)).toEqual([{ type: "text", text: report }]);
+  });
+
+  it("writes control characters in a string result as visible escapes", async () => {
+    const result = await toMcpContent("a\u001b[0m\tb\r\nc\u0000");
+    expect(result).toEqual([{ type: "text", text: "a\\u001b[0m\tb\r\nc\\u0000" }]);
+  });
+
+  it("writes object results without indentation", async () => {
+    const value = { a: { b: [1, 2] }, c: null };
+    const result = await toMcpContent(value);
+    expect(result).toEqual([{ type: "text", text: '{"a":{"b":[1,2]},"c":null}' }]);
+  });
+
+  it("keeps a top-level list of strings one item per line, as valid JSON", async () => {
+    const value = { message: "saved", summary: ["1. tap", "  warning: late"], steps: 1 };
+    const [block] = await toMcpContent(value);
+    const text = (block as { text: string }).text;
+    expect(text).toBe('{"message":"saved","summary":[\n"1. tap",\n"  warning: late"\n],"steps":1}');
+    expect(JSON.parse(text)).toEqual(value);
+  });
+
+  it("leaves other lists on one line", async () => {
+    const value = { one: ["x"], numbers: [1, 2], nested: { list: ["a", "b"] }, none: [] };
+    const result = await toMcpContent(value);
+    expect(result).toEqual([{ type: "text", text: JSON.stringify(value) }]);
+  });
+
+  it("returns an empty string result as a visible empty string", async () => {
+    expect(await toMcpContent("")).toEqual([{ type: "text", text: '""' }]);
   });
 
   it("returns JSON text block when outputHint is not image", async () => {
@@ -43,7 +79,7 @@ describe("toMcpContent", () => {
     expect(result).toEqual([
       {
         type: "text",
-        text: JSON.stringify({ url: "http://x" }, null, 2),
+        text: JSON.stringify({ url: "http://x" }),
       },
     ]);
   });
@@ -111,6 +147,37 @@ describe("toMcpContent", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    ["image-and-path", ["image", "Saved: /tmp/img.png"]],
+    ["image", ["image"]],
+    ["path", [screenshotPathNote("/tmp/img.png")]],
+  ] as const)("renders a screenshot in the %s form", async (form, expected) => {
+    vi.stubGlobal("fetch", mockOk(PNG_SIGNATURE));
+
+    const result = await toMcpContent(
+      { url: "http://localhost/img.png", path: "/tmp/img.png" },
+      "image",
+      undefined,
+      undefined,
+      form
+    );
+
+    expect(result.map((b) => (b.type === "image" ? "image" : b.text))).toEqual(expected);
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the plain Saved line when the agent asked for no image, in every form", async () => {
+    const result = await toMcpContent(
+      { url: "http://localhost/img.png", path: "/tmp/img.png" },
+      "image",
+      undefined,
+      { includeImageInContext: false },
+      "path"
+    );
+
+    expect(result).toEqual([{ type: "text", text: "Saved: /tmp/img.png" }]);
+  });
+
   it("uses empty string for path when not present", async () => {
     vi.stubGlobal("fetch", mockOk(PNG_SIGNATURE));
 
@@ -122,7 +189,7 @@ describe("toMcpContent", () => {
 
   it("falls back to text when outputHint is image but no url", async () => {
     const result = await toMcpContent({ foo: 1 }, "image");
-    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: 1 }, null, 2) }]);
+    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: 1 }) }]);
   });
 
   // Regression for #255 — fetched bytes that aren't a PNG must NOT be shipped
@@ -172,7 +239,7 @@ describe("screenshotDiffToMcpContent", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("returns a context image followed by the summary text", async () => {
+  it("returns a context image, the summary text, then the diff paths it refers to", async () => {
     const contextDiffPath = path.join(dir, "context.diff.png");
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     await fs.writeFile(contextDiffPath, pngBytes);
@@ -198,6 +265,10 @@ describe("screenshotDiffToMcpContent", () => {
         mimeType: "image/png",
       },
       { type: "text", text: summary },
+      {
+        type: "text",
+        text: `diffPath: ${path.join(dir, "full.diff.png")}\ncontextDiffPath: ${contextDiffPath}`,
+      },
     ]);
   });
 
@@ -245,6 +316,23 @@ describe("toMcpContent with artifact ctx", () => {
   afterEach(async () => {
     delete process.env.ARGENT_ARTIFACTS_DIR;
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("renders an image artifact as its path only in the path form", async () => {
+    const result = await toMcpContent(
+      { image: artifactHandle("img1", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE]),
+      },
+      undefined,
+      "path"
+    );
+
+    expect(result).toHaveLength(1);
+    expect((result[0] as { text: string }).text).toMatch(/^Screenshot saved to .*shot\.png\n/);
   });
 
   it("materializes an image artifact and renders image + local Saved path", async () => {
@@ -816,7 +904,7 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] gesture-tap" });
     expect(blocks[2]).toEqual({
       type: "text",
-      text: JSON.stringify({ ok: true }, null, 2),
+      text: JSON.stringify({ ok: true }),
     });
   });
 
@@ -937,5 +1025,93 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] A" });
     expect(blocks[2]).toEqual({ type: "text", text: "[2] B" });
     expect(blocks[3]).toEqual({ type: "text", text: "[3] C" });
+  });
+});
+
+// ── describeResultText ───────────────────────────────────────────────
+
+describe("describeResultText", () => {
+  const header = "Source: ax-service\nMode: flat\n\nROOT  AXGroup (0, 0, 1, 1)\n\n";
+  const tree = `${header}  AXButton "Done"  (0.1, 0.2, 0.3, 0.1)`;
+  const sent = `${header}AXButton "Done" (0.1, 0.2, 0.3, 0.1)`;
+
+  it("drops the indent every row shares and keeps the depth between rows", () => {
+    const rows = [
+      '  Button "Close" [clickable]  (0.000, 0.000, 1.000, 1.000)',
+      '    Button "Open" id="menu"  (0.039, 0.032, 0.073, 0.036)',
+      '      Text "Title"  (-0.100, 0.000, 0.500, 0.100)',
+      '  Text "Back"  (0.000, 0.900, 0.100, 0.100)',
+    ].join("\n");
+    expect(describeResultText({ description: `${header}${rows}`, source: "ax-service" })).toBe(
+      header +
+        [
+          'Button "Close" [clickable] (0.000, 0.000, 1.000, 1.000)',
+          '  Button "Open" id="menu" (0.039, 0.032, 0.073, 0.036)',
+          '    Text "Title" (-0.100, 0.000, 0.500, 0.100)',
+          'Text "Back" (0.000, 0.900, 0.100, 0.100)',
+        ].join("\n")
+    );
+  });
+
+  it("accepts the shorter frame form", () => {
+    const description = `${header}  Button "Go"  (.040,.336,.920,.059)`;
+    expect(describeResultText({ description, source: "ax-service" })).toBe(
+      `${header}Button "Go" (.040,.336,.920,.059)`
+    );
+  });
+
+  it("leaves a frame quoted in a label alone", () => {
+    const description = `${header}  Text "a  (0, 0, 1, 1)"  (0.1, 0.2, 0.3, 0.1)`;
+    expect(describeResultText({ description, source: "ax-service" })).toBe(
+      `${header}Text "a  (0, 0, 1, 1)" (0.1, 0.2, 0.3, 0.1)`
+    );
+  });
+
+  it("leaves lines that are not tree rows alone", () => {
+    const description = "  focused: Button Play\n  focusable: Button Stop\nNote:  (not a row)";
+    expect(describeResultText({ description, source: "tv-focus" })).toBe(
+      `${description}\nSource: tv-focus`
+    );
+  });
+
+  it("returns the tree as plain text, without repeating the source its header names", () => {
+    expect(describeResultText({ description: tree, source: "ax-service" })).toBe(sent);
+  });
+
+  it("names the source when the tree does not", () => {
+    expect(describeResultText({ description: "AXButton", source: "native-devtools" })).toBe(
+      "AXButton\nSource: native-devtools"
+    );
+  });
+
+  it("keeps should_restart and hint as lines after the tree", () => {
+    expect(
+      describeResultText({
+        description: tree,
+        source: "ax-service",
+        should_restart: true,
+        hint: "Restart the app.",
+      })
+    ).toBe(`${sent}\nshould_restart: true\nHint: Restart the app.`);
+  });
+
+  it("keeps unknown fields as JSON", () => {
+    expect(describeResultText({ description: tree, source: "ax-service", extra: 1 })).toBe(
+      `${sent}\n{"extra":1}`
+    );
+  });
+
+  it("does not repeat a hint the tree text already carries", () => {
+    const description = "Note: No element has focus.\nSource: tv-focus";
+    expect(
+      describeResultText({ description, source: "tv-focus", hint: "No element has focus." })
+    ).toBe(description);
+  });
+
+  it("returns undefined for a result without a text tree", () => {
+    expect(describeResultText({ tree: {} })).toBeUndefined();
+    expect(describeResultText({ description: "" })).toBeUndefined();
+    expect(describeResultText("text")).toBeUndefined();
+    expect(describeResultText(null)).toBeUndefined();
   });
 });

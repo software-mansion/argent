@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { ToolsServerPaths } from "@argent/tools-client";
 import { AUTO_DESCRIBE_HEADER, getAutoScreenshotDelayMs } from "../src/auto-capture.js";
+import { screenshotPathNote } from "../src/content.js";
 
 // Drives the real adapter (`startMcpServer`) over the SDK's in-memory transport
 // against a stub tool-server, so the adapter's own call handling is exercised:
@@ -290,8 +291,9 @@ describe("startMcpServer tool calls", () => {
       "/tools/describe",
     ]);
     expect(textOf(tap)).toContain("skipped while a profiler is recording");
-    expect(textOf(described)).toContain("Button 'OK'");
     expect(textOf(described)).not.toContain("profiler");
+    // The tree as plain text, not a JSON object holding it as an escaped string.
+    expect(described.content).toEqual([{ type: "text", text: "Button 'OK'" }]);
   });
 
   it("uploads a tar-upload input and returns the tool result", async () => {
@@ -301,7 +303,7 @@ describe("startMcpServer tool calls", () => {
     });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('"reinstalled": true');
+    expect(textOf(result)).toContain('"reinstalled":true');
     expect(requests.filter((r) => r.url === "/upload")).toHaveLength(1);
     const posts = requests.filter((r) => r.url === "/tools/reinstall-app");
     expect(posts).toHaveLength(1);
@@ -348,7 +350,7 @@ describe("startMcpServer tool calls", () => {
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
-    expect(textOf(result)).toContain('"ok": true');
+    expect(textOf(result)).toContain('"ok":true');
   });
 });
 
@@ -426,9 +428,16 @@ describe("startMcpServer screen capture after an interaction", () => {
         name,
         description: name,
         inputSchema: { type: "object", properties: {} },
+        ...(name === "screenshot" ? { outputHint: "image" } : {}),
       })
     ),
   };
+  // TEST_HOME is set in beforeAll.
+  const paths = () => ({
+    bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+    simulatorServerDir: "",
+    nativeDevtoolsDir: "",
+  });
   // Short, so a capture call that never answers ends the test in about a second.
   const CAPTURE_MS = 1_000;
   let stub: Stub;
@@ -441,6 +450,7 @@ describe("startMcpServer screen capture after an interaction", () => {
   // A hanging route never answers, as a read of a frozen device's tree.
   let idleHangs: boolean;
   let describeHangs: boolean;
+  let describeData: Record<string, unknown>;
 
   const send = (res: http.ServerResponse, status: number, payload: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json" });
@@ -463,9 +473,8 @@ describe("startMcpServer screen capture after an interaction", () => {
     waitResult = { success: true, elapsed: 120 };
     idleHangs = false;
     describeHangs = false;
-    const describeRoute = slow("describe", (res) =>
-      send(res, 200, { data: { description: "button Done (0.1,0.2,0.3,0.1)" } })
-    );
+    describeData = { description: "button Done (0.1,0.2,0.3,0.1)" };
+    const describeRoute = slow("describe", (res) => send(res, 200, { data: describeData }));
     stub = await startStub({
       routes: {
         "/tools/gesture-tap": (res) => send(res, 200, { data: { tapped: true } }),
@@ -490,14 +499,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     });
     vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
     vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
-    client = await connect(
-      {
-        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
-        simulatorServerDir: "",
-        nativeDevtoolsDir: "",
-      },
-      { captureTimeoutMs: CAPTURE_MS }
-    );
+    client = await connect(paths(), { captureTimeoutMs: CAPTURE_MS });
   });
 
   afterEach(async () => {
@@ -522,14 +524,30 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(result.isError).toBeFalsy();
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content.map((c) => (c.type === "image" ? "image" : c.text!.split("\n")[0]))).toEqual([
-      "{",
+      '{"tapped":true}',
       "--- Screen after action ---",
       "image",
       "Saved: /tmp/shot.png",
       "--- Elements after action (describe) ---",
     ]);
-    expect(content[0]!.text).toContain('"tapped": true');
+    expect(content[0]!.text).toContain('"tapped":true');
     expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  // describe tells a device its standing caveat once; an auto tree that dropped
+  // it would use the caveat up without the agent ever reading it.
+  it("keeps describe's hint in the element tree it appends", async () => {
+    describeData = {
+      description: "button Done (0.1,0.2,0.3,0.1)",
+      hint: "This simulator was not booted by argent.",
+    };
+
+    const result = await tap();
+
+    const content = result.content as Array<{ type: string; text?: string }>;
+    expect(content.at(-1)!.text).toBe(
+      "--- Elements after action (describe) ---\nbutton Done (0.1,0.2,0.3,0.1)\nHint: This simulator was not booted by argent."
+    );
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
@@ -571,7 +589,7 @@ describe("startMcpServer screen capture after an interaction", () => {
 
     expect(result.isError).toBeFalsy();
     const text = textOf(result);
-    expect(text).toContain('"tapped": true');
+    expect(text).toContain('"tapped":true');
     expect(text).not.toContain("--- Screen after action ---");
     expect(text).toContain("--- Elements after action (describe) ---");
   });
@@ -605,7 +623,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     expect(result.isError).toBeFalsy();
     expect(toolCalls().filter((url) => url === "/tools/describe")).toHaveLength(1);
     const text = textOf(result);
-    expect(text).toContain('"tapped": true');
+    expect(text).toContain('"tapped":true');
     expect(text).toContain("--- Screen after action ---");
     expect(text).not.toContain(AUTO_DESCRIBE_HEADER);
   });
@@ -620,6 +638,77 @@ describe("startMcpServer screen capture after an interaction", () => {
     const text = textOf(result);
     expect(text).toContain("--- Screen after action ---");
     expect(text).toContain(AUTO_DESCRIBE_HEADER);
+  });
+
+  describe("per client", () => {
+    const outline = (result: Awaited<ReturnType<Client["callTool"]>>) =>
+      (result.content as Array<{ type: string; text?: string }>).map((c) =>
+        c.type === "image" ? "image" : c.text!.split("\n")[0]
+      );
+    const as = async (clientName: string) => {
+      await client.close();
+      client = await connect(paths(), { clientName, captureTimeoutMs: CAPTURE_MS });
+    };
+
+    it.each(["claude-code", "Cursor", "cursor-vscode", "codex-mcp-client", "kiro"])(
+      "leaves the Saved line out of the auto-screenshot for %s, whose model sees the image",
+      async (clientName) => {
+        await as(clientName);
+
+        expect(outline(await tap())).toEqual([
+          '{"tapped":true}',
+          "--- Screen after action ---",
+          "image",
+          "--- Elements after action (describe) ---",
+        ]);
+      }
+    );
+
+    // Haiku's taps on small buttons drifted off centre without this screenshot. The
+    // label is left free on purpose: this pins what the agent gets, not the wording.
+    it.each([
+      ["claude-code", ["image"]],
+      ["an unknown client", ["image", "Saved: /tmp/shot.png"]],
+      ["Q DEV CLI", [screenshotPathNote("/tmp/shot.png").split("\n")[0]]],
+    ])("gives %s a screenshot after an explicit describe, and one tree", async (name, shot) => {
+      await as(name);
+
+      const result = await client.callTool({ name: "describe", arguments: { udid: "u" } });
+
+      expect(outline(result)).toEqual([
+        "button Done (0.1,0.2,0.3,0.1)",
+        expect.any(String),
+        ...shot,
+      ]);
+      expect(toolCalls().filter((url) => url === "/tools/describe")).toHaveLength(1);
+    });
+
+    it("keeps the Saved line after the screenshot the agent asked for", async () => {
+      await as("claude-code");
+
+      const result = await client.callTool({ name: "screenshot", arguments: { udid: "u" } });
+
+      expect(outline(result)).toEqual(["image", "Saved: /tmp/shot.png"]);
+    });
+
+    it.each(["Q DEV CLI", "q dev cli"])(
+      "sends %s the path and how to open it instead of the image",
+      async (clientName) => {
+        await as(clientName);
+
+        const auto = await tap();
+        const asked = await client.callTool({ name: "screenshot", arguments: { udid: "u" } });
+
+        const note = screenshotPathNote("/tmp/shot.png");
+        expect(outline(auto)).toEqual([
+          '{"tapped":true}',
+          "--- Screen after action ---",
+          note.split("\n")[0],
+          "--- Elements after action (describe) ---",
+        ]);
+        expect(asked.content).toEqual([{ type: "text", text: note }]);
+      }
+    );
   });
 });
 
@@ -710,7 +799,7 @@ describe("startMcpServer with a local tool-server", () => {
     const result = await client.callTool({ name: "noted", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain('"ok": true');
+    expect(textOf(result)).toContain('"ok":true');
     const calls = postsTo(second, "/tools/noted");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.headers.authorization).toBe("Bearer tok-2");

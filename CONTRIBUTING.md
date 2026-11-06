@@ -196,6 +196,10 @@ tool's `tools/list` entry and the server instructions, as markdown in
 descriptions, tool schemas or the server instructions. See
 [packages/tool-server/src/tools/README.md](packages/tool-server/src/tools/README.md).
 
+`npm run capture:tool-output -- --call '<tool> <json args>'` calls tools through the same
+server against real devices and saves what each result puts in front of the agent: text,
+screenshots and element trees. Run it when you change what a tool returns.
+
 ---
 
 ## Code style

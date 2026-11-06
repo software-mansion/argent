@@ -20,9 +20,11 @@ import {
 } from "@argent/telemetry";
 import {
   toMcpContent,
+  describeResultText,
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
+  isScreenshotBlock,
   type ContentContext,
   type ContentBlock,
   type FlowExecuteResult,
@@ -41,6 +43,7 @@ import {
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
+import { autoScreenshotForm, screenshotForm } from "./client-images.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
 import { createToolCaller } from "./tool-caller.js";
@@ -190,12 +193,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   ): Promise<ContentBlock[]> {
     try {
       const { result } = await callTool("screenshot", { udid }, { signal });
-      const blocks = await toMcpContent(result, "image", {
-        toolsUrl: TOOLS_URL,
-        authToken: AUTH_TOKEN,
-        deviceId: udid,
-      });
-      if (!blocks.some((b) => b.type === "image")) return [];
+      const blocks = await toMcpContent(
+        result,
+        "image",
+        { toolsUrl: TOOLS_URL, authToken: AUTH_TOKEN, deviceId: udid },
+        undefined,
+        autoScreenshotForm(server.getClientVersion()?.name)
+      );
+      if (!blocks.some(isScreenshotBlock)) return [];
       return [{ type: "text" as const, text: "--- Screen after action ---" }, ...blocks];
     } catch {
       return []; /* best-effort */
@@ -216,15 +221,17 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const t1 = Date.now();
     try {
       const d = await callTool("describe", { udid }, { signal });
-      const desc = (d.result as { description?: unknown } | null)?.description;
+      // The whole result, not only `description`: describe tells each device its
+      // standing caveat (`hint`) once, so dropping it here would use it up unseen.
+      const desc = describeResultText(d.result);
       await spyLog({
         ts: new Date().toISOString(),
         event: "auto_describe",
         name: toolName,
         durationMs: Date.now() - t1,
-        chars: typeof desc === "string" ? desc.length : 0,
+        chars: desc?.length ?? 0,
       });
-      if (typeof desc !== "string" || desc.length === 0) return [];
+      if (!desc) return [];
       return [{ type: "text" as const, text: `${AUTO_DESCRIBE_HEADER}\n${desc}` }];
     } catch (e) {
       await spyLog({
@@ -292,6 +299,8 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         deviceId: getDeviceIdFromArgs(params.arguments),
       };
 
+      const describeText =
+        canonicalToolId(params.name) === "describe" ? describeResultText(result) : undefined;
       let content: ContentBlock[];
       if (
         canonicalToolId(params.name) === "e2e-execute" &&
@@ -303,8 +312,16 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
       } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
         content = await screenshotDiffToMcpContent(result, ctx);
+      } else if (describeText !== undefined) {
+        content = [{ type: "text" as const, text: describeText }];
       } else {
-        content = await toMcpContent(result, outputHint, ctx, params.arguments);
+        content = await toMcpContent(
+          result,
+          outputHint,
+          ctx,
+          params.arguments,
+          screenshotForm(server.getClientVersion()?.name)
+        );
       }
 
       const udid = getUdidFromArgs(params.arguments);
