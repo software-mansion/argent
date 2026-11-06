@@ -786,18 +786,20 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // A fieldset's overflow (but not its paint containment) clips its content no nearer
   // its block-start side than where its rendered legend's margin box ends. A relative
-  // offset moves where the legend paints, not that edge; a transform is not undone.
+  // offset moves where the legend paints, not that edge; a sticky offset or a transform
+  // is not undone.
   function belowLegend(p, style, legend) {
     const r = getBCR.call(legend);
     const ls = window.getComputedStyle(legend);
     const px = (prop) => parseFloat(ls[prop]) || 0;
+    const shift = (prop) => (ls.position === "relative" ? px(prop) : 0);
     const wm = style.writingMode;
     if (wm === "horizontal-tb") {
       if (style.overflowY === "visible") return;
-      p.top = Math.max(p.top, r.bottom + (px("marginBottom") - px("top")) * p.sy);
+      p.top = Math.max(p.top, r.bottom + (px("marginBottom") - shift("top")) * p.sy);
     } else if (style.overflowX !== "visible") {
-      if (wm.endsWith("rl")) p.right = Math.min(p.right, r.left - (px("marginLeft") + px("left")) * p.sx);
-      else p.left = Math.max(p.left, r.right + (px("marginRight") - px("left")) * p.sx);
+      if (wm.endsWith("rl")) p.right = Math.min(p.right, r.left - (px("marginLeft") + shift("left")) * p.sx);
+      else p.left = Math.max(p.left, r.right + (px("marginRight") - shift("left")) * p.sx);
     }
   }
 

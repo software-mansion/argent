@@ -3020,6 +3020,55 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "rendered")).toEqual({ x: 20, y: 3, w: 60, h: 10 });
   });
 
+  it("undoes only a relative legend's offset where a fieldset's overflow clips", () => {
+    // "under" spans x 5..295, y 5..235; each legend's margin box ends at 40 from its side.
+    const legendAt = (writingMode: string, rect: Rect, legendStyle: Record<string, string>) =>
+      pxFrame(
+        run([
+          el({
+            tag: "fieldset",
+            rect: { x: 0, y: 0, w: 300, h: 240 },
+            client: { left: 0, top: 0, width: 300, height: 240 },
+            offset: { width: 300, height: 240 },
+            style: { overflow: "hidden", writingMode },
+            children: [
+              el({ tag: "legend", rect, style: legendStyle }),
+              row("under", { x: 5, y: 5, w: 290, h: 230 }),
+            ],
+          }),
+        ]).tree,
+        "under"
+      );
+    const top = { x: 0, y: 0, w: 300, h: 40 };
+    const right = { x: 260, y: 0, w: 40, h: 240 };
+    const left = { x: 0, y: 0, w: 40, h: 240 };
+    const below = { x: 5, y: 40, w: 290, h: 195 };
+    for (const position of ["static", "sticky"]) {
+      const offset = { position, top: "30px", left: "30px" };
+      expect(legendAt("horizontal-tb", top, offset), position).toEqual(below);
+      expect(legendAt("vertical-rl", right, offset), position).toEqual({
+        x: 5,
+        y: 5,
+        w: 255,
+        h: 230,
+      });
+      expect(legendAt("vertical-lr", left, offset), position).toEqual({
+        x: 40,
+        y: 5,
+        w: 255,
+        h: 230,
+      });
+    }
+    const relative = { position: "relative", top: "30px", left: "-30px" };
+    expect(legendAt("horizontal-tb", { ...top, y: 30 }, relative)).toEqual(below);
+    expect(legendAt("vertical-rl", { ...right, x: 230 }, relative)).toEqual({
+      x: 5,
+      y: 5,
+      w: 255,
+      h: 230,
+    });
+  });
+
   it("takes as a fieldset's rendered legend only a <legend> that generates a box", () => {
     const fieldset = (children: MockElement[]) =>
       run([
