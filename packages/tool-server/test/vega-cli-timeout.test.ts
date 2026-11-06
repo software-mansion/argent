@@ -300,10 +300,10 @@ async function waitForWorkerGroups(
   return sample;
 }
 
-// The `hang-self` launcher's own command line, as it has no `sleep` worker to match. `$`
-// scopes it to this run, as in cmdlinePattern, and keeps out execSync's wrapper.
-function launcherPattern(tag: string): string {
-  return `/vega hang-self ${tag.replaceAll(".", "\\.")}$`;
+// A wedged launcher's own command line, as it is no `sleep` worker for sweep() to match.
+// `$` scopes it to this run, as in cmdlinePattern, and keeps out execSync's wrapper.
+function launcherPattern(cmd: "hang-self" | "orphan", tag: string): string {
+  return `/vega ${cmd} ${tag.replaceAll(".", "\\.")}$`;
 }
 
 function strayCount(pattern: string): number {
@@ -404,7 +404,7 @@ describe("runVega timeout (real subprocess)", () => {
   });
 
   it("reaps a launcher wedged with nothing under it (the group kill alone)", async () => {
-    const pattern = launcherPattern(SENTINEL_PREFIX);
+    const pattern = launcherPattern("hang-self", SENTINEL_PREFIX);
     const HANG_SELF_DEADLINE_MS = 4_000;
     const run = runVega(["hang-self", SENTINEL_PREFIX], { timeoutMs: HANG_SELF_DEADLINE_MS }).catch(
       (e: unknown) => e
@@ -421,16 +421,23 @@ describe("runVega timeout (real subprocess)", () => {
   });
 
   it("closes its stdio on timeout when a worker neither reap reaches holds the pipe", async () => {
+    const pattern = launcherPattern("orphan", SENTINEL_ORPHAN);
     const before = openPipes();
     const ORPHAN_DEADLINE_MS = 3_000;
     const run = runVega(["orphan", SENTINEL_ORPHAN], { timeoutMs: ORPHAN_DEADLINE_MS }).catch(
       (e: unknown) => e
     );
-    expect(await waitForCount(SENTINEL_ORPHAN, 1, ORPHAN_DEADLINE_MS)).toBe(1);
-    expect(((await run) as Error).message).toMatch(/timed out/i);
-    // The worker outlives the reap, so only runVega dropping its read ends closes the pipes.
-    expect(await waitForCount(SENTINEL_ORPHAN, 0, 1_000)).toBe(1);
-    expect(await pollCount(openPipes, before, 3_000)).toBe(before);
+    try {
+      expect(await waitForCount(SENTINEL_ORPHAN, 1, ORPHAN_DEADLINE_MS)).toBe(1);
+      expect(((await run) as Error).message).toMatch(/timed out/i);
+      expect(await pollCount(() => strayCount(pattern), 0, 3_000)).toBe(0);
+      // The worker outlives the reap, so only runVega dropping its read ends closes the pipes.
+      expect(await waitForCount(SENTINEL_ORPHAN, 0, 1_000)).toBe(1);
+      expect(await pollCount(openPipes, before, 3_000)).toBe(before);
+    } finally {
+      // Outside sweep()'s `sleep` namespace.
+      execSync(`pkill -9 -f '${pattern}' || true`);
+    }
   });
 
   it("returns normally, leaving no timer armed, when the CLI responds before the deadline", async () => {
