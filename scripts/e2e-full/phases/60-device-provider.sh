@@ -72,9 +72,11 @@ _spawn_sim_server() { # native-id subcommand
   return 1
 }
 
-# Modification time in seconds — BSD and GNU stat spell it differently.
+# Modification time in seconds — BSD and GNU stat spell it differently. GNU
+# first: its `stat -f` is --file-system, which prints the filesystem's status
+# (free blocks included) before failing on `%m`.
 _mtime() { # path
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0
 }
 
 # The descriptor document, on stdout. Shared by the hand-rolled write below and
