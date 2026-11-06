@@ -818,7 +818,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           req.body
         );
         // `error` in the zod issue shape: older CLIs `JSON.parse` it (see below).
-        const issues = [{ code: "custom", path: [], message: err.message }];
+        const { issues } = err;
         res.status(400).json({ error: JSON.stringify(issues), message: err.message, issues });
         return;
       }
