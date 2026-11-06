@@ -1087,6 +1087,7 @@ type YamlStep =
 type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
 type YamlFlowFile = {
+  version?: number;
   requires?: { platform?: WhenPlatform | WhenPlatform[]; runtimeKind?: FlowRuntimeKind };
   executionPrerequisite?: string;
   steps: YamlStep[];
@@ -1741,14 +1742,14 @@ function toYamlStep(step: FlowStep): YamlStep {
 // 200 chars still shows a genuine flow entry in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
-function badEntry(raw: unknown, detail: string): never {
+function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message. It also returns the *value*
   // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
-  // declared `string` return type hides.
+  // declared `string` return type hides, and renders `.inf`/`.nan` as `null`.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw) ?? String(raw);
+    rendered = typeof raw === "number" ? String(raw) : (JSON.stringify(raw) ?? String(raw));
   } catch {
     rendered = "[cyclic entry]";
   }
@@ -1756,7 +1757,11 @@ function badEntry(raw: unknown, detail: string): never {
     const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
     rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
-  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${rendered}`, {
+  return rendered;
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${renderEntry(raw)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
@@ -3801,6 +3806,12 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   return badEntry(raw, "unrecognized step kind");
 }
 
+/**
+ * The e2e file format version this build writes and the newest it reads. A file
+ * without `version` is version 1.
+ */
+const FLOW_FILE_VERSION = 1;
+
 function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["requires"] {
   return {
     ...(platform ? { platform: platform.length === 1 ? platform[0] : platform } : {}),
@@ -3808,9 +3819,10 @@ function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["
   };
 }
 
-/** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
+/** Serialize a full flow file to YAML: `version` always, other fields only when not empty or defaulted. */
 export function serializeFlow(flow: FlowFile): string {
   const doc: YamlFlowFile = {
+    version: FLOW_FILE_VERSION,
     ...(flow.requires ? { requires: requiresToYaml(flow.requires) } : {}),
     steps: flow.steps.map(toYamlStep),
   };
@@ -3866,22 +3878,44 @@ export function parseFlow(content: string): FlowFile {
     );
   }
 
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("steps" in parsed) ||
-    !Array.isArray(parsed.steps)
-  ) {
-    throw new FailureError("Invalid e2e test file: expected an object with a steps array", {
+  const notAFlow = () =>
+    new FailureError("Invalid e2e test file: expected an object with a steps array", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_file_parse",
       failure_area: "tool_server",
       error_kind: "validation",
     });
+  if (typeof parsed !== "object" || parsed === null) throw notAFlow();
+
+  // Before the shape checks: a newer version may change the shape.
+  const version: unknown = parsed.version ?? 1;
+  if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
+    throw new FailureError(
+      `Invalid e2e test file: version must be a positive integer, got ${renderEntry(version)}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  if (version > FLOW_FILE_VERSION) {
+    throw new FailureError(
+      `The e2e test file is version ${version}, but this Argent reads up to version ${FLOW_FILE_VERSION}. Update Argent to run it.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
+  if (!("steps" in parsed) || !Array.isArray(parsed.steps)) throw notAFlow();
+
   // Same strictness as step bodies: a misspelled top-level key must not be silently dropped.
-  const topKeys: readonly string[] = ["executionPrerequisite", "requires", "steps"];
+  const topKeys: readonly string[] = ["version", "executionPrerequisite", "requires", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(

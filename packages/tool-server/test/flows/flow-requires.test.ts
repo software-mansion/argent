@@ -137,7 +137,7 @@ describe("parsing a requires block", () => {
       requires: { platform: ["ios"] },
       steps: [{ kind: "echo", message: "hi" }],
     });
-    expect(yaml).toMatch(/^requires:\n {2}platform: ios\nsteps:/);
+    expect(yaml).toMatch(/^version: 1\nrequires:\n {2}platform: ios\nsteps:/);
   });
 
   it.each([

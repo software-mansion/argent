@@ -31,14 +31,18 @@ import {
 // ── serializeFlow ────────────────────────────────────────────────────
 
 describe("serializeFlow", () => {
+  it("writes the format version as the first key", async () => {
+    expect(serializeFlow({ executionPrerequisite: "", steps: [] })).toBe("version: 1\nsteps: []\n");
+  });
+
   it("serializes an empty flow with prerequisite", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "App on home screen",
       steps: [],
     };
-    const result = serializeFlow(flow);
-    expect(result).toContain("executionPrerequisite: App on home screen");
-    expect(result).toContain("steps: []");
+    expect(serializeFlow(flow)).toBe(
+      "version: 1\nsteps: []\nexecutionPrerequisite: App on home screen\n"
+    );
   });
 
   it("serializes echo steps", async () => {
@@ -197,9 +201,12 @@ describe("parseFlow", () => {
     expect(message.length).toBeLessThan(400);
   });
 
-  it("throws when content is not an object with steps", async () => {
-    expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
-  });
+  it.each([["- echo: Hello\n"], ["~\n"], ["hello\n"], ["42\n"]])(
+    "throws when content is not an object with steps: %j",
+    async (content) => {
+      expect(() => parseFlow(content)).toThrow("expected an object with a steps array");
+    }
+  );
 
   it("classifies a YAML syntax error as a validation failure with the parser's detail", async () => {
     let thrown: unknown;
@@ -882,6 +889,76 @@ describe("parseFlow", () => {
   // parse time — silently dropping it would apply the default instead and
   // surface later as a misleading runtime failure (wrong scroll direction,
   // lost submit opt-out, lost timeout, lost snapshot tolerance).
+  describe("format version", () => {
+    const thrown = (content: string): unknown => {
+      try {
+        parseFlow(content);
+      } catch (e) {
+        return e;
+      }
+      throw new Error("parseFlow did not throw");
+    };
+
+    it("reads a file without version, and one with version 1, the same", async () => {
+      const body = "steps:\n  - echo: hi\n";
+      expect(parseFlow(`version: 1\n${body}`)).toEqual(parseFlow(body));
+    });
+
+    it.each([[2], [3]])("refuses a version %i file and says to update", async (v) => {
+      const err = thrown(`version: ${v}\nsteps:\n  - echo: hi\n`);
+      expect((err as Error).message).toBe(
+        `The e2e test file is version ${v}, but this Argent reads up to version 1. Update Argent to run it.`
+      );
+      // `validation` is what lets `argent e2e run <dir>` move on to the next file.
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+        error_kind: "validation",
+      });
+    });
+
+    it.each([
+      ["adds a top-level key", "version: 2\nmetadata: x\nsteps: []\n"],
+      ["reshapes steps", "version: 2\nsteps:\n  main: []\n"],
+    ])("refuses a newer file that %s as newer, not as malformed", async (_, file) => {
+      expect(() => parseFlow(file)).toThrow(
+        "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it."
+      );
+    });
+
+    it.each([
+      ["0", "0"],
+      ["1.5", "1.5"],
+      ['"1"', '"1"'],
+      [".inf", "Infinity"],
+      [".nan", "NaN"],
+      ["&a [*a]", "[cyclic entry]"],
+    ])("rejects version: %s, naming it as %s", async (v, shown) => {
+      const err = thrown(`version: ${v}\nsteps: []\n`);
+      expect((err as Error).message).toBe(
+        `Invalid e2e test file: version must be a positive integer, got ${shown}`
+      );
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        error_kind: "validation",
+      });
+    });
+
+    it.each([["version:"], ["version: ~"], ["version: null"]])(
+      "reads %j as version 1",
+      async (line) => {
+        expect(parseFlow(`${line}\nsteps:\n  - echo: hi\n`)).toEqual(
+          parseFlow("steps:\n  - echo: hi\n")
+        );
+      }
+    );
+
+    it("caps an oversized version in the message", async () => {
+      expect(() => parseFlow(`version: ${"x".repeat(300)}\nsteps: []\n`)).toThrow(
+        /got "x{199}…\(\+102 chars\)$/
+      );
+    });
+  });
+
   describe("unknown option keys are rejected at parse time", () => {
     it("rejects a misspelled scroll-to direction key with a suggestion", async () => {
       expect(() =>
@@ -974,10 +1051,25 @@ describe("parseFlow", () => {
       );
     });
 
+    it("names a non-finite step entry instead of null", async () => {
+      expect(() => parseFlow("steps:\n  - .inf\n")).toThrow(
+        "Unrecognized e2e test entry (step must be an object): Infinity"
+      );
+    });
+
     it("rejects an unknown top-level flow file key", async () => {
       expect(() =>
         parseFlow("executionPrerequisit: Settings open\nsteps:\n  - echo: hi\n")
       ).toThrow(/unknown key `executionPrerequisit` \(did you mean `executionPrerequisite`\?\)/);
+    });
+
+    it.each([
+      ["verison: 1", "unknown key `verison` (did you mean `version`?)"],
+      ["metadata: x", "unknown key `metadata`"],
+    ])("names the allowed top-level keys for %j", async (line, unknown) => {
+      expect(() => parseFlow(`${line}\nsteps: []\n`)).toThrow(
+        `Invalid e2e test file: ${unknown} — allowed top-level keys: version, executionPrerequisite, requires, steps`
+      );
     });
   });
 
