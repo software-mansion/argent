@@ -13,7 +13,9 @@ set -euo pipefail
 #
 # Built and checksummed in argent-private CI, shipped as a single
 # trace-processor-wasm.tar.gz (+ .sha256) release asset. The blobs are unsigned,
-# so a sha256 mismatch is fatal: it means a corrupt or tampered download.
+# so a sha256 mismatch is fatal: it means a corrupt or incomplete download. The
+# checksum comes from the same release as the tarball, so it proves integrity
+# only: whoever can replace the tarball there can replace the checksum too.
 #
 # Usage: ./scripts/download-trace-processor.sh [release-tag]
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.

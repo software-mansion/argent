@@ -11,6 +11,7 @@ import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
+import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
 import {
   withRemotePrefix,
@@ -143,10 +144,12 @@ type ListDevicesResult = {
   devices: ListedDevice[];
   avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Rules for a provider's device, present only when one is listed, and how to
-   * reach the adb server, present only when it is not adb's default. Most
-   * installs need neither and the description is read once per session, so a
-   * provider appearing later would miss it. This is re-read per call.
+   * Why local iOS targets are missing, present only while Xcode's component
+   * install is pending; rules for a provider's device, present only when one is
+   * listed; and how to reach the adb server, present only when it is not adb's
+   * default. Most installs need none of them, and the description is read once
+   * per session, so a state that appears later would be missed. This is re-read
+   * per call.
    */
   hint?: string;
 };
@@ -383,6 +386,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
   services: () => ({}),
   async execute(_services, _params) {
     const harmonyEnabled = isHarmonyEnabled();
+    const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
     // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
     // the "no branch can hang the fan-out" guarantee universal. The deadline only
     // substitutes a fallback on *slowness*; a rejection still propagates, so the
@@ -400,7 +404,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       external,
       macos,
     ] = await Promise.all([
-      withDeadline(listIosSimulators(), [], "ios"),
+      xcodeInstallPending.includes("simctl") ? [] : withDeadline(listIosSimulators(), [], "ios"),
       withDeadline(
         listIosPhysicalDevices().catch(() => []),
         [],
@@ -549,6 +553,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
 
     const adbPrefix = adbCommandPrefix(process.env);
     const hints = [
+      ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];

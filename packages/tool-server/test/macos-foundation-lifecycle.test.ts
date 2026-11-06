@@ -92,7 +92,7 @@ import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { openUrlTool } from "../src/tools/open-url";
-import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { resolveDevice } from "../src/utils/device-info";
 import {
   chromiumRefusal,
@@ -236,7 +236,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       "launch-app": createLaunchAppTool(registry),
       "restart-app": createRestartAppTool(registry),
       "open-url": openUrlTool,
-      "native-network-logs": nativeNetworkLogsTool,
+      "native-network-logs": createNativeNetworkLogsTool(registry),
     };
     for (const tool of Object.values(tools)) registry.registerTool(tool);
   });

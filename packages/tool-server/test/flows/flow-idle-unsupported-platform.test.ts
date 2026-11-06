@@ -109,7 +109,7 @@ describe("await: { idle } on a platform with no flow tree source", () => {
     expect(elapsed).toBeLessThan(3_000);
     expect(reads).toHaveLength(0);
     expect(captures).toHaveLength(0);
-    expect(r.steps[0].reason).toContain("no UI-tree source");
+    expect(r.steps[0].reason).toContain("e2e tests have no UI-tree source");
     expect(r.steps[0].reason).toContain("`wait:`");
     expect(r.steps[0].reason).not.toContain("foreground");
     expect(r.steps[1]).toMatchObject({ kind: "echo", status: "skip" });

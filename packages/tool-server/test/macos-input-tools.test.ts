@@ -35,7 +35,7 @@ import { nativeFindViewsTool } from "../src/tools/native-devtools/native-find-vi
 import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-full-hierarchy";
 import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
-import { nativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import {
   MAC_BUNDLE_ID,
@@ -84,7 +84,7 @@ function harness(handlers: Parameters<typeof fakeMacosApp>[0] = {}) {
     nativeFullHierarchyTool,
     nativeViewAtPointTool,
     nativeUserInteractableViewAtPointTool,
-    nativeNetworkLogsTool,
+    createNativeNetworkLogsTool(registry),
   ]);
   const invoke = (id: string, args: Record<string, unknown>, signal?: AbortSignal) =>
     registry.invokeTool(id, { udid: MAC_ID, ...args }, signal ? { signal } : undefined);

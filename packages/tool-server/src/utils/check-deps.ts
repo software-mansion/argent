@@ -1,29 +1,12 @@
-import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
+import type { ToolDependency } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { resolveVegaBinary } from "./vega-cli";
 import { resolveHarmonyEmulator } from "./harmony-cli";
 import { resolveHdc } from "./harmony-hdc";
 import { commandOnPath } from "./command-on-path";
+import { DependencyMissingError } from "./dependency-errors";
 
-/**
- * Thrown when a declared host-binary dependency (e.g. `adb`, `xcrun`) can't be
- * resolved. The HTTP dispatcher maps it to 424; `.message` is the install hint,
- * safe to bubble straight to the agent.
- */
-export class DependencyMissingError extends Error {
-  readonly missing: ToolDependency[];
-  constructor(missing: ToolDependency[], message: string) {
-    super(message);
-    this.name = "DependencyMissingError";
-    this.missing = missing;
-    withFailureSignal(this, {
-      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
-      failure_stage: "tool_dependency_preflight",
-      failure_area: "tool_server",
-      error_kind: "dependency_missing",
-    });
-  }
-}
+export { DependencyMissingError };
 
 // Short TTL: a burst of tool calls pays for at most one probe per dep, yet an
 // install mid-session recovers without a tool-server restart.

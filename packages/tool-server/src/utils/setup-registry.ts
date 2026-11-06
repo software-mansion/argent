@@ -10,8 +10,9 @@ import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-ru
 import { tvControlBlueprint } from "../blueprints/tv-control";
 import { androidTvControlBlueprint } from "../blueprints/android-tv-control";
 import { macosAppBlueprint } from "../blueprints/macos-app";
+import { androidNetworkInspectorBlueprint } from "../blueprints/android-network-inspector";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
-import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../tools/native-devtools/native-full-hierarchy";
 import { nativeDescribeScreenTool } from "../tools/native-devtools/native-describe-screen";
@@ -132,6 +133,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(tvControlBlueprint);
   registry.registerBlueprint(androidTvControlBlueprint);
   registry.registerBlueprint(macosAppBlueprint);
+  registry.registerBlueprint(androidNetworkInspectorBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -198,7 +200,7 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerLoadTool);
   registry.registerTool(gatherWorkspaceDataTool);
   registry.registerTool(nativeDevtoolsStatusTool);
-  registry.registerTool(nativeNetworkLogsTool);
+  registry.registerTool(createNativeNetworkLogsTool(registry));
   registry.registerTool(nativeFindViewsTool);
   registry.registerTool(nativeFullHierarchyTool);
   registry.registerTool(nativeDescribeScreenTool);

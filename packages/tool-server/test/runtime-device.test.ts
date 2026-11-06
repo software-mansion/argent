@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { findRuntimeDevice } from "../src/utils/debugger/runtime-device";
+import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
+import { listIosSimulators } from "../src/utils/ios-devices";
 
 /** What each device's log holds: the markers the app wrote there. */
 const deviceLogs = vi.hoisted(() => new Map<string, string[]>());
@@ -87,5 +89,16 @@ describe("findRuntimeDevice", () => {
 
   it("finds nothing when no device it can read holds the marker", async () => {
     await expect(findRuntimeDevice(runtimeOn("ext:cloud-phone"))).resolves.toBeUndefined();
+  });
+
+  // The simulator listing is refused while Xcode's install is pending.
+  it("still answers when the simulator listing is refused", async () => {
+    vi.mocked(listIosSimulators).mockRejectedValue(new XcodeFirstLaunchPendingError("simctl"));
+    try {
+      await expect(findRuntimeDevice(runtimeOn("ext:cloud-phone"))).resolves.toBeUndefined();
+      await expect(findRuntimeDevice(runtimeOn("emulator-5556"))).resolves.toBe("emulator-5556");
+    } finally {
+      vi.mocked(listIosSimulators).mockReset();
+    }
   });
 });
