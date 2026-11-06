@@ -618,6 +618,7 @@ function newRuntime(nowEpochMs: number, renderers: number, tickMs: number) {
   return ctx;
 }
 
+/** One app. With `tickMs`, renderers start at different times, as on a device. */
 function makeApp({ renderers = 1, tickMs = 0 } = {}) {
   let ctx = newRuntime(T0, renderers, tickMs);
   const app = {
@@ -1200,6 +1201,114 @@ describe("the run lifecycle, on the real session and scripts", () => {
       expect(replaced.rig.evaluated).toEqual([]);
       expect(getLostProfilerRun(PORT, DEVICE)?.cause).toBe("cdp_disconnected");
       expect(app.recording()).toBe(true);
+    });
+  });
+
+  describe("a stop after the session that replaced the run has stopped too", () => {
+    async function replacedAndStopped(app: App) {
+      const replaced = toolServer(app, PORT);
+      const taker = toolServer(app, OTHER_PORT);
+      await replaced.start();
+      app.commit("ReplacedScreen");
+      app.advance(1_000);
+      await taker.start(true);
+      app.commit("TakerScreen");
+      await taker.stop();
+      dumps.written.length = 0;
+      return { replaced, taker };
+    }
+
+    it("fails with the takeover instead of saving the other session's commits", async () => {
+      const { replaced } = await replacedAndStopped(makeApp());
+
+      const err = await failure(replaced.stop());
+
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.REACT_PROFILER_SESSION_TAKEN_OVER
+      );
+      expect(err.message).toContain("has since stopped");
+      expect(err.message).not.toContain("still recording");
+      expect(dumps.written).toEqual([]);
+      expect(getCachedProfilerPaths(PORT, DEVICE)).toBeUndefined();
+      expect(getLostProfilerRun(PORT, DEVICE)).toMatchObject({ cause: "taken_over" });
+    });
+
+    it("has status say so too", async () => {
+      const app = makeApp();
+      const { replaced } = await replacedAndStopped(app);
+      const run = (await replaced.api()).sessionId;
+
+      await expect(replaced.status()).resolves.toMatchObject({
+        session_status: "taken_over",
+        is_running: false,
+        lost_run: { session_id: run, cause: "taken_over" },
+      });
+    });
+
+    it("finds the replacement across two renderers that started apart", async () => {
+      const { replaced } = await replacedAndStopped(makeApp({ renderers: 2, tickMs: 1 }));
+
+      const err = await failure(replaced.stop());
+
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.REACT_PROFILER_SESSION_TAKEN_OVER
+      );
+    });
+
+    it("records a teardown as the takeover it was", async () => {
+      const { replaced } = await replacedAndStopped(makeApp());
+
+      await replaced.teardown();
+
+      expect(getLostProfilerRun(PORT, DEVICE)).toMatchObject({
+        cause: "taken_over",
+        takenOverBy: null,
+      });
+    });
+  });
+
+  describe("a stop after profiling stopped outside argent", () => {
+    it("still collects the run's data, which nothing replaced", async () => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.commit("Screen");
+      app.run("__ri.stopProfiling()");
+
+      await expect(ts.status()).resolves.toMatchObject({
+        session_status: "lost",
+        lost_run: { cause: "ended_in_app" },
+      });
+      await expect(ts.stop()).resolves.toMatchObject({ fiber_renders_captured: 1 });
+
+      expect(lastCommitNames()).toEqual(["Screen"]);
+    });
+
+    it("works when the two renderers started at different times", async () => {
+      // The run's start time is the first renderer's, and the second one's differs.
+      const app = makeApp({ renderers: 2, tickMs: 1 });
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      const starts = JSON.parse(app.run(READ_STATE_SCRIPT) as string) as {
+        rendererStartedAtEpochMs: number[];
+      };
+      expect(new Set(starts.rendererStartedAtEpochMs).size).toBe(2);
+      app.commit("Screen");
+      app.run(
+        "__REACT_DEVTOOLS_GLOBAL_HOOK__.rendererInterfaces.forEach(function (ri) { ri.stopProfiling(); })"
+      );
+
+      await expect(ts.stop()).resolves.toMatchObject({ fiber_renders_captured: 1 });
+    });
+
+    it("proceeds when no renderer has a start time to compare", async () => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.commit("Screen");
+      app.run("__ri.stopProfiling(); __ri.__argent_startedAtEpochMs__ = null;");
+
+      await expect(ts.stop()).resolves.toMatchObject({ fiber_renders_captured: 1 });
     });
   });
 });

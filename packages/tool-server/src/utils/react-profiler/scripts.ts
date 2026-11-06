@@ -286,7 +286,8 @@ export const HEARTBEAT_SCRIPT = `
  *
  * `isRunning` is true when ANY renderer is profiling — with RN's Fabric +
  * dormant Paper pair the first iterated renderer is not necessarily the
- * active one.
+ * active one. `rendererStartedAtEpochMs` lists each renderer's last start, which
+ * outlives its stop: `takeoverOf` reads it to tell runs apart in a stopped app.
  */
 export const READ_STATE_SCRIPT = `
 (function __argent_readState() {
@@ -294,10 +295,14 @@ export const READ_STATE_SCRIPT = `
   if (!h) return JSON.stringify({ hookExists: false });
   var rendererInterfaceFound = false;
   var isRunning = false;
+  var rendererStartedAtEpochMs = [];
   if (h.rendererInterfaces && typeof h.rendererInterfaces.forEach === 'function') {
     h.rendererInterfaces.forEach(function (ri) {
       rendererInterfaceFound = true;
       if (ri && ri.__argent_isProfiling__ === true) isRunning = true;
+      if (ri && typeof ri.__argent_startedAtEpochMs__ === 'number') {
+        rendererStartedAtEpochMs.push(ri.__argent_startedAtEpochMs__);
+      }
     });
   }
   if (!rendererInterfaceFound) {
@@ -310,6 +315,7 @@ export const READ_STATE_SCRIPT = `
     isRunning: isRunning,
     owner: globalThis.__ARGENT_PROFILER_OWNER__ || null,
     nowEpochMs: Date.now(),
+    rendererStartedAtEpochMs: rendererStartedAtEpochMs,
   });
 })()
 `;

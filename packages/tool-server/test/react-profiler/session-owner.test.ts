@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyStaleness,
+  takeoverOf,
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
 } from "../../src/utils/react-profiler/session-ownership";
@@ -70,6 +71,57 @@ describe("classifyStaleness", () => {
       nowEpochMs: 1_000_000_000,
     });
     expect(r.ageSeconds).toBe(0);
+  });
+});
+
+describe("takeoverOf", () => {
+  const run = { sessionId: "uuid-mine", profileStartWallMs: 1_000 };
+  const recording = (sessionId: string | null) => ({
+    isRunning: true,
+    owner: sessionId ? owner({ sessionId }) : null,
+  });
+  const stopped = (rendererStartedAtEpochMs?: number[]) => ({
+    isRunning: false,
+    owner: null,
+    rendererStartedAtEpochMs,
+  });
+
+  it("finds nothing while the run owns the recording", () => {
+    expect(takeoverOf(recording("uuid-mine"), run)).toBeUndefined();
+  });
+
+  it("names the session that is recording over the run", () => {
+    expect(takeoverOf(recording("uuid-other"), run)).toEqual({
+      by: "uuid-other",
+      stillRecording: true,
+    });
+  });
+
+  it("names nobody for a recording with no owner", () => {
+    expect(takeoverOf(recording(null), run)).toEqual({ by: null, stillRecording: true });
+  });
+
+  it("finds nothing in a stopped app while any renderer has the run's start time", () => {
+    expect(takeoverOf(stopped([999, 1_000]), run)).toBeUndefined();
+    expect(takeoverOf(stopped([1_000, 1_001]), run)).toBeUndefined();
+  });
+
+  it("finds a takeover in a stopped app when no renderer has it", () => {
+    expect(takeoverOf(stopped([2_000, 2_001]), run)).toEqual({ by: null, stillRecording: false });
+  });
+
+  it("cannot tell with no start times to compare", () => {
+    expect(takeoverOf(stopped([]), run)).toBeUndefined();
+    expect(takeoverOf(stopped(), run)).toBeUndefined();
+  });
+
+  it("cannot tell for a run with no start time", () => {
+    expect(takeoverOf(stopped([2_000]), { ...run, profileStartWallMs: null })).toBeUndefined();
+  });
+
+  it("has nothing to check for a session with no run", () => {
+    const noRun = { sessionId: null, profileStartWallMs: null };
+    expect(takeoverOf(recording("uuid-other"), noRun)).toBeUndefined();
   });
 });
 

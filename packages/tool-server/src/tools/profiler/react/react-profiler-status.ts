@@ -13,6 +13,7 @@ import {
 } from "../../../utils/react-profiler/scripts";
 import {
   STOP_IN_PROGRESS_NOTE,
+  takeoverOf,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
 import {
@@ -39,6 +40,7 @@ type ReadStateResult =
       isRunning: boolean;
       owner: ProfilerSessionOwner | null;
       nowEpochMs: number;
+      rendererStartedAtEpochMs?: number[];
     };
 
 /**
@@ -278,7 +280,20 @@ export function createReactProfilerStatusTool(
         };
       }
 
-      if (recordingHere) return lostResponse(ownRunId, "ended_in_app", false);
+      if (recordingHere) {
+        if (takeoverOf(state, api)) {
+          return {
+            ...inApp,
+            session_status: "taken_over",
+            note:
+              `Your run (session ${ownRunId}) was not saved: ${lostRunCauseText("taken_over")}. ` +
+              "That session has since stopped too. Nothing is recording now; call react-profiler-start to record again.",
+            ...lastRun,
+            lost_run: { session_id: ownRunId, cause: "taken_over" },
+          };
+        }
+        return lostResponse(ownRunId, "ended_in_app", false);
+      }
       if (ownRunId !== null) return lostResponse(ownRunId, "stop_failed", false);
 
       if (lost) {

@@ -64,31 +64,46 @@ export function classifyStaleness({
 interface AppRecordingState {
   isRunning?: boolean;
   owner?: ProfilerSessionOwner | null;
+  /** Each renderer's last start. Absent or empty when none was started here. */
+  rendererStartedAtEpochMs?: number[];
 }
 
-/** The run a takeover is checked for; ReactProfilerSessionApi has this field. */
+/** The run a takeover is checked for; ReactProfilerSessionApi has these fields. */
 interface OwnRun {
   sessionId: string | null;
+  profileStartWallMs: number | null;
+}
+
+interface RunTakeover {
+  /** The session that replaced the run, or null when the app names none. */
+  by: string | null;
+  stillRecording: boolean;
 }
 
 /**
- * The session that started a run over `run`, as `by`, which is null when the
- * recording has no owner record.
+ * Whether another session started a run over `run`. A stopped app names no
+ * owner, but every start replaces each renderer's start time, so the run is
+ * still the app's only while a renderer has the time it started with. Renderers
+ * start one by one, so any of them may hold it. A stop from outside argent
+ * leaves those times alone, and with none to compare there is nothing to tell.
  */
-export function takeoverOf(
-  state: AppRecordingState,
-  run: OwnRun
-): { by: string | null } | undefined {
-  if (run.sessionId === null || !state.isRunning) return undefined;
-  if (state.owner?.sessionId === run.sessionId) return undefined;
-  return { by: state.owner?.sessionId ?? null };
+export function takeoverOf(state: AppRecordingState, run: OwnRun): RunTakeover | undefined {
+  if (run.sessionId === null) return undefined;
+  if (state.isRunning) {
+    if (state.owner?.sessionId === run.sessionId) return undefined;
+    return { by: state.owner?.sessionId ?? null, stillRecording: true };
+  }
+  const starts = state.rendererStartedAtEpochMs ?? [];
+  if (starts.length === 0 || run.profileStartWallMs === null) return undefined;
+  if (starts.includes(run.profileStartWallMs)) return undefined;
+  return { by: null, stillRecording: false };
 }
 
 /** `takeoverOf` on the app's current state; undefined when that cannot be read. */
 export async function readTakeover(
   cdp: Pick<CDPClient, "evaluate">,
   run: OwnRun
-): Promise<{ by: string | null } | undefined> {
+): Promise<RunTakeover | undefined> {
   try {
     const raw = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
     return raw ? takeoverOf(JSON.parse(raw) as AppRecordingState, run) : undefined;

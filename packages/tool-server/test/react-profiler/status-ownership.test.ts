@@ -240,6 +240,7 @@ describe("react-profiler-status: nothing recording", () => {
     const res = await runStatus(api);
     expect(res.session_status).toBe("lost");
     expect(res.lost_run).toEqual({ session_id: "uuid-mine", cause: "ended_in_app" });
+    expect(res.note).toContain("react-profiler-stop can still collect it");
   });
 
   it("returns 'taken_over' when another session replaced the run and has stopped since", async () => {

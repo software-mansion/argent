@@ -426,6 +426,37 @@ describe("READ_STATE_SCRIPT (multi-renderer)", () => {
   });
 });
 
+describe("READ_STATE_SCRIPT (renderer start times)", () => {
+  it("lists every renderer that has a start time, and only those", () => {
+    const started = makeRi();
+    started.__argent_startedAtEpochMs__ = 1_000;
+    const later = makeRi();
+    later.__argent_startedAtEpochMs__ = 1_001;
+    const neverStarted = makeRi();
+    const ris = new Map<number, MockRi>([
+      [1, started],
+      [2, neverStarted],
+      [3, later],
+    ]);
+    const out = withHook(ris, () => evalIIFE<string>(READ_STATE_SCRIPT));
+    const r = JSON.parse(out) as { rendererStartedAtEpochMs: number[] };
+    expect(r.rendererStartedAtEpochMs).toEqual([1_000, 1_001]);
+  });
+
+  it("keeps a renderer's start time after it stops", () => {
+    const ri = makeRi();
+    const ris = new Map<number, MockRi>([[1, ri]]);
+    const out = withHook(ris, () => {
+      evalIIFE<string>(buildStartScript(ownerJson));
+      evalIIFE<string>(STOP_FOR_TAKEOVER_SCRIPT);
+      return evalIIFE<string>(READ_STATE_SCRIPT);
+    });
+    const r = JSON.parse(out) as { isRunning: boolean; rendererStartedAtEpochMs: number[] };
+    expect(r.isRunning).toBe(false);
+    expect(r.rendererStartedAtEpochMs).toEqual([1_700_000_000_000]);
+  });
+});
+
 describe("REACT_NATIVE_PROFILER_SETUP_SCRIPT (per-renderer cache isolation)", () => {
   it("clearing one renderer's cache bucket does not affect another's", () => {
     // The wrapper does `cache.set(ri, Object.create(null))` on start; a flat

@@ -276,15 +276,21 @@ Fails if no active profiling session exists, another stop is running, the CDP co
         api.profilingActive = false;
         api.sessionId = null;
         api.ownerToolServerPid = null;
+        const howTakeoversHappen =
+          "A takeover happens when another agent or tool-server calls react-profiler-start with " +
+          "force, or once a run's heartbeat is 5 minutes old.";
+        const replacedBy = takeover.by
+          ? `session ${takeover.by}`
+          : "a recording with no owner record (a DevTools client outside argent)";
         throw new FailureError(
-          `This profiling run was taken over by ${
-            takeover.by
-              ? `session ${takeover.by}`
-              : "a recording with no owner record (a DevTools client outside argent)"
-          }, which is still recording. Its data was discarded at the takeover, so there is ` +
-            "nothing to collect, and the other recording was left running. A takeover happens when " +
-            "another agent or tool-server calls react-profiler-start with force, or once a run's " +
-            "heartbeat is 5 minutes old. Ask the user before taking over with react-profiler-start { force: true }.",
+          takeover.stillRecording
+            ? `This profiling run was taken over by ${replacedBy}, which is still recording. Its ` +
+                "data was discarded at the takeover, so there is nothing to collect, and the " +
+                `other recording was left running. ${howTakeoversHappen} Ask the user before ` +
+                "taking over with react-profiler-start { force: true }."
+            : "This profiling run was taken over by another session, which has since stopped. " +
+                `Its data was discarded at the takeover, so there is nothing to collect. ${howTakeoversHappen} ` +
+                "Nothing is recording now: call react-profiler-start to record again.",
           {
             error_code: FAILURE_CODES.REACT_PROFILER_SESSION_TAKEN_OVER,
             failure_stage: "react_profiler_stop_taken_over",
