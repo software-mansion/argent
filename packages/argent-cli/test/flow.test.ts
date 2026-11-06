@@ -2192,6 +2192,7 @@ describe("argent e2e run", () => {
     ["FLOW_FILE_INVALID", "not run (invalid e2e test)"],
     ["FLOW_FILE_NEWER_VERSION", "not run (needs a newer Argent)"],
     ["FLOW_DEVICE_RESOLUTION", "not run (no device resolved)"],
+    ["FLOW_REQUIREMENTS_UNMET", "not run (requires not met)"],
     ["A_CODE_THIS_CLI_DOES_NOT_MAP", "not run (rejected)"],
   ])("renders a %s rejection of a single flow as %j", async (errorCode, verdict) => {
     toolsClientMock.callTool.mockRejectedValue(
@@ -2380,6 +2381,56 @@ describe("argent e2e run <dir>", () => {
     expect(out).not.toMatch(/✓ {2}1 tap/);
     expect(out).not.toContain("Failed e2e tests");
     expect(out).toContain("PASS — 2 e2e tests: 2 passed, 0 failed, 0 skipped");
+  });
+
+  it("skips a flow whose requires: excludes the target and runs the rest", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+          errorCode: "FLOW_REQUIREMENTS_UNMET",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report() });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs).toContain("  · skipped (requires not met)\n    excludes device SIM-1 (ios)");
+    expect(logs.at(-1)).toMatch(/^\nPASS — 2 e2e tests: 1 passed, 0 failed, 1 skipped/);
+    expect(errs).toEqual([]);
+  });
+
+  it("exits 2 with a NONE RAN verdict when requires: skipped every flow", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.at(-1)).toMatch(/^\nNONE RAN — 2 e2e tests: 0 passed, 0 failed, 2 skipped/);
+    expect(errs).toEqual([`No e2e test in ${flowsDir} ran on the selected target.`]);
+  });
+
+  it("reports a requires: skip with its reason, and ok: false when nothing ran, under --json", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const out = JSON.parse(logs.join("\n"));
+    expect(out).toMatchObject({ ok: false, total: 2, skipped: 2 });
+    expect(out.e2eTests[0]).toEqual({
+      path: "a-login.yaml",
+      status: "skip",
+      reason: "excludes device SIM-1 (ios)",
+    });
   });
 
   it("ends each flow verdict with its run time and the batch verdict with the batch time", async () => {

@@ -120,6 +120,24 @@ describe("flow-start-recording", () => {
     expect(result.message).toContain("my-flow");
   });
 
+  it("writes the requires block it is given and keeps it through appended steps", async () => {
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "tv-flow", project_root: tmpDir, requires: { platform: "ios", runtimeKind: "tv" } }
+    );
+    await flowInsertEchoTool.execute({}, { name: "tv-flow", project_root: tmpDir, message: "hi" });
+
+    const flow = parseFlow(await readFlowFile("tv-flow"));
+    expect(flow.requires).toEqual({ platform: ["ios"], runtimeKind: "tv" });
+    expect(flow.steps).toEqual([{ kind: "echo", message: "hi" }]);
+  });
+
+  it("rejects an empty requires block", async () => {
+    await expect(
+      flowStartRecordingTool.execute({}, { name: "empty", project_root: tmpDir, requires: {} })
+    ).rejects.toThrow(/must declare at least one of platform, runtimeKind/);
+  });
+
   it("overwrites an existing flow file", async () => {
     await flowStartRecordingTool.execute(
       {},
