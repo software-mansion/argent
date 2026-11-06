@@ -80,10 +80,10 @@ export function getGlobalBinaryPath(): string | null {
 }
 
 /**
- * The first global argent still on PATH after an uninstall: a binary that
- * resolves to the package, or one that still runs (a pnpm shim). A
- * version-manager shim (nodenv's, mise's) outlives the package until a reshim
- * and then fails, so it is passed over: an install behind it still counts.
+ * The first live global argent on PATH: a binary that resolves to the package,
+ * or one that still runs (a pnpm shim). A version-manager shim (nodenv's,
+ * mise's) outlives the package until a reshim and then fails, so it is passed
+ * over: an install behind it still counts.
  */
 export function getRemainingGlobalBinaryPath(): string | null {
   for (const binaryPath of getGlobalBinaryPaths()) {
@@ -113,7 +113,7 @@ export function getGloballyInstalledPackageRoot(): string | null {
   return binaryPath ? packageRootOf(binaryPath) : null;
 }
 
-function packageRootOf(binaryPath: string): string | null {
+export function packageRootOf(binaryPath: string): string | null {
   try {
     const realPath = fs.realpathSync(binaryPath);
     const root = resolvePackageRoot(path.dirname(realPath));

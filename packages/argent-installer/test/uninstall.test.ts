@@ -397,6 +397,73 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("drops the CLI record of a removed global when a second global stays on PATH", async () => {
+    const clack = await import("@clack/prompts");
+    const npmPkg = path.join(tmpDir, "npm-prefix", "lib", "node_modules", "@swmansion", "argent");
+    writeFile(path.join(npmPkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
+    writeFile(path.join(npmPkg, "dist", "cli.js"));
+    const npmBin = path.join(tmpDir, "npm-prefix", "bin", "argent");
+    fs.mkdirSync(path.dirname(npmBin), { recursive: true });
+    fs.symlinkSync(path.join(npmPkg, "dist", "cli.js"), npmBin);
+    const otherBin = path.join(tmpDir, "other-node", "bin", "argent");
+    writeFile(otherBin);
+    const record = path.join(tmpDir, ".argent", "cli.json");
+    writeFile(
+      record,
+      JSON.stringify({
+        cli: path.join(fs.realpathSync(npmPkg), "dist", "cli.js"),
+        node: process.execPath,
+      })
+    );
+    childProcessMock.which.mockImplementation(() => `${npmBin}\n${otherBin}\n`);
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "npm") {
+        fs.rmSync(npmBin);
+        fs.rmSync(npmPkg, { recursive: true });
+      }
+      return undefined;
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${otherBin} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(fs.existsSync(record)).toBe(false);
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({ has_uninstalled_package: true })
+    );
+  });
+
+  it("counts a global that does not resolve to the package as left on Windows", async () => {
+    const clack = await import("@clack/prompts");
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    // `where` lists npm-style shims that neither resolve to the package nor run
+    // through execFileSync (a .cmd fails with EINVAL).
+    const yarnShim = path.join(tmpDir, "Yarn", "bin", "argent.cmd");
+    writeFile(yarnShim);
+    childProcessMock.which.mockImplementation(() => yarnShim + "\n");
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("spawnSync EINVAL"), { code: "EINVAL" });
+    });
+    process.chdir(tmpDir);
+
+    try {
+      await uninstall(["--yes", "--global"]);
+    } finally {
+      platform.mockRestore();
+    }
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${yarnShim} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(process.exitCode).toBe(1);
+  });
+
   it("removes both installs when run through npx from a project that has a local devDependency", async () => {
     const clack = await import("@clack/prompts");
     const project = fs.realpathSync(tmpDir);

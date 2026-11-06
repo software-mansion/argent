@@ -796,6 +796,26 @@ describe("detectGlobalPackageManager", () => {
       putGlobalOnPath(parent);
       expect(detectGlobalPackageManager()).toBe("yarn");
     });
+
+    function putShimFirst(exitCode: number): void {
+      const shims = path.join(dir, "shims");
+      fs.mkdirSync(shims);
+      fs.writeFileSync(path.join(shims, "argent"), `#!/bin/sh\nexit ${exitCode}\n`);
+      fs.chmodSync(path.join(shims, "argent"), 0o755);
+      process.env.PATH = `${shims}:${process.env.PATH}`;
+    }
+
+    it("returns yarn over Yarn classic's global behind a stale version-manager shim", () => {
+      putShimFirst(127);
+      putGlobalOnPath(".config/yarn/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("yarn");
+    });
+
+    it("returns npm over a live version-manager shim, whatever is behind it", () => {
+      putShimFirst(0);
+      putGlobalOnPath(".config/yarn/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
   });
 
   it("returns pnpm for pnpm agent", () => {

@@ -729,28 +729,31 @@ export async function uninstall(args: string[]): Promise<void> {
         // The command comes from the launcher, not the install's owner: npm
         // exits 0 on a package Yarn classic or pnpm installed and leaves it.
         const leftover = removable.kind === "global" ? getRemainingGlobalBinaryPath() : null;
-        if (leftover) {
-          throw new Error(
-            `${leftover} is still on PATH. Remove it with the package manager that installed it.`
-          );
-        }
-        p.log.success(`Removed ${removable.kind} package.`);
-        hasUninstalledPackage = true;
-        if (removable.kind === "global") hasUninstalledGlobalPackage = true;
-
-        // Must go with the install even when pruning was declined, or a stale
-        // mode:"local" record keeps `update`/`uninstall` targeting a gone devDependency.
-        if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
-          p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
-        }
+        // A second global can stay on PATH after this one is gone.
+        const removed =
+          !leftover || (removable.installDir !== null && !fs.existsSync(removable.installDir));
+        if (removed) hasUninstalledPackage = true;
 
         /**
          * Only when the record points inside the install just removed. The
          * two modes coexist and orphaning a record that names a surviving
          * install would break provider CLI discovery for no reason.
          */
-        if (removeCliRecordFor(removable.installDir)) {
+        if (removed && removeCliRecordFor(removable.installDir)) {
           p.log.info(pc.dim("Removed ~/.argent/cli.json (provider CLI discovery record)."));
+        }
+        if (leftover) {
+          throw new Error(
+            `${leftover} is still on PATH. Remove it with the package manager that installed it.`
+          );
+        }
+        p.log.success(`Removed ${removable.kind} package.`);
+        if (removable.kind === "global") hasUninstalledGlobalPackage = true;
+
+        // Must go with the install even when pruning was declined, or a stale
+        // mode:"local" record keeps `update`/`uninstall` targeting a gone devDependency.
+        if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
+          p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
         }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);
