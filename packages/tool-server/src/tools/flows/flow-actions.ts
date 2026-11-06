@@ -888,12 +888,13 @@ async function scrollToVisible(
     // wheel at the anchor cannot scroll away (its scroller is at its end, or a wheel
     // taker the walker cannot see holds the anchor, such as a page's wheel listener):
     // it is accepted where it is, after one more increment at the centre of the
-    // `within` container if one is named. A wheel elsewhere would move the page.
+    // `within` container, else of the window that cuts it. A cut that one leaves in
+    // place too is accepted, so a wheel the page takes is sent at most once.
     const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
     const shown = room === undefined ? undefined : (vertical ? region.height : region.width) - room;
     let spentNow = false;
     if (shown !== undefined && prevShown !== undefined && Math.abs(shown - prevShown) < 1e-4) {
-      if (anchorSpent || !container) return { frame: frame!, ...warnedBy(warning) };
+      if (anchorSpent) return { frame: frame!, ...warnedBy(warning) };
       anchorSpent = spentNow = true;
     }
     prevShown = shown;
@@ -927,10 +928,9 @@ async function scrollToVisible(
 
     // A cut target moves no further than its visible start is from the
     // window's, or one taller than half the window would be carried past it.
-    const sent =
-      anchorSpent && container
-        ? await scrollIncrement(env, axisDirection, container.frame, room)
-        : await scrollIncrement(env, axisDirection, region, room, anchor);
+    const sent = anchorSpent
+      ? await scrollIncrement(env, axisDirection, container?.frame ?? region, room)
+      : await scrollIncrement(env, axisDirection, region, room, anchor);
     warning ??= sent;
   }
   return {
