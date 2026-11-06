@@ -79,6 +79,15 @@ describe("toolResultVerdict", () => {
     });
   });
 
+  it("fails a status tool's disconnected answer, which an e2e step asserts against", () => {
+    expect(
+      toolResultVerdict("native-devtools-status", { status: "init_failed", message: "env failed" })
+    ).toEqual({
+      status: "fail",
+      reason: "native-devtools-status did not run (init_failed): env failed",
+    });
+  });
+
   it("returns undefined for a passing result and for a tool with no verdict", () => {
     expect(toolResultVerdict("await-ui-element", { success: true })).toBeUndefined();
     expect(toolResultVerdict("e2e-execute", { ok: true, steps: [] })).toBeUndefined();

@@ -57,9 +57,8 @@ const HIDDEN_UNREADABLE_NOTE =
 
 /**
  * WHY an unmet wait came back `success: false`. {@link isUnmetUiWaitResult}
- * answers "did this wait fail", which is all `run-sequence` and `flow-run`
- * need. A caller that NARRATES the failure needs more, because only one cause
- * judges the condition:
+ * answers "did this wait fail". A caller that NARRATES the failure needs more,
+ * because only one cause judges the condition:
  *
  * - `unmet` — the tree was read and the condition was false there.
  * - `unreadable` — the tree source never answered, so nothing was observed.
