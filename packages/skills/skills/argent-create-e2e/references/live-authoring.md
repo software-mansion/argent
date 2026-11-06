@@ -103,13 +103,17 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 ### Taps
 
-`e2e-add-step` cannot receive a YAML selector directly. Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator. The recorder reads the pre-tap tree and derives the selector in a fixed order (`id`, then `text`, then `role`), giving three outcomes. Read the `recorded` line after every tap. It names the derived form (a selector map, or the kept point):
+Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator.
 
-1. **`tap: { id: ... }` or `tap: { text: ... }`**: the good case.
-2. **`tap: { role: ... }`, with a warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree) and the tap reports a pass on the wrong control.
+**Pass `selector` when you know which field is stable.** The recorder is `id`-first, which is wrong when the id is positional (`row-3`) and the text is durable: `e2e-add-step { command: "gesture-tap", args: …, selector: { text: "Settings" } }`. It sits beside `args`, not inside the JSON. The selector is checked against the replay tree, not `describe`. A replay taps the centre of the element the selector resolves to there, so the innermost element at that centre must be the one under the tap. The call is refused before the tap runs when that tree cannot be read (or the platform has none), the selector matches nothing there, or its centre is on another element. That refusal names the centre: when the selector names the element you meant (a text leaf narrower than its row, say), record the tap again at that point. When it says a smaller element sits at the centre, the tree cannot tell which of the two takes the touch: a label passes it to its row, a button keeps it. Record there only if the result is the one you want. `selector` with any other `command`, with `delayMs`, or inside `args` is refused the same way.
+
+With no `selector`, the recorder reads the pre-tap tree and derives one in a fixed order (`id`, then `text`, then `role`), giving three outcomes. Read the `recorded` line after every tap, because the first never warns. It names the derived form (a selector map, or the kept point):
+
+1. **`tap: { id: ... }` or `tap: { text: ... }`**: the good case, unless the id is positional (`row-3`), which breaks when the list reorders, with no warning.
+2. **`tap: { role: ... }`, with a `matches by role alone` warning.** An icon-only button with neither id nor visible label lands here. `role` matches as a case-insensitive substring, so a replay screen holding a second control of that role can win the [ranking](e2e-yaml.md#the-runner-tree-is-not-the-discovery-tree) and the tap reports a pass on the wrong control.
 3. **A kept raw point**, with a warning naming the reason and the retarget.
 
-Treat outcomes 2 and 3 alike. Restore the source screen with direct MCP calls, record a corrected tap, then remove the weak step after finishing. Keep a point or a bare role only through the [coordinate fallback gate](reliability-and-recovery.md#coordinate-fallback-gate).
+Treat a positional id and outcomes 2 and 3 alike. Restore the source screen with direct MCP calls, record a corrected tap (with `selector` when the tree carries a stable field the derivation passed over), then remove the weak step after finishing. Keep a point or a bare role only through the [coordinate fallback gate](reliability-and-recovery.md#coordinate-fallback-gate).
 
 Never tap the on-screen keyboard through the recorder. Some platforms expose it as one large node, so replay can tap the wrong key while reporting success. Record text with `keyboard`.
 
@@ -228,7 +232,7 @@ The condition grep matches a condition key with a scalar after it (`visible: Sav
 Resolve every hit and confirm:
 
 - Every element action uses a stable selector unless the fallback gate cleared and documented it.
-- **No `role:` stands as the only key under a `tap:`/`long-press:`.** It comes from the recorder's last-resort fallback or a hand edit. Replace it, or clear it through the fallback gate. A `role:` beside another field or a scope (`within`, `after`, `next`) is deliberate and needs no defence.
+- **No `role:` stands as the only key under a `tap:`/`long-press:`.** It comes from the recorder's last-resort fallback, a role-only `selector` passed to it, or a hand edit. Replace it, or clear it through the fallback gate. A `role:` beside another field or a scope (`within`, `after`, `next`) is deliberate and needs no defence.
 - Every element-seeking gesture became `scroll-to`.
 - No device id or literal credential remains.
 - Every selector-bearing condition uses an explicit selector map without positional or data-derived values.
