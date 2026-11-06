@@ -261,17 +261,24 @@ run_phase() {
   fi
 
   # --- capability denial ----------------------------------------------------
-  # Neither declared capability grants CDP or dylib injection, so both must fail
-  # with the capability-denied message rather than crashing or half-working.
-  # `bundleId` is required by the tool's schema; without it validation fails
-  # (rc=2, usage text) before the capability gate ever runs and the denial this
-  # case exists to prove never happens. Any value will do, the grant check fires
-  # before the app is looked up.
-  run_tool native-describe-screen "{\"udid\":\"$DEV\",\"bundleId\":\"com.e2e.denied\"}"
-  if [ "$RT_RC" -ne 0 ] && printf '%s' "$RT_OUT" | grep -qi "did not grant"; then
-    pass "$P" native-describe-screen "denied: native-devtools not granted"
+  # A tool the platform supports, on a mechanism the descriptor does not grant,
+  # must fail with the capability-denied message. native-describe-screen is
+  # iOS-only: on Android its platform gate answers first.
+  # `bundleId` is required by its schema, or validation (rc=2) fails before the
+  # grant check; any value will do.
+  local DENY_TOOL DENY_ARGS DENY_CAP
+  if [ "$PLATFORM" = ios ]; then
+    DENY_TOOL=native-describe-screen DENY_CAP=native-devtools
+    DENY_ARGS="{\"udid\":\"$DEV\",\"bundleId\":\"com.e2e.denied\"}"
   else
-    fail "$P" native-describe-screen "denied" "rc=$RT_RC $(printf '%s' "$RT_OUT" | tr '\n' ' ' | cut -c1-160)"
+    DENY_TOOL=native-profiler-start DENY_CAP=native-profiler
+    DENY_ARGS="{\"device_id\":\"$DEV\"}"
+  fi
+  run_tool "$DENY_TOOL" "$DENY_ARGS"
+  if [ "$RT_RC" -ne 0 ] && printf '%s' "$RT_OUT" | grep -qi "did not grant the '$DENY_CAP'"; then
+    pass "$P" "$DENY_TOOL" "denied: $DENY_CAP not granted"
+  else
+    fail "$P" "$DENY_TOOL" "denied" "rc=$RT_RC $(printf '%s' "$RT_OUT" | tr '\n' ' ' | cut -c1-160)"
   fi
 
   # --- revocation -----------------------------------------------------------
