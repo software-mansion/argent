@@ -44,6 +44,12 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
+/** Undefined for a runtime that is neither iOS nor tvOS, such as watchOS or visionOS (`xrOS`). */
+export function simulatorRuntimeKind(runtimeId: string): "mobile" | "tv" | undefined {
+  if (runtimeId.includes("tvOS")) return "tv";
+  return runtimeId.includes("iOS") ? "mobile" : undefined;
+}
+
 /**
  * List one device set's iOS/tvOS simulators; [] on any failure but the refusal
  * while Xcode's component install is pending. Read as an empty set, it would
@@ -65,10 +71,10 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
     const out: IosSimulator[] = [];
     const deviceTypes: string[] = [];
     for (const [runtimeId, devices] of Object.entries(data.devices)) {
-      if (!runtimeId.includes("iOS") && !runtimeId.includes("tvOS")) continue;
+      const runtimeKind = simulatorRuntimeKind(runtimeId);
+      if (!runtimeKind) continue;
       for (const d of devices) {
         if (!d.isAvailable) continue;
-        const runtimeKind = runtimeId.includes("tvOS") ? "tv" : "mobile";
         out.push({
           udid: d.udid,
           name: d.name,
