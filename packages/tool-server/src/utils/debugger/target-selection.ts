@@ -104,8 +104,21 @@ export function selectTarget(
   const bridge = candidates.find((t) => t.title?.startsWith("React Native Bridge"));
   if (bridge) return makeResult(bridge, port, false);
 
+  // The legacy inspector also lists worklet runtimes (Reanimated's "Reanimated
+  // UI runtime", or one named by `createWorkletRuntime`), in any order. They
+  // never answer `Runtime.enable`, so the app's runtime is picked by the title
+  // React Native registers it under.
+  const hermes = candidates.find((t) => LEGACY_APP_RUNTIME_TITLES.has(t.title));
+  if (hermes) return makeResult(hermes, port, false);
+
   return makeResult(candidates[0]!, port, false);
 }
+
+/** The bridge's (`HermesExecutorFactory`) and bridgeless (`HermesInstance`) names. */
+const LEGACY_APP_RUNTIME_TITLES = new Set([
+  "Hermes React Native",
+  "Hermes Bridgeless React Native",
+]);
 
 function makeResult(target: CDPTarget, port: number, isNewDebugger: boolean): SelectedTarget {
   return {

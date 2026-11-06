@@ -278,53 +278,61 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       process.stderr.write(`[JsRuntimeDebugger:${port}] ${label} failed (non-fatal): ${msg}\n`);
     };
 
-    /**
-     * Through a provider's socket Argent is one of several clients on a single
-     * connection, so this setup splits by what it touches.
-     *
-     * These four are per-runtime, not per-client. On a shared session they reach
-     * into someone else's debugger: `setPauseOnExceptions: "none"` would disarm
-     * exception breakpoints a user set, from a tool they did not run. The client
-     * that owns the session owns its global state.
-     *
-     * The remaining setup only affects Argent's client. Enables are idempotent,
-     * and a binding only adds one. Other clients can ignore it by name.
-     */
-    if (!proxied) {
-      await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
-    }
-
     const runtimeApp: RuntimeAppMetadata = {};
     cdp.events.on("event", (method, params) => {
       if (method !== "ReactNativeApplication.metadataUpdated") return;
       if (typeof params.appIdentifier === "string") runtimeApp.appId = params.appIdentifier;
       if (typeof params.platform === "string") runtimeApp.platform = params.platform;
     });
-    await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
-    await cdp.send("Runtime.enable");
-    // Metro can inline a full source map on Debugger.enable. Only skip it for
-    // targets advertising the modern inspector: legacy Hermes (RN <= 0.72,
-    // including Vega) requires it for evaluation. A reactNative block alone
-    // does not prove the runtime uses the modern inspector.
-    const enableDebugger =
-      !!proxied || selected.target.reactNative?.capabilities?.prefersFuseboxFrontend !== true;
-    if (enableDebugger) {
-      await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
-    }
 
-    if (!proxied) {
-      if (enableDebugger) {
-        await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
-        await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+    try {
+      /**
+       * Through a provider's socket Argent is one of several clients on a single
+       * connection, so this setup splits by what it touches.
+       *
+       * These four are per-runtime, not per-client. On a shared session they reach
+       * into someone else's debugger: `setPauseOnExceptions: "none"` would disarm
+       * exception breakpoints a user set, from a tool they did not run. The client
+       * that owns the session owns its global state.
+       *
+       * The remaining setup only affects Argent's client. Enables are idempotent,
+       * and a binding only adds one. Other clients can ignore it by name.
+       */
+      if (!proxied) {
+        await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
       }
-      await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
+
+      await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
+      await cdp.send("Runtime.enable");
+      // Metro can inline a full source map on Debugger.enable. Only skip it for
+      // targets advertising the modern inspector: legacy Hermes (RN <= 0.72,
+      // including Vega) requires it for evaluation. A reactNative block alone
+      // does not prove the runtime uses the modern inspector.
+      const enableDebugger =
+        !!proxied || selected.target.reactNative?.capabilities?.prefersFuseboxFrontend !== true;
+      if (enableDebugger) {
+        await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
+      }
+
+      if (!proxied) {
+        if (enableDebugger) {
+          await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
+          await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
+        }
+        await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
+      }
+
+      await cdp.addBinding("__argent_callback", { legacyInspector: !selected.isNewDebugger });
+
+      await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
+
+      await sourceMaps.waitForPending();
+    } catch (error) {
+      // An open socket keeps the inspector's debugger session, and the next
+      // connect's Runtime.enable then goes unanswered.
+      await cdp.disconnect();
+      throw error;
     }
-
-    await cdp.addBinding("__argent_callback");
-
-    await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
-
-    await sourceMaps.waitForPending();
 
     const sourceResolver = createSourceResolver(port, metro.projectRoot);
 

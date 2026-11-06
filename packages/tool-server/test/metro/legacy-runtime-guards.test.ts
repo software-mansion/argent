@@ -1,18 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
 import { discoverMetro } from "../../src/utils/debugger/discovery";
 
 /**
  * Tolerating a missing X-React-Native-Project-Root header admits the whole legacy
- * (RN <= 0.72) inspector — not only Vega, but any older iOS/Android project,
- * where the capability gate does NOT reject the binding-dependent tools. So the
- * legacy runtime's quirks have to be handled at the transport, not just guessed
- * at from the platform:
+ * inspector — not only Vega, but any older iOS/Android project, where the
+ * capability gate does NOT reject the binding-dependent tools. So the legacy
+ * runtime's quirks have to be handled at the transport, not just guessed at from
+ * the platform:
  *
- *  - Runtime.addBinding is ACKed but never installed, so a tool waiting on
- *    Runtime.bindingCalled would hang for the full 10s timeout.
+ *  - Runtime.addBinding is ACKed but never installed (RN <= 0.72), so a tool
+ *    waiting on Runtime.bindingCalled would hang for the full 10s timeout, or is
+ *    rejected with -32601 (RN 0.73 - 0.75).
  *  - The proxy advertises an unusable `vm: "don't use"` page.
  *  - Anything answering "packager-status:running" now reaches the /json/list parse.
  */
@@ -23,6 +25,8 @@ let port: number;
 
 /** Whether the mock runtime installs the binding it ACKs. */
 let installsBinding = true;
+/** How the mock runtime answers Runtime.addBinding. */
+let addBindingReply: "ack" | "method-not-found" | "close" = "ack";
 let listBody: unknown = [];
 
 function handleCDP(ws: WebSocket, raw: string) {
@@ -32,8 +36,17 @@ function handleCDP(ws: WebSocket, raw: string) {
     params?: { expression?: string };
   };
   if (method === "Runtime.addBinding") {
-    // Legacy Hermes ACKs this happily either way — that is the whole trap.
-    ws.send(JSON.stringify({ id, result: {} }));
+    if (addBindingReply === "method-not-found") {
+      // RN 0.75's legacy Hermes inspector, as reported in #1836.
+      ws.send(
+        JSON.stringify({ id, error: { code: -32601, message: "Runtime.addBinding wasn't found" } })
+      );
+    } else if (addBindingReply === "close") {
+      ws.close();
+    } else {
+      // Legacy Hermes ACKs this happily either way — that is the whole trap.
+      ws.send(JSON.stringify({ id, result: {} }));
+    }
     return;
   }
   if (method === "Runtime.evaluate") {
@@ -82,6 +95,7 @@ describe("legacy inspector guards", () => {
 
   beforeEach(() => {
     installsBinding = true;
+    addBindingReply = "ack";
   });
 
   afterEach(async () => {
@@ -100,6 +114,42 @@ describe("legacy inspector guards", () => {
     );
     // The point of the probe: not a 10s DEFAULT_TIMEOUT_MS wait.
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("marks the binding unavailable when a legacy runtime has no Runtime.addBinding", async () => {
+    addBindingReply = "method-not-found";
+    cdp = new CDPClient(`ws://localhost:${port}/inspector/debug?device=0&page=1`);
+    await cdp.connect();
+    await cdp.addBinding("__argent_callback", { legacyInspector: true });
+
+    const started = Date.now();
+    const error = await cdp.evaluateWithBinding("void 0", "req-3").catch((e: unknown) => e);
+    expect(getFailureSignal(error)?.error_code).toBe(
+      FAILURE_CODES.DEBUGGER_CDP_BINDING_UNAVAILABLE
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("still fails addBinding when the connection drops instead of answering", async () => {
+    addBindingReply = "close";
+    cdp = new CDPClient(`ws://localhost:${port}/inspector/debug?device=0&page=1`);
+    await cdp.connect();
+
+    const error = await cdp
+      .addBinding("__argent_callback", { legacyInspector: true })
+      .catch((e: unknown) => e);
+    expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED);
+  });
+
+  it("fails addBinding on a rejection from a modern target", async () => {
+    // A modern host has the method and rejects it only while it has no JS
+    // instance; the binding must not be written off for the session.
+    addBindingReply = "method-not-found";
+    cdp = new CDPClient(`ws://localhost:${port}/inspector/debug?device=0&page=1`);
+    await cdp.connect();
+
+    const error = await cdp.addBinding("__argent_callback").catch((e: unknown) => e);
+    expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR);
   });
 
   it("still uses the binding when the runtime actually installs it", async () => {
