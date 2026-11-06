@@ -18,11 +18,17 @@ const PORT = 18_081;
 const DEVICE = "cpu-query-react-only";
 
 const NODES = [
-  { id: 1, callFrame: { functionName: "(root)", url: "", lineNumber: -1 }, children: [2, 3, 4, 5] },
+  {
+    id: 1,
+    callFrame: { functionName: "(root)", url: "", lineNumber: -1 },
+    children: [2, 3, 4, 5, 6, 7],
+  },
   { id: 2, callFrame: { functionName: "(idle)", url: "", lineNumber: -1 }, children: [] },
   { id: 3, callFrame: { functionName: "formatDate", url: "/app/utils.js", lineNumber: 4 } },
   { id: 4, callFrame: { functionName: "FeedRow", url: "/app/FeedRow.js", lineNumber: 12 } },
   { id: 5, callFrame: { functionName: "App", url: "/app/App.js", lineNumber: 1 } },
+  { id: 6, callFrame: { functionName: "JSON.parse", url: "/app/a.js", lineNumber: 2 } },
+  { id: 7, callFrame: { functionName: "Foo_bar", url: "/app/b.js", lineNumber: 3 } },
 ];
 
 /**
@@ -123,15 +129,26 @@ describe("profiler-cpu-query react_only and Self %", () => {
 
   it("applies to time_window too", async () => {
     await store(MIXED);
-    // Samples 81-100 cover 80-100ms: 15 FeedRow, 5 App.
+    // Samples 71-100 cover 70-100ms: 10 formatDate, 15 FeedRow, 5 App.
     const out = await query({
       mode: "time_window",
-      time_window_ms: { start: 80, end: 100 },
+      time_window_ms: { start: 70, end: 100 },
       react_only: true,
     });
 
-    expect(rowOf(out, "FeedRow")).toBe("| `FeedRow` | 15 | 75.0% | 15 | app/FeedRow.js:12 |");
-    expect(rowOf(out, "App")).toBe("| `App` | 5 | 25.0% | 5 | app/App.js:1 |");
+    expect(out).toContain("**Filter:** React components only (PascalCase function names)");
+    expect(rowOf(out, "formatDate")).toBeUndefined();
+    expect(rowOf(out, "FeedRow")).toBe("| `FeedRow` | 15 | 50.0% | 15 | app/FeedRow.js:12 |");
+    expect(rowOf(out, "App")).toBe("| `App` | 5 | 16.7% | 5 | app/App.js:1 |");
+  });
+
+  it("rejects names that only start like a component", async () => {
+    await store([...new Array(10).fill(4), ...new Array(10).fill(6), ...new Array(10).fill(7)]);
+    const out = await query({ mode: "top_functions", react_only: true });
+
+    expect(rowOf(out, "FeedRow")).toBeDefined();
+    expect(rowOf(out, "JSON.parse")).toBeUndefined();
+    expect(rowOf(out, "Foo_bar")).toBeUndefined();
   });
 
   it("says so when JS ran but no function has a component name", async () => {
