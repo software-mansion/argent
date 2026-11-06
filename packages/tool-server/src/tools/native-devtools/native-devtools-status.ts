@@ -12,6 +12,7 @@ import {
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
+import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
 
 type Result =
   | NativeDevtoolsInitFailedResult
@@ -41,10 +42,12 @@ type Result =
  * clears that record). Only `appConnectionState`'s unconnected path re-applies
  * the env, so for a connected or non-injectable app the record is whatever an
  * earlier call for another bundle left — and a live connection is the better
- * evidence: the process reached this endpoint, so the env was in place.
+ * evidence: the process reached this endpoint, so the env was in place. That
+ * holds even before this service applied the env itself, on a server started
+ * after an earlier one armed the simulator.
  */
 function envSetupReading(api: NativeDevtoolsApi, connected: boolean): boolean {
-  return api.isEnvSetup() && (connected || api.getInitFailure() === null);
+  return connected || (api.isEnvSetup() && api.getInitFailure() === null);
 }
 
 const zodSchema = z.object({
@@ -117,6 +120,8 @@ Fails if the simulator server is not running for the given UDID.`,
         // IS corrective) over a raw subprocess error. This branch runs no env
         // work of its own, so a sim that died after the construction-time latch
         // records nothing — there the probe's error is the honest answer.
+        // The refusal is neither: re-booting cannot help, and is itself refused.
+        if (err instanceof XcodeFirstLaunchPendingError) throw err;
         const failure = api.getInitFailure();
         if (failure) return buildInitFailedResult(params.udid, failure);
         throw err;
@@ -131,16 +136,33 @@ Fails if the simulator server is not running for the given UDID.`,
       };
     }
 
-    const blocked = await precheckNativeDevtools(api, params.udid);
+    let blocked: NativeDevtoolsInitFailedResult | null;
+    try {
+      blocked = await precheckNativeDevtools(api, params.udid);
+    } catch (err) {
+      // The 2-arg precheck has no app to make an exception for, so it refuses
+      // while Xcode's component install is pending even when the app asked
+      // about is connected. That app is read over its own socket, which needs
+      // no simctl, and `appConnectionState` below answers it before any simctl
+      // call. Answering the refusal instead would tell the agent to wait for
+      // the install while the native tools serve this very app.
+      if (!(err instanceof XcodeFirstLaunchPendingError) || !api.isConnected(params.bundleId)) {
+        throw err;
+      }
+      blocked = null;
+    }
     if (blocked) return blocked;
 
     // Re-applies the launchd env on its way to a verdict, repairing (and
     // recording) an out-of-band reboot that wiped DYLD_INSERT_LIBRARIES — which
     // is why envSetup / nextLaunchWillBeInjected are read after it rather than
     // off a latch stamped before.
-    const measured = await api
-      .appConnectionState(params.bundleId)
-      .catch(() => "indeterminate" as const);
+    const measured = await api.appConnectionState(params.bundleId).catch((err: unknown) => {
+      // The refusal is not an unmeasured app, and the failure fallback below would
+      // read it as a dead simulator and prescribe a reboot.
+      if (err instanceof XcodeFirstLaunchPendingError) throw err;
+      return "indeterminate" as const;
+    });
     const connected = measured === "connected";
 
     // Running-ness comes out of the same measurement rather than a second

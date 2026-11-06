@@ -16,6 +16,14 @@ vi.mock("../src/utils/android-binary", () => ({
   resolveAndroidBinary: (name: string) => resolveAndroidBinaryMock(name),
 }));
 
+const xcodePending = vi.hoisted(() => ({ value: false }));
+vi.mock("../src/utils/xcode-first-launch", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
+    "../src/utils/xcode-first-launch"
+  );
+  return { ...actual, xcodeFirstLaunchPending: () => xcodePending.value };
+});
+
 import {
   shutdownOwnedDevice,
   shutdownOwnedDevices,
@@ -93,6 +101,17 @@ describe("shutdownOwnedDevice (best-effort, swallows errors)", () => {
     resolveDeviceMock.mockReturnValue({ platform: "ios", kind: "simulator" });
     execFails("simctl: boom");
     await expect(shutdownOwnedDevice("UDID-1")).resolves.toBeUndefined();
+  });
+
+  it("swallows a refused argv while Xcode's component install is pending", async () => {
+    resolveDeviceMock.mockReturnValue({ id: "SIM-1", platform: "ios" });
+    xcodePending.value = true;
+    try {
+      await expect(shutdownOwnedDevice("SIM-1")).resolves.toBeUndefined();
+      expect(execFileMock).not.toHaveBeenCalled();
+    } finally {
+      xcodePending.value = false;
+    }
   });
 
   it("swallows an unclassifiable id (resolveDevice throws)", async () => {

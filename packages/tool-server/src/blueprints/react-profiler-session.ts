@@ -5,6 +5,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import { deviceIdsOf } from "../utils/debugger/device-alias";
 import { assertExternalCapability } from "../utils/external-devices";
 import type { CDPClient, ScriptInfo } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi, RuntimeAppMetadata } from "./js-runtime-debugger";
@@ -292,7 +293,14 @@ function stopSamplerInNextRuntime(cdp: CDPClient): void {
   cdp.events.on("disconnected", disarm);
 }
 
-const profilerPathsCache = new Map<string, ProfilerSessionPaths>();
+// A run is stored under the id its session connected with: the connect id when
+// an alias exists at react-profiler-start, the `logicalDeviceId` when the app has
+// restarted and none does. Tools can later name the device by either id, with or
+// without an alias, so a lookup tries every id the device has now and takes the
+// newest run. react-profiler-analyze and react-profiler-cpu-summary pass their
+// `device_id` as given; the query tools canonicalize it first.
+const profilerPathsCache = new Map<string, { paths: ProfilerSessionPaths; order: number }>();
+let storedRuns = 0;
 
 function cacheKey(port: number, deviceId: string): string {
   return `${port}:${deviceId}`;
@@ -303,7 +311,8 @@ export function cacheProfilerPaths(
   paths: ProfilerSessionPaths,
   deviceId: string
 ): void {
-  profilerPathsCache.set(cacheKey(port, deviceId), paths);
+  storedRuns += 1;
+  profilerPathsCache.set(cacheKey(port, deviceId), { paths, order: storedRuns });
   lostRuns.delete(cacheKey(port, deviceId));
 }
 
@@ -311,11 +320,22 @@ export function getCachedProfilerPaths(
   port: number,
   deviceId: string
 ): ProfilerSessionPaths | undefined {
-  return profilerPathsCache.get(cacheKey(port, deviceId));
+  let newest: { paths: ProfilerSessionPaths; order: number } | undefined;
+
+  for (const id of deviceIdsOf(deviceId)) {
+    const stored = profilerPathsCache.get(cacheKey(port, id));
+    if (stored && (!newest || stored.order > newest.order)) {
+      newest = stored;
+    }
+  }
+
+  return newest?.paths;
 }
 
 export function clearCachedProfilerPaths(port: number, deviceId: string): void {
-  profilerPathsCache.delete(cacheKey(port, deviceId));
+  for (const id of deviceIdsOf(deviceId)) {
+    profilerPathsCache.delete(cacheKey(port, id));
+  }
 }
 
 /**

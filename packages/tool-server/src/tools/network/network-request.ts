@@ -51,6 +51,9 @@ function redactHeaders(headers: Record<string, string> | undefined): Record<stri
   return result;
 }
 
+/** Every Android native ID starts with this, and so does a truncated or mistyped one. */
+const ANDROID_ID_PREFIX = "android-";
+
 /** Body chars kept, of a request or a response; the rest is truncated to limit context. */
 const MAX_BODY_SIZE = 1000;
 
@@ -211,13 +214,20 @@ Returns an error message string if the requestId is not found.`,
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    /**
+     * An android- ID in any other shape was not issued by the native layer, and
+     * the JS layer names its requests rn-net-<n>. No layer can hold it, so saying
+     * that needs no debugger. Chromium's IDs are opaque, so Chromium, above, still
+     * gets to answer for itself.
+     */
+    if (params.requestId.startsWith(ANDROID_ID_PREFIX)) return {};
     return {
       inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
     };
   },
   async execute(services, params) {
     if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {
-      return androidNativeRequestDetails(params.requestId, params.includeBody);
+      return androidNativeRequestDetails(params.requestId, params.includeBody, params.device_id);
     }
 
     const device = resolveDevice(params.device_id);
@@ -271,6 +281,10 @@ Returns an error message string if the requestId is not found.`,
         details.response = resp;
       }
       return details;
+    }
+
+    if (params.requestId.startsWith(ANDROID_ID_PREFIX)) {
+      return androidNativeNotFound(params.requestId, params.device_id);
     }
 
     const api = services.inspector as NetworkInspectorApi;
@@ -349,14 +363,27 @@ Returns an error message string if the requestId is not found.`,
   },
 };
 
+/**
+ * The answer to an android- ID no inspector holds names a tool the caller's
+ * device can list with: native-network-logs refuses Chromium and Vega. There it
+ * also says where the ID came from, because view-network-logs never lists one.
+ * An iOS-shaped ID keeps the native hint: it can be the logicalDeviceId of an
+ * Android device on a shared Metro, and native-network-logs accepts it.
+ */
+function androidNativeNotFound(requestId: string, deviceId: string): string {
+  const { platform } = resolveDevice(deviceId);
+  return platform === "chromium" || platform === "vega"
+    ? `Request ${requestId} not found. An android- ID comes from an Android device. Use view-network-logs to list this device's requests.`
+    : `Request ${requestId} not found. Use native-network-logs to list the requests the Android native layer recorded.`;
+}
+
 async function androidNativeRequestDetails(
   requestId: string,
-  includeBody: boolean
+  includeBody: boolean,
+  deviceId: string
 ): Promise<NetworkRequestDetails | string> {
   const found = findAndroidNativeRecord(requestId);
-  if (!found) {
-    return `Request ${requestId} not found. Use native-network-logs to list the requests the Android native layer recorded.`;
-  }
+  if (!found) return androidNativeNotFound(requestId, deviceId);
   const { inspector, record } = found;
   const { wireHeaders } = record.request;
   /**
