@@ -483,6 +483,28 @@ describe("profiler-commit-query render_counts", () => {
     expect(out).toContain("`Memo(Ticker)` rendered 1 time in this session");
   });
 
+  it("by_component says when its total covers only the stored commits", async () => {
+    const stored = [fiber("ClockRow", 7, 0.07), fiber("ClockRow", 8, 0.07)];
+    await cacheSession("partial-device", stored, {
+      hotCommitIndices: [7],
+      renderSummary: clockSummary(),
+    });
+    const out = await query("partial-device", { mode: "by_component", component_name: "ClockRow" });
+    expect(out).toContain(
+      "**Total occurrences:** 2 across 2 commits (stored commits only; 14,040 renders over all 468 commits, see mode=`render_counts`)"
+    );
+  });
+
+  it("by_component adds nothing when the stored commits hold every render", async () => {
+    const stored = [fiber("Row", 0, 20), fiber("Row", 1, 20)];
+    await cacheSession("complete-device", stored, {
+      hotCommitIndices: [0, 1],
+      renderSummary: summarizeRenders(stored, timings([20, 20]), 1000),
+    });
+    const out = await query("complete-device", { mode: "by_component", component_name: "Row" });
+    expect(out).toContain("**Total occurrences:** 2 across 2 commits\n");
+  });
+
   it("a name render_counts cannot find points at the full list, not at by_index", async () => {
     await cacheSession("counts-miss-device", [], {
       hotCommitIndices: [],
@@ -507,6 +529,45 @@ describe("profiler-commit-query render_counts", () => {
     const out = await query("counts-idle-device", { mode: "render_counts" });
     expect(out).toContain("No React commits were recorded");
     expect(out).not.toContain("| Component |");
+  });
+});
+
+describe("profiler-commit-query by_time_range outside the stored commits", () => {
+  const window = { mode: "by_time_range", time_range_ms: { start: 0, end: 4000 } };
+  // Stored at t = 80 000 ms, so the window above holds none of them.
+  const stored = [fiber("Hot", 5000, 30)];
+
+  it("says the window can hold commits that were not stored", async () => {
+    await cacheSession("range-device", stored, {
+      hotCommitIndices: [5000],
+      totalReactCommits: 468,
+      renderSummary: clockSummary(),
+    });
+    const out = await query("range-device", window);
+    expect(out).toContain("No stored commits in the range 0ms → 4000ms");
+    expect(out).toContain("commits under 16ms in this range are not listed");
+    expect(out).toContain("mode=`render_counts`");
+  });
+
+  it("does not offer render_counts to a session without a summary", async () => {
+    await cacheSession("range-old-device", stored, {
+      hotCommitIndices: [5000],
+      totalReactCommits: 468,
+    });
+    const out = await query("range-old-device", window);
+    expect(out).toContain("commits under 16ms in this range are not listed");
+    expect(out).not.toContain("render_counts");
+  });
+
+  it("keeps the plain answer when every commit is stored", async () => {
+    await cacheSession("range-all-device", stored, {
+      hotCommitIndices: [5000],
+      totalReactCommits: 1,
+      renderSummary: summarizeRenders(stored, timings([30]), 1000),
+    });
+    expect(await query("range-all-device", window)).toBe(
+      "_No commits found in the range 0ms → 4000ms._"
+    );
   });
 });
 
@@ -617,12 +678,16 @@ describe("profiler-cpu-query component_cpu", () => {
 // ── profiler-load ─────────────────────────────────────────────────────
 
 describe("profiler-load with and without a render summary", () => {
-  async function writeSession(sid: string, meta: Record<string, unknown>): Promise<void> {
+  async function writeSession(
+    sid: string,
+    meta: Record<string, unknown>,
+    commits: DevToolsFiberCommit[] = []
+  ): Promise<void> {
     const dir = join(scratch, "argent-profiler-cwd");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(
       join(dir, `react-profiler-${sid}_commits.json`),
-      JSON.stringify({ commits: [], meta })
+      JSON.stringify({ commits, meta })
     );
   }
 
@@ -651,6 +716,14 @@ describe("profiler-load with and without a render summary", () => {
     const out = await load("20261103-120001");
     expect(out).toContain("Loaded React profiler session");
     expect(out).toContain("- Render counts over all commits: not available for this session");
+  });
+
+  it("counts persisted commits, not their fibers", async () => {
+    const stored = [fiber("A", 5, 20), fiber("B", 5, 1), fiber("A", 6, 1)];
+    await writeSession("20261103-120002", { totalReactCommits: 12 }, stored);
+    expect(await load("20261103-120002")).toContain(
+      "- Commits persisted (hot ±1 margin, ≥16ms): 2"
+    );
   });
 });
 

@@ -227,7 +227,8 @@ async function loadReactSession(
   if (hasCommits) {
     try {
       const onDisk = await readCommitTree(commitsPath);
-      commitCount = onDisk.commits.length;
+      // The file holds one entry per fiber, not per commit.
+      commitCount = new Set(onDisk.commits.map((c) => c.commitIndex)).size;
       if (onDisk.meta) {
         detectedArchitecture = onDisk.meta.detectedArchitecture ?? null;
         anyCompilerOptimized = onDisk.meta.anyCompilerOptimized ?? null;

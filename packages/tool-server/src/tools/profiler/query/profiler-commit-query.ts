@@ -173,6 +173,22 @@ function formatReason(commit: DevToolsFiberCommit): string {
   return parts.join(" ");
 }
 
+/** Only when commits under 16ms hold renders the stored total cannot show. */
+function storedOnlyNote(
+  name: string,
+  storedRenders: number,
+  summary: RenderSummary | null
+): string {
+  const row = summary?.components.find((c) => c.name === name);
+  if (!summary || !row) return "";
+  const allRenders = row.rerenders + row.mounts + row.untrackedRenders;
+  if (allRenders <= storedRenders) return "";
+  return (
+    ` (stored commits only; ${formatCount(allRenders)} renders over all ` +
+    `${formatCount(summary.totalCommits)} commits, see mode=\`render_counts\`)`
+  );
+}
+
 function renderByComponent(
   commits: DevToolsFiberCommit[],
   componentName: string,
@@ -228,7 +244,7 @@ function renderByComponent(
     `## Commits for \`${resolvedName}\``,
     "",
     ...(resolutionNote ? [resolutionNote, ""] : []),
-    `**Total occurrences:** ${matching.length} across ${byCommit.size} commits`,
+    `**Total occurrences:** ${matching.length} across ${byCommit.size} commits${storedOnlyNote(resolvedName, matching.length, summary)}`,
     "",
     "| Commit | Instances | Duration (ms) | Commit Total (ms) | Time (ms) | Reason | Parent |",
     "|---|---|---|---|---|---|---|",
@@ -243,17 +259,31 @@ function renderByComponent(
   return lines.join("\n");
 }
 
+function renderEmptyTimeRange(data: StoredCommitData, start: number, end: number): string {
+  const range = `${start.toFixed(0)}ms → ${end.toFixed(0)}ms`;
+  const stored = new Set(data.commits.map((c) => c.commitIndex)).size;
+  if (data.totalReactCommits === null || data.totalReactCommits <= stored) {
+    return `_No commits found in the range ${range}._`;
+  }
+  const counts = data.renderSummary
+    ? " mode=`render_counts` counts them over the whole session, without timing."
+    : "";
+  return (
+    `_No stored commits in the range ${range}: only commits of 16ms or more and their ` +
+    `neighbours are stored, so commits under 16ms in this range are not listed.${counts}_`
+  );
+}
+
 function renderByTimeRange(
-  commits: DevToolsFiberCommit[],
+  data: StoredCommitData,
   start: number,
   end: number,
   topN: number
 ): string {
+  const { commits } = data;
   const matching = commits.filter((c) => c.timestamp >= start && c.timestamp <= end);
 
-  if (matching.length === 0) {
-    return `_No commits found in the range ${start.toFixed(0)}ms → ${end.toFixed(0)}ms._`;
-  }
+  if (matching.length === 0) return renderEmptyTimeRange(data, start, end);
 
   const byCommit = new Map<number, DevToolsFiberCommit[]>();
   for (const c of matching) {
@@ -544,7 +574,7 @@ Fails if react-profiler-stop has not been called.`,
           });
         }
         return renderByTimeRange(
-          commitTree.commits,
+          commitTree,
           params.time_range_ms.start,
           params.time_range_ms.end,
           params.top_n ?? 20
