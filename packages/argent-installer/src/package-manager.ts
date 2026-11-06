@@ -1,5 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { canonicalPath } from "@argent/configuration-core";
+import { PACKAGE_NAME } from "./constants.js";
+import { getRemainingGlobalBinaryPath, packageRootOf } from "./topology.js";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
@@ -26,6 +29,24 @@ export function detectPackageManager(): PackageManager {
   if (agent.startsWith("pnpm")) return "pnpm";
   if (agent.startsWith("bun")) return "bun";
   return "npm";
+}
+
+// Yarn 2+ has no `yarn global`, so npm installs for it - except over a global npm
+// does not own, where it would add a second argent to PATH and leave the first in
+// place. `yarn` then fails without installing anything. npm's layout puts
+// <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent. A live
+// bin that resolves to no package keeps npm, since that is mostly a version-manager
+// shim over an npm global; a pnpm shim or any Windows .cmd is one too, so npm can
+// still add a second copy over a pnpm global, or over a Yarn global on Windows.
+export function detectGlobalPackageManager(): PackageManager {
+  const pm = detectPackageManager();
+  const agent = process.env.npm_config_user_agent ?? "";
+  if (pm !== "yarn" || agent.startsWith("yarn/1.")) return pm;
+  const binaryPath = getRemainingGlobalBinaryPath();
+  const root = binaryPath && packageRootOf(binaryPath);
+  if (!binaryPath || !root) return "npm";
+  const npmCopy = path.join(path.dirname(path.dirname(binaryPath)), "lib", "node_modules");
+  return canonicalPath(path.join(npmCopy, PACKAGE_NAME)) === canonicalPath(root) ? "npm" : "yarn";
 }
 
 function asKnownPm(name: unknown): PackageManager | null {

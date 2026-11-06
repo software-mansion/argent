@@ -41,6 +41,7 @@ import {
   RETIRED_BUNDLED_PATHS,
   dirExists,
   detectPackageManager,
+  detectGlobalPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
@@ -619,6 +620,45 @@ describe("resolveProjectRoot", () => {
     expect(resolveProjectRoot(home, home)).toBe(home);
   });
 
+  // process.cwd() is physical; HOME may name it through a link.
+  describe.skipIf(process.platform === "win32")("home reached through a symlink", () => {
+    it.each([
+      ["HOME is itself a symlink", "realhome", "realhome", "home"],
+      ["an ancestor of HOME is a symlink", "var/home/u", "var/home", "home/u"],
+    ])("stops at home when %s", (_shape, physicalHome, linkTarget, homeVar) => {
+      const realHome = path.join(fs.realpathSync(tmpDir), physicalHome);
+      const projectRoot = path.join(realHome, "Dev", "argent-test");
+      fs.mkdirSync(path.join(realHome, ".claude"), { recursive: true });
+      fs.mkdirSync(projectRoot, { recursive: true });
+      fs.writeFileSync(path.join(projectRoot, "package.json"), "{}");
+      fs.symlinkSync(linkTarget, path.join(tmpDir, "home"));
+
+      expect(resolveProjectRoot(projectRoot, path.join(tmpDir, homeVar))).toBe(projectRoot);
+    });
+
+    it("stops at home when the start directory names it through the link", () => {
+      const realHome = path.join(fs.realpathSync(tmpDir), "realhome");
+      fs.mkdirSync(path.join(realHome, ".claude"), { recursive: true });
+      fs.symlinkSync("realhome", path.join(tmpDir, "home"));
+      const projectRoot = path.join(tmpDir, "home", "Dev", "argent-test");
+      fs.mkdirSync(projectRoot, { recursive: true });
+
+      expect(resolveProjectRoot(projectRoot, realHome)).toBe(projectRoot);
+    });
+  });
+
+  it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+    "stops at home when HOME differs from the on-disk case",
+    () => {
+      const home = path.join(fs.realpathSync(tmpDir), "home");
+      const projectRoot = path.join(home, "Dev", "argent-test");
+      fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+      fs.mkdirSync(projectRoot, { recursive: true });
+
+      expect(resolveProjectRoot(projectRoot, home.toUpperCase())).toBe(projectRoot);
+    }
+  );
+
   it("recognizes opencode.jsonc as a project root marker", () => {
     const projectRoot = path.join(tmpDir, "project");
     const nestedDir = path.join(projectRoot, "src");
@@ -644,8 +684,13 @@ describe("detectPackageManager", () => {
     expect(detectPackageManager()).toBe("npm");
   });
 
-  it("returns yarn for yarn agent", () => {
-    process.env.npm_config_user_agent = "yarn/4.0.0";
+  it("returns yarn for a Yarn 1 agent", () => {
+    process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v24.14.1 darwin arm64";
+    expect(detectPackageManager()).toBe("yarn");
+  });
+
+  it("returns yarn for a Yarn 2+ agent", () => {
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
     expect(detectPackageManager()).toBe("yarn");
   });
 
@@ -657,6 +702,125 @@ describe("detectPackageManager", () => {
   it("returns bun for bun agent", () => {
     process.env.npm_config_user_agent = "bun/1.0.0";
     expect(detectPackageManager()).toBe("bun");
+  });
+});
+
+// ── detectGlobalPackageManager ────────────────────────────────────────────────
+
+describe("detectGlobalPackageManager", () => {
+  const original = process.env.npm_config_user_agent;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = original;
+  });
+
+  it("returns npm when agent is unset", () => {
+    delete process.env.npm_config_user_agent;
+    expect(detectGlobalPackageManager()).toBe("npm");
+  });
+
+  it("returns yarn for a Yarn 1 agent", () => {
+    process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v24.14.1 darwin arm64";
+    expect(detectGlobalPackageManager()).toBe("yarn");
+  });
+
+  describe.skipIf(process.platform === "win32")("Yarn 2+ agent over a global on PATH", () => {
+    const originalPath = process.env.PATH;
+    let dir: string;
+
+    function putGlobalOnPath(packageParent: string): void {
+      const pkg = path.join(dir, packageParent, "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(dir, "bin", "argent"));
+    }
+
+    beforeEach(() => {
+      dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-global-pm-")));
+      fs.mkdirSync(path.join(dir, "bin"));
+      process.env.PATH = `${path.join(dir, "bin")}:/usr/bin:/bin`;
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    });
+
+    afterEach(() => {
+      process.env.PATH = originalPath;
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("returns npm with no global install", () => {
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it("returns npm over a global in npm's own layout", () => {
+      putGlobalOnPath("lib/node_modules");
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+      "returns npm over npm's layout behind a PATH entry in another case",
+      () => {
+        // npm links the bin relatively, so realpath keeps the case PATH spells.
+        const pkg = path.join(dir, "prefix", "lib", "node_modules", "@swmansion", "argent");
+        fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+        fs.mkdirSync(path.join(dir, "prefix", "bin"));
+        fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+        fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+        fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+        fs.symlinkSync(
+          "../lib/node_modules/@swmansion/argent/dist/cli.js",
+          path.join(dir, "prefix", "bin", "argent")
+        );
+        process.env.PATH = `${path.join(dir, "PREFIX", "bin")}:/usr/bin:/bin`;
+        expect(detectGlobalPackageManager()).toBe("npm");
+      }
+    );
+
+    it("returns npm over an `npm link`ed checkout", () => {
+      putGlobalOnPath("checkout");
+      fs.mkdirSync(path.join(dir, "lib", "node_modules", "@swmansion"), { recursive: true });
+      fs.symlinkSync(
+        path.join(dir, "checkout", "@swmansion", "argent"),
+        path.join(dir, "lib", "node_modules", "@swmansion", "argent")
+      );
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    it.each([
+      ["Yarn classic's default folder", ".config/yarn/global/node_modules"],
+      ["a custom Yarn classic global-folder", "yg/node_modules"],
+      ["bun's global folder", ".bun/install/global/node_modules"],
+    ])("returns yarn over a global in %s, which npm would duplicate", (_shape, parent) => {
+      putGlobalOnPath(parent);
+      expect(detectGlobalPackageManager()).toBe("yarn");
+    });
+
+    function putShimFirst(exitCode: number): void {
+      const shims = path.join(dir, "shims");
+      fs.mkdirSync(shims);
+      fs.writeFileSync(path.join(shims, "argent"), `#!/bin/sh\nexit ${exitCode}\n`);
+      fs.chmodSync(path.join(shims, "argent"), 0o755);
+      process.env.PATH = `${shims}:${process.env.PATH}`;
+    }
+
+    it("returns yarn over Yarn classic's global behind a stale version-manager shim", () => {
+      putShimFirst(127);
+      putGlobalOnPath(".config/yarn/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("yarn");
+    });
+
+    it("returns npm over a live version-manager shim, whatever is behind it", () => {
+      putShimFirst(0);
+      putGlobalOnPath(".config/yarn/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+  });
+
+  it("returns pnpm for pnpm agent", () => {
+    process.env.npm_config_user_agent = "pnpm/9.0.0 npm/? node/v24.14.1 darwin arm64";
+    expect(detectGlobalPackageManager()).toBe("pnpm");
   });
 });
 
@@ -1226,6 +1390,11 @@ describe("detectProjectPackageManager", () => {
     // must NOT bleed through the .git boundary, so the walk stops and falls
     // back to the (pinned-unset) agent default.
     expect(detectProjectPackageManager(repo)).toBe("npm");
+  });
+  it("falls back to yarn for a markerless project launched from Yarn 2+", () => {
+    fs.mkdirSync(path.join(tmpDir, ".git"));
+    process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    expect(detectProjectPackageManager(tmpDir)).toBe("yarn");
   });
 });
 

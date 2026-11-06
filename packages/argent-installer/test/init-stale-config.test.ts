@@ -179,6 +179,20 @@ describe("claudeAdapter.findShadowingConfigs", () => {
     expect(findings[0].location).toContain(link);
   });
 
+  it.skipIf(!fs.existsSync(os.tmpdir().toUpperCase()))(
+    "matches a project key that differs from the root only in case",
+    () => {
+      const key = root.toUpperCase();
+      writeJsonFile(claudeJsonPath(), {
+        projects: { [key]: { mcpServers: { argent: ARGENT_GLOBAL_ENTRY } } },
+      });
+
+      const findings = claude.findShadowingConfigs!(root, "local");
+      expect(findings).toHaveLength(1);
+      expect(findings[0].location).toContain(key);
+    }
+  );
+
   it("returns nothing and never writes when ~/.claude.json is malformed", () => {
     fs.writeFileSync(claudeJsonPath(), "{ this is not json");
 

@@ -23,7 +23,7 @@ import {
   getGloballyInstalledPackageRoot,
   isGloballyInstalled,
   isNewerVersion,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   globalInstallCommand,
   localInstallCommand,
@@ -294,7 +294,8 @@ export async function update(args: string[]): Promise<void> {
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
+    const pm =
+      mode === "local" ? detectProjectPackageManager(projectRoot) : detectGlobalPackageManager();
     let latest: string | null = null;
     let target: string | null;
     let minReleaseAgeMs = 0;

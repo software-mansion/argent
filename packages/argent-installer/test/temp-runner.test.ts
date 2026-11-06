@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { isGloballyInstalled } from "../src/utils.js";
+import { getGlobalBinaryPath } from "../src/topology.js";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand } from "../src/shell.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
@@ -87,6 +91,63 @@ describe("isGloballyInstalled — temp package runners", () => {
   it.each(TEMP_RUNNER_BINS)("ignores the copy %s puts on PATH", (_runner, bin) => {
     whichFinds(bin);
     expect(isGloballyInstalled()).toBe(false);
+  });
+
+  it("ignores a project copy that npm exec puts on PATH from the cwd or an ancestor", () => {
+    whichFinds(path.join(path.dirname(process.cwd()), "node_modules", ".bin", "argent"));
+    expect(isGloballyInstalled()).toBe(false);
+  });
+
+  it("matches a project copy whose case differs on Windows", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      whichFinds(path.join(process.cwd().toUpperCase(), "node_modules", ".bin", "argent.cmd"));
+      expect(isGloballyInstalled()).toBe(false);
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "ignores a project copy that `npm --prefix <symlink>` puts on PATH",
+    () => {
+      const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-prefix-link-")));
+      const originalCwd = process.cwd();
+      try {
+        fs.mkdirSync(path.join(tmp, "project", "node_modules", ".bin"), { recursive: true });
+        fs.writeFileSync(path.join(tmp, "project", "node_modules", ".bin", "argent"), "");
+        fs.symlinkSync(path.join(tmp, "project"), path.join(tmp, "link"));
+        process.chdir(path.join(tmp, "project"));
+        whichFinds(path.join(tmp, "link", "node_modules", ".bin", "argent"));
+        expect(isGloballyInstalled()).toBe(false);
+      } finally {
+        process.chdir(originalCwd);
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it("ignores a project copy that `npm --prefix <project> exec` puts on PATH from another cwd", () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-prefix-exec-")));
+    const savedPrefix = process.env.npm_config_local_prefix;
+    try {
+      const bin = path.join(tmp, "project", "node_modules", ".bin", "argent");
+      fs.mkdirSync(path.dirname(bin), { recursive: true });
+      fs.writeFileSync(bin, "");
+      process.env.npm_config_local_prefix = path.join(tmp, "project");
+      whichFinds(`${bin}\n/usr/local/bin/argent`);
+      expect(getGlobalBinaryPath()).toBe("/usr/local/bin/argent");
+    } finally {
+      if (savedPrefix === undefined) delete process.env.npm_config_local_prefix;
+      else process.env.npm_config_local_prefix = savedPrefix;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the global install behind a project copy", () => {
+    const projectBin = path.join(process.cwd(), "node_modules", ".bin", "argent");
+    whichFinds(`${projectBin}\n/usr/local/bin/argent`);
+    expect(isGloballyInstalled()).toBe(true);
   });
 
   it.each(GLOBAL_BINS)("counts a %s global install", (_pm, bin) => {

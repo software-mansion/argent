@@ -242,10 +242,10 @@ function untrackArchive(archive: string): void {
   process.removeListener("exit", removePendingArchives);
 }
 
-function sha256File(filePath: string): Promise<string> {
+function sha256File(filePath: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash("sha256");
-    createReadStream(filePath)
+    createReadStream(filePath, { signal })
       .on("data", (chunk) => hash.update(chunk))
       .on("end", () => resolve(hash.digest("hex")))
       .on("error", reject);
@@ -337,8 +337,8 @@ export async function uploadFile(
   const tarPath = path.join(tmpdir(), `argent-upload-${randomUUID()}.tar.gz`);
   trackArchive(tarPath);
   try {
-    await createTarGzFile(await realpath(sourcePath), tarPath);
-    const contentHash = await sha256File(tarPath);
+    await createTarGzFile(await realpath(sourcePath), tarPath, signal);
+    const contentHash = await sha256File(tarPath, signal);
     return { uploadId: await uploadTar(tarPath, endpoint, signal), contentHash };
   } finally {
     untrackArchive(tarPath);

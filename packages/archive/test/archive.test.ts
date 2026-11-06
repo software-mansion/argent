@@ -35,6 +35,16 @@ describe("createTarGzFile", () => {
     await expect(createTarGzFile(path.join(tmpDir, "does-not-exist"), tarPath)).rejects.toThrow();
     await expect(fs.stat(tarPath)).rejects.toThrow();
   });
+
+  it("stops tar at an aborted signal and leaves no archive", async () => {
+    const src = path.join(tmpDir, "src");
+    await fs.mkdir(src);
+    await fs.writeFile(path.join(src, "a"), "a");
+    const tarPath = path.join(tmpDir, "out.tar.gz");
+
+    await expect(createTarGzFile(src, tarPath, AbortSignal.abort())).rejects.toThrow(/aborted/i);
+    await expect(fs.access(tarPath)).rejects.toThrow();
+  });
 });
 
 describe("createTarGzFile + safeExtractTarGz round-trip", () => {

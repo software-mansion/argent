@@ -15,9 +15,10 @@ import {
 import { cleanupRetiredFiles, formatRetiredCleanup } from "./retired-files.js";
 import {
   AGENTS_DIR,
-  detectPackageManager,
+  detectGlobalPackageManager,
   detectProjectPackageManager,
   formatShellCommand,
+  getRemainingGlobalBinaryPath,
   getGloballyInstalledPackageRoot,
   globalUninstallCommand,
   localUninstallCommand,
@@ -676,7 +677,7 @@ export async function uninstall(args: string[]): Promise<void> {
       if (!globalPresent) return null;
       return {
         kind: "global",
-        cmd: globalUninstallCommand(detectPackageManager(), PACKAGE_NAME),
+        cmd: globalUninstallCommand(detectGlobalPackageManager(), PACKAGE_NAME),
         prompt: `Uninstall the global ${PACKAGE_NAME} package?`,
         defaultRemove: false,
         installDir: getGloballyInstalledPackageRoot(),
@@ -698,6 +699,8 @@ export async function uninstall(args: string[]): Promise<void> {
       );
     }
 
+    // One install failing still leaves the other target to remove.
+    let packageFailed = false;
     for (const removable of removables) {
       let shouldRemove = nonInteractive || removePreconfirmed;
       if (!nonInteractive && !removePreconfirmed) {
@@ -725,8 +728,28 @@ export async function uninstall(args: string[]): Promise<void> {
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
+        // The command comes from the launcher, not the install's owner: npm
+        // exits 0 on a package Yarn classic or pnpm installed and leaves it.
+        const leftover = removable.kind === "global" ? getRemainingGlobalBinaryPath() : null;
+        // A second global can stay on PATH after this one is gone.
+        const removed =
+          !leftover || (removable.installDir !== null && !fs.existsSync(removable.installDir));
+        if (removed) hasUninstalledPackage = true;
+
+        /**
+         * Only when the record points inside the install just removed. The
+         * two modes coexist and orphaning a record that names a surviving
+         * install would break provider CLI discovery for no reason.
+         */
+        if (removed && removeCliRecordFor(removable.installDir)) {
+          p.log.info(pc.dim("Removed ~/.argent/cli.json (provider CLI discovery record)."));
+        }
+        if (leftover) {
+          throw new Error(
+            `${leftover} is still on PATH. Remove it with the package manager that installed it.`
+          );
+        }
         p.log.success(`Removed ${removable.kind} package.`);
-        hasUninstalledPackage = true;
         if (removable.kind === "global") hasUninstalledGlobalPackage = true;
 
         // Must go with the install even when pruning was declined, or a stale
@@ -734,24 +757,20 @@ export async function uninstall(args: string[]): Promise<void> {
         if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
           p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
         }
-
-        /**
-         * Only when the record points inside the install just removed. The
-         * two modes coexist and orphaning a record that names a surviving
-         * install would break provider CLI discovery for no reason.
-         */
-        if (removeCliRecordFor(removable.installDir)) {
-          p.log.info(pc.dim("Removed ~/.argent/cli.json (provider CLI discovery record)."));
-        }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);
-        await finalizeUninstallTelemetry(
-          hasPrunedContent,
-          hasUninstalledPackage,
-          UNINSTALL_PACKAGE_ACTION_FAILED
-        );
-        return;
+        packageFailed = true;
       }
+    }
+
+    if (packageFailed) {
+      await finalizeUninstallTelemetry(
+        hasPrunedContent,
+        hasUninstalledPackage,
+        UNINSTALL_PACKAGE_ACTION_FAILED
+      );
+      process.exitCode = 1;
+      return;
     }
 
     await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
