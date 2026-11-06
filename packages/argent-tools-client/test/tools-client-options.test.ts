@@ -310,7 +310,7 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: true }),
     });
 
-    const { data } = await callTool("run-flow", {
+    const { data, failure } = await callTool("run-flow", {
       e2e_test_path: flowPath,
       project_root: TEST_HOME,
       updateBaselines: true,
@@ -320,6 +320,7 @@ describe("createToolsClient options", () => {
       inside,
       { path: outside, error: `${outside} is not a baseline of this call (${dir}/<name>.png)` },
     ]);
+    expect(failure).toBe(`Baselines not written on this client: ${outside}`);
     expect(existsSync(outside)).toBe(false);
   });
 
@@ -350,13 +351,14 @@ describe("createToolsClient options", () => {
       onDiagnostic: (line) => diagnostics.push(line),
     });
 
-    await callTool("run-flow", {
+    const result = await callTool("run-flow", {
       e2e_test_path: flowPath,
       project_root: TEST_HOME,
       updateBaselines: true,
     });
 
     expect(diagnostics).toContain(`[e2e-files] baseline ${written}: written`);
+    expect(result).not.toHaveProperty("failure");
   });
 
   it("rejects a 2xx answer whose body cannot be read", async () => {

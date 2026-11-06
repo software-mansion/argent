@@ -71,7 +71,7 @@ import {
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
-import { toolResultVerdict } from "./utils/tool-result-verdict";
+import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -1118,8 +1118,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             : {};
         // A failure the tool returned rather than threw, so a client that only
         // checks for an error (`argent run`'s exit status) still sees it.
-        const verdict = toolResultVerdict(name, data);
-        const failurePayload = verdict ? { failure: verdict.reason } : {};
+        const failure = directCallFailure(name, data);
+        const failurePayload = failure !== undefined ? { failure } : {};
         if (wantsStream) {
           writeLine({
             event: "result",

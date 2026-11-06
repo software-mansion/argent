@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toolResultVerdict } from "../src/utils/tool-result-verdict";
+import { directCallFailure, toolResultVerdict } from "../src/utils/tool-result-verdict";
 
 describe("toolResultVerdict", () => {
   it("fails an unmet await-ui-element", () => {
@@ -7,6 +7,28 @@ describe("toolResultVerdict", () => {
       status: "fail",
       reason: "await-ui-element condition not met: timed out",
     });
+  });
+
+  it("says a wait that never judged its condition was not judged, by cause", () => {
+    expect(
+      toolResultVerdict("await-ui-element", {
+        success: false,
+        cause: "unreadable",
+        note: "no element matched the selector before timeout",
+      })
+    ).toEqual({
+      status: "fail",
+      reason:
+        "await-ui-element condition not judged (unreadable): no element matched the selector before timeout",
+    });
+    expect(
+      toolResultVerdict("await-ui-element", {
+        success: false,
+        note: "wait was cancelled before the condition was met",
+      })?.reason
+    ).toBe(
+      "await-ui-element condition not judged (cancelled): wait was cancelled before the condition was met"
+    );
   });
 
   it("fails a run-sequence that stopped on an error", () => {
@@ -65,5 +87,30 @@ describe("toolResultVerdict", () => {
     expect(
       toolResultVerdict("describe", { status: "restart_required", message: "x" })
     ).toBeUndefined();
+  });
+});
+
+describe("directCallFailure", () => {
+  const notConnected = {
+    status: "not_connected",
+    reason: "metro_not_running",
+    detail: "nothing on 8081",
+    guidance: "start Metro",
+  };
+
+  it("sends no failure for a status tool reporting its state", () => {
+    expect(directCallFailure("debugger-status", notConnected)).toBeUndefined();
+    expect(
+      directCallFailure("native-devtools-status", { status: "init_failed", message: "env failed" })
+    ).toBeUndefined();
+  });
+
+  it("sends the verdict's reason for any other tool", () => {
+    expect(directCallFailure("debugger-log-registry", notConnected)).toBe(
+      "debugger not connected (metro_not_running): nothing on 8081 — start Metro"
+    );
+    expect(directCallFailure("await-ui-element", { success: false, note: "x" })).toBe(
+      "await-ui-element condition not met: x"
+    );
   });
 });

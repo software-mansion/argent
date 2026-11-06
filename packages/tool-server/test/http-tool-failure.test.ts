@@ -99,6 +99,21 @@ describe("HTTP failure reported in a tool's result", () => {
     expect(res.body.failure).toBe("await-ui-element condition not met: no element matched");
   });
 
+  it("sends no failure for a status tool whose answer is a disconnected state", async () => {
+    handle = createHttpApp(
+      stubRegistry({
+        "debugger-status": () => ({
+          status: "not_connected",
+          reason: "metro_not_running",
+          detail: "nothing on 8081",
+          guidance: "start Metro",
+        }),
+      })
+    );
+    const res = await supertest(handle.app).post("/tools/debugger-status").send({});
+    expect(res.body).not.toHaveProperty("failure");
+  });
+
   it("sends no failure for a passing run", async () => {
     handle = createHttpApp(
       stubRegistry({ "e2e-execute": () => ({ ...FAILED_RUN, ok: true, failed: 0 }) })
