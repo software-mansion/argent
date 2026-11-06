@@ -8,7 +8,7 @@ These tools can be called independently without starting a profiling session.
 { "port": 8081, "device_id": "<UDID>", "top_n": 20 }
 ```
 
-Call `react-profiler-renders`. Returns mounted instance counts and render durations per component (the count is mounted instances in the live fiber tree, not re-renders). It walks only the top 30 levels of the tree, so deeper components are missing. Useful for spotting hot components before a full profile.
+Call `react-profiler-renders`. Returns mounted instance counts, the largest instance's subtree time and total self time per component, sorted by self time (the count is mounted instances in the live fiber tree, not re-renders). Self time comes from each fiber's own last render, often its mount, and subtree time from the last commit that reached it, so self time can exceed subtree time. It walks only the top 30 levels of the tree, so deeper components are missing. Useful for spotting hot components before a full profile.
 
 ## Component hierarchy
 

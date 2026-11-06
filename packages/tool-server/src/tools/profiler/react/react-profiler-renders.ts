@@ -118,8 +118,8 @@ export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>,
     failedMsg: ({ failureSignal }) =>
       `Failed to read React render activity: ${failureSignal.error_code}`,
   },
-  description: `Scan the live React fiber tree for the components costing the most render time right now.
-Returns a markdown table sorted by self time: how many instances of each component are mounted within the top 30 levels of the tree, the largest single instance's subtree time, and total self time. It is a snapshot, not a recording, so the instance count is how many exist, not how many times they re-rendered.
+  description: `Scan the live React fiber tree for the components with the most self render time.
+Returns a markdown table sorted by self time: how many instances of each component are mounted within the top 30 levels of the tree, the largest single instance's subtree time, and total self time. It is a snapshot, not a recording, so the instance count is how many exist, not how many times they re-rendered. Self time comes from each fiber's own last render, often its mount, and subtree time from the last commit that reached it, so self time can exceed subtree time. Compare self time between rows, not against the subtree column.
 Use for a quick read on which components are expensive without starting a profiling session; use react-profiler-start/stop when you need re-render counts and the reasons behind them.
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   readOnly: true,
