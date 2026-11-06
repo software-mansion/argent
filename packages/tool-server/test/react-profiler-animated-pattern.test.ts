@@ -8,7 +8,6 @@ import type {
 } from "../src/utils/react-profiler/types/pipeline";
 const sessionContext: SessionContext = {
   reactCompilerEnabled: false,
-  strictModeEnabled: false,
   buildMode: "dev",
   rnArchitecture: "bridge",
   projectRoot: "/proj",

@@ -2,7 +2,6 @@ import type { ReRenderReason, HotCommitSummary, ComponentFinding } from "./outpu
 
 export interface SessionContext {
   reactCompilerEnabled: boolean;
-  strictModeEnabled: boolean;
   buildMode: "dev" | "prod";
   rnArchitecture: "bridge" | "bridgeless";
   projectRoot: string;
