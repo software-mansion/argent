@@ -123,6 +123,19 @@ describe("HTTP screen-recording reminder note", () => {
     expect(res.body.note).toContain("screen-recording-stop");
   });
 
+  it("does not claim a server-side finalized video exists when the server may be gone", async () => {
+    registerActiveScreenRecording(UDID, Date.now(), 180, /* serverSide */ true);
+    markScreenRecordingFinalized(UDID, "it hit its 180s time limit");
+    handle = createHttpApp(stubRegistry());
+
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
+
+    expect(res.body.note).toContain("already ended");
+    expect(res.body.note).toContain("inside simulator-server");
+    expect(res.body.note).toContain("while that server is still up");
+    expect(res.body.note).not.toContain("to get the file");
+  });
+
   it("drops the note once the recording is cleared", async () => {
     registerActiveScreenRecording(UDID, Date.now(), 180);
     handle = createHttpApp(stubRegistry());
