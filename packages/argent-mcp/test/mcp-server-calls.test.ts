@@ -426,6 +426,7 @@ describe("startMcpServer screen capture after an interaction", () => {
         name,
         description: name,
         inputSchema: { type: "object", properties: {} },
+        ...(name === "screenshot" ? { outputHint: "image" } : {}),
       })
     ),
   };
@@ -515,6 +516,15 @@ describe("startMcpServer screen capture after an interaction", () => {
     });
   const toolCalls = () =>
     stub.requests.filter((r) => r.url.startsWith("/tools/")).map((r) => r.url);
+
+  it("gives the caller's `out` to the screenshot renderer", async () => {
+    const out = join(TEST_HOME, "kept.png");
+
+    const result = await client.callTool({ name: "screenshot", arguments: { udid: "u", out } });
+
+    const text = (result.content as Array<{ text?: string }>).map((c) => c.text ?? "").join("\n");
+    expect(text).toContain(`Could not save to ${out}:`);
+  });
 
   it("appends the screenshot, then the element tree, after the tool result", async () => {
     const result = await tap();

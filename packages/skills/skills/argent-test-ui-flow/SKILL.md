@@ -13,7 +13,7 @@ Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. `la
 
 For implementation tasks that modify visible UI, this workflow also serves as a visual acceptance path.
 
-1. **Baseline screenshot**: call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
+1. **Baseline screenshot**: call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and a run-unique absolute `out` path before editing whenever feasible.
 2. **Find target**: get element coordinates from a discovery tool before tapping:
    - **App screens (React Native included), in-app modals and system dialogs**: `describe`. Fall back to `screenshot` only if an overlay is not exposed reliably. When the app raises its own permission dialog, answer it here; that's the real flow under test. To take a prompt _out_ of the flow, use `argent-settings-permissions` during setup.
    - **Fallback**: use `screenshot` to estimate where the component is, then verify immediately after the action.
