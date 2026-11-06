@@ -18,6 +18,7 @@ import {
   ToolNotFoundError,
   ToolExecutionError,
   FailureError,
+  getFailureSignal,
   getFailureSignalOrFallback,
   withFailureSignal,
 } from "./errors";
@@ -238,8 +239,11 @@ export class Registry {
           : new ToolExecutionError(toolId, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
-      // Whatever the tool threw on a caller's abort, the abort is the cause.
-      if (options?.signal?.aborted) withFailureSignal(wrappedError, CANCELLED_SIGNAL);
+      // An unclassified failure after the caller's abort is the abort; a tool's
+      // own classification still wins.
+      if (options?.signal?.aborted && !getFailureSignal(error)) {
+        withFailureSignal(wrappedError, CANCELLED_SIGNAL);
+      }
       const failureSignal = getFailureSignalOrFallback(wrappedError);
       const failedMsg = formatInteractionMessage(
         () =>

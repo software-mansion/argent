@@ -236,6 +236,36 @@ describe("Registry — failure signals", () => {
     });
   });
 
+  it("keeps the tool's own classification when it fails after the caller aborted", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    const ownSignal = {
+      error_code: FAILURE_CODES.VEGA_BOOT_TIMEOUT,
+      failure_stage: "boot_timeout",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    } as const;
+    registry.registerTool({
+      id: "slow-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        throw withFailureSignal(new Error("boot timed out"), ownSignal);
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("slow-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("boot timed out");
+
+    expect(getFailureSignal(emittedError)).toEqual(ownSignal);
+  });
+
   it("keeps the tool's own classification when the caller did not abort", async () => {
     const registry = new Registry();
     registry.registerTool({
