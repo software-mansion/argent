@@ -37,6 +37,7 @@ import {
 } from "../src/utils/external-devices";
 import { classifyDevice, resolveDevice } from "../src/utils/device-info";
 import { adbArgv } from "../src/utils/adb";
+import { readAndroidSurfaceRotation } from "../src/utils/device-orientation";
 import {
   deviceSetForUdid,
   simctlArgsForUdid,
@@ -1439,6 +1440,14 @@ describe("adb argv for a provider device", () => {
 
     expect(() => adbArgv(["-s", deviceId, "shell", "ls"])).toThrow(/'adb' capability/);
   });
+
+  it.each([ANDROID_SERIAL, makeExternalId("acme-3f2a9c", ANDROID_SERIAL)])(
+    "refuses rotation probes without the adb grant for %s",
+    async (id) => {
+      useDescriptors(await androidDescriptor({ capabilities: ["simulator-server"] }));
+      await expect(readAndroidSurfaceRotation(id)).rejects.toThrow(/'adb' capability/);
+    }
+  );
 
   it("refuses a device that is no longer offered, rather than passing the ext: id through", async () => {
     useDescriptors();

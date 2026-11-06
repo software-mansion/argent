@@ -16,7 +16,8 @@ import * as path from "node:path";
  */
 
 const adbShell = vi.hoisted(() => vi.fn(async (_serial: string, _cmd: string) => ""));
-vi.mock("../src/utils/adb", () => ({ adbShell }));
+const adbArgv = vi.hoisted(() => vi.fn((args: string[]) => args));
+vi.mock("../src/utils/adb", () => ({ adbArgv, adbShell }));
 // The adb-server socket path is tried before the spawned client. Default it to
 // "server not reachable" so the existing probe tests keep exercising the client.
 const adbServerShell = vi.hoisted(() =>
@@ -41,11 +42,37 @@ const DUMPSYS_WINDOW = (r: number) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  adbArgv.mockReset().mockImplementation((args) => args);
   adbShell.mockResolvedValue("");
   adbServerShell.mockRejectedValue(new Error("ECONNREFUSED"));
 });
 
 describe("the rotation is read from the cheapest source that answers", () => {
+  it("uses the provider's native serial for both adb transports", async () => {
+    adbArgv.mockReturnValue(["127.0.0.1:15671"]);
+    adbShell.mockResolvedValueOnce(DUMPSYS_DISPLAY(1));
+
+    expect(await readAndroidSurfaceRotation("ext:farm:127.0.0.1:15671")).toBe(1);
+    expect(adbArgv).toHaveBeenCalledWith(["ext:farm:127.0.0.1:15671"]);
+    expect(adbServerShell).toHaveBeenCalledWith(
+      "127.0.0.1:15671",
+      expect.any(String),
+      expect.anything()
+    );
+    expect(adbShell).toHaveBeenCalledWith("127.0.0.1:15671", expect.any(String), expect.anything());
+  });
+
+  it("does not probe adb when the provider denies access", async () => {
+    const denied = new Error("provider did not grant the 'adb' capability");
+    adbArgv.mockImplementation(() => {
+      throw denied;
+    });
+
+    await expect(readAndroidSurfaceRotation("127.0.0.1:15671")).rejects.toBe(denied);
+    expect(adbServerShell).not.toHaveBeenCalled();
+    expect(adbShell).not.toHaveBeenCalled();
+  });
+
   // Measured on a Pixel_9 emulator: helper peek ~1 ms, adb server socket ~8 ms,
   // spawned adb client ~19 ms. All three report the same platform value, so
   // the order only changes latency — these tests pin that order and that each

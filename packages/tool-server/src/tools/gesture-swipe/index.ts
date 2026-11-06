@@ -15,7 +15,7 @@ import {
   toDevicePoint,
 } from "../../utils/harmony-uitest";
 import { ensureDep } from "../../utils/check-deps";
-import { sendCommand } from "../../utils/simulator-client";
+import { createTouchSender } from "../../utils/gesture-utils";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -218,6 +218,7 @@ Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app 
     }
 
     const api = services.simulatorServer as SimulatorServerApi;
+    const sendTouch = await createTouchSender(api, resolveDevice(params.udid));
     // No sample floor on this ramp, unlike `momentum: false` above: a fast swipe
     // is delivered as fast as it was authored. At durationMs 16 the whole travel
     // is one Move, the hardest flick either OS can be handed, but the fling
@@ -249,14 +250,7 @@ Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app 
         // it, which callers key on by name.
         if (i > 0) {
           try {
-            await sendCommand(api, {
-              cmd: "touch",
-              type: "Up",
-              x: lastX,
-              y: lastY,
-              second_x: null,
-              second_y: null,
-            });
+            await sendTouch("Up", lastX, lastY);
           } catch (liftErr) {
             err.cause = liftErr;
           }
@@ -275,23 +269,9 @@ Returns { swiped: true, timestampMs }. On physical iOS, reactivated: true = app 
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       // In the Up's own frame, with no added sleep, so the cadence is unchanged.
       if (type === "Up") {
-        await sendCommand(api, {
-          cmd: "touch",
-          type: "Move",
-          x,
-          y,
-          second_x: null,
-          second_y: null,
-        });
+        await sendTouch("Move", x, y);
       }
-      const sent = await sendCommand(api, {
-        cmd: "touch",
-        type,
-        x,
-        y,
-        second_x: null,
-        second_y: null,
-      });
+      const sent = await sendTouch(type, x, y);
       // Only the Down resolves the panel; the rest of the sequence keeps it.
       if (type === "Down") warning = sent.warning;
       lastX = x;
