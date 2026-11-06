@@ -114,12 +114,15 @@ run_phase() {
   # Capture starts at the first network-tool call, and the reload cleared it.
   run_tool view-network-logs "{$D}" >/dev/null 2>&1
   run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
+  local FETCH_RC=$RT_RC
   sleep 2
   assert_ok "$P" view-network-logs netlogs "{$D,\"pageIndex\":\"latest\"}"
   # Text, not JSON: one `{id: <requestId>} "<METHOD> <url>" ...` line per request.
   local RID; RID="$(printf '%s' "$RT_JSON" | sed -n 's/^{id: \([^}]*\)}.*/\1/p' | tail -n 1)"
   if [ -n "$RID" ]; then
     assert_ok "$P" view-network-request-details netdetails "{$D,\"requestId\":\"$RID\"}"
+  elif [ "$FETCH_RC" -ne 0 ]; then
+    fail "$P" view-network-request-details netdetails "the harness fetch failed to start (debugger-evaluate rc=$FETCH_RC)"
   else
     # The fetch above is the harness's own, so a missing id is a capture regression.
     fail "$P" view-network-request-details netdetails "no request id in view-network-logs: $(rt_detail 160)"
