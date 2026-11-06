@@ -2,7 +2,8 @@
  * Which devices a profiler is recording on. Read for the `profiling` flag of
  * the tool-call envelope (the MCP adapter skips its post-action capture on
  * it), and to switch the device's simulator-server to capture on demand
- * for the length of the profile.
+ * for the length of the profile. A server registered as always on demand (a
+ * physical Android phone) holds the mode for its whole life instead.
  *
  * A start registers its session state; the run counts for as long as that
  * state's `profilingActive` is set. The sessions clear the flag on every way a
@@ -18,7 +19,7 @@ type CaptureOnDemandSender = (onDemand: boolean) => void;
 const runs = new Map<string, Set<ProfilingRun>>();
 const servers = new Map<
   string,
-  { endpoint: string; send: CaptureOnDemandSender; onDemand: boolean }
+  { endpoint: string; send: CaptureOnDemandSender; onDemand: boolean; always: boolean }
 >();
 
 export function trackProfilingRun(deviceId: string, run: ProfilingRun): void {
@@ -50,24 +51,27 @@ function syncCaptureOnDemand(): void {
     if (set.size === 0) runs.delete(deviceId);
   }
   for (const [deviceId, server] of servers) {
-    const profiling = runs.has(deviceId);
-    if (server.onDemand !== profiling) {
-      server.onDemand = profiling;
-      server.send(profiling);
+    const wanted = server.always || runs.has(deviceId);
+    if (server.onDemand !== wanted) {
+      server.onDemand = wanted;
+      server.send(wanted);
     }
   }
 }
 
 /**
  * Registers a simulator-server, reached at `endpoint`, which starts with
- * capture_on_demand off. Returns the unregister call for its exit.
+ * capture_on_demand off. With `always`, the mode is sent at once and held
+ * until the unregister call, not only while a profiler records. Returns the
+ * unregister call for its exit.
  */
 export function registerCaptureOnDemandSender(
   deviceId: string,
   endpoint: string,
-  send: CaptureOnDemandSender
+  send: CaptureOnDemandSender,
+  always = false
 ): () => void {
-  const entry = { endpoint, send, onDemand: false };
+  const entry = { endpoint, send, onDemand: false, always };
   servers.set(deviceId, entry);
   syncCaptureOnDemand();
   return () => {
@@ -75,8 +79,13 @@ export function registerCaptureOnDemandSender(
     servers.delete(deviceId);
     // The server holds the mode for as long as the WebSocket that set it. An
     // attached server's WebSocket outlives this instance, so release the hold
-    // here. A spawned server is about to exit, which releases it anyway.
-    if (entry.onDemand) entry.send(false);
+    // here. A spawned server is about to exit, which releases it anyway. A
+    // device reached under two ids has one entry per id and one server, which
+    // the other entry may still want on demand.
+    const stillWanted = [...servers.values()].some(
+      (other) => other.endpoint === endpoint && other.onDemand
+    );
+    if (entry.onDemand && !stillWanted) entry.send(false);
   };
 }
 
@@ -86,9 +95,10 @@ export function registerCaptureOnDemandSender(
  * was already replaced on the device changes nothing: the new server, at
  * another endpoint, still holds the mode.
  */
-export function captureOnDemandDropped(deviceId: string, endpoint: string): void {
-  const server = servers.get(deviceId);
-  if (server?.endpoint === endpoint) server.onDemand = false;
+export function captureOnDemandDropped(endpoint: string): void {
+  for (const server of servers.values()) {
+    if (server.endpoint === endpoint) server.onDemand = false;
+  }
 }
 
 export function __resetProfilingDevicesForTesting(): void {
