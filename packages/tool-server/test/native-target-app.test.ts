@@ -33,10 +33,10 @@ function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
     isAppRunning: async (bundleId) => byBundleId.has(bundleId),
     listConnectedBundleIds: () => [...byBundleId.keys()],
     appConnectionState: async () => "connected",
-    activateNetworkInspection: () => {},
+    activateNetworkInspection: async () => false,
     takeCaptureGap: () => false,
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
+    networkRecords: () => undefined,
+    networkCaptureAfterLaunch: async () => undefined,
     getAppState: async (bundleId) => {
       const app = byBundleId.get(bundleId);
       if (!app) throw new Error(`unknown bundleId: ${bundleId}`);

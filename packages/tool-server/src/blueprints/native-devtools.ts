@@ -1,10 +1,16 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
+import {
+  attachNdjsonReader,
+  createNdjsonCdpRequester,
+  reportDroppedFrameToStderr,
+  type NdjsonCdpRequester,
+} from "../utils/ndjson-socket";
 import {
   TypedEventEmitter,
   FAILURE_CODES,
   FailureError,
+  getFailureSignal,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceEvents,
@@ -18,6 +24,13 @@ import {
   processCarriesInjection,
   type IosEndpoint,
 } from "../utils/ios-host";
+import {
+  createIosNetworkRecords,
+  registerIosNetworkCaptures,
+  type IosNetworkCaptureState,
+  type IosNetworkRecordStore,
+  type IosNetworkRecords,
+} from "./ios-network-records";
 
 // Re-exported for native-devtools-env.test.ts, which imports them from here.
 export { buildDyldInsertLibraries, withdrawDyldInsertLibraries };
@@ -423,11 +436,11 @@ export function nativeDevtoolsRef(
   };
 }
 
-export interface NetworkEvent {
-  method: string;
-  params: unknown;
-  timestamp: number;
-}
+/** The agent acknowledges Network.enable within this, the blueprint's RPC ceiling. */
+const NETWORK_ENABLE_TIMEOUT_MS = 5_000;
+/** How long a launch waits for its new process to be armed before it says it is not yet. */
+const LAUNCH_ARM_WAIT_MS = 5_000;
+const WAITING_FOR_ENABLE = "waiting for the agent to acknowledge Network.enable";
 
 type ViewInspectorMethod =
   | "ViewHierarchy.getFullHierarchy"
@@ -490,19 +503,26 @@ export interface NativeDevtoolsApi {
    */
   appConnectionState(bundleId: string): Promise<NativeDevtoolsAppState>;
   /**
-   * Activates NSURLProtocol network interception for a specific app. Idempotent,
-   * and sticky: re-enabled automatically when the app reconnects after a
-   * relaunch.
+   * Turns native network capture on for an app. Sticky at once: every later
+   * connection of the app is armed at its handshake. Resolves true once the
+   * app's live connection acknowledges Network.enable, false when there is no
+   * connection or no acknowledgement within 5 s. Never rejects.
    */
-  activateNetworkInspection(bundleId: string): void;
+  activateNetworkInspection(bundleId: string): Promise<boolean>;
   /**
    * True once per gap: capture for this app was turned on while it was already
    * running, so the requests before that (its launch among them) were missed.
    * Reading it clears it, so only the answer that reports the log says so.
    */
   takeCaptureGap(bundleId: string): boolean;
-  getNetworkLog(bundleId: string): NetworkEvent[];
-  clearNetworkLog(bundleId: string): void;
+  /** The app's request records, from its first connection on; undefined before that. */
+  networkRecords(bundleId: string): IosNetworkRecords | undefined;
+  /**
+   * The `networkCapture` note of a launch of an app that capture is on for:
+   * waits up to 5 s for the launched process to be armed. Undefined when
+   * capture is off for the app. Never throws.
+   */
+  networkCaptureAfterLaunch(bundleId: string): Promise<string | undefined>;
   getAppState(bundleId: string): Promise<NativeAppState>;
   detectFrontmostBundleId(): Promise<string | null>;
   queryViewHierarchy(
@@ -514,7 +534,17 @@ export interface NativeDevtoolsApi {
 
 interface AppConnection {
   socket: net.Socket;
-  networkLog: NetworkEvent[];
+  /** Numbers the connections of this service, so records know which one they came in on. */
+  index: number;
+  cdp: NdjsonCdpRequester;
+  /** The agent acknowledged Network.enable on this connection. */
+  armed: boolean;
+  /** The Network.enable on its way, resolved by the acknowledgement. */
+  enabling?: Promise<boolean>;
+  /** Why the last Network.enable did not arm this connection. */
+  enableFailure?: string;
+  /** The app process behind the connection, once the host read it. */
+  pid?: number;
 }
 
 function getNativeDevtoolsSocketPath(udid: string): string {
@@ -660,8 +690,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // listen block below, before ensureEnvReady and dispose read it.
     const endpoint: IosEndpoint =
       transport === "tcp" ? { transport: "tcp" } : { transport: "unix", socketPath };
-    const MAX_LOG_ENTRIES = 1000;
     const connections = new Map<string, AppConnection>();
+    let nextConnectionIndex = 1;
+    /** One per app from its first connection until dispose, so history survives relaunches. */
+    const networkStores = new Map<string, IosNetworkRecordStore>();
     const pendingRpc = new Map<
       number,
       { resolve: (v: unknown) => void; reject: (e: Error) => void }
@@ -683,6 +715,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const activatedBundleIds = new Set<string>();
     const captureGaps = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
+    /** Woken whenever a connection is armed, learns its pid or closes. */
+    const connectionWaiters = new Set<() => void>();
+    const wakeConnectionWaiters = (): void => {
+      for (const wake of [...connectionWaiters]) wake();
+    };
 
     const noteInitFailure = (err: unknown): void => {
       /**
@@ -799,6 +836,129 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
     }
 
+    /** Resolves when `test` holds, or false once `timeoutMs` passed or the service was disposed. */
+    const waitForConnection = (test: () => boolean, timeoutMs: number): Promise<boolean> => {
+      if (test()) return Promise.resolve(true);
+      return new Promise((resolve) => {
+        const finish = (): void => {
+          clearTimeout(timer);
+          connectionWaiters.delete(check);
+          resolve(!disposed && test());
+        };
+        const check = (): void => {
+          if (disposed || test()) finish();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        timer.unref();
+        connectionWaiters.add(check);
+      });
+    };
+
+    /**
+     * Sends Network.enable unless the connection is armed or already waiting
+     * for the reply. The reply arms the connection as its frame is read, before
+     * the events after it. A connection that does not answer in time stays open
+     * and unarmed, because the view tools share it and the app does not dial
+     * again; the next call asks again.
+     */
+    const enableOn = (conn: AppConnection): Promise<boolean> => {
+      if (conn.armed) return Promise.resolve(true);
+      if (conn.enabling) return conn.enabling;
+      delete conn.enableFailure;
+      const enabling = conn.cdp
+        .request(
+          "Network.enable",
+          {},
+          {
+            timeoutMs: NETWORK_ENABLE_TIMEOUT_MS,
+            onResult: () => {
+              conn.armed = true;
+              wakeConnectionWaiters();
+            },
+          }
+        )
+        .then(
+          () => true,
+          (err: unknown) => {
+            if (conn.socket.destroyed || disposed) return false;
+            conn.enableFailure =
+              getFailureSignal(err)?.error_kind === "timeout"
+                ? `the agent did not acknowledge Network.enable within ${NETWORK_ENABLE_TIMEOUT_MS / 1000} s; the next call asks again`
+                : `the agent did not enable capture (${err instanceof Error ? err.message : String(err)}); the next call asks again`;
+            process.stderr.write(`[native-devtools ${udid.slice(0, 8)}] ${conn.enableFailure}\n`);
+            return false;
+          }
+        )
+        .finally(() => {
+          if (conn.enabling === enabling) conn.enabling = undefined;
+        });
+      conn.enabling = enabling;
+      return enabling;
+    };
+
+    const captureState = (bundleId: string): IosNetworkCaptureState => {
+      const conn = connections.get(bundleId);
+      if (!conn) {
+        return {
+          armed: false,
+          note: activatedBundleIds.has(bundleId)
+            ? "the app is not connected; its next process is armed when it connects"
+            : "the app is not connected",
+        };
+      }
+      return {
+        armed: conn.armed,
+        ...(conn.pid !== undefined ? { pid: conn.pid } : {}),
+        ...(conn.armed
+          ? {}
+          : conn.enabling
+            ? { note: WAITING_FOR_ENABLE }
+            : conn.enableFailure
+              ? { note: conn.enableFailure }
+              : {}),
+      };
+    };
+
+    /**
+     * Reads the pid of the process that just connected. In attach mode the
+     * process is the provider's, so it is never probed.
+     */
+    const readConnectionPid = async (bundleId: string, conn: AppConnection): Promise<void> => {
+      if (lentSocketPath) return;
+      const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
+      const pid = inspection?.process?.pid;
+      if (pid === undefined || disposed || connections.get(bundleId) !== conn) return;
+      conn.pid = pid;
+      wakeConnectionWaiters();
+    };
+
+    /**
+     * A closed connection never comes back for the same process, so its open
+     * requests fail now: with the process-ended reason when one host check
+     * finds the process gone or replaced, and as not reconnected otherwise.
+     */
+    const settleClosedConnection = async (bundleId: string, conn: AppConnection): Promise<void> => {
+      const store = networkStores.get(bundleId);
+      if (lentSocketPath || disposed || !store?.hasOpenRecords(conn.index)) return;
+      const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
+      if (disposed) return;
+      const live = connections.get(bundleId);
+      store.connectionClosed(conn.index, {
+        superseded: live !== undefined && live !== conn,
+        ...(inspection ? { running: inspection.running } : {}),
+        ...(inspection?.process ? { runningPid: inspection.process.pid } : {}),
+        ...(conn.pid !== undefined ? { connectionPid: conn.pid } : {}),
+      });
+    };
+
+    const closeConnection = (bundleId: string, conn: AppConnection): void => {
+      conn.cdp.close();
+      conn.armed = false;
+      if (connections.get(bundleId) === conn) connections.delete(bundleId);
+      wakeConnectionWaiters();
+      void settleClosedConnection(bundleId, conn);
+    };
+
     // Stale socket file from a crashed previous run (unix-only). Never in
     // attach mode: that path is the provider's live socket, not ours.
     if (transport === "unix" && !lentSocketPath) {
@@ -809,12 +969,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       }
     }
 
-    // Drives one agent connection: the handshake, the network log it feeds and
-    // the RPC responses it answers with. Same wire protocol whether our dylib
-    // dialled in or we dialled out to a lent socket, so only who connects
+    // Drives one agent connection: the handshake, the network records it feeds
+    // and the RPC responses it answers with. Same wire protocol whether our
+    // dylib dialled in or we dialled out to a lent socket, so only who connects
     // differs.
     const serveAgentConnection = (socket: net.Socket) => {
       let bundleId: string | null = null;
+      let conn: AppConnection | null = null;
       attachNdjsonReader(socket, {
         onDropped: reportDroppedFrameToStderr(`native-devtools ${udid.slice(0, 8)}`),
         onMessage: (parsed) => {
@@ -828,41 +989,42 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             // The same app reconnecting (fast restart) supersedes the old socket.
             const existing = connections.get(bundleId);
             if (existing) {
+              closeConnection(bundleId, existing);
               existing.socket.destroy();
             }
 
-            connections.set(bundleId, { socket, networkLog: [] });
+            conn = {
+              socket,
+              index: nextConnectionIndex++,
+              cdp: createNdjsonCdpRequester(socket, { label: `native-devtools ${bundleId}` }),
+              armed: false,
+            };
+            connections.set(bundleId, conn);
+            if (!networkStores.has(bundleId)) {
+              const app = bundleId;
+              networkStores.set(
+                app,
+                createIosNetworkRecords(() => captureState(app))
+              );
+            }
 
             if (activatedBundleIds.has(bundleId)) {
               // Our own listener hears an app at its launch, so nothing was
               // missed. A lent agent is an app that was already running.
               if (lentSocketPath) captureGaps.add(bundleId);
               else captureGaps.delete(bundleId);
-              socket.write(
-                JSON.stringify({
-                  type: "Control",
-                  payload: { command: "activateNetworkInspection" },
-                }) + "\n"
-              );
+              void enableOn(conn);
             }
+            void readConnectionPid(bundleId, conn);
             return;
           }
 
-          if (msg.type === "CDP") {
+          if (msg.type === "CDP" && conn) {
             const p = msg.payload;
-            // Unsolicited events have method but no id
-            if (p.method && p.id === undefined) {
-              const conn = connections.get(bundleId);
-              if (conn) {
-                if (conn.networkLog.length >= MAX_LOG_ENTRIES) {
-                  conn.networkLog.shift();
-                }
-                conn.networkLog.push({
-                  method: p.method,
-                  params: p.params,
-                  timestamp: Date.now(),
-                });
-              }
+            if (conn.cdp.handleResponse(p)) return;
+            // Unsolicited events have a method and no id.
+            if (p && typeof p.method === "string" && p.id === undefined) {
+              networkStores.get(bundleId)?.fold(conn.index, p.method, p.params);
             }
           }
 
@@ -886,11 +1048,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
 
       socket.on("close", () => {
-        if (bundleId !== null) {
-          // A fast reconnect may have already replaced this socket.
-          if (connections.get(bundleId)?.socket === socket) {
-            connections.delete(bundleId);
-          }
+        // A fast reconnect may have already replaced and closed this one.
+        if (bundleId !== null && conn !== null && connections.get(bundleId) === conn) {
+          closeConnection(bundleId, conn);
         }
       });
 
@@ -1101,24 +1261,35 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         const startedNow = !activatedBundleIds.has(bundleId);
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
-        if (conn) {
-          if (startedNow) captureGaps.add(bundleId);
-          conn.socket.write(
-            JSON.stringify({
-              type: "Control",
-              payload: { command: "activateNetworkInspection" },
-            }) + "\n"
-          );
-        }
+        if (!conn) return Promise.resolve(false);
+        if (startedNow) captureGaps.add(bundleId);
+        return enableOn(conn);
       },
 
       takeCaptureGap: (bundleId) => captureGaps.delete(bundleId),
 
-      getNetworkLog: (bundleId) => [...(connections.get(bundleId)?.networkLog ?? [])],
+      networkRecords: (bundleId) => networkStores.get(bundleId),
 
-      clearNetworkLog: (bundleId) => {
-        const conn = connections.get(bundleId);
-        if (conn) conn.networkLog.length = 0;
+      async networkCaptureAfterLaunch(bundleId) {
+        if (!activatedBundleIds.has(bundleId) || lentSocketPath) return undefined;
+        // Without a pid, as when the probe failed, any armed connection of
+        // the app counts.
+        const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
+        const pid = inspection?.process?.pid;
+        const ofLaunch = (): AppConnection | undefined => {
+          const conn = connections.get(bundleId);
+          return conn && (pid === undefined || conn.pid === pid) ? conn : undefined;
+        };
+        const armed = await waitForConnection(() => ofLaunch()?.armed === true, LAUNCH_ARM_WAIT_MS);
+        if (disposed) return undefined;
+        const shownPid = pid ?? ofLaunch()?.pid;
+        const pidText = shownPid !== undefined ? ` (pid ${shownPid})` : "";
+        if (armed) {
+          return `native network capture is armed for ${bundleId}${pidText}; stop-all-simulator-servers for this device, then restart-app, ends it`;
+        }
+        return ofLaunch()
+          ? `native network capture is on for ${bundleId}, and its new process${pidText} has not acknowledged Network.enable yet; native-network-logs shows when it is armed`
+          : `native network capture is on for ${bundleId}, and its new process has not connected yet; native-network-logs shows when it is armed`;
       },
 
       async getAppState(bundleId) {
@@ -1178,16 +1349,26 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       },
     };
 
+    const unregisterCaptures = registerIosNetworkCaptures({
+      udid,
+      bundleIds: activatedBundleIds,
+      stores: networkStores,
+    });
+
     return {
       api,
       dispose: async () => {
         disposed = true;
-        for (const { socket } of connections.values()) {
+        unregisterCaptures();
+        for (const { socket, cdp } of connections.values()) {
+          cdp.close();
           socket.destroy();
         }
         connections.clear();
         activatedBundleIds.clear();
         captureGaps.clear();
+        networkStores.clear();
+        wakeConnectionWaiters();
         /**
          * Attach mode owns only its end of the connection: hang up and leave
          * the provider's socket file and server exactly as they were.

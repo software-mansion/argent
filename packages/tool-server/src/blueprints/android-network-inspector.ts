@@ -36,8 +36,23 @@ import {
   type NdjsonCdpRequester,
 } from "../utils/ndjson-socket";
 import { withKeyedLock } from "../utils/keyed-lock";
-import { canonicalDeviceId } from "../utils/debugger/device-alias";
-import { externalNativeId } from "../utils/external-devices";
+import {
+  MAX_LAYER_ID_CHARS,
+  MAX_RECORDS,
+  NOT_RECONNECTED,
+  PROCESS_ENDED,
+  RECORD_CHARS_BUDGET,
+  asObject,
+  asString,
+  capString,
+  deviceKeyOf,
+  headerMap,
+  isMetroTraffic,
+  isOpen,
+  recordSize,
+  type NativeNetworkBody,
+  type NativeNetworkRecord,
+} from "../utils/native-network-record";
 import {
   AGENT_ABIS,
   AGENT_LIB_NAME,
@@ -71,15 +86,6 @@ interface AndroidNetworkInspectorOptions extends Record<string, unknown> {
 }
 
 /**
- * One device, whichever id names it: an `ext:` id and the adb serial behind
- * it, or a Metro logicalDeviceId and the id it was connected with, all key the
- * same inspector.
- */
-function deviceKeyOf(deviceId: string): string {
-  return externalNativeId(canonicalDeviceId(deviceId) ?? deviceId);
-}
-
-/**
  * The URN has no Metro port: one app on one device has one inspector, and each
  * call hands it the port it should use.
  */
@@ -100,15 +106,7 @@ const MIN_SDK = 26;
 const PACKAGE_NAME = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*$/;
 const PROTOCOL_VERSION = 2;
 
-/** Record memory is bounded by count and by size, whichever binds first. */
-const MAX_RECORDS = 2000;
-const RECORD_CHARS_BUDGET = 32 * 1024 * 1024;
-/** One URL, header value or text field; longer ones keep their start. */
-const MAX_VALUE_CHARS = 64 * 1024;
-const MAX_HEADERS = 256;
-const MAX_HEADER_MAP_CHARS = 256 * 1024;
 const MAX_REDIRECTS = 32;
-const MAX_LAYER_ID_CHARS = 200;
 const MAX_CACHED_BODIES = 64;
 
 /** An authenticated agent's sealed frames: a body can be several MiB of base64. */
@@ -140,9 +138,6 @@ const AGENT_GONE_REASON =
   "the agent that recorded the request is no longer in the app, as after an emulator snapshot load";
 const LOST_WHILE_DISCONNECTED =
   "the agent lost this request's final events while it was disconnected";
-const NOT_RECONNECTED =
-  "the agent did not reconnect after its connection dropped, so this request's final events never arrived";
-const PROCESS_ENDED = "the app process ended before the request finished";
 const JS_LAYER_FALLBACK =
   "Use view-network-logs: the JS layer still records the app's JavaScript requests while Metro serves the app.";
 
@@ -166,63 +161,6 @@ export interface AndroidNetworkNotAttachable {
   status: "not_attachable";
   reason: string;
   fallback: string;
-}
-
-export type AndroidNativeRecordState = "pending" | "headers" | "complete" | "failed";
-
-/** One hop before the final response: what was asked, and what came back. */
-interface AndroidNativeRedirect {
-  /** The URL that answered with the redirect. */
-  url: string;
-  method: string;
-  status: number;
-  statusText: string;
-  /** The redirect response's headers. */
-  headers: Record<string, string>;
-  /** As this hop's request went on the wire, when the agent reported them. */
-  requestHeaders?: Record<string, string>;
-}
-
-export interface AndroidNativeRecord {
-  id: string;
-  layer: "android-native";
-  layerId: string;
-  connection: number;
-  rnRequestId?: number;
-  state: AndroidNativeRecordState;
-  request: {
-    /** The URL the app requested. */
-    url: string;
-    method: string;
-    /** As the app set them. */
-    headers: Record<string, string>;
-    /** As they went on the wire for the latest hop, when the agent reported them. */
-    wireHeaders?: Record<string, string>;
-    hasPostData?: boolean;
-  };
-  /** The hops before the final response, oldest first. */
-  redirects?: AndroidNativeRedirect[];
-  response?: {
-    /** The final URL, after any redirects. */
-    url: string;
-    status: number;
-    statusText: string;
-    headers: Record<string, string>;
-    mimeType: string;
-    fromCache?: boolean;
-  };
-  timing: { startedAt: number; durationMs?: number };
-  resourceType?: string;
-  encodedDataLength?: number;
-  errorText?: string;
-}
-
-export interface AndroidNetworkBody {
-  available: boolean;
-  body: string;
-  base64Encoded: boolean;
-  truncated: boolean;
-  reason?: string;
 }
 
 export type AndroidCaptureState = "active" | "waiting" | "unavailable";
@@ -258,10 +196,10 @@ export interface AndroidNetworkInspectorApi {
     metroPort: number
   ): Promise<AndroidNetworkNotAttachable | AndroidNetworkCallNote | null>;
   state(): AndroidNetworkInspectorState;
-  records(metroPort: number): AndroidNativeRecord[];
-  record(id: string): AndroidNativeRecord | undefined;
-  responseBody(id: string): Promise<AndroidNetworkBody>;
-  requestPostData(id: string): Promise<AndroidNetworkBody>;
+  records(metroPort: number): NativeNetworkRecord[];
+  record(id: string): NativeNetworkRecord | undefined;
+  responseBody(id: string): Promise<NativeNetworkBody>;
+  requestPostData(id: string): Promise<NativeNetworkBody>;
   clear(): void;
 }
 
@@ -291,7 +229,7 @@ function allHandles(): InspectorHandle[] {
 /** Ids are unique per tool-server, so the device that recorded one does not matter. */
 export function findAndroidNativeRecord(
   id: string
-): { inspector: AndroidNetworkInspectorApi; record: AndroidNativeRecord } | undefined {
+): { inspector: AndroidNetworkInspectorApi; record: NativeNetworkRecord } | undefined {
   for (const handle of allHandles()) {
     const record = handle.api.record(id);
     if (record) return { inspector: handle.api, record };
@@ -416,7 +354,7 @@ interface AgentConnection {
   closed: boolean;
   capture?: { state: AndroidCaptureState; detail?: string };
   droppedEvents: number;
-  byLayerId: Map<string, AndroidNativeRecord>;
+  byLayerId: Map<string, NativeNetworkRecord>;
   resumes?: AgentConnection;
   resumedBy?: AgentConnection;
   agentGone?: boolean;
@@ -488,17 +426,17 @@ function createInspector(
   let awaiting: { key: string; note: string; since?: string; reason?: string } | null = null;
   const pendingSockets = new Set<net.Socket>();
   const connections: AgentConnection[] = [];
-  const records: AndroidNativeRecord[] = [];
+  const records: NativeNetworkRecord[] = [];
   let recordChars = 0;
-  const recordSizes = new WeakMap<AndroidNativeRecord, number>();
-  const byId = new Map<string, { record: AndroidNativeRecord; conn: AgentConnection }>();
-  const bodies = new Map<string, Promise<AndroidNetworkBody>>();
-  const cleared = new WeakSet<AndroidNativeRecord>();
+  const recordSizes = new WeakMap<NativeNetworkRecord, number>();
+  const byId = new Map<string, { record: NativeNetworkRecord; conn: AgentConnection }>();
+  const bodies = new Map<string, Promise<NativeNetworkBody>>();
+  const cleared = new WeakSet<NativeNetworkRecord>();
   /** Failed only because their final events did not arrive; a later event still settles them. */
-  const lostOnly = new WeakSet<AndroidNativeRecord>();
+  const lostOnly = new WeakSet<NativeNetworkRecord>();
   /** The URL and method of each record's latest hop. */
-  const hops = new WeakMap<AndroidNativeRecord, { url: string; method: string }>();
-  const startArrivals = new WeakMap<AndroidNativeRecord, number>();
+  const hops = new WeakMap<NativeNetworkRecord, { url: string; method: string }>();
+  const startArrivals = new WeakMap<NativeNetworkRecord, number>();
   const armWaiters = new Set<() => void>();
   /** One attach at a time: native-network-logs calls and launches. */
   const attachLock = new Map<string, Promise<unknown>>();
@@ -1471,7 +1409,7 @@ function createInspector(
   }
 
   /** A record failed only for lost events takes the state the agent reports after all. */
-  function revive(record: AndroidNativeRecord): void {
+  function revive(record: NativeNetworkRecord): void {
     if (!lostOnly.has(record)) return;
     lostOnly.delete(record);
     record.state = record.response ? "headers" : "pending";
@@ -1483,7 +1421,7 @@ function createInspector(
    * the previous hop goes into `redirects`, and the record keeps the URL the
    * app requested.
    */
-  function addHop(record: AndroidNativeRecord, p: Record<string, unknown>): void {
+  function addHop(record: NativeNetworkRecord, p: Record<string, unknown>): void {
     revive(record);
     const previous = hops.get(record) ?? { url: record.request.url, method: record.request.method };
     const response = asObject(p.redirectResponse);
@@ -1510,7 +1448,7 @@ function createInspector(
   }
 
   /** Durations run from the arrival of a request's first event to its last. */
-  function setDurationFromArrival(record: AndroidNativeRecord): void {
+  function setDurationFromArrival(record: NativeNetworkRecord): void {
     const arrived = startArrivals.get(record);
     if (arrived !== undefined) record.timing.durationMs = Math.round(performance.now() - arrived);
   }
@@ -1536,7 +1474,7 @@ function createInspector(
         : typeof p.timestamp === "number"
           ? p.timestamp * 1000
           : Date.now();
-    const record: AndroidNativeRecord = {
+    const record: NativeNetworkRecord = {
       id: `android-${RUN_TAG}-${nextRecordNumber++}`,
       layer: "android-native",
       layerId,
@@ -1561,7 +1499,7 @@ function createInspector(
     resize(record);
   }
 
-  function findRecord(conn: AgentConnection, layerId: string): AndroidNativeRecord | undefined {
+  function findRecord(conn: AgentConnection, layerId: string): NativeNetworkRecord | undefined {
     const own = conn.byLayerId.get(layerId);
     if (own) return own;
     for (let dropped = conn.resumes; dropped; dropped = dropped.resumes) {
@@ -1572,7 +1510,7 @@ function createInspector(
   }
 
   /** Re-measures a record after it grew, and evicts the oldest past either bound. */
-  function resize(record: AndroidNativeRecord): void {
+  function resize(record: NativeNetworkRecord): void {
     if (!byId.has(record.id)) return;
     const size = recordSize(record);
     recordChars += size - (recordSizes.get(record) ?? 0);
@@ -1585,7 +1523,7 @@ function createInspector(
     }
   }
 
-  function evict(record: AndroidNativeRecord): void {
+  function evict(record: NativeNetworkRecord): void {
     const entry = byId.get(record.id);
     if (entry && entry.conn.byLayerId.get(record.layerId) === record) {
       entry.conn.byLayerId.delete(record.layerId);
@@ -1597,7 +1535,7 @@ function createInspector(
     bodies.delete(`post:${record.id}`);
   }
 
-  function markLost(record: AndroidNativeRecord, reason: string): void {
+  function markLost(record: NativeNetworkRecord, reason: string): void {
     record.state = "failed";
     record.errorText = reason;
     lostOnly.add(record);
@@ -1631,7 +1569,7 @@ function createInspector(
     return last.agentGone === true;
   }
 
-  function fetchBody(id: string, kind: "response" | "post"): Promise<AndroidNetworkBody> {
+  function fetchBody(id: string, kind: "response" | "post"): Promise<NativeNetworkBody> {
     const entry = byId.get(id);
     if (!entry) return Promise.resolve(unavailable("no such request"));
     const { record } = entry;
@@ -2047,10 +1985,6 @@ function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-function isOpen(record: AndroidNativeRecord): boolean {
-  return record.state === "pending" || record.state === "headers";
-}
-
 function parseCapture(value: unknown): { state: AndroidCaptureState; detail?: string } | undefined {
   const o = asObject(value);
   if (o.state !== "active" && o.state !== "waiting" && o.state !== "unavailable") return undefined;
@@ -2074,23 +2008,7 @@ function isAgentAbi(abi: string): abi is AgentAbi {
   return (AGENT_ABIS as readonly string[]).includes(abi);
 }
 
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "10.0.2.2", "[::1]"]);
-
-/**
- * Metro's own traffic on `metroPort`: the bundle, HMR, symbolication, the
- * inspector socket. Keyed on the caller's port.
- */
-function isMetroTraffic(url: string, metroPort: number): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return false;
-  }
-  return LOOPBACK_HOSTS.has(parsed.hostname) && Number(parsed.port) === metroPort;
-}
-
-function toBody(result: unknown, kind: "response" | "post"): AndroidNetworkBody {
+function toBody(result: unknown, kind: "response" | "post"): NativeNetworkBody {
   const r = asObject(result);
   const text = kind === "response" ? r.body : r.postData;
   if (r.bodyAvailable === false || typeof text !== "string") {
@@ -2108,75 +2026,8 @@ function toBody(result: unknown, kind: "response" | "post"): AndroidNetworkBody 
   };
 }
 
-function unavailable(reason: string): AndroidNetworkBody {
+function unavailable(reason: string): NativeNetworkBody {
   return { available: false, body: "", base64Encoded: false, truncated: false, reason };
-}
-
-/** Keeps the start of an absurdly long value and says how much was left out. */
-function capString(value: string, max = MAX_VALUE_CHARS): string {
-  return value.length > max ? `${value.slice(0, max)}…[${value.length - max} more chars]` : value;
-}
-
-/**
- * A header map with every value capped, bounded in count and in total size.
- * The headers left out are counted in an entry that says so.
- */
-function headerMap(value: unknown): Record<string, string> {
-  const headers: Record<string, string> = {};
-  let kept = 0;
-  let chars = 0;
-  let left = 0;
-  for (const [name, v] of Object.entries(asObject(value))) {
-    if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
-    const key = capString(name, 1024);
-    const text = capString(String(v));
-    if (kept >= MAX_HEADERS || chars + key.length + text.length > MAX_HEADER_MAP_CHARS) {
-      left++;
-      continue;
-    }
-    headers[key] = text;
-    kept++;
-    chars += key.length + text.length;
-  }
-  if (left > 0) headers["(not kept)"] = `${left} more headers`;
-  return headers;
-}
-
-function mapChars(map: Record<string, string> | undefined): number {
-  let chars = 0;
-  for (const [name, value] of Object.entries(map ?? {})) chars += name.length + value.length;
-  return chars;
-}
-
-/** What a record holds in strings, which is what its memory scales with. */
-function recordSize(record: AndroidNativeRecord): number {
-  let chars =
-    record.request.url.length +
-    record.request.method.length +
-    mapChars(record.request.headers) +
-    mapChars(record.request.wireHeaders) +
-    (record.errorText?.length ?? 0) +
-    256;
-  if (record.response) {
-    chars +=
-      record.response.url.length +
-      record.response.statusText.length +
-      record.response.mimeType.length +
-      mapChars(record.response.headers);
-  }
-  for (const hop of record.redirects ?? []) {
-    chars +=
-      hop.url.length + hop.statusText.length + mapChars(hop.headers) + mapChars(hop.requestHeaders);
-  }
-  return chars;
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
 }
 
 /** The inspector's own failures, whose messages stand on their own. */

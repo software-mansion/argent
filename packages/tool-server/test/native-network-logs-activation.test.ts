@@ -49,8 +49,9 @@ describe("native-network-logs before the app is instrumented", () => {
       .mockResolvedValueOnce(null);
     let gap = false;
     const api = {
-      activateNetworkInspection: vi.fn(() => {
+      activateNetworkInspection: vi.fn(async () => {
         gap = true;
+        return true;
       }),
       takeCaptureGap: vi.fn(() => {
         const had = gap;
@@ -58,7 +59,7 @@ describe("native-network-logs before the app is instrumented", () => {
         return had;
       }),
       isConnected: () => true,
-      getNetworkLog: () => [],
+      networkRecords: () => ({ records: () => [], state: () => ({ armed: true }), clear() {} }),
       armsEnv: true,
     } as any;
     const { createNativeNetworkLogsTool } =
@@ -74,10 +75,10 @@ describe("native-network-logs before the app is instrumented", () => {
 
     const ok = (await nativeNetworkLogsTool.execute({ nativeDevtools: api }, params)) as {
       status: string;
-      note?: string;
+      header: string;
     };
     expect(ok.status).toBe("ok");
-    expect(ok.note).toMatch(/were not recorded.*restart-app/);
+    expect(ok.header).toMatch(/were not recorded.*restart-app/);
   });
 
   it("says capture is armed when the app is not connected yet", async () => {

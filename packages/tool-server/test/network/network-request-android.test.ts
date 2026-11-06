@@ -3,10 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Registry, type ToolCapability } from "@argent/registry";
 import {
   findAndroidNativeRecord,
-  type AndroidNativeRecord,
-  type AndroidNetworkBody,
   type AndroidNetworkInspectorApi,
 } from "../../src/blueprints/android-network-inspector";
+import type { NativeNetworkBody, NativeNetworkRecord } from "../../src/utils/native-network-record";
 import { networkRequestTool } from "../../src/tools/network/network-request";
 import { networkLogsTool } from "../../src/tools/network/network-logs";
 import { createNativeNetworkLogsTool } from "../../src/tools/native-devtools/native-network-logs";
@@ -27,8 +26,8 @@ const ID = "android-1a2b-7";
 const SERIAL = "emulator-5554";
 const MIB = 1024 * 1024;
 
-const responseBody = vi.fn<(id: string) => Promise<AndroidNetworkBody>>();
-const requestPostData = vi.fn<(id: string) => Promise<AndroidNetworkBody>>();
+const responseBody = vi.fn<(id: string) => Promise<NativeNetworkBody>>();
+const requestPostData = vi.fn<(id: string) => Promise<NativeNetworkBody>>();
 const inspector = { responseBody, requestPostData } as unknown as AndroidNetworkInspectorApi;
 
 interface Details {
@@ -58,11 +57,11 @@ interface Details {
 }
 
 function record(
-  over: Omit<Partial<AndroidNativeRecord>, "request" | "response"> & {
-    request?: Partial<AndroidNativeRecord["request"]>;
-    response?: Partial<NonNullable<AndroidNativeRecord["response"]>>;
+  over: Omit<Partial<NativeNetworkRecord>, "request" | "response"> & {
+    request?: Partial<NativeNetworkRecord["request"]>;
+    response?: Partial<NonNullable<NativeNetworkRecord["response"]>>;
   } = {}
-): AndroidNativeRecord {
+): NativeNetworkRecord {
   const { request, response, ...rest } = over;
   return {
     id: ID,
@@ -79,14 +78,14 @@ function record(
       mimeType: "application/json",
       ...response,
     },
-  } as AndroidNativeRecord;
+  } as NativeNetworkRecord;
 }
 
-function heldBody(bytes: Buffer, truncated = false): AndroidNetworkBody {
+function heldBody(bytes: Buffer, truncated = false): NativeNetworkBody {
   return { available: true, body: bytes.toString("base64"), base64Encoded: true, truncated };
 }
 
-function serve(rec: AndroidNativeRecord): void {
+function serve(rec: NativeNetworkRecord): void {
   vi.mocked(findAndroidNativeRecord).mockImplementation((id: string) =>
     id === rec.id ? { inspector, record: rec } : undefined
   );
@@ -373,7 +372,7 @@ describe("view-network-request-details: request bodies and charsets", () => {
   });
 
   /** A POST the server answered with a 303: the follow-up GET carries no body headers. */
-  function postThen303(firstHopHeaders?: Record<string, string>): AndroidNativeRecord {
+  function postThen303(firstHopHeaders?: Record<string, string>): NativeNetworkRecord {
     return record({
       request: {
         url: "http://localhost:9090/upload",

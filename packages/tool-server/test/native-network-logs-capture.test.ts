@@ -45,14 +45,18 @@ const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 const UDID = processScopedUdid("-5555-6666-7777-888888888888");
 const BUNDLE = "com.example.app";
 const device: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
-const ACTIVATE = JSON.stringify({
-  type: "Control",
-  payload: { command: "activateNetworkInspection" },
-});
+/** Whether a line the app was sent asks it to turn capture on. */
+const isEnable = (line: string): boolean => {
+  const frame = JSON.parse(line) as { type?: string; payload?: { method?: string } };
+  return frame.type === "CDP" && frame.payload?.method === "Network.enable";
+};
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 80));
 
-/** Dial the service as the injected dylib does, recording every line it is sent. */
+/**
+ * Dial the service as the injected dylib does, recording every line it is sent
+ * and acknowledging each CDP request.
+ */
 async function connectApp(socketPath: string, bundleId: string) {
   const received: string[] = [];
   let buffer = "";
@@ -64,6 +68,12 @@ async function connectApp(socketPath: string, bundleId: string) {
     const lines = buffer.split("\n");
     buffer = lines.pop()!;
     received.push(...lines);
+    for (const line of lines) {
+      const { type, payload } = JSON.parse(line) as { type: string; payload: { id?: number } };
+      if (type === "CDP" && payload.id !== undefined) {
+        sock.write(JSON.stringify({ type, payload: { id: payload.id, result: {} } }) + "\n");
+      }
+    }
   });
   await settle();
   return { received, close: () => sock.destroy() };
@@ -98,14 +108,14 @@ describe("native-network-logs arms capture through the blueprint", () => {
 
       const first = await callTool(api);
 
-      await vi.waitFor(() => expect(app.received).toContain(ACTIVATE));
-      expect(first).toMatchObject({ status: "ok", count: 0 });
-      expect((first as { note?: string }).note).toMatch(/were not recorded.*restart-app/);
+      await vi.waitFor(() => expect(app.received.some(isEnable)).toBe(true));
+      expect(first).toMatchObject({ status: "ok", armed: true, count: 0 });
+      expect((first as { header: string }).header).toMatch(/were not recorded.*restart-app/);
 
       // Capture was already on for the second call, so its count is the truth.
       const second = await callTool(api);
       expect(second).toMatchObject({ status: "ok" });
-      expect((second as { note?: string }).note).toBeUndefined();
+      expect((second as { header: string }).header).not.toMatch(/were not recorded/);
       app.close();
     });
   });
@@ -117,12 +127,12 @@ describe("native-network-logs arms capture through the blueprint", () => {
 
       // The relaunch: capture must be on before the app sends its first request.
       const app = await connectApp(api.socketPath, BUNDLE);
-      await vi.waitFor(() => expect(app.received).toContain(ACTIVATE));
+      await vi.waitFor(() => expect(app.received.some(isEnable)).toBe(true));
 
       // That launch was captured, so the next answer carries no note.
       const next = await callTool(api);
       expect(next).toMatchObject({ status: "ok" });
-      expect((next as { note?: string }).note).toBeUndefined();
+      expect((next as { header: string }).header).not.toMatch(/were not recorded/);
       app.close();
     });
   });
@@ -135,7 +145,7 @@ describe("native-network-logs arms capture through the blueprint", () => {
       await settle();
 
       const after = await connectApp(api.socketPath, BUNDLE);
-      await vi.waitFor(() => expect(after.received).toContain(ACTIVATE));
+      await vi.waitFor(() => expect(after.received.some(isEnable)).toBe(true));
       after.close();
     });
   });
@@ -149,11 +159,11 @@ describe("native-network-logs arms capture through the blueprint", () => {
       await settle();
 
       const after = await connectApp(api.socketPath, BUNDLE);
-      await vi.waitFor(() => expect(after.received).toContain(ACTIVATE));
+      await vi.waitFor(() => expect(after.received.some(isEnable)).toBe(true));
 
       const next = await callTool(api);
       expect(next).toMatchObject({ status: "ok" });
-      expect((next as { note?: string }).note).toBeUndefined();
+      expect((next as { header: string }).header).not.toMatch(/were not recorded/);
       after.close();
     });
   });
@@ -166,13 +176,13 @@ describe("native-network-logs arms capture through the blueprint", () => {
       const err = await callTool(api, SYSTEM_APP).catch((e: unknown) => e);
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE);
       await settle();
-      expect(connected.received).not.toContain(ACTIVATE);
+      expect(connected.received.some(isEnable)).toBe(false);
       connected.close();
       await settle();
 
       // Nor at a later launch.
       const relaunched = await connectApp(api.socketPath, SYSTEM_APP);
-      expect(relaunched.received).not.toContain(ACTIVATE);
+      expect(relaunched.received.some(isEnable)).toBe(false);
       relaunched.close();
     });
   });

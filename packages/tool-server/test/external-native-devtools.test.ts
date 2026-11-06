@@ -61,7 +61,12 @@ async function startLentAgent(options: { deferHandshake?: boolean } = {}): Promi
       const message = JSON.parse(raw);
       received.push(message);
 
-      /** Answer `ViewInspector` RPCs the way the agent in the app would. */
+      /** Answer CDP requests and `ViewInspector` RPCs the way the agent in the app would. */
+      if (message.type === "CDP") {
+        socket.write(
+          JSON.stringify({ payload: { id: message.payload.id, result: {} }, type: "CDP" }) + "\n"
+        );
+      }
       if (message.type === "ViewInspector") {
         socket.write(
           JSON.stringify({
@@ -282,13 +287,13 @@ describe("a provider that lends its native-devtools agent", () => {
     agent.handshake();
     await waitForConnectedBundle(instance.api);
 
-    const first = (await call()) as { status: string; note?: string };
+    const first = (await call()) as { status: string; header: string };
     expect(first.status).toBe("ok");
-    expect(first.note).toMatch(/were not recorded/);
-    expect(first.note).not.toMatch(/restart-app/);
+    expect(first.header).toMatch(/were not recorded/);
+    expect(first.header).not.toMatch(/restart-app/);
 
-    const second = (await call()) as { note?: string };
-    expect(second.note).toBeUndefined();
+    const second = (await call()) as { header: string };
+    expect(second.header).not.toMatch(/were not recorded/);
 
     await instance.dispose();
     await agent.close();

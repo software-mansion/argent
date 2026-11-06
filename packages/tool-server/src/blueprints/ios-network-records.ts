@@ -1,0 +1,302 @@
+import { randomBytes } from "node:crypto";
+import { STATUS_CODES } from "node:http";
+import {
+  MAX_LAYER_ID_CHARS,
+  MAX_RECORDS,
+  NOT_RECONNECTED,
+  PROCESS_ENDED,
+  RECORD_CHARS_BUDGET,
+  asObject,
+  asString,
+  capString,
+  deviceKeyOf,
+  headerMap,
+  isMetroTraffic,
+  isOpen,
+  recordSize,
+  type NativeNetworkRecord,
+} from "../utils/native-network-record";
+
+/**
+ * A tag per tool-server start, so an id from before a restart rarely names
+ * another request: two starts share a tag 1 time in 65536.
+ */
+const RUN_TAG = randomBytes(2).toString("hex");
+
+export const IOS_NATIVE_REQUEST_ID = /^ios-[0-9a-f]{4}-\d+$/;
+
+/** Shared by every store of the tool-server, so ids never repeat across apps or devices. */
+let nextRecordNumber = 1;
+
+export interface IosNetworkCaptureState {
+  /** The app's live connection acknowledged Network.enable. */
+  armed: boolean;
+  /** The process of the live connection, once the host has read it. */
+  pid?: number;
+  /** Why the live connection is not armed yet. */
+  note?: string;
+}
+
+/** What a reader of one app's iOS native records sees. */
+export interface IosNetworkRecords {
+  state(): IosNetworkCaptureState;
+  /** The listed records, oldest first, without Metro's own traffic on `metroPort`. */
+  records(metroPort: number): NativeNetworkRecord[];
+  record(id: string): NativeNetworkRecord | undefined;
+  /** Hides every record from the listing; ids still resolve. */
+  clear(): void;
+}
+
+/** What the host learned about the app after one of its connections closed. */
+export interface ClosedConnectionCheck {
+  /** A newer connection of the same app exists. */
+  superseded: boolean;
+  /** Whether the app runs now; undefined when the host could not tell. */
+  running?: boolean;
+  /** The pid of the running process, when the host could read it. */
+  runningPid?: number;
+  /** The pid of the closed connection's process, when the host had read it. */
+  connectionPid?: number;
+}
+
+export interface IosNetworkRecordStore extends IosNetworkRecords {
+  /** Folds one event that came in on `connection` into its request's record. */
+  fold(connection: number, method: string, params: unknown): void;
+  hasOpenRecords(connection: number): boolean;
+  /**
+   * Fails the open records of a connection that closed. A connection does not
+   * come back for the same process, so its open records never settle.
+   */
+  connectionClosed(connection: number, check: ClosedConnectionCheck): void;
+}
+
+/**
+ * One app's records. They belong to the app, not to a connection, so a
+ * reconnect and a relaunch keep the history. `state` reads the app's live
+ * connection, which the native-devtools service owns.
+ */
+export function createIosNetworkRecords(
+  state: () => IosNetworkCaptureState
+): IosNetworkRecordStore {
+  const records: NativeNetworkRecord[] = [];
+  let recordChars = 0;
+  const recordSizes = new WeakMap<NativeNetworkRecord, number>();
+  const byId = new Map<string, NativeNetworkRecord>();
+  /** Keyed on the connection and the request id the agent sent. */
+  const byLayerId = new Map<string, NativeNetworkRecord>();
+  const cleared = new WeakSet<NativeNetworkRecord>();
+  const startArrivals = new WeakMap<NativeNetworkRecord, number>();
+
+  const keyOf = (connection: number, layerId: string): string => `${connection}:${layerId}`;
+
+  function startRecord(connection: number, layerId: string, p: Record<string, unknown>): void {
+    const req = asObject(p.request);
+    const startedAt =
+      typeof p.wallTime === "number"
+        ? p.wallTime * 1000
+        : typeof p.timestamp === "number"
+          ? p.timestamp * 1000
+          : Date.now();
+    const postData = req.postData;
+    const record: NativeNetworkRecord = {
+      id: `ios-${RUN_TAG}-${nextRecordNumber++}`,
+      layer: "ios-native",
+      layerId,
+      connection,
+      state: "pending",
+      request: {
+        url: capString(asString(req.url)),
+        method: capString(asString(req.method), 100) || "GET",
+        headers: headerMap(req.headers),
+        ...(req.hasPostData === true || (typeof postData === "string" && postData.length > 0)
+          ? { hasPostData: true }
+          : {}),
+      },
+      timing: { startedAt: Math.round(startedAt) },
+    };
+    byLayerId.set(keyOf(connection, layerId), record);
+    startArrivals.set(record, performance.now());
+    records.push(record);
+    byId.set(record.id, record);
+    resize(record);
+  }
+
+  /** The duration the app measured, else the time between the first and the last event. */
+  function setDuration(record: NativeNetworkRecord, p: Record<string, unknown>): void {
+    const measured = p.nativeDevtoolsDurationMs;
+    if (typeof measured === "number" && Number.isFinite(measured) && measured >= 0) {
+      record.timing.durationMs = Math.round(measured);
+      return;
+    }
+    const arrived = startArrivals.get(record);
+    if (arrived !== undefined) record.timing.durationMs = Math.round(performance.now() - arrived);
+  }
+
+  /** Re-measures a record after it grew, and evicts the oldest past either bound. */
+  function resize(record: NativeNetworkRecord): void {
+    if (!byId.has(record.id)) return;
+    const size = recordSize(record);
+    recordChars += size - (recordSizes.get(record) ?? 0);
+    recordSizes.set(record, size);
+    while (
+      records.length > MAX_RECORDS ||
+      (records.length > 1 && recordChars > RECORD_CHARS_BUDGET)
+    ) {
+      evict(records.shift()!);
+    }
+  }
+
+  function evict(record: NativeNetworkRecord): void {
+    const key = keyOf(record.connection, record.layerId);
+    if (byLayerId.get(key) === record) byLayerId.delete(key);
+    byId.delete(record.id);
+    recordChars -= recordSizes.get(record) ?? 0;
+    recordSizes.delete(record);
+  }
+
+  return {
+    state,
+
+    fold(connection, method, params) {
+      if (typeof params !== "object" || params === null) return;
+      const p = params as Record<string, unknown>;
+      const layerId = typeof p.requestId === "string" ? p.requestId : null;
+      if (!layerId || layerId.length > MAX_LAYER_ID_CHARS) return;
+
+      if (method === "Network.requestWillBeSent") {
+        // A redirect hop of a request already recorded, not a new request.
+        if (p.redirectResponse !== undefined && p.redirectResponse !== null) return;
+        startRecord(connection, layerId, p);
+        return;
+      }
+      const record = byLayerId.get(keyOf(connection, layerId));
+      if (!record) return;
+      switch (method) {
+        case "Network.responseReceived": {
+          const r = asObject(p.response);
+          const status = typeof r.status === "number" ? r.status : 0;
+          record.state = "headers";
+          record.response = {
+            // The URL of the final response, after any redirects.
+            url: capString(asString(r.url)) || record.request.url,
+            status,
+            statusText: STATUS_CODES[status] ?? "",
+            headers: headerMap(r.headers),
+            mimeType: capString(asString(r.mimeType)),
+          };
+          if (typeof p.type === "string") record.resourceType = capString(p.type, 100);
+          break;
+        }
+        case "Network.loadingFinished":
+          // A request in flight at a clear lists again once it settles, so
+          // polling with clear sees it finish.
+          cleared.delete(record);
+          record.state = "complete";
+          if (typeof p.encodedDataLength === "number")
+            record.encodedDataLength = p.encodedDataLength;
+          setDuration(record, p);
+          break;
+        case "Network.loadingFailed":
+          cleared.delete(record);
+          record.state = "failed";
+          record.errorText = capString(asString(p.errorText)) || "Unknown error";
+          setDuration(record, p);
+          break;
+        default:
+          // Body chunks and anything else add nothing to the record.
+          return;
+      }
+      resize(record);
+    },
+
+    hasOpenRecords: (connection) =>
+      records.some((record) => record.connection === connection && isOpen(record)),
+
+    connectionClosed(connection, check) {
+      const ended =
+        check.superseded ||
+        check.running === false ||
+        (check.runningPid !== undefined &&
+          check.connectionPid !== undefined &&
+          check.runningPid !== check.connectionPid);
+      // Collected first: re-measuring a record can evict the oldest, which
+      // would shift the array under a loop over it and skip a record.
+      const open = records.filter((r) => r.connection === connection && isOpen(r));
+      for (const record of open) {
+        record.state = "failed";
+        record.errorText = ended ? PROCESS_ENDED : NOT_RECONNECTED;
+        cleared.delete(record);
+      }
+      for (const record of open) resize(record);
+    },
+
+    records: (port) =>
+      records.filter((r) => !cleared.has(r) && !isMetroTraffic(r.request.url, port)),
+
+    record: (id) => byId.get(id),
+
+    clear() {
+      // Also hides the records the clearing call did not return because of
+      // its limit. A request in flight keeps folding its events and lists
+      // again once it settles.
+      for (const record of records) cleared.add(record);
+    },
+  };
+}
+
+/**
+ * One native-devtools service's view of its device: the apps capture is on
+ * for, and the records of every app that connected. Both are live, owned by
+ * the service.
+ */
+interface IosNetworkCaptures {
+  readonly udid: string;
+  readonly bundleIds: ReadonlySet<string>;
+  readonly stores: ReadonlyMap<string, IosNetworkRecords>;
+}
+
+/**
+ * Every native-devtools service, so a reader that knows only an `ios-…` id or
+ * a device can find the records without creating a service nobody asked for.
+ */
+const liveCaptures = new Set<IosNetworkCaptures>();
+
+/** Registers a service's captures until the returned function is called. */
+export function registerIosNetworkCaptures(captures: IosNetworkCaptures): () => void {
+  liveCaptures.add(captures);
+  return () => {
+    liveCaptures.delete(captures);
+  };
+}
+
+/** Ids are unique per tool-server, so the device that recorded one does not matter. */
+export function findIosNativeRecord(
+  id: string
+): { records: IosNetworkRecords; record: NativeNetworkRecord } | undefined {
+  for (const captures of liveCaptures) {
+    for (const records of captures.stores.values()) {
+      const record = records.record(id);
+      if (record) return { records, record };
+    }
+  }
+  return undefined;
+}
+
+/** Bundle ids with native network capture on for the device. */
+export function liveIosNetworkCaptures(deviceId: string): string[] {
+  const key = deviceKeyOf(deviceId);
+  const bundleIds = new Set<string>();
+  for (const captures of liveCaptures) {
+    if (deviceKeyOf(captures.udid) !== key) continue;
+    for (const bundleId of captures.bundleIds) bundleIds.add(bundleId);
+  }
+  return [...bundleIds].sort();
+}
+
+/** Udids of the devices with native network capture on for the app. */
+export function liveIosNetworkCaptureDevices(bundleId: string): string[] {
+  const udids = [...liveCaptures]
+    .filter((captures) => captures.bundleIds.has(bundleId))
+    .map((captures) => captures.udid);
+  return [...new Set(udids)].sort();
+}
