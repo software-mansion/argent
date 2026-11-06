@@ -94,11 +94,14 @@ async function connectAndCountOpenSockets(): Promise<number> {
 }
 
 describe("debugger-connect failing partway", () => {
-  it("closes the socket it opened", async () => {
-    rejected = "Runtime.enable";
-    fusebox = false;
-    expect(await connectAndCountOpenSockets()).toBe(0);
-  });
+  it.each(["Runtime.enable", "Debugger.enable", "Debugger.setPauseOnExceptions"])(
+    "closes the socket it opened when %s fails",
+    async (method) => {
+      rejected = method;
+      fusebox = false;
+      expect(await connectAndCountOpenSockets()).toBe(0);
+    }
+  );
 
   it("fails on a Fusebox target that rejects Runtime.addBinding", async () => {
     // A modern host rejects it only while it has no JS instance (mid-reload);
