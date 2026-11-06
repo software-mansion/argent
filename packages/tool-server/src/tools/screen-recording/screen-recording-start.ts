@@ -33,6 +33,12 @@ const POINTER_REQUEST_TIMEOUT_MS = 2_000;
 const RECORDING_START_TIMEOUT_MS = 10_000;
 const RECORDING_STOP_TIMEOUT_MS = 60_000;
 
+const capability = {
+  apple: { simulator: true },
+  appleRemote: { simulator: true },
+  android: { emulator: true, device: true, unknown: true },
+} as const;
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -44,7 +50,7 @@ const zodSchema = z.object({
     .max(MAX_TIME_LIMIT_SECONDS)
     .optional()
     .describe(
-      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}, max ${MAX_TIME_LIMIT_SECONDS}). ` +
+      `Auto-stop cap in seconds (default ${DEFAULT_TIME_LIMIT_SECONDS}). ` +
         `Set it to slightly more than the interaction you plan to capture.`
     ),
   trimStatic: z
@@ -53,34 +59,30 @@ const zodSchema = z.object({
     .describe(
       "Default true. Collapse stretches where the screen does not change: the first second of " +
         "each still stretch is kept, then unchanged frames are dropped until something moves again, " +
-        "so a long recording with brief activity comes back short instead of full of dead air " +
-        "(on a remote simulator the still stretches are removed whole). " +
-        "The returned durationMs is the trimmed length; wallClockMs/trimmedMs report what was removed. " +
+        "so a long recording with brief activity comes back short instead of full of dead air. " +
         "Set false to keep a faithful real-time recording."
     ),
   showTouches: z
     .boolean()
     .optional()
     .describe(
-      "Default true. Draw simulator-server's touch visualizer into the recording: a pulse marks each " +
-        "tap, a comet trail follows swipes and drags, and paired markers show two-finger pinch/rotate, so " +
-        "the video makes clear where every interaction landed. On remote (`remote:`) simulators the overlay " +
-        "is drawn on the runner and is also visible in the live stream until the recording stops. " +
-        "Set false to record the raw screen with no overlay."
+      "Default true. Draw an on-screen marker for every tap, swipe, drag, pinch and rotate into the " +
+        "video, so it shows where each interaction landed. Set false to record the raw screen with no overlay."
     ),
 });
-
-const capability = {
-  apple: { simulator: true },
-  appleRemote: { simulator: true },
-  android: { emulator: true, device: true, unknown: true },
-} as const;
 
 export function createScreenRecordingStartTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, StartRecordingResult> {
   return {
     id: "screen-recording-start",
+    description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
+The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
+Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
+Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
+Fails if a recording is already running on the device, the device is not booted, the host has to encode the video and ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
+    zodSchema,
+    searchHint: "record video screen capture movie mp4 start filming screencast",
     interaction: {
       startedMsg: () => "Starting screen recording",
       completedMsg: () => "Started screen recording",
@@ -91,16 +93,6 @@ export function createScreenRecordingStartTool(
     // A remote start first ends a leftover runner-side recording, which can
     // take minutes, past the 30s MCP fetch timeout.
     longRunning: true,
-    description: `Start recording the device screen to a video file (h264 mp4, 30fps at the device's native resolution).
-By default stretches where the screen does not change are trimmed out (see trimStatic), so a long session with only brief activity comes back as a short clip instead of minutes of dead air.
-By default every tap, swipe, drag, pinch and rotate is drawn into the video as an on-screen touch marker (see showTouches), so the recording shows where each interaction landed.
-The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
-Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
-Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-On a remote (\`remote:\`) simulator the recording is made on the runner and downloaded by \`screen-recording-stop\`; trimming and the watermark are applied locally afterwards, and are skipped with a warning if ffmpeg is not installed rather than failing the recording.
-Fails if a recording is already running on the device, the device is not booted, the host has to encode the video and ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
-    searchHint: "record video screen capture movie mp4 start filming screencast",
-    zodSchema,
     // Resolved inside execute, not declared eagerly: a tvOS udid classifies as
     // iOS by shape, so an eager service would spawn simulator-server for a
     // device it cannot drive and hang on its ready timeout (as in `screenshot`).

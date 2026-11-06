@@ -11,6 +11,7 @@ import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
+import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
 import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
 import { listHarmonyInstances, listHarmonyHdcTargets } from "../../utils/harmony-devices";
@@ -118,10 +119,12 @@ type ListDevicesResult = {
   devices: ListedDevice[];
   avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Rules for a provider's device, present only when one is listed, and how to
-   * reach the adb server, present only when it is not adb's default. Most
-   * installs need neither and the description is read once per session, so a
-   * provider appearing later would miss it. This is re-read per call.
+   * Why local iOS targets are missing, present only while Xcode's component
+   * install is pending; rules for a provider's device, present only when one is
+   * listed; and how to reach the adb server, present only when it is not adb's
+   * default. Most installs need none of them, and the description is read once
+   * per session, so a state that appears later would be missed. This is re-read
+   * per call.
    */
   hint?: string;
 };
@@ -312,6 +315,22 @@ const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
+  description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, <flag:harmonyos>HarmonyOS phones and emulators, </flag:harmonyos>and Vega (Fire TV) devices in one place.
+Call this at the start of a session to pick a target id ('udid' for iOS<flag:harmonyos>/HarmonyOS</flag:harmonyos> entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
+Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', <flag:harmonyos>'harmony', </flag:harmonyos>or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
+<flag:harmonyos>HarmonyOS entries carry a 'kind': 'device' is a target connected over \`hdc\` (a phone on USB, or a booted emulator) and is what the interaction tools drive; 'emulator' is a DevEco Studio instance, running or not, and is what boot-device starts. A running emulator appears under both, exactly as a running Android AVD appears in both 'avds' and the device list. Instance state is 'running'/'stopped'; connected-target state is 'Connected'/'Offline'.
+</flag:harmonyos>Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone on USB / wireless adb). Physical phones use the same interaction tools as emulators and need no boot-device (just connect the phone with USB debugging authorised).
+Physical iPhones appear as iOS entries with kind 'device' (no iPads); no boot-device. State 'connected' = cabled and usable; 'paired' = not reachable over USB, never auto-bound.
+TV targets are tagged with runtimeKind 'tv' (Apple TV simulators, Android TV / leanback devices). They are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses, and \`keyboard\` to type, rather than the coordinate/gesture tools.
+iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are tagged with their 'deviceSet' path; the same tools drive them by udid, but they run headless (no Simulator.app window).
+A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'; use the \`fold\` tool to fold or unfold it.
+Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
+Booted/ready devices are listed first, but use a physical phone (kind 'device') only when the user asks for one. A platform is silently omitted when its CLI is not found; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
+  zodSchema,
+  alwaysLoad: true,
+  searchHint:
+    "list devices simulators emulators avd serial udid ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>app fire tv session start",
+  readOnly: true,
   interaction: {
     startedMsg: () => "Listing devices",
     completedMsg: ({ result }) => {
@@ -321,25 +340,10 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
     },
     failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
   },
-  description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, <flag:harmonyos>HarmonyOS phones and emulators, </flag:harmonyos>and Vega (Fire TV) devices in one place.
-Use at the start of a session to pick a target id ('udid' for iOS<flag:harmonyos>/HarmonyOS</flag:harmonyos> entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
-Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', <flag:harmonyos>'harmony', </flag:harmonyos>or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
-<flag:harmonyos>HarmonyOS entries carry a 'kind': 'device' is a target connected over \`hdc\` (a phone on USB, or a booted emulator) and is what the interaction tools drive; 'emulator' is a DevEco Studio instance, running or not, and is what boot-device starts. A running emulator appears under both, exactly as a running Android AVD appears in both 'avds' and the device list. Instance state is 'running'/'stopped'; connected-target state is 'Connected'/'Offline'.
-</flag:harmonyos>Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb). Physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
-Physical iPhones appear as iOS entries with kind 'device' (no iPads); no boot-device. State 'connected' = cabled and usable; 'paired' = not reachable over USB, never auto-bound.
-TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android TV / leanback devices on Android). These are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses (up/down/left/right/select/back/menu/home), and \`keyboard\` to type, rather than the coordinate/gesture tools.
-iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
-A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'. Use the \`fold\` tool to fold or unfold it.
-Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
-Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
-  alwaysLoad: true,
-  searchHint:
-    "list devices simulators emulators avd serial udid ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>app fire tv session start",
-  readOnly: true,
-  zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
     const harmonyEnabled = isHarmonyEnabled();
+    const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
     // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
     // the "no branch can hang the fan-out" guarantee universal. The deadline only
     // substitutes a fallback on *slowness*; a rejection still propagates, so the
@@ -356,7 +360,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       harmonyTargets,
       external,
     ] = await Promise.all([
-      withDeadline(listIosSimulators(), [], "ios"),
+      xcodeInstallPending.includes("simctl") ? [] : withDeadline(listIosSimulators(), [], "ios"),
       withDeadline(
         listIosPhysicalDevices().catch(() => []),
         [],
@@ -499,6 +503,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
 
     const adbPrefix = adbCommandPrefix(process.env);
     const hints = [
+      ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
       ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
       ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
     ];

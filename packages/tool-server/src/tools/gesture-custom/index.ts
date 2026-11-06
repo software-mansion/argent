@@ -19,47 +19,6 @@ import { interpolateEvents } from "../../utils/gesture-utils";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const eventSchema = z.object({
-  type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
-  x: z.number().min(0).max(1).describe("Normalized x 0.0–1.0 (not pixels; same as tap/swipe)"),
-  y: z.number().min(0).max(1).describe("Normalized y 0.0–1.0 (not pixels; same as tap/swipe)"),
-  x2: z
-    .number()
-    .min(0)
-    .max(1)
-    .optional()
-    .describe("Second touch x for two-finger gestures: normalized 0.0–1.0 (not pixels)"),
-  y2: z
-    .number()
-    .min(0)
-    .max(1)
-    .optional()
-    .describe("Second touch y for two-finger gestures: normalized 0.0–1.0 (not pixels)"),
-  delayMs: z
-    .number()
-    .optional()
-    .describe("Delay before this event in milliseconds (default 16ms ≈ 60fps)"),
-});
-
-const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
-  events: z
-    .array(eventSchema)
-    .describe(
-      "Sequence of touch events; x/y (and optional second touch) are normalized 0.0–1.0, not pixels"
-    ),
-  interpolate: z
-    .number()
-    .optional()
-    .describe(
-      "Number of intermediate Move events to auto-insert between each pair of consecutive events. " +
-        "Smooths out gestures by linearly interpolating both primary (x,y) and secondary (x2,y2) coordinates. " +
-        "The delay is split evenly across interpolated frames. Default: no interpolation."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 interface Result {
   events: number;
   /**
@@ -188,21 +147,40 @@ async function runOnIosDevice(
   return { events: events.length, ...(reactivated ? { reactivated: true as const } : {}) };
 }
 
+const eventSchema = z.object({
+  type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
+  x: z.number().min(0).max(1).describe("Touch x."),
+  y: z.number().min(0).max(1).describe("Touch y."),
+  x2: z.number().min(0).max(1).optional().describe("Second finger x, for two-finger gestures."),
+  y2: z.number().min(0).max(1).optional().describe("Second finger y, for two-finger gestures."),
+  delayMs: z
+    .number()
+    .optional()
+    .describe("Delay before this event in milliseconds (default 16ms ≈ 60fps)"),
+});
+
+const zodSchema = z.object({
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  events: z.array(eventSchema).describe("Touch events, dispatched in order."),
+  interpolate: z
+    .number()
+    .optional()
+    .describe(
+      "Number of Move events to insert between each pair of consecutive events, linearly interpolating " +
+        "both x,y and x2,y2 and splitting the delay evenly, for a smooth gesture. Default: no interpolation."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
-  interaction: {
-    startedMsg: () => "Performing custom gesture",
-    completedMsg: () => "Performed custom gesture",
-    failedMsg: ({ failureSignal }) =>
-      `Failed to perform custom gesture: ${failureSignal.error_code}`,
-  },
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
 For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
 For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
-All x/y values are normalized 0.0–1.0 (screen fractions, not pixels). delayMs controls the delay before each event (default 16ms ≈ 60fps).
-Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
-Physical iOS: a Down, any Moves, then an Up, with an optional second finger as x2/y2. Paths need the app drawn in portrait. A plain Down then Up keeps its hold semantics: same point = press-hold, other point = drag (Up delayMs = rest before the move), and one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Anything else (more Moves, a second finger) plays as timed paths, each event waiting its delayMs after the one before. The second finger touches down at the first event with x2/y2 and lifts after the last.
+All x/y values are fractions of the screen width/height (not pixels).
+Physical iOS: a Down, any Moves, then an Up; x2/y2 adds a second finger. A plain Down then Up: same point = press-hold, other point = drag (Up delayMs = rest before the move); one Move at the Down point between them = long-press pickup (Move delayMs = hold, Up delayMs = move time). Any other train plays as timed paths, each event waiting its delayMs, and needs the app drawn in portrait.
 Returns { events: number } with the total count of events dispatched. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the target device is not booted or an event type is invalid.
 
 Example long-press at center:
@@ -221,7 +199,16 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
            {"type":"Up","x":0.2,"y":0.5,"x2":0.8,"y2":0.5}]
   interpolate: 10`,
   zodSchema,
+  interaction: {
+    startedMsg: () => "Performing custom gesture",
+    completedMsg: () => "Performed custom gesture",
+    failedMsg: ({ failureSignal }) =>
+      `Failed to perform custom gesture: ${failureSignal.error_code}`,
+  },
   capability,
+  // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,
+  // whose abort replays the call: the gesture would land once per replay.
+  longRunning: true,
   // Declare the runner only for a train execute can play. A rejected train must not pay a runner cold start.
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
