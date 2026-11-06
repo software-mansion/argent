@@ -1117,6 +1117,91 @@ describe("the run lifecycle, on the real session and scripts", () => {
       ts.rig.intercept = rejectCall("Profiler.stop");
     };
   });
+
+  describe("a teardown of a run another session replaced", () => {
+    it("leaves the other session's recording alone, and records the takeover", async () => {
+      const app = makeApp();
+      const replaced = toolServer(app, PORT);
+      const taker = toolServer(app, OTHER_PORT);
+      await replaced.start();
+      await taker.start(true);
+      const takerRun = app.owner()!.sessionId;
+      replaced.rig.sent.length = 0;
+
+      await replaced.teardown();
+
+      expect(replaced.stoppedApp()).toBe(false);
+      expect(app.recording()).toBe(true);
+      expect(app.sampling).toBe(true);
+      expect(app.owner()?.sessionId).toBe(takerRun);
+      expect(getLostProfilerRun(PORT, DEVICE)).toMatchObject({
+        cause: "taken_over",
+        takenOverBy: takerRun,
+      });
+    });
+
+    it("stops the sampler when the recording has no owner, as a stop does", async () => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.run("__ri.stopProfiling(); __ri.startProfiling();");
+      ts.rig.sent.length = 0;
+
+      await ts.teardown();
+
+      expect(app.recording()).toBe(true);
+      expect(app.sampling).toBe(false);
+      expect(getLostProfilerRun(PORT, DEVICE)).toMatchObject({
+        cause: "taken_over",
+        takenOverBy: null,
+      });
+    });
+
+    it("stops the run when its own session still owns it", async () => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+
+      await ts.teardown();
+
+      expect(app.recording()).toBe(false);
+      expect(app.sampling).toBe(false);
+      expect(getLostProfilerRun(PORT, DEVICE)?.cause).toBe("session_torn_down");
+    });
+
+    it("stops as before when the owner cannot be read", async () => {
+      const app = makeApp();
+      const replaced = toolServer(app, PORT);
+      const taker = toolServer(app, OTHER_PORT);
+      await replaced.start();
+      await taker.start(true);
+      replaced.rig.intercept = async (_m, expression) => {
+        if (expression === READ_STATE_SCRIPT) throw new Error("no reply");
+        return undefined;
+      };
+
+      await replaced.teardown();
+
+      expect(getLostProfilerRun(PORT, DEVICE)?.cause).toBe("session_torn_down");
+      expect(app.recording()).toBe(false);
+    });
+
+    it("does not try the app when the connection dropped", async () => {
+      const app = makeApp();
+      const replaced = toolServer(app, PORT);
+      const taker = toolServer(app, OTHER_PORT);
+      await replaced.start();
+      await taker.start(true);
+      replaced.rig.evaluated.length = 0;
+
+      replaced.drop();
+      await replaced.settled();
+
+      expect(replaced.rig.evaluated).toEqual([]);
+      expect(getLostProfilerRun(PORT, DEVICE)?.cause).toBe("cdp_disconnected");
+      expect(app.recording()).toBe(true);
+    });
+  });
 });
 
 /** Holds the next app state read of the call that starts now. */

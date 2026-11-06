@@ -13,6 +13,7 @@ import {
   FIBER_ROOT_TRACKER_SCRIPT,
   STOP_FOR_TAKEOVER_SCRIPT,
 } from "../utils/react-profiler/scripts";
+import { readTakeover } from "../utils/react-profiler/session-ownership";
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
@@ -262,22 +263,31 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         // is nothing left there to stop, and the new runtime may not answer.
         if (!runtimeReloaded && (state.profilingActive || state.sessionId !== null)) {
           state.profilingActive = false;
-          // A dropped connection gets here first: the debugger's own listener
-          // tears this node down before `onDisconnected` runs, so only the
-          // client can still tell a drop from a scoped teardown.
-          recordLostProfilerRun(
-            state,
-            cdp.isConnected() ? "session_torn_down" : "cdp_disconnected"
-          );
-          await cdp
-            .send("Runtime.evaluate", {
-              expression: STOP_FOR_TAKEOVER_SCRIPT,
-              returnByValue: true,
-            })
-            .catch(warnOnError("STOP_FOR_TAKEOVER_SCRIPT"));
-          // `Profiler.disable` is not documented to end the Hermes sampler
-          // `react-profiler-start` started.
-          await cdp.send("Profiler.stop").catch(ignore);
+          const takeover = cdp.isConnected() ? await readTakeover(cdp, state) : undefined;
+          if (takeover) {
+            // The app's recording is another session's. A recording with no
+            // owner record owns no sampler, so the one this run started would
+            // run on: see react-profiler-stop.
+            recordLostProfilerRun(state, "taken_over", takeover.by);
+            if (takeover.by === null) await cdp.send("Profiler.stop").catch(ignore);
+          } else {
+            // A dropped connection gets here first: the debugger's own listener
+            // tears this node down before `onDisconnected` runs, so only the
+            // client can still tell a drop from a scoped teardown.
+            recordLostProfilerRun(
+              state,
+              cdp.isConnected() ? "session_torn_down" : "cdp_disconnected"
+            );
+            await cdp
+              .send("Runtime.evaluate", {
+                expression: STOP_FOR_TAKEOVER_SCRIPT,
+                returnByValue: true,
+              })
+              .catch(warnOnError("STOP_FOR_TAKEOVER_SCRIPT"));
+            // `Profiler.disable` is not documented to end the Hermes sampler
+            // `react-profiler-start` started.
+            await cdp.send("Profiler.stop").catch(ignore);
+          }
         }
         await cdp.send("Profiler.disable").catch(ignore);
       },

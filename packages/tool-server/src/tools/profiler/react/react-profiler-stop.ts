@@ -21,14 +21,12 @@ import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/deb
 import {
   STOP_AND_READ_SCRIPT,
   RESOLVE_FIBER_META_SCRIPT,
-  READ_STATE_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
 import { lastRunText } from "../../../utils/react-profiler/last-run";
 import {
+  readTakeover,
   STOP_IN_PROGRESS_NOTE,
-  type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
-import type { CDPClient } from "../../../utils/debugger/cdp-client";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
@@ -145,32 +143,6 @@ export function flattenProfilingData(
   }
 
   return { commits, totalCommits: flatCommitIndex, unattributedByCommit };
-}
-
-/**
- * Whether another session started a run over this one in the app: the new
- * owner's session id, or null when the run there has no owner record. Returns
- * undefined while this run still owns the app's recording, when nothing is
- * recording, or when the state cannot be read; stop then proceeds as before.
- */
-async function readTakeover(
-  cdp: CDPClient,
-  ownSessionId: string | null
-): Promise<string | null | undefined> {
-  if (ownSessionId === null) return undefined;
-  try {
-    const raw = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
-    if (!raw) return undefined;
-    const state = JSON.parse(raw) as {
-      isRunning?: boolean;
-      owner?: ProfilerSessionOwner | null;
-    };
-    if (state.isRunning !== true) return undefined;
-    if (state.owner?.sessionId === ownSessionId) return undefined;
-    return state.owner?.sessionId ?? null;
-  } catch {
-    return undefined;
-  }
 }
 
 function stopInProgressError(): FailureError {
@@ -292,22 +264,22 @@ Fails if no active profiling session exists, another stop is running, the CDP co
       // Another session may have started a run over this one (react-profiler-start
       // with force, or once this run's heartbeat went stale). Stopping now would
       // stop their recording and read their data as this run's.
-      const takenOverBy = await readTakeover(cdp, api.sessionId);
-      if (takenOverBy !== undefined) {
+      const takeover = await readTakeover(cdp, api);
+      if (takeover) {
         // This run is over: record why, and leave the app and the shared
         // Hermes sampler to the session that owns them now. A recording with
         // no owner record owns no sampler: a DevTools client outside argent
         // never sends Hermes `Profiler.stop`, so the one this run started
         // would run on.
-        recordLostProfilerRun(api, "taken_over", takenOverBy);
-        if (takenOverBy === null) await cdp.send("Profiler.stop").catch(() => {});
+        recordLostProfilerRun(api, "taken_over", takeover.by);
+        if (takeover.by === null) await cdp.send("Profiler.stop").catch(() => {});
         api.profilingActive = false;
         api.sessionId = null;
         api.ownerToolServerPid = null;
         throw new FailureError(
           `This profiling run was taken over by ${
-            takenOverBy
-              ? `session ${takenOverBy}`
+            takeover.by
+              ? `session ${takeover.by}`
               : "a recording with no owner record (a DevTools client outside argent)"
           }, which is still recording. Its data was discarded at the takeover, so there is ` +
             "nothing to collect, and the other recording was left running. A takeover happens when " +
