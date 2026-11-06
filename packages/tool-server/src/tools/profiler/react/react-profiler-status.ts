@@ -11,7 +11,10 @@ import {
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
   READ_STATE_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
-import type { ProfilerSessionOwner } from "../../../utils/react-profiler/session-ownership";
+import {
+  STOP_IN_PROGRESS_NOTE,
+  type ProfilerSessionOwner,
+} from "../../../utils/react-profiler/session-ownership";
 import {
   lastRunText,
   lostRunCauseText,
@@ -39,7 +42,7 @@ type ReadStateResult =
     };
 
 /**
- * - `active`: this tool-server's run is recording.
+ * - `active`: this tool-server's run is recording, or a stop is collecting it.
  * - `saved`: nothing is recording; the last run was stopped and saved.
  * - `lost`: this tool-server's last run ended without being saved.
  * - `taken_over`: another session is recording, or replaced this tool-server's run.
@@ -128,6 +131,18 @@ export function createReactProfilerStatusTool(
         );
       }
 
+      // Answers without the app, which may be busy with the stop and not reply.
+      const stopInProgress = (): StatusResponse => ({
+        hook_exists: true,
+        renderer_interface_found: true,
+        is_running: true,
+        current_session_id: api.sessionId,
+        current_owner: null,
+        session_status: "active",
+        note: STOP_IN_PROGRESS_NOTE,
+      });
+      if (api.stopping) return stopInProgress();
+
       const cdp = api.cdp;
       if (!cdp.isConnected()) {
         return noRuntime(
@@ -157,6 +172,9 @@ export function createReactProfilerStatusTool(
       }
 
       const state = JSON.parse(stateJson) as ReadStateResult;
+
+      // A stop that began during the reads above reads as one that failed.
+      if (api.stopping) return stopInProgress();
 
       if (!state.hookExists) {
         return noRuntime(

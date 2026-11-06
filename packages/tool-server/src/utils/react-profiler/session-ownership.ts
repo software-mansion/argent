@@ -11,6 +11,11 @@ export interface ProfilerSessionOwner {
 
 export const DEFAULT_STALE_THRESHOLD_MS = 5 * 60_000;
 
+/** react-profiler-start and react-profiler-status, while a stop collects the run. */
+export const STOP_IN_PROGRESS_NOTE =
+  "A react-profiler-stop is collecting this run. Wait for its result before you call " +
+  "react-profiler-start or react-profiler-stop.";
+
 interface StalenessInput {
   owner: ProfilerSessionOwner | null;
   nowEpochMs: number;

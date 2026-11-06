@@ -223,6 +223,8 @@ describe("ReactProfilerSession on a JS reload", () => {
       undefined
     );
     instance.api.profilingActive = true;
+    // A dispose must not treat this as a run to end: the runtime it ran in is gone.
+    instance.api.sessionId = "uuid-run";
     const events = cdpEventsOf(api);
     // What the registry does on `terminated`.
     instance.events.on("terminated", () => void instance.dispose());
@@ -345,6 +347,8 @@ describe("ReactProfilerSession records how a run was lost", () => {
   });
 
   it("records nothing when no run was active", async () => {
+    // `sessionId` set with `profilingActive` off is a failed stop: see
+    // "after a react-profiler-stop failed" in start-stop-ownership.test.ts.
     const { instance, events } = await activeRun([]);
     instance.api.profilingActive = false;
     events.emit("event", "Runtime.executionContextDestroyed", { executionContextId: 1 });

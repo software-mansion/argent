@@ -69,7 +69,7 @@ export function lostRunCauseText(
     case "stop_failed":
       return (
         "a react-profiler-stop, or a react-profiler-start that replaced it, failed partway " +
-        "(see the error it returned; if that react-profiler-stop is still running, wait for its result)"
+        "(see the error it returned)"
       );
     case "ended_in_app":
       return (

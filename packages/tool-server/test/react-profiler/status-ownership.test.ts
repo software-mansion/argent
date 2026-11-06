@@ -77,6 +77,7 @@ function buildApi(opts: {
     detectedArchitecture: null,
     sessionPaths: null as ProfilerSessionPaths | null,
     profilingActive: opts.profilingActive ?? false,
+    stopping: false,
     scriptSources: new Map(),
     anyCompilerOptimized: null,
     hotCommitIndices: null,

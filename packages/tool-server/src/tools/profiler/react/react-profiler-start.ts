@@ -25,6 +25,7 @@ import {
 import {
   classifyStaleness,
   DEFAULT_STALE_THRESHOLD_MS,
+  STOP_IN_PROGRESS_NOTE,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
@@ -93,6 +94,11 @@ interface TakeoverReport {
   reason: "stale" | "unattributed" | "forced" | "own_unsaved";
   heartbeat_age_seconds?: number;
   note: string;
+}
+
+/** What a start answers while a stop collects the run, also with force. */
+function stopInProgress() {
+  return { already_running: true, mine: true, note: STOP_IN_PROGRESS_NOTE };
 }
 
 function describeTakeover(input: {
@@ -242,6 +248,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       }
 
       let api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
+      if (api.stopping) return stopInProgress();
       if (!api.cdp.isConnected()) {
         await disposeAndWait();
         api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
@@ -362,6 +369,10 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         if (err instanceof Error) err.message = withTakeover(err.message);
         throw err;
       };
+
+      // A stop that began while this start awaited the app reads as a run this
+      // tool-server lost, which a start would replace.
+      if (api.stopping) return stopInProgress();
 
       if (state.isRunning) {
         const owner: ProfilerSessionOwner | null = state.owner;
