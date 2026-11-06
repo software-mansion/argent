@@ -97,7 +97,7 @@ describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => 
     [
       "reinstall-app",
       () => reinstallAppTool.execute!({}, { udid: UDID, bundleId: "com.x", appPath: "/a.app" }),
-      ["uninstall", "install"],
+      { uninstall: 30_000, install: 180_000 },
     ],
     [
       "launch-app",
@@ -106,18 +106,20 @@ describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => 
           {},
           { udid: UDID, bundleId: "com.x", launchArgs: ["-a"] }
         ),
-      ["terminate", "launch"],
+      { terminate: 15_000, launch: 30_000 },
     ],
     [
       "restart-app",
       () => createRestartAppTool(fakeRegistry).execute!({}, { udid: UDID, bundleId: "com.x" }),
-      ["terminate", "launch"],
+      { terminate: 15_000, launch: 30_000 },
     ],
-  ])("%s", async (_id, run, subcommands) => {
+  ])("%s", async (_id, run, limits) => {
     await run();
     const simctl = calls.filter((c) => c.cmd === "xcrun" && c.args.includes("simctl"));
-    for (const sub of subcommands) {
-      expect(simctl.some((c) => c.args.includes(sub))).toBe(true);
+    // The messages, descriptions and tools.mdx state these limits.
+    for (const [sub, timeout] of Object.entries(limits)) {
+      const call = simctl.find((c) => c.args.includes(sub));
+      expect(call?.options).toMatchObject({ killSignal: "SIGKILL", timeout });
     }
     for (const c of simctl) {
       expect(c.options?.killSignal).toBe("SIGKILL");

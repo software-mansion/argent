@@ -424,7 +424,10 @@ describe("boot-device — iOS path", () => {
       (e: unknown) => e
     );
 
-    expect(getFailureSignal(err)?.error_code).toBe("BOOT_IOS_SIMCTL_LIST_TIMEOUT");
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "BOOT_IOS_SIMCTL_LIST_TIMEOUT",
+      error_kind: "timeout",
+    });
     expect((err as Error).message).toContain("call boot-device again shortly");
     expect(mockExecFile).not.toHaveBeenCalled();
     expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();

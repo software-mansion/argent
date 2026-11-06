@@ -59,7 +59,7 @@ export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
   id: "open-url",
   description: `Open a URL or URL scheme on the device.
 Use when navigating to a web page or deep-linking into an app. On Chromium, this navigates the primary renderer to the given URL; a URL the renderer does not load in the page, such as tel:, mailto: or an unknown scheme, fails there.
-Cross-platform schemes: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.<flag:harmonyos> HarmonyOS resolves any scheme through \`aa start -U\`.</flag:harmonyos>
+Cross-platform schemes on native devices: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.<flag:harmonyos> HarmonyOS resolves any scheme through \`aa start -U\`.</flag:harmonyos>
 An https:// link opens the native app only if that app is verified for the link's domain (Universal Links / App Links); even then, an iOS simulator may open Safari. To reliably open an installed app, use its custom scheme (scheme://path) or launch-app.
 On a physical iPhone, the app that receives the URL becomes the app under automation.
 Returns { opened, url, note? }. \`note\` explains the routing caveat when a web URL was opened on a native device<flag:harmonyos>; on HarmonyOS every result carries one, since success only means the system accepted the URI</flag:harmonyos>. Fails if no app is registered to handle the URI (iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>) or the renderer rejects the navigation (Chromium).`,
