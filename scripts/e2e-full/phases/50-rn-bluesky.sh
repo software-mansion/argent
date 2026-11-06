@@ -122,7 +122,7 @@ run_phase() {
   if [ -n "$RID" ]; then
     assert_ok "$P" view-network-request-details netdetails "{$D,\"requestId\":\"$RID\"}"
   elif [ "$FETCH_RC" -ne 0 ]; then
-    fail "$P" view-network-request-details netdetails "the harness fetch failed to start (debugger-evaluate rc=$FETCH_RC)"
+    fail "$P" view-network-request-details netdetails "debugger-evaluate of the harness fetch failed (rc=$FETCH_RC), so nothing may have been sent"
   else
     # The fetch above is the harness's own, so a missing id is a capture regression.
     fail "$P" view-network-request-details netdetails "no request id in view-network-logs: $(rt_detail 160)"
