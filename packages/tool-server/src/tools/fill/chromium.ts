@@ -217,7 +217,11 @@ export async function fillChromium(
   // the dialog closes. Connecting touches no field, and a no-op goes first, so
   // a blocked page is sent nothing that edits a field.
   const api = await withTimeoutError(
-    () => registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options),
+    () =>
+      registry.resolveService<ChromiumCdpApi>(ref.urn, {
+        ...ref.options,
+        answerTimeoutMs: PAGE_ANSWER_TIMEOUT_MS,
+      }),
     () => pageNotAnsweringError("fill_chromium_connect")
   );
   await withTimeoutError(

@@ -371,6 +371,15 @@ describe("fill: Chromium", () => {
     expect(calls[1]![2]).toBe(10_000);
   });
 
+  it("bounds a connect by the no-op's 2 s, as a page under a dialog answers no setup step", async () => {
+    const registry = registryWith({ cdp: cdpAnswering({ status: "ok", verified: true }) });
+    await createFillTool(registry).execute({}, { udid: CHROMIUM, text: "hello" });
+    expect(registry.resolveService).toHaveBeenCalledWith(
+      `ChromiumCdp:${CHROMIUM}`,
+      expect.objectContaining({ answerTimeoutMs: 2_000 })
+    );
+  });
+
   it("sends nothing that writes to a page that does not answer the no-op", async () => {
     const cdp = {
       send: vi.fn().mockRejectedValue(cdpError(FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT)),

@@ -23,7 +23,11 @@ import { parseChromiumCdpPort, resolveDevice } from "../utils/device-info";
 
 export const CHROMIUM_CDP_NAMESPACE = "ChromiumCdp";
 
-type ChromiumFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+type ChromiumFactoryOptions = Record<string, unknown> & {
+  device: DeviceInfo;
+  /** See `answerTimeoutMs` on `createChromiumServer`; applies only when this resolve connects. */
+  answerTimeoutMs?: number;
+};
 
 /**
  * `ServiceRef` for a Chromium CDP session. Preferred over hand-building the URN:
@@ -165,7 +169,11 @@ export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> 
       );
     }
 
-    const server = await createChromiumServer({ deviceId: device.id, port });
+    const server = await createChromiumServer({
+      deviceId: device.id,
+      port,
+      answerTimeoutMs: opts?.answerTimeoutMs,
+    });
     const rootDomNodeId = await getDocumentNodeId(server.cdp);
 
     const events = new TypedEventEmitter<ServiceEvents>();
