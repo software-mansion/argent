@@ -54,7 +54,7 @@ function boundaryCtx(flowPath: string): ToolContext {
   return {
     artifacts: new ArtifactStore(),
     fileInputs: {
-      flow_path: {
+      e2e_test_path: {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
@@ -467,7 +467,7 @@ describe("where a script path resolves", () => {
     const bPath = path.join(root, ".argent", "flows", "deep", "root-b.yaml");
     const b = await run(
       mockRegistry({ booted: [DEVICE] }).registry,
-      { flow_path: bPath, device: DEVICE },
+      { e2e_test_path: bPath, device: DEVICE },
       boundaryCtx(bPath)
     );
 
@@ -520,19 +520,19 @@ describe("where a script path resolves", () => {
     expect(result.steps[0]!.scriptLog).toContain("through the alias");
   });
 
-  it("anchors an explicit flow_path at that YAML's own directory", async () => {
-    await write("elsewhere/scripts/seed.mjs", `console.log("from flow_path");`);
+  it("anchors an explicit e2e_test_path at that YAML's own directory", async () => {
+    await write("elsewhere/scripts/seed.mjs", `console.log("from e2e_test_path");`);
     await write("elsewhere/standalone.yaml", "steps:\n  - script: { path: scripts/seed.mjs }\n");
 
     const flowPath = path.join(root, "elsewhere", "standalone.yaml");
     const result = await run(
       mockRegistry().registry,
-      { flow_path: flowPath },
+      { e2e_test_path: flowPath },
       boundaryCtx(flowPath)
     );
 
     expect(result.ok).toBe(true);
-    expect(result.steps[0]!.scriptLog).toContain("from flow_path");
+    expect(result.steps[0]!.scriptLog).toContain("from e2e_test_path");
   });
 
   it("runs the script in project_root, not in the flow file's directory", async () => {
@@ -544,7 +544,7 @@ describe("where a script path resolves", () => {
     const flowPath = path.join(root, "elsewhere", "standalone.yaml");
     const result = await run(
       mockRegistry().registry,
-      { flow_path: flowPath },
+      { e2e_test_path: flowPath },
       boundaryCtx(flowPath)
     );
 
@@ -650,11 +650,11 @@ describe("a script step in an uploaded flow", () => {
     await expect(
       createRunFlowTool(registry).execute(
         {},
-        { name: "main", project_root: root, flow_file: uploaded, device: DEVICE },
+        { name: "main", project_root: root, e2e_test_file: uploaded, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,
@@ -675,11 +675,11 @@ describe("a script step in an uploaded flow", () => {
     await expect(
       createRunFlowTool(registry).execute(
         {},
-        { name: "main", project_root: root, flow_file: uploaded, device: DEVICE },
+        { name: "main", project_root: root, e2e_test_file: uploaded, device: DEVICE },
         {
           artifacts: new ArtifactStore(),
           fileInputs: {
-            flow_file: {
+            e2e_test_file: {
               clientPath: "/client/.argent/flows/main.yaml",
               presentOnHost: false,
               viaUpload: true,

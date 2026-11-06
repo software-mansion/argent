@@ -15,6 +15,7 @@ import {
   isProfileMissingDeviceFailure,
   killRunnerProcess,
   launchRunner,
+  resolveRunnerSigningConfig,
   waitForRunnerListeningPort,
 } from "../../src/utils/ios-device/runner-build";
 import { readRunnerCrashSummary } from "../../src/utils/ios-device/runner-crash";
@@ -538,5 +539,13 @@ describe("ios-device-runner blueprint: failure signals", () => {
     expect(getFailureSignal(terminated[0])?.error_code).toBe(
       FAILURE_CODES.IOS_DEVICE_RUNNER_TERMINATED
     );
+  });
+});
+
+describe("ios-device-runner blueprint: signing", () => {
+  it("resolves the signing team for the phone it starts on", async () => {
+    await createInstance();
+
+    expect(resolveRunnerSigningConfig).toHaveBeenCalledWith(DEVICE_UDID);
   });
 });
