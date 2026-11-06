@@ -125,6 +125,24 @@ describe("resolveSigningHint", () => {
     expect(hint).toContain("set-key-partition-list");
     expect(hint).not.toContain("Xcode > Settings > Accounts");
   });
+
+  // The detection note rides completed calls only, so a failed build never gets it.
+  it.each([
+    [
+      "no-devices",
+      "error: Your team has no devices from which to generate a provisioning profile.",
+    ],
+    ["bundle id", "error: Failed Registering Bundle Identifier (in target 'ArgentRunner')"],
+    ["provisioning", 'No profiles for "com.argent.runner.tabcde12345" were found'],
+  ])("names the team override on a %s failure", (_name, output) => {
+    expect(resolveSigningHint(output)).toContain(
+      "argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach"
+    );
+  });
+
+  it("leaves the team override out of a keychain failure another team would not fix", () => {
+    expect(resolveSigningHint("errSecInternalComponent")).not.toContain("ARGENT_IOS_TEAM_ID");
+  });
 });
 
 describe("resolveRunnerSigningConfig with several teams and a phone", () => {
