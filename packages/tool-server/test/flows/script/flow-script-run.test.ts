@@ -490,19 +490,24 @@ describe("flow script executor — module loading", () => {
     expect(result.failure?.kind).toBe("runtime");
   });
 
-  it("calls a script file it cannot open a load failure, not a runtime one", async () => {
-    const ws = workspace();
-    const script = ws.write("locked.mjs", `output.ok = true;`);
-    fs.chmodSync(script, 0o000);
-    try {
-      const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
+  const enforcesMode = process.platform !== "win32" && process.getuid?.() !== 0;
 
-      expect(result.failure?.kind).toBe("load");
-      expect(result.failure?.message).toContain("EACCES");
-    } finally {
-      fs.chmodSync(script, 0o600);
+  it.skipIf(!enforcesMode)(
+    "calls a script file it cannot open a load failure, not a runtime one",
+    async () => {
+      const ws = workspace();
+      const script = ws.write("locked.mjs", `output.ok = true;`);
+      fs.chmodSync(script, 0o000);
+      try {
+        const result = await executor().execute({ scriptPath: script, projectRoot: ws.dir });
+
+        expect(result.failure?.kind).toBe("load");
+        expect(result.failure?.message).toContain("EACCES");
+      } finally {
+        fs.chmodSync(script, 0o600);
+      }
     }
-  });
+  );
 
   it("does not put a stream crash into the log of a passing step", async () => {
     const ws = workspace();
