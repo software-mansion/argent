@@ -25,6 +25,34 @@ export interface CpuSampleIndex {
   childToParent?: Map<number, number>;
 }
 
+/**
+ * Start a profile at its first real sample when the samples before it carry a
+ * stale clock. Changes the profile in place; a normal one is left as it is.
+ *
+ * Hermes stamps a sample taken during a VM suspension with the time that
+ * suspension was recorded, and records it only while sampling is on. If the VM
+ * was already suspended when sampling started, the first samples carry the
+ * stamp of a suspension from an earlier recording, or 0 when there was none.
+ * The first positive delta is then the jump from that stamp to the first real
+ * sample, not an interval: one profile here reads as 27,954 s instead of 11 s.
+ *
+ * A stamp does not say whether it is stale, so this goes by size: the first
+ * positive delta is a jump when it is longer than everything after it. On 154
+ * recorded profiles it is at most 1.5% of the recording, except in the one
+ * with the stale stamp. A stale jump shorter than the recording after it is
+ * missed, which leaves the recording under twice its real length.
+ */
+export function dropStaleLeadingGap(profile: HermesCpuProfile): void {
+  const { timeDeltas } = profile;
+  // timeDeltas[0] is the first sample against itself, always 0.
+  const first = timeDeltas.findIndex((delta, i) => i > 0 && delta > 0);
+  if (first < 0) return;
+  const gap = timeDeltas[first]!;
+  if (gap <= profile.endTime - profile.startTime - gap) return;
+  timeDeltas[first] = 0;
+  profile.startTime += gap;
+}
+
 /** Pre-compute sample timestamps so windowed queries are a binary search. */
 export function buildCpuSampleIndex(cpuProfile: HermesCpuProfile): CpuSampleIndex {
   const { nodes, samples, timeDeltas, startTime, endTime } = cpuProfile;
