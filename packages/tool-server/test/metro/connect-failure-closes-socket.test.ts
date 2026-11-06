@@ -16,6 +16,9 @@ scopeTempHome("argent-connect-failure-home-");
 let server: http.Server;
 let wss: WebSocketServer;
 let port: number;
+/** The method the mock runtime rejects, and whether it advertises Fusebox. */
+let rejected = "Runtime.enable";
+let fusebox = false;
 
 beforeAll(async () => {
   await new Promise<void>((resolve) => {
@@ -35,6 +38,9 @@ beforeAll(async () => {
               vm: "Hermes",
               deviceName: "Pixel 7",
               webSocketDebuggerUrl: `ws://localhost:${port}/inspector/debug?device=0&page=1`,
+              ...(fusebox
+                ? { reactNative: { capabilities: { prefersFuseboxFrontend: true } } }
+                : {}),
             },
           ])
         );
@@ -49,9 +55,9 @@ beforeAll(async () => {
         const { id, method } = JSON.parse(raw.toString()) as { id: number; method: string };
         ws.send(
           JSON.stringify(
-            method === "Runtime.enable"
-              ? { id, error: { code: -32000, message: "Runtime.enable refused" } }
-              : { id, result: {} }
+            method === rejected
+              ? { id, error: { code: -32601, message: `${method} wasn't found` } }
+              : { id, result: { result: { type: "string", value: "function" } } }
           )
         );
       })
@@ -68,23 +74,37 @@ afterAll(async () => {
   await new Promise<void>((resolve) => wss.close(() => server.close(() => resolve())));
 });
 
+async function connectAndCountOpenSockets(): Promise<number> {
+  const registry = new Registry();
+  registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
+  registry.registerTool(debuggerConnectTool);
+  try {
+    await expect(
+      registry.invokeTool("debugger-connect", { port, device_id: "emulator-5554" })
+    ).rejects.toThrow(`${rejected} wasn't found`);
+
+    const deadline = Date.now() + 2_000;
+    while (wss.clients.size > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    return wss.clients.size;
+  } finally {
+    await registry.dispose();
+  }
+}
+
 describe("debugger-connect failing partway", () => {
   it("closes the socket it opened", async () => {
-    const registry = new Registry();
-    registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
-    registry.registerTool(debuggerConnectTool);
-    try {
-      await expect(
-        registry.invokeTool("debugger-connect", { port, device_id: "emulator-5554" })
-      ).rejects.toThrow(/Runtime.enable refused/);
+    rejected = "Runtime.enable";
+    fusebox = false;
+    expect(await connectAndCountOpenSockets()).toBe(0);
+  });
 
-      const deadline = Date.now() + 2_000;
-      while (wss.clients.size > 0 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 20));
-      }
-      expect(wss.clients.size).toBe(0);
-    } finally {
-      await registry.dispose();
-    }
+  it("fails on a Fusebox target that rejects Runtime.addBinding", async () => {
+    // A modern host rejects it only while it has no JS instance (mid-reload);
+    // connecting then would write the binding off for the whole session.
+    rejected = "Runtime.addBinding";
+    fusebox = true;
+    expect(await connectAndCountOpenSockets()).toBe(0);
   });
 });

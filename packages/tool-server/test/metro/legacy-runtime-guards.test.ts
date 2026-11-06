@@ -7,13 +7,14 @@ import { discoverMetro } from "../../src/utils/debugger/discovery";
 
 /**
  * Tolerating a missing X-React-Native-Project-Root header admits the whole legacy
- * (RN <= 0.72) inspector — not only Vega, but any older iOS/Android project,
- * where the capability gate does NOT reject the binding-dependent tools. So the
- * legacy runtime's quirks have to be handled at the transport, not just guessed
- * at from the platform:
+ * inspector — not only Vega, but any older iOS/Android project, where the
+ * capability gate does NOT reject the binding-dependent tools. So the legacy
+ * runtime's quirks have to be handled at the transport, not just guessed at from
+ * the platform:
  *
- *  - Runtime.addBinding is ACKed but never installed, so a tool waiting on
- *    Runtime.bindingCalled would hang for the full 10s timeout.
+ *  - Runtime.addBinding is ACKed but never installed (RN <= 0.72), so a tool
+ *    waiting on Runtime.bindingCalled would hang for the full 10s timeout, or is
+ *    rejected with -32601 (RN 0.73 - 0.75).
  *  - The proxy advertises an unusable `vm: "don't use"` page.
  *  - Anything answering "packager-status:running" now reaches the /json/list parse.
  */
@@ -115,11 +116,11 @@ describe("legacy inspector guards", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 
-  it("marks the binding unavailable when the runtime has no Runtime.addBinding", async () => {
+  it("marks the binding unavailable when a legacy runtime has no Runtime.addBinding", async () => {
     addBindingReply = "method-not-found";
     cdp = new CDPClient(`ws://localhost:${port}/inspector/debug?device=0&page=1`);
     await cdp.connect();
-    await cdp.addBinding("__argent_callback");
+    await cdp.addBinding("__argent_callback", { legacyInspector: true });
 
     const started = Date.now();
     const error = await cdp.evaluateWithBinding("void 0", "req-3").catch((e: unknown) => e);
@@ -134,8 +135,21 @@ describe("legacy inspector guards", () => {
     cdp = new CDPClient(`ws://localhost:${port}/inspector/debug?device=0&page=1`);
     await cdp.connect();
 
-    const error = await cdp.addBinding("__argent_callback").catch((e: unknown) => e);
+    const error = await cdp
+      .addBinding("__argent_callback", { legacyInspector: true })
+      .catch((e: unknown) => e);
     expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED);
+  });
+
+  it("fails addBinding on a rejection from a modern target", async () => {
+    // A modern host has the method and rejects it only while it has no JS
+    // instance; the binding must not be written off for the session.
+    addBindingReply = "method-not-found";
+    cdp = new CDPClient(`ws://localhost:${port}/inspector/debug?device=0&page=1`);
+    await cdp.connect();
+
+    const error = await cdp.addBinding("__argent_callback").catch((e: unknown) => e);
+    expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR);
   });
 
   it("still uses the binding when the runtime actually installs it", async () => {

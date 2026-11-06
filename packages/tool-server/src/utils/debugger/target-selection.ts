@@ -107,15 +107,18 @@ export function selectTarget(
   // The legacy inspector also lists worklet runtimes (Reanimated's "Reanimated
   // UI runtime", or one named by `createWorkletRuntime`), in any order. They
   // never answer `Runtime.enable`, so the app's runtime is picked by the title
-  // Hermes registers it under.
-  const hermes = candidates.find((t) => t.title === LEGACY_HERMES_TITLE);
+  // React Native registers it under.
+  const hermes = candidates.find((t) => LEGACY_APP_RUNTIME_TITLES.has(t.title));
   if (hermes) return makeResult(hermes, port, false);
 
   return makeResult(candidates[0]!, port, false);
 }
 
-/** `HermesExecutorFactory`'s default debugger name for the app's runtime. */
-const LEGACY_HERMES_TITLE = "Hermes React Native";
+/** The bridge's (`HermesExecutorFactory`) and bridgeless (`HermesInstance`) names. */
+const LEGACY_APP_RUNTIME_TITLES = new Set([
+  "Hermes React Native",
+  "Hermes Bridgeless React Native",
+]);
 
 function makeResult(target: CDPTarget, port: number, isNewDebugger: boolean): SelectedTarget {
   return {

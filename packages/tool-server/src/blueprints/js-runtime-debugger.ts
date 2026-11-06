@@ -322,7 +322,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
       }
 
-      await cdp.addBinding("__argent_callback");
+      await cdp.addBinding("__argent_callback", { legacyInspector: !selected.isNewDebugger });
 
       await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
 

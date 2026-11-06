@@ -396,13 +396,20 @@ export class CDPClient {
     return result.result?.value;
   }
 
-  async addBinding(name: string): Promise<void> {
+  /**
+   * With `legacyInspector`, a protocol error leaves the binding unavailable
+   * instead of failing: that inspector (RN 0.73 - 0.75) has no such method and
+   * answers -32601. A modern host answers the same while it has no JS instance
+   * (mid-reload), where disabling the binding for the session would be wrong.
+   */
+  async addBinding(name: string, options?: { legacyInspector?: boolean }): Promise<void> {
     try {
       await this.send("Runtime.addBinding", { name });
     } catch (error) {
-      // The legacy Hermes inspector of RN 0.73 - 0.75 has no such method and
-      // answers -32601.
-      if (getFailureSignal(error)?.error_code !== FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR) {
+      if (
+        !options?.legacyInspector ||
+        getFailureSignal(error)?.error_code !== FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR
+      ) {
         throw error;
       }
       this.bindingUnavailable = true;
