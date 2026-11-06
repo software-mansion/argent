@@ -54,9 +54,9 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Max results to return. Defaults to 20 for by_component / by_time_range, which count " +
-        "commits. by_index counts individual fibers and returns all of them unless this is set, " +
-        "because one commit's fibers collapse to far fewer distinct components, and a small cap there " +
-        "can show less than the analyze report it is meant to expand on."
+        "commits. by_index counts individual fibers, ranked by self time, and returns all of them " +
+        "unless this is set, because one commit's fibers collapse to far fewer distinct components, " +
+        "and a small cap there can show less than the analyze report it is meant to expand on."
     ),
 });
 
@@ -242,7 +242,7 @@ export function renderByIndex(
   const commitDuration = matching[0]!.commitDuration;
   const timestamp = matching[0]!.timestamp;
 
-  const sorted = [...matching].sort((a, b) => b.actualDuration - a.actualDuration);
+  const sorted = [...matching].sort((a, b) => b.selfDuration - a.selfDuration);
   // Uncapped by default: rows are fibers, so a small cap would show less than
   // the analyze report that points here.
   const shown = topN !== undefined ? sorted.slice(0, topN) : sorted;
@@ -270,8 +270,8 @@ export function renderByIndex(
   if (hidden > 0) {
     lines.push("");
     lines.push(
-      `_Showing the ${shown.length} costliest of ${sorted.length} fibers — ${hidden} cheaper ` +
-        `fibers hidden. Note these are fibers, not components: the full set covers ` +
+      `_Showing the ${shown.length} of ${sorted.length} fibers with the most self time — ` +
+        `${hidden} cheaper fibers hidden. Note these are fibers, not components: the full set covers ` +
         `${new Set(sorted.map((c) => c.componentName)).size} distinct components and this view ` +
         `covers ${new Set(shown.map((c) => c.componentName)).size}. Omit top_n for everything._`
     );
