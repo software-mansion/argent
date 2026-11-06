@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isGloballyInstalled } from "../src/utils.js";
+import { getGlobalBinaryPath } from "../src/topology.js";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand } from "../src/shell.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
@@ -125,6 +126,23 @@ describe("isGloballyInstalled — temp package runners", () => {
       }
     }
   );
+
+  it("ignores a project copy that `npm --prefix <project> exec` puts on PATH from another cwd", () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-prefix-exec-")));
+    const savedPrefix = process.env.npm_config_local_prefix;
+    try {
+      const bin = path.join(tmp, "project", "node_modules", ".bin", "argent");
+      fs.mkdirSync(path.dirname(bin), { recursive: true });
+      fs.writeFileSync(bin, "");
+      process.env.npm_config_local_prefix = path.join(tmp, "project");
+      whichFinds(`${bin}\n/usr/local/bin/argent`);
+      expect(getGlobalBinaryPath()).toBe("/usr/local/bin/argent");
+    } finally {
+      if (savedPrefix === undefined) delete process.env.npm_config_local_prefix;
+      else process.env.npm_config_local_prefix = savedPrefix;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 
   it("finds the global install behind a project copy", () => {
     const projectBin = path.join(process.cwd(), "node_modules", ".bin", "argent");

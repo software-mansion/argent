@@ -132,6 +132,7 @@ afterEach(() => {
   bundleOverride.agentsDir = undefined;
   bundleOverride.retired = undefined;
   process.chdir(originalCwd);
+  process.exitCode = undefined;
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
   else process.env.npm_config_user_agent = savedAgent;
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -249,6 +250,7 @@ describe("uninstall — telemetry consent preservation", () => {
       );
       expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
       expect(vi.mocked(clack.outro)).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
       expect(telemetryMock.track).toHaveBeenCalledWith(
         "installation:cli_uninstall_complete",
         expect.objectContaining({
@@ -272,6 +274,7 @@ describe("uninstall — telemetry consent preservation", () => {
 
       expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
       expect(vi.mocked(clack.outro)).toHaveBeenCalled();
+      expect(process.exitCode).toBeUndefined();
     });
 
     it("reports success for a linked install whose source checkout stays", async () => {
@@ -369,6 +372,29 @@ describe("uninstall — telemetry consent preservation", () => {
         "Remove it with the package manager that installed it."
     );
     expect(telemetryMock.resetLocalTelemetryState).not.toHaveBeenCalled();
+  });
+
+  it("reports a failure when a second global install stays on PATH behind a stale shim", async () => {
+    const clack = await import("@clack/prompts");
+    const shim = path.join(tmpDir, "nodenv", "shims", "argent");
+    const yarnBin = path.join(tmpDir, "yarn-bin", "argent");
+    writeFile(shim, "#!/usr/bin/env bash\n");
+    writeFile(yarnBin);
+    childProcessMock.which.mockImplementation(() => `${shim}\n${yarnBin}\n`);
+    childProcessMock.versionProbe.mockImplementation((bin: string) => {
+      if (bin === shim) throw Object.assign(new Error("exit 127"), { status: 127 });
+      return undefined;
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(vi.mocked(clack.log.error)).toHaveBeenCalledWith(
+      `global uninstall failed: Error: ${yarnBin} is still on PATH. ` +
+        "Remove it with the package manager that installed it."
+    );
+    expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
+    expect(process.exitCode).toBe(1);
   });
 
   it("removes both installs when run through npx from a project that has a local devDependency", async () => {

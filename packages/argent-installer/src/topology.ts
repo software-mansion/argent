@@ -36,23 +36,23 @@ function isTempRunnerPath(binaryPath: string): boolean {
 }
 
 // npm exec, npx and package scripts prepend `<cwd or ancestor>/node_modules/.bin`,
-// which holds a project's devDependency, not a global install. Compared by
-// canonical path: process.cwd() is physical, and `npm --prefix <symlink>` is not.
+// or `<--prefix>/node_modules/.bin` from any cwd, which holds a project's
+// devDependency, not a global install. Compared by canonical path:
+// process.cwd() is physical, and `npm --prefix <symlink>` is not.
 function isProjectBinPath(binaryPath: string): boolean {
   const norm = (p: string) => (process.platform === "win32" ? p.toLowerCase() : canonicalPath(p));
   const binDir = norm(path.dirname(path.resolve(binaryPath)));
+  const prefix = process.env.npm_config_local_prefix;
+  if (prefix && norm(path.join(prefix, "node_modules", ".bin")) === binDir) return true;
   for (let dir = path.resolve(process.cwd()); ; dir = path.dirname(dir)) {
     if (norm(path.join(dir, "node_modules", ".bin")) === binDir) return true;
     if (path.dirname(dir) === dir) return false;
   }
 }
 
-/**
- * Path of the globally-installed argent binary, or null when argent is not
- * permanently on PATH. Checks every match so a temp-runner or project copy
- * does not mask a real global install.
- */
-export function getGlobalBinaryPath(): string | null {
+// Every permanent argent on PATH, in PATH order: temp-runner and project copies
+// are skipped so they do not mask a real global install.
+function getGlobalBinaryPaths(): string[] {
   try {
     const [cmd, args] =
       process.platform === "win32"
@@ -62,34 +62,40 @@ export function getGlobalBinaryPath(): string | null {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return (
-      output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .find((line) => !isTempRunnerPath(line) && !isProjectBinPath(line)) ?? null
-    );
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !isTempRunnerPath(line) && !isProjectBinPath(line));
   } catch {
-    return null;
+    return [];
   }
 }
 
 /**
- * The global argent still on PATH after an uninstall: a binary that resolves to
- * the package, or one that still runs (a pnpm shim). A version-manager shim
- * (nodenv's, mise's) outlives the package until a reshim, and then fails.
+ * Path of the globally-installed argent binary, or null when argent is not
+ * permanently on PATH.
+ */
+export function getGlobalBinaryPath(): string | null {
+  return getGlobalBinaryPaths()[0] ?? null;
+}
+
+/**
+ * The first global argent still on PATH after an uninstall: a binary that
+ * resolves to the package, or one that still runs (a pnpm shim). A
+ * version-manager shim (nodenv's, mise's) outlives the package until a reshim
+ * and then fails, so it is passed over: an install behind it still counts.
  */
 export function getRemainingGlobalBinaryPath(): string | null {
-  const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath || process.platform === "win32" || getGloballyInstalledPackageRoot()) {
-    return binaryPath;
+  for (const binaryPath of getGlobalBinaryPaths()) {
+    if (process.platform === "win32" || packageRootOf(binaryPath)) return binaryPath;
+    try {
+      execFileSync(binaryPath, ["--version"], { stdio: "ignore", timeout: 10_000 });
+      return binaryPath;
+    } catch {
+      // A stale shim.
+    }
   }
-  try {
-    execFileSync(binaryPath, ["--version"], { stdio: "ignore", timeout: 10_000 });
-    return binaryPath;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /** True iff argent is permanently on PATH, not run from an npx / dlx cache. */
@@ -104,7 +110,10 @@ export function isGloballyInstalled(): boolean {
  */
 export function getGloballyInstalledPackageRoot(): string | null {
   const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath) return null;
+  return binaryPath ? packageRootOf(binaryPath) : null;
+}
+
+function packageRootOf(binaryPath: string): string | null {
   try {
     const realPath = fs.realpathSync(binaryPath);
     const root = resolvePackageRoot(path.dirname(realPath));

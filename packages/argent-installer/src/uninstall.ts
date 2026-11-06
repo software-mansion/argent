@@ -759,6 +759,7 @@ export async function uninstall(args: string[]): Promise<void> {
           hasUninstalledPackage,
           UNINSTALL_PACKAGE_ACTION_FAILED
         );
+        process.exitCode = 1;
         return;
       }
     }
