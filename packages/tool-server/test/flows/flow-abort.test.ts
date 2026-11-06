@@ -295,7 +295,7 @@ describe("run cancellation mid-directive", () => {
 
   it("reports a raw tool step cancelled inside the gesture as a skip, not the tool's error", async () => {
     const controller = new AbortController();
-    // The third dispatch site, and the one flow-yaml.md sends authors to for a
+    // The third dispatch site, and the one e2e-yaml.md sends authors to for a
     // flick faster than the swipe directive's floor: a raw `tool: gesture-swipe`
     // step, whose signal invokeSubTool forwards to the tool itself.
     currentFetch = () => ({ tree: screen([]), source: "native-devtools" });

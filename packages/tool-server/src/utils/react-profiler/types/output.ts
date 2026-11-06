@@ -1,11 +1,5 @@
 export type ReRenderReason =
-  | "parent"
-  | "props"
-  | "hooks"
-  | "context"
-  | "state"
-  | "force_update"
-  | "unknown";
+  "parent" | "props" | "hooks" | "context" | "state" | "force_update" | "unknown";
 
 export interface HotCommitComponentEntry {
   name: string;

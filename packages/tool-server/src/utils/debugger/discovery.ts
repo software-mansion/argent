@@ -42,7 +42,7 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
     throw new FailureError(
       `Metro at port ${port} is not running (got: ${err instanceof Error ? err.message : String(err)}). ` +
         `Do not retry in a loop — the result will not change until Metro is started. ` +
-        `Start Metro (e.g. \`npx react-native start\` or \`npx expo start\`) or ask the user, ` +
+        `Start Metro with the project's own start script if it has one (else \`npx react-native start\` or \`npx expo start\`) or ask the user, ` +
         `wait for it to report ready, then retry once.`,
       {
         error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,
@@ -58,7 +58,7 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
     new FailureError(
       `Metro at port ${port} is not running (got: ${err instanceof Error ? err.message : String(err)}). ` +
         `Do not retry in a loop — the result will not change until Metro is started. ` +
-        `Start Metro (e.g. \`npx react-native start\` or \`npx expo start\`) or ask the user, ` +
+        `Start Metro with the project's own start script if it has one (else \`npx react-native start\` or \`npx expo start\`) or ask the user, ` +
         `wait for it to report ready, then retry once.`,
       {
         error_code: FAILURE_CODES.DEBUGGER_METRO_NOT_RUNNING,

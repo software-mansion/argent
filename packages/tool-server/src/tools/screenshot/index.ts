@@ -3,10 +3,15 @@ import { promisify } from "node:util";
 import * as os from "node:os";
 import * as path from "node:path";
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  type Registry,
+  type ToolCapability,
+  type ToolDefinition,
+} from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { isIosPhysicalDevice, resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import {
   RESULT_NOTE_KEY,
   requestedGeometry,
@@ -31,50 +36,14 @@ import { captureRunnerScreenshotPng } from "../../utils/ios-device/runner-comman
 import { RUNNER_COMMAND_TIMEOUT_MS } from "../../utils/ios-device/runner-client";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
 import { captureVegaScreenshotPng } from "../../utils/vega-screen";
+import { captureHarmonyScreenshotPng } from "../../utils/harmony-screen";
+import { ensureDep } from "../../utils/check-deps";
+import { InvalidToolInputError } from "../../utils/capability";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import type { DeviceInfo } from "@argent/registry";
 import * as fs from "node:fs/promises";
 
 const execFileAsync = promisify(execFile);
-
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Apple TV UDID, Vega serial, or Chromium id)."
-    ),
-  rotation: z
-    .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
-    .optional()
-    .describe(
-      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium). On Android the capture already follows the device's rotation. Ignored on physical iPhones."
-    ),
-  scale: z
-    .number()
-    .min(0.01)
-    .max(1.0)
-    .optional()
-    .describe(
-      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android. " +
-        "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture); an Android TV whose form factor or display size cannot be read in time keeps 0.25. " +
-        "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
-    ),
-  includeImageInContext: z
-    .boolean()
-    .optional()
-    .default(true)
-    .describe(
-      "Default true. Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff. The file is still written, but the image bytes are not attached to the agent context."
-    ),
-  downscaler: z
-    .enum(["lanczos3", "box", "bilinear", "nearest"])
-    .optional()
-    .describe(
-      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
 
 interface Result {
   /**
@@ -104,6 +73,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  harmony: { device: true },
 };
 
 /**
@@ -241,20 +211,60 @@ export async function downscalePngInPlace(
   });
 }
 
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Apple TV UDID, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+    ),
+  rotation: z
+    .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
+    .optional()
+    .describe(
+      "Orientation override for the screenshot (on Chromium it rotates the captured image). On Android the capture already follows the device's rotation. <flag:harmonyos>Rejected on HarmonyOS, which captures the display in its current orientation and has no override. </flag:harmonyos>Ignored on physical iPhones."
+    ),
+  scale: z
+    .number()
+    .min(0.01)
+    .max(1.0)
+    .optional()
+    .describe(
+      "Scale factor. Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>. " +
+        "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
+        "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
+    ),
+  includeImageInContext: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      "Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff. The file is still written, but the image bytes are not attached to the agent context."
+    ),
+  downscaler: z
+    .enum(["lanczos3", "box", "bilinear", "nearest"])
+    .optional()
+    .describe(
+      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Ignored on every other platform."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export function createScreenshotTool(registry: Registry): ToolDefinition<Params, Result> {
   return {
     id: "screenshot",
+    description: `Capture a PNG of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>or Chromium app). Returns { image }, the PNG file.
+Use when you need a baseline image before an interaction or the screen state after a delay. Gestures, key presses and app launches already attach a screenshot to their result.
+Fails if the capture backend (simulator-server, emulator, Chromium CDP<flag:harmonyos> or \`hdc\`</flag:harmonyos>) cannot be reached for this device.`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
+    readOnly: true,
     interaction: {
       startedMsg: () => "Capturing screenshot",
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
       failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
     },
-    description: `Capture a screenshot of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
-Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
-Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
-    alwaysLoad: true,
-    searchHint: "device simulator emulator chromium screen image capture baseline tvos apple tv",
-    zodSchema,
     outputHint: "image",
     capability,
     // No eager service: a tvOS udid classifies as iOS by shape, so declaring
@@ -340,6 +350,30 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
           "Vega (Fire TV)"
         );
         return { image, ...(note ? { [RESULT_NOTE_KEY]: note } : {}) };
+      }
+
+      // No simulator-server controller exists for HarmonyOS.
+      if (device.platform === "harmony") {
+        if (params.rotation) {
+          throw new InvalidToolInputError(
+            "rotation is not supported on HarmonyOS: `uitest screenCap` captures the display in its current orientation and has no override. Rotate the device itself, or drop the rotation parameter.",
+            {
+              error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+              failure_stage: "harmony_screenshot_rotation",
+            }
+          );
+        }
+        await ensureDep("hdc");
+        const pngPath = await captureHarmonyScreenshotPng({
+          connectKey: harmonyConnectKey(device.id),
+          scale: params.scale,
+        });
+        const image = await requireArtifacts(ctx).register({
+          hostPath: pngPath,
+          kind: "screenshot",
+          mimeType: "image/png",
+        });
+        return { image };
       }
 
       const ref = simulatorServerRef(device);

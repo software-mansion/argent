@@ -8,8 +8,7 @@ import {
 } from "@argent/tools-client";
 
 export type ContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
 /**
  * Context for resolving artifact handles. Omitted ⇒ rendering falls back to the
@@ -186,7 +185,7 @@ export async function screenshotDiffToMcpContent(
   return blocks;
 }
 
-export type FlowStepResult = {
+type FlowStepResult = {
   index?: number;
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";
@@ -223,7 +222,9 @@ export type FlowStepResult = {
 };
 
 export type FlowExecuteResult = {
-  flow: string;
+  e2eTest?: string;
+  /** The `e2eTest` of a tool-server that predates that field. */
+  flow?: string;
   device?: string;
   executionPrerequisite?: string;
   ok?: boolean;
@@ -239,6 +240,8 @@ export type FlowExecuteResult = {
    * wrote, or `{ path, error }` for one it could not write.
    */
   baselineWrites?: unknown[];
+  /** A test of the same name that this one hides. */
+  warning?: string;
 };
 
 const STATUS_GLYPH: Record<string, string> = {
@@ -292,6 +295,7 @@ export async function flowRunToMcpContent(
   ctx?: ContentContext
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
+  const name = result.e2eTest ?? result.flow;
 
   if (result.executionPrerequisite) {
     blocks.push({ type: "text", text: `Prerequisite: ${result.executionPrerequisite}` });
@@ -299,8 +303,10 @@ export async function flowRunToMcpContent(
 
   blocks.push({
     type: "text",
-    text: `Running flow "${result.flow}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
+    text: `Running e2e test "${name}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
   });
+  if (typeof result.warning === "string")
+    blocks.push({ type: "text", text: `⚠ ${result.warning}` });
 
   for (let i = 0; i < result.steps.length; i++) {
     const step = result.steps[i]!;
@@ -356,7 +362,7 @@ export async function flowRunToMcpContent(
       text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}${durationSuffix(result.durationMs)}`,
     });
   } else {
-    blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+    blocks.push({ type: "text", text: `E2E test "${name}" complete.` });
   }
   return blocks;
 }

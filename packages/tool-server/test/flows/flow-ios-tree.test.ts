@@ -495,7 +495,7 @@ describe("flow iOS full-hierarchy source", () => {
     // of the message, not per line.
     const source = await resolveNativeTargetApp(api, undefined).catch((err) => err);
     expect(error.message).toContain(source.message.split("\n").slice(0, -1).join("\n"));
-    expect(error.message).toContain("Flow selectors auto-target and cannot name a bundleId");
+    expect(error.message).toContain("E2E test selectors auto-target and cannot name a bundleId");
     expect(error.message).toContain("Foreground the intended app with launch-app");
     // argent has no terminate tool, and restart-app would bring the cleared app
     // back to the front.
@@ -942,9 +942,13 @@ describe("flow iOS full-hierarchy source", () => {
       probeAnswered: false,
     }).catch((err) => err);
 
-    expect(goneError.message).toContain(`${gone.launched} — the app this flow launched — is NOT`);
+    expect(goneError.message).toContain(
+      `${gone.launched} — the app this e2e test launched — is NOT`
+    );
     expect(goneError.message).toContain("relaunch it with restart-app");
-    expect(goneError.message).not.toContain("foreground the app the flow drives with launch-app");
+    expect(goneError.message).not.toContain(
+      "foreground the app the e2e test drives with launch-app"
+    );
 
     // Same branch, launched app present among the connected: the app is only
     // suspended, so foregrounding it is still the remedy and a relaunch is not.
@@ -957,7 +961,7 @@ describe("flow iOS full-hierarchy source", () => {
       probeAnswered: false,
     }).catch((err) => err);
 
-    expect(liveError.message).toContain("foreground the app the flow drives with launch-app");
+    expect(liveError.message).toContain("foreground the app the e2e test drives with launch-app");
     expect(liveError.message).not.toContain("relaunch it with restart-app");
   });
 

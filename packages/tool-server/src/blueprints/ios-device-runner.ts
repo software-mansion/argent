@@ -302,7 +302,7 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
 
     const { launched, client } = await buildAndStartRunner(
       udid,
-      await resolveRunnerSigningConfig()
+      await resolveRunnerSigningConfig(udid)
     );
 
     const events = new TypedEventEmitter<ServiceEvents>();

@@ -12,6 +12,7 @@ import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { adbShell } from "../utils/adb";
+import { adbCommandPrefix } from "../utils/adb-server";
 import { recordReapedSession } from "../utils/reaped-sessions";
 import { disposeWarmEngine } from "@argent/native-devtools-android";
 
@@ -35,6 +36,12 @@ export interface NativeProfilerParsedData {
   uiHangs: UiHang[];
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
+  /**
+   * False when THIS data has no leaks export (a template without the Leaks
+   * instrument, or a failed export), so an empty `memoryLeaks` means "not
+   * checked" rather than "no leaks". See LEAKS_NOT_RECORDED in ios-profiler/render.ts.
+   */
+  leaksRecorded: boolean;
   /**
    * Capture mode of THIS data, frozen at parse time so drill-down consumers
    * (leak_stacks, the combined report) are not re-labeled by a later capture.
@@ -146,7 +153,7 @@ function androidSalvage(midCapture: boolean, onDeviceTracePath: string | null): 
     `The recording had already ended before this teardown (the 10-minute cap), so the ` +
     `on-device trace was left in place${onDeviceTracePath ? ` at ${onDeviceTracePath}` : ""} — ` +
     `but this session was the only thing that could pull it to the host. Re-profile, or ` +
-    `\`adb pull\` it yourself.`
+    `\`${adbCommandPrefix(process.env)}adb pull\` it yourself.`
   );
 }
 
