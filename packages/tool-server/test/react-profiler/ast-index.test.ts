@@ -81,7 +81,7 @@ describe("buildAstIndexWithDiagnostics", () => {
   it("leaves out a file too large to be a screen someone wrote", async () => {
     const dir = makeTempDir("ast-index-huge-");
     writeFileSync(
-      join(dir, "vendor.js"),
+      join(dir, "generated.tsx"),
       `// ${"x".repeat(600_000)}\nfunction NotAScreen() { return <View />; }\n`
     );
 
@@ -111,6 +111,20 @@ describe("buildAstIndexWithDiagnostics", () => {
     const res = await buildAstIndexWithDiagnostics(dir);
 
     expect(res.index.has("NotAScreen")).toBe(false);
+  });
+
+  it("leaves a .js file over 32 KB out: it may be a minified bundle, whose names are not components", async () => {
+    // Minified code names its functions E, A, T, G. Indexed, those names made a
+    // library's `G` the app's own, and its 50-line snippet 144 KB of one file.
+    const dir = makeTempDir("ast-index-minified-");
+    const minified = `var x=${JSON.stringify("x".repeat(40_000))};function G(){return x}function E(){return G}\n`;
+    writeFileSync(join(dir, "bundle.js"), minified);
+    writeFileSync(join(dir, "Screen.jsx"), minified.replace("function G", "function BigJsx"));
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect([...res.index.keys()].sort()).toEqual(["BigJsx", "E"]);
+    expect(res.index.get("E")?.file).toBe(join(dir, "Screen.jsx"));
   });
 
   it("indexes every component of a .js file with JSX, not just those before the first tag", async () => {

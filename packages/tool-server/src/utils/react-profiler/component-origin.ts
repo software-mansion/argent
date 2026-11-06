@@ -32,9 +32,11 @@
  * - The index sees function declarations and arrow/function/memo/forwardRef
  *   assignments only. App class components, components made by a factory or HOC
  *   (`styled.View`, `connect()`), and code outside the project root count as
- *   library, as do components in a plain .ts file over 32 KB or any file over
+ *   library, as do components in a .ts or .js file over 32 KB or any file over
  *   512 KB, which the index skips. Libraries that ship React Compiler output
  *   count as app.
+ * - Minified or vendored .js under 32 KB inside the project root is indexed, so
+ *   a library component named like one of its functions counts as app.
  * - Names DevTools cannot resolve (`Anonymous`) are left out.
  */
 import { ANIMATED_PATTERN } from "./pipeline/03-tag";

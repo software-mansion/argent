@@ -232,7 +232,7 @@ function pickPrimary(entries: ComponentIndexEntry[]): {
 
 /** What tree-sitter parses with its default 32 KB buffer. */
 const DEFAULT_PARSE_BUFFER_CHARS = 32 * 1024 - 1;
-/** Over this a file is generated or vendored, not a screen someone wrote. */
+/** Limit for .tsx and .jsx. Over this a file is generated or vendored, not a screen someone wrote. */
 const MAX_JSX_FILE_CHARS = 512 * 1024;
 
 /**
@@ -270,12 +270,14 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
     // fails at the first tag and drops every component after it. TSX parses all
     // of JavaScript, so only .ts, where `<T>value` casts conflict with JSX, keeps
     // the TypeScript grammar.
-    const isTsxFile = file.endsWith(".tsx") || file.endsWith(".jsx") || file.endsWith(".js");
-    const language = isTsxFile ? tsxLang : tsLang;
+    const isJsxFile = file.endsWith(".tsx") || file.endsWith(".jsx");
+    const language = isJsxFile || file.endsWith(".js") ? tsxLang : tsLang;
     // Walking a tree is the slow part, not parsing it. Large plain .ts files hold
     // data, not components: Bluesky's 55 cost about 3 s of CPU and add no names,
-    // while its 13 large .tsx files are real screens.
-    if (source.length > (isTsxFile ? MAX_JSX_FILE_CHARS : DEFAULT_PARSE_BUFFER_CHARS)) continue;
+    // while its 13 large .tsx files are real screens. A large .js file can be a
+    // minified bundle, whose one-letter function names would be indexed as the
+    // app's components, so it keeps the small limit too.
+    if (source.length > (isJsxFile ? MAX_JSX_FILE_CHARS : DEFAULT_PARSE_BUFFER_CHARS)) continue;
 
     let tree: { rootNode: TreeSitterNode };
     try {
