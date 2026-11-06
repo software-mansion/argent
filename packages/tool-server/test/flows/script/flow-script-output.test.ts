@@ -88,7 +88,17 @@ describe("flow script executor — output validation", () => {
     [
       "a class instance",
       `class Order {}; output.order = new Order();`,
-      "output.order is a Order; output must be JSON-compatible data",
+      "output.order is an Order; output must be JSON-compatible data",
+    ],
+    [
+      "a typed array",
+      `output.bytes = new Uint8Array(1);`,
+      "output.bytes is a Uint8Array; output must be JSON-compatible data",
+    ],
+    [
+      "an object inheriting from a plain one",
+      `output.x = Object.create({});`,
+      "output.x is an object with an unusual prototype; output must be JSON-compatible data",
     ],
   ])("rejects %s, naming its exact path", async (_label, source, expected) => {
     const result = await run(source);
@@ -128,6 +138,15 @@ describe("flow script executor — output validation", () => {
     const result = await run(`output = "done";`);
     expect(result.failure?.kind).toBe("output");
     expect(result.failure?.message).toBe("output is a string; output must be a plain object");
+  });
+
+  it.each([
+    ["new Error('e')", "an Error"],
+    ["new ArrayBuffer(1)", "an ArrayBuffer"],
+    ["Object.create({})", "an object with an unusual prototype"],
+  ])("names a non-plain output (%s) as %s", async (value, named) => {
+    const result = await run(`output = ${value};`);
+    expect(result.failure?.message).toBe(`output is ${named}; output must be a plain object`);
   });
 
   it("rejects output above the 1 MiB encoded limit", async () => {
