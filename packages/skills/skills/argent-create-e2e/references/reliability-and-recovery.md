@@ -43,7 +43,7 @@ On an iOS simulator, the full runner tree exists only for an app launched by Arg
 
 1. If Metro, Expo, Xcode, an icon, or a prior process launched the app, call `restart-app`. Restore the source screen and retry capture. `launch-app` can only foreground the existing process.
 2. Tap capture does **not** wait for that connection. It makes one tree read and turns any failure straight into the kept-coordinates warning. A recording-time `restart-app` returns before the devtools connection opens, so the first tap after a restart can warn transiently. Re-record that tap once before escalating; only a warning that survives the retry is evidence of a real fault.
-3. If the warning survives, call `native-full-hierarchy` with the same UDID and bundle id and `maxDepth: 1`. A `status` other than `ok` carries a `message`: follow it. It names the one action that helps and says when to stop.
+3. If the warning survives, call `native-full-hierarchy` with the same UDID and bundle id and `maxDepth: 1`. A `status` other than `ok` carries a `message`: follow it. It names the one action that helps and says when to stop. If the call fails with `ViewInspector RPC timed out`, the app is connected and its main thread is stalled, so skip step 4: wait a few seconds, then repeat this call.
 4. If an injectable app remains disconnected, call `stop-all-simulator-servers` once, **scoped to `devices: [<this simulator's UDID>]`**. This does not change app or account data. Then restart and repeat the step 3 call.
 5. If it still fails, report an instrumentation blocker. Do not replace selectors with coordinates in a QA e2e test.
 
