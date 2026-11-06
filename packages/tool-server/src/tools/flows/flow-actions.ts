@@ -742,6 +742,40 @@ function leadingRoom(
 }
 
 /**
+ * Where to retry a cut `target` whose anchor's wheel left it in place, with no
+ * `within` named: the centre of `region`, the window that cuts it. When a
+ * scroller inside the target lies there, a wheel would scroll the target's own
+ * content, so the retry moves halfway from `anchor` to the target's visible
+ * start, which stays in the cutter's visible window.
+ */
+function stuckCutRetry(
+  tree: DescribeNode,
+  region: DescribeFrame,
+  target: DescribeFrame,
+  anchor: { x: number; y: number },
+  direction: ScrollDirection
+): { x: number; y: number } {
+  const centre = { x: region.x + region.width / 2, y: region.y + region.height / 2 };
+  const e = 1e-3;
+  const inTarget = (f: DescribeFrame) =>
+    f.x >= target.x - e &&
+    f.y >= target.y - e &&
+    f.x + f.width <= target.x + target.width + e &&
+    f.y + f.height <= target.y + target.height + e;
+  if (!anchorScrollFrames(tree, centre).some(inTarget)) return centre;
+  switch (direction) {
+    case "down":
+      return { x: anchor.x, y: (anchor.y + target.y) / 2 };
+    case "up":
+      return { x: anchor.x, y: (anchor.y + target.y + target.height) / 2 };
+    case "right":
+      return { x: (anchor.x + target.x) / 2, y: anchor.y };
+    case "left":
+      return { x: (anchor.x + target.x + target.width) / 2, y: anchor.y };
+  }
+}
+
+/**
  * Dispatch one momentum-free scroll increment anchored at `anchor`, else at the
  * center of `region`. The anchor (the touch-down / wheel point) is what selects the scroll
  * container — the OS routes the gesture to the innermost scroller hit-tested
@@ -888,8 +922,9 @@ async function scrollToVisible(
     // wheel at the anchor cannot scroll away (its scroller is at its end, or a wheel
     // taker the walker cannot see holds the anchor, such as a page's wheel listener):
     // it is accepted where it is, after one more increment at the centre of the
-    // `within` container, else of the window that cuts it. A cut that one leaves in
-    // place too is accepted, so a wheel the page takes is sent at most once.
+    // `within` container, else of the window that cuts it (see stuckCutRetry). A
+    // cut that one leaves in place too is accepted, so the page takes at most two
+    // wheels.
     const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
     const shown = room === undefined ? undefined : (vertical ? region.height : region.width) - room;
     let spentNow = false;
@@ -928,9 +963,17 @@ async function scrollToVisible(
 
     // A cut target moves no further than its visible start is from the
     // window's, or one taller than half the window would be carried past it.
-    const sent = anchorSpent
-      ? await scrollIncrement(env, axisDirection, container?.frame ?? region, room)
-      : await scrollIncrement(env, axisDirection, region, room, anchor);
+    const sent = !anchorSpent
+      ? await scrollIncrement(env, axisDirection, region, room, anchor)
+      : container
+        ? await scrollIncrement(env, axisDirection, container.frame, room)
+        : await scrollIncrement(
+            env,
+            axisDirection,
+            region,
+            room,
+            stuckCutRetry(tree, region, frame!, anchor!, axisDirection)
+          );
     warning ??= sent;
   }
   return {

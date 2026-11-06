@@ -525,13 +525,28 @@ describe("scroll-to directive", () => {
 
   it.each([
     // Half the window that cuts the row (0.4-0.8, centred on the row's column).
-    { name: "the window that cuts it", within: undefined, at: [0.75, 0.6], travel: 0.2 },
+    {
+      name: "at the centre of the window that cuts it",
+      within: undefined,
+      at: [0.75, 0.6],
+      travel: 0.2,
+    },
     // Half the container.
-    { name: "the `within` container", within: "pane", at: [0.75, 0.6], travel: 0.3 },
+    {
+      name: "at the centre of the `within` container",
+      within: "pane",
+      at: [0.75, 0.6],
+      travel: 0.3,
+    },
     // No further than the row's visible start is from the window's (0.35).
-    { name: "a tall `within` container", within: "tall", at: [0.75, 0.55], travel: 0.35 },
+    {
+      name: "at the centre of a tall `within` container",
+      within: "tall",
+      at: [0.75, 0.55],
+      travel: 0.35,
+    },
   ])(
-    "retries a cut the anchor's wheel left in place once, at the centre of $name",
+    "retries a cut the anchor's wheel left in place once, $name",
     async ({ within, at, travel }) => {
       // A wheel taker the walker cannot see (a closed shadow root's scroller, a
       // page's wheel listener) holds the anchor, and the tree shows nothing move.
@@ -578,6 +593,34 @@ describe("scroll-to directive", () => {
       expect(swipes[1].fromY - swipes[1].toY).toBeCloseTo(travel);
     }
   );
+
+  it("retries a stuck cut off a scrollable target that covers its window's centre", async () => {
+    // A wheel on the target (a textarea, a nested list) scrolls the target's own
+    // content, not the window that cuts it.
+    const target = n({
+      identifier: "editor",
+      scrollable: true,
+      frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.3 },
+      clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+      clipAnchors: { y: { x: 0.5, y: 0.45 } },
+    });
+    currentTree = () => screen([target]);
+    const swipes: SwipeCall[] = [];
+    await writeFlow("scrollable-target", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "editor" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(swipes, () => {})).execute(
+        {},
+        { name: "scrollable-target", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(2);
+    expect(swipes[1].fromX).toBeCloseTo(0.5);
+    expect(swipes[1].fromY).toBeCloseTo(0.475);
+  });
 
   it("keeps the anchor for a cut whose room recurs in a window of another length", async () => {
     // The first wheel scrolls the inner of two cutting lists until it no longer
