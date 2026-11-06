@@ -497,6 +497,17 @@ describe("profiler-commit-query render_counts", () => {
     expect(out).toContain("mode=`render_counts` without `component_name`");
     expect(out).not.toContain("by_index");
   });
+
+  it("says no commits were recorded instead of printing an empty table", async () => {
+    await cacheSession("counts-idle-device", [], {
+      hotCommitIndices: [],
+      totalReactCommits: 0,
+      renderSummary: summarizeRenders([], [], 6000),
+    });
+    const out = await query("counts-idle-device", { mode: "render_counts" });
+    expect(out).toContain("No React commits were recorded");
+    expect(out).not.toContain("| Component |");
+  });
 });
 
 // ── profiler-cpu-query ────────────────────────────────────────────────
@@ -567,6 +578,39 @@ describe("profiler-cpu-query component_cpu", () => {
     const out = await componentCpu("cpu-old-miss-device", "Nope");
     expect(out).toContain("across 1 commits");
     expect(out).toContain("mode=by_index");
+  });
+
+  it("explains a session with no stored commit", async () => {
+    await cacheCpuSession("cpu-empty-device", [], {
+      hotCommitIndices: [],
+      totalReactCommits: 468,
+      renderSummary: clockSummary(),
+    });
+    const out = await componentCpu("cpu-empty-device", "ClockRow");
+    expect(out).toContain("none of its 468 React commits reached 16ms");
+    expect(out).toContain("mode=`render_counts`");
+    expect(out).toContain("mode=`top_functions`");
+  });
+
+  it("says nothing was recorded on a session with no commits", async () => {
+    await cacheCpuSession("cpu-idle-device", [], {
+      hotCommitIndices: [],
+      totalReactCommits: 0,
+      renderSummary: summarizeRenders([], [], 6000),
+    });
+    const out = await componentCpu("cpu-idle-device", "ClockRow");
+    expect(out).toContain("No React commits were recorded");
+    expect(out).not.toContain("16ms");
+  });
+
+  it("does not send a session without a summary to render_counts for counts", async () => {
+    await cacheCpuSession("cpu-old-device", [], {
+      hotCommitIndices: [],
+      totalReactCommits: 456,
+    });
+    const out = await componentCpu("cpu-old-device", "ClockRow");
+    expect(out).toContain("has no render summary");
+    expect(out).not.toContain("for render counts");
   });
 });
 

@@ -55,17 +55,21 @@ async function getCommitData(port: number, deviceId: string): Promise<StoredComm
   };
 }
 
+const NO_COMMITS_RECORDED =
+  "_No React commits were recorded in this session, so there is no commit data to query. " +
+  "Interact with the app while the profiler records._";
+
 /**
  * A stopped session with no kept commit is a normal outcome, not a missing
  * session: stop keeps per-commit detail only for commits of 16ms or more and
  * their neighbours. Say so instead of telling the caller to profile again.
  */
-export function renderNoStoredCommits(data: StoredCommitData): string {
+export function renderNoStoredCommits(
+  data: Pick<StoredCommitData, "renderSummary" | "totalReactCommits">
+): string {
   const summary = data.renderSummary;
   const total = summary?.totalCommits ?? data.totalReactCommits;
-  if (total === 0) {
-    return "_No React commits were recorded in this session, so there is no commit data to query._";
-  }
+  if (total === 0) return NO_COMMITS_RECORDED;
   const peak =
     summary && summary.maxCommitMs > 0 ? ` (peak ${formatPeakCommit(summary.maxCommitMs)})` : "";
   const count = total !== null ? `its ${formatCount(total)} React commits` : "its React commits";
@@ -105,6 +109,7 @@ export function renderRenderCounts(
       "Re-profile to get render counts over all commits; the other modes still cover the commits of 16ms or more._"
     );
   }
+  if (summary.totalCommits === 0) return NO_COMMITS_RECORDED;
   const seconds = Math.max(summary.recordingMs / 1000, 0.001);
   let rows = summary.components;
   let heading = `## Render Counts — all ${formatCount(summary.totalCommits)} commits`;
