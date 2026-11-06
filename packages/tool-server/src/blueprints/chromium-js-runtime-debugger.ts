@@ -1,5 +1,3 @@
-import { WebSocketServer, WebSocket } from "ws";
-import * as http from "node:http";
 import {
   TypedEventEmitter,
   type DeviceInfo,
@@ -52,48 +50,6 @@ function formatConsoleArgs(params: ConsoleAPICalledParams): string {
       return `[${arg.type}]`;
     })
     .join(" ");
-}
-
-function createConsoleLogServer(
-  consoleEvents: TypedEventEmitter<ConsoleLogEvents>,
-  logWriter: LogFileWriter
-): Promise<{ url: string; close: () => Promise<void> }> {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer();
-    const wss = new WebSocketServer({ server });
-
-    wss.on("connection", (ws) => {
-      for (const entry of logWriter.readAll()) {
-        ws.send(JSON.stringify(entry));
-      }
-      const onLog = (entry: ConsoleLogEntry) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify(entry));
-        }
-      };
-      consoleEvents.on("log", onLog);
-      ws.on("close", () => consoleEvents.off("log", onLog));
-    });
-
-    server.listen(0, "127.0.0.1", () => {
-      const addr = server.address();
-      if (!addr || typeof addr === "string") {
-        reject(new Error("Failed to bind console log server"));
-        return;
-      }
-      const url = `ws://127.0.0.1:${addr.port}`;
-      resolve({
-        url,
-        close: () =>
-          new Promise<void>((res) => {
-            wss.clients.forEach((c) => c.close());
-            wss.close(() => server.close(() => res()));
-          }),
-      });
-    });
-
-    server.on("error", reject);
-  });
 }
 
 function makeStubSourceResolver(): SourceResolver {
@@ -164,7 +120,7 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
 
     const onConsoleAPI = (params: ConsoleAPICalledParams) => {
       // consoleAPICalled.timestamp is ms-since-epoch on Chrome as on Hermes (see
-      // consoleTimestampToIso); keep it finite so streamed entries carry a usable
+      // consoleTimestampToIso); keep it finite so emitted entries carry a usable
       // number.
       const ts = Number.isFinite(params.timestamp) ? params.timestamp : Date.now();
       const entry: ConsoleLogEntry = {
@@ -189,8 +145,6 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       consoleEvents.emit("log", entry);
     };
     cdp.events.on("consoleAPICalled", onConsoleAPI);
-
-    const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
 
     // Best-effort: no Chromium-capable tool uses evaluateWithBinding today (its
     // only two callers are gated RN-only), so a failure here is not fatal.
@@ -220,7 +174,6 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       sourceMaps,
       logWriter,
       consoleEvents,
-      consoleSocketUrl: consoleServer.url,
     };
 
     return {
@@ -228,7 +181,6 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       dispose: async () => {
         cdp.events.off("consoleAPICalled", onConsoleAPI);
         cdp.events.off("disconnected", onDisconnected);
-        await consoleServer.close();
         // `logWriter.close()` below unlinks the log file unless the socket
         // dropped (likely an app crash), and this dispose is routinely
         // triggered by another agent's `stop-all-simulator-servers`

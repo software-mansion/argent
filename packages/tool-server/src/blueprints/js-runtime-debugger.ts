@@ -25,8 +25,6 @@ import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import { DISABLE_LOGBOX_SCRIPT } from "../utils/debugger/scripts/disable-logbox";
 import { LogFileWriter } from "../utils/debugger/log-file-writer";
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
-import { WebSocketServer, WebSocket } from "ws";
-import * as http from "node:http";
 
 export const JS_RUNTIME_DEBUGGER_NAMESPACE = "JsRuntimeDebugger";
 
@@ -72,56 +70,6 @@ function formatConsoleArgs(params: ConsoleAPICalledParams): string {
     .join(" ");
 }
 
-function createConsoleLogServer(
-  consoleEvents: TypedEventEmitter<ConsoleLogEvents>,
-  logWriter: LogFileWriter
-): Promise<{ url: string; close: () => Promise<void> }> {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer();
-    const wss = new WebSocketServer({ server });
-
-    wss.on("connection", (ws) => {
-      for (const entry of logWriter.readAll()) {
-        ws.send(JSON.stringify(entry));
-      }
-
-      const onLog = (entry: ConsoleLogEntry) => {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify(entry));
-        }
-      };
-      consoleEvents.on("log", onLog);
-      ws.on("close", () => consoleEvents.off("log", onLog));
-    });
-
-    server.listen(0, "127.0.0.1", () => {
-      const addr = server.address();
-      if (!addr || typeof addr === "string") {
-        reject(
-          new FailureError("Failed to bind console log server", {
-            error_code: FAILURE_CODES.JS_RUNTIME_CONSOLE_SERVER_BIND_FAILED,
-            failure_stage: "js_runtime_console_server_bind",
-            failure_area: "tool_server",
-            error_kind: "network",
-          })
-        );
-        return;
-      }
-      const url = `ws://127.0.0.1:${addr.port}`;
-      resolve({
-        url,
-        close: () =>
-          new Promise<void>((res) => {
-            wss.clients.forEach((c) => c.close());
-            wss.close(() => server.close(() => res()));
-          }),
-      });
-    });
-
-    server.on("error", reject);
-  });
-}
-
 /**
  * What a React Native runtime says about itself in
  * `ReactNativeApplication.metadataUpdated`, its answer to the enable sent at
@@ -149,7 +97,6 @@ export interface JsRuntimeDebuggerApi {
   sourceMaps: SourceMapsRegistry;
   logWriter: LogFileWriter;
   consoleEvents: TypedEventEmitter<ConsoleLogEvents>;
-  consoleSocketUrl: string;
 }
 
 export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
@@ -355,8 +302,6 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       consoleEvents.emit("log", entry);
     });
 
-    const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
-
     const api: JsRuntimeDebuggerApi = {
       port,
       projectRoot: metro.projectRoot,
@@ -370,7 +315,6 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       sourceMaps,
       logWriter,
       consoleEvents,
-      consoleSocketUrl: consoleServer.url,
     };
 
     // Connect is the only place both ids are known at once; the alias keeps a
@@ -424,7 +368,6 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         }
         forgetDeviceAlias(api.logicalDeviceId);
         forgetLogicalKeyedDevice(deviceId);
-        await consoleServer.close();
         logWriter.close({ keepFile });
         await cdp.disconnect();
       },

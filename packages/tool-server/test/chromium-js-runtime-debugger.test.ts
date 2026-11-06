@@ -121,6 +121,22 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     }
   });
 
+  it("factory opens no listening socket of its own", async () => {
+    const listening = () =>
+      process.getActiveResourcesInfo().filter((r) => r === "TCPServerWrap").length;
+    const before = listening();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: makeFakeChromiumCdpApi().api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    try {
+      expect(listening()).toBe(before);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
   it("dispose unsubscribes from the underlying CDP — events do NOT keep firing", async () => {
     const fake = makeFakeChromiumCdpApi();
     const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(

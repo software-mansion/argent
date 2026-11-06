@@ -256,4 +256,16 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
     })) as { result: unknown };
     expect(evaluation.result).toBe("eval-result-42");
   });
+
+  it("opens no listening socket of its own", async () => {
+    const listening = () =>
+      process.getActiveResourcesInfo().filter((r) => r === "TCPServerWrap").length;
+    const before = listening();
+    const result = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: "socket-count-device",
+    })) as Record<string, unknown>;
+    expect(result.connected).toBe(true);
+    expect(listening()).toBe(before);
+  });
 });
