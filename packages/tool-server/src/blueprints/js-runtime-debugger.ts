@@ -10,7 +10,7 @@ import { discoverMetro } from "../utils/debugger/discovery";
 import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
-import { proxyStart } from "../utils/sim-remote";
+import { reverseStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
 import {
   rememberDeviceAlias,
@@ -203,10 +203,10 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     // A remote (cloud) sim reaches the developer's LOCAL Metro over a sim-remote
     // reverse tunnel: the sim's localhost:<port> is forwarded out to this host.
     // Only the app→Metro hop needs it — discoverMetro below still reaches Metro
-    // directly. proxyStart tolerates "already started", so re-ensuring it on
+    // directly. reverseStart tolerates "already started", so re-ensuring it on
     // every connect is cheap.
     if (classifyDevice(deviceId) === "ios-remote") {
-      await proxyStart(deviceId, port);
+      await reverseStart(deviceId, port);
     }
 
     /**
