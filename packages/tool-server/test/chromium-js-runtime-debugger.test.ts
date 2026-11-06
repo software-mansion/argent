@@ -102,16 +102,14 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
       expect(typeof instance.api.sourceMaps.waitForPending).toBe("function");
       await expect(instance.api.sourceMaps.waitForPending()).resolves.toBeUndefined();
 
-      // Console events from the CDP feed through to the api's consoleEvents.
-      const received: unknown[] = [];
-      instance.api.consoleEvents.on("log", (entry) => received.push(entry));
       fake.events.emit("consoleAPICalled", {
         type: "log",
         args: [{ type: "string", value: "hello" }],
         timestamp: Date.now(),
       });
-      expect(received).toHaveLength(1);
-      expect((received[0] as { message: string }).message).toBe("hello");
+      const logged = instance.api.logWriter.readAll();
+      expect(logged).toHaveLength(1);
+      expect(logged[0].message).toBe("hello");
 
       // Binding is registered best-effort so future tools using
       // evaluateWithBinding don't need their own setup.
@@ -144,15 +142,14 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
       "chromium-cdp-19222",
       { device: chromiumDevice }
     );
-    const received: unknown[] = [];
-    instance.api.consoleEvents.on("log", (entry) => received.push(entry));
+    const write = vi.spyOn(instance.api.logWriter, "write");
     await instance.dispose();
     fake.events.emit("consoleAPICalled", {
       type: "log",
       args: [{ type: "string", value: "after-dispose" }],
       timestamp: Date.now(),
     });
-    expect(received).toHaveLength(0);
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("dispose leaves a reaped-session breadcrumb when it deletes captured history", async () => {
@@ -298,10 +295,6 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
       { device: chromiumDevice }
     );
     try {
-      const received: Array<{ message: string; timestamp: number }> = [];
-      instance.api.consoleEvents.on("log", (entry) =>
-        received.push({ message: entry.message, timestamp: entry.timestamp })
-      );
       const before = Date.now();
       fake.events.emit("consoleAPICalled", {
         type: "log",
@@ -309,12 +302,13 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
         timestamp: Number.NaN,
       });
       const after = Date.now();
-      expect(received).toHaveLength(1);
-      expect(received[0].message).toBe("nan-test");
-      // Coerced to Date.now() — must be finite and within the call window.
-      expect(Number.isFinite(received[0].timestamp)).toBe(true);
-      expect(received[0].timestamp).toBeGreaterThanOrEqual(before);
-      expect(received[0].timestamp).toBeLessThanOrEqual(after);
+      const logged = instance.api.logWriter.readAll();
+      expect(logged).toHaveLength(1);
+      expect(logged[0].message).toBe("nan-test");
+      // Coerced to Date.now(), so it lands within the call window.
+      const loggedAt = Date.parse(logged[0].timestamp);
+      expect(loggedAt).toBeGreaterThanOrEqual(before);
+      expect(loggedAt).toBeLessThanOrEqual(after);
     } finally {
       await instance.dispose();
     }

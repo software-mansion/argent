@@ -8,14 +8,10 @@ import { CHROMIUM_CDP_NAMESPACE, type ChromiumCdpApi } from "./chromium-cdp";
 import type { ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import type { SourceResolver } from "../utils/debugger/source-resolver";
-import { LogFileWriter } from "../utils/debugger/log-file-writer";
+import { LogFileWriter, type RichLogEntry } from "../utils/debugger/log-file-writer";
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 import { recordReapedSession } from "../utils/reaped-sessions";
-import {
-  type ConsoleLogEntry,
-  type ConsoleLogEvents,
-  type JsRuntimeDebuggerApi,
-} from "./js-runtime-debugger";
+import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 
 export const CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE = "ChromiumJsRuntimeDebugger";
 
@@ -115,34 +111,16 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     cdp.events.on("disconnected", onDisconnected);
 
     const logWriter = new LogFileWriter(port);
-    const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
     const onConsoleAPI = (params: ConsoleAPICalledParams) => {
-      // consoleAPICalled.timestamp is ms-since-epoch on Chrome as on Hermes (see
-      // consoleTimestampToIso); keep it finite so emitted entries carry a usable
-      // number.
-      const ts = Number.isFinite(params.timestamp) ? params.timestamp : Date.now();
-      const entry: ConsoleLogEntry = {
-        id: nextLogId++,
-        level: params.type,
-        args: params.args.map((a) => ({
-          type: a.type,
-          value: a.value,
-          description: a.description,
-        })),
-        message: formatConsoleArgs(params),
-        timestamp: ts,
-        stackTrace: params.stackTrace as ConsoleLogEntry["stackTrace"],
-      };
       logWriter.write({
-        id: entry.id,
-        timestamp: consoleTimestampToIso(ts),
-        level: entry.level,
-        message: entry.message,
-        stackTrace: entry.stackTrace,
+        id: nextLogId++,
+        timestamp: consoleTimestampToIso(params.timestamp),
+        level: params.type,
+        message: formatConsoleArgs(params),
+        stackTrace: params.stackTrace as RichLogEntry["stackTrace"],
       });
-      consoleEvents.emit("log", entry);
     };
     cdp.events.on("consoleAPICalled", onConsoleAPI);
 
@@ -173,7 +151,6 @@ export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       sourceResolver,
       sourceMaps,
       logWriter,
-      consoleEvents,
     };
 
     return {

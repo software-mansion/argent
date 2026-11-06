@@ -23,31 +23,10 @@ import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-cl
 import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import { DISABLE_LOGBOX_SCRIPT } from "../utils/debugger/scripts/disable-logbox";
-import { LogFileWriter } from "../utils/debugger/log-file-writer";
+import { LogFileWriter, type RichLogEntry } from "../utils/debugger/log-file-writer";
 import { consoleTimestampToIso } from "../utils/debugger/console-timestamp";
 
 export const JS_RUNTIME_DEBUGGER_NAMESPACE = "JsRuntimeDebugger";
-
-export interface ConsoleLogEntry {
-  id: number;
-  level: string;
-  args: Array<{ type: string; value?: unknown; description?: string }>;
-  message: string;
-  timestamp: number;
-  stackTrace?: {
-    callFrames: Array<{
-      functionName: string;
-      scriptId: string;
-      url: string;
-      lineNumber: number;
-      columnNumber: number;
-    }>;
-  };
-}
-
-export type ConsoleLogEvents = {
-  log: (entry: ConsoleLogEntry) => void;
-};
 
 function stringifyConsoleValue(value: unknown): string {
   if (typeof value === "object" && value !== null) {
@@ -96,7 +75,6 @@ export interface JsRuntimeDebuggerApi {
   sourceResolver: SourceResolver;
   sourceMaps: SourceMapsRegistry;
   logWriter: LogFileWriter;
-  consoleEvents: TypedEventEmitter<ConsoleLogEvents>;
 }
 
 export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
@@ -276,30 +254,16 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const sourceResolver = createSourceResolver(port, metro.projectRoot);
 
     const logWriter = new LogFileWriter(port);
-    const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
     cdp.events.on("consoleAPICalled", (params) => {
-      const entry: ConsoleLogEntry = {
-        id: nextLogId++,
-        level: params.type,
-        args: params.args.map((a) => ({
-          type: a.type,
-          value: a.value,
-          description: a.description,
-        })),
-        message: formatConsoleArgs(params),
-        timestamp: params.timestamp,
-        stackTrace: params.stackTrace as ConsoleLogEntry["stackTrace"],
-      };
       logWriter.write({
-        id: entry.id,
-        timestamp: consoleTimestampToIso(entry.timestamp),
-        level: entry.level,
-        message: entry.message,
-        stackTrace: entry.stackTrace,
+        id: nextLogId++,
+        timestamp: consoleTimestampToIso(params.timestamp),
+        level: params.type,
+        message: formatConsoleArgs(params),
+        stackTrace: params.stackTrace as RichLogEntry["stackTrace"],
       });
-      consoleEvents.emit("log", entry);
     });
 
     const api: JsRuntimeDebuggerApi = {
@@ -314,7 +278,6 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       sourceResolver,
       sourceMaps,
       logWriter,
-      consoleEvents,
     };
 
     // Connect is the only place both ids are known at once; the alias keeps a
