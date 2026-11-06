@@ -25,6 +25,7 @@ import {
 } from "../../src/blueprints/react-profiler-session";
 import {
   DEFAULT_STALE_THRESHOLD_MS,
+  STALE_OWN_RUN_NOTE,
   STOP_IN_PROGRESS_NOTE,
   type ProfilerSessionOwner,
 } from "../../src/utils/react-profiler/session-ownership";
@@ -205,16 +206,23 @@ describe("react-profiler-start with a session already running", () => {
 
     const res = await start(registry);
 
-    expect(res).toMatchObject({ already_running: true, mine: true });
+    expect(res).toMatchObject({
+      already_running: true,
+      mine: true,
+      stale: false,
+      heartbeat_age_seconds: 1,
+    });
     expect(res.note).toContain("react-profiler-stop");
+    expect(res.note).not.toBe(STALE_OWN_RUN_NOTE);
     expect(res).not.toHaveProperty("how_to_reclaim");
     expect(evaluated).not.toContain(STOP_FOR_TAKEOVER_SCRIPT);
     expect(sent).not.toContain("Profiler.start");
   });
 
-  it("keeps the own run even when its heartbeat is stale", async () => {
+  it("keeps the own run even when its heartbeat is stale, and warns it may not be the caller's", async () => {
     // A stale heartbeat let any start take the run over silently, the
-    // caller's own included, discarding its data.
+    // caller's own included, discarding its data. `mine` only means this
+    // tool-server, which another agent or an earlier conversation can share.
     const { registry, evaluated } = fakeSession({
       app: { isRunning: true, owner: owner("uuid-mine", DEFAULT_STALE_THRESHOLD_MS + 60_000) },
       sessionId: "uuid-mine",
@@ -223,7 +231,13 @@ describe("react-profiler-start with a session already running", () => {
 
     const res = await start(registry);
 
-    expect(res).toMatchObject({ already_running: true, mine: true });
+    expect(res).toMatchObject({
+      already_running: true,
+      mine: true,
+      stale: true,
+      heartbeat_age_seconds: 360,
+      note: STALE_OWN_RUN_NOTE,
+    });
     expect(evaluated).not.toContain(STOP_FOR_TAKEOVER_SCRIPT);
   });
 
@@ -575,6 +589,7 @@ describe("react-profiler-stop with no run to stop", () => {
  * buffer and `stopProfiling` keeps it, and `toolServer` is one tool-server on it.
  */
 const T0 = 2_000_000_000_000;
+const MINUTE = 60_000;
 const OTHER_PORT = 8082;
 
 function newRuntime(nowEpochMs: number, renderers: number, tickMs: number) {
@@ -1309,6 +1324,72 @@ describe("the run lifecycle, on the real session and scripts", () => {
       app.run("__ri.stopProfiling(); __ri.__argent_startedAtEpochMs__ = null;");
 
       await expect(ts.stop()).resolves.toMatchObject({ fiber_renders_captured: 1 });
+    });
+  });
+
+  describe("a stale run of this tool-server", () => {
+    it("is flagged by start, and the recording keeps running", async () => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.advance(30 * MINUTE);
+
+      await expect(ts.start()).resolves.toMatchObject({
+        already_running: true,
+        mine: true,
+        stale: true,
+        heartbeat_age_seconds: 1_800,
+        note: STALE_OWN_RUN_NOTE,
+      });
+      expect(app.recording()).toBe(true);
+    });
+
+    it("is flagged by the status call that refreshes it, and not by the next one", async () => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.advance(30 * MINUTE);
+
+      await expect(ts.status()).resolves.toMatchObject({
+        session_status: "active",
+        stale: true,
+        heartbeat_age_seconds: 1_800,
+        note: STALE_OWN_RUN_NOTE,
+      });
+      expect(app.owner()?.lastHeartbeatEpochMs).toBe(app.now());
+
+      const next = await ts.status();
+      expect(next).toMatchObject({ stale: false, heartbeat_age_seconds: 0 });
+      expect(next.note).not.toBe(STALE_OWN_RUN_NOTE);
+    });
+
+    it("is not flagged while it is fresh", async () => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.advance(4 * MINUTE);
+
+      await expect(ts.status()).resolves.toMatchObject({
+        stale: false,
+        heartbeat_age_seconds: 240,
+      });
+    });
+
+    it("can still be replaced by another tool-server, which needs no force", async () => {
+      const app = makeApp();
+      const owner = toolServer(app, PORT);
+      const other = toolServer(app, OTHER_PORT);
+      await owner.start();
+      const run = app.owner()!.sessionId;
+      app.advance(6 * MINUTE);
+
+      const res = await other.start();
+
+      expect(res.took_over).toMatchObject({
+        session_id: run,
+        reason: "stale",
+        heartbeat_age_seconds: 360,
+      });
     });
   });
 });

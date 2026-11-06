@@ -12,6 +12,8 @@ import {
   READ_STATE_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
 import {
+  classifyStaleness,
+  STALE_OWN_RUN_NOTE,
   STOP_IN_PROGRESS_NOTE,
   takeoverOf,
   type ProfilerSessionOwner,
@@ -62,6 +64,8 @@ interface StatusResponse extends Record<string, unknown> {
   current_owner: ProfilerSessionOwner | null;
   session_status: SessionStatus;
   note: string;
+  stale?: boolean;
+  heartbeat_age_seconds?: number | null;
   saved_session?: SavedSessionInfo;
   lost_run?: LostRunInfo;
 }
@@ -227,12 +231,21 @@ export function createReactProfilerStatusTool(
       if (state.isRunning) {
         if (owner && ownRunId !== null && owner.sessionId === ownRunId) {
           if (recordingHere) {
+            // From the state read above: the heartbeat below would hide a stale run.
+            const { stale, heartbeatAgeSeconds } = classifyStaleness({
+              owner,
+              nowEpochMs: state.nowEpochMs,
+            });
             // Keep the run fresh for anyone deciding whether it is stale.
             await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
             return {
               ...inApp,
               session_status: "active",
-              note: "Your profiling session is still running. Call react-profiler-stop to collect the data, or continue profiling.",
+              stale,
+              heartbeat_age_seconds: heartbeatAgeSeconds,
+              note: stale
+                ? STALE_OWN_RUN_NOTE
+                : "A profiling session started through this tool-server is still running: yours, unless another agent shares this tool-server. Call react-profiler-stop to collect the data, or continue profiling.",
             };
           }
           return lostResponse(ownRunId, "stop_failed", true);

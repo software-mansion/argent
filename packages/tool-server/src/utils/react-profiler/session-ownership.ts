@@ -18,6 +18,16 @@ export const STOP_IN_PROGRESS_NOTE =
   "A react-profiler-stop is collecting this run. Wait for its result before you call " +
   "react-profiler-start or react-profiler-stop.";
 
+/**
+ * A tool-server has no agent identity, so a stale run of its own can be another
+ * agent's, or left over from an earlier conversation.
+ */
+export const STALE_OWN_RUN_NOTE =
+  "This recording was started through this tool-server, but its heartbeat is stale, so it may " +
+  "be left over from another agent or an earlier conversation. If you started it, call " +
+  "react-profiler-stop to collect it. If not, ask the user before you discard it with " +
+  "react-profiler-start { force: true }.";
+
 interface StalenessInput {
   owner: ProfilerSessionOwner | null;
   nowEpochMs: number;
@@ -27,6 +37,7 @@ interface StalenessInput {
 interface StalenessResult {
   stale: boolean;
   ageSeconds: number | null;
+  heartbeatAgeSeconds: number | null;
   canReclaimWithoutForce: boolean;
 }
 
@@ -45,6 +56,7 @@ export function classifyStaleness({
     return {
       stale: false,
       ageSeconds: null,
+      heartbeatAgeSeconds: null,
       canReclaimWithoutForce: true,
     };
   }
@@ -56,6 +68,7 @@ export function classifyStaleness({
   return {
     stale,
     ageSeconds: Math.max(0, ageMs) / 1000,
+    heartbeatAgeSeconds: Math.max(0, Math.round(heartbeatAgeMs / 1000)),
     canReclaimWithoutForce: stale,
   };
 }

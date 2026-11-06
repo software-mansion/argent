@@ -33,6 +33,7 @@ describe("classifyStaleness", () => {
     expect(r.stale).toBe(false);
     expect(r.canReclaimWithoutForce).toBe(true);
     expect(r.ageSeconds).toBeNull();
+    expect(r.heartbeatAgeSeconds).toBeNull();
   });
 
   it("keeps a fresh session non-stale and non-reclaimable", () => {
@@ -43,6 +44,16 @@ describe("classifyStaleness", () => {
     expect(r.stale).toBe(false);
     expect(r.canReclaimWithoutForce).toBe(false);
     expect(r.ageSeconds).toBeCloseTo(1, 3);
+    expect(r.heartbeatAgeSeconds).toBe(1);
+  });
+
+  it("keeps a session exactly at the threshold fresh", () => {
+    const r = classifyStaleness({
+      owner: owner({ lastHeartbeatEpochMs: 1_000_000_000 }),
+      nowEpochMs: 1_000_000_000 + DEFAULT_STALE_THRESHOLD_MS,
+    });
+    expect(r.stale).toBe(false);
+    expect(r.heartbeatAgeSeconds).toBe(DEFAULT_STALE_THRESHOLD_MS / 1000);
   });
 
   it("marks a session stale once lastHeartbeat is older than threshold", () => {
@@ -71,6 +82,7 @@ describe("classifyStaleness", () => {
       nowEpochMs: 1_000_000_000,
     });
     expect(r.ageSeconds).toBe(0);
+    expect(r.heartbeatAgeSeconds).toBe(0);
   });
 });
 

@@ -25,6 +25,7 @@ import {
 import {
   classifyStaleness,
   DEFAULT_STALE_THRESHOLD_MS,
+  STALE_OWN_RUN_NOTE,
   STOP_IN_PROGRESS_NOTE,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
@@ -92,7 +93,7 @@ type ReadStateResult =
 interface TakeoverReport {
   session_id: string | null;
   reason: "stale" | "unattributed" | "forced" | "own_unsaved";
-  heartbeat_age_seconds?: number;
+  heartbeat_age_seconds?: number | null;
   note: string;
 }
 
@@ -106,9 +107,9 @@ function describeTakeover(input: {
   mine: boolean;
   ownRunWasActive: boolean;
   stale: boolean;
-  nowEpochMs: number;
+  heartbeatAgeSeconds: number | null;
 }): TakeoverReport {
-  const { owner, mine, ownRunWasActive, stale, nowEpochMs } = input;
+  const { owner, mine, ownRunWasActive, stale, heartbeatAgeSeconds } = input;
   if (!owner) {
     return {
       session_id: null,
@@ -130,10 +131,6 @@ function describeTakeover(input: {
           note: `Stopped this tool-server's earlier run (session ${id}), which the app kept recording after it was lost; it was not saved.`,
         };
   }
-  const heartbeatAgeSeconds = Math.max(
-    0,
-    Math.round((nowEpochMs - owner.lastHeartbeatEpochMs) / 1000)
-  );
   return stale
     ? {
         session_id: id,
@@ -192,7 +189,7 @@ export function createReactProfilerStartTool(
 Use when you need to profile a user interaction.
 On an iOS simulator or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data. mine: true is your own run: call react-profiler-stop. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data. mine: true means this tool-server started the run: if it is yours, call react-profiler-stop. With stale: true it may be another agent's: follow the note. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     interaction: {
@@ -398,7 +395,11 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
             mine: true,
             owner,
             age_seconds: staleness.ageSeconds,
-            note: "A recording started through this tool-server is still running: yours, unless another agent shares this tool-server. Call react-profiler-stop to collect it. To discard it and start over, call react-profiler-start again with { force: true }.",
+            stale: staleness.stale,
+            heartbeat_age_seconds: staleness.heartbeatAgeSeconds,
+            note: staleness.stale
+              ? STALE_OWN_RUN_NOTE
+              : "A recording started through this tool-server is still running: yours, unless another agent shares this tool-server. Call react-profiler-stop to collect it. To discard it and start over, call react-profiler-start again with { force: true }.",
           };
         }
 
@@ -422,7 +423,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           mine,
           ownRunWasActive: mine && api.profilingActive,
           stale: staleness.stale,
-          nowEpochMs: state.nowEpochMs,
+          heartbeatAgeSeconds: staleness.heartbeatAgeSeconds,
         });
       }
 
