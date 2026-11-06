@@ -72,7 +72,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
+
+      # Mounted into the container for the tool-server; the image's own Node 20
+      # stays on PATH for the Vega SDK.
+      - name: Locate Node for the container
+        id: node
+        run: echo "dir=$(dirname "$(dirname "$(command -v node)")")" >> "$GITHUB_OUTPUT"
 
       # The package bundle copies these in and fails without them.
       - name: Download bundled binaries and assets
@@ -121,7 +127,10 @@ jobs:
         with:
           boot-timeout: 420
           screenshot-path: artifacts/vvd-ready.png
-          container-options: -e KEPLER_VPKG=fixtures/keplervideoapp_aarch64.vpkg
+          container-options: >-
+            -e KEPLER_VPKG=fixtures/keplervideoapp_aarch64.vpkg
+            -v ${{ steps.node.outputs.dir }}:/opt/argent-node:ro
+            -e ARGENT_NODE=/opt/argent-node/bin/node
           script: |
             set -ex
             bash scripts/ci/vega-vvd-test.sh
