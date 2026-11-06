@@ -94,6 +94,12 @@ const PROJECT_ROOT = "/proj";
 // throws by default — page-fronting swallows that, and a test that needs a
 // reachable CDP api (the pinned-device attach) overrides it; getSnapshot is
 // empty so teardown skips disposing a session; getTool is a stub.
+const BOOTED_IOS = {
+  platform: "ios",
+  udid: "00000000-0000-0000-0000-0000000000ab",
+  state: "Booted",
+};
+
 function makeRegistry(invoke: (id: string, args: unknown) => Promise<unknown> = async () => ({})) {
   return {
     invokeTool: vi.fn(invoke),
@@ -2052,7 +2058,10 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
       'executionPrerequisite: "logged in"\nsteps:\n  - run: helper\n'
     );
     await writeSiblingFlow(fragment, "helper", "steps:\n  - echo: nothing to launch\n");
-    const registry = makeRegistry();
+    // The notice comes after device selection, so the run needs a device to select.
+    const registry = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [BOOTED_IOS] } : {}
+    );
 
     const result = await runFlowRaw(registry, {
       name: "plain-prereq",
@@ -2079,8 +2088,11 @@ describe("flow-execute prerequisite vs leading launch chain", () => {
     const registry = makeRegistry(async (id: string) =>
       id === "list-devices" ? { devices: [] } : {}
     );
+    const withDevice = makeRegistry(async (id: string) =>
+      id === "list-devices" ? { devices: [BOOTED_IOS] } : {}
+    );
 
-    const noticed = await runFlowRaw(registry, {
+    const noticed = await runFlowRaw(withDevice, {
       name: "broken-chain",
       project_root: PROJECT_ROOT,
       e2e_test_file: fragment,
