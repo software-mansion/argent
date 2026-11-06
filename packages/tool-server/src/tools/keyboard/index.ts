@@ -74,6 +74,19 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+/** An Android read-back that proved the text did not land. Absent `verified` is not a failure. */
+export function isUnlandedKeyboardTextResult(
+  toolId: string,
+  result: unknown
+): result is { verified: false; note?: string } {
+  return (
+    toolId === "keyboard" &&
+    typeof result === "object" &&
+    result !== null &&
+    (result as { verified?: unknown }).verified === false
+  );
+}
+
 // TV is a `runtimeKind`, not a `platform` — a tvOS sim dispatches as "ios" and
 // an Android TV as "android" by id shape — so those two branches probe the kind
 // at runtime and route a TV target to the focus-driven backend. A non-TV target
@@ -108,7 +121,9 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; focus a text field with \`tv-remote\` first (e.g. a search or login box), then type into it with keyboard.
 Tap the field first: with no focus the text is dropped and the call still succeeds.
-Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
+Returns { typed: string, keys: number, verified?: boolean, note?: string }. On physical iOS, reactivated: true = app was re-fronted; re-describe.
+On an Android phone or tablet the focused field is read back, because \`adb input text\` can silently drop characters on a field that re-renders per keystroke. verified=true: the field holds the text. verified=false: it does not, and note gives the character counts. verified is absent when the check could not conclude (note says why), and on every other platform, including Android TV: absent means "not checked". A verified=false step stops a \`run-sequence\` and fails an e2e test step.
+Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
 A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
 React Native: after typing, the next tap outside the field may only close the keyboard. If only the keyboard closed, tap again; where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
     zodSchema,
@@ -128,12 +143,16 @@ React Native: after typing, the next tap outside the field may only close the ke
         if (params.key === undefined) return "Entering text";
         return "Entering text and pressing a key";
       },
-      completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
+      completedMsg: ({ params, result }) =>
+        params.text === undefined
+          ? "Pressed a key"
+          : `Entered text${result.verified === false ? " (text did not land)" : ""}`,
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
     capability,
-    // Typing time grows with text length on several backends and can outlast the MCP
-    // fetch timeout, whose abort replays the call: the text would be typed twice.
+    // Typing time grows with text length on several backends, and the Android read-back
+    // can first resolve its helper (an APK install, up to a 30 s READY timeout). Either can
+    // outlast the MCP fetch timeout, whose abort replays the call: the text would be typed twice.
     longRunning: true,
     services: () => ({}),
     execute: async (services, params, options) => {

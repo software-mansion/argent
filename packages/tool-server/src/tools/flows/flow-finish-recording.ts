@@ -45,17 +45,16 @@ function attachStepWarnings(
  * What `message` says about the warnings the summary carries, by KIND — and
  * about the ones it does NOT carry.
  *
- * The two kinds are different news, and only one is about conversion. A wait
- * that came back `success: false` was never probed: it failed live, and at
- * replay it stops the run. Counting it as a conversion warning states the
- * opposite of the actionable fact.
+ * Only `conversion` is about converting a wait; `wait` and `text` are live
+ * failures (see `RecordedStepWarning.kind`). Counting them as conversion
+ * warnings states the opposite of the actionable fact.
  *
  * `discarded` is what the anchor checks threw away. Dropping is the right
  * answer, but reporting it as a pass is not: a recording where every wait
  * diverged would otherwise return the same payload as a clean one.
  */
 function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: number): string {
-  const counts = { conversion: 0, wait: 0 };
+  const counts = { conversion: 0, wait: 0, text: 0 };
   for (const { kind } of warnings.values()) counts[kind] += 1;
   const clauses: string[] = [];
   if (counts.conversion > 0) {
@@ -69,6 +68,11 @@ function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: 
       `${counts.wait} ${counts.wait === 1 ? "step" : "steps"} recorded a wait that did not pass`
     );
   }
+  if (counts.text > 0) {
+    clauses.push(
+      `${counts.text} ${counts.text === 1 ? "step" : "steps"} recorded text that did not land`
+    );
+  }
   const carried =
     clauses.length === 0
       ? ""
@@ -79,7 +83,7 @@ function warningHeadline(warnings: Map<number, RecordedStepWarning>, discarded: 
     `${discarded} ${one ? "warning" : "warnings"} raised during this recording ${one ? "is" : "are"} ` +
     `NOT in \`summary\`: a hand edit to the .yaml moved the ${one ? "step it judged" : "steps they judged"}, ` +
     `so which step ${one ? "it belongs" : "they belong"} to is no longer knowable — re-record ` +
-    `${one ? "that wait" : "those waits"} to see ${one ? "it" : "them"} again`;
+    `${one ? "that step" : "those steps"} to see ${one ? "it" : "them"} again`;
   return carried === "" ? ` — ${drop}` : `${carried}. ${drop}`;
 }
 
@@ -149,7 +153,7 @@ export const flowFinishRecordingTool: ToolDefinition<
 > = {
   id: "e2e-finish-recording",
   description: `Finish recording the e2e test named by \`name\` + \`project_root\`, leaving recordings under any other key untouched. Returns { message, path, executionPrerequisite, steps, summary, e2eTestFile, savedTo } - a summary of all recorded steps plus the final YAML. Use when you have added all desired steps and want to finalize the e2e test file. Fails if that e2e test has no recording in progress.
-A warning e2e-add-step raised on a recorded \`await-ui-element\` is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test.
+A warning e2e-add-step raised on a recorded \`await-ui-element\` or \`keyboard\` step is repeated in \`summary\` as a \`warning:\` line right below its step, and \`message\` counts them by kind. Read them before you convert a wait to \`await:\`/\`assert:\` or replay the e2e test. A \`keyboard\` step whose text did not land stops the run at replay.
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   aliases: ["flow-finish-recording"],

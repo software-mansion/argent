@@ -98,6 +98,19 @@ describe("tool interaction messages", () => {
     ).toBe(`Failed to tap at (50%, 25%): ${failureSignal.error_code}`);
   });
 
+  it("carries the keyboard read-back's negative verdict into the completed line", () => {
+    const definitions = definitionsById(createRegistry());
+    const completed = definitions.get("keyboard")!.interaction!.completedMsg!;
+
+    expect(completed({ params: { udid: "d", text: "hi" }, result: { verified: false } })).toBe(
+      "Entered text (text did not land)"
+    );
+    expect(completed({ params: { udid: "d", text: "hi" }, result: { verified: true } })).toBe(
+      "Entered text"
+    );
+    expect(completed({ params: { udid: "d", text: "hi" }, result: {} })).toBe("Entered text");
+  });
+
   it("does not claim a comparison for a dimension-mismatch screenshot-diff", () => {
     const completedMsg =
       definitionsById(createRegistry()).get("screenshot-diff")!.interaction!.completedMsg!;
