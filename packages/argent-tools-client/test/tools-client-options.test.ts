@@ -68,6 +68,12 @@ beforeEach(async () => {
             fileInputs: [{ target: "appPath", path: "${appPath}", kind: "tar-upload" }],
           },
           {
+            name: "record",
+            description: "",
+            inputSchema: {},
+            fileInputs: [{ target: "project_root", path: "${project_root}", kind: "probe" }],
+          },
+          {
             name: "run-flow",
             description: "",
             inputSchema: {},
@@ -97,6 +103,8 @@ beforeEach(async () => {
       return json({ data: { reinstalled: true } });
     }
     if (req.method === "POST" && req.url === "/tools/run-flow") return json({ data: runFlowData });
+    if (req.method === "POST" && req.url === "/tools/record")
+      return json({ data: { recorded: true } });
     if (req.method === "POST" && req.url === "/tools/proxy-page") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html>Sign in</html>");
@@ -133,7 +141,7 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: false }),
     });
     const tools = await withOverride.fetchTools();
-    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app", "run-flow"]);
+    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app", "record", "run-flow"]);
 
     const withoutOverride = createToolsClient();
     await expect(withoutOverride.fetchTools()).rejects.toThrow(
@@ -320,7 +328,36 @@ describe("createToolsClient options", () => {
       inside,
       { path: outside, error: `${outside} is not a baseline of this call (${dir}/<name>.png)` },
     ]);
+    expect((data as { ok: unknown }).ok).toBe(false);
     expect(existsSync(outside)).toBe(false);
+  });
+
+  it("keeps ok: true when it writes every baseline the run returns", async () => {
+    const flowPath = join(TEST_HOME, "allwritten.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const inside = join(realpathSync(TEST_HOME), "__baselines__", "allwritten", "t__ios-30x60.png");
+    runFlowData = {
+      ok: true,
+      baselineWrites: [
+        {
+          __argentClientFile: true,
+          path: inside,
+          content: Buffer.from("png").toString("base64"),
+          encoding: "base64",
+        },
+      ],
+    };
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    const { data } = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+      updateBaselines: true,
+    });
+
+    expect(data).toEqual({ ok: true, baselineWrites: [inside] });
   });
 
   it("logs each baseline it writes under the [e2e-files] tag", async () => {
@@ -390,5 +427,60 @@ describe("createToolsClient options", () => {
 
     expect(buffered.outputHint).toBe("image");
     expect(streamed).toEqual({ data: { ok: true }, outputHint: "image" });
+  });
+});
+
+describe("refuseRelativeProjectRoot", () => {
+  const recordBodies = () =>
+    requests
+      .filter((r) => r.url === "/tools/record")
+      .map((r) => JSON.parse(r.body) as Record<string, unknown>);
+
+  it("refuses a relative project_root without calling the tool", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectRoot: true,
+    });
+
+    await expect(callTool("record", { project_root: "." })).rejects.toThrow(
+      'project_root must be an absolute path (got ".")'
+    );
+    expect(recordBodies()).toEqual([]);
+  });
+
+  it("sends an absolute project_root", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectRoot: true,
+    });
+
+    await callTool("record", { project_root: TEST_HOME });
+
+    expect(recordBodies()).toEqual([
+      { project_root: { __argentFileInput: true, path: TEST_HOME } },
+    ]);
+  });
+
+  it("leaves project_root alone for a tool whose file inputs do not name it", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectRoot: true,
+    });
+
+    await expect(callTool("slow", { project_root: "." })).resolves.toMatchObject({
+      data: { ok: true },
+    });
+  });
+
+  it("resolves a relative project_root against the cwd without the option", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+    });
+
+    await callTool("record", { project_root: "." });
+
+    expect(recordBodies()).toEqual([
+      { project_root: { __argentFileInput: true, path: process.cwd() } },
+    ]);
   });
 });

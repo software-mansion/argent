@@ -15,6 +15,7 @@ import {
   parseScriptPath,
   parseScriptTimeout,
   recordingSessionState,
+  PROJECT_ROOT_INPUT,
   requireRecordingSession,
   type FlowSavedTo,
   type FlowStep,
@@ -125,6 +126,7 @@ export const flowAddScriptTool: ToolDefinition<z.infer<typeof zodSchema>, FlowAd
   id: "e2e-add-script",
   description: `Run a local .mjs file and record it as a \`script:\` step in an active e2e test. Use when the user requests a local script in the e2e test, and only then. Call it at the point in the recording where the script must run. Returns \`status\`, \`reason\` and \`stepCount\`. A failed script is not recorded. Check \`reason\` and the affected state before you retry. Over a link (argent link or ARGENT_TOOLS_URL), the tool refuses the call: record such an e2e test with no link.`,
   zodSchema,
+  fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-add-script"],
   interaction: {
     startedMsg: ({ params }) => `Running script for e2e test ${params.name}`,

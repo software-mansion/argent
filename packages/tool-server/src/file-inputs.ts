@@ -30,7 +30,7 @@
 
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, win32 } from "node:path";
 import bytesUtil from "bytes";
 import { safeExtractTarGz } from "@argent/archive";
 import {
@@ -367,6 +367,18 @@ async function resolveMembers(
   return out;
 }
 
+/**
+ * A current client sends a path as absolute, except a spelling nothing expanded
+ * (`~`, `$VAR`, `$(cmd)`, `%VAR%`, a URL), which no host has a file at either.
+ */
+function unexpandedPathError(wire: FileInputWire): FileInputError | undefined {
+  if (isAbsolute(wire.path) || win32.isAbsolute(wire.path)) return undefined;
+  return new FileInputError(
+    `Path "${wire.path}" is not an absolute path. Nothing expands "~", variables, ` +
+      `commands or URLs in a file argument, so pass the file's absolute path.`
+  );
+}
+
 async function resolveOne(
   spec: FileInputSpec,
   wire: FileInputWire,
@@ -396,9 +408,17 @@ async function resolveOne(
     if (meta.presentOnHost) {
       return { value: wire.path, meta };
     }
-    throw new FileInputError(
-      `Path "${wire.path}" does not exist on the tool-server host and no upload was provided. ` +
-        `Update argent to a version that supports uploads for remote sessions.`
+    throw (
+      unexpandedPathError(wire) ??
+      new FileInputError(
+        wire.size == null
+          ? `Path "${wire.path}" was not found. The client sent no file for it, and the ` +
+              `tool-server host has none at that path. If the file is on the client, update ` +
+              `argent there: versions before 0.16 do not send it.`
+          : `Path "${wire.path}" no longer matches the file the client read: its size or ` +
+              `modification time changed, and the client uploaded none. If a build is still ` +
+              `writing it, call again once the build finishes.`
+      )
     );
   }
 
@@ -430,6 +450,8 @@ async function resolveOne(
   if (meta.presentOnHost) {
     return { value: wire.path, meta };
   }
+  const unexpanded = unexpandedPathError(wire);
+  if (unexpanded) throw unexpanded;
 
   if (spec.kind === "directory") {
     throw new FileInputError(

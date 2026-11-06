@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { FileInputSpec, ToolDefinition } from "@argent/registry";
+import { LAUNCH_PLATFORMS, type FileInputSpec, type ToolDefinition } from "@argent/registry";
 import {
   countStepsOnDisk,
   getFlowPath,
@@ -9,7 +9,6 @@ import {
   withFlowFileLock,
   writeNewFlowFile,
   clientFileDirective,
-  LAUNCH_PLATFORMS,
   parseRequires,
   RUNTIME_KINDS,
   serializeFlow,

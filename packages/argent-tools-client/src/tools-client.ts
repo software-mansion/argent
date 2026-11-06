@@ -18,10 +18,12 @@ import {
   canonicalToolArgs,
   canonicalToolId,
   describeParamIssues,
+  flowYamlSource,
 } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 import {
+  callerPath,
   prepareFileInputs,
   applyClientFileDirectives,
   FILE_INPUT_MARKER,
@@ -125,6 +127,13 @@ export interface CreateToolsClientOptions {
    * secrets is checked against.
    */
   headers?: () => Record<string, string>;
+  /**
+   * Refuse a relative `project_root` instead of resolving it against
+   * `process.cwd()`. For a client whose working directory need not be the
+   * project, such as the MCP server, which runs where the editor started it:
+   * a recording would be saved there without any error.
+   */
+  refuseRelativeProjectRoot?: boolean;
 }
 
 function authHeaders(token: string | undefined): Record<string, string> {
@@ -389,7 +398,8 @@ async function forwardedSecrets(args: unknown): Promise<Map<string, string> | un
       // run, not to this terminal.
       let parsed: unknown;
       try {
-        parsed = text === undefined ? undefined : parseYaml(text.trim(), { logLevel: "error" });
+        parsed =
+          text === undefined ? undefined : parseYaml(flowYamlSource(text), { logLevel: "error" });
       } catch {
         continue;
       }
@@ -435,6 +445,21 @@ export function secretsTransportRefusal(url: string): string | undefined {
 
 /** Upper bound of the head bytes fetch adds to a call's own headers and URL. */
 const FETCH_HEAD_BYTES = 256;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Throws when `args` sets a relative `project_root` that a file input of `meta` resolves. */
+function assertAbsoluteProjectRoot(meta: ToolMeta | null, args: unknown): void {
+  const root = isRecord(args) ? args.project_root : undefined;
+  if (typeof root !== "string" || callerPath(root) === root) return;
+  if (!meta?.fileInputs?.some((spec) => spec.path.includes("${project_root}"))) return;
+  throw new Error(
+    `project_root must be an absolute path (got "${root}"). Pass the absolute path to the ` +
+      `project root directory - the same cwd the calling agent is working in.`
+  );
+}
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
   let cached: ToolsServerHandle | null = null;
@@ -503,6 +528,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     let finalArgs = canonicalToolArgs(name, args);
     const tools = await fetchTools({ signal: opts?.signal });
     const meta = findTool(tools, name);
+    if (options.refuseRelativeProjectRoot) assertAbsoluteProjectRoot(meta, finalArgs);
     // An older tool-server reads saved tests only from `.argent/flows/`, and
     // lists its tools by their `flow-*` ids only.
     const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));
@@ -551,7 +577,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
           }
         }
       }
-      const result = applied.result;
+      const result =
+        applied.failed.length > 0 && isRecord(applied.result) && applied.result.ok === true
+          ? { ...applied.result, ok: false }
+          : applied.result;
       if (
         shadowWarning === undefined ||
         typeof result !== "object" ||

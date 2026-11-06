@@ -15,9 +15,12 @@ import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  LAUNCH_PLATFORMS,
   SCRIPT_FILE_NAME_PATTERN,
   completeRunExtension,
+  flowYamlSource,
   type ClientFileDirective,
+  type FileInputSpec,
   type OnDiskSpelling,
   type ToolContext,
 } from "@argent/registry";
@@ -112,6 +115,14 @@ export function flowsDirFor(root: string): string {
 export const E2E_FILE_TEMPLATES: string[] = E2E_DIRS.map(
   (dir) => `\${project_root}/${dir.split(path.sep).join("/")}/\${name}.yaml`
 );
+
+/**
+ * `project_root` of an e2e tool that names a test by it. The client resolves a
+ * relative root, so every e2e tool names the same project.
+ */
+export const PROJECT_ROOT_INPUT: FileInputSpec[] = [
+  { target: "project_root", path: "${project_root}", kind: "probe" },
+];
 
 /** The flows dir under a root that has not been validated yet. */
 function getFlowsDir(projectRoot: string): string {
@@ -715,7 +726,7 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
 /**
  * The platforms a `when: { platform: … }` condition can name — derived from
  * {@link LAUNCH_PLATFORMS} so the parser's runtime check and this type cannot
- * drift. Narrower than {@link SelectablePlatform}, which a RUN is selected
+ * drift. Narrower than `SelectablePlatform`, which a RUN is selected
  * with: a guard is authored text, and `ios-remote` is not writable.
  */
 type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
@@ -1308,7 +1319,7 @@ export function describeTextExpectation(
     case "equals":
       return `${verbForm === "infinitive" ? "equal" : mode} ${JSON.stringify(expected)}`;
     case "matches":
-      return `${verbForm === "infinitive" ? "match" : mode} /${expected}/`;
+      return `${verbForm === "infinitive" ? "match" : mode} /${escapeInline(expected)}/`;
   }
 }
 
@@ -1783,7 +1794,7 @@ function validatePattern(raw: unknown, pattern: string, where: string): void {
   } catch (err) {
     badEntry(
       raw,
-      `${where} \`matches\` is not a valid regular expression: ${err instanceof Error ? err.message : String(err)}`
+      `${where} \`matches\` is not a valid regular expression: ${escapeInline(err instanceof Error ? err.message : String(err))}`
     );
   }
 }
@@ -2319,21 +2330,6 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
 }
 
 /**
- * The platforms an AUTHOR can name in a flow file: launch-map keys and
- * `when: { platform }` guards ({@link WhenPlatform}).
- */
-export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
-
-/**
- * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
- * flow-run's `platform` param. `ios-remote` is selectable but deliberately not
- * writable: a flow says what it drives, not which machine hosts the simulator,
- * so `when:` and launch maps stay on {@link LAUNCH_PLATFORMS}.
- */
-export const SELECTABLE_PLATFORMS = [...LAUNCH_PLATFORMS, "ios-remote"] as const;
-export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
-
-/**
  * The platform a flow AUTHOR names, for a device the runner resolved.
  *
  * `ios-remote` is an iOS simulator reached over the sim-remote tunnel: same OS,
@@ -2342,7 +2338,7 @@ export type SelectablePlatform = (typeof SELECTABLE_PLATFORMS)[number];
  * `ios`, which is why `ios-remote` stays out of {@link LAUNCH_PLATFORMS}.
  *
  * Deliberately NOT applied where the question is "which machine am I driving?":
- * device selection ({@link SELECTABLE_PLATFORMS}, `resolveFlowDevice`, the
+ * device selection (`SELECTABLE_PLATFORMS`, `resolveFlowDevice`, the
  * `platform` run param) and service refs / transports all keep the real
  * platform.
  */
@@ -3818,7 +3814,7 @@ export function serializeFlow(flow: FlowFile): string {
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
   // stripped on re-parse (" \n" comes back as "\n"), and a block scalar at the
-  // document tail exposes its raw last line to parseFlow's content.trim(), so
+  // document tail exposes its raw last line to parseFlow's trailing trim, so
   // parseFlow(serializeFlow(x)) was not the identity. Disabling it emits
   // multi-line values as double-quoted scalars (escape-exact both ways);
   // single-line values still serialize plain, and legacy files containing block
@@ -3852,7 +3848,7 @@ export function parseFlow(content: string): FlowFile {
   // abort a whole batch run instead of failing this file alone.
   let parsed: YamlFlowFile;
   try {
-    parsed = yamlParse(trimmed) as YamlFlowFile;
+    parsed = yamlParse(flowYamlSource(content)) as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
       `Invalid e2e test file: ${err instanceof Error ? err.message : String(err)}`,

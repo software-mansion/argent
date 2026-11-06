@@ -178,6 +178,31 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
 }
 
 /**
+ * An unexpanded `~`, variable, command or URL: `~/app`, `$HOME/app`, `$1/app`,
+ * `$(pwd)/app`, `` `pwd`/app ``, `%USERPROFILE%\app`, `file:///app`. A scheme has
+ * two letters or more, so `D:dir` is not one.
+ */
+const UNEXPANDED_PATH = /^~|\$[A-Za-z0-9_{(]|`|%[A-Za-z_][A-Za-z0-9_]*%|^[A-Za-z][A-Za-z0-9+.-]+:/;
+
+/**
+ * `p` as an absolute path on this machine. The tool-server works in the
+ * directory of whichever client spawned it, so it cannot resolve a relative
+ * path. A path with a `..` segment is prefixed with the directory it is
+ * relative to (on Windows, that of its drive for `D:dir`), not normalized:
+ * collapsing `..` ignores symlinks, so it can name another file than the kernel
+ * opens. A Windows path on another OS, and a spelling nothing expanded
+ * ({@link UNEXPANDED_PATH}), are left for the tool-server to refuse.
+ */
+export function callerPath(p: string): string {
+  if (path.isAbsolute(p) || path.win32.isAbsolute(p) || UNEXPANDED_PATH.test(p)) return p;
+  const { root } = path.parse(p);
+  const rest = p.slice(root.length);
+  if (!rest.split(/[\\/]/).includes("..")) return path.resolve(p);
+  const base = path.resolve(root);
+  return base.endsWith(path.sep) ? `${base}${rest}` : `${base}${path.sep}${rest}`;
+}
+
+/**
  * The path a spec names for this call: its `path`, or for a `file` input
  * with `paths`, the first of them whose file exists ({@link pickE2eFile}).
  */
@@ -399,7 +424,10 @@ export async function prepareFileInputs(
     return args;
   }
   const record = args as Record<string, unknown>;
-  let out: Record<string, unknown> | null = null;
+  const planned: { spec: FileInputSpec; filePath: string }[] = [];
+  // The collectors read every target the call sets as the wire names it,
+  // whichever spec they run for.
+  const callArgs: Record<string, unknown> = { ...record };
 
   for (const spec of specs) {
     // Deriving this target too would have the boundary vouch for a file the
@@ -409,12 +437,19 @@ export async function prepareFileInputs(
     // still diagnosed by the tool, not by the boundary.
     if (spec.skipWhenSet && record[spec.skipWhenSet] !== undefined) continue;
     if (spec.target in record && typeof record[spec.target] !== "string") continue;
-    const filePath = await specPath(spec, record);
-    if (filePath === null) continue;
+    const spelled = await specPath(spec, record);
+    if (spelled === null) continue;
     // When the target IS a source param the interpolated path equals its
     // value; a derived target (e2e_test_file) is wrapped only when unset.
-    if (spec.target in record && record[spec.target] !== filePath) continue;
+    if (spec.target in record && record[spec.target] !== spelled) continue;
+    const filePath = callerPath(spelled);
+    planned.push({ spec, filePath });
+    if (spec.target in record) callArgs[spec.target] = filePath;
+  }
+  if (planned.length === 0) return args;
 
+  const out: Record<string, unknown> = { ...record };
+  for (const { spec, filePath } of planned) {
     const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: filePath };
     if (spec.kind === "file") {
       // Unreadable here (null) keeps the path-only wrapper, which still
@@ -431,7 +466,7 @@ export async function prepareFileInputs(
       ) {
         Object.assign(
           wire,
-          await opts.collectMembers(filePath, Buffer.from(wire.content, "base64"), record, opts)
+          await opts.collectMembers(filePath, Buffer.from(wire.content, "base64"), callArgs, opts)
         );
       }
     }
@@ -442,7 +477,7 @@ export async function prepareFileInputs(
       opts.includeContent &&
       opts.collectStepMembers
     ) {
-      wire.members = await opts.collectStepMembers(record, opts);
+      wire.members = await opts.collectStepMembers(callArgs, opts);
     }
 
     if (spec.kind === "tar-upload") {
@@ -459,11 +494,10 @@ export async function prepareFileInputs(
       }
     }
 
-    out = out ?? { ...record };
     out[spec.target] = wire;
   }
 
-  return out ?? args;
+  return out;
 }
 
 export interface AppliedClientFiles {

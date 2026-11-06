@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { requireRecordingSession, appendStepToFlow, type FlowSavedTo } from "./flow-utils";
+import {
+  requireRecordingSession,
+  appendStepToFlow,
+  PROJECT_ROOT_INPUT,
+  type FlowSavedTo,
+} from "./flow-utils";
 
 const zodSchema = z.object({
   name: z
@@ -23,6 +28,7 @@ export const flowInsertEchoTool: ToolDefinition<
 Use when you want to annotate a recorded e2e test with a human-readable label or checkpoint message.
 Returns { message, stepCount, savedTo }. Fails if that e2e test has no recording in progress.`,
   zodSchema,
+  fileInputs: PROJECT_ROOT_INPUT,
   aliases: ["flow-add-echo"],
   interaction: {
     // Name the flow: recordings are concurrent, so an unqualified message is ambiguous.

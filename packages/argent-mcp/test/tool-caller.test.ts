@@ -64,6 +64,12 @@ const LISTING = {
       inputSchema: {},
       fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
     },
+    {
+      name: "record",
+      description: "",
+      inputSchema: {},
+      fileInputs: [{ target: "project_root", path: "${project_root}", kind: "probe" }],
+    },
     { name: "slow", description: "", inputSchema: {}, longRunning: true },
     { name: "slow-plain", description: "", inputSchema: {} },
     { name: "fast", description: "", inputSchema: {} },
@@ -224,6 +230,15 @@ describe("createToolCaller", () => {
     expect(sent.appPath.path).toBe(appPath);
     expect(sent.appPath).not.toHaveProperty("uploadId");
     expect(sent.appPath).not.toHaveProperty("content");
+  });
+
+  it("refuses a relative project_root, since its cwd is where the editor started it", async () => {
+    const { callTool } = caller();
+
+    await expect(callTool("record", { project_root: "." })).rejects.toThrow(
+      'project_root must be an absolute path (got ".")'
+    );
+    expect(postsTo("/tools/record")).toHaveLength(0);
   });
 
   it("refuses a routed call that lacks a required argument before it uploads", async () => {

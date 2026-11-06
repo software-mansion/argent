@@ -11,6 +11,7 @@ import {
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
+  SELECTABLE_PLATFORMS,
   flowMemberKey,
   isLiveServiceState,
   MAX_RUN_DEPTH,
@@ -37,6 +38,8 @@ import {
   blockSteps,
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
+  PROJECT_ROOT_INPUT,
+  escapeInline,
   flowNameCasingError,
   iosLaunchArgs,
   isBlockStep,
@@ -47,7 +50,6 @@ import {
   type FlowFile,
   type FlowStep,
   type Launch,
-  SELECTABLE_PLATFORMS,
   windowsPathRefusal,
 } from "./flow-utils";
 import { createScriptLogBudget, type FlowScriptLogBudget } from "./script/flow-script-executor";
@@ -144,6 +146,7 @@ const fileInputs: FileInputSpec[] = [
     skipWhenSet: "e2e_test_path",
     collect: "flow",
   },
+  ...PROJECT_ROOT_INPUT,
 ];
 
 export type StepStatus = "pass" | "fail" | "skip" | "error";
@@ -187,10 +190,10 @@ export interface StepReport {
    * The e2e test a step belongs to: the run's own name, or for a fragment (a
    * `run` step and the steps it expands) the target's basename stem; when that
    * stem collides with the top-level test's name, the as-written path minus
-   * `.yaml` (`./<stem>` for a bare spelling). Renderers distinguish fragment
-   * steps by this differing from the report's `e2eTest`, which the collision
-   * fallback guarantees: both disambiguated shapes contain a `/`, which
-   * FLOW_NAME_PATTERN forbids.
+   * `.yaml`, control characters escaped (`./<stem>` for a bare spelling).
+   * Renderers distinguish fragment steps by this differing from the report's
+   * `e2eTest`, which the collision fallback guarantees: both disambiguated
+   * shapes contain a `/`, which FLOW_NAME_PATTERN forbids.
    */
   e2eTest?: string;
   /** @deprecated Same value as `e2eTest`, kept for clients that predate it. */
@@ -1052,10 +1055,12 @@ interface ExecState extends Omit<ActionEnv, "device"> {
    */
   snapshotApps: Map<string, string>;
   /**
-   * True once a step carrying a `{{secret:…}}` placeholder ran. The value may
-   * still be on screen, so a later failure takes no screenshot.
+   * `typed` is set once a step carrying a `{{secret:…}}` placeholder ran. The
+   * value may still be on screen, so a later failure takes no screenshot. A
+   * run that a `tool:` step starts shares the holder of the run that started
+   * it, so a secret typed on either side counts on both.
    */
-  secretTyped?: boolean;
+  secret: { typed?: boolean };
   /**
    * The un-owned chromium instance the run started attached to, if any — the
    * one instance the runner never kills, so it stands as a single-instance lock
@@ -1287,7 +1292,9 @@ function fragmentLoadRefusal(
   target: string
 ): string | undefined {
   const retiredArg = findRetiredToolArg(registry, fragment.steps);
-  return retiredArg ? `fragment "${target}" ${retiredArgReason(retiredArg)}` : undefined;
+  return retiredArg
+    ? `fragment "${escapeInline(target)}" ${retiredArgReason(retiredArg)}`
+    : undefined;
 }
 
 /**
@@ -1376,7 +1383,10 @@ function assertUploadSelfContained(
         ? closure.project.runMember(anchorDir, target)
         : closure.project.savedTestMember(entry.paths);
     if (member?.state === "refused") {
-      offending.push({ kind: entry.kind, line: `${entry.line} (${member.error})` });
+      offending.push({
+        kind: entry.kind,
+        line: `${entry.line} (${escapeInline(String(member.error))})`,
+      });
     } else if (
       member?.state === "present" &&
       member.canonical !== undefined &&
@@ -1391,7 +1401,7 @@ function assertUploadSelfContained(
       queue.push({
         flow: next,
         canonical: member.canonical,
-        within: ` in ${member.canonical}`,
+        within: ` in ${escapeInline(member.canonical)}`,
         hop: file.hop + 1,
       });
     }
@@ -1399,11 +1409,14 @@ function assertUploadSelfContained(
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
     for (const { step, where } of walkSteps(file.flow.steps, file.within)) {
       if (step.kind === "run") {
-        const line = `${where}: run: ${step.flow}`;
+        const line = `${where}: run: ${escapeInline(step.flow)}`;
         if (!closure) offending.push({ kind: "run", line });
         else follow(file, path.dirname(file.canonical), step.flow, { kind: "run", line });
       } else if (step.kind === "script") {
-        offending.push({ kind: "script", line: `${where}: script: { path: ${step.path} }` });
+        offending.push({
+          kind: "script",
+          line: `${where}: script: { path: ${escapeInline(step.path)} }`,
+        });
       } else if (step.kind === "snapshot") {
         if (closure) continue;
         offending.push({ kind: "snapshot", line: `${where}: snapshot: ${step.name}` });
@@ -1799,6 +1812,7 @@ Without a link, every step kind runs.`,
         ...(resolved.booted ? { hoistedBootMs: Date.now() - resolveStartedAt } : {}),
         chromiumLaunched: false,
         snapshotApps: new Map(),
+        secret: ctx?.flowSecret ?? {},
         projectRoot: params.project_root,
         scriptLogBudget: createScriptLogBudget(),
         networkCaptureNoted: new Map(),
@@ -2318,7 +2332,8 @@ function scopeFlow(scope: StepScope): string {
 /**
  * The report attribution for a `run:` target: its basename stem
  * ({@link runTargetName}), except when that stem equals the ROOT flow's name —
- * then the as-written path with the `.yaml` extension stripped, or `./<stem>`
+ * then the as-written path with the `.yaml` extension stripped (control
+ * characters escaped, as only the basename is pattern-checked), or `./<stem>`
  * when the spelling is bare (stripping would reproduce the stem). Two
  * different files may legitimately share a stem (root `login.yaml` composing
  * `helpers/login.yaml`), and a bare-stem attribution there would make
@@ -2347,7 +2362,7 @@ function runDisplayFor(target: string, rootDisplay: string): string {
   // Parse guarantees the target ends in lowercase ".yaml", so slicing the
   // extension off never truncates a real path segment.
   const spelled = target.slice(0, -".yaml".length);
-  return spelled === stem ? `./${stem}` : spelled;
+  return spelled === stem ? `./${stem}` : escapeInline(spelled);
 }
 
 /**
@@ -2470,7 +2485,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
       startedAt -= state.hoistedBootMs;
       state.hoistedBootMs = undefined;
     }
-    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secretTyped = true;
+    if (JSON.stringify(step).includes(SECRET_PLACEHOLDER_MARKER)) state.secret.typed = true;
     const report = await execLeafStep(state, step, index, scope);
     if (report.status !== "skip") report.durationMs = Date.now() - startedAt;
     if ((report.status === "fail" || report.status === "error") && !report.artifacts) {
@@ -2489,7 +2504,7 @@ async function execSteps(state: ExecState, steps: FlowStep[], scope: StepScope):
  * step keeps its own failure either way.
  */
 async function captureFailureScreen(state: ExecState): Promise<ArtifactHandle | undefined> {
-  if (!state.device || state.signal?.aborted || state.secretTyped) return undefined;
+  if (!state.device || state.signal?.aborted || state.secret.typed) return undefined;
   try {
     // Full resolution: the image is a file in the report, never in an agent's
     // context (the MCP client prints only its path).
@@ -2642,6 +2657,9 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
+  // Reasons quote the target; their own error text stays raw (a YAML error's
+  // code frame is multi-line).
+  const shown = escapeInline(target);
   // Shared with stepFlow so the marker/error reports here and every skip path
   // there attribute the same `run:` step identically; the fragment's expanded
   // steps inherit it through the runStack entry pushed below.
@@ -2654,7 +2672,7 @@ async function execRunStep(
       kind: "run",
       status: "error",
       e2eTest: display,
-      target,
+      target: stepTarget(step),
       reason,
       ...depthOf(scope),
       durationMs: Date.now() - startedAt,
@@ -2670,7 +2688,7 @@ async function execRunStep(
   try {
     hop = await resolveRunTarget(state.project, scopeFlowDir(scope), target);
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
   }
   const { canonical, spelling } = hop;
 
@@ -2706,11 +2724,11 @@ async function execRunStep(
     // can paste. An on-disk ".YAML" is reachable by no run: target at all, so
     // that fork asks for the rename it really needs.
     const recovery = spelling.addressable
-      ? `reference it as "${target.slice(0, target.length - suppliedBase.length)}${spelling.actual}"`
+      ? `reference it as "${escapeInline(target.slice(0, target.length - suppliedBase.length))}${spelling.actual}"`
       : `rename "${spelling.actual}" to "${suppliedBase}" to compose it — e2e test files must be ` +
         `lowercase .yaml`;
     return fail(
-      `mis-cased fragment reference "${target}": no directory entry is named "${suppliedBase}" ` +
+      `mis-cased fragment reference "${shown}": no directory entry is named "${suppliedBase}" ` +
         `(this filesystem matched it case-insensitively to "${spelling.actual}"), so the fragment ` +
         `name keying its step reports is one nothing on disk carries and a case-sensitive ` +
         `checkout could not find the file at all — ${recovery}`
@@ -2740,12 +2758,12 @@ async function execRunStep(
     const text = await hop.read();
     if (text === null) {
       return fail(
-        `could not load fragment "${target}": ENOENT: no such file or directory, open '${canonical}'`
+        `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(canonical)}'`
       );
     }
     fragment = parseFlow(text);
   } catch (err) {
-    return fail(`could not load fragment "${target}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
   }
 
   // Charged to the run: step, so the fragment is refused whole rather than
@@ -2772,7 +2790,7 @@ async function execRunStep(
     kind: "run",
     status: "pass",
     e2eTest: display,
-    target,
+    target: stepTarget(step),
     ...depthOf(scope),
     durationMs: Date.now() - startedAt,
   });
@@ -3084,7 +3102,7 @@ async function execLeafStep(
           // The two tools that can start a nested run continue this run's
           // stack, so a flow that runs itself stops at the cycle guard.
           ...(FLOW_STARTING_TOOLS.has(canonicalToolId(step.name))
-            ? { flowStack: scope.runStack }
+            ? { flowStack: scope.runStack, flowSecret: state.secret }
             : {}),
         });
         if (isUnmetUiWaitResult(step.name, result)) {
@@ -3215,15 +3233,15 @@ function errMsg(err: unknown): string {
  * reached us, so they are reported apart from the boundary gate — a caller
  * that did use the boundary must not be told to use the boundary. A host path
  * is checked as the string execute() will open; an upload's client spelling is
- * checked as the path the caller wrote, the one every message quotes.
+ * checked as the path the client sent, the one every message quotes.
  */
 function assertFlowPathShape(flowPath: string): void {
   // Reject a relative path: this string seeds canonicalFlowPath in execute(),
   // which requires an absolute input — its realpath, the read, and every root
   // anchor derived from the one canonical result would otherwise resolve
   // against the tool server's working directory, which is not the caller's.
-  // `argent flow list` prints relative paths, so this is the spelling an agent
-  // is most likely to pass back.
+  // The argent client resolves a relative e2e_test_path before sending it; a direct
+  // HTTP caller and an older client do not.
   const windows = windowsPathRefusal("e2e_test_path", flowPath);
   if (windows) {
     throw new FailureError(windows, {
@@ -3255,15 +3273,12 @@ function assertFlowPathShape(flowPath: string): void {
   // different files — or, when the directory chain is broken, slip through
   // canonicalFlowPath's verbatim fallback to fail later as a raw readFile
   // ENOENT on the unresolved spelling. Rejecting up front means every admitted
-  // e2e_test_path has exactly one reading. The argent client rejects ".." segments
-  // before sending; only a direct MCP/HTTP caller can pass an unresolved
-  // e2e_test_path.
+  // e2e_test_path has exactly one reading.
   if (flowPath.split(/[\\/]+/).includes("..")) {
     throw new FailureError(
       `Invalid e2e_test_path "${flowPath}": e2e test paths must not contain ".." segments — ` +
         `a ".." after a symlinked directory can name a different file than the spelling ` +
-        `suggests, and the argent client always sends fully resolved paths. Pass the fully ` +
-        `resolved absolute path to the e2e test's YAML.`,
+        `suggests. Pass the fully resolved absolute path to the e2e test's YAML.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_path_dotdot",
