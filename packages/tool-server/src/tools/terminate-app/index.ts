@@ -5,7 +5,11 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
-import { remoteSimctl } from "../../utils/simctl-backend";
+import {
+  remoteSimctl,
+  SIMCTL_NOTHING_TO_TERMINATE,
+  tolerateNothingToTerminate,
+} from "../../utils/simctl-backend";
 import { adbShell, shellQuote } from "../../utils/adb";
 import { vegaDevice } from "../../utils/vega-cli";
 
@@ -23,24 +27,8 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-// simctl answers the same for an app that is not running and one that is not installed.
-const SIMCTL_NOTHING_TO_TERMINATE = /found nothing to terminate/i;
 // The vega CLI's error for an app that is not installed.
 const VEGA_NOT_INSTALLED = /App could not be determined/i;
-
-async function tolerateNothingToTerminate(
-  terminate: Promise<unknown>,
-  nothingToTerminate: RegExp
-): Promise<boolean> {
-  try {
-    await terminate;
-    return true;
-  } catch (err) {
-    const e = err as { stderr?: string; message?: string };
-    if (nothingToTerminate.test(`${e.stderr ?? ""} ${e.message ?? ""}`)) return false;
-    throw err;
-  }
-}
 
 const zodSchema = z.object({
   udid: z.string().min(1).describe("Target device id from `list-devices`."),
