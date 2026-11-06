@@ -369,8 +369,70 @@ describe("hot-commit report", () => {
     expect(report).toContain("re-renders in all 51 commits");
     const row = report.split("\n").find((l) => l.startsWith("| `SearchScreenShell`"));
     expect(row).toContain("| 6 / 50 |");
-    // A hot report gets the column fix only, never a second count table.
+    // Every frequent component is in the table above with its count over all
+    // commits, so a second count table would only repeat it.
     expect(report).not.toContain("Frequent Re-renders");
+  });
+
+  it("lists a frequent component the stored commits never held", async () => {
+    // A 45 Hz ticker next to one slow commit: TickRow re-renders in every cheap
+    // commit, none of which is stored, so no other section can name it.
+    const report = await render({
+      noHotCommits: false,
+      hotCommitSummaries: [HOT],
+      componentFindings: [SEARCH_SHELL],
+      renderSummary: {
+        ...TYPING,
+        components: [
+          component("TickRow", 12_330, 227.5, { reason: "props", topProps: ["now"] }),
+          ...TYPING.components,
+        ],
+      },
+      recordingMs: 11_241.6,
+      reactCommits: 51,
+    });
+    expect(report).toContain("## Most Frequent Re-renders");
+    const rows = report
+      .slice(report.indexOf("## Most Frequent Re-renders"), report.indexOf("## Next Steps"))
+      .split("\n")
+      .filter((l) => l.startsWith("| `"));
+    // The whole list by the one rule, the already named component included.
+    expect(rows.map((r) => r.split("`")[1])).toEqual(["TickRow", "SearchScreenShell"]);
+    expect(rows[0]).toContain("| 12,330 | 1096.8 | 20.2 | 227.5ms | props: now |");
+    // Once, in the full report and in the capped copy alike.
+    expect(report.split("## Most Frequent Re-renders")).toHaveLength(2);
+    expect(report.indexOf("## Top Components")).toBeLessThan(
+      report.indexOf("## Most Frequent Re-renders")
+    );
+  });
+
+  it("lists it too when the hot commits produced no finding at all", async () => {
+    const report = await render({
+      noHotCommits: false,
+      hotCommitSummaries: [HOT],
+      componentFindings: [],
+      renderSummary: TYPING,
+      recordingMs: 11_241.6,
+      reactCommits: 51,
+    });
+    expect(report).toContain("## Most Frequent Re-renders");
+    expect(report).toContain("| `SearchScreenShell` [React Compiler] | 50 |");
+  });
+
+  it("adds no section for library components or a session without a summary", async () => {
+    for (const renderSummary of [
+      { ...TYPING, components: [component("Text", 12_330, 227.5)] },
+      null,
+    ]) {
+      const report = await render({
+        noHotCommits: false,
+        hotCommitSummaries: [HOT],
+        componentFindings: [],
+        renderSummary,
+        reactCommits: 51,
+      });
+      expect(report).not.toContain("Frequent Re-renders");
+    }
   });
 
   it("falls back to the stored count for a session without a summary", async () => {

@@ -187,12 +187,11 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     // The index costs seconds on a large app, so build it only when the report
     // uses it: for the File column of findings, or to tell app components from
-    // library ones in the frequent re-render rows of a session with no hot
-    // commit. Names alone rule out most rows, which keeps quiet sessions fast.
+    // library ones in the frequent re-render rows. Names alone rule out most
+    // rows, which keeps quiet sessions fast.
     const needsSourceIndex =
       pipelineOutput.componentFindings.length > 0 ||
-      (pipelineOutput.noHotCommits &&
-        renderSummary !== null &&
+      (renderSummary !== null &&
         selectFrequentRerenders(renderSummary, createComponentOriginClassifier(null)).length > 0);
     let sourceIndex: ComponentSourceIndex | null = null;
     try {

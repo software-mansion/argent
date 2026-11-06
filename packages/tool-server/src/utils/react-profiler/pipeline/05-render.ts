@@ -180,27 +180,8 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
     lines.push(``, `No component in this session could be named, so there is nothing to list.`);
   }
 
-  const rows = summary
-    ? selectFrequentRerenders(
-        summary,
-        input.componentOrigin ?? createComponentOriginClassifier(null)
-      )
-    : [];
-  if (summary && rows.length > 0) {
-    // With no source index, names alone cannot tell the app's components from a library's.
-    const unplaced = rows.some((row) => row.origin.origin === "unknown");
-    lines.push(
-      ``,
-      `---`,
-      `## Most Frequent Re-renders`,
-      ``,
-      `${unplaced ? "Components" : "App components"} that re-rendered in at least 10 of the ${formatCount(summary.totalCommits)} commits, by self time per second. This shows what re-rendered most, not that it is a problem. ${unplaced ? "The project source could not be indexed (check `project_root`), so library components may be listed. " : ""}React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
-      ``,
-      `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
-      `|---|---|---|---|---|---|---|`
-    );
-    for (const row of rows) lines.push(renderFrequentRow(row));
-  }
+  const rows = frequentRerenderRows(input);
+  lines.push(...renderFrequentRerenders(summary, rows));
 
   lines.push(``, `---`, `## Next Steps`, ``);
   if (rows.length > 0) {
@@ -223,6 +204,36 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
     }
   }
   return lines.join("\n");
+}
+
+function frequentRerenderRows(input: RenderInput): FrequentRerenderRow[] {
+  return input.renderSummary
+    ? selectFrequentRerenders(
+        input.renderSummary,
+        input.componentOrigin ?? createComponentOriginClassifier(null)
+      )
+    : [];
+}
+
+/** The section is the same in a report with hot commits and in one without. */
+function renderFrequentRerenders(
+  summary: RenderSummary | null,
+  rows: FrequentRerenderRow[]
+): string[] {
+  if (!summary || rows.length === 0) return [];
+  // With no source index, names alone cannot tell the app's components from a library's.
+  const unplaced = rows.some((row) => row.origin.origin === "unknown");
+  return [
+    ``,
+    `---`,
+    `## Most Frequent Re-renders`,
+    ``,
+    `${unplaced ? "Components" : "App components"} that re-rendered in at least 10 of the ${formatCount(summary.totalCommits)} commits, by self time per second. This shows what re-rendered most, not that it is a problem. ${unplaced ? "The project source could not be indexed (check `project_root`), so library components may be listed. " : ""}React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
+    ``,
+    `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
+    `|---|---|---|---|---|---|---|`,
+    ...rows.map(renderFrequentRow),
+  ];
 }
 
 function renderFrequentRow(row: FrequentRerenderRow): string {
@@ -317,6 +328,16 @@ function buildFullMarkdown(
           "Check babel plugin ordering, React version compatibility, or run `npx react-compiler-healthcheck`."
       );
     }
+  }
+
+  // The sections above cover the stored commits only, so a cheap component that
+  // re-renders in every commit between the slow ones can be missing from all of
+  // them. The list is added only then: a component in the table above already
+  // shows its count over all commits there.
+  const frequent = frequentRerenderRows(input);
+  const inTopComponents = new Set(input.componentFindings.map((f) => f.component));
+  if (frequent.some((row) => !inTopComponents.has(row.component.name))) {
+    lines.push(...renderFrequentRerenders(input.renderSummary ?? null, frequent));
   }
 
   const suggestionsSection = renderSuggestedImprovements(

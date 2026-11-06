@@ -174,6 +174,68 @@ describe("source index on a hot session", () => {
   });
 });
 
+describe("source index on a hot session with a frequent component outside its findings", () => {
+  /** One stored 30 ms commit of `Slow`, and `ClockRow` in 100 commits that were not stored. */
+  async function analyzeHot(slowRenders: number): Promise<string> {
+    const cheap = Array.from({ length: 100 }, (_, i) => rerender("ClockRow", i, 1));
+    const slow = Array.from({ length: slowRenders }, () => ({
+      ...rerender("Slow", 100, 20),
+      commitDuration: 30,
+    }));
+    const timings = [...cheap.map(() => 5), 30].map((durationMs, i) => ({
+      timestamp: i * 20,
+      durationMs,
+    }));
+    return runAnalyze({
+      commits: slow,
+      meta: {
+        hotCommitIndices: [100],
+        renderSummary: summarizeRenders([...cheap, ...slow], timings, 2020),
+      },
+      hotCommitIndices: [100],
+      totalReactCommits: 101,
+    });
+  }
+
+  it("is built when the hot commit gave no finding, so the row is placed", async () => {
+    buildIndex.mockResolvedValue({
+      index: new Map([["ClockRow", { file: "/app/src/Clock.tsx", line: 25 }]]),
+      treeSitterAvailable: true,
+    });
+    // One render of `Slow` is under the three a finding needs.
+    const report = await analyzeHot(1);
+    expect(report).toContain("**Hot commits:** 1 of 101");
+    expect(report).not.toContain("## Top Components");
+    expect(buildIndex).toHaveBeenCalledOnce();
+    expect(report).toContain("App components that re-rendered in at least 10 of the 101 commits");
+    expect(report).toContain(
+      "| `ClockRow` | 100 | 49.5 | 49.5 | 100.0ms | props: now | `src/Clock.tsx:25` |"
+    );
+  });
+
+  it("drops a library component from that list, as on a session with no hot commit", async () => {
+    buildIndex.mockResolvedValue({
+      index: new Map([["Slow", { file: "/app/src/Slow.tsx", line: 1, col: 0 }]]),
+      treeSitterAvailable: true,
+    });
+    const report = await analyzeHot(3);
+    expect(report).toContain("## Top Components");
+    expect(report).not.toContain("Frequent Re-renders");
+  });
+
+  it("is built for a stored session whose hot commit cannot be shown", async () => {
+    // Saved when stop still called a commit hot whose named fiber did no work.
+    buildIndex.mockResolvedValue({
+      index: new Map([["ClockRow", { file: "/app/src/Clock.tsx", line: 25 }]]),
+      treeSitterAvailable: true,
+    });
+    const report = await analyzeHot(0);
+    expect(report).toContain("**Hot commits:** 0 of 101");
+    expect(buildIndex).toHaveBeenCalledOnce();
+    expect(report).toContain("`src/Clock.tsx:25`");
+  });
+});
+
 describe("sessions with little or no commit data", () => {
   it("says nothing was measured for an older session that recorded no commits", async () => {
     const report = await runAnalyze({
