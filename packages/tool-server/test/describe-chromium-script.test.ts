@@ -925,7 +925,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       labelledBy([text("Pick"), svg("svg", kids), text("end")], style);
     expect(pick([unknown([unknown([text("Opt")])])])).toBe("Pick end");
     expect(pick([unknown([])])).toBe("Pick end");
-    expect(pick([text(" ")])).toBe("Pick end");
+    expect(pick([text("raw")])).toBe("Pick raw end");
     expect(pick([])).toBe("Pickend");
     expect(pick([{ nodeType: 8, nodeValue: "c" }])).toBe("Pickend");
     expect(pick([svg("metadata", [text("md")], "SVGMetadataElement")])).toBe("Pick end");
