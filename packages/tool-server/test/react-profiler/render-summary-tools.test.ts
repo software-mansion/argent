@@ -6,8 +6,10 @@ import { FAILURE_CODES, ServiceState, getFailureSignal, type Registry } from "@a
 import { createReactProfilerStopTool } from "../../src/tools/profiler/react/react-profiler-stop";
 import { profilerCommitQueryTool } from "../../src/tools/profiler/query/profiler-commit-query";
 import { profilerCpuQueryTool } from "../../src/tools/profiler/query/profiler-cpu-query";
+import { profilerCombinedReportTool } from "../../src/tools/profiler/combined/profiler-combined-report";
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
 import { reactProfilerRendersTool } from "../../src/tools/profiler/react/react-profiler-renders";
+import { nativeProfilerSessionBlueprint } from "../../src/blueprints/native-profiler-session";
 import {
   cacheProfilerPaths,
   clearCachedProfilerPaths,
@@ -672,6 +674,38 @@ describe("profiler-cpu-query component_cpu", () => {
     const out = await componentCpu("cpu-old-device", "ClockRow");
     expect(out).toContain("has no render summary");
     expect(out).not.toContain("for render counts");
+  });
+});
+
+// ── profiler-combined-report ──────────────────────────────────────────
+
+describe("profiler-combined-report on a session with no stored commit", () => {
+  it("names the storage rule and points at the native report", async () => {
+    await cacheSession("combined-device", [], {
+      hotCommitIndices: [],
+      totalReactCommits: 468,
+      renderSummary: clockSummary(),
+    });
+    const device = { id: "combined-device", platform: "ios" as const, kind: "simulator" as const };
+    const { api } = await nativeProfilerSessionBlueprint.factory({}, device, { device });
+    api.parsedData = {
+      cpuSamples: [],
+      uiHangs: [],
+      cpuHotspots: [],
+      memoryLeaks: [],
+      leaksRecorded: true,
+      mallocStackLogging: true,
+      wallClockStartMs: 1_000_000,
+    };
+    const error: unknown = await Promise.resolve(
+      profilerCombinedReportTool.execute!({ nativeSession: api } as never, {
+        port: PORT,
+        device_id: "combined-device",
+      })
+    ).catch((e: unknown) => e);
+    expect((error as Error).message).toContain("No React commits are stored for this session");
+    expect((error as Error).message).toContain("native-profiler-analyze report on its own");
+    expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.PROFILER_DATA_NOT_LOADED);
   });
 });
 

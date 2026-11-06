@@ -214,6 +214,28 @@ describe("parseRenderSummary", () => {
     expect(parseRenderSummary(null)).toBeNull();
   });
 
+  it.each([
+    "rerenders",
+    "untrackedRenders",
+    "rerenderCommits",
+    "rerenderSelfMs",
+    "maxRerenderSelfMs",
+    "mounts",
+    "mountSelfMs",
+  ])("rejects a row that lost %s, which render_counts would print", (key) => {
+    const s = summarizeRenders([fiber("A", 0, 1)], timings([3]), 1000);
+    const row: Record<string, unknown> = { ...s.components[0]! };
+    delete row[key];
+    expect(parseRenderSummary({ ...s, components: [row] })).toBeNull();
+  });
+
+  it("rejects components that are not a list", () => {
+    const s = summarizeRenders([fiber("A", 0, 1)], timings([3]), 1000);
+    for (const components of [undefined, null, 3, "A", {}]) {
+      expect(parseRenderSummary({ ...s, components })).toBeNull();
+    }
+  });
+
   it("rejects another version or a damaged value instead of throwing later", () => {
     const s = summarizeRenders([fiber("A", 0, 1)], timings([3]), 1000);
     expect(parseRenderSummary({ ...s, version: 2 })).toBeNull();
@@ -335,6 +357,20 @@ describe("component origin", () => {
     }
   });
 
+  it("treats list internals as library with no source index to fall back on", () => {
+    const nameOnly = createComponentOriginClassifier(null);
+    for (const name of [
+      "FlatList",
+      "SectionList",
+      "VirtualizedList",
+      "CellRenderer",
+      "FlashList",
+      "AutoLayoutView",
+    ]) {
+      expect(nameOnly(name).origin, name).toBe("library");
+    }
+  });
+
   it("leaves unresolved names out, under a compiler wrapper too", () => {
     for (const name of [
       "Anonymous",
@@ -438,6 +474,13 @@ describe("selectFrequentRerenders", () => {
     );
     // Rare re-rendered in 9 commits; Free's 5 ms over 10 s is under 1 ms/s.
     expect(rows).toEqual([]);
+  });
+
+  it("lists a component at exactly the 10-commit cutoff, and not one below it", () => {
+    const at = component("Forget(AtCutoff)", 100, 500, { rerenderCommits: 10 });
+    const below = component("Forget(BelowCutoff)", 100, 500, { rerenderCommits: 9 });
+    const rows = selectFrequentRerenders(summary([at, below]), classify);
+    expect(rows.map((r) => r.component.name)).toEqual(["Forget(AtCutoff)"]);
   });
 
   it("shows at most five rows", () => {
