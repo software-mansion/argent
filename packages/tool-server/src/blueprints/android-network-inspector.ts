@@ -37,10 +37,12 @@ import {
 } from "../utils/ndjson-socket";
 import { withKeyedLock } from "../utils/keyed-lock";
 import {
+  MAX_CACHED_BODIES,
   MAX_LAYER_ID_CHARS,
   MAX_RECORDS,
   NOT_RECONNECTED,
   PROCESS_ENDED,
+  PROCESS_GONE,
   RECORD_CHARS_BUDGET,
   asObject,
   asString,
@@ -50,6 +52,8 @@ import {
   isMetroTraffic,
   isOpen,
   recordSize,
+  toBody,
+  unavailable,
   type NativeNetworkBody,
   type NativeNetworkRecord,
 } from "../utils/native-network-record";
@@ -107,7 +111,6 @@ const PACKAGE_NAME = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*$/;
 const PROTOCOL_VERSION = 2;
 
 const MAX_REDIRECTS = 32;
-const MAX_CACHED_BODIES = 64;
 
 /** An authenticated agent's sealed frames: a body can be several MiB of base64. */
 const MAX_FRAME_CHARS = 8 * 1024 * 1024;
@@ -1596,11 +1599,7 @@ function createInspector(
     const conn = liveConnectionFor(entry.conn);
     if (!conn) {
       return Promise.resolve(
-        unavailable(
-          agentGoneFor(entry.conn)
-            ? AGENT_GONE_REASON
-            : "the app process that made the request is gone"
-        )
+        unavailable(agentGoneFor(entry.conn) ? AGENT_GONE_REASON : PROCESS_GONE)
       );
     }
     // A "no body" answer for a pending request is not cached.
@@ -2006,28 +2005,6 @@ function agentFiles(): { jar: string; lib: Partial<Record<AgentAbi, string>> } |
 
 function isAgentAbi(abi: string): abi is AgentAbi {
   return (AGENT_ABIS as readonly string[]).includes(abi);
-}
-
-function toBody(result: unknown, kind: "response" | "post"): NativeNetworkBody {
-  const r = asObject(result);
-  const text = kind === "response" ? r.body : r.postData;
-  if (r.bodyAvailable === false || typeof text !== "string") {
-    return unavailable(
-      kind === "response"
-        ? "the agent holds no body for this response"
-        : "the agent holds no body for this request"
-    );
-  }
-  return {
-    available: true,
-    body: text,
-    base64Encoded: r.base64Encoded === true,
-    truncated: r.wasTruncated === true,
-  };
-}
-
-function unavailable(reason: string): NativeNetworkBody {
-  return { available: false, body: "", base64Encoded: false, truncated: false, reason };
 }
 
 /** The inspector's own failures, whose messages stand on their own. */

@@ -62,6 +62,12 @@ export interface NativeNetworkBody {
   base64Encoded: boolean;
   truncated: boolean;
   reason?: string;
+  /**
+   * Set on a request body that came with the request itself and that the host
+   * holds: the whole body's length in chars, of which `body` keeps the start.
+   * Such a body carries no base64 flag, so a binary one reads as base64 text.
+   */
+  inlineChars?: number;
 }
 
 /**
@@ -77,14 +83,18 @@ export function deviceKeyOf(deviceId: string): string {
 export const MAX_RECORDS = 2000;
 export const RECORD_CHARS_BUDGET = 32 * 1024 * 1024;
 /** One URL, header value or text field; longer ones keep their start. */
-const MAX_VALUE_CHARS = 64 * 1024;
+export const MAX_VALUE_CHARS = 64 * 1024;
 const MAX_HEADERS = 256;
 const MAX_HEADER_MAP_CHARS = 256 * 1024;
 export const MAX_LAYER_ID_CHARS = 200;
+/** The bodies most recently read, kept so a body is read from the app once per record. */
+export const MAX_CACHED_BODIES = 64;
 
 export const NOT_RECONNECTED =
   "the agent did not reconnect after its connection dropped, so this request's final events never arrived";
 export const PROCESS_ENDED = "the app process ended before the request finished";
+/** A body that was never read before the app process that made the request ended. */
+export const PROCESS_GONE = "the app process that made the request is gone";
 
 export function isOpen(record: NativeNetworkRecord): boolean {
   return record.state === "pending" || record.state === "headers";
@@ -163,6 +173,29 @@ export function recordSize(record: NativeNetworkRecord): number {
       hop.url.length + hop.statusText.length + mapChars(hop.headers) + mapChars(hop.requestHeaders);
   }
   return chars;
+}
+
+/** A body reply of an in-app agent: `{body | postData, base64Encoded, wasTruncated}`. */
+export function toBody(result: unknown, kind: "response" | "post"): NativeNetworkBody {
+  const r = asObject(result);
+  const text = kind === "response" ? r.body : r.postData;
+  if (r.bodyAvailable === false || typeof text !== "string") {
+    return unavailable(
+      kind === "response"
+        ? "the agent holds no body for this response"
+        : "the agent holds no body for this request"
+    );
+  }
+  return {
+    available: true,
+    body: text,
+    base64Encoded: r.base64Encoded === true,
+    truncated: r.wasTruncated === true,
+  };
+}
+
+export function unavailable(reason: string): NativeNetworkBody {
+  return { available: false, body: "", base64Encoded: false, truncated: false, reason };
 }
 
 export function asObject(value: unknown): Record<string, unknown> {

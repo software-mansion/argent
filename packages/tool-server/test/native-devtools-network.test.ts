@@ -45,6 +45,7 @@ vi.mock("node:child_process", async () => {
 
 import { nativeDevtoolsBlueprint, type NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { liveIosNetworkCaptures } from "../src/blueprints/ios-network-records";
+import type { NativeNetworkRecord } from "../src/utils/native-network-record";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 const UDID = processScopedUdid("-9999-8888-7777-666666666666");
@@ -121,10 +122,17 @@ async function connectApp(
   };
 }
 
-const enableRequests = (app: FakeApp): Frame[] =>
-  app.received.filter((f) => f.type === "CDP" && f.payload.method === "Network.enable");
+const cdpRequests = (app: FakeApp, method: string): Frame[] =>
+  app.received.filter((f) => f.type === "CDP" && f.payload.method === method);
 
-function requestEvents(requestId: string, url: string): Frame[] {
+const enableRequests = (app: FakeApp): Frame[] => cdpRequests(app, "Network.enable");
+
+/** `request` adds to or replaces the fields of the request the app reports. */
+function requestEvents(
+  requestId: string,
+  url: string,
+  request: Record<string, unknown> = {}
+): Frame[] {
   return [
     {
       type: "CDP",
@@ -133,7 +141,7 @@ function requestEvents(requestId: string, url: string): Frame[] {
         params: {
           requestId,
           wallTime: 1_700_000_000,
-          request: { url, method: "GET", headers: {} },
+          request: { url, method: "GET", headers: {}, ...request },
         },
       },
     },
@@ -169,6 +177,52 @@ async function startService(): Promise<NativeDevtoolsApi> {
   instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
   return instance.api as NativeDevtoolsApi;
 }
+
+/** Connects the app with capture on for it, and acknowledges its Network.enable. */
+async function connectArmedApp(api: NativeDevtoolsApi): Promise<FakeApp> {
+  await api.activateNetworkInspection(BUNDLE);
+  const app = await connectApp(api.socketPath, { acknowledge: false });
+  await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+  app.reply(enableRequests(app)[0]!.payload.id!);
+  await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+  return app;
+}
+
+/** Waits for the listed record of `url` to reach `state`, and returns its id. */
+function recordOf(
+  api: NativeDevtoolsApi,
+  url: string,
+  state: NativeNetworkRecord["state"] = "complete"
+): Promise<string> {
+  return vi.waitFor(() => {
+    const record = api
+      .networkRecords(BUNDLE)
+      ?.records(8081)
+      .find((r) => r.request.url === url);
+    expect(record?.state).toBe(state);
+    return record!.id;
+  });
+}
+
+const responseBodyReads = (app: FakeApp): Frame[] => cdpRequests(app, "Network.getResponseBody");
+const postDataReads = (app: FakeApp): Frame[] => cdpRequests(app, "Network.getRequestPostData");
+
+const textBody = (body: string) => ({
+  available: true,
+  body,
+  base64Encoded: false,
+  truncated: false,
+});
+
+const noBody = (reason: string) => ({
+  available: false,
+  body: "",
+  base64Encoded: false,
+  truncated: false,
+  reason,
+});
+
+const PROCESS_GONE = "the app process that made the request is gone";
 
 afterEach(async () => {
   vi.useRealTimers();
@@ -400,5 +454,241 @@ describe("native-devtools network capture", () => {
     instance = null;
     expect(liveIosNetworkCaptures(UDID)).toEqual([]);
     expect(api.networkRecords(BUNDLE)).toBeUndefined();
+  });
+});
+
+describe("native-devtools body reads", () => {
+  it("reads a response body with Network.getResponseBody for the request id the app reported", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    for (const frame of [
+      ...requestEvents("layer-7", "https://example.com/json"),
+      ...finishEvents("layer-7"),
+    ]) {
+      app.send(frame);
+    }
+    const id = await recordOf(api, "https://example.com/json");
+
+    const reading = api.networkRecords(BUNDLE)!.responseBody(id);
+    await vi.waitFor(() => expect(responseBodyReads(app)).toHaveLength(1));
+    const [request] = responseBodyReads(app);
+    expect(request).toEqual({
+      type: "CDP",
+      payload: {
+        id: expect.any(Number),
+        method: "Network.getResponseBody",
+        params: { requestId: "layer-7" },
+      },
+    });
+
+    app.reply(request!.payload.id!, {
+      body: '{"ok":true}',
+      base64Encoded: false,
+      wasTruncated: false,
+    });
+    await expect(reading).resolves.toEqual(textBody('{"ok":true}'));
+  });
+
+  it("answers a request body the app is still sending after 5 s, asks the app once, and serves its late reply", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    for (const frame of requestEvents("upload", "https://example.com/upload", {
+      method: "POST",
+      hasPostData: true,
+    })) {
+      app.send(frame);
+    }
+    const id = await recordOf(api, "https://example.com/upload", "pending");
+    const records = api.networkRecords(BUNDLE)!;
+
+    // Only the timers are fake, and only around the two 5 s waits: the socket
+    // I/O stays real, as in the Network.enable timeout test, so the frames
+    // still cross the socket while the waits are skipped instead of slept.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const first = records.requestPostData(id);
+    await vi.waitFor(() => expect(postDataReads(app)).toHaveLength(1));
+    const [request] = postDataReads(app);
+    expect(request!.payload).toMatchObject({
+      method: "Network.getRequestPostData",
+      params: { requestId: "upload" },
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const stillSending = noBody("the app is still sending this request body; read it again later");
+    await expect(first).resolves.toEqual(stillSending);
+
+    const second = records.requestPostData(id);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(second).resolves.toEqual(stillSending);
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(postDataReads(app)).toHaveLength(1);
+
+    // The app answers the first read once it has the whole body. Frames are
+    // read in order, so once the request sent after the reply is listed, the
+    // reply was read before the next body read.
+    app.reply(request!.payload.id!, { postData: "name=demo", base64Encoded: false });
+    for (const frame of requestEvents("after", "https://example.com/after")) app.send(frame);
+    await recordOf(api, "https://example.com/after", "pending");
+    await expect(records.requestPostData(id)).resolves.toEqual(textBody("name=demo"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(postDataReads(app)).toHaveLength(1);
+  });
+
+  it("still answers a view read whose reply arrives between two body replies", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    for (const frame of [
+      ...requestEvents("upload", "https://example.com/upload", {
+        method: "POST",
+        hasPostData: true,
+      }),
+      ...finishEvents("upload"),
+    ]) {
+      app.send(frame);
+    }
+    const id = await recordOf(api, "https://example.com/upload");
+    const records = api.networkRecords(BUNDLE)!;
+
+    // As a details call reads them: the request body, then the response body.
+    const postData = records.requestPostData(id);
+    const responseBody = records.responseBody(id);
+    const view = api.queryViewHierarchy(BUNDLE, "ViewHierarchy.describeScreen");
+    await vi.waitFor(() => {
+      expect(postDataReads(app)).toHaveLength(1);
+      expect(app.received.some((f) => f.type === "ViewInspector")).toBe(true);
+    });
+    const viewRequest = app.received.find((f) => f.type === "ViewInspector")!;
+
+    app.reply(postDataReads(app)[0]!.payload.id!, { postData: "name=demo", base64Encoded: false });
+    await vi.waitFor(() => expect(responseBodyReads(app)).toHaveLength(1));
+    app.send({
+      type: "ViewInspector",
+      payload: { id: viewRequest.payload.id, result: { elements: ["ok"] } },
+    });
+    app.reply(responseBodyReads(app)[0]!.payload.id!, {
+      body: '{"ok":true}',
+      base64Encoded: false,
+      wasTruncated: false,
+    });
+
+    await expect(postData).resolves.toEqual(textBody("name=demo"));
+    await expect(view).resolves.toEqual({ elements: ["ok"] });
+    await expect(responseBody).resolves.toEqual(textBody('{"ok":true}'));
+  });
+
+  it("answers a body never read as gone once the app process ended, and still serves a body read before, after a relaunch too", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.state().pid).toBe(4711));
+    // Every request finished: the host still checks the process after the close.
+    for (const frame of [
+      ...requestEvents("read", "https://example.com/read"),
+      ...finishEvents("read"),
+      ...requestEvents("unread", "https://example.com/unread"),
+      ...finishEvents("unread"),
+    ]) {
+      app.send(frame);
+    }
+    const read = await recordOf(api, "https://example.com/read");
+    const unread = await recordOf(api, "https://example.com/unread");
+    const records = api.networkRecords(BUNDLE)!;
+
+    const reading = records.responseBody(read);
+    await vi.waitFor(() => expect(responseBodyReads(app)).toHaveLength(1));
+    app.reply(responseBodyReads(app)[0]!.payload.id!, {
+      body: "kept",
+      base64Encoded: false,
+      wasTruncated: false,
+    });
+    await expect(reading).resolves.toEqual(textBody("kept"));
+
+    appGone();
+    app.close();
+    // Until the host check after the close ends, the read says the connection closed.
+    await vi.waitFor(async () =>
+      expect(await records.responseBody(unread)).toEqual(noBody(PROCESS_GONE))
+    );
+    await expect(records.responseBody(read)).resolves.toEqual(textBody("kept"));
+
+    // The relaunched app is not asked for the bodies of the process before it.
+    appRunsAs(4712);
+    const relaunched = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+    await expect(records.responseBody(unread)).resolves.toEqual(noBody(PROCESS_GONE));
+    await expect(records.responseBody(read)).resolves.toEqual(textBody("kept"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(responseBodyReads(relaunched)).toHaveLength(0);
+  });
+
+  it("answers a body never read as not read before the close while the same process still runs, and as gone once a new process connects", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.state().pid).toBe(4711));
+    for (const frame of [
+      ...requestEvents("unread", "https://example.com/unread"),
+      ...finishEvents("unread"),
+      ...requestEvents("open", "https://example.com/open"),
+    ]) {
+      app.send(frame);
+    }
+    const unread = await recordOf(api, "https://example.com/unread");
+    const open = await recordOf(api, "https://example.com/open", "pending");
+    const records = api.networkRecords(BUNDLE)!;
+
+    app.close();
+    // The host check after the close is done once it failed the open request.
+    await vi.waitFor(() =>
+      expect(records.record(open)?.errorText).toBe(
+        "the agent did not reconnect after its connection dropped, so this request's final events never arrived"
+      )
+    );
+    await expect(records.responseBody(unread)).resolves.toEqual(
+      noBody("the agent's connection closed before this body was read")
+    );
+
+    appRunsAs(4712);
+    const next = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+    await expect(records.responseBody(unread)).resolves.toEqual(noBody(PROCESS_GONE));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(responseBodyReads(next)).toHaveLength(0);
+  });
+
+  it("sends one body read at a time per app connection, the next once the app answered the first", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    for (const frame of [
+      ...requestEvents("a", "https://example.com/a"),
+      ...finishEvents("a"),
+      ...requestEvents("b", "https://example.com/b"),
+      ...finishEvents("b"),
+    ]) {
+      app.send(frame);
+    }
+    const a = await recordOf(api, "https://example.com/a");
+    const b = await recordOf(api, "https://example.com/b");
+    const records = api.networkRecords(BUNDLE)!;
+
+    const reads = Promise.all([records.responseBody(a), records.responseBody(b)]);
+    await vi.waitFor(() => expect(responseBodyReads(app)).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(responseBodyReads(app).map((f) => f.payload.params)).toEqual([{ requestId: "a" }]);
+
+    app.reply(responseBodyReads(app)[0]!.payload.id!, {
+      body: "first",
+      base64Encoded: false,
+      wasTruncated: false,
+    });
+    await vi.waitFor(() => expect(responseBodyReads(app)).toHaveLength(2));
+    expect(responseBodyReads(app)[1]!.payload.params).toEqual({ requestId: "b" });
+    app.reply(responseBodyReads(app)[1]!.payload.id!, {
+      body: "second",
+      base64Encoded: false,
+      wasTruncated: false,
+    });
+
+    await expect(reads).resolves.toEqual([textBody("first"), textBody("second")]);
   });
 });
