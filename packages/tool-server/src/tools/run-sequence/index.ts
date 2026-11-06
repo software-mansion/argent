@@ -6,6 +6,7 @@ import { assertSupported, UnsupportedOperationError } from "../../utils/capabili
 import { sleepOrAbort, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { AWAIT_UI_ELEMENT_TOOL_ID, isUnmetUiWaitResult } from "../await-ui-element";
+import { unmetWaitReason } from "../../utils/tool-result-verdict";
 
 // No tool here returns an image or an artifact handle — that is what keeps a
 // sequence to the single capture the MCP layer appends after the last step.
@@ -174,11 +175,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
           if (isUnmetUiWaitResult(step.tool, result)) {
-            const note = (result as { note?: string }).note;
-            results.push({
-              tool: step.tool,
-              error: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
-            });
+            results.push({ tool: step.tool, error: unmetWaitReason(result) });
             break;
           }
           results.push({ tool: step.tool, result });

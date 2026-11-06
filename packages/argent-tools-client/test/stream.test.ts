@@ -322,3 +322,43 @@ describe("errorBodyMessage", () => {
     expect(errorBodyMessage({})).toBeUndefined();
   });
 });
+
+describe("callTool failure reported in the result", () => {
+  it("carries the result line's failure on the NDJSON path", async () => {
+    await startServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.end(
+        `${JSON.stringify({ event: "result", data: { ok: false }, failure: "e2e test failed" })}\n`
+      );
+    });
+
+    const { callTool } = createToolsClient();
+    const result = await callTool("streamy", {}, { onProgress: () => {} });
+    expect(result.data).toEqual({ ok: false });
+    expect(result.failure).toBe("e2e test failed");
+  });
+
+  it("carries the body's failure on the buffered JSON path", async () => {
+    await startServer((_req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ data: { ok: false }, failure: "e2e test failed" }));
+    });
+
+    const { callTool } = createToolsClient();
+    const result = await callTool("streamy", {});
+    expect(result.failure).toBe("e2e test failed");
+  });
+
+  it("leaves failure unset when the server sends none or a non-string", async () => {
+    let body: unknown = { data: { ok: true } };
+    await startServer((_req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(body));
+    });
+
+    const { callTool } = createToolsClient();
+    expect(await callTool("streamy", {})).not.toHaveProperty("failure");
+    body = { data: { ok: true }, failure: true };
+    expect(await callTool("streamy", {})).not.toHaveProperty("failure");
+  });
+});
