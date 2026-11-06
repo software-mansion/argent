@@ -765,13 +765,19 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   // A fieldset's rendered legend, which its overflow never clips: the first <legend>
-  // child that is neither floated nor out of flow.
+  // child that generates a box and is neither floated nor out of flow.
   function renderedLegend(el, kids) {
     if (htmlTag(el) !== "FIELDSET") return null;
     for (const kid of kids) {
       if (htmlTag(kid) !== "LEGEND") continue;
       const ks = window.getComputedStyle(kid);
-      if (ks.cssFloat === "none" && ks.position !== "absolute" && ks.position !== "fixed") {
+      if (
+        ks.display !== "none" &&
+        ks.display !== "contents" &&
+        ks.cssFloat === "none" &&
+        ks.position !== "absolute" &&
+        ks.position !== "fixed"
+      ) {
         return kid;
       }
     }

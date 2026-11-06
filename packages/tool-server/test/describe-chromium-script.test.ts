@@ -3020,6 +3020,45 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "rendered")).toEqual({ x: 20, y: 3, w: 60, h: 10 });
   });
 
+  it("takes as a fieldset's rendered legend only a <legend> that generates a box", () => {
+    const fieldset = (children: MockElement[]) =>
+      run([
+        el({
+          tag: "fieldset",
+          rect: { x: 0, y: 0, w: 300, h: 240 },
+          client: { left: 0, top: 0, width: 300, height: 240 },
+          offset: { width: 300, height: 240 },
+          style: { overflow: "hidden" },
+          children: [...children, row("under", { x: 20, y: 50, w: 260, h: 100 })],
+        }),
+      ]).tree;
+    const boxless = (display: string, children: MockElement[] = []) =>
+      el({
+        tag: "legend",
+        rect: { x: 0, y: 0, w: 0, h: 0 },
+        style: { display, marginBottom: "300px" },
+        children,
+      });
+    const rendered = el({ tag: "legend", rect: { x: 0, y: 0, w: 60, h: 80 } });
+    for (const display of ["none", "contents"]) {
+      expect(pxFrame(fieldset([boxless(display)]), "under"), display).toEqual({
+        x: 20,
+        y: 50,
+        w: 260,
+        h: 100,
+      });
+      expect(pxFrame(fieldset([boxless(display), rendered]), "under"), display).toEqual({
+        x: 20,
+        y: 80,
+        w: 260,
+        h: 70,
+      });
+    }
+    // A display:contents legend's content is the fieldset's content, which its overflow clips.
+    const outside = row("outside", { x: 20, y: 250, w: 60, h: 10 });
+    expect(pxFrame(fieldset([boxless("contents", [outside])]), "outside").h).toBe(0);
+  });
+
   it("scales the padding box by the clipper's transform", () => {
     // Rendered at 2x: border box 600x200 on screen for a 300x100 layout box.
     const { tree } = run([
