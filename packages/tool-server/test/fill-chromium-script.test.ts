@@ -4,8 +4,11 @@ import { buildChromiumFillScript } from "../src/tools/fill/chromium";
 /**
  * Runs the real page script against a hand-built document. The mock carries
  * only what the script reads: the focused element (through an open shadow
- * root), its kind, `select()`, the document selection and `execCommand`, and
- * the window's native value setters and Event.
+ * root or a frame), its kind, `select()`, the document selection and
+ * `execCommand`, which stores line breaks as LF outside an input and fires
+ * `input` through the window's capture listeners, `createElementNS` for a
+ * detached input that applies the HTML value sanitization of number and email
+ * inputs, and the window's native value setters and Event.
  */
 
 interface Page {
@@ -19,6 +22,20 @@ interface PageOptions {
   refuseCommands?: boolean;
   /** The page puts the old content back a task later, as a rich-text editor does. */
   restore?: boolean;
+  /** The browser changes inserted text, as Chromium punycodes an email input's domain. */
+  rewrite?: (text: string) => string;
+  /** The edit's `input` never reaches fill's listener, as when an earlier window capture listener of the page stops it. */
+  hideInput?: boolean;
+}
+
+/** HTML value sanitization for the input types the script probes. */
+function sanitize(type: string, multiple: boolean, value: string): string {
+  if (type === "number") return /^-?(\d+(\.\d+)?|\.\d+)([eE][-+]?\d+)?$/.test(value) ? value : "";
+  if (type === "email") {
+    const trim = (v: string) => v.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+    return multiple ? value.split(",").map(trim).join(",") : trim(value);
+  }
+  return value;
 }
 
 function makePage(options: PageOptions = {}): Page {
@@ -39,7 +56,18 @@ function makePage(options: PageOptions = {}): Page {
   class Event {
     constructor(readonly type: string) {}
   }
-  const win = { HTMLInputElement, HTMLTextAreaElement, Event };
+  // Only capture listeners: a listener on the field can stop the bubble phase.
+  const listeners = new Set<() => void>();
+  const win = {
+    HTMLInputElement,
+    HTMLTextAreaElement,
+    Event,
+    listeners,
+    addEventListener: (type: string, fn: () => void, capture?: boolean) =>
+      type === "input" && capture === true && listeners.add(fn),
+    removeEventListener: (type: string, fn: () => void, capture?: boolean) =>
+      type === "input" && capture === true && listeners.delete(fn),
+  };
   const body: any = { tagName: "BODY", isContentEditable: false, parentElement: null };
   const doc: any = {
     body,
@@ -51,6 +79,17 @@ function makePage(options: PageOptions = {}): Page {
       removeAllRanges: () => (doc.selected = null),
       addRange: (range: { node: unknown }) => (doc.selected = range.node),
     }),
+    // Any other namespace makes a plain element, which has no sanitization.
+    createElementNS: (ns: string) => {
+      const probe = { type: "text", multiple: false, sanitized: "" };
+      if (ns !== "http://www.w3.org/1999/xhtml") return probe;
+      return Object.defineProperty(probe, "value", {
+        get: () => probe.sanitized,
+        set: (v: string) => (probe.sanitized = sanitize(probe.type, probe.multiple, v)),
+      });
+    },
+    // As in an HTML document; a test of another document type replaces it.
+    createElement: (name: string) => doc.createElementNS("http://www.w3.org/1999/xhtml", name),
     createRange: () => ({
       node: null as unknown,
       selectNodeContents(node: unknown) {
@@ -63,9 +102,12 @@ function makePage(options: PageOptions = {}): Page {
       if (!el) return false;
       const key = "_value" in el ? "_value" : "innerText";
       const before = el[key];
-      if (command === "insertText") el[key] = value;
-      else if (command === "delete") el[key] = "";
+      if (command === "insertText") {
+        const text = options.rewrite ? options.rewrite(value!) : value!;
+        el[key] = el.tagName === "INPUT" ? text : text.replace(/\r\n?/g, "\n");
+      } else if (command === "delete") el[key] = "";
       else return false;
+      if (!options.hideInput) for (const listener of win.listeners) listener();
       if (options.restore) setTimeout(() => (el[key] = before), 0);
       return true;
     },
@@ -125,6 +167,9 @@ async function runScript(page: Page, text: string): Promise<any> {
   }
 }
 
+const EMAIL = { type: "email" };
+const EMAILS = { type: "email", multiple: true };
+
 describe("fill page script", () => {
   it("replaces an input's value through the page's own insert command", async () => {
     const page = makePage();
@@ -175,6 +220,304 @@ describe("fill page script", () => {
     });
     expect(input._value).toBe("42");
     expect(page.events).toEqual(["input", "change"]);
+  });
+
+  it("keeps the browser's rewrite of the edit instead of forcing the text", async () => {
+    const page = makePage({ rewrite: (t) => t.toUpperCase() });
+    const input = control(page, "INPUT");
+    page.doc.activeElement = input;
+    await expect(runScript(page, "new")).resolves.toEqual({ status: "ok", verified: false });
+    expect(input._value).toBe("NEW");
+    expect(page.events).toEqual([]);
+  });
+
+  it("keeps the browser's rewrite when it equals the old text, as on a retry", async () => {
+    const page = makePage({ rewrite: (t) => t.toUpperCase() });
+    const input = control(page, "INPUT", { _value: "NEW" });
+    page.doc.activeElement = input;
+    await expect(runScript(page, "new")).resolves.toEqual({ status: "ok", verified: false });
+    expect(input._value).toBe("NEW");
+    expect(page.events).toEqual([]);
+    expect(page.win.listeners.size).toBe(0);
+  });
+
+  // What Chrome stores for each, read from a focused input after insertText.
+  it.each([
+    ["an IDN address", EMAIL, "a@bücher.de", "a@xn--bcher-kva.de"],
+    ["an uppercase IDN domain", EMAIL, "a@BÜCHER.de", "a@xn--bcher-kva.de"],
+    ["ß, as ss", EMAIL, "a@straße.de", "a@strasse.de"],
+    ["a capital sharp s", EMAIL, "a@ẞü.de", "a@xn--ss-yka.de"],
+    ["a final sigma", EMAIL, "a@ς.gr", "a@xn--4xa.gr"],
+    ["a zero-width joiner", EMAIL, "a@a\u200dü.de", "a@xn--a-eha.de"],
+    ["a zero-width non-joiner", EMAIL, "a@b\u200cc.de", "a@bc.de"],
+    ["a numeric last label", EMAIL, "a@ü.123", "a@xn--tda.123"],
+    ["a one-digit last label", EMAIL, "a@ü.1", "a@xn--tda.1"],
+    ["two IDN addresses", EMAILS, "a@bücher.de,b@ąę.pl", "a@xn--bcher-kva.de,b@xn--2da4b.pl"],
+    ["an IDN address after an uppercase ASCII one", EMAILS, "A@B.CO,c@ü.de", "A@B.CO,c@xn--tda.de"],
+    [
+      "an IDN address after one Chrome keeps as typed",
+      EMAILS,
+      "Ü@ü.de,a@ü.de",
+      "Ü@ü.de,a@xn--tda.de",
+    ],
+  ])(
+    "verifies an email input that stores the domain of %s in ASCII, without forcing the text",
+    async (_n, props, text, stored) => {
+      const page = makePage({ rewrite: () => stored });
+      const input = control(page, "INPUT", props);
+      page.doc.activeElement = input;
+      await expect(runScript(page, text)).resolves.toEqual({ status: "ok", verified: true });
+      expect(input._value).toBe(stored);
+      expect(page.events).toEqual([]);
+    }
+  );
+
+  it.each([
+    ["a text input holding an IDN domain in ASCII", { type: "text" }, "a@ü.de", "a@xn--tda.de"],
+    ["an email input holding another domain", EMAIL, "a@ü.de", "a@xn--zz.de"],
+    ["an email input holding another local part", EMAIL, "a@ü.de", "b@xn--tda.de"],
+    ["an email input holding an ASCII domain lowercased", EMAIL, "a@B.CO", "a@b.co"],
+    ["an email input holding a text without @ in ASCII", EMAIL, "ü", "xn--tda"],
+    ["a single email input holding one of two addresses", EMAIL, "a@ü.de,b@ü.de", "a@xn--tda.de"],
+    [
+      "a multiple email input holding one of two addresses",
+      EMAILS,
+      "a@ü.de,b@ü.de",
+      "a@xn--tda.de",
+    ],
+    [
+      "a single email input holding each comma-separated part of a domain in ASCII",
+      EMAIL,
+      "a@ü,b.de",
+      "a@xn--tda,b.de",
+    ],
+  ])("does not verify %s", async (_n, props, text, stored) => {
+    const page = makePage({ rewrite: () => stored });
+    const input = control(page, "INPUT", props);
+    page.doc.activeElement = input;
+    await expect(runScript(page, text)).resolves.toEqual({ status: "ok", verified: false });
+    expect(input._value).toBe(stored);
+    expect(page.events).toEqual([]);
+  });
+
+  it("keeps a rewrite whose input event the page stopped before fill saw it", async () => {
+    const page = makePage({ rewrite: (t) => t.toUpperCase(), hideInput: true });
+    const input = control(page, "INPUT");
+    page.doc.activeElement = input;
+    await expect(runScript(page, "new")).resolves.toEqual({ status: "ok", verified: false });
+    expect(input._value).toBe("NEW");
+    expect(page.events).toEqual([]);
+  });
+
+  it("falls back to the value setter in a document without editing commands, as SVG", async () => {
+    const page = makePage();
+    page.doc.execCommand = () => {
+      throw new Error("execCommand is only supported on HTML documents");
+    };
+    const input = control(page, "INPUT");
+    page.doc.activeElement = input;
+    await expect(runScript(page, "new")).resolves.toEqual({ status: "ok", verified: true });
+    expect(input._value).toBe("new");
+    expect(page.events).toEqual(["input", "change"]);
+    expect(page.win.listeners.size).toBe(0);
+  });
+
+  it("refuses a number input's invalid text in a document without editing commands, as SVG", async () => {
+    const page = makePage();
+    page.doc.execCommand = () => {
+      throw new Error("execCommand is only supported on HTML documents");
+    };
+    // An SVG document's createElement makes an element in no namespace.
+    page.doc.createElement = () => page.doc.createElementNS(null, "input");
+    const input = control(page, "INPUT", { type: "number", _value: "42" });
+    page.doc.activeElement = input;
+    await expect(runScript(page, "abc")).resolves.toEqual({
+      status: "unsupported",
+      detail: "a number input holds only a valid number",
+    });
+    expect(input._value).toBe("42");
+  });
+
+  it("listens in a frame's own window, keeping its rewrite on a retry", async () => {
+    const page = makePage();
+    const frame = makePage({ rewrite: (t) => t.toUpperCase() });
+    const input = control(frame, "INPUT", { _value: "NEW" });
+    frame.doc.activeElement = input;
+    page.doc.activeElement = {
+      tagName: "IFRAME",
+      contentWindow: frame.win,
+      contentDocument: frame.doc,
+    };
+    await expect(runScript(page, "new")).resolves.toEqual({ status: "ok", verified: false });
+    expect(input._value).toBe("NEW");
+    expect(frame.events).toEqual([]);
+  });
+
+  it.each([
+    ["an input", "INPUT", "text", "abcdef"],
+    ["a textarea", "TEXTAREA", "textarea", "abcdef"],
+    ["a search input", "INPUT", "search", "abcd"],
+    ["a url input", "INPUT", "url", "abcd"],
+    ["a tel input", "INPUT", "tel", "abcd"],
+    ["an email input", "INPUT", "email", "a@bc"],
+    ["a password input, in UTF-16 units", "INPUT", "password", "😀😀"],
+  ] as const)(
+    "refuses text over the maxlength of %s without touching it",
+    async (_n, tag, type, text) => {
+      const page = makePage();
+      const field = control(page, tag, { type, maxLength: 3 });
+      page.doc.activeElement = field;
+      await expect(runScript(page, text)).resolves.toEqual({
+        status: "unsupported",
+        detail: "the text is longer than its maxlength of 3",
+      });
+      expect(field._value).toBe("old value");
+      expect(page.doc.selected).toBeNull();
+    }
+  );
+
+  it("refuses any text in a field with a maxlength of 0", async () => {
+    const page = makePage();
+    const input = control(page, "INPUT", { maxLength: 0, _value: "" });
+    page.doc.activeElement = input;
+    await expect(runScript(page, "a")).resolves.toEqual({
+      status: "unsupported",
+      detail: "the text is longer than its maxlength of 0",
+    });
+    expect(input._value).toBe("");
+  });
+
+  it("counts each CRLF in a textarea as the one line break it stores", async () => {
+    const page = makePage();
+    const area = control(page, "TEXTAREA", { maxLength: 5 });
+    page.doc.activeElement = area;
+    await expect(runScript(page, "a\r\nb\r\nc")).resolves.toEqual({ status: "ok", verified: true });
+    expect(area._value).toBe("a\nb\nc");
+    area._value = "old value";
+    await expect(runScript(page, "ab\r\ncde")).resolves.toEqual({
+      status: "unsupported",
+      detail: "the text is longer than its maxlength of 5",
+    });
+    expect(area._value).toBe("old value");
+  });
+
+  it.each([
+    ["text up to the maxlength", { maxLength: 3 }, "abc"],
+    ["a number input, which ignores maxlength", { type: "number", maxLength: 2 }, "123"],
+    ["an unlimited field", { maxLength: -1 }, "abcdef"],
+  ])("fills %s", async (_n, props, text) => {
+    const page = makePage();
+    const input = control(page, "INPUT", props);
+    page.doc.activeElement = input;
+    await expect(runScript(page, text)).resolves.toEqual({ status: "ok", verified: true });
+    expect(input._value).toBe(text);
+  });
+
+  const NUMBER = { type: "number" };
+  const NOT_A_NUMBER = "a number input holds only a valid number";
+  const SPACED = "an email input drops the whitespace around an address";
+
+  it.each([
+    ["a number input", "abc", NUMBER, NOT_A_NUMBER],
+    ["a number input", "+5", NUMBER, NOT_A_NUMBER],
+    ["an email input", " a@b.co ", EMAIL, SPACED],
+    ["a multiple email input", "a@b.co, c@d.co", EMAILS, SPACED],
+  ])("refuses %s given %j, without touching it", async (_n, text, props, detail) => {
+    const page = makePage();
+    const input = control(page, "INPUT", { ...props, _value: "42" });
+    page.doc.activeElement = input;
+    await expect(runScript(page, text)).resolves.toEqual({ status: "unsupported", detail });
+    expect(input._value).toBe("42");
+    expect(page.doc.selected).toBeNull();
+  });
+
+  it.each([
+    ["a number input", "1e3", NUMBER],
+    ["a number input", "", NUMBER],
+    ["an email input", "a@b.co", EMAIL],
+    ["a multiple email input", "a@b.co,c@d.co", EMAILS],
+    ["a single email input", "a@b.co, c@d.co", EMAIL],
+  ])("fills %s with %j", async (_n, text, props) => {
+    const page = makePage();
+    const input = control(page, "INPUT", { ...props, _value: "42" });
+    page.doc.activeElement = input;
+    await expect(runScript(page, text)).resolves.toEqual({ status: "ok", verified: true });
+    expect(input._value).toBe(text);
+  });
+
+  it.each(["IFRAME", "FRAME", "OBJECT"])("descends into a same-origin %s", async (tagName) => {
+    const page = makePage();
+    const input = control(page, "INPUT");
+    page.doc.activeElement = {
+      tagName,
+      contentWindow: {},
+      contentDocument: { activeElement: input },
+    };
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "ok", verified: true });
+    expect(input._value).toBe("x");
+  });
+
+  it.each(["IFRAME", "OBJECT"])(
+    "refuses focus in a cross-origin %s, whose document it cannot read",
+    async (tagName) => {
+      const page = makePage();
+      page.doc.activeElement = { tagName, contentWindow: {}, contentDocument: null };
+      await expect(runScript(page, "x")).resolves.toEqual({
+        status: "unsupported",
+        detail: "focus is in a cross-origin frame, which fill cannot reach",
+      });
+    }
+  );
+
+  it("refuses focus in an <embed>, whose document it cannot read", async () => {
+    const page = makePage();
+    page.doc.activeElement = { tagName: "EMBED" };
+    await expect(runScript(page, "x")).resolves.toEqual({
+      status: "unsupported",
+      detail: "focus is in an <embed>, which fill cannot reach",
+    });
+  });
+
+  it.each([
+    ["a textarea", (page: Page) => control(page, "TEXTAREA"), "_value"],
+    ["a contenteditable", (page: Page) => editable(page), "innerText"],
+  ] as const)("verifies %s that stores a CR or CRLF as LF", async (_n, make, key) => {
+    const page = makePage();
+    const field = make(page);
+    page.doc.activeElement = field;
+    await expect(runScript(page, "a\r\nb\rc")).resolves.toEqual({ status: "ok", verified: true });
+    expect(field[key]).toBe("a\nb\nc");
+  });
+
+  it("clears a number input that shows text it cannot parse", async () => {
+    const page = makePage();
+    const validity = { badInput: true };
+    const input = control(page, "INPUT", { type: "number", _value: "", validity });
+    page.doc.activeElement = input;
+    const execCommand = page.doc.execCommand;
+    page.doc.execCommand = (...args: [string, boolean, string?]) => {
+      if (args[0] === "delete") validity.badInput = false;
+      return execCommand(...args);
+    };
+    await expect(runScript(page, "")).resolves.toEqual({ status: "ok", verified: true });
+    expect(validity.badInput).toBe(false);
+  });
+
+  it("does not verify a number input that still shows text it cannot parse", async () => {
+    const page = makePage();
+    const input = control(page, "INPUT", {
+      type: "number",
+      _value: "",
+      validity: { badInput: true },
+    });
+    page.doc.activeElement = input;
+    await expect(runScript(page, "")).resolves.toEqual({ status: "ok", verified: false });
+  });
+
+  it("answers no_focus for an <object> that shows an image, which has no document", async () => {
+    const page = makePage();
+    page.doc.activeElement = { tagName: "OBJECT", contentWindow: null, contentDocument: null };
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "no_focus" });
   });
 
   it("sets a contenteditable's text", async () => {
@@ -258,6 +601,17 @@ describe("fill page script", () => {
     };
     page.doc.activeElement = editable(page);
     await expect(runScript(page, "x")).resolves.toEqual({ status: "error" });
+  });
+
+  it("answers an error for a contenteditable in a document without editing commands", async () => {
+    const page = makePage();
+    page.doc.execCommand = () => {
+      throw new Error("execCommand is only supported on HTML documents");
+    };
+    const div = editable(page);
+    page.doc.activeElement = div;
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "error" });
+    expect(page.win.listeners.size).toBe(0);
   });
 
   it("answers no text for a password input", async () => {

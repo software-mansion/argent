@@ -118,7 +118,7 @@ function renderAllClear(input: RenderInput, maxMs: number): string {
     `No performance hotspots found. Consider these proactive checks:`,
     ``,
     `- Run \`react-profiler-component-source\` on your most-rendered components to verify memoization is in place.`,
-    `- Run \`react-profiler-renders\` for a live count of mounted instances per component.`,
+    `- Run \`react-profiler-renders\` for a live count of mounted instances per component and their self render time, often from their mount. It does not count re-renders, so base \`React.memo\` decisions on commit data.`,
     `- Re-profile under heavier load (longer interaction, more data) to catch issues that don't appear in short sessions.`,
   ];
   return lines.join("\n");
@@ -148,9 +148,10 @@ function buildFullMarkdown(
     `${compilerLine}  **Hot commits:** ${totalHotCommits} of ${input.reactCommits} total`,
     ``,
     `> **Duration columns:** \`self\` = this component's own render work only (exclusive).`,
-    `> \`w/children\` = self + the entire subtree it owns (inclusive).`,
-    `> Do not sum the \`w/children\` column — a parent's inclusive time already contains its`,
-    `> children's time. Use \`self\` for summing; use \`w/children\` to understand container cost.`,
+    `> \`w/children\` = self + the entire subtree it owns (inclusive). On a grouped \`×N\` row it is`,
+    `> the largest single instance, while \`self\` is the total of all N.`,
+    `> Do not sum \`w/children\` across rows or instances — inclusive times nest inside each other.`,
+    `> Use \`self\` for summing; use \`w/children\` to understand container cost.`,
     ``,
     `---`,
     `## Slow React Batches`,

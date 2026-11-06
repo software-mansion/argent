@@ -69,7 +69,7 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `screenshot`                | Capture the device screen                                                        |
 | `describe`                  | Get the accessibility / DOM element tree for the current screen                  |
 | `screenshot-diff`           | Compare two PNG screenshots and return a visual-diff summary                     |
-| `await-screen-idle`         | Block until the screen has rendered content and stopped changing                 |
+| `await-screen-idle`         | Block until the screen has rendered content and held it for `minStableMs`        |
 | `await-ui-element`          | Block until a UI element reaches an expected state, instead of polling in a loop |
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
@@ -197,24 +197,24 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 
 ## Profiling
 
-| Tool                              | Description                                                                  |
-| --------------------------------- | ---------------------------------------------------------------------------- |
-| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime |
-| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                   |
-| `react-profiler-status`           | Check the profiler session state without side effects                        |
-| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree             |
-| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
-| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                              |
-| `react-profiler-component-source` | Find a component's source file, line, and memoization status                 |
-| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android              |
-| `native-profiler-stop`            | Stop native profiling and export the trace                                   |
-| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                      |
-| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                      |
-| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it    |
-| `profiler-commit-query`           | Query React commit data for iterative render investigation                   |
-| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
-| `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
+| Tool                              | Description                                                                   |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime  |
+| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                    |
+| `react-profiler-status`           | Check the profiler session state without side effects                         |
+| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report              |
+| `react-profiler-renders`          | List mounted instances and self durations from the fiber tree's top 30 levels |
+| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                          |
+| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                               |
+| `react-profiler-component-source` | Find a component's source file, line, and memoization status                  |
+| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android               |
+| `native-profiler-stop`            | Stop native profiling and export the trace                                    |
+| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                       |
+| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                       |
+| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it     |
+| `profiler-commit-query`           | Query React commit data for iterative render investigation                    |
+| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                             |
+| `profiler-stack-query`            | Query native trace data for iterative native investigation                    |
 
 While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
 
@@ -264,6 +264,14 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
 
 `terminate-app`, `ui-tree`, `foreground-app`, `fill` and `gather-workspace-data` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
+
+`fill` replaces the text of the focused field and reads the field back. The result and the errors never contain the text. In an email input, Chromium stores the domain of an address in ASCII, for example `xn--bcher-kva.de` for `bücher.de`. `fill` accepts that form as the text. On a physical iPhone, Argent cannot read the field back, so `verified` is `false`. Besides errors it shares with other tools, such as a lost connection, an unknown secret placeholder or a page that navigates away during the fill, a failed `fill` returns one of these codes:
+
+| Code                     | Meaning                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `FILL_NO_FOCUSED_FIELD`  | No field that takes text has focus. `fill` changes nothing.                                                                                                                                                                                                                                                                                                              |
+| `FILL_UNSUPPORTED_FIELD` | The field cannot take the text, and `fill` changes nothing. Examples are a date or time input and a newline in a single-line field. On Chromium, other examples are text longer than the `maxlength` of the field, text that is not a valid number in a number input, whitespace around an address in an email input, and focus in a cross-origin frame or an `<embed>`. |
+| `FILL_NOT_VERIFIED`      | The field does not read back the text, or the device does not answer in time. The error message tells if the field can have changed. A Chromium page does not answer while it shows a JavaScript dialog.                                                                                                                                                                 |
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
 

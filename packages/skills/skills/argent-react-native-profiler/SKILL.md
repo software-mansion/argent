@@ -15,7 +15,7 @@ Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Prof
 - `react-profiler-analyze`: turn the recording into a ranked report: hot commits with the JS functions that ran during each.
 - `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. A debugger drop also ends the recording; check status before stopping or restarting.
 - `react-profiler-component-source`: source, location and memoization status of a component the report flagged.
-- `react-profiler-renders`: how many instances of each component are mounted in the top 30 levels of the tree, with their last render time; no session needed. It does not count re-renders: record a profile for that.
+- `react-profiler-renders`: how many instances of each component are mounted in the top 30 levels of the tree, with their self time from each fiber's last render, often its mount; no session needed. It does not count re-renders: record a profile for that.
 - `react-profiler-fiber-tree`: live component hierarchy, no session needed, for tracing a component's ancestry.
 
 ### Drill-down queries (after analyze)

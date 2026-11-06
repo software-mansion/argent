@@ -7,6 +7,7 @@ import {
 } from "../../../blueprints/react-profiler-session";
 import {
   buildCpuSampleIndex,
+  buildChildToParent,
   queryCpuWindow,
   deserializeCpuSampleIndex,
   isArgentProfilerFunction,
@@ -280,7 +281,7 @@ function renderCallTree(
   return lines.join("\n");
 }
 
-function renderComponentCpu(
+export function renderComponentCpu(
   index: CpuSampleIndex,
   commitTree: {
     commits: {
@@ -329,30 +330,70 @@ function renderComponentCpu(
     }
   }
 
-  const aggregated = new Map<
-    string,
-    { selfMs: number; totalMs: number; url?: string; lineNumber?: number }
-  >();
+  const aggregated = new Map<string, { selfMs: number; totalMs: number }>();
+  // Hermes can give one function a different line in each call-tree node, so rows
+  // go by name and show the line that took the most self time.
+  const selfMsByLocation = new Map<string, Map<string, SourceSelfTime>>();
+
+  const childToParent = index.childToParent ?? buildChildToParent(index.nodeMap);
 
   for (const window of commitWindows.values()) {
-    const { hotspots } = queryCpuWindow(index, window.start, window.end, 50);
+    // Every node on the sampled stacks: a name's outer frame can rank below the cut, or
+    // take no self sample at all, while its nested one does.
+    const { hotspots } = queryCpuWindow(index, window.start, window.end, Infinity, {
+      withCallers: true,
+    });
+    // Rows are per call-tree node. Self time adds; inclusive time sums only
+    // the outermost of a name's nodes (`members`), since recursion nests them.
+    const perWindow = new Map<
+      string,
+      {
+        selfMs: number;
+        totalMs: number;
+        members: { nodeId: number; totalMs: number }[];
+      }
+    >();
     for (const hs of hotspots) {
-      const existing = aggregated.get(hs.name);
-      if (existing) {
-        existing.selfMs += hs.selfMs;
-        existing.totalMs += hs.totalMs;
+      const locations = selfMsByLocation.get(hs.name) ?? new Map<string, SourceSelfTime>();
+      selfMsByLocation.set(hs.name, locations);
+      const locationKey = `${hs.url ?? ""}:${hs.lineNumber ?? ""}`;
+      const location = locations.get(locationKey);
+      if (location) location.selfMs += hs.selfMs;
+      else
+        locations.set(locationKey, { url: hs.url, lineNumber: hs.lineNumber, selfMs: hs.selfMs });
+      const seen = perWindow.get(hs.name);
+      if (seen) {
+        seen.selfMs += hs.selfMs;
+        if (!seen.members.some((m) => isAncestor(m.nodeId, hs.nodeId, childToParent))) {
+          seen.members = seen.members.filter(
+            (m) => !isAncestor(hs.nodeId, m.nodeId, childToParent)
+          );
+          seen.members.push({ nodeId: hs.nodeId, totalMs: hs.totalMs });
+          seen.totalMs = seen.members.reduce((sum, m) => sum + m.totalMs, 0);
+        }
       } else {
-        aggregated.set(hs.name, {
+        perWindow.set(hs.name, {
           selfMs: hs.selfMs,
           totalMs: hs.totalMs,
-          url: hs.url,
-          lineNumber: hs.lineNumber,
+          members: [{ nodeId: hs.nodeId, totalMs: hs.totalMs }],
         });
+      }
+    }
+    for (const [name, win] of perWindow) {
+      const existing = aggregated.get(name);
+      if (existing) {
+        existing.selfMs += win.selfMs;
+        existing.totalMs += win.totalMs;
+      } else {
+        aggregated.set(name, { ...win });
       }
     }
   }
 
-  const sorted = [...aggregated.entries()].sort((a, b) => b[1].selfMs - a[1].selfMs).slice(0, topN);
+  const sorted = [...aggregated.entries()]
+    .filter(([, row]) => row.selfMs > 0)
+    .sort((a, b) => b[1].selfMs - a[1].selfMs)
+    .slice(0, topN);
 
   if (sorted.length === 0) {
     return `_No CPU samples found during \`${resolvedName}\` commits._`;
@@ -370,7 +411,12 @@ function renderComponentCpu(
     "|---|---|---|---|",
   ];
 
-  for (const [name, { selfMs, totalMs, url, lineNumber }] of sorted) {
+  for (const [name, { selfMs, totalMs }] of sorted) {
+    let top: SourceSelfTime | undefined;
+    for (const location of selfMsByLocation.get(name)!.values()) {
+      if (!top || location.selfMs > top.selfMs) top = location;
+    }
+    const { url, lineNumber } = top!;
     const loc = url ? `${shortenUrl(url)}${lineNumber != null ? `:${lineNumber}` : ""}` : "—";
     lines.push(
       `| \`${name}\` | ${Math.round(selfMs * 100) / 100} | ${Math.round(totalMs * 100) / 100} | ${loc} |`
@@ -380,9 +426,27 @@ function renderComponentCpu(
   return lines.join("\n");
 }
 
+interface SourceSelfTime {
+  url?: string;
+  lineNumber?: number;
+  selfMs: number;
+}
+
 function shortenUrl(url: string): string {
   const parts = url.replace(/\\/g, "/").split("/");
   return parts.slice(-2).join("/");
+}
+
+function isAncestor(ancestor: number, nodeId: number, childToParent: Map<number, number>): boolean {
+  const seen = new Set<number>([nodeId]);
+  let current = nodeId;
+  while (childToParent.has(current)) {
+    current = childToParent.get(current)!;
+    if (current === ancestor) return true;
+    if (seen.has(current)) return false;
+    seen.add(current);
+  }
+  return false;
 }
 
 const timeWindowSchema = z.object({

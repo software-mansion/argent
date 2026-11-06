@@ -39,11 +39,11 @@ describe("profiler-commit-query by_index — top_n", () => {
     expect(out).not.toContain("cheaper fibers hidden");
   });
 
-  it("caps the table when top_n is given, keeping the costliest fibers", () => {
+  it("caps the table when top_n is given, keeping the fibers with the most self time", () => {
     const out = renderByIndex(commit(), 1, 8);
     const rows = out.split("\n").filter((l) => l.startsWith("| `"));
     expect(rows.length).toBe(8);
-    // Sorted by actualDuration desc, so the retained rows are 30..23.
+    // Self time is half the duration here, so the retained rows are 30..23.
     expect(rows[0]).toContain("| 30.0 |");
     expect(rows[7]).toContain("| 23.0 |");
   });
@@ -53,6 +53,17 @@ describe("profiler-commit-query by_index — top_n", () => {
     expect(out).toContain("**Fibers:** 30 (showing 8)");
     // The heading must stop claiming full detail once it is not full.
     expect(out).not.toContain("Full Detail");
+  });
+
+  it("ranks by self time, not by the inclusive duration a wrapper inherits", () => {
+    const commits = [
+      fiber("Wrapper", 50, { selfDuration: 0.5 }),
+      fiber("Leaf", 10, { selfDuration: 10 }),
+    ];
+    const rows = renderByIndex(commits, 1, 1)
+      .split("\n")
+      .filter((l) => l.startsWith("| `"));
+    expect(rows).toEqual(["| `Leaf` | 10.0 | 10.0 | unknown | `—` |  |"]);
   });
 
   it("says how many distinct components the truncated view actually covers", () => {

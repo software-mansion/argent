@@ -53,6 +53,8 @@ const SOURCE_EXT = /\.(tsx?|jsx?|mjs|cjs)$/;
 
 // [L:<id>] <timestamp> <LEVEL> <source> | <message>
 const LINE_RE = /^\[L:(\d+)\] (\S+) (\S+)\s+(\S+) \| (.*)$/;
+// CDP console types that lowercasing the uppercase LEVEL column cannot restore
+const CAMEL_LEVELS = ["startGroup", "startGroupCollapsed", "endGroup", "profileEnd", "timeEnd"];
 
 const liveLogFiles = new Set<string>();
 
@@ -69,7 +71,11 @@ export class LogFileWriter {
   constructor(port: number) {
     const timestamp = Date.now();
     const dir = path.join(os.homedir(), ".argent", "tmp");
-    fs.mkdirSync(dir, { recursive: true });
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      // Unwritable ~/.argent: open() fails too and the writer runs fileless.
+    }
     pruneStaleLogs(dir);
     this.filePath = path.join(dir, `argent-logs-${port}-${timestamp}-p${process.pid}.log`);
     liveLogFiles.add(this.filePath);
@@ -112,11 +118,14 @@ export class LogFileWriter {
     // Nothing reopens the file, and readAll() serves it alone, so a line with
     // no file has no reader: the entry lives on only in the counts and clusters.
     if (this.ready && this.fd !== null) {
-      const buf = Buffer.from(line);
-      fs.writeSync(this.fd, buf);
+      try {
+        // Short of the whole line at a file-size limit or on a full disk.
+        this.bytesWritten += fs.writeSync(this.fd, Buffer.from(line));
+      } catch {
+        // Past that limit it throws, and the entry is left to the counts and clusters.
+      }
     }
 
-    this.bytesWritten += Buffer.byteLength(line);
     this.entryCount++;
 
     this.levelCounts[entry.level] = (this.levelCounts[entry.level] || 0) + 1;
@@ -144,6 +153,10 @@ export class LogFileWriter {
 
   getFilePath(): string {
     return this.filePath;
+  }
+
+  hasFile(): boolean {
+    return fs.existsSync(this.filePath);
   }
 
   getStats(): LogStats {
@@ -270,7 +283,7 @@ function parseFlatLine(line: string): RichLogEntry | null {
   const match = LINE_RE.exec(line);
   if (!match) return null;
   const [, idStr, timestamp, levelRaw, , message] = match;
-  const level = levelRaw.toLowerCase().trim();
+  const level = CAMEL_LEVELS.find((l) => l.toUpperCase() === levelRaw) ?? levelRaw.toLowerCase();
   return {
     marker: `[L:${idStr}]`,
     id: parseInt(idStr, 10),

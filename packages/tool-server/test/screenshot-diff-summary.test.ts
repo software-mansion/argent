@@ -20,6 +20,7 @@ describe("formatScreenshotDiffSummary", () => {
     expect(summary).toContain("Overall:");
     expect(summary).toContain("- status: unchanged");
     expect(summary).toContain("- pixel_mismatch: 0% - no pixel change");
+    expect(summary.split("\n")).toContain("- compared_at: 10x10");
     expect(summary).toContain("Text changes:");
     expect(summary).toContain("- text_analysis: status=ok provider=ocr shown=0 total=0 omitted=0");
     expect(summary).toContain("Regions:");

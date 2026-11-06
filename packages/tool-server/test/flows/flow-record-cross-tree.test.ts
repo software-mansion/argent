@@ -899,11 +899,13 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
 
     // A node is kept only when onScreen AND addressable; naming the latter blames the selector.
     expect(warning).toContain("addressable nodes");
-    expect(warning).toContain("clamp");
+    expect(warning).toContain("did not clip to zero area");
     expect(warning).toContain("off-viewport");
     expect(warning).toContain("`scroll-to` before the check rather than a different selector");
-    // Both axes. `normRect` clamps each edge alone, so a sideways node is zero-WIDTH.
-    expect(warning).toContain("zero width for one left or right of it");
+    // A clip no scroll moves gets no scroll-to remedy.
+    expect(warning).toContain("one an `overflow: hidden` box clips stays hidden");
+    // Both axes. The walker clips each edge alone, so a sideways node is zero-WIDTH.
+    expect(warning).toContain("zero width for one cut off left or right");
     // Not the other direction: the live `exists` passed, so the recorder saw it.
     expect(warning).toContain("5000-node walk limit is not what went wrong");
     expect(warning).not.toContain("past the end of what it read");

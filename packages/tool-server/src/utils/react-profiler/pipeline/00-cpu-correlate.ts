@@ -90,12 +90,14 @@ function isIdleFrame(name: string | undefined): boolean {
  * own interval that lies inside the window. This keeps the numbers additive across
  * adjoining windows and independent of how wide the caller made the query —
  * apportioning the requested width by hit share did not (#619).
+ * `withCallers` also lists the frames on the sampled stacks that took no self sample.
  */
 export function queryCpuWindow(
   index: CpuSampleIndex,
   startMs: number,
   endMs: number,
-  topN: number = 5
+  topN: number = 5,
+  { withCallers = false }: { withCallers?: boolean } = {}
 ): CpuWindowResult {
   const { timestampsMs, intervalStartsMs, sampleNodeIds, nodeMap } = index;
   const n = timestampsMs.length;
@@ -175,16 +177,18 @@ export function queryCpuWindow(
   }
 
   const entries: CpuCommitHotspot[] = [];
-  for (const [nodeId, ms] of selfMsByNode) {
+  for (const nodeId of (withCallers ? totalMsByNode : selfMsByNode).keys()) {
     const node = nodeMap.get(nodeId);
     if (!node) continue;
     const name = node.callFrame.functionName;
     if (isArgentProfilerFunction(name)) continue;
+    const ms = selfMsByNode.get(nodeId) ?? 0;
 
     entries.push({
       name,
+      nodeId,
       selfMs: Math.round(ms * 100) / 100,
-      totalMs: Math.round((totalMsByNode.get(nodeId) ?? ms) * 100) / 100,
+      totalMs: Math.round(totalMsByNode.get(nodeId)! * 100) / 100,
       url: node.callFrame.url || undefined,
       lineNumber: node.callFrame.lineNumber >= 0 ? node.callFrame.lineNumber : undefined,
     });
@@ -202,7 +206,7 @@ export function queryCpuWindow(
   };
 }
 
-function buildChildToParent(nodeMap: Map<number, HermesProfileNode>): Map<number, number> {
+export function buildChildToParent(nodeMap: Map<number, HermesProfileNode>): Map<number, number> {
   const childToParent = new Map<number, number>();
   for (const node of nodeMap.values()) {
     for (const childId of node.children ?? []) childToParent.set(childId, node.id);
