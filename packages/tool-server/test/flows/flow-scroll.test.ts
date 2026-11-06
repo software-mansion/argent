@@ -635,6 +635,75 @@ describe("scroll-to directive", () => {
     }
   );
 
+  it("keeps retrying a tall cut target the retry carries under the window's centre", async () => {
+    // Wheels at the anchor are held; one anywhere else moves the card by its travel.
+    let cardY = 0.75;
+    currentTree = () => {
+      const bottom = cardY + 0.3;
+      return screen([
+        n({
+          identifier: "card",
+          frame: { x: 0.6, y: cardY, width: 0.3, height: Math.min(bottom, 0.8) - cardY },
+          clipBounds: bottom > 0.8 ? { x: 0, y: 0.4, width: 1, height: 0.4 } : undefined,
+          clipAnchors: bottom > 0.8 ? { y: { x: 0.3, y: 0.45 } } : undefined,
+        }),
+      ]);
+    };
+    const swipes: SwipeCall[] = [];
+    const registry = mockRegistry(swipes, () => {
+      const last = swipes[swipes.length - 1];
+      if (last.fromX !== 0.3) cardY -= last.fromY - last.toY;
+    });
+    await writeFlow("tall-card", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "card" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(registry).execute(
+        {},
+        { name: "tall-card", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(cardY + 0.3).toBeLessThanOrEqual(0.8 + 1e-9);
+  });
+
+  it("accepts a stuck cut whose target lies under the `within` container's centre", async () => {
+    // The window that cuts the row is centred above it (0.6); the pane is centred on it.
+    const target = n({
+      identifier: "editor",
+      frame: { x: 0.1, y: 0.65, width: 0.8, height: 0.15 },
+      clipBounds: { x: 0, y: 0.4, width: 1, height: 0.4 },
+      clipAnchors: { y: { x: 0.5, y: 0.45 } },
+    });
+    const pane = n({
+      identifier: "pane",
+      scrollable: true,
+      frame: { x: 0, y: 0.5, width: 1, height: 0.5 },
+    });
+    currentTree = () => screen([pane, target]);
+    const swipes: SwipeCall[] = [];
+    await writeFlow("target-under-within", {
+      executionPrerequisite: "",
+      steps: [
+        {
+          kind: "scroll-to",
+          direction: "down",
+          target: { identifier: "editor" },
+          within: { identifier: "pane" },
+        },
+      ],
+    });
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(swipes, () => {})).execute(
+        {},
+        { name: "target-under-within", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
+  });
+
   it("keeps scrolling a target the retry uncut while the screen still cuts it", async () => {
     // The anchor's wheel is held, the retry scrolls the list past its end of the row
     // cut, and the row then runs past the screen's bottom edge across its centre.
