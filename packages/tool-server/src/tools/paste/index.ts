@@ -66,17 +66,16 @@ export function createPasteTool(registry: Registry): ToolDefinition<PasteParams,
   });
   return {
     id: "paste",
+    description: `Set the DEVICE clipboard to \`text\`, then trigger the platform's paste shortcut to paste it into the focused field (iOS simulator, Android emulator).<flag:macos-apps> On a Mac app it types \`text\` in instead: the pasteboard is untouched and the app's own paste handling does not run.</flag:macos-apps>
+Do NOT use this in place of \`keyboard\`. \`keyboard\` types as a user would and is the default for all text entry; call this only where a real user would paste: a 2FA/OTP code copied from another app, a long link or token, or when testing the app's own paste handling.
+Tap the field first so it has focus. Returns { pasted: true }, plus via: "keyboard" when a secret was typed instead of pasted. Fails on a TV target, when the device clipboard cannot be set, when a secret that has to be typed holds a character that cannot be typed, or when the simulator-server build lacks clipboard support<flag:macos-apps>, or on a Mac app when the focused element takes no text</flag:macos-apps>.`,
+    zodSchema: pasteZodSchema,
+    searchHint: "paste clipboard pasteboard otp 2fa code fill field",
     interaction: {
       startedMsg: () => "Pasting text",
       completedMsg: () => "Pasted text",
       failedMsg: ({ failureSignal }) => `Failed to paste text: ${failureSignal.error_code}`,
     },
-    description: `Paste text into the focused field: puts \`text\` on the DEVICE clipboard, then triggers the platform's paste shortcut (iOS simulator, Android emulator).<flag:macos-apps> On a Mac app it inserts \`text\` at the focused field as typed text: the pasteboard stays unchanged, and the app's own paste handling does not run.</flag:macos-apps>
-Do NOT use this in place of \`keyboard\`. \`keyboard\` types as a user would and is the default for all text entry; use \`paste\` only where a real user would paste: a 2FA/OTP code copied from another app, a long link or token, or when testing the app's own paste handling.
-Tap the field first so it has focus. Returns { pasted: true }, plus via: "keyboard" when a secret was typed instead of pasted. Fails on a TV target, when the device clipboard cannot be set, when a secret that has to be typed holds a character that cannot be typed, or when the simulator-server build lacks clipboard support<flag:macos-apps>; on a Mac app, also when the focused element takes no text (read-only, or a web page with no text field focused)</flag:macos-apps>.
-Supports \`{{secret:<NAME>}}\` placeholders like \`keyboard\`; the value is never echoed back.`,
-    searchHint: "paste clipboard pasteboard otp 2fa code fill field",
-    zodSchema: pasteZodSchema,
     capability,
     services: () => ({}),
     execute: async (services, params, options) => {

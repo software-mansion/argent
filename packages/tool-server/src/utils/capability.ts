@@ -16,7 +16,13 @@ import { HARMONY_DISABLED_REASON, isHarmonyEnabled } from "./harmony-flag";
 export class UnsupportedOperationError extends Error {
   constructor(toolId: string, device: DeviceInfo, reason?: string) {
     const detail = reason ? ` (${reason})` : "";
-    super(`Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.`);
+    const next =
+      device.platform === "ios" && device.kind === "device"
+        ? " Use a simulator, or see the argent-ios-device-interact skill."
+        : "";
+    super(
+      `Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.${next}`
+    );
     this.name = "UnsupportedOperationError";
     withFailureSignal(this, {
       error_code: FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION,

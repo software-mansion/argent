@@ -3,6 +3,8 @@ import { FAILURE_CODES, type ToolDefinition } from "@argent/registry";
 import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
 import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 
+type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; view: unknown | null };
+
 const zodSchema = z.object({
   ...nativeAppTarget,
   x: z
@@ -12,9 +14,7 @@ const zodSchema = z.object({
     ),
   y: z
     .number()
-    .describe(
-      "Raw Y coordinate in points, on the portrait axes of the screen (the axes of native-describe-screen frames)<flag:macos-apps>; on a Mac app, points from the top-left of the area describe reports</flag:macos-apps>. NOT normalized [0,1] tap space."
-    ),
+    .describe("Raw Y coordinate in points, on the same axes as x. NOT normalized [0,1] tap space."),
   includeAncestors: z
     .boolean()
     .optional()
@@ -49,10 +49,30 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; view: unknown | null };
 
 export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-view-at-point",
+  description: `Inspect the deepest visible UIView at a raw native window point.
+
+Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,
+so it answers "what is visually here?" rather than "what would receive the touch?".
+
+Use when a screenshot shows something the accessibility tree does not name (an
+unlabeled icon, a decorative overlay, a custom-drawn cell) and you need the class,
+identifier or nativeID of whatever draws it.
+
+Returns { status: "ok", view }: the matched view with its class name, frames,
+identifier, label and layer name, plus its ancestors and subviews as requested.
+view is null when nothing is drawn at that point.
+
+To get x and y from a normalized describe frame, multiply its values by the
+screen size in points, also when the UI is landscape.<flag:macos-apps> On a Mac app,
+multiply them by the size of the area describe reports instead.</flag:macos-apps>
+
+If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+An Apple system app is rejected outright (terminal: never retry it).`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Inspecting native view at (${params.x}, ${params.y})`,
     completedMsg: ({ params }) => `Inspected native view at (${params.x}, ${params.y})`,
@@ -64,29 +84,6 @@ export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
     appleRemote: { simulator: true },
     macos: { app: true },
   },
-  description: `Inspect the deepest visible UIView at a raw native window point.
-
-Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,
-so it answers "what is visually here?" rather than "what would receive the touch?".
-
-Use when a screenshot shows something the accessibility tree does not name (an
-unlabeled icon, a decorative overlay, a custom-drawn cell) and you need the class,
-identifier or nativeID of whatever draws it.
-
-Returns { status: "ok", view }: the matched view with its class name, frames,
-identifier, label and layer name, its ancestor chain by default, and its subviews on
-request. view is null when nothing is drawn at that point.
-
-IMPORTANT: x and y are raw points on the portrait axes of the screen, NOT
-normalized [0,1] simulator tap coordinates. To get them from a describe frame,
-multiply the normalized values by the screen size in points. Do this also when
-the UI is landscape.
-<flag:macos-apps>Mac app: x and y are points from the top-left of the area describe reports; returns the deepest NSView drawn there.
-</flag:macos-apps>
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
-A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), and the point query itself can error or time out.`,
-  readOnly: true,
-  zodSchema,
   services: nativeAppServices,
   execute: (services, params) =>
     queryViewHierarchyFor(

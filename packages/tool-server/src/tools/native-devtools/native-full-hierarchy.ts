@@ -3,6 +3,8 @@ import type { ToolDefinition } from "@argent/registry";
 import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
 import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 
+type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; windows: unknown[]; screen?: unknown };
+
 const zodSchema = z.object({
   ...nativeAppTarget,
   fields: z
@@ -37,17 +39,23 @@ const zodSchema = z.object({
     .int()
     .positive()
     .optional()
-    .describe(
-      "Maximum recursion depth (default 8). Increase for deeper inspection, " +
-        "decrease to reduce output size."
-    ),
+    .describe("Maximum recursion depth (default 8). Raise it to reach deeper views."),
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; windows: unknown[]; screen?: unknown };
 
 export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
   id: "native-full-hierarchy",
+  description: `Get the complete UIKit view tree for the running app.
+WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
+Reduce the output with skipClasses / skipClassPrefixes, fields and maxDepth.
+Use when you need deep layout debugging, finding views with no accessibility labels, or verifying view structure not exposed through the accessibility tree.
+Returns { status: "ok", windows, screen } with the full view hierarchy. screen gives the screen size in points on its portrait axes, and the interfaceOrientation of the UI (portrait, portraitUpsideDown, landscapeLeft, landscapeRight). Each screenFrame uses the portrait axes of the screen. Each windowFrame uses the axes of its window, which turn with the UI.
+<flag:macos-apps>On a Mac app it returns the AppKit view tree of the app's windows, each screenFrame in points from the top-left of the area describe reports. The statuses below are iOS only; on a Mac app that is not running, the call fails.
+</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+An Apple system app is rejected outright (terminal: never retry it).`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Reading native view hierarchy for ${params.bundleId}`,
     completedMsg: ({ params }) => `Read native view hierarchy for ${params.bundleId}`,
@@ -59,16 +67,6 @@ export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
     appleRemote: { simulator: true },
     macos: { app: true },
   },
-  description: `Get the complete UIKit view tree for the running app.
-WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
-Use skipClasses / skipClassPrefixes to prune SwiftUI internal subtrees and reduce output size. Use the fields param to request only the properties you need.
-Use when you need deep layout debugging, finding views with no accessibility labels, or verifying view structure not exposed through the accessibility tree.
-<flag:macos-apps>On a Mac app it returns the AppKit view tree of the app's windows in the same shape, with each screenFrame in points from the top-left of the area describe reports (the app window, grown to hold sheets, alerts and menus past it); the statuses below are iOS only, and on a Mac app that is not running the call fails.
-</flag:macos-apps>Returns { status: "ok", windows, screen } with the full view hierarchy. screen gives the screen size in points on its portrait axes, and the interfaceOrientation of the UI (portrait, portraitUpsideDown, landscapeLeft, landscapeRight). Each screenFrame uses the portrait axes of the screen. Each windowFrame uses the axes of its window, which turn with the UI.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
-A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), and the hierarchy query itself can error or time out.`,
-  readOnly: true,
-  zodSchema,
   services: nativeAppServices,
   execute: (services, params) =>
     queryViewHierarchyFor(
