@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { ArtifactStore } from "@argent/registry";
@@ -260,6 +260,55 @@ describe("GET /artifacts/:id", () => {
       expect(listing).toContain("session.trace/sub/nested.txt");
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("answers a plain JSON 500 when tar cannot be spawned", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-notar-"));
+    const savedPath = process.env.PATH;
+    try {
+      const bundle = join(root, "session.trace");
+      await mkdir(bundle);
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: bundle,
+        kind: "native-profile-trace",
+      });
+      handle = createHttpApp(registry);
+      process.env.PATH = join(root, "no-bin");
+      const res = await supertest(handle.app).get(`/artifacts/${artifact.id}`);
+
+      expect(res.status).toBe(500);
+      expect(res.headers["content-type"]).toBe("application/json; charset=utf-8");
+      expect(res.headers["content-disposition"]).toBeUndefined();
+      expect(res.body.error).toContain("ENOENT");
+    } finally {
+      process.env.PATH = savedPath;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("answers a plain JSON 500 when the file cannot be read", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "artifact-unreadable-"));
+    try {
+      const filePath = join(dir, "img.png");
+      await writeFile(filePath, "png");
+      await chmod(filePath, 0o000);
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register({
+        hostPath: filePath,
+        kind: "screenshot",
+        mimeType: "image/png",
+      });
+      handle = createHttpApp(registry);
+      const res = await supertest(handle.app).get(`/artifacts/${artifact.id}`);
+
+      expect(res.status).toBe(500);
+      expect(res.headers["content-type"]).toBe("application/json; charset=utf-8");
+      expect(res.headers["content-disposition"]).toBeUndefined();
+      expect(res.body).toEqual({ error: `Failed to read artifact "${artifact.id}"` });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 
