@@ -98,9 +98,10 @@ if (cmd === "hang") {
   // A worker that ESCAPES the launcher's process group (detached → its own session/
   // pgid, like the real CLI's setsid'd worker), so the group-only SIGKILL can't reach
   // it — only the descendant sweep does. It also inherits our stdout, reproducing the
-  // pipe-held-open freeze. \`secs\` is a per-test sentinel so pgrep finds strays
-  // unambiguously.
-  const worker = spawn("sh", ["-c", "trap '' TERM; exec sleep " + secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
+  // pipe-held-open freeze; it sleeps only while that stdout is our pipe (a socket), so the
+  // reap test's count of its workers pins the inheritance. \`secs\` is a per-test sentinel
+  // so pgrep finds strays unambiguously.
+  const worker = spawn("sh", ["-c", "trap '' TERM; [ -S /dev/stdout ] && exec sleep " + secs], { detached: true, stdio: ["ignore", "inherit", "ignore"] });
   worker.unref();
   // The launcher itself also hangs so it stays alive to be timed out and snapshotted.
   // This sleep is a descendant, so the sweep reaps it before the group kill runs.
@@ -460,6 +461,9 @@ describe("runVega timeout (real subprocess)", () => {
     // The worker still holds both pipes, so only runVega dropping its read ends closes
     // them; a held one keeps accumulating whatever the worker writes.
     expect(await pollCount(openPipes, pipesBefore, 3_000)).toBe(pipesBefore);
+    // Alive past the drain's group reap: escaping the group is what sets this worker apart
+    // from `linger-grouped`'s.
+    expect(await waitForCount(SENTINEL_LINGER, 0, 1_000)).toBe(1);
   });
 
   it("resolves a clean exit whose drain grace outlasts the deadline (does not reject as timeout)", async () => {
