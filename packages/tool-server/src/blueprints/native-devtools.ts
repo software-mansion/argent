@@ -495,6 +495,12 @@ export interface NativeDevtoolsApi {
    * relaunch.
    */
   activateNetworkInspection(bundleId: string): void;
+  /**
+   * True once per gap: capture for this app was turned on while it was already
+   * running, so the requests before that (its launch among them) were missed.
+   * Reading it clears it, so only the answer that reports the log says so.
+   */
+  takeCaptureGap(bundleId: string): boolean;
   getNetworkLog(bundleId: string): NetworkEvent[];
   clearNetworkLog(bundleId: string): void;
   getAppState(bundleId: string): Promise<NativeAppState>;
@@ -675,6 +681,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     let envRetired = false;
 
     const activatedBundleIds = new Set<string>();
+    const captureGaps = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
@@ -827,6 +834,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             connections.set(bundleId, { socket, networkLog: [] });
 
             if (activatedBundleIds.has(bundleId)) {
+              // Our own listener hears an app at its launch, so nothing was
+              // missed. A lent agent is an app that was already running.
+              if (lentSocketPath) captureGaps.add(bundleId);
+              else captureGaps.delete(bundleId);
               socket.write(
                 JSON.stringify({
                   type: "Control",
@@ -1087,9 +1098,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       },
 
       activateNetworkInspection(bundleId) {
+        const startedNow = !activatedBundleIds.has(bundleId);
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
         if (conn) {
+          if (startedNow) captureGaps.add(bundleId);
           conn.socket.write(
             JSON.stringify({
               type: "Control",
@@ -1098,6 +1111,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           );
         }
       },
+
+      takeCaptureGap: (bundleId) => captureGaps.delete(bundleId),
 
       getNetworkLog: (bundleId) => [...(connections.get(bundleId)?.networkLog ?? [])],
 
@@ -1172,6 +1187,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
         connections.clear();
         activatedBundleIds.clear();
+        captureGaps.clear();
         /**
          * Attach mode owns only its end of the connection: hang up and leave
          * the provider's socket file and server exactly as they were.

@@ -8,6 +8,7 @@ import {
   type ToolDefinition,
 } from "@argent/registry";
 import {
+  buildAppStateMessage,
   nativeDevtoolsRef,
   precheckNativeDevtools,
   type NativeDevtoolsApi,
@@ -88,7 +89,7 @@ interface AndroidNativeStopped {
 
 type Result =
   | NativeDevtoolsPrecheckBlock
-  | { status: "ok"; count: number; events: NetworkEvent[] }
+  | { status: "ok"; count: number; events: NetworkEvent[]; note?: string }
   | AndroidNetworkNotAttachable
   | AndroidNativeListing
   | AndroidNativeStopped;
@@ -124,8 +125,9 @@ export function createNativeNetworkLogsTool(
 Unlike the JS-level network inspector (view-network-logs), this also sees requests that never pass through JS XMLHttpRequest or fetch. On iOS that is URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing. On iOS, capture starts at the first call, so the first call is usually empty: repeat the action, then call again.
 Use when you need to inspect native-level HTTP traffic that is invisible to the JS-level capture. 
 On iOS: returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
+Capture for an app starts on the first call for it, and stays on across relaunches (except on a device whose devtools agent argent attached to, where a relaunch ends it). So the first ok answer after capture started for an app that was already running carries a note that requests made before that, including the app's launch, were not recorded, so count 0 there does not mean the app made no requests. To capture the launch, restart-app and call again, unless the note says the launch cannot be recorded on that device.
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised. Follow the message (re-boot the simulator) rather than retrying this tool.
-A not-running app comes back as one of those statuses rather than a failure. An app that is not connected does too, except on a device whose devtools agent argent attached to rather than armed itself: there it fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\`, since no restart of ours can complete a handshake we do not own. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), while a missing host dependency is not.
+A not-running app comes back as one of those statuses rather than a failure. An app that is not connected does too, except on a device whose devtools agent argent attached to rather than armed itself: there it fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\`, since no restart of ours can complete a handshake we do not own. That device serves only one app, so retry only if that app has just started; for any other app, read the screen with describe or screenshot instead. Failures are separate: an Apple system app is rejected outright (terminal: never retry it), while a missing host dependency is not.
 On Android: needs a debuggable build. The first call starts capture and usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need: earlier requests are not captured.
 Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
 Returns { status, header, armed, capture, captureDetail, count, total, requests }. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing. Pass a request's ID (android-3f9a-12) to view-network-request-details for its headers, redirects and bodies.
@@ -157,6 +159,7 @@ When status is not_attachable, use view-network-logs and do not retry.`,
       const api = services.nativeDevtools as NativeDevtoolsApi;
 
       const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
+      api.activateNetworkInspection(params.bundleId);
       if (blocked) return blocked;
 
       /**
@@ -164,9 +167,12 @@ When status is not_attachable, use view-network-logs and do not retry.`,
        * truth is "nothing is capturing them", as the hierarchy tools do.
        */
       if (!api.isConnected(params.bundleId)) {
+        const remedy = api.armsEnv
+          ? `Network capture for it is armed and starts once it connects, so call again in a few seconds. ` +
+            `Requests made before then are not recorded.`
+          : buildAppStateMessage(params.bundleId, "provider_attached");
         throw new FailureError(
-          `Native devtools not connected for bundleId: ${params.bundleId}. ` +
-            `No network log is being captured for it.`,
+          `Native devtools not connected for bundleId: ${params.bundleId}. ${remedy}`,
           {
             error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
             error_kind: "not_found",
@@ -176,11 +182,22 @@ When status is not_attachable, use view-network-logs and do not retry.`,
         );
       }
 
-      api.activateNetworkInspection(params.bundleId);
-
       const events = api.getNetworkLog(params.bundleId).slice(-params.limit);
       if (params.clear) api.clearNetworkLog(params.bundleId);
-      return { status: "ok", count: events.length, events };
+      return {
+        status: "ok",
+        count: events.length,
+        events,
+        ...(api.takeCaptureGap(params.bundleId) && {
+          note:
+            `Network capture for ${params.bundleId} started while the app was already running. ` +
+            `Requests made before that, including the app's launch, were not recorded. ` +
+            (api.armsEnv
+              ? `To capture the launch, restart-app and call again.`
+              : `On this device the app's lifecycle belongs to its provider and a relaunch ends ` +
+                `capture, so its launch cannot be recorded here. Do not restart the app for it.`),
+        }),
+      };
     },
   };
 }
