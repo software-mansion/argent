@@ -182,6 +182,8 @@ A run on a remote simulator uses the `ios` entry. If the map has no `ios` entry,
 
 When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry.
 
+A browser that `boot-device` starts with `browser` has no `launch:` form. Boot it before the run.
+
 An Android app that starts from a non-launcher activity has no `launch:` form. Record `restart-app` with `activity` as a `tool` step and keep the e2e test as a fragment.
 
 ### Swipe

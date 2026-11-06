@@ -11,10 +11,10 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
-import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { scopeTempHome } from "./helpers/temp-home";
+import { createCdpStub } from "./helpers/cdp-stub";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
 scopeTempHome("argent-boot-electron-race-home-");
@@ -91,33 +91,27 @@ beforeEach(() => {
 });
 
 /**
- * Minimal CDP stub: only /json/version, which is all waitForCdpReady probes.
- * `served` resolves once the first probe has been answered, so a test can
- * sequence "CDP reported ready" against the child's exit.
+ * CDP stub that starts listening when `child` is spawned. `served` resolves
+ * once the first probe has been answered, so a test can sequence "CDP reported
+ * ready" against the child's exit.
  */
-async function startCdpStub(): Promise<{ port: number; served: Promise<void>; close: () => void }> {
+async function startCdpStub(
+  child: FakeChild
+): Promise<{ port: number; served: Promise<void>; close: () => void }> {
   let markServed!: () => void;
   const served = new Promise<void>((resolve) => (markServed = resolve));
-  const srv = http.createServer((req, res) => {
-    res.setHeader("content-type", "application/json");
-    if (req.url === "/json/version") {
-      res.end(JSON.stringify({ "Browser": "Chrome/Test", "Protocol-Version": "1.3" }));
-      markServed();
-      return;
-    }
-    res.statusCode = 404;
-    res.end();
+  const { port, listen, close } = await createCdpStub({}, () => markServed());
+  spawnMock.mockImplementation(() => {
+    listen();
+    return child;
   });
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
-  const { port } = srv.address() as { port: number };
-  return { port, served, close: () => srv.close() };
+  return { port, served, close };
 }
 
 describe("bootElectronApp — ready-vs-exit confirmation window", () => {
   it("rejects with the early-exit failure when the child exits just after CDP first answers (single-instance-lock quit)", async () => {
     const child = makeFakeChild();
-    spawnMock.mockReturnValue(child);
-    const { port, served, close } = await startCdpStub();
+    const { port, served, close } = await startCdpStub(child);
 
     let unhandled = 0;
     const onUnhandled = () => unhandled++;
@@ -161,8 +155,7 @@ describe("bootElectronApp — ready-vs-exit confirmation window", () => {
 
   it("still boots — after paying exactly the confirmation window — when no exit arrives inside it", async () => {
     const child = makeFakeChild();
-    spawnMock.mockReturnValue(child);
-    const { port, served, close } = await startCdpStub();
+    const { port, served, close } = await startCdpStub(child);
 
     try {
       const promise = bootElectronApp({ appPath: appDir, port, readyTimeoutMs: 5000 });

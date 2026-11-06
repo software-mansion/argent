@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { scopeTempHome } from "./helpers/temp-home";
+import { createCdpStub } from "./helpers/cdp-stub";
 
 /**
  * CDP port for the boots below, which must never reach a live endpoint: when
@@ -123,6 +124,7 @@ describe("bootElectronApp — spawn error handling", () => {
     // Without an `error` listener, an emitted error escapes as an uncaught
     // exception and crashes the tool-server.
     expect(child.listenerCount("error")).toBeGreaterThan(0);
+    await promise.catch(() => {});
   });
 
   it("strips ELECTRON_RUN_AS_NODE from the spawned electron env (GUI boot, not Node mode)", async () => {
@@ -138,8 +140,6 @@ describe("bootElectronApp — spawn error handling", () => {
     const prev = process.env.ELECTRON_RUN_AS_NODE;
     process.env.ELECTRON_RUN_AS_NODE = "1";
     try {
-      // With `port` provided, bootElectronApp reaches spawn() synchronously
-      // (no `await pickFreePort()`), so the spawn env is observable immediately.
       const promise = bootElectronApp({
         appPath: appDir,
         // Unreachable port → the readiness race rejects fast; we only care about
@@ -149,7 +149,7 @@ describe("bootElectronApp — spawn error handling", () => {
       });
       promise.catch(() => {});
 
-      expect(spawnMock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
       const spawnEnv = (spawnMock.mock.calls[0]![2] as { env: NodeJS.ProcessEnv }).env;
       expect(spawnEnv.ELECTRON_RUN_AS_NODE).toBeUndefined();
       expect(spawnEnv.ELECTRON_ENABLE_LOGGING).toBe("1");
@@ -177,7 +177,7 @@ describe("bootElectronApp — spawn error handling", () => {
     });
     promise.catch(() => {});
 
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
     const args = spawnMock.mock.calls[0]![1] as string[];
     expect(args).toContain("--disable-background-timer-throttling");
     expect(args).toContain("--disable-backgrounding-occluded-windows");
@@ -260,6 +260,7 @@ describe("bootElectronApp — spawn error handling", () => {
       port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 100,
     }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
     await vi.advanceTimersByTimeAsync(1000);
 
     const signal = getFailureSignal(await settled);
@@ -274,46 +275,27 @@ describe("bootElectronApp — spawn error handling", () => {
     // would reject "exited with code 0" on an orphan — Node escalates to
     // uncaughtException with default --unhandled-rejections=throw.
     const child = makeFakeChild();
-    spawnMock.mockReturnValue(child);
-
-    // Mock waitForCdpReady → instant success via a real CDP server is overkill;
-    // emit 'exit' immediately would also work, but we want to test the success
-    // path. Use a tiny http server on `port` that satisfies ensureCdpReachable
-    // + discoverPrimaryPage. Or, simpler: fire `Promise.race` to win on the
-    // ready probe by exposing one. Easiest: just verify the no-leak property
-    // by triggering a synthetic success — exit fires AFTER we've already
-    // verified the listeners are detached.
-
-    // Force the boot to complete by emitting `exit` only after we've awaited
-    // a tick — to win the race naturally we'd need a live HTTP/CDP server,
-    // which is outside the unit-test scope. Instead, simulate the post-boot
-    // window by directly stubbing waitForCdpReady via a one-shot HTTP server.
-    const http = await import("node:http");
-    const srv = http.createServer((req, res) => {
-      res.setHeader("content-type", "application/json");
-      if (req.url === "/json/version") {
-        res.end(JSON.stringify({ "Browser": "Chrome/Test", "Protocol-Version": "1.3" }));
-        return;
-      }
-      if (req.url === "/json/list") {
-        res.end(
-          JSON.stringify([
-            {
-              id: "page1",
-              type: "page",
-              title: "T",
-              url: "about:blank",
-              webSocketDebuggerUrl: "ws://127.0.0.1:1/discard",
-            },
-          ])
-        );
-        return;
-      }
-      res.statusCode = 404;
-      res.end();
+    // A stub CDP endpoint lets the boot complete for real, so the post-boot exit
+    // below happens after the listeners were detached.
+    const {
+      port: realPort,
+      listen,
+      close,
+    } = await createCdpStub({
+      "/json/list": [
+        {
+          id: "page1",
+          type: "page",
+          title: "T",
+          url: "about:blank",
+          webSocketDebuggerUrl: "ws://127.0.0.1:1/discard",
+        },
+      ],
     });
-    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
-    const realPort = (srv.address() as { port: number }).port;
+    spawnMock.mockImplementation(() => {
+      listen();
+      return child;
+    });
 
     let unhandled = 0;
     const onUnhandled = () => unhandled++;
@@ -360,7 +342,7 @@ describe("bootElectronApp — spawn error handling", () => {
       expect(unhandled).toBe(0);
     } finally {
       process.off("unhandledRejection", onUnhandled);
-      srv.close();
+      close();
     }
   });
 

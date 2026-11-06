@@ -63,7 +63,7 @@ steps:
         args: ["--enable-feature-flag"]
 ```
 
-A relative path resolves from the folder of the test being run. Copy the live boot arguments verbatim, and omit `args` when the boot passed none. This packaging exception represents the boot already exercised live. It does not permit a rehearsed UI path.
+A relative path resolves from the folder of the test being run. Copy the live boot arguments verbatim, and omit `args` when the boot passed none. A browser booted with `browser` has no `launch` form, so a saved test cannot start one; tell the user rather than pointing `path` at a browser binary. This packaging exception represents the boot already exercised live. It does not permit a rehearsed UI path.
 
 ### Fragments
 

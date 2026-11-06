@@ -276,13 +276,18 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   // An `avdName`-only call (boot-device before the emulator exists) has no serial
   // to resolve a runtime kind from, so it stays coarse `android`; later `udid` /
   // `device_id` calls refine an Android TV AVD once the cache is warm.
-  if (typeof (data as Record<string, unknown>).avdName === "string") {
-    return { platform: "android" };
-  }
+  // An empty field names no target: boot-device skips it too.
+  const { avdName, harmonyInstance, electronAppPath, browser, vvdImage } = data as Record<
+    string,
+    unknown
+  >;
+  const named = (v: unknown) => typeof v === "string" && v !== "";
+  if (named(avdName)) return { platform: "android" };
   // HarmonyOS twin: an instance is named, not addressed.
-  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") {
-    return { platform: "harmony" };
-  }
+  if (named(harmonyInstance)) return { platform: "harmony" };
+  // Electron apps and browsers boot as Chromium devices.
+  if (named(electronAppPath) || named(browser)) return { platform: "chromium" };
+  if (named(vvdImage)) return { platform: "vega" };
   return null;
 }
 
