@@ -120,6 +120,32 @@ describe("HTTP signing-detection note", () => {
     expect(phone.body.note).toContain("Signing the on-device runner with team ABCDE12345");
   });
 
+  it("holds a phone's note past calls on another phone", async () => {
+    const OTHER_PHONE = "00008110-000978540290401E";
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      announceDetectedSigningTeam(DETECTED_TEAM, DETECTED_TEAM[0], {
+        udid: PHONE,
+        coveringTeams: 0,
+      });
+    } finally {
+      write.mockRestore();
+    }
+    handle = createHttpApp(stubRegistry());
+
+    const other = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({ udid: OTHER_PHONE })
+      .expect(200);
+    expect(other.body).not.toHaveProperty("note");
+
+    const own = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({ udid: PHONE })
+      .expect(200);
+    expect(own.body.note).toContain("Signing the on-device runner with team ABCDE12345");
+  });
+
   it("recognises the phone under flow-execute's `device` spelling", async () => {
     // A session that only replays flows on the phone names it as `device`,
     // never as `udid`; the note must not wait for a call that never comes.
