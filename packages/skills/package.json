@@ -9,5 +9,8 @@
   },
   "bin": {
     "argent-skills": "scripts/install.js"
+  },
+  "dependencies": {
+    "@argent/installer": "file:../argent-installer"
   }
 }
