@@ -277,7 +277,7 @@ When using `screenshot` for permission or native modal navigation:
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }`: rotates the capture without changing simulator orientation.
 
-Screenshots are downscaled by default (30% of original resolution) to reduce context size. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
+iOS and Android screenshots are downscaled by default (25% of original resolution, or `ARGENT_SCREENSHOT_SCALE` when set) to reduce context size; Chromium captures at full resolution unless `scale` is passed. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
 
 Use full-resolution screenshots only when saving baseline/current PNG files for comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context:
 
