@@ -241,7 +241,7 @@ One React profiler run at a time can record in an app. `react-profiler-status` r
 
 | Value              | Meaning                                                                                               |
 | ------------------ | ----------------------------------------------------------------------------------------------------- |
-| `active`           | A run that this tool-server started records                                                           |
+| `active`           | A run that this tool-server started records, or `react-profiler-stop` collects the run                |
 | `saved`            | No run records. `saved_session` names the files of the last run, or of a session from `profiler-load` |
 | `lost`             | The last run of this tool-server ended without its data. `lost_run.cause` gives the reason            |
 | `taken_over`       | Another session records, or another session replaced the run of this tool-server                      |
@@ -250,13 +250,23 @@ One React profiler run at a time can record in an app. `react-profiler-status` r
 
 The `lost_run.cause` values are `js_reload`, `cdp_disconnected`, `session_torn_down`, `taken_over`, `stop_failed` and `ended_in_app`. The tool-server keeps this record in memory only. After a restart, it shows a run that it started before as `taken_over`.
 
-A run is stale when its heartbeat is older than 5 minutes, also while you use the app during a long recording. `react-profiler-status` refreshes the heartbeat of a run that its tool-server records. `react-profiler-renders` and `react-profiler-fiber-tree` can also refresh a heartbeat, but they do not check which session owns the run, so do not rely on them to keep a run fresh. `react-profiler-start` handles a run that records:
+A run is stale when its heartbeat is older than 5 minutes, also while you use the app during a long recording. `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` refresh the heartbeat of a run that their tool-server records. They do not refresh the heartbeat of a session that replaced this run.
 
-- A run that this tool-server records: `react-profiler-start` returns `already_running` with `mine: true`. Call `react-profiler-stop` to collect it.
+For an `active` run, `react-profiler-status` returns `stale` and `heartbeat_age_seconds`. It reads these values before it refreshes the heartbeat. Only the first call after the heartbeat goes stale returns `stale: true`.
+
+`react-profiler-start` handles a run that records:
+
+- A run that this tool-server records: `react-profiler-start` returns `already_running` with `mine: true`, `stale` and `heartbeat_age_seconds`. The value of `mine` identifies the tool-server, not the agent. The run can belong to another agent on the same tool-server. Call `react-profiler-stop` to collect your run. If `stale` is `true` and you did not start the run, ask the user before you pass `force: true`.
 - A fresh run of another session: `react-profiler-start` returns `already_running` with `mine: false`. Ask the user before you pass `force: true`.
-- A stale run, a run without an owner record, or a lost run of this tool-server: `react-profiler-start` stops the run and starts a new one. It does the same for any run when you pass `force: true`. The result has `took_over` with the replaced session and the reason.
+- A stale run of another tool-server, a run without an owner record, or a lost run of this tool-server: `react-profiler-start` stops the run and starts a new one. It does the same for any run when you pass `force: true`. The result has `took_over` with the replaced session and the reason.
 
-When another session replaced the run, `react-profiler-stop` fails with `REACT_PROFILER_SESSION_TAKEN_OVER`. It does not stop the other recording.
+When another session replaced the run, `react-profiler-stop` fails with `REACT_PROFILER_SESSION_TAKEN_OVER`, also after that session stopped. It does not stop the other recording. If profiling stopped outside Argent and no session replaced the run, `react-profiler-stop` collects the data of the run.
+
+While `react-profiler-stop` collects a run, wait for its result:
+
+- `react-profiler-status` returns `active`.
+- `react-profiler-start` returns `already_running` with `mine: true`, also when you pass `force: true`.
+- A second `react-profiler-stop` fails with `REACT_PROFILER_STOP_IN_PROGRESS`.
 
 <a id="flows" />
 

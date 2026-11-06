@@ -13,6 +13,7 @@ import {
   FIBER_ROOT_TRACKER_SCRIPT,
   STOP_FOR_TAKEOVER_SCRIPT,
 } from "../utils/react-profiler/scripts";
+import { readTakeover } from "../utils/react-profiler/session-ownership";
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
@@ -47,6 +48,8 @@ export interface ReactProfilerSessionApi {
   detectedArchitecture: "bridge" | "bridgeless" | null;
   sessionPaths: ProfilerSessionPaths | null;
   profilingActive: boolean;
+  /** Set for as long as a react-profiler-stop is collecting the run. */
+  stopping: boolean;
   scriptSources: Map<string, ScriptSourceEntry>;
   anyCompilerOptimized: boolean | null;
   hotCommitIndices: number[] | null;
@@ -125,6 +128,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       detectedArchitecture: null,
       sessionPaths: null,
       profilingActive: false,
+      stopping: false,
       scriptSources: new Map<string, ScriptSourceEntry>(),
       anyCompilerOptimized: null,
       hotCommitIndices: null,
@@ -218,6 +222,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     // runtime only reports its execution context gone. End the session here
     // instead, so its run stops counting as a profile (profiling-devices.ts)
     // and the next start sets up the new runtime.
+    let runtimeReloaded = false;
     const onCdpEvent = (method: string) => {
       if (
         method !== "Runtime.executionContextDestroyed" &&
@@ -225,7 +230,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       ) {
         return;
       }
-      if (state.profilingActive) {
+      runtimeReloaded = true;
+      if (state.profilingActive || state.stopping) {
         state.profilingActive = false;
         clearCachedProfilerPaths(state.port, state.deviceId);
         recordLostProfilerRun(state, "js_reload");
@@ -251,25 +257,37 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         // commit and argent's commit hook re-serializing its buffer on React's
         // commit path, inside the user's app. `Registry._teardown` disposes
         // dependents before their dependency, so the JsRuntimeDebugger is
-        // still connected — the last moment anything can reach the app.
-        if (state.profilingActive) {
+        // still connected — the last moment anything can reach the app. A
+        // `sessionId` with `profilingActive` off is a stop that failed, or one
+        // still running: the app can be recording either. After a reload there
+        // is nothing left there to stop, and the new runtime may not answer.
+        if (!runtimeReloaded && (state.profilingActive || state.sessionId !== null)) {
           state.profilingActive = false;
-          // A dropped connection gets here first: the debugger's own listener
-          // tears this node down before `onDisconnected` runs, so only the
-          // client can still tell a drop from a scoped teardown.
-          recordLostProfilerRun(
-            state,
-            cdp.isConnected() ? "session_torn_down" : "cdp_disconnected"
-          );
-          await cdp
-            .send("Runtime.evaluate", {
-              expression: STOP_FOR_TAKEOVER_SCRIPT,
-              returnByValue: true,
-            })
-            .catch(warnOnError("STOP_FOR_TAKEOVER_SCRIPT"));
-          // `Profiler.disable` is not documented to end the Hermes sampler
-          // `react-profiler-start` started.
-          await cdp.send("Profiler.stop").catch(ignore);
+          const takeover = cdp.isConnected() ? await readTakeover(cdp, state) : undefined;
+          if (takeover) {
+            // The app's recording is another session's. With no session to
+            // name, nothing else ends the sampler this run started: see
+            // react-profiler-stop.
+            recordLostProfilerRun(state, "taken_over", takeover.by);
+            if (takeover.by === null) await cdp.send("Profiler.stop").catch(ignore);
+          } else {
+            // A dropped connection gets here first: the debugger's own listener
+            // tears this node down before `onDisconnected` runs, so only the
+            // client can still tell a drop from a scoped teardown.
+            recordLostProfilerRun(
+              state,
+              cdp.isConnected() ? "session_torn_down" : "cdp_disconnected"
+            );
+            await cdp
+              .send("Runtime.evaluate", {
+                expression: STOP_FOR_TAKEOVER_SCRIPT,
+                returnByValue: true,
+              })
+              .catch(warnOnError("STOP_FOR_TAKEOVER_SCRIPT"));
+            // `Profiler.disable` is not documented to end the Hermes sampler
+            // `react-profiler-start` started.
+            await cdp.send("Profiler.stop").catch(ignore);
+          }
         }
         await cdp.send("Profiler.disable").catch(ignore);
       },
@@ -350,9 +368,10 @@ export function clearCachedProfilerPaths(port: number, deviceId: string): void {
  * - `cdp_disconnected`: the debugger connection dropped
  * - `session_torn_down`: the session was disposed mid-run, e.g. by stop-all-simulator-servers
  * - `taken_over`: another session started a run over this one
+ * - `stop_failed`: a react-profiler-stop failed partway
  */
 export type LostProfilerRunCause =
-  "js_reload" | "cdp_disconnected" | "session_torn_down" | "taken_over";
+  "js_reload" | "cdp_disconnected" | "session_torn_down" | "taken_over" | "stop_failed";
 
 export interface LostProfilerRun {
   cause: LostProfilerRunCause;

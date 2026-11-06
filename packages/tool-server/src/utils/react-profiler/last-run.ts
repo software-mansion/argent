@@ -69,12 +69,12 @@ export function lostRunCauseText(
     case "stop_failed":
       return (
         "a react-profiler-stop, or a react-profiler-start that replaced it, failed partway " +
-        "(see the error it returned; if that react-profiler-stop is still running, wait for its result)"
+        "(see the error it returned)"
       );
     case "ended_in_app":
       return (
-        "it stopped recording in the app without a react-profiler-stop: a JS reload, another " +
-        "session that took it over and has since stopped, or React profiling stopped outside argent"
+        "it stopped recording in the app without a react-profiler-stop, most likely from outside " +
+        "argent, and react-profiler-stop can still collect it"
       );
   }
 }

@@ -4,6 +4,7 @@ import {
   READ_STATE_SCRIPT,
   STOP_AND_READ_SCRIPT,
   STOP_FOR_TAKEOVER_SCRIPT,
+  buildHeartbeatScript,
   buildStartScript,
 } from "../../src/utils/react-profiler/scripts";
 
@@ -423,6 +424,75 @@ describe("READ_STATE_SCRIPT (multi-renderer)", () => {
     const out = withHook(ris, () => evalIIFE<string>(READ_STATE_SCRIPT));
     const r = JSON.parse(out) as { isRunning: boolean };
     expect(r.isRunning).toBe(false);
+  });
+});
+
+describe("READ_STATE_SCRIPT (renderer start times)", () => {
+  it("lists every renderer that has a start time, and only those", () => {
+    const started = makeRi();
+    started.__argent_startedAtEpochMs__ = 1_000;
+    const later = makeRi();
+    later.__argent_startedAtEpochMs__ = 1_001;
+    const neverStarted = makeRi();
+    const ris = new Map<number, MockRi>([
+      [1, started],
+      [2, neverStarted],
+      [3, later],
+    ]);
+    const out = withHook(ris, () => evalIIFE<string>(READ_STATE_SCRIPT));
+    const r = JSON.parse(out) as { rendererStartedAtEpochMs: number[] };
+    expect(r.rendererStartedAtEpochMs).toEqual([1_000, 1_001]);
+  });
+
+  it("keeps a renderer's start time after it stops", () => {
+    const ri = makeRi();
+    const ris = new Map<number, MockRi>([[1, ri]]);
+    const out = withHook(ris, () => {
+      evalIIFE<string>(buildStartScript(ownerJson));
+      evalIIFE<string>(STOP_FOR_TAKEOVER_SCRIPT);
+      return evalIIFE<string>(READ_STATE_SCRIPT);
+    });
+    const r = JSON.parse(out) as { isRunning: boolean; rendererStartedAtEpochMs: number[] };
+    expect(r.isRunning).toBe(false);
+    expect(r.rendererStartedAtEpochMs).toEqual([1_700_000_000_000]);
+  });
+});
+
+describe("buildHeartbeatScript", () => {
+  const g = globalThis as Record<string, unknown>;
+  const beat = (sessionId: string, owner: unknown) => {
+    const helper = vi.fn();
+    g.__argent_profilerHeartbeat = helper;
+    g.__ARGENT_PROFILER_OWNER__ = owner;
+    evalIIFE(buildHeartbeatScript(sessionId));
+    return helper;
+  };
+
+  afterEach(() => {
+    delete g.__argent_profilerHeartbeat;
+  });
+
+  it("bumps the owner that matches", () => {
+    expect(beat("uuid-mine", { sessionId: "uuid-mine" })).toHaveBeenCalledOnce();
+  });
+
+  it("leaves another session's owner alone", () => {
+    expect(beat("uuid-mine", { sessionId: "uuid-other" })).not.toHaveBeenCalled();
+  });
+
+  it("does nothing with no owner", () => {
+    expect(beat("uuid-mine", null)).not.toHaveBeenCalled();
+  });
+
+  it("does nothing before the setup script has installed the helper", () => {
+    g.__ARGENT_PROFILER_OWNER__ = { sessionId: "uuid-mine" };
+    expect(() => evalIIFE(buildHeartbeatScript("uuid-mine"))).not.toThrow();
+  });
+
+  it("does not let a session id break out of the script", () => {
+    const id = `x'"; globalThis.__pwned = true; //`;
+    expect(beat(id, { sessionId: id })).toHaveBeenCalledOnce();
+    expect(g.__pwned).toBeUndefined();
   });
 });
 

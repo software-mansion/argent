@@ -7,11 +7,17 @@ import {
   getLostProfilerRun,
 } from "../../../blueprints/react-profiler-session";
 import {
-  HEARTBEAT_SCRIPT,
+  buildHeartbeatScript,
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
   READ_STATE_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
-import type { ProfilerSessionOwner } from "../../../utils/react-profiler/session-ownership";
+import {
+  classifyStaleness,
+  STALE_OWN_RUN_NOTE,
+  STOP_IN_PROGRESS_NOTE,
+  takeoverOf,
+  type ProfilerSessionOwner,
+} from "../../../utils/react-profiler/session-ownership";
 import {
   lastRunText,
   lostRunCauseText,
@@ -39,7 +45,7 @@ type ReadStateResult =
     };
 
 /**
- * - `active`: this tool-server's run is recording.
+ * - `active`: this tool-server's run is recording, or a stop is collecting it.
  * - `saved`: nothing is recording; the last run was stopped and saved.
  * - `lost`: this tool-server's last run ended without being saved.
  * - `taken_over`: another session is recording, or replaced this tool-server's run.
@@ -57,6 +63,8 @@ interface StatusResponse extends Record<string, unknown> {
   current_owner: ProfilerSessionOwner | null;
   session_status: SessionStatus;
   note: string;
+  stale?: boolean;
+  heartbeat_age_seconds?: number | null;
   saved_session?: SavedSessionInfo;
   lost_run?: LostRunInfo;
 }
@@ -128,6 +136,18 @@ export function createReactProfilerStatusTool(
         );
       }
 
+      // Answers without the app, which may be busy with the stop and not reply.
+      const stopInProgress = (): StatusResponse => ({
+        hook_exists: true,
+        renderer_interface_found: true,
+        is_running: true,
+        current_session_id: api.sessionId,
+        current_owner: null,
+        session_status: "active",
+        note: STOP_IN_PROGRESS_NOTE,
+      });
+      if (api.stopping) return stopInProgress();
+
       const cdp = api.cdp;
       if (!cdp.isConnected()) {
         return noRuntime(
@@ -157,6 +177,9 @@ export function createReactProfilerStatusTool(
       }
 
       const state = JSON.parse(stateJson) as ReadStateResult;
+
+      // A stop that began during the reads above reads as one that failed.
+      if (api.stopping) return stopInProgress();
 
       if (!state.hookExists) {
         return noRuntime(
@@ -207,12 +230,21 @@ export function createReactProfilerStatusTool(
       if (state.isRunning) {
         if (owner && ownRunId !== null && owner.sessionId === ownRunId) {
           if (recordingHere) {
+            // From the state read above: the heartbeat below would hide a stale run.
+            const { stale, heartbeatAgeSeconds } = classifyStaleness({
+              owner,
+              nowEpochMs: state.nowEpochMs,
+            });
             // Keep the run fresh for anyone deciding whether it is stale.
-            await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+            await cdp.evaluate(buildHeartbeatScript(ownRunId)).catch(() => {});
             return {
               ...inApp,
               session_status: "active",
-              note: "Your profiling session is still running. Call react-profiler-stop to collect the data, or continue profiling.",
+              stale,
+              heartbeat_age_seconds: heartbeatAgeSeconds,
+              note: stale
+                ? STALE_OWN_RUN_NOTE
+                : "A profiling session started through this tool-server is still running: yours, unless another agent shares this tool-server. Call react-profiler-stop to collect the data, or continue profiling.",
             };
           }
           return lostResponse(ownRunId, "stop_failed", true);
@@ -260,7 +292,20 @@ export function createReactProfilerStatusTool(
         };
       }
 
-      if (recordingHere) return lostResponse(ownRunId, "ended_in_app", false);
+      if (recordingHere) {
+        if (takeoverOf(state, api)) {
+          return {
+            ...inApp,
+            session_status: "taken_over",
+            note:
+              `Your run (session ${ownRunId}) was not saved: ${lostRunCauseText("taken_over")}. ` +
+              "That session has since stopped too. Nothing is recording now; call react-profiler-start to record again.",
+            ...lastRun,
+            lost_run: { session_id: ownRunId, cause: "taken_over" },
+          };
+        }
+        return lostResponse(ownRunId, "ended_in_app", false);
+      }
       if (ownRunId !== null) return lostResponse(ownRunId, "stop_failed", false);
 
       if (lost) {
