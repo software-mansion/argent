@@ -7,7 +7,7 @@ import {
   getLostProfilerRun,
 } from "../../../blueprints/react-profiler-session";
 import {
-  HEARTBEAT_SCRIPT,
+  buildHeartbeatScript,
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
   READ_STATE_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
@@ -237,7 +237,7 @@ export function createReactProfilerStatusTool(
               nowEpochMs: state.nowEpochMs,
             });
             // Keep the run fresh for anyone deciding whether it is stale.
-            await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+            await cdp.evaluate(buildHeartbeatScript(ownRunId)).catch(() => {});
             return {
               ...inApp,
               session_status: "active",

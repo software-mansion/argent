@@ -10,7 +10,7 @@ import {
   type ReactProfilerSessionApi,
   type ProfilerSessionPaths,
 } from "../../src/blueprints/react-profiler-session";
-import { HEARTBEAT_SCRIPT } from "../../src/utils/react-profiler/scripts";
+import { buildHeartbeatScript } from "../../src/utils/react-profiler/scripts";
 import type { ProfilerSessionOwner } from "../../src/utils/react-profiler/session-ownership";
 import { rememberDeviceAlias, resetDeviceAliases } from "../../src/utils/debugger/device-alias";
 
@@ -145,7 +145,7 @@ describe("react-profiler-status: a run this tool-server is recording", () => {
     expect(res.is_running).toBe(true);
     expect(res.current_session_id).toBe("uuid-mine");
     // Polling status keeps the run from going stale and being taken over.
-    expect(evaluated).toContain(HEARTBEAT_SCRIPT);
+    expect(evaluated).toContain(buildHeartbeatScript("uuid-mine"));
   });
 
   it("does not refresh a heartbeat that is not this tool-server's", async () => {
@@ -154,7 +154,7 @@ describe("react-profiler-status: a run this tool-server is recording", () => {
       state: inApp(true, buildOwner("uuid-other")),
     });
     await runStatus(api);
-    expect(evaluated).not.toContain(HEARTBEAT_SCRIPT);
+    expect(evaluated).not.toContain(buildHeartbeatScript("uuid-other"));
   });
 });
 
@@ -167,7 +167,7 @@ describe("react-profiler-status: nothing recording", () => {
     expect(res).not.toHaveProperty("saved_session");
     expect(res).not.toHaveProperty("lost_run");
     expect(res.note).not.toContain("not recoverable");
-    expect(evaluated).not.toContain(HEARTBEAT_SCRIPT);
+    expect(evaluated.join()).not.toContain("o.sessionId");
   });
 
   it("returns 'saved' with the session after a successful stop", async () => {
@@ -266,7 +266,8 @@ describe("react-profiler-status: another session recording", () => {
     expect(res.note).toContain(
       "Your run (session uuid-mine) was taken over by session uuid-stranger"
     );
-    expect(evaluated).not.toContain(HEARTBEAT_SCRIPT);
+    expect(evaluated).not.toContain(buildHeartbeatScript("uuid-mine"));
+    expect(evaluated).not.toContain(buildHeartbeatScript("uuid-stranger"));
   });
 
   it("returns 'taken_over' when this tool-server has no run, as after a restart", async () => {

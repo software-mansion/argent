@@ -34,6 +34,7 @@ import {
   STOP_AND_READ_SCRIPT,
   STOP_FOR_TAKEOVER_SCRIPT,
 } from "../../src/utils/react-profiler/scripts";
+import { rememberDeviceAlias, resetDeviceAliases } from "../../src/utils/debugger/device-alias";
 import { __resetProfilingDevicesForTesting } from "../../src/utils/profiling-devices";
 import { createReactProfilerStartTool } from "../../src/tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../../src/tools/profiler/react/react-profiler-stop";
@@ -591,6 +592,7 @@ describe("react-profiler-stop with no run to stop", () => {
 const T0 = 2_000_000_000_000;
 const MINUTE = 60_000;
 const OTHER_PORT = 8082;
+const LOGICAL_ID = "logical-xyz";
 
 function newRuntime(nowEpochMs: number, renderers: number, tickMs: number) {
   const ctx = vm.createContext({ console });
@@ -838,6 +840,7 @@ describe("the run lifecycle, on the real session and scripts", () => {
   afterEach(() => {
     clearCachedProfilerPaths(OTHER_PORT, DEVICE);
     clearLostProfilerRun(OTHER_PORT, DEVICE);
+    resetDeviceAliases();
   });
 
   describe("while a react-profiler-stop is running", () => {
@@ -1390,6 +1393,56 @@ describe("the run lifecycle, on the real session and scripts", () => {
         reason: "stale",
         heartbeat_age_seconds: 360,
       });
+    });
+  });
+
+  describe("heartbeats", () => {
+    const tools: Array<[string, (ts: ToolServer, deviceId?: string) => Promise<unknown>]> = [
+      ["react-profiler-renders", (ts, deviceId) => ts.renders(deviceId)],
+      ["react-profiler-fiber-tree", (ts, deviceId) => ts.fiberTree(deviceId)],
+    ];
+
+    it.each(tools)("%s does not keep the session that replaced the run fresh", async (_t, call) => {
+      const app = makeApp();
+      const replaced = toolServer(app, PORT);
+      const taker = toolServer(app, OTHER_PORT);
+      const third = toolServer(app, 8083);
+      await replaced.start();
+      await taker.start(true);
+      const takerRun = app.owner()!.sessionId;
+      for (let i = 0; i < 4; i++) {
+        app.advance(2 * MINUTE);
+        await call(replaced);
+      }
+
+      const res = await third.start();
+
+      expect(res.took_over).toMatchObject({ session_id: takerRun, reason: "stale" });
+      clearCachedProfilerPaths(8083, DEVICE);
+      clearLostProfilerRun(8083, DEVICE);
+    });
+
+    it.each(tools)("%s keeps its own run fresh", async (_t, call) => {
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.advance(MINUTE);
+
+      await call(ts);
+
+      expect(app.owner()?.lastHeartbeatEpochMs).toBe(app.now());
+    });
+
+    it.each(tools)("%s reaches the run under a forwarded logicalDeviceId", async (_t, call) => {
+      rememberDeviceAlias(LOGICAL_ID, DEVICE);
+      const app = makeApp();
+      const ts = toolServer(app, PORT);
+      await ts.start();
+      app.advance(MINUTE);
+
+      await call(ts, LOGICAL_ID);
+
+      expect(app.owner()?.lastHeartbeatEpochMs).toBe(app.now());
     });
   });
 });

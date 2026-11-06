@@ -269,16 +269,23 @@ export const BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT = `
 
 /**
  * Bumps `lastHeartbeatEpochMs` on the session owner so concurrent tool-server
- * instances do not classify it as stale. No-op before
- * `REACT_NATIVE_PROFILER_SETUP_SCRIPT` has run.
+ * instances do not classify it as stale, but only while `sessionId` owns the
+ * run: a replaced run must not keep the session that replaced it fresh. The
+ * check is here because `__argent_profilerHeartbeat` is installed once per
+ * runtime, so changing it would miss a runtime that already has one. No-op
+ * before `REACT_NATIVE_PROFILER_SETUP_SCRIPT` has run.
  */
-export const HEARTBEAT_SCRIPT = `
+export function buildHeartbeatScript(sessionId: string): string {
+  return `
 (function(){
+  var o = globalThis.__ARGENT_PROFILER_OWNER__;
+  if (!o || o.sessionId !== ${JSON.stringify(sessionId)}) return;
   if (typeof globalThis.__argent_profilerHeartbeat === 'function') {
     try { globalThis.__argent_profilerHeartbeat(); } catch (_e) {}
   }
 })()
 `;
+}
 
 /**
  * Side-effect-free read of profiling state, so the caller can decide whether
