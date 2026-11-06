@@ -48,6 +48,17 @@ describe("profiler paths cache", () => {
     expect(getCachedProfilerPaths(PORT, SERIAL)).toBeUndefined();
   });
 
+  it("clears a run stored under the logicalDeviceId by the connect id", () => {
+    // A run stored after a restart sits under the logicalDeviceId, and
+    // react-profiler-start clears by the connect id once the alias is back.
+    cacheProfilerPaths(PORT, PATHS, LOGICAL);
+    rememberDeviceAlias(LOGICAL, SERIAL);
+
+    clearCachedProfilerPaths(PORT, SERIAL);
+
+    expect(getCachedProfilerPaths(PORT, LOGICAL)).toBeUndefined();
+  });
+
   it("keeps devices apart", () => {
     rememberDeviceAlias(LOGICAL, SERIAL);
     cacheProfilerPaths(PORT, PATHS, SERIAL);
