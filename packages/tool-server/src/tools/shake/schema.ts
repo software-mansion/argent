@@ -17,6 +17,6 @@ export const shakeZodSchema = z.object({
     .max(MAX_SHAKE_COUNT)
     .optional()
     .describe(
-      `How many shake gestures to deliver back-to-back (default 1, max ${MAX_SHAKE_COUNT}). Raise it for apps whose shake detector needs sustained motion before it fires.`
+      "How many shake gestures to deliver back-to-back (default 1). Raise it for apps whose shake detector needs sustained motion before it fires."
     ),
 });
