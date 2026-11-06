@@ -73,8 +73,9 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
   const hotCommitsTotal = hotCommits.length;
 
   if (hotCommitsTotal === 0) {
-    // A summary still holds real totals, for example when the hot commit's only
-    // named fiber did no work. Without one, nothing about commits is known.
+    // A summary still holds real totals, for example in a session saved when
+    // stop still called a commit hot whose only named fiber did no work. Without
+    // one, nothing about commits is known.
     const report = input.renderSummary
       ? renderNoHotCommits(input, input.maxCommitMs ?? 0)
       : renderNoCommitData(input);

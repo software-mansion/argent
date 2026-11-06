@@ -433,9 +433,12 @@ Fails if no active profiling session exists, the CDP connection was lost during 
       const commitHeat = new Map<number, number>();
       let anyCompilerOptimized = false;
       for (const c of allCommits) {
+        if (c.isCompilerOptimized) anyCompilerOptimized = true;
+        // The report builds a commit from its fibers that rendered, so a commit
+        // without one is not hot here either: it would be counted and never shown.
+        if (!c.didRender) continue;
         const prev = commitHeat.get(c.commitIndex) ?? 0;
         if (c.commitDuration > prev) commitHeat.set(c.commitIndex, c.commitDuration);
-        if (c.isCompilerOptimized) anyCompilerOptimized = true;
       }
 
       const interestingKeys = [...commitHeat.keys()].filter(

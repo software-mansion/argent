@@ -247,6 +247,46 @@ describe("react-profiler-stop render summary", () => {
     });
   });
 
+  it("does not call a commit hot when its only named fiber did not render", async () => {
+    // The pipeline builds a hot commit from fibers that rendered. A commit stop
+    // called hot without one had no place in the report: stop said 1 hot, the
+    // report said 0.
+    const live = backend(4, false);
+    live.dataForRoots[0]!.commitData.push({
+      timestamp: 100,
+      duration: 40,
+      fiberActualDurations: [
+        [1, 0],
+        [99, 40],
+      ],
+      fiberSelfDurations: [
+        [1, 0],
+        [99, 40],
+      ],
+      changeDescriptions: [],
+    });
+    const { response, onDisk } = await stop(live, 10_000);
+    expect(response["hot_commit_indices"]).toEqual([]);
+    expect(onDisk.commits).toEqual([]);
+    expect(response["selection_note"]).toContain("The slowest commit took 40.0ms");
+  });
+
+  it("does not keep a neighbour for a commit that is not hot", async () => {
+    // Two slow commits: one with a rendered named fiber, one without.
+    const live = backend(0, true);
+    live.dataForRoots[0]!.commitData.push({
+      timestamp: 100,
+      duration: 40,
+      fiberActualDurations: [[1, 0]],
+      fiberSelfDurations: [[1, 0]],
+      changeDescriptions: [],
+    });
+    const { response, onDisk } = await stop(live, 10_000);
+    expect(response["hot_commit_indices"]).toEqual([0]);
+    expect(response["selection_note"]).toBe("1 of 2 commits at ≥16ms absolute floor");
+    expect(new Set(onDisk.commits.map((c) => c.commitIndex))).toEqual(new Set([0]));
+  });
+
   it("words a quiet session the same way, with no verdict", async () => {
     // 4 commits × 5 ms in 2 s: 1%.
     const { response } = await stop(backend(4, false), 2000);
