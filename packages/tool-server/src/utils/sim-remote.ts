@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
  */
 
 import { stripRemotePrefix } from "./device-info";
+import { simulatorRuntimeKind } from "./ios-devices";
 
 export const SIM_REMOTE_TIMEOUT_MS = 30_000;
 
@@ -79,36 +80,46 @@ export async function simctlListDevices(options?: {
 const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
 
 /**
- * True when a remote UDID is a tvOS (Apple TV) simulator.
+ * Runtime kind of a remote simulator, or undefined when the listing does not
+ * know the UDID or cannot be read. `timeoutMs` bounds the list call on a cache miss.
  *
  * `resolveDevice` classifies remote ids by shape alone, and iOS and tvOS sims
  * are both `platform: "ios-remote"` UUIDs, so the runtime is only knowable
  * from the orchestrator's device list, whose keys name the runtime.
+ */
+export async function getRemoteSimulatorRuntimeKind(
+  udid: string,
+  options?: { timeoutMs?: number }
+): Promise<"mobile" | "tv" | undefined> {
+  const id = stripRemotePrefix(udid);
+  const cached = remoteRuntimeKindCache.get(id);
+  if (cached) return cached;
+  try {
+    const { devices } = await simctlListDevices(options);
+    for (const [runtime, entries] of Object.entries(devices)) {
+      if (!entries.some((d) => d.udid === id)) continue;
+      const kind = simulatorRuntimeKind(runtime);
+      if (kind) remoteRuntimeKindCache.set(id, kind);
+      return kind;
+    }
+  } catch {
+    // unknown runtime
+  }
+  return undefined;
+}
+
+/**
+ * True when a remote UDID is a tvOS (Apple TV) simulator.
  *
  * A failed lookup resolves to `false` rather than throwing: callers use this
  * to narrow an already-supported device, so it must not turn a working phone
- * simulator into an error. `timeoutMs` bounds the list call on a cache miss; a
- * lookup that times out is a failed one.
+ * simulator into an error.
  */
 export async function isRemoteTvOsSimulator(
   udid: string,
   options?: { timeoutMs?: number }
 ): Promise<boolean> {
-  const id = stripRemotePrefix(udid);
-  const cached = remoteRuntimeKindCache.get(id);
-  if (cached) return cached === "tv";
-  try {
-    const { devices } = await simctlListDevices(options);
-    for (const [runtime, entries] of Object.entries(devices)) {
-      if (!entries.some((d) => d.udid === id)) continue;
-      const kind = runtime.includes("tvOS") ? "tv" : "mobile";
-      remoteRuntimeKindCache.set(id, kind);
-      return kind === "tv";
-    }
-  } catch {
-    // unknown runtime — treat as non-TV
-  }
-  return false;
+  return (await getRemoteSimulatorRuntimeKind(udid, options)) === "tv";
 }
 
 export async function simctlBoot(udid: string): Promise<void> {

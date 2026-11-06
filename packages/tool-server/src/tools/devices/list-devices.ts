@@ -12,6 +12,7 @@ import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
   scanIosSimulators,
   simctlListTimeoutAdvice,
+  simulatorRuntimeKind,
   type IosSimulator,
 } from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
@@ -55,6 +56,7 @@ type IosRemoteDevice = {
   name: string;
   state: string;
   runtime: string;
+  runtimeKind?: "mobile" | "tv";
 };
 
 type AndroidDevice = {
@@ -213,6 +215,7 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
           name: d.name,
           state: d.state,
           runtime,
+          runtimeKind: simulatorRuntimeKind(runtime),
         });
       }
     }
