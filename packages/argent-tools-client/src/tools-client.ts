@@ -63,6 +63,11 @@ export interface ToolInvocationResult {
   profiling?: boolean;
   /** The `outputHint` of the tool's listing entry, when it has one. */
   outputHint?: string;
+  /**
+   * Set when the result itself reports that the tool failed (an e2e test that
+   * did not pass, an unmet `await-ui-element`): why, in one line.
+   */
+  failure?: string;
 }
 
 export interface CallToolOptions {
@@ -162,7 +167,7 @@ async function consumeToolStream(
   onProgress: (event: unknown) => void,
   signal?: AbortSignal
 ): Promise<ToolInvocationResult> {
-  let final: { data?: unknown; note?: string; profiling?: boolean } | undefined;
+  let final: { data?: unknown; note?: string; profiling?: boolean; failure?: string } | undefined;
   let progress = 0;
   const reader = body.getReader();
   const handleLine = (line: string): void => {
@@ -172,6 +177,7 @@ async function consumeToolStream(
       data?: unknown;
       note?: string;
       profiling?: boolean;
+      failure?: string;
       error?: string;
       error_code?: string;
       error_kind?: string;
@@ -184,6 +190,7 @@ async function consumeToolStream(
         data: msg.data,
         note: msg.note,
         ...(msg.profiling === true ? { profiling: true } : {}),
+        ...(typeof msg.failure === "string" ? { failure: msg.failure } : {}),
       };
     } else if (msg.event === "error") {
       throw new ToolInvocationError(msg.error ?? "tool invocation failed", {
@@ -245,6 +252,7 @@ async function consumeToolStream(
     data: final.data,
     note: final.note,
     ...(final.profiling ? { profiling: true } : {}),
+    ...(final.failure !== undefined ? { failure: final.failure } : {}),
   };
 }
 
@@ -652,6 +660,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
         note: streamed.note,
         outputHint: meta?.outputHint,
         ...(streamed.profiling ? { profiling: true } : {}),
+        ...(streamed.failure !== undefined ? { failure: streamed.failure } : {}),
       };
     }
     let json: {
@@ -660,6 +669,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       message?: string;
       note?: string;
       profiling?: boolean;
+      failure?: string;
       error_code?: string;
       error_kind?: string;
       issues?: unknown;
@@ -712,6 +722,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
       note: json.note,
       outputHint: meta?.outputHint,
       ...(json.profiling === true ? { profiling: true } : {}),
+      ...(typeof json.failure === "string" ? { failure: json.failure } : {}),
     };
   }
 

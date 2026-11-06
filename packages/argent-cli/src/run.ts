@@ -28,6 +28,7 @@ import {
   missingFlagNames,
   type ValidationReport,
 } from "./run-validation.js";
+import { exitAfterFlush } from "./e2e.js";
 
 export interface RunCommandOptions {
   paths: ToolsServerPaths;
@@ -189,6 +190,9 @@ Examples:
   argent run screenshot --udid <UDID> --out ./screen.png
   argent run run-sequence --udid <UDID> --steps-json '[{"tool":"button","args":{"button":"home"}}]'
   argent run gesture-tap --args '{"udid":"<UDID>","x":0.5,"y":0.5}'
+
+Exits 1 when the tool fails, including a failure its result reports, such as
+an e2e test that does not pass or an await-ui-element condition that is not met.
 `);
     return;
   }
@@ -345,6 +349,7 @@ Examples:
 
   let result: unknown;
   let note: string | undefined;
+  let failure: string | undefined;
   let images: MaterializedImage[] = [];
   try {
     const resp = await callTool(toolName, payload);
@@ -360,6 +365,7 @@ Examples:
     result = materialized.result;
     images = materialized.images;
     note = resp.note;
+    failure = resp.failure;
   } catch (err) {
     // The tool rejected the input rather than failing to run it — report it like any other bad
     // invocation.
@@ -404,5 +410,11 @@ Examples:
 
   if (outPath && meta.outputHint === "image" && !json) {
     console.log(`Wrote: ${outPath}`);
+  }
+
+  if (failure) {
+    console.error(failure);
+    // Flushed first: a failed e2e test's report can outgrow the pipe buffer.
+    await exitAfterFlush(1);
   }
 }
