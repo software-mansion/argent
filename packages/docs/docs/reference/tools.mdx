@@ -233,7 +233,7 @@ When the connection of the app closes, Argent marks each request that still runs
 | `the app process ended before the request finished`                                                      | The app process ended, or the app relaunched.                                     |
 | `the agent did not reconnect after its connection dropped, so this request's final events never arrived` | The connection closed, and Argent did not find a sign that the app process ended. |
 
-The list also contains the requests of the earlier processes of the app. Argent keeps the 2000 most recent requests of each app. Argent keeps fewer requests when the requests have very large headers or URLs. Argent keeps the list until `stop-all-simulator-servers` stops the services of the device, the simulator shuts down, or the tool-server stops.
+The list also contains the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the list. Argent keeps the 2000 most recent requests of each app. Argent keeps fewer requests when the requests have very large headers or URLs. Argent keeps the list until `stop-all-simulator-servers` stops the services of the device, the simulator shuts down, or the tool-server stops.
 
 Argent arms each new process of the app when the process connects, also a process that starts from a tap on the home screen or from a link. While the capture is on for an app, these tools tell you:
 

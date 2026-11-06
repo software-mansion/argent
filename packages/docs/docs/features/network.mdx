@@ -66,7 +66,7 @@ If the app ran before the capture started, the header line of the first result t
 
 The capture follows the app. Argent starts the capture in each new process of the app when the process connects. On a local simulator, the result of a launch or a restart tells the agent if the capture is ready in the new process. The launch steps of an e2e test do the same.
 
-The network log of this layer keeps the requests of the earlier processes of the app. A request that runs when the connection of the app closes shows as failed. The error of the request tells if the app process ended.
+The network log of this layer keeps the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the network log of this layer. A request that runs when the connection of the app closes shows as failed. The error of the request tells if the app process ended.
 
 Each request has an ID such as `ios-3f9a-12`. The agent cannot read the details of a request of this layer.
 
@@ -103,7 +103,7 @@ Then the agent reads the details of one record by its ID. The native `NSURLProto
 - The bodies of the request and of the response
 - For Chromium, the initiator of the request
 
-For the JS runtime layer, native network capture and the Chrome DevTools Protocol layer, Argent replaces the values of secret headers with `[REDACTED]`. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word. The native `NSURLProtocol` layer does not replace these values. See the Limits section.
+For the JS runtime layer, native network capture and the Chrome DevTools Protocol layer, Argent replaces the values of secret headers with `[REDACTED]`. A header is secret if its name contains `authorization`, `cookie`, `token`, `api-key` or a related word. The native `NSURLProtocol` layer shows no headers to the agent. See the Limits section.
 
 Argent also shortens a body that is longer than 1000 characters. A message before the shortened body gives the size of the full body. The JS runtime layer can keep only the start of a large body. For such a body, the message gives the full size in bytes, the full length in characters or a minimum length. Native network capture can also keep only the start of a large body. For such a body, the message gives the full size in bytes if Argent knows it, and the number of bytes that the in-app agent kept.
 
@@ -167,6 +167,6 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
   - The session file and the files of the in-app agent stay in the app until the capture starts and stops again, or until you install the app again.
   - The `adb reverse` stays until you remove it with `adb reverse --remove`, until the adb server or the device restarts, or until the USB connection of the device stops. A restart of the adb server also removes the other reverses, for example the reverse of Metro. Each `adb reverse` that stays holds one device port from 20000 to 29999.
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
-- On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a network log of this layer as you protect other data of the app.
+- The agent does not see the headers of the requests of the native `NSURLProtocol` layer. The list of this layer contains no headers. This layer has no details.
 
 Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.
