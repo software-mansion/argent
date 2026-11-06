@@ -111,10 +111,13 @@ run_phase() {
   assert_ok    "$P" debugger-reload-metro reload "{$D}"
   sleep 4  # reload drops the runtime; let it re-register
 
+  # Capture starts at the first network-tool call, and the reload cleared it.
+  run_tool view-network-logs "{$D}" >/dev/null 2>&1
   run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
   sleep 2
   assert_ok "$P" view-network-logs netlogs "{$D,\"pageIndex\":\"latest\"}"
-  local RID; RID="$(printf '%s' "$RT_JSON" | jq -r '(.requests // .entries // [])[0].requestId // empty' 2>/dev/null)"
+  # Text, not JSON: one `{id: <requestId>} "<METHOD> <url>" ...` line per request.
+  local RID; RID="$(printf '%s' "$RT_JSON" | sed -n 's/^{id: \([^}]*\)}.*/\1/p' | tail -n 1)"
   if [ -n "$RID" ]; then
     assert_ok "$P" view-network-request-details netdetails "{$D,\"requestId\":\"$RID\"}"
   else
