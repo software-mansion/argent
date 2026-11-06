@@ -55,6 +55,28 @@ describe("COLLECT_RENDERS_SCRIPT — same-name fibers", () => {
   });
 });
 
+describe("COLLECT_RENDERS_SCRIPT — depth cap", () => {
+  // The HostRoot (no type) sits at depth 0, so named fibers occupy depths 1-30.
+  const hostRoot = (child: unknown) => ({ type: null, actualDuration: 0, child, sibling: null });
+
+  it("walks 30 levels below the root and no deeper", () => {
+    let chain: unknown = null;
+    for (let depth = 31; depth >= 1; depth--) chain = fiber(`Level${depth}`, 1, 1, chain);
+    const rows = runScript(hostRoot(chain));
+
+    expect(rows["Level30"]).toBeDefined();
+    expect(rows["Level31"]).toBeUndefined();
+  });
+
+  it("keeps siblings at their parent's level", () => {
+    let items: unknown = null;
+    for (let i = 0; i < 40; i++) items = view(1, 1, null, items);
+    const rows = runScript(hostRoot(fiber("List", 1, 0, items)));
+
+    expect(rows["View"]!.instanceCount).toBe(40);
+  });
+});
+
 describe("react-profiler-renders", () => {
   it("ranks by self time, not by the largest subtree", async () => {
     // Wrapper: 50ms subtree, 1ms self. Leaf: 12ms subtree, 10ms self.
