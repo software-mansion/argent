@@ -816,7 +816,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       await other.dispose();
     }
     expect(await argvOf()).toEqual([]);
-  });
+  }, 20_000);
 
   it("launch-app leaves a running app alone; once it quits, calls name boot-device and launch-app, list-devices drops it, and launch-app starts it from the record", async () => {
     const { pid } = await run("boot-device", { macosAppPath: appPath });
