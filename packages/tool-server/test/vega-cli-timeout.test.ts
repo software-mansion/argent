@@ -106,6 +106,13 @@ if (cmd === "hang") {
   spawnSync("sleep", [secs]);
   process.exit(0);
 }
+if (cmd === "hang-self") {
+  // The launcher wedges itself with no child under it, like a real \`vega\` blocked on its
+  // device-agent socket: the descendant sweep finds nothing, so only the group kill reaps
+  // it. \`secs\` bounds its life, as it does a sentinel worker's.
+  setTimeout(() => process.exit(0), Number(secs) * 1000);
+  return;
+}
 if (cmd === "fail") {
   // A fast, non-timeout failure: exit non-zero with stderr (like "device offline").
   // runVega must reject classifying this as a "subprocess" failure, NOT a "timeout".
@@ -280,9 +287,15 @@ async function waitForWorkerGroups(
   return sample;
 }
 
-function strayCount(sentinel: string): number {
+// The `hang-self` launcher's own command line, as it has no `sleep` worker to match. `$`
+// scopes it to this run, as in cmdlinePattern, and keeps out execSync's wrapper.
+function launcherPattern(tag: string): string {
+  return `/vega hang-self ${tag.replaceAll(".", "\\.")}$`;
+}
+
+function strayCount(pattern: string): number {
   try {
-    const out = execSync(`pgrep -f '${cmdlinePattern(sentinel)}' || true`, { encoding: "utf-8" });
+    const out = execSync(`pgrep -f '${pattern}' || true`, { encoding: "utf-8" });
     return out.split("\n").filter((l) => l.trim()).length;
   } catch {
     // -1, not 0: 0 is the pass value of every clearance assertion, so a look that never
@@ -293,14 +306,18 @@ function strayCount(sentinel: string): number {
   }
 }
 
-// Poll `strayCount` until it reaches `want`, or the deadline passes. Returns the final
+// Poll the match count until it reaches `want`, or the deadline passes. Returns the final
 // count, so the caller asserts on a number rather than on having timed out.
 async function waitForCount(sentinel: string, want: number, timeoutMs = 3_000): Promise<number> {
+  return waitForMatches(cmdlinePattern(sentinel), want, timeoutMs);
+}
+
+async function waitForMatches(pattern: string, want: number, timeoutMs: number): Promise<number> {
   const deadline = Date.now() + timeoutMs;
-  let count = strayCount(sentinel);
+  let count = strayCount(pattern);
   while (count !== want && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50));
-    count = strayCount(sentinel);
+    count = strayCount(pattern);
   }
   return count;
 }
@@ -367,6 +384,23 @@ describe("runVega timeout (real subprocess)", () => {
     // into its own group. Both fall to the descendant sweep — killing the launcher alone
     // leaves both behind, and a group kill without the sweep still misses the escaped one.
     expect(await waitForClear(SENTINEL_REAP)).toBe(0);
+  });
+
+  it("reaps a launcher wedged with nothing under it (the group kill alone)", async () => {
+    const pattern = launcherPattern(SENTINEL_PREFIX);
+    const HANG_SELF_DEADLINE_MS = 4_000;
+    const run = runVega(["hang-self", SENTINEL_PREFIX], { timeoutMs: HANG_SELF_DEADLINE_MS }).catch(
+      (e: unknown) => e
+    );
+    try {
+      expect(await waitForMatches(pattern, 1, HANG_SELF_DEADLINE_MS)).toBe(1);
+      const err = await run;
+      expect((err as Error).message).toMatch(/timed out/i);
+      expect(await waitForMatches(pattern, 0, 3_000)).toBe(0);
+    } finally {
+      // Outside sweep()'s `sleep` namespace.
+      execSync(`pkill -9 -f '${pattern}' || true`);
+    }
   });
 
   it("returns normally, leaving no timer armed, when the CLI responds before the deadline", async () => {
