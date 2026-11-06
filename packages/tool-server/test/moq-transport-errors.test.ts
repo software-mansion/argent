@@ -206,14 +206,23 @@ describe("every input reaches the SDK as an InputMessage", () => {
 
     await sendCommand(apiWith(transport), { ...TOUCH });
     await sendCommand(apiWith(transport), { cmd: "touch", type: "Up", x: 0.5, y: 0.5 });
+    await sendCommand(apiWith(transport), {
+      cmd: "touch",
+      type: "Down",
+      x: 0.2,
+      y: 0.3,
+      second_x: 0.7,
+      second_y: 0.8,
+    });
     await sendCommand(apiWith(transport), { cmd: "button", direction: "Down", button: "home" });
     await sendCommand(apiWith(transport), { cmd: "rotate", direction: "LandscapeLeft" });
     await sendCommand(apiWith(transport), { cmd: "key", direction: "Down", code: 4 });
     await transport.pressKey("Up", 4);
 
-    expect(sent).toEqual([
+    expect(sent).toStrictEqual([
       { type: "touch", action: "Down", x: 0.5, y: 0.5, secondX: undefined, secondY: undefined },
       { type: "touch", action: "Up", x: 0.5, y: 0.5, secondX: undefined, secondY: undefined },
+      { type: "touch", action: "Down", x: 0.2, y: 0.3, secondX: 0.7, secondY: 0.8 },
       { type: "button", action: "Down", button: "home" },
       { type: "rotate", direction: "LandscapeLeft" },
       { type: "key", action: "Down", code: 4 },

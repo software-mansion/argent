@@ -15,7 +15,7 @@ const PUBLISH_PATH = "argent";
 type ToolInput = Exclude<InputMessage, { type: "screenshot" | "touchState" }>;
 
 export interface MoqClient {
-  /** The SDK picks the track: ordered for anything with a Down/Up pair. */
+  /** The SDK picks the track. */
   sendInput(message: ToolInput): Promise<void>;
   screenshot(opts?: { scale?: number }): Promise<Buffer>;
   close(): Promise<void>;
