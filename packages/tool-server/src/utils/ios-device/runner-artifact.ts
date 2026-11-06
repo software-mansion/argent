@@ -354,7 +354,7 @@ export async function ensureRunnerArtifact(
       });
     }
 
-    const built = await build(derivedDataPath, staticArgs, opts.destinationUdid);
+    const built = await build(derivedDataPath, staticArgs, opts.destinationUdid, config.teamId);
     await fsp.writeFile(stampPath, cacheKey);
 
     return built;
@@ -367,7 +367,8 @@ export async function ensureRunnerArtifact(
 async function buildRunnerArtifact(
   derivedDataPath: string,
   staticArgs: readonly string[],
-  destinationUdid: string | undefined
+  destinationUdid: string | undefined,
+  teamId: string
 ): Promise<RunnerArtifact> {
   await fsp.mkdir(derivedDataPath, { recursive: true });
 
@@ -393,7 +394,7 @@ async function buildRunnerArtifact(
 
     throw withFailureSignal(
       new Error(
-        `Building the iOS device runner failed.${hint ? ` ${hint}` : ""}\n\n` +
+        `Building the iOS device runner failed.${hint ? ` Signing team: ${teamId}. ${hint}` : ""}\n\n` +
           `xcodebuild reported:\n${xcodebuildFailureSummary(output)}`,
         { cause: error }
       ),
