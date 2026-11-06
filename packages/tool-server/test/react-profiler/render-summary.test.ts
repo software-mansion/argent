@@ -15,6 +15,9 @@ import {
   type RenderSummaryComponent,
 } from "../../src/utils/react-profiler/render-summary";
 import { createComponentOriginClassifier } from "../../src/utils/react-profiler/component-origin";
+import { reduce } from "../../src/utils/react-profiler/pipeline/01-reduce";
+import { enrich } from "../../src/utils/react-profiler/pipeline/02-enrich";
+import type { SessionContext } from "../../src/utils/react-profiler/types/pipeline";
 import type {
   DevToolsChangeDescription,
   DevToolsFiberCommit,
@@ -486,5 +489,37 @@ describe("selectFrequentRerenders", () => {
   it("shows at most five rows", () => {
     const many = Array.from({ length: 8 }, (_, i) => component(`Forget(Row${i})`, 100, 100 - i));
     expect(selectFrequentRerenders(summary(many), classify)).toHaveLength(5);
+  });
+});
+
+describe("the dominant reason on a tie", () => {
+  const STATE = { ...RERENDER, hooks: [0] };
+  const PROPS = { ...RERENDER, props: ["x"] };
+  const useState = { hookTypes: ["useState"] };
+
+  /** The reason the report's Top Components table gives for the same fibers. */
+  function reportReason(fibers: DevToolsFiberCommit[], name: string) {
+    const reduced = reduce({ commits: fibers, hookNames: new Map() }, {} as SessionContext, 1000);
+    return enrich(reduced).components.get(name)!.dominantReason;
+  }
+
+  it("is the same in the summary and in the report, whichever came first", () => {
+    // The order is the report's: parent, props, hooks, context, state.
+    for (const [order, expected] of [
+      [[STATE, STATE, PROPS, PROPS], "props"],
+      [[PROPS, PROPS, STATE, STATE], "props"],
+      [[STATE, PROPS, RERENDER, STATE, PROPS, RERENDER], "parent"],
+    ] as const) {
+      const fibers = order.map((cd, i) => fiber("Row", i, 1, cd, useState));
+      const summary = summarizeRenders(fibers, timings(order.map(() => 5)), 1000);
+      expect(summary.components[0]!.reason).toBe(expected);
+      expect(reportReason(fibers, "Row")).toBe(expected);
+    }
+  });
+
+  it("still follows the count when there is no tie", () => {
+    const order = [PROPS, STATE, STATE];
+    const fibers = order.map((cd, i) => fiber("Row", i, 1, cd, useState));
+    expect(summarizeRenders(fibers, timings([5, 5, 5]), 1000).components[0]!.reason).toBe("state");
   });
 });

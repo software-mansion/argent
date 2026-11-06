@@ -14,7 +14,7 @@
  */
 import type { DevToolsFiberCommit } from "./types/input";
 import type { ReRenderReason } from "./types/output";
-import { deriveReason } from "./pipeline/utils";
+import { deriveReason, dominantReason, emptyReasonHistogram } from "./pipeline/utils";
 import type { ComponentOriginResult } from "./component-origin";
 import {
   renderComponentNameMiss,
@@ -148,7 +148,7 @@ export function summarizeRenders(
     mountSelfMs: number;
     lastRerenderCommit: number;
     rerenderCommits: number;
-    reasons: Map<ReRenderReason, number>;
+    reasons: Record<ReRenderReason, number>;
     props: Map<string, number>;
     hooks: Map<string, number>;
   }
@@ -172,7 +172,7 @@ export function summarizeRenders(
         mountSelfMs: 0,
         lastRerenderCommit: -1,
         rerenderCommits: 0,
-        reasons: new Map(),
+        reasons: emptyReasonHistogram(),
         props: new Map(),
         hooks: new Map(),
       };
@@ -202,8 +202,7 @@ export function summarizeRenders(
       acc.rerenderCommits++;
       acc.lastRerenderCommit = c.commitIndex;
     }
-    const reason = deriveReason(cd, c.hookTypes ?? null);
-    acc.reasons.set(reason, (acc.reasons.get(reason) ?? 0) + 1);
+    acc.reasons[deriveReason(cd, c.hookTypes ?? null)]++;
     for (const p of cd.props ?? []) acc.props.set(p, (acc.props.get(p) ?? 0) + 1);
     if (cd.hooks && c.hookTypes) {
       for (const idx of cd.hooks) {
@@ -215,7 +214,7 @@ export function summarizeRenders(
 
   const components: RenderSummaryComponent[] = [];
   for (const [name, acc] of byName) {
-    const reason = acc.rerenders > 0 ? (topKeys(acc.reasons, 1)[0] ?? null) : null;
+    const reason = acc.rerenders > 0 ? dominantReason(acc.reasons) : null;
     const row: RenderSummaryComponent = {
       name,
       rerenders: acc.rerenders,
