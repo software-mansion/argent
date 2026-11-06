@@ -331,6 +331,22 @@ describe("a debugger session whose app crashed", () => {
     expect(result.note).not.toContain("stop-all-simulator-servers");
   });
 
+  it("names no log file when its file was removed before the crash", async () => {
+    const urn = await connectAndCapture(LOGICAL_ID, 3);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    fs.rmSync(api.logWriter.getFilePath(), { force: true });
+    await crash(urn);
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { status: string; note?: string };
+
+    expect(result.status).toBe("not_connected");
+    expect(result.note).toContain("3 captured console entries went with it — no log file");
+    expect(result.note).not.toContain("kept at");
+  });
+
   it("names the kept file on the next debugger-connect", async () => {
     const file = await crash(await connectAndCapture(LOGICAL_ID, 3));
     appRunning = true;
