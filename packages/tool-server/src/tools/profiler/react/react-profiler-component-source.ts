@@ -31,8 +31,9 @@ When several files define a component with the same name (e.g. platform variants
   zodSchema,
   readOnly: true,
   // react-profiler-analyze runs the same AST lookup for each component in its
-  // table (file and line only) and adds the source of the located ones among
-  // the top five; agents read any other file themselves. The SDK still calls it.
+  // table (file, line and other matches) and adds the source of the located ones
+  // among the top five; agents read any other file themselves. The SDK still
+  // calls it.
   hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `Finding source for ${params.component_name}`,

@@ -14,6 +14,7 @@ import type { SessionContext } from "../types/pipeline";
 import { annotateComponentName } from "../component-names";
 
 const MAX_INLINE_COMMITS = 10;
+const MAX_OTHER_MATCHES = 3;
 const REPORT_FILENAME = "react-profiler-report.md";
 
 interface RenderInput {
@@ -170,7 +171,7 @@ function buildFullMarkdown(
     lines.push("|---|---|---|---|---|---|---|");
     for (const f of input.componentFindings) {
       const file = f.sourceLocation
-        ? `\`${pathFromProject(f.sourceLocation.file, sessionContext.projectRoot)}:${f.sourceLocation.line}\``
+        ? formatLocation(f.sourceLocation, sessionContext.projectRoot)
         : "—";
       const reasonStr = formatReason(f.dominantReason, f.topChangedProps, f.topChangedHookNames);
       const compilerFlag = f.compilerBailoutSuspected ? " ⚠️" : f.isCompilerOptimized ? " ✓" : "";
@@ -424,9 +425,7 @@ function renderSuggestedImprovements(
   const lines: string[] = ["", "---", "## Suggested Improvements", ""];
 
   for (const f of topFindings) {
-    const loc = f.sourceLocation
-      ? `\`${pathFromProject(f.sourceLocation.file, projectRoot)}:${f.sourceLocation.line}\``
-      : null;
+    const loc = f.sourceLocation ? formatLocation(f.sourceLocation, projectRoot) : null;
     const ann = annotateComponentName(f.component);
     const heading = `\`${ann.displayName}\`${ann.tag}`;
     lines.push(loc ? `### ${heading} — ${loc}` : `### ${heading}`);
@@ -521,6 +520,20 @@ function renderSuggestedImprovements(
   }
 
   return lines.join("\n");
+}
+
+function formatLocation(
+  loc: { file: string; line: number; otherMatches?: Array<{ file: string; line: number }> },
+  projectRoot: string
+): string {
+  const main = `\`${pathFromProject(loc.file, projectRoot)}:${loc.line}\``;
+  const others = loc.otherMatches ?? [];
+  if (others.length === 0) return main;
+  const shown = others
+    .slice(0, MAX_OTHER_MATCHES)
+    .map((m) => `${pathFromProject(m.file, projectRoot)}:${m.line}`);
+  const rest = others.length - shown.length;
+  return `${main} (name also in ${shown.join(", ")}${rest > 0 ? `, +${rest} more` : ""})`;
 }
 
 /** For a CPU frame's bundle url, where the end of the path is all that helps. */
