@@ -53,3 +53,15 @@ describe("Mac app text with the macos-apps flag off", () => {
     }
   });
 });
+
+describe("Mac app text with the macos-apps flag on", () => {
+  const definitions = definitionsById(createRegistry());
+
+  // e2e recording on a Mac app records restart-app as the launch step, so its
+  // description must say what the Mac branch does and returns.
+  it.each(["launch-app", "restart-app"])("%s names Mac apps and their result fields", (id) => {
+    const text = renderFlagGated(definitions.get(id)!.description, (f) => f === MACOS_APPS_FLAG);
+    expect(text).toMatch(/Mac app/);
+    expect(text).toMatch(/appPath\?, args\?/);
+  });
+});

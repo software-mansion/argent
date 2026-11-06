@@ -73,7 +73,7 @@ The menu bar of a background app is not on the screen, so the agent does not cli
 
 ### File panels
 
-A system service draws the file list of an open panel or a save panel, so the agent cannot read or click this list. The agent answers the panel with a path, and the app reads or writes the file as after a choice of the user. When the app asks whether to keep an edited new document, the agent can delete the document instead.
+A system service draws the file list of an open panel or a save panel, so the agent cannot read or click this list. The agent answers the panel with a path, and the app reads or writes the file as after a choice of the user. A save panel asks you before it replaces an existing file, but it does not ask the agent. When the agent answers a save panel with the path of an existing file, the app replaces that file at once. When the app asks whether to keep an edited new document, the agent can delete the document instead.
 
 The app can add its own controls to a panel, for example a format pop-up or an option checkbox. The agent reads and clicks these controls before it answers the panel.
 
@@ -91,14 +91,16 @@ An e2e test for a Mac app starts with a `launch` step that names the bundle id. 
 
 macOS loads the Argent library only into a build that allows it:
 
-| Build   | Hardened runtime off | Hardened runtime on                                         |
-| ------- | -------------------- | ----------------------------------------------------------- |
-| Debug   | Works                | Works after one step                                        |
-| Release | Works                | Never, also for notarized apps and apps of other developers |
+| Build   | Hardened runtime off | Hardened runtime on                                            |
+| ------- | -------------------- | -------------------------------------------------------------- |
+| Debug   | Works                | Works after one step                                           |
+| Release | Works                | Only with an entitlement that allows code injection. See below |
 
 The App Sandbox does not change this table. The macOS app templates of Xcode and of react-native-macos do not turn on the hardened runtime.
 
-With the hardened runtime, macOS loads the Argent library only into a build that allows debugging. Xcode adds this permission only to a Debug build. With the hardened runtime, macOS also loads only a library that the team of the app signed, unless the build turns off library validation. Thus a Release build with the hardened runtime cannot work.
+With the hardened runtime, macOS loads the Argent library only into a build that allows debugging or that has the entitlement `com.apple.security.cs.allow-dyld-environment-variables`. Xcode adds the permission to debug only to a Debug build. With the hardened runtime, macOS also loads only a library that the team of the app signed, unless the build turns off library validation.
+
+Thus a Release build with the hardened runtime works only with the entitlement `com.apple.security.cs.allow-dyld-environment-variables`. Together with `com.apple.security.cs.disable-library-validation`, this entitlement lets any program that starts the app load its own code into the app. Do not add these entitlements to a build that you ship. Start the Debug build instead.
 
 For a Debug build with the hardened runtime, do one of these steps:
 
@@ -126,7 +128,7 @@ Argent does not start an Electron app or a Chromium browser as a Mac app. Argent
 | A tool says that the app has no open window                                      | Ask the agent to open a window with a command of the app, for example File > New. A restart loses the state of the app.                                                                        |
 | The app is missing from the device list                                          | The list shows only the apps that Argent started. Ask the agent to start the app.                                                                                                              |
 | The app runs already without the Argent library                                  | Ask the agent to restart the app, or quit the app yourself. A restart loses the unsaved changes in that copy. Xcode Run and `react-native run-macos` start the app without the Argent library. |
-| The start fails because of the hardened runtime                                  | For a Debug build, do one of the steps in [The hardened runtime](#the-hardened-runtime). A Release build cannot work.                                                                          |
+| The start fails because of the hardened runtime                                  | For a Debug build, do one of the steps in [The hardened runtime](#the-hardened-runtime). For a Release build, start the Debug build instead.                                                   |
 | The start fails because a different build runs                                   | Quit that copy if it is yours. To run both builds, give this build a bundle id of its own. See [Several agents and git worktrees](#several-agents-and-git-worktrees).                          |
 | A call fails because another tool-server drives the app                          | Stop the other Argent tool-server, or give this build a bundle id of its own.                                                                                                                  |
 | An e2e test launch warns that it started another worktree's build                | Quit the copy of the other build if it is yours. Then ask the agent to start the build of this worktree, and run the e2e test again.                                                           |

@@ -41,13 +41,13 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+      "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
     ),
   bundleId: z
     .string()
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id. Android: package name from build.gradle `applicationId`. Vega (Fire TV): the interactive component app id from manifest.toml (e.g. com.example.app.main). <flag:harmonyos>HarmonyOS: bundle name as listed by `bm dump -a` (e.g. com.huawei.hmos.calculator). </flag:harmonyos>Chromium: any tag matching the pattern."
+      "App identifier. iOS: bundle id. Android: package name from build.gradle `applicationId`. Vega (Fire TV): the interactive component app id from manifest.toml (e.g. com.example.app.main). <flag:harmonyos>HarmonyOS: bundle name as listed by `bm dump -a` (e.g. com.huawei.hmos.calculator). </flag:harmonyos>Chromium: any tag matching the pattern.<flag:macos-apps> Mac app: the bundle id in the device id.</flag:macos-apps>"
     ),
   activity: z
     .string()
@@ -75,9 +75,9 @@ type Params = z.infer<typeof zodSchema>;
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
-    description: `Open an installed app, or confirm the running renderer (Chromium).
+    description: `Open an installed app, or confirm the running renderer (Chromium).<flag:macos-apps> On a Mac app it starts the app in the background when it does not run, and leaves a running app as it is.</flag:macos-apps>
 Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (iOS and Apple TV).
-Returns { launched, bundleId, note?, networkCapture? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready. networkCapture (Android) says whether native network capture followed the launch.
+Returns { launched, bundleId, <flag:macos-apps>appPath?, args?, </flag:macos-apps>note?, networkCapture? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready.<flag:macos-apps> appPath and args (Mac app) are the .app that runs and its arguments; note (Mac app) also says when the app already ran or shows no window.</flag:macos-apps> networkCapture (Android) says whether native network capture followed the launch.
 For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.mobileslideshow (Photos), com.apple.MobileAddressBook

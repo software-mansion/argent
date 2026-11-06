@@ -37,14 +37,14 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial)."
+      "Target device id from `list-devices` (iOS UDID<flag:harmonyos>, HarmonyOS id,</flag:harmonyos> or Android serial<flag:macos-apps>, or a Mac app id</flag:macos-apps>)."
     ),
   bundleId: z
     .string()
     .min(1)
     .regex(BUNDLE_ID_PATTERN, BUNDLE_ID_MESSAGE)
     .describe(
-      "App identifier. iOS: bundle id. Android: package name. Vega: interactive component app id.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos>"
+      "App identifier. iOS: bundle id. Android: package name. Vega: interactive component app id.<flag:harmonyos> HarmonyOS: bundle name.</flag:harmonyos><flag:macos-apps> Mac app: the bundle id in the device id.</flag:macos-apps>"
     ),
   activity: z
     .string()
@@ -69,9 +69,9 @@ type Params = z.infer<typeof zodSchema>;
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
   return {
     id: "restart-app",
-    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>or Vega.
-Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).
-Returns { restarted, bundleId, networkCapture? }. networkCapture (Android) says whether native network capture followed the launch. Fails if the app is not installed.`,
+    description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>macOS, </flag:macos-apps>or Vega.
+Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).<flag:macos-apps> On a Mac app it quits the app and starts the same .app again in the background.</flag:macos-apps>
+Returns { restarted, bundleId, <flag:macos-apps>appPath?, args?, note?, </flag:macos-apps>networkCapture? }. networkCapture (Android) says whether native network capture followed the launch.<flag:macos-apps> appPath and args (Mac app) are the .app that runs and its arguments; note (Mac app) warns about the start, for example a force-quit or no window.</flag:macos-apps> Fails if the app is not installed.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

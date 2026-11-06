@@ -31,7 +31,8 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "For choose and stub: the absolute path to answer with (a leading ~/ is your home folder). " +
-        "An open panel takes an existing file or folder; a save panel takes the file to write, in an existing folder."
+        "An open panel takes an existing file or folder; a save panel takes the file to write, in an existing folder. " +
+        "A save panel answer replaces an existing file at that path without the replace prompt a user gets: check the path first."
     ),
   paths: z
     .array(z.string().min(1))
