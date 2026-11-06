@@ -442,8 +442,8 @@ describe("scroll-to directive", () => {
   });
 
   it("ends the scroll once the clip cutting a target stops moving, whatever moves outside it", async () => {
-    // The list is at its end, so the row stays cut under a wheel at the anchor and
-    // one at the screen's centre, while each moves the page's top bar.
+    // The list is at its end, so the row stays cut under a wheel at the anchor,
+    // which moves the page's top bar.
     const swipes = await scrollTo(
       "stuck-cut",
       (scrolled) => [
@@ -456,7 +456,7 @@ describe("scroll-to directive", () => {
       ],
       { target: { identifier: "row" } }
     );
-    expect(swipes).toHaveLength(2);
+    expect(swipes).toHaveLength(1);
   });
 
   it("ends the scroll on a stuck cut while a clock outside it never stops ticking", async () => {
@@ -482,10 +482,10 @@ describe("scroll-to directive", () => {
       )
     );
     expect(result.steps[0].status).toBe("pass");
-    expect(swipes).toHaveLength(2);
+    expect(swipes).toHaveLength(1);
   });
 
-  it("retries a cut the anchor's wheel left in place where an uncut target's gesture goes", async () => {
+  it("retries a cut the anchor's wheel left in place only at the centre of the `within` container", async () => {
     // A wheel taker the walker cannot see (a closed shadow root's scroller, a
     // page's wheel listener) holds the anchor, and the tree shows nothing move.
     const pane = n({
@@ -511,13 +511,17 @@ describe("scroll-to directive", () => {
         )
       );
       expect(result.steps[0].status).toBe("pass");
-      expect(swipes).toHaveLength(2);
       expect([swipes[0].fromX, swipes[0].fromY]).toEqual([0.3, 0.45]);
-      // The screen's centre, else the named container's.
-      expect(swipes[1].fromX).toBeCloseTo(within ? 0.75 : 0.5);
-      expect(swipes[1].fromY).toBeCloseTo(within ? 0.6 : 0.5);
-      // Still no further than the row's visible start is from the window's (0.35).
-      expect(swipes[1].fromY - swipes[1].toY).toBeCloseTo(within ? 0.3 : 0.35);
+      if (!within) {
+        // A wheel anywhere else on the screen would move the page.
+        expect(swipes).toHaveLength(1);
+        continue;
+      }
+      expect(swipes).toHaveLength(2);
+      expect(swipes[1].fromX).toBeCloseTo(0.75);
+      expect(swipes[1].fromY).toBeCloseTo(0.6);
+      // Half the container, no further than the row's visible start is from the window's (0.35).
+      expect(swipes[1].fromY - swipes[1].toY).toBeCloseTo(0.3);
     }
   });
 
@@ -716,7 +720,38 @@ describe("scroll-to directive", () => {
       )
     );
     expect(result.steps[0].status).toBe("pass");
-    expect(swipes).toHaveLength(2);
+    expect(swipes).toHaveLength(1);
+  });
+
+  it("stops once the page carries a cut target's window past the screen's top edge", async () => {
+    // The list window starts at 0.05 and the screen cuts it as the page moves, so
+    // its length and the row's distance from its start shrink together.
+    let pageScrolls = 0;
+    currentTree = () => {
+      const top = 0.05 - 0.1 * pageScrolls;
+      const bottom = top + 0.35;
+      return screen([
+        n({
+          identifier: "row",
+          frame: { x: 0.6, y: bottom - 0.05, width: 0.3, height: 0.05 },
+          clipBounds: { x: 0, y: Math.max(0, top), width: 1, height: bottom - Math.max(0, top) },
+          clipAnchors: { y: { x: 0.3, y: bottom - 0.1 } },
+        }),
+      ]);
+    };
+    const swipes: SwipeCall[] = [];
+    await writeFlow("carried-off-screen", {
+      executionPrerequisite: "",
+      steps: [{ kind: "scroll-to", direction: "down", target: { identifier: "row" } } as never],
+    });
+    const result = asRun(
+      await createRunFlowTool(mockRegistry(swipes, () => pageScrolls++)).execute(
+        {},
+        { name: "carried-off-screen", project_root: tmpDir, device: DEVICE }
+      )
+    );
+    expect(result.steps[0].status).toBe("pass");
+    expect(swipes).toHaveLength(1);
   });
 
   it("scrolls a target cut by a scroller whose window spans the whole screen on the axis", async () => {

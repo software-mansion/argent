@@ -835,7 +835,7 @@ async function scrollToVisible(
   within: FlowSelector | undefined
 ): Promise<ScrollResolve> {
   let prevFp: string | undefined;
-  let prevCut: { room: number; span: number } | undefined;
+  let prevShown: number | undefined;
   // Whether the walker's anchor is spent: a wheel there left the cut in place.
   let anchorSpent = false;
   let warning: string | undefined;
@@ -882,30 +882,21 @@ async function scrollToVisible(
     if (frame && axisFullyInside(frame, axisDirection, cut ?? container?.clipFrame ?? region)) {
       return { frame, ...warnedBy(warning) };
     }
-    // A cut the last increment left where it was, in a window as long: the walker
-    // cannot see every wheel taker (a page's wheel listener, a closed shadow root's
-    // scroller, a scroller that moved under the anchor), so later increments go where
-    // an uncut target's would. One that leaves it in place too is a cut its scroller
-    // cannot scroll away (it is at its end): further wheels only chain to the page.
-    const at =
-      frame && axisCut
-        ? {
-            room: leadingRoom(frame, axisCut, axisDirection),
-            span: vertical ? axisCut.height : axisCut.width,
-          }
-        : undefined;
+    // How far the target reaches into its window from the cutting edge changes only
+    // when its scroller moves, not when a wheel carries the window along (the page, a
+    // scroller holding the cutter). A cut the last increment left in place is one a
+    // wheel at the anchor cannot scroll away (its scroller is at its end, or a wheel
+    // taker the walker cannot see holds the anchor, such as a page's wheel listener):
+    // it is accepted where it is, after one more increment at the centre of the
+    // `within` container if one is named. A wheel elsewhere would move the page.
+    const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
+    const shown = room === undefined ? undefined : (vertical ? region.height : region.width) - room;
     let spentNow = false;
-    if (
-      at &&
-      prevCut &&
-      Math.abs(at.room - prevCut.room) < 1e-4 &&
-      Math.abs(at.span - prevCut.span) < 1e-4
-    ) {
-      if (anchorSpent) return { frame: frame!, ...warnedBy(warning) };
+    if (shown !== undefined && prevShown !== undefined && Math.abs(shown - prevShown) < 1e-4) {
+      if (anchorSpent || !container) return { frame: frame!, ...warnedBy(warning) };
       anchorSpent = spentNow = true;
     }
-    prevCut = at;
-    const room = at?.room;
+    prevShown = shown;
 
     // Fingerprint only the scrolled content: a continuously-animating node
     // outside it (a spinner, a ticking clock) would keep a wider fingerprint
@@ -936,9 +927,10 @@ async function scrollToVisible(
 
     // A cut target moves no further than its visible start is from the
     // window's, or one taller than half the window would be carried past it.
-    const sent = anchorSpent
-      ? await scrollIncrement(env, axisDirection, container?.frame ?? FULL_SCREEN, room)
-      : await scrollIncrement(env, axisDirection, region, room, anchor);
+    const sent =
+      anchorSpent && container
+        ? await scrollIncrement(env, axisDirection, container.frame, room)
+        : await scrollIncrement(env, axisDirection, region, room, anchor);
     warning ??= sent;
   }
   return {
