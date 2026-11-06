@@ -1,8 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { promises as fs } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { detectSessionContext } from "../../src/utils/react-profiler/pipeline/session-context";
+import { describe, expect, it } from "vitest";
 import { reduce } from "../../src/utils/react-profiler/pipeline/01-reduce";
 import { enrich } from "../../src/utils/react-profiler/pipeline/02-enrich";
 import { tag } from "../../src/utils/react-profiler/pipeline/03-tag";
@@ -19,17 +15,18 @@ import type { SessionContext } from "../../src/utils/react-profiler/types/pipeli
  * "Renders 2, Total 637.8 ms, Avg 159.44 ms", which do not add up.
  */
 
-const RENDER_MS = 159.45;
-const RENDERS = 4;
+const HEAVY_MS = 159.45;
+// Below rank's max-duration gate, so only the render count can admit a component.
+const SHORT_MS = 5;
 
-function heavyPanelRender(commitIndex: number): DevToolsFiberCommit {
+function render(commitIndex: number, durationMs: number): DevToolsFiberCommit {
   return {
     commitIndex,
     timestamp: commitIndex * 1000,
-    componentName: "HeavyPanel",
-    actualDuration: RENDER_MS,
-    selfDuration: RENDER_MS,
-    commitDuration: RENDER_MS,
+    componentName: "Panel",
+    actualDuration: durationMs,
+    selfDuration: durationMs,
+    commitDuration: durationMs,
     didRender: true,
     changeDescription: {
       props: ["count"],
@@ -45,73 +42,38 @@ function heavyPanelRender(commitIndex: number): DevToolsFiberCommit {
   };
 }
 
-function rankHeavyPanel(sessionContext: SessionContext) {
-  const commits = Array.from({ length: RENDERS }, (_, i) => heavyPanelRender(i));
-  const findings = rank(tag(enrich(reduce({ commits }, sessionContext, 10_000))));
-  const finding = findings.find((f) => f.component === "HeavyPanel");
-  expect(finding, "HeavyPanel must be ranked").toBeDefined();
-  return finding!;
+const SESSION: SessionContext = {
+  reactCompilerEnabled: false,
+  buildMode: "dev",
+  rnArchitecture: "bridgeless",
+  projectRoot: "/tmp/none",
+  platform: "ios",
+};
+
+function rankPanel(renders: number, durationMs: number, session = SESSION) {
+  const commits = Array.from({ length: renders }, (_, i) => render(i, durationMs));
+  const findings = rank(tag(enrich(reduce({ commits }, session, 10_000))));
+  return findings.find((f) => f.component === "Panel");
 }
 
-const projectDirs: string[] = [];
+describe("render counts", () => {
+  it("reports every recorded render, with an average that matches the total", () => {
+    const finding = rankPanel(4, HEAVY_MS)!;
 
-afterEach(async () => {
-  for (const dir of projectDirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
-});
-
-async function strictModeProject(): Promise<string> {
-  const dir = await fs.mkdtemp(join(tmpdir(), "argent-strict-mode-"));
-  projectDirs.push(dir);
-  await fs.writeFile(
-    join(dir, "index.js"),
-    [
-      "import { StrictMode } from 'react';",
-      "import { AppRegistry } from 'react-native';",
-      "import App from './App';",
-      "AppRegistry.registerComponent('main', () => () => (",
-      "  <StrictMode><App /></StrictMode>",
-      "));",
-      "",
-    ].join("\n")
-  );
-  return dir;
-}
-
-describe("render counts under Strict Mode", () => {
-  it("reports every recorded render, with an average that matches the total", async () => {
-    const projectRoot = await strictModeProject();
-    const sessionContext = await detectSessionContext({
-      commitTree: { commits: [] },
-      sessionMeta: {
-        recordingDurationMs: 10_000,
-        deviceId: "DEV",
-        platform: "ios",
-        rnVersion: "0.81.0",
-        projectRoot,
-      },
-    });
-    // Still detected, and still reported as metadata.
-    expect(sessionContext.strictModeEnabled).toBe(true);
-
-    const finding = rankHeavyPanel(sessionContext);
-
-    expect(finding.renders).toBe(RENDERS);
-    expect(finding.avgMs).toBe(RENDER_MS);
+    expect(finding.renders).toBe(4);
+    expect(finding.avgMs).toBe(HEAVY_MS);
     expect(finding.totalMs).toBe(637.8);
     expect(finding.renders * finding.avgMs).toBeCloseTo(finding.totalMs, 1);
   });
 
-  it("counts the same renders with Strict Mode on and off", () => {
-    const base: SessionContext = {
-      reactCompilerEnabled: false,
-      strictModeEnabled: false,
-      buildMode: "dev",
-      rnArchitecture: "bridgeless",
-      projectRoot: "/tmp/none",
-      platform: "ios",
-    };
-    const off = rankHeavyPanel(base);
-    const on = rankHeavyPanel({ ...base, strictModeEnabled: true });
-    expect(on).toEqual(off);
+  it("ranks a short component from its third recorded render", () => {
+    expect(rankPanel(2, SHORT_MS)).toBeUndefined();
+    expect(rankPanel(3, SHORT_MS)?.renders).toBe(3);
+  });
+
+  it("suspects a compiler bailout from the sixth recorded render", () => {
+    const compiled = { ...SESSION, reactCompilerEnabled: true };
+    expect(rankPanel(5, SHORT_MS, compiled)?.compilerBailoutSuspected).toBeUndefined();
+    expect(rankPanel(6, SHORT_MS, compiled)?.compilerBailoutSuspected).toBe(true);
   });
 });

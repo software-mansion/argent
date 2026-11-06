@@ -17,7 +17,6 @@ import type { SessionContext } from "../../src/utils/react-profiler/types/pipeli
 
 const SESSION_CONTEXT: SessionContext = {
   reactCompilerEnabled: false,
-  strictModeEnabled: false,
   buildMode: "dev",
   rnArchitecture: "bridgeless",
   projectRoot: "/tmp/fake-project",

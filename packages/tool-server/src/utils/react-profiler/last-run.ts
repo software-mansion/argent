@@ -15,6 +15,7 @@ export interface SavedSessionInfo {
   session_id: string;
   commits_path: string | null;
   cpu_profile_path: string | null;
+  loaded_from_disk?: boolean;
 }
 
 export interface LostRunInfo {
@@ -29,6 +30,7 @@ export function savedSessionInfo(paths: ProfilerSessionPaths): SavedSessionInfo 
     session_id: paths.sessionId,
     commits_path: paths.commitsPath,
     cpu_profile_path: paths.cpuProfilePath,
+    ...(paths.loadedFromDisk ? { loaded_from_disk: true } : {}),
   };
 }
 
@@ -50,7 +52,10 @@ export function lostRunCauseText(
     case "js_reload":
       return "a JS reload (Metro's `r`, a red-box Reload, debugger-reload-metro) ended it";
     case "cdp_disconnected":
-      return "the debugger connection dropped while it was recording";
+      return (
+        "the debugger connection dropped while it was recording: the app crashed or was killed, " +
+        "Metro restarted, or another debugger took the connection"
+      );
     case "session_torn_down":
       return (
         "its session was torn down mid-run, typically by stop-all-simulator-servers: the run " +
@@ -75,6 +80,12 @@ export function lostRunCauseText(
 }
 
 export function savedSessionText(paths: ProfilerSessionPaths): string {
+  if (paths.loadedFromDisk) {
+    return (
+      `Session ${paths.sessionId} is loaded from disk: react-profiler-analyze and the profiler ` +
+      `query tools read it.`
+    );
+  }
   return (
     `Your last run was stopped and saved as session ${paths.sessionId}: react-profiler-analyze ` +
     `and the profiler query tools read it. After a tool-server restart, load it again with ` +
@@ -89,8 +100,9 @@ export function lostRunText(lost: LostProfilerRun): string {
 
 /**
  * One sentence on this tool-server's last run on the device, or null when it
- * has no record of one. When both records exist, the loss is the newer: a
- * save drops the lost-run record, and a start clears both.
+ * has no record of one. When both records exist, the loss is the last run: a
+ * saved run drops the lost-run record, a start clears both, and what is left
+ * beside a loss can only be a session loaded from disk.
  */
 export function lastRunText(
   saved: ProfilerSessionPaths | undefined,

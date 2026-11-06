@@ -6,6 +6,7 @@ import {
   type ReactProfilerSessionApi,
   type ProfilerSessionPaths,
   cacheProfilerPaths,
+  clearLostProfilerRun,
   getCachedProfilerPaths,
   getLostProfilerRun,
   recordLostProfilerRun,
@@ -296,8 +297,12 @@ Fails if no active profiling session exists, the CDP connection was lost during 
       const takenOverBy = await readTakeover(cdp, api.sessionId);
       if (takenOverBy !== undefined) {
         // This run is over: record why, and leave the app and the shared
-        // Hermes sampler to the session that owns them now.
+        // Hermes sampler to the session that owns them now. A recording with
+        // no owner record owns no sampler: a DevTools client outside argent
+        // never sends Hermes `Profiler.stop`, so the one this run started
+        // would run on.
         recordLostProfilerRun(api, "taken_over", takenOverBy);
+        if (takenOverBy === null) await cdp.send("Profiler.stop").catch(() => {});
         api.profilingActive = false;
         api.sessionId = null;
         api.ownerToolServerPid = null;
@@ -497,6 +502,7 @@ Fails if no active profiling session exists, the CDP connection was lost during 
       };
 
       cacheProfilerPaths(api.port, sessionPaths, api.deviceId);
+      clearLostProfilerRun(api.port, api.deviceId);
       api.sessionPaths = sessionPaths;
       api.sessionId = null;
       api.ownerToolServerPid = null;

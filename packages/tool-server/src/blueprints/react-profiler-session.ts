@@ -5,6 +5,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import { deviceIdsOf } from "../utils/debugger/device-alias";
 import { assertExternalCapability } from "../utils/external-devices";
 import type { CDPClient, ScriptInfo } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi, RuntimeAppMetadata } from "./js-runtime-debugger";
@@ -30,6 +31,8 @@ export interface ProfilerSessionPaths {
   anyCompilerOptimized: boolean | null;
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
+  /** Set by profiler-load: this session came from disk, not from a run on this tool-server. */
+  loadedFromDisk?: boolean;
 }
 
 export interface ReactProfilerSessionApi {
@@ -194,7 +197,6 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       // Clear only mid-run, so a completed session's cached paths survive the disconnect.
       if (state.profilingActive) {
         clearCachedProfilerPaths(state.port, state.deviceId);
-        recordLostProfilerRun(state, "cdp_disconnected");
       }
       events.emit(
         "terminated",
@@ -252,7 +254,13 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         // still connected — the last moment anything can reach the app.
         if (state.profilingActive) {
           state.profilingActive = false;
-          recordLostProfilerRun(state, "session_torn_down");
+          // A dropped connection gets here first: the debugger's own listener
+          // tears this node down before `onDisconnected` runs, so only the
+          // client can still tell a drop from a scoped teardown.
+          recordLostProfilerRun(
+            state,
+            cdp.isConnected() ? "session_torn_down" : "cdp_disconnected"
+          );
           await cdp
             .send("Runtime.evaluate", {
               expression: STOP_FOR_TAKEOVER_SCRIPT,
@@ -292,7 +300,14 @@ function stopSamplerInNextRuntime(cdp: CDPClient): void {
   cdp.events.on("disconnected", disarm);
 }
 
-const profilerPathsCache = new Map<string, ProfilerSessionPaths>();
+// A run is stored under the id its session connected with: the connect id when
+// an alias exists at react-profiler-start, the `logicalDeviceId` when the app has
+// restarted and none does. Tools can later name the device by either id, with or
+// without an alias, so a lookup tries every id the device has now and takes the
+// newest run. react-profiler-analyze and react-profiler-cpu-summary pass their
+// `device_id` as given; the query tools canonicalize it first.
+const profilerPathsCache = new Map<string, { paths: ProfilerSessionPaths; order: number }>();
+let storedRuns = 0;
 
 function cacheKey(port: number, deviceId: string): string {
   return `${port}:${deviceId}`;
@@ -303,19 +318,30 @@ export function cacheProfilerPaths(
   paths: ProfilerSessionPaths,
   deviceId: string
 ): void {
-  profilerPathsCache.set(cacheKey(port, deviceId), paths);
-  lostRuns.delete(cacheKey(port, deviceId));
+  storedRuns += 1;
+  profilerPathsCache.set(cacheKey(port, deviceId), { paths, order: storedRuns });
 }
 
 export function getCachedProfilerPaths(
   port: number,
   deviceId: string
 ): ProfilerSessionPaths | undefined {
-  return profilerPathsCache.get(cacheKey(port, deviceId));
+  let newest: { paths: ProfilerSessionPaths; order: number } | undefined;
+
+  for (const id of deviceIdsOf(deviceId)) {
+    const stored = profilerPathsCache.get(cacheKey(port, id));
+    if (stored && (!newest || stored.order > newest.order)) {
+      newest = stored;
+    }
+  }
+
+  return newest?.paths;
 }
 
 export function clearCachedProfilerPaths(port: number, deviceId: string): void {
-  profilerPathsCache.delete(cacheKey(port, deviceId));
+  for (const id of deviceIdsOf(deviceId)) {
+    profilerPathsCache.delete(cacheKey(port, id));
+  }
 }
 
 /**
@@ -342,36 +368,52 @@ export interface LostProfilerRun {
  * Lets react-profiler-status and react-profiler-stop tell a lost run apart
  * from one that never started: the session node is gone by then, and so is
  * everything it knew. Per process, like the saved-paths cache above, so a
- * restarted tool-server knows neither. A save (`cacheProfilerPaths`) and a new
- * start clear the entry.
+ * restarted tool-server knows neither. A saved run and a new start clear the
+ * entry; a session loaded from disk does not, since it says nothing about the
+ * last run.
+ *
+ * Stored under every id of the device, because the alias between them is gone
+ * after a CDP drop or a teardown. `keys` lets either id clear them all.
  */
-const lostRuns = new Map<string, LostProfilerRun>();
+const lostRuns = new Map<string, { run: LostProfilerRun; keys: string[] }>();
+
+function findLostRun(port: number, deviceId: string) {
+  for (const id of deviceIdsOf(deviceId)) {
+    const entry = lostRuns.get(cacheKey(port, id));
+    if (entry) return entry;
+  }
+  return undefined;
+}
 
 /**
- * The first cause recorded for a run wins: a CDP drop also ends in a dispose,
- * and that dispose is not a second, different loss.
+ * The first cause recorded for a run wins: a teardown that follows the loss
+ * is not a second, different one.
  */
 export function recordLostProfilerRun(
   run: Pick<ReactProfilerSessionApi, "port" | "deviceId" | "sessionId" | "profileStartWallMs">,
   cause: LostProfilerRunCause,
   takenOverBy?: string | null
 ): void {
-  const key = cacheKey(run.port, run.deviceId);
-  const prior = lostRuns.get(key);
+  const prior = findLostRun(run.port, run.deviceId)?.run;
   if (prior && prior.sessionId !== null && prior.sessionId === run.sessionId) return;
-  lostRuns.set(key, {
-    cause,
-    sessionId: run.sessionId,
-    startedAtEpochMs: run.profileStartWallMs,
-    lostAtEpochMs: Date.now(),
-    ...(takenOverBy !== undefined ? { takenOverBy } : {}),
-  });
+  clearLostProfilerRun(run.port, run.deviceId);
+  const entry = {
+    run: {
+      cause,
+      sessionId: run.sessionId,
+      startedAtEpochMs: run.profileStartWallMs,
+      lostAtEpochMs: Date.now(),
+      ...(takenOverBy !== undefined ? { takenOverBy } : {}),
+    },
+    keys: deviceIdsOf(run.deviceId).map((id) => cacheKey(run.port, id)),
+  };
+  for (const key of entry.keys) lostRuns.set(key, entry);
 }
 
 export function getLostProfilerRun(port: number, deviceId: string): LostProfilerRun | undefined {
-  return lostRuns.get(cacheKey(port, deviceId));
+  return findLostRun(port, deviceId)?.run;
 }
 
 export function clearLostProfilerRun(port: number, deviceId: string): void {
-  lostRuns.delete(cacheKey(port, deviceId));
+  for (const key of findLostRun(port, deviceId)?.keys ?? []) lostRuns.delete(key);
 }
