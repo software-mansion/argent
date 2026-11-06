@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifyDevice,
   macosAppIdFromBundleId,
@@ -52,6 +52,14 @@ describe("Mac app device ids", () => {
 });
 
 describe("macosListenSocket", () => {
+  // A fixed HOME: which name fits sun_path depends on its length.
+  beforeEach(() => {
+    vi.stubEnv("HOME", "/Users/dev");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("gives a sandboxed app the CONTAINER marker and a plain app a socket under ~/.argent/macos", () => {
     const sandboxed = macosListenSocket("com.example.app", true);
     expect(sandboxed?.env).toBe("CONTAINER");
@@ -66,11 +74,13 @@ describe("macosListenSocket", () => {
   it("falls back to a hashed name, then to none, so the path fits sun_path", () => {
     const long = `com.${"a".repeat(80)}`;
     const hashed = macosListenSocket(long, false);
-    if (hashed) {
-      expect(hashed.path).toMatch(/\/\.argent\/macos\/[0-9a-f]{16}\.sock$/);
-      expect(Buffer.byteLength(hashed.path)).toBeLessThanOrEqual(103);
-    }
+    expect(hashed?.env).toBe(hashed?.path);
+    expect(hashed?.path).toMatch(/^\/Users\/dev\/\.argent\/macos\/[0-9a-f]{16}\.sock$/);
+    expect(Buffer.byteLength(hashed!.path)).toBeLessThanOrEqual(103);
     // A container path cannot be renamed, so a long one has no socket at all.
     expect(macosListenSocket(long, true)).toBeNull();
+    // Nor has any app under a home too long for the hashed name.
+    vi.stubEnv("HOME", `/Users/${"h".repeat(80)}`);
+    expect(macosListenSocket(long, false)).toBeNull();
   });
 });

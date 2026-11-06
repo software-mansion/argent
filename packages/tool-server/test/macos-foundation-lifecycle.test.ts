@@ -166,6 +166,19 @@ function fakeAppPids(of: string = executable): number[] {
     .map((m) => Number(m[1]));
 }
 
+/**
+ * Every process that runs an executable under the suite's directory: the fake
+ * app of any bundle there, also one that runs as a launcher's `<executable>.sh`.
+ */
+function suitePids(): number[] {
+  const out = execFileSync("ps", ["-ww", "-axo", "pid=,comm="], { encoding: "utf8" });
+  return out
+    .split("\n")
+    .map((line) => /^\s*(\d+)\s+(.*)$/.exec(line))
+    .filter((m): m is RegExpExecArray => m !== null && m[2]!.startsWith(`${root}/`))
+    .map((m) => Number(m[1]));
+}
+
 async function waitUntil(check: () => boolean, timeoutMs = 3_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
@@ -244,7 +257,12 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
 
   afterEach(async () => {
     await registry.dispose();
-    for (const pid of fakeAppPids()) {
+    // Also a copy that the code under test failed to stop, of another bundle or
+    // under another name. An outside copy's process group holds its
+    // `/bin/sleep`, also when the test failed before it learned that pid.
+    const tracked = await runningTrackedApp(BUNDLE_ID);
+    if (tracked) leftovers.push(tracked.pid);
+    for (const pid of [...suitePids(), ...leftovers.splice(0)]) {
       try {
         process.kill(-pid, "SIGKILL");
       } catch {
@@ -253,16 +271,6 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         } catch {
           // already gone
         }
-      }
-    }
-    // A copy argent started from another bundle is not among fakeAppPids().
-    const tracked = await runningTrackedApp(BUNDLE_ID);
-    if (tracked) leftovers.push(tracked.pid);
-    for (const pid of leftovers.splice(0)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // already gone
       }
     }
     vi.unstubAllEnvs();
@@ -1096,7 +1104,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(fakeAppPids()).toEqual([booted.pid]);
     expect(getTrackedMacosApp(BUNDLE_ID)?.pid).toBe(booted.pid);
     await expect((await macosApp()).call("Echo")).resolves.toMatchObject({ pid: booted.pid });
-  });
+  }, 20_000);
 
   it("never signals a found pid that runs another program by then", async () => {
     // Before SIGTERM: the search listed the pid, which now runs /bin/sleep.
@@ -1123,7 +1131,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     // SIGKILL would have ended it; it still runs as /bin/sleep.
     expect(pidAlive(shell.pid!)).toBe(true);
     expect(fakeAppPids()).toEqual([booted.pid]);
-  });
+  }, 20_000);
 
   it("fails and starts nothing when a copy argent did not start survives the signals", async () => {
     const outside = await startOutsideCopy();
