@@ -73,14 +73,19 @@ export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
 
       var startedAtEpochMs = Date.now();
       ri.__argent_startedAtEpochMs__ = startedAtEpochMs;
-      // Reset the commit-time fiber-name cache BEFORE flipping the
-      // isProfiling flag so the tracker only populates it with fibers seen
-      // during this session. Per-renderer bucket: clearing this ri's bucket
-      // does not affect other renderers' caches. Clearing here rather than in
-      // stopProfiling is load-bearing: STOP_AND_READ_SCRIPT calls
-      // ri.stopProfiling() itself before consulting the cache, so clearing on
-      // stop would wipe the cache out from under the reader on every session.
-      globalThis.__argent_fiberNames__.set(ri, Object.create(null));
+      // Give this session a fresh fiber-name cache BEFORE flipping the
+      // isProfiling flag. A start that skipped buildStartScript (a DevTools
+      // frontend recording again mid-session) keeps the current bucket, because
+      // no flush will name the mounted fibers again. Per-renderer bucket:
+      // replacing this ri's bucket does not affect other renderers' caches.
+      // Doing this here rather than in stopProfiling is load-bearing:
+      // STOP_AND_READ_SCRIPT calls ri.stopProfiling() itself before consulting
+      // the cache, so clearing on stop would wipe the cache out from under the
+      // reader on every session.
+      var names = globalThis.__argent_fiberNames__;
+      if (ri.__argent_flushedOperations__ || !names.get(ri)) {
+        names.set(ri, Object.create(null));
+      }
       ri.__argent_isProfiling__ = true;
       try {
         return origStart.apply(this, arguments);
@@ -101,7 +106,7 @@ export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
         // STOP_AND_READ_SCRIPT calls ri.stopProfiling() and then reads the
         // cache to resolve unmounted-fiber names. Clearing here would race
         // that read and break the fallback for every transient component.
-        // The cache is cleared at the top of the next startProfiling wrapper.
+        // The cache is replaced in the startProfiling wrapper of the next session.
       }
     };
   });
@@ -337,8 +342,17 @@ export function buildStartScript(ownerJson: string): string {
   var anyStarted = false;
   var firstError = null;
   var startedAtEpochMs = null;
+  var heldOperations = [];
   h.rendererInterfaces.forEach(function (ri) {
     sawAny = true;
+    // This flush emits the mounted tree as 'operations' events. A fiber mounted
+    // before the recording may never show its ID again, so the tracker in
+    // FIBER_ROOT_TRACKER_SCRIPT holds those events and they are named after
+    // this loop, once every renderer has started. Naming waits for that because
+    // commit timestamps count from these starts and CPU samples from the earlier
+    // Profiler.start: time spent before a start would shift one against the
+    // other. This script is synchronous, so no commit can land in between.
+    ri.__argent_flushedOperations__ = [];
     try { ri.flushInitialOperations(); } catch (_e) {}
     try {
       ri.startProfiling(true);
@@ -357,7 +371,15 @@ export function buildStartScript(ownerJson: string): string {
       // throwing, this is the only diagnostic the operator gets.
       if (firstError == null) firstError = String((err && err.message) || err);
     }
+    heldOperations.push(ri.__argent_flushedOperations__);
+    ri.__argent_flushedOperations__ = null;
   });
+
+  if (typeof h.__argent_nameFibers__ === 'function') {
+    heldOperations.forEach(function (flushed) {
+      flushed.forEach(h.__argent_nameFibers__);
+    });
+  }
 
   if (!sawAny) return JSON.stringify({ ok: false, reason: 'no-renderer-interface' });
   if (!anyStarted) {
@@ -412,12 +434,30 @@ export const STOP_FOR_TAKEOVER_SCRIPT = `
  * That cache is the only way to recover names for components that unmount
  * before `STOP_AND_READ_SCRIPT` runs (modals, popovers, navigation screens):
  * the DevTools backend drops unmounted fibers from `idToDevToolsInstanceMap`,
- * so the display-name accessor returns null at stop time. Reading names
- * immediately after React's `handleCommitFiberRoot` guarantees the fiber is
- * still present. Keying by `ri` keeps Fabric's and Paper's ID spaces apart.
+ * so the display-name accessor returns null at stop time, and the backend has
+ * no unmount callback to catch them with. Keying by `ri` keeps each renderer's
+ * entries apart.
  *
- * Prefers the accessor stashed by the setup wrapper, resolving one directly as
- * a fallback in case setup has not run yet.
+ * Names are collected from DevTools' `operations` event, which fires once per
+ * commit and carries only what changed, so the cost follows the size of the
+ * commit. `ri.getProfilingData()` must not be used here: it rebuilds every
+ * commit recorded so far, which made the recording slow itself down. A fiber
+ * that mounts during the recording is an ADD entry of the event, and one
+ * mounted at the start is an ADD entry of the flush in `buildStartScript`, so
+ * both are named while still mounted. Two narrow cases escape that: hidden
+ * Suspense content at a re-walk on DevTools 7.0.1, which gets durations but no
+ * ADD, and a fiber that mounts between a frontend's stop and record.
+ *
+ * The flush is also what makes the events fire: until the first one the backend
+ * holds them in a queue, waiting for a frontend to connect. It replays that
+ * queue, so the first recording of a long-lived app opens with a one-off pause
+ * that follows what mounted since launch. No commit can land during it.
+ *
+ * Every integer in the event is tried as a fiber ID rather than parsing the
+ * entries: their layout is not self-describing and has changed (ADD gained a
+ * field in DevTools 7). A non-ID costs one failed lookup, and any ID that does
+ * resolve gets its true name whatever its role in the array, so the only
+ * layout this relies on is the renderer ID at index 0.
  */
 export const FIBER_ROOT_TRACKER_SCRIPT = `
 (function() {
@@ -435,55 +475,41 @@ export const FIBER_ROOT_TRACKER_SCRIPT = `
   hook.onCommitFiberRoot = function __argent_fiberRootTracker(rendererID, root, priorityLevel) {
     hook.__argent_roots__.add(root);
     if (typeof orig === 'function') orig.call(this, rendererID, root, priorityLevel);
-
-    // Populate fiberID → displayName cache for every fiber that rendered in
-    // this commit. Must run AFTER orig.call() — the DevTools backend writes
-    // commitData synchronously inside handleCommitFiberRoot, so by the time
-    // control returns here getProfilingData() already reflects this commit.
-    try {
-      var ri = hook.rendererInterfaces && hook.rendererInterfaces.get(rendererID);
-      if (!ri || ri.__argent_isProfiling__ !== true) return;
-
-      var pd = ri.getProfilingData ? ri.getProfilingData() : null;
-      if (!pd || !pd.dataForRoots) return;
-
-      var getName = (typeof ri.__argent_getDisplayName__ === 'function')
-        ? ri.__argent_getDisplayName__
-        : (typeof ri.getDisplayNameForElementID === 'function')
-          ? ri.getDisplayNameForElementID.bind(ri)
-          : (typeof ri.getDisplayNameForFiberID === 'function')
-            ? ri.getDisplayNameForFiberID.bind(ri)
-            : null;
-      if (!getName) return;
-
-      var cacheRoot = globalThis.__argent_fiberNames__;
-      var bucket = cacheRoot.get(ri);
-      if (!bucket) {
-        bucket = Object.create(null);
-        cacheRoot.set(ri, bucket);
-      }
-      for (var r = 0; r < pd.dataForRoots.length; r++) {
-        var commitData = pd.dataForRoots[r].commitData;
-        if (!commitData || commitData.length === 0) continue;
-        var latest = commitData[commitData.length - 1];
-        var fa = latest.fiberActualDurations || [];
-        for (var k = 0; k < fa.length; k++) {
-          var entry = fa[k];
-          if (!entry) continue;
-          var fiberID = entry[0];
-          if (bucket[fiberID] !== undefined) continue;
-          try {
-            var name = getName(fiberID);
-            if (typeof name === 'string' && name.length > 0) {
-              bucket[fiberID] = name;
-            }
-          } catch (_e) {}
-        }
-      }
-    } catch (_e) {
-      // Swallow — a bug in the cache path must never disrupt React rendering.
-    }
   };
+
+  if (typeof hook.sub !== 'function') return;
+  hook.__argent_nameFibers__ = function __argent_fiberNameTracker(operations) {
+    // Runs inside DevTools' commit handler, so nothing may escape: a bug in
+    // the cache path must never disrupt React rendering.
+    try {
+      var ri = hook.rendererInterfaces && hook.rendererInterfaces.get(operations[0]);
+      if (!ri) return;
+
+      if (ri.__argent_flushedOperations__) {
+        ri.__argent_flushedOperations__.push(operations);
+        return;
+      }
+      if (ri.__argent_isProfiling__ !== true) return;
+
+      var bucket = globalThis.__argent_fiberNames__.get(ri);
+      if (!bucket) return;
+
+      var getName = ri.__argent_getDisplayName__;
+      if (typeof getName !== 'function') return;
+
+      for (var i = 1; i < operations.length; i++) {
+        var fiberID = operations[i];
+        if (bucket[fiberID] !== undefined) continue;
+        try {
+          var name = getName(fiberID);
+          if (typeof name === 'string' && name.length > 0) {
+            bucket[fiberID] = name;
+          }
+        } catch (_e) {}
+      }
+    } catch (_e) {}
+  };
+  hook.sub('operations', hook.__argent_nameFibers__);
 })();
 `;
 

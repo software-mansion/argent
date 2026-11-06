@@ -245,8 +245,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         // `react-profiler-stop` stops the renderers and the sampler before
         // disposing; a dispose from `stop-all-simulator-servers` arrives
         // mid-run instead, leaving the in-app DevTools backend recording every
-        // commit and argent's commit hook re-serializing its buffer on React's
-        // commit path, inside the user's app. `Registry._teardown` disposes
+        // commit and argent's name tracker running on React's commit path,
+        // inside the user's app. `Registry._teardown` disposes
         // dependents before their dependency, so the JsRuntimeDebugger is
         // still connected — the last moment anything can reach the app.
         if (state.profilingActive) {

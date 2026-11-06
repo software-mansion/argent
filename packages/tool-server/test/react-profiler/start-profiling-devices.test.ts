@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 import type { ReactProfilerSessionApi } from "../../src/blueprints/react-profiler-session";
-import { STOP_FOR_TAKEOVER_SCRIPT } from "../../src/utils/react-profiler/scripts";
+import {
+  FIBER_ROOT_TRACKER_SCRIPT,
+  STOP_FOR_TAKEOVER_SCRIPT,
+} from "../../src/utils/react-profiler/scripts";
 import {
   rememberLogicalKeyedDevice,
   resetDeviceAliases,
@@ -74,6 +77,25 @@ afterEach(() => {
   __resetProfilingDevicesForTesting();
   resetDeviceAliases();
   findRuntimeDeviceMock.mockReset();
+});
+
+describe("react-profiler-start installs the name tracker", () => {
+  it("before the start script, for a session created before the app had a hook", async () => {
+    // The session's own install does nothing without a hook, and a retried
+    // start reuses that session.
+    const { registry, evaluated } = fakeSession("emulator-5554");
+    const tool = createReactProfilerStartTool(registry);
+
+    await tool.execute(
+      {},
+      { device_id: "emulator-5554", port: 8081, sample_interval_us: 100, force: false }
+    );
+
+    const tracker = evaluated.indexOf(FIBER_ROOT_TRACKER_SCRIPT);
+    const startScript = evaluated.findIndex((script) => script.includes("__argent_doStart"));
+    expect(tracker).toBeGreaterThanOrEqual(0);
+    expect(tracker).toBeLessThan(startScript);
+  });
 });
 
 describe("react-profiler-start registers the run where the device's calls look", () => {
