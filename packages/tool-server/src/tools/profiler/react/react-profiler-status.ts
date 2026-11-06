@@ -42,7 +42,6 @@ type ReadStateResult =
       isRunning: boolean;
       owner: ProfilerSessionOwner | null;
       nowEpochMs: number;
-      rendererStartedAtEpochMs?: number[];
     };
 
 /**

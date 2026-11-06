@@ -265,9 +265,9 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
           state.profilingActive = false;
           const takeover = cdp.isConnected() ? await readTakeover(cdp, state) : undefined;
           if (takeover) {
-            // The app's recording is another session's. A recording with no
-            // owner record owns no sampler, so the one this run started would
-            // run on: see react-profiler-stop.
+            // The app's recording is another session's. With no session to
+            // name, nothing else ends the sampler this run started: see
+            // react-profiler-stop.
             recordLostProfilerRun(state, "taken_over", takeover.by);
             if (takeover.by === null) await cdp.send("Profiler.stop").catch(ignore);
           } else {

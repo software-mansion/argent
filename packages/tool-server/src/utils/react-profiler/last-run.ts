@@ -73,8 +73,8 @@ export function lostRunCauseText(
       );
     case "ended_in_app":
       return (
-        "it stopped recording in the app without a react-profiler-stop: a JS reload, or React " +
-        "profiling stopped outside argent, and then react-profiler-stop can still collect it"
+        "it stopped recording in the app without a react-profiler-stop, most likely from outside " +
+        "argent, and react-profiler-stop can still collect it"
       );
   }
 }

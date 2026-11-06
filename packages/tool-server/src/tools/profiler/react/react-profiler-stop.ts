@@ -273,10 +273,9 @@ Fails if no active profiling session exists, another stop is running, the CDP co
       const takeover = await readTakeover(cdp, api);
       if (takeover) {
         // This run is over: record why, and leave the app and the shared
-        // Hermes sampler to the session that owns them now. A recording with
-        // no owner record owns no sampler: a DevTools client outside argent
-        // never sends Hermes `Profiler.stop`, so the one this run started
-        // would run on.
+        // Hermes sampler to the session that owns them now. With no session to
+        // name, nothing else ends the sampler this run started: a DevTools
+        // client outside argent never sends Hermes `Profiler.stop`.
         recordLostProfilerRun(api, "taken_over", takeover.by);
         if (takeover.by === null) await cdp.send("Profiler.stop").catch(() => {});
         api.profilingActive = false;
