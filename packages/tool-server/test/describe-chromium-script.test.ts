@@ -222,15 +222,32 @@ function el(opts: Opts = {}): MockElement {
   // An open shadow root is a DocumentFragment exposing `.children`; the walker reads
   // `getShadowRoot.call(el)` then iterates `shadow.children`. null unless a fixture sets it.
   if (opts.shadow) {
+    // Like Chrome's, it hit-tests the host and its ancestors below its own tree's nodes.
+    const hostChain = () => {
+      const chain: unknown[] = [];
+      for (let n: unknown = node; n instanceof MockElement;) {
+        chain.push(n);
+        n = (n as Record<string, unknown>).__parentNode;
+      }
+      return chain;
+    };
+    let hitTests = 0;
     const shadowRoot = {
+      nodeType: 11,
+      host: node,
       children: opts.shadow,
-      elementsFromPoint: (x: number, y: number) => paintedAt(opts.shadow!, x, y),
+      elementsFromPoint: (x: number, y: number) => {
+        // A script hit-testing one point over and over would otherwise hang the suite.
+        if (++hitTests > 10_000) throw new Error("hit-tested a shadow root without end");
+        return [...paintedAt(opts.shadow!, x, y), ...hostChain()];
+      },
     };
-    const own = (n: Record<string, unknown>) => {
+    const own = (n: Record<string, unknown>, parent: unknown) => {
       n.__root = shadowRoot;
-      for (const k of (n.__children as Record<string, unknown>[]) ?? []) own(k);
+      if (n.__parentNode === undefined) n.__parentNode = parent;
+      for (const k of (n.__children as Record<string, unknown>[]) ?? []) own(k, n);
     };
-    for (const k of opts.shadow) own(k as unknown as Record<string, unknown>);
+    for (const k of opts.shadow) own(k as unknown as Record<string, unknown>, shadowRoot);
     node.shadowRoot = shadowRoot;
   } else {
     node.shadowRoot = null;
@@ -345,6 +362,7 @@ function run(
     },
   };
   g.document = {
+    nodeType: 9,
     documentElement: root,
     compatMode,
     // Resolve aria-labelledby targets by walking the mock tree's backing __children
@@ -412,6 +430,7 @@ function run(
     },
   };
   (body as Record<string, unknown>).ownerDocument = g.document;
+  root.parentNode = g.document;
   g.Node = MockNode;
   g.Element = MockElement;
   g.HTMLInputElement = MockHTMLInputElement;
@@ -3382,5 +3401,175 @@ describe("DESCRIBE_DOM_SCRIPT wheel anchors", () => {
         y: { x: 0.03, y: 0.01 },
       });
     }
+  });
+
+  it("follows a wheel's path through slots and out of shadow roots to the cutter", () => {
+    const area = { x: 0, y: 0, w: 300, h: 100 };
+    const list = (kids: MockElement[], opts: Opts = {}) =>
+      el({
+        rect: area,
+        client: { left: 0, top: 0, width: 300, height: 100 },
+        offset: { width: 300, height: 100 },
+        scrollSize: { width: 300, height: 400 },
+        style: { overflow: "auto" },
+        children: kids,
+        ...opts,
+      });
+    const tall = { x: 0, y: -20, w: 300, h: 200 };
+    const anchorOf = (kids: MockElement[]) => findById(run(kids).tree, "cut")!.clipAnchors;
+    const top = { y: { x: 0.03, y: 0.01 } };
+    // A light child slotted into a shadow tree's scroller, painted over all of it.
+    const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
+    const slotted = el({ attrs: { id: "cut" }, rect: tall, painted: area });
+    (slotted as Record<string, unknown>).assignedSlot = slot;
+    const withSlot = el({
+      tag: "x-feed",
+      rect: area,
+      painted: area,
+      children: [slotted],
+      shadow: [list([slot])],
+    });
+    expect(anchorOf([withSlot])).toEqual(top);
+    // Shadow content of a row that a light scroller cuts.
+    const row = el({
+      tag: "x-row",
+      attrs: { id: "cut" },
+      rect: tall,
+      painted: area,
+      shadow: [el({ rect: tall, painted: area })],
+    });
+    expect(anchorOf([list([row], { painted: area })])).toEqual(top);
+    // A host whose shadow tree paints nothing at the point: the host takes the wheel.
+    const badge = el({
+      tag: "x-badge",
+      rect: { x: 0, y: 0, w: 300, h: 50 },
+      painted: { x: 0, y: 0, w: 300, h: 50 },
+      shadow: [el({ rect: { x: 0, y: 0, w: 10, h: 10 }, painted: { x: 0, y: 0, w: 10, h: 10 } })],
+    });
+    const cut = el({
+      attrs: { id: "cut" },
+      rect: { x: 0, y: 60, w: 300, h: 80 },
+      painted: { x: 0, y: 60, w: 300, h: 40 },
+    });
+    expect(anchorOf([list([badge, cut], { painted: area })])).toEqual(top);
+  });
+
+  it("anchors a horizontal cut through a cross-axis scroller unless its overscroll-behavior-x keeps the wheel", () => {
+    // A vertical list over the left of a horizontal strip that cuts the card.
+    const anchorFor = (overscroll: Record<string, string>) =>
+      findById(
+        run([
+          el({
+            rect: { x: 0, y: 0, w: 200, h: 300 },
+            client: { left: 0, top: 0, width: 200, height: 300 },
+            offset: { width: 200, height: 300 },
+            scrollSize: { width: 600, height: 300 },
+            style: { overflow: "auto" },
+            painted: { x: 0, y: 0, w: 200, h: 300 },
+            children: [
+              el({
+                rect: { x: 0, y: 0, w: 180, h: 300 },
+                client: { left: 0, top: 0, width: 180, height: 300 },
+                offset: { width: 180, height: 300 },
+                scrollSize: { width: 180, height: 900 },
+                style: { overflow: "auto", ...overscroll },
+                painted: { x: 0, y: 0, w: 180, h: 300 },
+              }),
+              el({
+                attrs: { id: "cut" },
+                rect: { x: 180, y: 0, w: 60, h: 300 },
+                painted: { x: 180, y: 0, w: 20, h: 300 },
+              }),
+            ],
+          }),
+        ]).tree,
+        "cut"
+      )!.clipAnchors;
+    expect(anchorFor({ overscrollBehaviorY: "contain" })).toEqual({ x: { x: 0.02, y: 0.03 } });
+    expect(anchorFor({ overscrollBehaviorX: "contain" })).toEqual({ x: { x: 0.18, y: 0.03 } });
+  });
+});
+
+describe("DESCRIBE_DOM_SCRIPT clips across shadow trees and ignored overflow", () => {
+  it.each([
+    { edge: "left", list: { x: 0.5, y: 1, w: 285.5, h: 98 } },
+    { edge: "top", list: { x: 1, y: 0.5, w: 285, h: 98.5 } },
+    { edge: "right", list: { x: 1, y: 1, w: 285.5, h: 98 } },
+    { edge: "bottom", list: { x: 1, y: 1, w: 285, h: 98.5 } },
+  ])(
+    "keeps clipping a closed host's child the page hit-tests within a pixel past the $edge clip edge of a scroller outside its shadow tree",
+    ({ list }) => {
+      const { tree } = run([
+        scroller([
+          el({
+            tag: "x-app",
+            rect: { x: 1, y: 1, w: 285, h: 98 },
+            shadow: [
+              el({
+                tag: "x-list",
+                rect: list,
+                children: [
+                  el({
+                    rect: list,
+                    painted: list,
+                    children: [row("hidden", { x: 1, y: 200, w: 285, h: 40 })],
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ]),
+      ]);
+      expect(pxFrame(tree, "hidden").h).toBe(0);
+    }
+  );
+
+  it("measures a closed host's child against clippers' borders only where their overflow applies", () => {
+    // An inline span with overflow: hidden, which Chromium ignores, fills the padding box
+    // of a 12px-bordered clipper; the row is hit-tested across the clipper's top border.
+    const { tree } = run([
+      el({
+        rect: { x: 100, y: 100, w: 324, h: 124 },
+        client: { left: 12, top: 12, width: 300, height: 100 },
+        style: { contain: "paint" },
+        children: [
+          el({
+            tag: "span",
+            rect: { x: 112, y: 112, w: 300, h: 100 },
+            style: { display: "inline", overflow: "hidden" },
+            children: [
+              el({
+                tag: "app-row",
+                rect: ZERO,
+                style: { display: "contents" },
+                children: [
+                  el({
+                    attrs: { id: "row" },
+                    rect: { x: 120, y: 97, w: 40, h: 65 },
+                    painted: { x: 120, y: 100, w: 40, h: 62 },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ]);
+    expect(pxFrame(tree, "row")).toEqual({ x: 120, y: 112, w: 40, h: 50 });
+  });
+
+  it("gives a scrollable body, whose overflow scrolls the viewport, no clipFrame", () => {
+    const body = el({
+      tag: "body",
+      attrs: { id: "page" },
+      rect: { x: 0, y: 0, w: W, h: H },
+      client: { left: 0, top: 0, width: W, height: H },
+      offset: { width: W, height: H },
+      scrollSize: { width: W, height: 3 * H },
+      style: { overflow: "auto" },
+    });
+    const page = findById(run([row("a", BOX)], body).tree, "page")!;
+    expect(page.scrollable).toBe(true);
+    expect(page.clipFrame).toBeUndefined();
   });
 });
