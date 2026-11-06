@@ -270,13 +270,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return s.replace(WHITESPACE, " ");
   }
 
-  // Whether a node has an element or non-blank text child.
+  // Whether a node has an element, text or CDATA child.
   function hasContent(node) {
     for (const child of getChildNodes.call(node)) {
       const type = getNodeType.call(child);
-      if (type === 1 || ((type === 3 || type === 4) && getNodeValue.call(child).trim())) {
-        return true;
-      }
+      if (type === 1 || type === 3 || type === 4) return true;
     }
     return false;
   }

@@ -927,6 +927,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(pick([unknown([])])).toBe("Pick end");
     expect(pick([text(" ")])).toBe("Pick end");
     expect(pick([])).toBe("Pickend");
+    expect(pick([{ nodeType: 8, nodeValue: "c" }])).toBe("Pickend");
     expect(pick([svg("metadata", [text("md")], "SVGMetadataElement")])).toBe("Pick end");
     expect(pick([svg("script", [text("var a")], "SVGScriptElement")])).toBe("Pick end");
     expect(pick([svg("style", [text(".a{}")], "SVGStyleElement"), svg("text", [text("T")])])).toBe(
