@@ -19,6 +19,25 @@ const POLL_INTERVAL_MS = 10_000;
 /** Ceiling, in ticks, on the polls skipped while `simctl` keeps timing out (5 min). */
 const MAX_BACKOFF_TICKS = 29;
 
+/**
+ * Cap on {@link firstSimulatorPoll}, from startup, so a tool call never waits on
+ * the watcher for longer.
+ */
+const FIRST_POLL_WAIT_MS = 15_000;
+
+let firstPollSettled: Promise<void> = Promise.resolve();
+
+/**
+ * Settles once a poll has read the booted simulators and attempted injection for
+ * each, once a tick finds Xcode's component install pending (no poll runs and
+ * `simctl` launches nothing), or {@link FIRST_POLL_WAIT_MS} after startup. A tool
+ * that can launch an app without arming injection itself waits on this, so the
+ * app is not started uninjected. Settled when no watcher runs.
+ */
+export function firstSimulatorPoll(): Promise<void> {
+  return firstPollSettled;
+}
+
 async function getBootedUdidsInSet(
   deviceSet: DeviceSetPath,
   signal: AbortSignal
@@ -100,6 +119,12 @@ export function startSimulatorWatcher(registry: Registry): {
    */
   let consecutiveTimeouts = 0;
   let ticksToSkip = 0;
+  let markArmed!: () => void;
+  const armed = new Promise<void>((resolve) => (markArmed = resolve));
+  firstPollSettled = Promise.race([
+    armed,
+    new Promise<void>((resolve) => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
+  ]);
   /** Whether the current wait for Xcode's component install has been logged. */
   let firstLaunchReported = false;
 
@@ -116,6 +141,7 @@ export function startSimulatorWatcher(registry: Registry): {
     }
     consecutiveTimeouts = 0;
     ticksToSkip = 0;
+    markArmed();
     if (!firstLaunchReported) {
       firstLaunchReported = true;
       process.stderr.write(
@@ -269,8 +295,9 @@ export function startSimulatorWatcher(registry: Registry): {
       }
     }
 
-    if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
-    else pendingAttempts.forEach((p) => p.catch(() => {}));
+    // Neither attempt kind rejects: initUdid and the ensureEnvReady retry catch.
+    const attempted = Promise.all(pendingAttempts).then(markArmed);
+    if (shouldBlockUntilSettled) await attempted;
 
     /**
      * Shut down, so there is no environment left to hand anywhere, launchd took
@@ -284,10 +311,9 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // Awaited: the server does not bind until ensureEnv has been attempted for
-  // every booted simulator, so launch-app cannot race it. While Xcode's install
-  // is pending nothing is attempted, and this resolves at once.
-  // The simctl call is bounded, so this resolves even when simctl hangs.
+  // Settles once ensureEnv has been attempted for every simulator booted at
+  // start, once the bounded simctl call fails, or at once while Xcode's install
+  // is pending, when nothing is attempted.
   const ready = simctlWouldStartInstall() ? Promise.resolve() : poll(true);
 
   // A tick that lands while the previous poll is still running, or inside the

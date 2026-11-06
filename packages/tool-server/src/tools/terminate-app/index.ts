@@ -5,7 +5,11 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
-import { remoteSimctl } from "../../utils/simctl-backend";
+import {
+  remoteSimctl,
+  SIMCTL_NOTHING_TO_TERMINATE,
+  tolerateNothingToTerminate,
+} from "../../utils/simctl-backend";
 import { adbShell, shellQuote } from "../../utils/adb";
 import { vegaDevice } from "../../utils/vega-cli";
 
@@ -23,18 +27,8 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-// simctl answers the same for an app that is not running and one that is not
-// installed; both resolve to false (nothing was stopped).
-async function tolerateNotRunning(terminate: Promise<unknown>): Promise<boolean> {
-  try {
-    await terminate;
-    return true;
-  } catch (err) {
-    const e = err as { stderr?: string; message?: string };
-    if (/found nothing to terminate/i.test(`${e.stderr ?? ""} ${e.message ?? ""}`)) return false;
-    throw err;
-  }
-}
+// The vega CLI's error for an app that is not installed.
+const VEGA_NOT_INSTALLED = /App could not be determined/i;
 
 const zodSchema = z.object({
   udid: z.string().min(1).describe("Target device id from `list-devices`."),
@@ -71,14 +65,20 @@ Succeeds when the app is not running or not installed.`,
       handler: async (_services, { udid, bundleId }) => {
         // Built outside the tolerance so a provider's entitlement denial still throws.
         const args = await simctlArgsForUdid(udid, ["terminate", udid, bundleId]);
-        const terminated = await tolerateNotRunning(execFileAsync("xcrun", args));
+        const terminated = await tolerateNothingToTerminate(
+          execFileAsync("xcrun", args),
+          SIMCTL_NOTHING_TO_TERMINATE
+        );
         return { terminated, bundleId };
       },
     },
     iosRemote: {
       requires: ["sim-remote"],
       handler: async (_services, { udid, bundleId }) => {
-        const terminated = await tolerateNotRunning(remoteSimctl.terminate(udid, bundleId));
+        const terminated = await tolerateNothingToTerminate(
+          remoteSimctl.terminate(udid, bundleId),
+          SIMCTL_NOTHING_TO_TERMINATE
+        );
         return { terminated, bundleId };
       },
     },
@@ -93,7 +93,12 @@ Succeeds when the app is not running or not installed.`,
     vega: {
       requires: ["vega"],
       handler: async (_services, { udid, bundleId }) => {
-        await vegaDevice(udid, ["terminate-app", "-a", bundleId], { timeoutMs: 40_000 });
+        // Always true, as on Android: the CLI exits 0 for a running or stopped app and
+        // errors on one that is not installed.
+        await tolerateNothingToTerminate(
+          vegaDevice(udid, ["terminate-app", "-a", bundleId], { timeoutMs: 40_000 }),
+          VEGA_NOT_INSTALLED
+        );
         return { terminated: true, bundleId };
       },
     },
