@@ -890,8 +890,10 @@ async function scrollToVisible(
     // it is accepted where it is, after one more increment at the centre of the
     // `within` container, else of the window that cuts it. A cut that one leaves in
     // place too is accepted, so the page takes at most two wheels. So is a cut whose
-    // target lies under that centre when its anchor is spent: a wheel there could
-    // scroll the target's own content instead of its window.
+    // target lies under that centre on the round its anchor is spent: a wheel there
+    // could scroll the target's own content instead of its window. Later increments
+    // go there regardless, so a scrollable target the retry carries under it can
+    // still take one.
     const room = frame && axisCut ? leadingRoom(frame, axisCut, axisDirection) : undefined;
     const shown = room === undefined ? undefined : (vertical ? region.height : region.width) - room;
     let spentNow = false;
