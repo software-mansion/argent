@@ -3069,6 +3069,53 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     });
   });
 
+  it("scales a fieldset's legend margins along the axis each one lies on", () => {
+    // Rendered 3x wide and 1x tall: a 100x240 layout box drawn 300x240.
+    const clipped = (writingMode: string, rect: Rect) =>
+      pxFrame(
+        run([
+          el({
+            tag: "fieldset",
+            rect: { x: 0, y: 0, w: 300, h: 240 },
+            client: { left: 0, top: 0, width: 100, height: 240 },
+            offset: { width: 100, height: 240 },
+            style: { overflow: "hidden", writingMode },
+            children: [
+              el({
+                tag: "legend",
+                rect,
+                style: { marginBottom: "10px", marginLeft: "5px", marginRight: "7px" },
+              }),
+              row("under", { x: 5, y: 5, w: 290, h: 230 }),
+            ],
+          }),
+        ]).tree,
+        "under"
+      );
+    expect(clipped("horizontal-tb", { x: 0, y: 0, w: 300, h: 40 })).toEqual({
+      x: 5,
+      y: 50,
+      w: 290,
+      h: 185,
+    });
+    for (const wm of ["vertical-rl", "sideways-rl"]) {
+      expect(clipped(wm, { x: 240, y: 0, w: 60, h: 240 }), wm).toEqual({
+        x: 5,
+        y: 5,
+        w: 220,
+        h: 230,
+      });
+    }
+    for (const wm of ["vertical-lr", "sideways-lr"]) {
+      expect(clipped(wm, { x: 0, y: 0, w: 60, h: 240 }), wm).toEqual({
+        x: 81,
+        y: 5,
+        w: 214,
+        h: 230,
+      });
+    }
+  });
+
   it("takes as a fieldset's rendered legend only a <legend> that generates a box", () => {
     const fieldset = (children: MockElement[]) =>
       run([
