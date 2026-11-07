@@ -189,6 +189,8 @@ The in-app agent stays in the current process of the app until this process ends
 
 On iOS, `native-network-logs` reads the `URLSession` requests of an app on an iOS simulator. The first call for an app starts the capture with `Network.enable`. The call waits until the app acknowledges `Network.enable`, for at most 5 seconds. Thus the first call for a connected app usually returns `armed: true`. Argent does not capture the requests from before this call.
 
+On a simulator where Argent uses the socket of a device provider, the provider controls the capture. Argent does not send `Network.enable` there, because `Network.enable` resets the network settings of the provider, for example its throttling. Instead, each call asks the agent if the capture is on. `armed` is `true` when the capture of the provider is on.
+
 To capture a request:
 
 1. Call `native-network-logs` with the UDID of the simulator and the bundle ID of the app.
@@ -209,6 +211,7 @@ The result contains `header`, `armed`, `count`, `total` and `requests`. `count` 
 - Argent waits for the app to acknowledge `Network.enable`.
 - The app did not acknowledge `Network.enable` within 5 seconds. The next call asks the app again.
 - `Network.enable` failed. The `header` line gives the error. The next call asks the app again.
+- On a simulator of a device provider, the provider has the capture off. Turn the capture on in the provider.
 - The app is not connected. Argent arms the next process of the app when the process connects.
 
 If the capture started while the app was already running, the `header` line of the first result says that Argent did not record the launch of the app. To capture the launch, call `restart-app`, then call `native-network-logs` again. On a simulator where Argent uses the socket of a device provider, the `header` line says instead that a relaunch ends the capture there. It tells you not to restart the app.

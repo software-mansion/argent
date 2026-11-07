@@ -45,7 +45,9 @@ type LentAgent = {
   socketPath: string;
 };
 
-async function startLentAgent(options: { deferHandshake?: boolean } = {}): Promise<LentAgent> {
+async function startLentAgent(
+  options: { deferHandshake?: boolean; captureOn?: boolean } = {}
+): Promise<LentAgent> {
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
@@ -61,10 +63,17 @@ async function startLentAgent(options: { deferHandshake?: boolean } = {}): Promi
       const message = JSON.parse(raw);
       received.push(message);
 
-      /** Answer CDP requests and `ViewInspector` RPCs the way the agent in the app would. */
+      /**
+       * Answer CDP requests and `ViewInspector` RPCs the way the agent in the
+       * app would. Its provider keeps capture on unless `captureOn` is false.
+       */
       if (message.type === "CDP") {
+        const result =
+          message.payload.method === "NativeDevtoolsIos.getConditions"
+            ? { enabled: options.captureOn ?? true, offline: false, latency: 2000 }
+            : {};
         socket.write(
-          JSON.stringify({ payload: { id: message.payload.id, result: {} }, type: "CDP" }) + "\n"
+          JSON.stringify({ payload: { id: message.payload.id, result }, type: "CDP" }) + "\n"
         );
       }
       if (message.type === "ViewInspector") {
@@ -300,10 +309,11 @@ describe("a provider that lends its native-devtools agent", () => {
   });
 
   /**
-   * The stand-in agent answers any CDP request, so only the methods it
-   * received show that capture was really asked for over the lent connection.
+   * The provider owns the agent's network config, and Network.enable replaces
+   * all of it, the provider's throttling with it. So argent only reads whether
+   * capture is on, and the methods the agent received show that it did.
    */
-  it("arms capture by sending Network.enable over the lent connection", async () => {
+  it("reads whether capture is on over the lent connection and never sends Network.enable", async () => {
     const agent = await startLentAgent();
     publishDescriptor({ socketPath: agent.socketPath });
 
@@ -318,18 +328,50 @@ describe("a provider that lends its native-devtools agent", () => {
       agent.received
         .filter((message) => message.type === "CDP")
         .map((message) => message.payload.method);
+    const call = () =>
+      nativeNetworkLogsTool.execute(
+        { nativeDevtools: instance.api },
+        { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+      ) as Promise<{ armed: boolean; header: string; status: string }>;
 
-    expect(cdpMethods()).not.toContain("Network.enable");
+    const listing = await call();
+    await call();
+
+    expect(listing.status).toBe("ok");
+    expect(listing.armed).toBe(true);
+    expect(listing.header).toMatch(/^ios-native: armed, 0 requests/);
+    // Read again on the second call: the provider can turn capture off at any time.
+    expect(cdpMethods()).toEqual([
+      "NativeDevtoolsIos.getConditions",
+      "NativeDevtoolsIos.getConditions",
+    ]);
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  it("says the provider has capture off rather than turning it on", async () => {
+    const agent = await startLentAgent({ captureOn: false });
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
     const listing = (await nativeNetworkLogsTool.execute(
       { nativeDevtools: instance.api },
       { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
-    )) as { armed: boolean; header: string; status: string };
+    )) as { armed: boolean; header: string };
 
-    expect(cdpMethods()).toContain("Network.enable");
-    expect(listing.status).toBe("ok");
-    expect(listing.armed).toBe(true);
-    expect(listing.header).toMatch(/^ios-native: armed, 0 requests/);
+    expect(listing.armed).toBe(false);
+    expect(listing.header).toMatch(
+      /^ios-native: not armed, 0 requests \(the device provider has capture off for the app; argent does not turn it on/
+    );
+    expect(agent.received.map((message) => message.payload.method)).not.toContain("Network.enable");
 
     await instance.dispose();
     await agent.close();

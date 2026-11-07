@@ -441,6 +441,9 @@ const NETWORK_ENABLE_TIMEOUT_MS = 5_000;
 /** How long a launch waits for its new process to be armed before it says it is not yet. */
 const LAUNCH_ARM_WAIT_MS = 5_000;
 const WAITING_FOR_ENABLE = "waiting for the agent to acknowledge Network.enable";
+const WAITING_FOR_CAPTURE_STATE = "waiting for the agent to say whether capture is on";
+const PROVIDER_CAPTURE_OFF =
+  "the device provider has capture off for the app; argent does not turn it on, because that resets the provider's network settings: turn capture on in the provider";
 
 type ViewInspectorMethod =
   | "ViewHierarchy.getFullHierarchy"
@@ -506,7 +509,8 @@ export interface NativeDevtoolsApi {
    * Turns native network capture on for an app. Sticky at once: every later
    * connection of the app is armed at its handshake. Resolves true once the
    * app's live connection acknowledges Network.enable, false when there is no
-   * connection or no acknowledgement within 5 s. Never rejects.
+   * connection or no acknowledgement within 5 s. Never rejects. In attach mode
+   * nothing is sent that changes the agent: true means the provider has capture on.
    */
   activateNetworkInspection(bundleId: string): Promise<boolean>;
   /**
@@ -860,31 +864,43 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
      * the events after it. A connection that does not answer in time stays open
      * and unarmed, because the view tools share it and the app does not dial
      * again; the next call asks again.
+     *
+     * A lent agent's capture is its provider's: Network.enable would replace
+     * the agent's whole network config, the provider's throttling with it. So
+     * attach mode only reads whether capture is on, on every call, because the
+     * provider can turn it off at any time.
      */
     const enableOn = (conn: AppConnection): Promise<boolean> => {
-      if (conn.armed) return Promise.resolve(true);
+      if (conn.armed && !lentSocketPath) return Promise.resolve(true);
       if (conn.enabling) return conn.enabling;
       delete conn.enableFailure;
       const enabling = conn.cdp
         .request(
-          "Network.enable",
+          lentSocketPath ? "NativeDevtoolsIos.getConditions" : "Network.enable",
           {},
           {
             timeoutMs: NETWORK_ENABLE_TIMEOUT_MS,
-            onResult: () => {
-              conn.armed = true;
+            onResult: (result) => {
+              conn.armed =
+                !lentSocketPath || (result as { enabled?: unknown } | null)?.enabled === true;
+              if (!conn.armed) conn.enableFailure = PROVIDER_CAPTURE_OFF;
               wakeConnectionWaiters();
             },
           }
         )
         .then(
-          () => true,
+          () => conn.armed,
           (err: unknown) => {
             if (conn.socket.destroyed || disposed) return false;
-            conn.enableFailure =
-              getFailureSignal(err)?.error_kind === "timeout"
+            const timedOut = getFailureSignal(err)?.error_kind === "timeout";
+            const detail = err instanceof Error ? err.message : String(err);
+            conn.enableFailure = lentSocketPath
+              ? timedOut
+                ? `the agent did not say within ${NETWORK_ENABLE_TIMEOUT_MS / 1000} s whether capture is on; the next call asks again`
+                : `the agent did not say whether capture is on (${detail}); the next call asks again`
+              : timedOut
                 ? `the agent did not acknowledge Network.enable within ${NETWORK_ENABLE_TIMEOUT_MS / 1000} s; the next call asks again`
-                : `the agent did not enable capture (${err instanceof Error ? err.message : String(err)}); the next call asks again`;
+                : `the agent did not enable capture (${detail}); the next call asks again`;
             process.stderr.write(`[native-devtools ${udid.slice(0, 8)}] ${conn.enableFailure}\n`);
             return false;
           }
@@ -912,7 +928,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         ...(conn.armed
           ? {}
           : conn.enabling
-            ? { note: WAITING_FOR_ENABLE }
+            ? { note: lentSocketPath ? WAITING_FOR_CAPTURE_STATE : WAITING_FOR_ENABLE }
             : conn.enableFailure
               ? { note: conn.enableFailure }
               : {}),
