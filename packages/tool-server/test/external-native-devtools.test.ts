@@ -270,7 +270,9 @@ describe("a provider that lends its native-devtools agent", () => {
       )
       .catch((e: Error) => e);
     expect((err as Error).message).toMatch(/not connected/);
-    expect((err as Error).message).toMatch(/describe or screenshot/);
+    expect((err as Error).message).toMatch(/no native network log is being captured for it/);
+    expect((err as Error).message).toMatch(/view-network-logs/);
+    expect((err as Error).message).not.toMatch(/describe or screenshot/);
     expect((err as Error).message).not.toMatch(/call again in a few seconds/);
 
     await instance.dispose();
