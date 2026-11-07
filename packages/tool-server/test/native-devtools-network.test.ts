@@ -391,6 +391,27 @@ describe("native-devtools network capture", () => {
     );
   });
 
+  it("fails open requests as ended when another process of the app runs after its connection closed", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    await api.activateNetworkInspection(BUNDLE);
+    const app = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
+    for (const frame of requestEvents("open", "https://example.com/slow")) app.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(1));
+
+    // A relaunch whose new process has not connected yet: only the pids tell it apart.
+    appRunsAs(4712);
+    app.close();
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)!.records(8081)[0]).toMatchObject({
+        state: "failed",
+        errorText: "the app process ended before the request finished",
+      })
+    );
+    expect(api.isConnected(BUNDLE)).toBe(false);
+  });
+
   it("drops the app's captures and records from the lookups on dispose", async () => {
     const api = await startService();
     await api.activateNetworkInspection(BUNDLE);
