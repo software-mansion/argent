@@ -77,9 +77,10 @@ function makeNativeApi(options: {
         await reverifyEnv();
         return options.state ?? (options.appRunning ? "stale_process" : "not_running");
       },
-      activateNetworkInspection: () => {},
-      getNetworkLog: () => [],
-      clearNetworkLog: () => {},
+      activateNetworkInspection: async () => false,
+      takeCaptureGap: () => false,
+      networkRecords: () => undefined,
+      networkCaptureAfterLaunch: async () => undefined,
       getAppState: async () => {
         throw new Error("not implemented");
       },

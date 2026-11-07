@@ -68,7 +68,7 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     id: "restart-app",
     description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>or Vega.
 Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).
-Returns { restarted, bundleId, networkCapture? }. networkCapture (Android) says whether native network capture followed the launch. Fails if the app is not installed.`,
+Returns { restarted, bundleId, networkCapture? }. networkCapture (Android, local iOS simulators) says whether native network capture followed the launch. Fails if the app is not installed.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

@@ -58,7 +58,9 @@ const IOS_UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const TVOS_UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 
 function makeRegistry() {
-  const resolveService = vi.fn(async () => ({}) as unknown);
+  const resolveService = vi.fn(
+    async () => ({ networkCaptureAfterLaunch: async () => undefined }) as unknown
+  );
   return { registry: { resolveService } as any, resolveService };
 }
 

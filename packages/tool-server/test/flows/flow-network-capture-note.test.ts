@@ -51,10 +51,10 @@ async function writeFlow(name: string, yaml: Parameters<typeof serializeFlow>[0]
   await fs.writeFile(path.join(dir, `${name}.yaml`), serializeFlow(yaml), "utf8");
 }
 
-async function run(name: string, registry: Registry): Promise<FlowRunResult> {
+async function run(name: string, registry: Registry, device = SERIAL): Promise<FlowRunResult> {
   const result = await createRunFlowTool(registry).execute(
     {},
-    { name, project_root: tmpDir, device: SERIAL },
+    { name, project_root: tmpDir, device },
     { signal: new AbortController().signal } as never
   );
   if (!("steps" in result)) throw new Error(`expected a run result, got: ${result.notice}`);
@@ -222,5 +222,108 @@ describe("flow-execute reports native network capture on Android launches", () =
     const result = await run("other-app", androidRegistry("com.example.other"));
 
     expect(outline(result)).toEqual(["launch:pass"]);
+  });
+});
+
+const IOS_UDID = "00000000-0000-0000-0000-0000000000cd";
+
+/**
+ * restart-app and launch-app answer like the iOS simulator tools do while
+ * native network capture is on for APP, the pid changing with each launch;
+ * the native devtools the iOS launch gate waits for are connected. Launch `n`
+ * returns `notes[n]` when given, otherwise the note of an armed capture.
+ */
+function iosRegistry(notes?: string[]): { registry: Registry; launches: () => number } {
+  let launches = 0;
+  const note = () => {
+    const n = launches++;
+    return (
+      notes?.[n] ??
+      `native network capture is armed for ${APP} (pid ${4101 + 87 * n}); stop-all-simulator-servers for this device, then restart-app, ends it`
+    );
+  };
+  const registry = {
+    invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
+      if (id === "list-devices") return { devices: [] };
+      if (id === "restart-app") {
+        return { restarted: true, bundleId: args.bundleId, networkCapture: note() };
+      }
+      if (id === "launch-app") {
+        return { launched: true, bundleId: args.bundleId, networkCapture: note() };
+      }
+      return { ok: true };
+    }),
+    getTool: vi.fn(() => ({ inputSchema: { properties: { udid: {} } } })),
+    resolveService: vi.fn(async () => ({
+      isConnected: () => true,
+      listConnectedBundleIds: () => [APP],
+    })),
+  } as unknown as Registry;
+  return { registry, launches: () => launches };
+}
+
+describe("flow-execute reports native network capture on iOS simulator launches", () => {
+  it("warns on the first launch of a captured app, once per run", async () => {
+    await writeFlow("ios-relaunch", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "launch", app: APP },
+        { kind: "launch", app: APP },
+        { kind: "tool", name: "restart-app", args: { bundleId: APP } },
+      ],
+    });
+    const { registry, launches } = iosRegistry();
+
+    const result = await run("ios-relaunch", registry, IOS_UDID);
+
+    expect(launches()).toBe(3);
+    expect(outline(result)).toEqual(["launch:pass!", "launch:pass", "tool:pass"]);
+    expect(result.steps[0]!.warning).toBe(
+      `native network capture is armed for ${APP} (pid 4101); stop-all-simulator-servers for this device, then restart-app, ends it`
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("warns on a tool: restart-app step when it is the first launch of a captured app", async () => {
+    await writeFlow("ios-tool-restart", {
+      executionPrerequisite: "",
+      steps: [
+        { kind: "tool", name: "restart-app", args: { bundleId: APP } },
+        { kind: "launch", app: APP },
+      ],
+    });
+    const { registry } = iosRegistry();
+
+    const result = await run("ios-tool-restart", registry, IOS_UDID);
+
+    expect(outline(result)).toEqual(["tool:pass!", "launch:pass"]);
+    expect(result.steps[0]!.warning).toContain(`native network capture is armed for ${APP}`);
+    expect(result.steps[0]!.result).toMatchObject({
+      networkCapture: result.steps[0]!.warning,
+    });
+  });
+
+  it("warns again when a later launch's note differs, and not when only the pid changes", async () => {
+    const pending = (pid: number) =>
+      `native network capture is on for ${APP}, and its new process (pid ${pid}) has not acknowledged Network.enable yet; native-network-logs shows when it is armed`;
+    const armed = (pid: number) =>
+      `native network capture is armed for ${APP} (pid ${pid}); stop-all-simulator-servers for this device, then restart-app, ends it`;
+    const notes = [pending(4101), armed(4188), armed(4275), pending(4362)];
+    await writeFlow("ios-notes-change", {
+      executionPrerequisite: "",
+      steps: notes.map(() => ({ kind: "launch" as const, app: APP })),
+    });
+    const { registry, launches } = iosRegistry(notes);
+
+    const result = await run("ios-notes-change", registry, IOS_UDID);
+
+    expect(launches()).toBe(4);
+    expect(outline(result)).toEqual([
+      "launch:pass!",
+      "launch:pass!",
+      "launch:pass",
+      "launch:pass!",
+    ]);
+    expect(result.steps.map((s) => s.warning)).toEqual([notes[0], notes[1], undefined, notes[3]]);
   });
 });

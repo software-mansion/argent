@@ -117,7 +117,7 @@ export function createReactProfilerStartTool(
 Use when you need to profile a user interaction.
 On an iOS simulator or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } instead, without clobbering their data. BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. A warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } instead, without clobbering their data. BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     interaction: {

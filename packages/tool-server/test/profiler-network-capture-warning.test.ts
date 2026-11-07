@@ -11,6 +11,15 @@ vi.mock("../src/blueprints/android-network-inspector", async (importActual) => (
   liveAndroidNetworkCaptureDevices: (packageName: string) => liveDevices(packageName),
 }));
 
+// The same two lookups for iOS apps.
+const liveIos = vi.fn<(deviceId: string) => string[]>();
+const liveIosDevices = vi.fn<(bundleId: string) => string[]>();
+vi.mock("../src/blueprints/ios-network-records", async (importActual) => ({
+  ...(await importActual<typeof import("../src/blueprints/ios-network-records")>()),
+  liveIosNetworkCaptures: (deviceId: string) => liveIos(deviceId),
+  liveIosNetworkCaptureDevices: (bundleId: string) => liveIosDevices(bundleId),
+}));
+
 vi.mock("../src/utils/check-deps", () => ({
   ensureDeps: vi.fn(async () => {}),
   ensureDep: vi.fn(async () => {}),
@@ -55,6 +64,10 @@ beforeEach(() => {
   live.mockReturnValue([]);
   liveDevices.mockReset();
   liveDevices.mockReturnValue([]);
+  liveIos.mockReset();
+  liveIos.mockReturnValue([]);
+  liveIosDevices.mockReset();
+  liveIosDevices.mockReturnValue([]);
   resetDeviceAliases();
 });
 
@@ -99,6 +112,22 @@ describe("nativeNetworkCaptureWarning", () => {
     expect(warning).toContain("native-network-logs with stop: true for each of these apps");
   });
 
+  it("names an iOS app with the remedy that ends capture there", () => {
+    liveIos.mockImplementation((deviceId) => (deviceId === IOS_UDID ? [PKG] : []));
+
+    const warning = nativeNetworkCaptureWarning(IOS_UDID);
+
+    expect(warning).toContain(`Native network capture is on for ${PKG} on this device`);
+    expect(warning).toContain(
+      "Argent's in-app agent captures the requests of that app's processes"
+    );
+    expect(warning).toContain("can slow the app");
+    expect(warning).toContain(
+      "stop this profile, call stop-all-simulator-servers for this device, then restart-app and profile again"
+    );
+    expect(warning).not.toContain("stop: true");
+  });
+
   it("is undefined, not a throw, when the lookup fails", () => {
     live.mockImplementation(() => {
       throw new Error("lookup failed");
@@ -139,6 +168,30 @@ describe("nativeNetworkCaptureWarning", () => {
       captureOnSerial(PKG);
 
       expect(nativeNetworkCaptureWarning(LOGICAL, { appId: PKG, platform: "ios" })).toBeUndefined();
+    });
+
+    it("names the simulators with capture on for an iOS runtime's app", () => {
+      connectedWithLogicalId();
+      liveIosDevices.mockImplementation((bundleId) => (bundleId === PKG ? [IOS_UDID] : []));
+
+      const warning = nativeNetworkCaptureWarning(LOGICAL, { appId: PKG, platform: "ios" });
+
+      expect(liveIosDevices).toHaveBeenCalledWith(PKG);
+      expect(liveDevices).not.toHaveBeenCalled();
+      expect(warning).toContain(
+        `Native network capture is on for ${PKG} on ${IOS_UDID}, which may be the device this profile runs on`
+      );
+      expect(warning).toContain("captures the requests of that app's processes there");
+      expect(warning).toContain(
+        "call stop-all-simulator-servers for that device, then restart-app and profile again"
+      );
+    });
+
+    it("is undefined for an Android runtime when only an iOS simulator captures the app id", () => {
+      connectedWithLogicalId();
+      liveIosDevices.mockReturnValue([IOS_UDID]);
+
+      expect(nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP)).toBeUndefined();
     });
 
     it("is undefined when the runtime did not say its app or platform", () => {
@@ -185,15 +238,24 @@ describe("native-profiler-start", () => {
     expect(result).toEqual({ status: "recording", pid: 2, traceFile: "/android.pftrace" });
   });
 
-  it("does not look for Android capture on iOS", async () => {
-    live.mockReturnValue([PKG]);
+  it("warns on iOS when native network capture is on for an app of the simulator", async () => {
+    liveIos.mockImplementation((deviceId) => (deviceId === IOS_UDID ? [PKG] : []));
 
     const result = await nativeProfilerStartTool.execute({ session: session("ios") } as never, {
       device_id: IOS_UDID,
     });
 
-    expect(live).not.toHaveBeenCalled();
-    expect(result).not.toHaveProperty("warning");
+    expect(result).toMatchObject({ status: "recording", pid: 1 });
+    expect(result.warning).toContain(`Native network capture is on for ${PKG}`);
+    expect(result.warning).toContain("stop-all-simulator-servers");
+  });
+
+  it("adds no warning on iOS when no capture is on", async () => {
+    const result = await nativeProfilerStartTool.execute({ session: session("ios") } as never, {
+      device_id: IOS_UDID,
+    });
+
+    expect(result).toEqual({ status: "recording", pid: 1, traceFile: "/ios.trace" });
   });
 });
 
