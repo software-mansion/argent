@@ -73,8 +73,14 @@ interface FakeApp {
   close(): void;
 }
 
-/** Dials the service as the app's in-app agent does, acknowledging each CDP request. */
-function connectApp(socketPath: string): Promise<FakeApp> {
+/**
+ * Dials the service as the app's in-app agent does, acknowledging each CDP
+ * request. With `enableError`, it answers Network.enable with that error instead.
+ */
+function connectApp(
+  socketPath: string,
+  { enableError }: { enableError?: string } = {}
+): Promise<FakeApp> {
   return new Promise((resolve, reject) => {
     let buffer = "";
     const sock = net.createConnection(socketPath, () => {
@@ -90,11 +96,17 @@ function connectApp(socketPath: string): Promise<FakeApp> {
       const lines = buffer.split("\n");
       buffer = lines.pop()!;
       for (const line of lines) {
-        const frame = JSON.parse(line) as { type?: string; payload?: { id?: number } };
+        const frame = JSON.parse(line) as {
+          type?: string;
+          payload?: { id?: number; method?: string };
+        };
         if (frame.type === "CDP" && frame.payload?.id !== undefined) {
-          sock.write(
-            JSON.stringify({ type: "CDP", payload: { id: frame.payload.id, result: {} } }) + "\n"
-          );
+          const { id, method } = frame.payload;
+          const reply =
+            enableError !== undefined && method === "Network.enable"
+              ? { id, error: { message: enableError } }
+              : { id, result: {} };
+          sock.write(JSON.stringify({ type: "CDP", payload: reply }) + "\n");
         }
       }
     });
@@ -274,6 +286,23 @@ describe("native-network-logs lists an iOS app's native requests", () => {
       const listing = await list(api);
 
       expect(listing.header).toBe("ios-native: armed, 1 request");
+      app.close();
+    });
+  });
+
+  it("says in the header why capture is not armed when the agent refuses Network.enable", async () => {
+    await withService(async (api) => {
+      await api.activateNetworkInspection(BUNDLE);
+      const app = await connectApp(api.socketPath, { enableError: "capture unavailable" });
+      await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(PID));
+
+      const listing = await list(api);
+
+      expect(listing.armed).toBe(false);
+      expect(listing.header).toBe(
+        `ios-native: not armed, 0 requests (pid ${PID}; the agent did not enable capture ` +
+          `(native-devtools ${BUNDLE}: Network.enable failed: capture unavailable); the next call asks again)`
+      );
       app.close();
     });
   });
