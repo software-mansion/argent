@@ -3,7 +3,40 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * While a test sets `runningApp`, the host's `launchctl list` and `ps` report
+ * that app running and every such probe is recorded. Unset, every command runs
+ * for real.
+ */
+const hostProbe = vi.hoisted(() => ({
+  probes: [] as string[],
+  runningApp: undefined as { bundleId: string; pid: number } | undefined,
+}));
+
+vi.mock("node:child_process", async () => {
+  const { promisify } = await vi.importActual<typeof import("node:util")>("node:util");
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const execFileForReal = promisify(actual.execFile);
+
+  /** What `promisify(execFile)` returns, which is how ios-host runs its probes. */
+  const execFileAsync = (file: string, args: readonly string[] = [], options = {}) => {
+    const app = hostProbe.runningApp;
+    const argv = args.join(" ");
+    const listsJobs = argv.includes("launchctl list");
+    if (!app || !(listsJobs || /\bps$/.test(file))) return execFileForReal(file, args, options);
+
+    hostProbe.probes.push(`${file} ${argv}`);
+    const stdout = listsJobs
+      ? `${app.pid}\t0\tUIKitApplication:${app.bundleId}[dffa][rb-legacy]\n`
+      : "00:05 /Example.app/Example\n";
+    return Promise.resolve({ stdout, stderr: "" });
+  };
+
+  const execFile = (...args: Parameters<typeof actual.execFile>) => actual.execFile(...args);
+  return { ...actual, execFile: Object.assign(execFile, { [promisify.custom]: execFileAsync }) };
+});
 
 import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
@@ -169,6 +202,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  hostProbe.probes = [];
+  hostProbe.runningApp = undefined;
   delete process.env.ARGENT_DEVICE_PROVIDERS;
   __resetDepCacheForTests();
   fs.rmSync(temporaryDirectory, { force: true, recursive: true });
@@ -228,6 +263,29 @@ describe("a provider that lends its native-devtools agent", () => {
     await expect(instance.api.appConnectionState("com.example.other")).resolves.toBe(
       "provider_attached"
     );
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  /**
+   * The process behind a lent agent is the provider's. Probing its simulator
+   * for a pid would put one argent never launched in the network-logs header.
+   */
+  it("never probes the host for the pid of the app it attached to", async () => {
+    hostProbe.runningApp = { bundleId: BUNDLE_ID, pid: 4242 };
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+    /** The probe would start at the handshake and land a few ticks later. */
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(hostProbe.probes).toEqual([]);
+    const records = instance.api.networkRecords(BUNDLE_ID);
+    expect(records).toBeDefined();
+    expect(records!.state().pid).toBeUndefined();
 
     await instance.dispose();
     await agent.close();
