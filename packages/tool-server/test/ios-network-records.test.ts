@@ -731,11 +731,12 @@ describe("iOS native network capture lookups", () => {
   /** Sorts before UDID. */
   const OTHER_UDID = "0F1E2D3C-0000-4000-8000-00000000BBBB";
 
-  function captureOn(udid: string, bundleIds: string[]): () => void {
+  /** Capture is on for each app, and each app connected, so it has records. */
+  function captureOn(udid: string, bundleIds: string[], connected = bundleIds): () => void {
     const unregister = registerIosNetworkCaptures({
       udid,
       bundleIds: new Set(bundleIds),
-      stores: new Map(),
+      stores: new Map(connected.map((bundleId) => [bundleId, newStore()])),
     });
     unregisters.push(unregister);
     return unregister;
@@ -761,6 +762,15 @@ describe("iOS native network capture lookups", () => {
     expect(liveIosNetworkCaptures(LOGICAL)).toEqual([BUNDLE]);
     expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([EXT]);
     expect(liveIosNetworkCaptureDevices("com.example.other")).toEqual([]);
+  });
+
+  /** A mistyped bundle id is turned on too, and must not be named by every later profile. */
+  it("leaves out an app that capture is on for but that never connected", () => {
+    captureOn(UDID, [BUNDLE, "com.example.typo"], [BUNDLE]);
+
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptureDevices("com.example.typo")).toEqual([]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([UDID]);
   });
 
   it("sorts and de-duplicates across services, and drops a service from both lookups once it is unregistered", () => {

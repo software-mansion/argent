@@ -282,13 +282,24 @@ export function findIosNativeRecord(
   return undefined;
 }
 
+/**
+ * Capture is on for the app and the app connected at least once. An app that
+ * never connected, such as a mistyped or uninstalled bundle id, has no process
+ * that capture runs in.
+ */
+function capturing(captures: IosNetworkCaptures, bundleId: string): boolean {
+  return captures.bundleIds.has(bundleId) && captures.stores.has(bundleId);
+}
+
 /** Bundle ids with native network capture on for the device. */
 export function liveIosNetworkCaptures(deviceId: string): string[] {
   const key = deviceKeyOf(deviceId);
   const bundleIds = new Set<string>();
   for (const captures of liveCaptures) {
     if (deviceKeyOf(captures.udid) !== key) continue;
-    for (const bundleId of captures.bundleIds) bundleIds.add(bundleId);
+    for (const bundleId of captures.bundleIds) {
+      if (capturing(captures, bundleId)) bundleIds.add(bundleId);
+    }
   }
   return [...bundleIds].sort();
 }
@@ -296,7 +307,7 @@ export function liveIosNetworkCaptures(deviceId: string): string[] {
 /** Udids of the devices with native network capture on for the app. */
 export function liveIosNetworkCaptureDevices(bundleId: string): string[] {
   const udids = [...liveCaptures]
-    .filter((captures) => captures.bundleIds.has(bundleId))
+    .filter((captures) => capturing(captures, bundleId))
     .map((captures) => captures.udid);
   return [...new Set(udids)].sort();
 }

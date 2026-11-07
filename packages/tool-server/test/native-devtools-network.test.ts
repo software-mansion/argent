@@ -206,11 +206,13 @@ describe("native-devtools network capture", () => {
   it("enables capture at the handshake of an app it is on for, also one that never connected before", async () => {
     const api = await startService();
     await expect(api.activateNetworkInspection(BUNDLE)).resolves.toBe(false);
-    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    // No process of the app carries capture yet, so no profile is warned about it.
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
 
     const app = await connectApp(api.socketPath);
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
     await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
   });
 
   it("sends nothing at the handshake of an app capture is not on for", async () => {
