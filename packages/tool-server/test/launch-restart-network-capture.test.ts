@@ -204,9 +204,15 @@ function runningRow(pid: number, bundleId = APP): string {
   return `${pid}\t0\tUIKitApplication:${bundleId}[a1b2][rb-legacy]\n`;
 }
 
-/** `ps eww -p <pid> -o etime=,command=` output: age, then argv and environment. */
-function psLine(etime = "00:02"): string {
-  return `${etime} /Devices/${IOS_UDID}/NetworkTest.app/NetworkTest HOME=/tmp\n`;
+/**
+ * `ps eww -p <pid> -o etime=,command=` output: age, then argv and environment.
+ * A process launched while the service runs carries its injection.
+ */
+function psLine(etime = "00:02", { injected = true }: { injected?: boolean } = {}): string {
+  const injection = injected
+    ? ` DYLD_INSERT_LIBRARIES=/fake/dylibs/libArgentInjectionBootstrap.dylib NATIVE_DEVTOOLS_IOS_CDP_SOCKET=/tmp/argent-nd-${IOS_UDID.slice(0, 8)}.sock`
+    : "";
+  return `${etime} /Devices/${IOS_UDID}/NetworkTest.app/NetworkTest HOME=/tmp${injection}\n`;
 }
 
 /** What the host answers before each iOS case: the app runs as PID. */
@@ -611,6 +617,24 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
       const note = await afterTheLaunchWait(() => api.networkCaptureAfterLaunch(APP));
 
       expect(note).toBe(NOT_CONNECTED_NOTE);
+    });
+  });
+
+  /**
+   * launch-app only brings a running app to the front, so a process started
+   * without the injection stays the app's process and never connects.
+   */
+  it("says at once, without waiting, that a running process without the injection cannot be armed", async () => {
+    await withService(async (api) => {
+      await api.activateNetworkInspection(APP);
+      sim.psOutput = psLine("10:00", { injected: false });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      const note = await api.networkCaptureAfterLaunch(APP);
+
+      expect(note).toBe(
+        `native network capture is on for ${APP}, but its running process (pid ${PID}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed`
+      );
     });
   });
 

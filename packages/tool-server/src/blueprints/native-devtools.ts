@@ -1299,6 +1299,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           const conn = connections.get(bundleId);
           return conn && (pid === undefined || conn.pid === pid) ? conn : undefined;
         };
+        // A launch of an app that already runs only brings it to the front.
+        // When that process lacks this simulator's injection, no process will
+        // connect, so waiting would only stall the launch.
+        const running = inspection?.process;
+        if (running && !ofLaunch() && !processCarriesInjection(running.env, endpoint)) {
+          return `native network capture is on for ${bundleId}, but its running process (pid ${running.pid}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed`;
+        }
         const armed = await waitForConnection(() => ofLaunch()?.armed === true, LAUNCH_ARM_WAIT_MS);
         if (disposed) return undefined;
         const shownPid = pid ?? ofLaunch()?.pid;
