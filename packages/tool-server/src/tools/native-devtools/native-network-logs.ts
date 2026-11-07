@@ -201,12 +201,9 @@ function notConnected(api: NativeDevtoolsApi, bundleId: string): FailureError {
 
 /** Said once, by the first answer after capture started for an app that was already running. */
 function captureGapNote(armsEnv: boolean): string {
-  return (
-    "capture started while the app was already running, so the requests before that, its launch among them, were not recorded; " +
-    (armsEnv
-      ? "to capture the launch, restart-app and call again"
-      : "on this device a relaunch ends capture, so the launch cannot be recorded here: do not restart the app for it")
-  );
+  return armsEnv
+    ? "capture started while the app was already running, so the requests before that, its launch among them, were not recorded; to capture the launch, restart-app and call again"
+    : "argent connected to the app's agent while the app was running, so the requests before that, its launch among them, were not recorded; on this device a relaunch ends capture, so the launch cannot be recorded here: do not restart the app for it";
 }
 
 /**

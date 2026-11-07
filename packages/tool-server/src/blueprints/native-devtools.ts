@@ -516,7 +516,8 @@ export interface NativeDevtoolsApi {
   /**
    * True once per gap: capture for this app was turned on while it was already
    * running, so the requests before that (its launch among them) were missed.
-   * Reading it clears it, so only the answer that reports the log says so.
+   * In attach mode the gap is the time before argent connected to the app's
+   * agent. Reading it clears it, so only the answer that reports the log says so.
    */
   takeCaptureGap(bundleId: string): boolean;
   /** The app's request records, from its first connection on; undefined before that. */
@@ -1024,11 +1025,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               );
             }
 
+            // A lent agent is an app that was already running, and its
+            // events reach us from this handshake on whether or not capture
+            // was asked for, so the gap is the time before the handshake.
+            if (lentSocketPath) captureGaps.add(bundleId);
             if (activatedBundleIds.has(bundleId)) {
-              // Our own listener hears an app at its launch, so nothing was
-              // missed. A lent agent is an app that was already running.
-              if (lentSocketPath) captureGaps.add(bundleId);
-              else captureGaps.delete(bundleId);
+              // Our own listener hears an app at its launch, so nothing was missed.
+              if (!lentSocketPath) captureGaps.delete(bundleId);
               void enableOn(conn);
             }
             void readConnectionPid(bundleId, conn);
@@ -1278,7 +1281,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
         if (!conn) return Promise.resolve(false);
-        if (startedNow) captureGaps.add(bundleId);
+        if (startedNow && !lentSocketPath) captureGaps.add(bundleId);
         return enableOn(conn);
       },
 

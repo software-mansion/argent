@@ -41,6 +41,8 @@ type LentAgent = {
   hangUp: () => void;
   /** Sends the deferred `Control` frame of a `deferHandshake` agent. */
   handshake: () => void;
+  /** Sends a CDP event, as the provider does with the app's network events. */
+  sendEvent: (method: string, params: Record<string, unknown>) => void;
   received: Array<{ type: string; payload: Record<string, unknown> }>;
   socketPath: string;
 };
@@ -97,6 +99,11 @@ async function startLentAgent(
     },
     handshake: () => {
       for (const socket of sockets) sendHandshake(socket);
+    },
+    sendEvent: (method, params) => {
+      for (const socket of sockets) {
+        socket.write(JSON.stringify({ payload: { method, params }, type: "CDP" }) + "\n");
+      }
     },
     received,
     socketPath,
@@ -303,6 +310,44 @@ describe("a provider that lends its native-devtools agent", () => {
 
     const second = (await call()) as { header: string };
     expect(second.header).not.toMatch(/were not recorded/);
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  /**
+   * A lent agent's events reach argent from the handshake on, before any call
+   * asks for capture. The note must not say a request it lists was missed.
+   */
+  it("says the requests before argent connected were missed, and lists the ones after", async () => {
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+    agent.sendEvent("Network.requestWillBeSent", {
+      requestId: "r1",
+      request: { url: "https://example.com/before-the-first-call", method: "GET", headers: {} },
+    });
+    agent.sendEvent("Network.loadingFinished", { requestId: "r1" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+    const listing = (await nativeNetworkLogsTool.execute(
+      { nativeDevtools: instance.api },
+      { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+    )) as { header: string; requests: Array<{ url: string }> };
+
+    expect(listing.requests.map((request) => request.url)).toEqual([
+      "https://example.com/before-the-first-call",
+    ]);
+    expect(listing.header).toMatch(
+      /argent connected to the app's agent while the app was running, so the requests before that, its launch among them, were not recorded/
+    );
+    expect(listing.header).not.toMatch(/capture started/);
 
     await instance.dispose();
     await agent.close();
