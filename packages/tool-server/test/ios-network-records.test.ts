@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import {
   IOS_NATIVE_REQUEST_ID,
   createIosNetworkRecords,
@@ -377,6 +379,25 @@ describe("iOS native network records: eviction", () => {
     agent.loadingFinished("r0", 10, 5);
     expect(store.records(8081)).toHaveLength(MAX_RECORDS);
     expect(store.records(8081).some((r) => r.layerId === "r0")).toBe(false);
+  });
+
+  it("releases an evicted record to the garbage collector", async () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const store = newStore();
+    const agent = agentOn(store);
+
+    agent.requestWillBeSent("r0", "https://e.com/0");
+    const evicted = new WeakRef(store.record(idOf(store, "r0"))!);
+    for (let i = 1; i <= MAX_RECORDS; i++) agent.requestWillBeSent(`r${i}`, `https://e.com/${i}`);
+    expect(store.records(8081)[0]!.layerId).toBe("r1");
+
+    // A WeakRef keeps its target alive until the current job ends.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    gc();
+    expect(evicted.deref()).toBeUndefined();
+    // The store outlives the collection, so only the eviction can have freed the record.
+    expect(store.records(8081)).toHaveLength(MAX_RECORDS);
   });
 
   it("evicts the oldest records first once their strings pass the size budget", () => {
