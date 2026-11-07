@@ -424,4 +424,22 @@ describe("native-devtools network capture", () => {
     expect(liveIosNetworkCaptures(UDID)).toEqual([]);
     expect(api.networkRecords(BUNDLE)).toBeUndefined();
   });
+
+  it("settles an enable still waiting for its reply as not armed at once on dispose", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    const arming = api.activateNetworkInspection(BUNDLE);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    await instance!.dispose();
+    instance = null;
+
+    // Well inside the 5 s the agent has to answer, so the reply timeout cannot settle it.
+    const outcome = await Promise.race([
+      arming,
+      new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
+    ]);
+    expect(outcome).toBe(false);
+  });
 });
