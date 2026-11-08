@@ -121,9 +121,9 @@ describe("chromium-server/screenshot", () => {
     });
 
     it("takes the ratio from the image, not devicePixelRatio", async () => {
-      // A page at 150% zoom on a 2x display: dpr 3, but the capture is 2048 wide for 682 CSS px.
-      const { cdp } = cdpWith(flat(2048, 1306), { w: 682, h: 435, dpr: 3 });
-      expect(sizeOf(await capture(cdp))).toEqual([682, 435]);
+      // dpr 3 fits the height but not the width: a ratio of 3 would give a 682-wide image.
+      const { cdp } = cdpWith(flat(2048, 1305), { w: 683, h: 435, dpr: 3 });
+      expect(sizeOf(await capture(cdp))).toEqual([683, 435]);
     });
 
     it("downscales a fractional ratio to the window's width", async () => {
