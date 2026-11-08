@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
+import { PNG } from "pngjs";
 import { __resetSharpCacheForTests, captureScreenshot } from "../src/chromium-server/screenshot";
 import type { CDPClient } from "../src/utils/debugger/cdp-client";
 
@@ -52,104 +53,135 @@ describe("chromium-server/screenshot", () => {
   });
 
   describe("cssPixels", () => {
-    const flatMetrics = (pageX: number, pageY: number) => ({
-      cssLayoutViewport: { pageX, pageY },
-      cssVisualViewport: { pageX, pageY, offsetX: 0, offsetY: 0, scale: 1, zoom: 1 },
-    });
-    function cdpWith(viewport: unknown, metrics: unknown = flatMetrics(0, 0)) {
+    type Rgba = [number, number, number, number];
+    /** A real PNG, so the downscale path decodes and encodes for real. */
+    function pngBase64(width: number, height: number, at: (x: number, y: number) => Rgba) {
+      const png = new PNG({ width, height });
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          png.data.set(at(x, y), (y * width + x) * 4);
+        }
+      }
+      return PNG.sync.write(png).toString("base64");
+    }
+    const flat = (width: number, height: number) =>
+      pngBase64(width, height, () => [10, 20, 30, 255]);
+
+    function cdpWith(capture: string, viewport: unknown) {
       const send = vi.fn(async (method: string) => {
         if (method === "Runtime.evaluate") {
           if (viewport instanceof Error) throw viewport;
           return { result: { value: JSON.stringify(viewport) } };
         }
-        if (method === "Page.getLayoutMetrics") {
-          if (metrics instanceof Error) throw metrics;
-          return metrics;
-        }
-        return { data: ONE_PX_PNG_BASE64 };
+        return { data: capture };
       });
       return { cdp: { send } as unknown as CDPClient, send };
     }
-    const captureArgs = (send: ReturnType<typeof vi.fn>) =>
-      send.mock.calls.filter(([method]) => method === "Page.captureScreenshot").map(([, a]) => a);
 
-    async function capture(cdp: CDPClient) {
-      const out = await captureScreenshot({ cdp, deviceId: "t" }, { cssPixels: true });
+    async function capture(cdp: CDPClient, opts: { cssPixels?: boolean } = { cssPixels: true }) {
+      const out = await captureScreenshot({ cdp, deviceId: "t" }, opts);
       filesToCleanup.push(out.path);
+      return fs.readFileSync(out.path);
     }
+    const sizeOf = (bytes: Buffer) => {
+      const png = PNG.sync.read(bytes);
+      return [png.width, png.height];
+    };
 
-    it("clips to the window at 1 / devicePixelRatio", async () => {
-      const { cdp, send } = cdpWith({ w: 1024, h: 740, dpr: 2 }, flatMetrics(0, 300));
-      await capture(cdp);
-      expect(captureArgs(send)).toEqual([
-        {
-          format: "png",
-          captureBeyondViewport: false,
-          clip: { x: 0, y: 300, width: 1024, height: 740, scale: 0.5 },
-        },
+    it("downscales a 2x capture to the window's CSS size and never clips", async () => {
+      const { cdp, send } = cdpWith(flat(2048, 1480), { w: 1024, h: 740, dpr: 2 });
+      expect(sizeOf(await capture(cdp))).toEqual([1024, 740]);
+      expect(send.mock.calls.filter(([method]) => method === "Page.captureScreenshot")).toEqual([
+        ["Page.captureScreenshot", { format: "png", captureBeyondViewport: false }],
       ]);
     });
 
-    it("starts the clip from the layout viewport, so a right-to-left page is not blank", async () => {
-      // A right-to-left page scrolled to its start: window.scrollX is 0, the document's left edge
-      // is 4991 CSS pixels further left.
-      const { cdp, send } = cdpWith(
-        { w: 1024, h: 653, dpr: 2 },
-        {
-          cssLayoutViewport: { pageX: 4991, pageY: 0 },
-          cssVisualViewport: { pageX: 0, pageY: 0, offsetX: 0, offsetY: 0, scale: 1, zoom: 1 },
-        }
+    it("averages each square of device pixels at a whole-number ratio", async () => {
+      // Top-left 2x2 block is black and white half-and-half, so its average is mid grey.
+      const shot = pngBase64(4, 2, (x, y) =>
+        x < 2 && y === 0 ? [255, 255, 255, 255] : [0, 0, 0, 255]
       );
-      await capture(cdp);
-      expect(captureArgs(send)[0].clip).toMatchObject({ x: 4991, y: 0 });
+      const { cdp } = cdpWith(shot, { w: 2, h: 1, dpr: 2 });
+      const out = PNG.sync.read(await capture(cdp));
+      expect([out.width, out.height]).toEqual([2, 1]);
+      expect([...out.data.subarray(0, 4)]).toEqual([128, 128, 128, 255]);
+      expect([...out.data.subarray(4, 8)]).toEqual([0, 0, 0, 255]);
     });
 
-    it("takes a plain capture at one device pixel per CSS pixel", async () => {
-      const { cdp, send } = cdpWith({ w: 1024, h: 740, dpr: 1 });
-      await capture(cdp);
-      expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
-    });
-
-    it("takes a plain capture when the window cannot be read", async () => {
-      const { cdp, send } = cdpWith(new Error("detached"));
-      await capture(cdp);
-      expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
-    });
-
-    it("takes a plain capture when the page position cannot be read", async () => {
-      const { cdp, send } = cdpWith({ w: 1024, h: 740, dpr: 2 }, new Error("detached"));
-      await capture(cdp);
-      expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
-    });
-
-    it.each([
-      ["page zoom", { zoom: 1.5, scale: 1 }],
-      ["pinch zoom", { zoom: 1, scale: 1.8 }],
-      ["a protocol that reports neither", {}],
-    ])("takes a plain capture under %s", async (_name, viewport) => {
-      const { cdp, send } = cdpWith(
-        { w: 682, h: 435, dpr: 3 },
-        { cssLayoutViewport: { pageX: 0, pageY: 900 }, cssVisualViewport: viewport }
+    it("averages any whole-number ratio, rounding to the nearest value", async () => {
+      // One 120 among eight 30s: (240 + 120) / 9 = 40.
+      const shot = pngBase64(6, 3, (x, y) =>
+        x === 0 && y === 0 ? [120, 120, 120, 255] : [30, 30, 30, 255]
       );
-      await capture(cdp);
-      expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
+      const { cdp } = cdpWith(shot, { w: 2, h: 1, dpr: 3 });
+      const out = PNG.sync.read(await capture(cdp));
+      expect([out.width, out.height]).toEqual([2, 1]);
+      expect([...out.data.subarray(0, 4)]).toEqual([40, 40, 40, 255]);
+      expect([...out.data.subarray(4, 8)]).toEqual([30, 30, 30, 255]);
     });
 
-    it("discards the clip and takes a plain capture when the page moved during the capture", async () => {
-      const positions = [flatMetrics(0, 2000), flatMetrics(0, 2400)];
-      let reads = 0;
-      const send = vi.fn(async (method: string) => {
-        if (method === "Runtime.evaluate") {
-          return { result: { value: JSON.stringify({ w: 1024, h: 653, dpr: 2 }) } };
-        }
-        if (method === "Page.getLayoutMetrics") return positions[reads++];
-        return { data: ONE_PX_PNG_BASE64 };
-      });
-      await capture({ send } as unknown as CDPClient);
-      const calls = captureArgs(send);
-      expect(calls).toHaveLength(2);
-      expect(calls[0]).toHaveProperty("clip");
-      expect(calls[1]).not.toHaveProperty("clip");
+    it("takes the ratio from the image, not devicePixelRatio", async () => {
+      // A page at 150% zoom on a 2x display: dpr 3, but the capture is 2048 wide for 682 CSS px.
+      const { cdp } = cdpWith(flat(2048, 1306), { w: 682, h: 435, dpr: 3 });
+      expect(sizeOf(await capture(cdp))).toEqual([682, 435]);
+    });
+
+    it("downscales a fractional ratio to the window's width", async () => {
+      const { cdp } = cdpWith(flat(1536, 981), { w: 1024, h: 654, dpr: 1.5 });
+      const out = PNG.sync.read(await capture(cdp));
+      expect([out.width, out.height]).toEqual([1024, 654]);
+      expect([...out.data.subarray(0, 4)]).toEqual([10, 20, 30, 255]);
+    });
+
+    it("keeps the image's aspect when a whole ratio does not fit the height", async () => {
+      // 2x wide but one row short of 2x tall: lanczos, not a box that would drop the odd row.
+      const { cdp } = cdpWith(flat(8, 5), { w: 4, h: 2, dpr: 2 });
+      expect(sizeOf(await capture(cdp))).toEqual([4, 3]);
+    });
+
+    it("leaves a capture at one device pixel per CSS pixel untouched", async () => {
+      const shot = flat(1024, 740);
+      const { cdp } = cdpWith(shot, { w: 1024, h: 740, dpr: 1 });
+      expect((await capture(cdp)).toString("base64")).toBe(shot);
+    });
+
+    it("leaves a capture not wider than the window untouched", async () => {
+      // A zoomed-out page: more CSS pixels than the screen has device pixels.
+      const shot = flat(1024, 740);
+      const { cdp } = cdpWith(shot, { w: 1365, h: 986, dpr: 0.75 });
+      expect((await capture(cdp)).toString("base64")).toBe(shot);
+    });
+
+    it("returns the capture when the window cannot be read", async () => {
+      const shot = flat(2048, 1480);
+      const { cdp } = cdpWith(shot, new Error("detached"));
+      expect((await capture(cdp)).toString("base64")).toBe(shot);
+    });
+
+    it("returns the capture when the window reports no size", async () => {
+      const shot = flat(2048, 1480);
+      const { cdp } = cdpWith(shot, { w: 0, h: 0, dpr: 2 });
+      expect((await capture(cdp)).toString("base64")).toBe(shot);
+    });
+
+    it("returns the capture when it is not a readable PNG", async () => {
+      const bytes = Buffer.from("not a png").toString("base64");
+      const { cdp } = cdpWith(bytes, { w: 1024, h: 740, dpr: 2 });
+      expect((await capture(cdp)).toString("base64")).toBe(bytes);
+    });
+
+    it("returns the capture when the PNG has a valid header but cannot be decoded", async () => {
+      const header = Buffer.from(flat(2048, 1480), "base64").subarray(0, 33);
+      const corrupt = Buffer.concat([header, Buffer.alloc(40)]).toString("base64");
+      const { cdp } = cdpWith(corrupt, { w: 1024, h: 740, dpr: 2 });
+      expect((await capture(cdp)).toString("base64")).toBe(corrupt);
+    });
+
+    it("does not touch the capture without cssPixels", async () => {
+      const shot = flat(2048, 1480);
+      const { cdp, send } = cdpWith(shot, { w: 1024, h: 740, dpr: 2 });
+      expect((await capture(cdp, {})).toString("base64")).toBe(shot);
+      expect(send.mock.calls.map(([method]) => method)).toEqual(["Page.captureScreenshot"]);
     });
   });
 

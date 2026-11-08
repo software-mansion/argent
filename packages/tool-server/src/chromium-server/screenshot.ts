@@ -1,10 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { PNG } from "pngjs";
 import type { CDPClient } from "../utils/debugger/cdp-client";
+import { boxDownscaleDecodedPng, scaleDecodedPng } from "../utils/png-scale";
 import { mediaDir } from "./cdp-session";
 import type { DownscalerType, MediaReady, Rotation, ScreenshotOpts } from "./types";
-import { readViewport, readWindowClipOrigin } from "./viewport";
+import { readViewport } from "./viewport";
 
 interface SharpModule {
   (input: Buffer): {
@@ -67,44 +69,45 @@ interface CaptureContext {
   deviceId: string;
 }
 
-type WindowClip = { x: number; y: number; width: number; height: number; scale: number };
+/** The async parser inflates on the thread pool, so it does not hold the event loop. */
+function decodePng(png: Buffer): Promise<PNG> {
+  return new Promise((resolve, reject) => {
+    new PNG().parse(png, (err, decoded) => (err ? reject(err) : resolve(decoded)));
+  });
+}
+
+/** Lets other tool calls run between the synchronous steps. */
+const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
+
+// Up-filter with zlib's default strategy: about half the CPU of pngjs's defaults
+// and smaller files on page screenshots (flat fills and text).
+const ENCODE_OPTIONS = { filterType: 2, deflateStrategy: 0, deflateLevel: 6 };
 
 /**
- * The window as a capture `clip` of one image pixel per CSS pixel. `clip.scale`
- * multiplies with the device pixel ratio while the page is rasterized, so a 1024×740
- * window on a 2x display comes out at 1024×740, not 2048×1480, without `sharp`.
- * No clip when the window already has that density or cannot be clipped as a
- * whole: a plain capture is then the right image, only larger.
+ * One image pixel per CSS pixel, made from the capture already taken, so nothing
+ * on the page or in the window changes. The ratio is the image against
+ * `innerWidth`, not `devicePixelRatio`, so the image is the window's CSS width
+ * at any browser zoom. Whatever cannot be read or decoded leaves the capture as
+ * it came: larger, not wrong.
  */
-async function cssPixelClip(cdp: CDPClient): Promise<WindowClip | undefined> {
+async function toCssPixels(cdp: CDPClient, capture: Buffer): Promise<Buffer> {
   try {
-    const { width, height, devicePixelRatio } = await readViewport(cdp);
-    if (devicePixelRatio <= 1) return undefined;
-    const origin = await readWindowClipOrigin(cdp);
-    if (!origin) return undefined;
-    return { ...origin, width, height, scale: 1 / devicePixelRatio };
+    const size = readPngSize(capture);
+    if (!size) return capture;
+    const viewport = await readViewport(cdp);
+    if (size.width <= viewport.width) return capture;
+    const decoded = await decodePng(capture);
+    await yieldToEventLoop();
+    const factor = size.width / viewport.width;
+    const scaled =
+      Number.isInteger(factor) && size.height === viewport.height * factor
+        ? boxDownscaleDecodedPng(decoded, factor)
+        : scaleDecodedPng(decoded, viewport.width / size.width);
+    await yieldToEventLoop();
+    return PNG.sync.write(scaled, ENCODE_OPTIONS);
   } catch {
-    return undefined;
+    return capture;
   }
-}
-
-/**
- * A clip holds a position in the document. A page that scrolled between reading
- * it and the capture is painted around the new position and comes out partly or
- * entirely blank, so a capture whose window moved cannot be used.
- */
-async function clipStillOnWindow(cdp: CDPClient, clip: WindowClip): Promise<boolean> {
-  const now = await readWindowClipOrigin(cdp);
-  return now !== null && Math.abs(now.x - clip.x) < 1 && Math.abs(now.y - clip.y) < 1;
-}
-
-async function capturePng(cdp: CDPClient, clip?: WindowClip): Promise<{ data?: string }> {
-  // PNG, not JPEG: matches sim-server's output and survives the downscale.
-  return (await cdp.send("Page.captureScreenshot", {
-    format: "png",
-    captureBeyondViewport: false,
-    ...(clip ? { clip } : {}),
-  })) as { data?: string };
 }
 
 /** Capture, optionally rotate / downscale with sharp, persist under `mediaDir()`. */
@@ -112,11 +115,11 @@ export async function captureScreenshot(
   ctx: CaptureContext,
   opts: ScreenshotOpts = {}
 ): Promise<MediaReady> {
-  const clip = opts.cssPixels ? await cssPixelClip(ctx.cdp) : undefined;
-  let cdpResult = await capturePng(ctx.cdp, clip);
-  if (clip && !(await clipStillOnWindow(ctx.cdp, clip))) {
-    cdpResult = await capturePng(ctx.cdp);
-  }
+  // PNG, not JPEG: matches sim-server's output and survives the downscale.
+  const cdpResult = (await ctx.cdp.send("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: false,
+  })) as { data?: string };
   if (!cdpResult.data) {
     throw new FailureError("Chromium CDP: Page.captureScreenshot returned no data.", {
       error_code: FAILURE_CODES.CHROMIUM_SCREENSHOT_FAILED,
@@ -125,7 +128,8 @@ export async function captureScreenshot(
       error_kind: "unknown",
     });
   }
-  let bytes = Buffer.from(cdpResult.data, "base64");
+  let bytes: Buffer = Buffer.from(cdpResult.data, "base64");
+  if (opts.cssPixels) bytes = await toCssPixels(ctx.cdp, bytes);
 
   const rotation = opts.rotation && opts.rotation !== "Portrait" ? opts.rotation : null;
   const scale = opts.scale != null && opts.scale > 0 && opts.scale < 1 ? opts.scale : null;
