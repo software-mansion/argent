@@ -32,10 +32,26 @@ function clampNormalizedFrame(
   };
 }
 
+/** Every role {@link mapNativeTraitsToDescribeRole} returns. */
+export const NATIVE_DESCRIBE_ROLES = [
+  "AXHeading",
+  "AXSwitch",
+  "AXButton",
+  "AXTextField",
+  "AXLink",
+  "AXImage",
+  "AXStaticText",
+  "AXTabBar",
+  "AXAdjustable",
+  "AXGroup",
+] as const;
+
 export function mapNativeTraitsToDescribeRole(traits: string[]): string {
   const set = new Set(traits);
   if (set.has("header")) return "AXHeading";
-  if (set.has("button") || set.has("toggleButton")) return "AXButton";
+  // A UISwitch carries `button` too. XCTest calls the element a Switch.
+  if (set.has("toggleButton")) return "AXSwitch";
+  if (set.has("button")) return "AXButton";
   // `textEntry` is on every text input (ax-service reads it from a private trait bit).
   if (set.has("searchField") || set.has("textEntry")) return "AXTextField";
   if (set.has("link")) return "AXLink";

@@ -3,15 +3,17 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Registry } from "@argent/registry";
-import type { DescribeNode, DescribeTreeData } from "../../src/tools/describe/contract";
+import type {
+  DescribeNode,
+  DescribeSource,
+  DescribeTreeData,
+} from "../../src/tools/describe/contract";
 
-// The iOS test exercises the focus-wait's source gate (a source that can't
-// report focus bails out of the poll) by stubbing the tree fetch with an
-// `ax-service`-tagged tree — flows no longer degrade to that source on their
-// own, so the stub is the only way to present it. The Android test leaves
+// The iOS tests exercise the focus-wait's source gate (`ax-service` reports
+// focus and is polled; a source that can't bails out of the poll) by stubbing
+// the tree fetch with a tree tagged with that source. The Android test leaves
 // `currentFetch` unset and drives the REAL fetch path: its tree comes from the
 // android-devtools getHierarchy stub below.
-let currentTree: () => DescribeNode;
 let currentFetch: (() => DescribeTreeData) | undefined;
 vi.mock("../../src/tools/flows/flow-tree", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/tools/flows/flow-tree")>();
@@ -120,52 +122,75 @@ describe("type directive focus wait", () => {
     expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(720);
   });
 
-  it("skips the focus poll on a source that can't report focus", async () => {
-    let axReads = 0;
-    currentTree = () => {
-      axReads++;
+  /** An iOS screen with one email field, focused once `focusedFrom` reads have happened. */
+  function stubIosTree(source: DescribeSource, focusedFrom: number): () => number {
+    let reads = 0;
+    currentFetch = () => {
+      reads++;
+      const field: DescribeNode = {
+        role: "AXTextField",
+        label: "Email",
+        frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 },
+        children: [],
+        ...(reads >= focusedFrom ? { focused: true } : {}),
+      };
       return {
-        role: "AXWindow",
-        frame: { x: 0, y: 0, width: 1, height: 1 },
-        children: [
-          {
-            role: "AXTextField",
-            label: "Email",
-            frame: { x: 0.1, y: 0.2, width: 0.8, height: 0.06 },
-            children: [],
-          },
-        ],
+        tree: { role: "AXWindow", frame: { x: 0, y: 0, width: 1, height: 1 }, children: [field] },
+        source,
       };
     };
-    currentFetch = () => ({ tree: currentTree(), source: "ax-service" });
-    const calls: Call[] = [];
-    const registry = mockRegistry(calls, () => ({ xml: emailXml(false) }));
+    return () => reads;
+  }
 
+  async function typeIntoEmail(): Promise<Call[]> {
+    const calls: Call[] = [];
     await writeFlow("ax-login", {
       executionPrerequisite: "",
       steps: [{ kind: "type", into: { text: "Email" }, text: "a@b.com", submit: false }],
     });
-
     const result = asRun(
-      await createRunFlowTool(registry).execute(
+      await createRunFlowTool(mockRegistry(calls, () => ({ xml: emailXml(false) }))).execute(
         {},
         { name: "ax-login", project_root: tmpDir, device: IOS_DEVICE }
       )
     );
-
     expect(result.ok).toBe(true);
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["type:pass"]);
-    // Reads 1-2: pre-tap settle. Read 3: the focus wait's single look, after
-    // which the ax-service source bails out instead of polling to the timeout.
-    expect(axReads).toBe(3);
-
-    const tap = calls.find((c) => c.id === "gesture-tap");
-    const keys = calls.filter((c) => c.id === "keyboard");
     // submit: false — no trailing Enter.
-    expect(keys.map((c) => c.args.text)).toEqual(["a@b.com"]);
+    expect(calls.filter((c) => c.id === "keyboard").map((c) => c.args.text)).toEqual(["a@b.com"]);
+    return calls;
+  }
+
+  /** Milliseconds from the focus tap to the first keystroke. */
+  function tapToKeys(calls: Call[]): number {
+    const tap = calls.find((c) => c.id === "gesture-tap")!;
+    return calls.find((c) => c.id === "keyboard")!.t - tap.t;
+  }
+
+  it("polls the ax-service tree until the field reports focus (ios simulator)", async () => {
+    // Reads 1-2: pre-tap settle. Read 3: the focus wait's first look (not yet
+    // focused). Read 4 reports focus — only then may the keyboard fire.
+    const reads = stubIosTree("ax-service", 4);
+
+    const calls = await typeIntoEmail();
+
+    expect(reads()).toBe(4);
+    // Settle plus one poll interval; slack as in the android case.
+    expect(tapToKeys(calls)).toBeGreaterThanOrEqual(720);
+  });
+
+  it("skips the focus poll on a source that can't report focus", async () => {
+    // xcuitest-runner is excluded from the focus-reporting sources on purpose.
+    const reads = stubIosTree("xcuitest-runner", Infinity);
+
+    const calls = await typeIntoEmail();
+
+    // Reads 1-2: pre-tap settle. Read 3: the focus wait's single look, after
+    // which the source bails out instead of polling to the timeout.
+    expect(reads()).toBe(3);
     // The fixed settle still applies even without a focus-reporting source:
     // skipping it alongside the poll leaves only the single tree read above, so
     // 10% of slack for the timer (see the case above) still pins the branch.
-    expect(keys[0]!.t - tap!.t).toBeGreaterThanOrEqual(450);
+    expect(tapToKeys(calls)).toBeGreaterThanOrEqual(450);
   });
 });

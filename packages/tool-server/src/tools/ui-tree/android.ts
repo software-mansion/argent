@@ -18,6 +18,7 @@ const LEGACY_UNSUPPORTED_FIELDS = [
   "keyboardVisible",
   "foregroundApp",
   "alertVisible",
+  "interfaceOrientation",
 ];
 
 // AccessibilityWindowInfo types.
@@ -142,7 +143,8 @@ export function adaptAndroidTree(
   };
   if (!v2) return tree;
 
-  const unsupported: string[] = [];
+  // The helper reports no interface orientation at any version.
+  const unsupported: string[] = ["interfaceOrientation"];
   const sdk = capture.sdkInt ?? 0;
   if (sdk < 26) unsupported.push("placeholder", "hintShowing");
   if (sdk < 28) unsupported.push("heading");
