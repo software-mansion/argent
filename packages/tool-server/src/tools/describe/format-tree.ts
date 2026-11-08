@@ -198,29 +198,6 @@ function foldedChildren(
   return { count: folded.length, sides: WINDOW_SIDES.filter((side) => present.has(side)) };
 }
 
-/**
- * The name of a clickable row that shows none: text the fold left out, such as a
- * `left:-9999px` label on an icon button, or the title of a card with only a sliver inside
- * the window. A scroller's folded rows are its content, and a folded link or button is a
- * row of its own, so neither names the row.
- */
-function foldedName(row: DescribeNode, offscreen: ReadonlySet<DescribeNode>): string | undefined {
-  if (offscreen.size === 0 || !row.clickable || row.scrollable || row.label || row.value) {
-    return undefined;
-  }
-  let name: string | undefined;
-  const stack = [...row.children].reverse();
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    const own = node.label || node.value;
-    if (own && !offscreen.has(node)) return undefined;
-    if (node.clickable) continue;
-    name ||= own;
-    for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
-  }
-  return name;
-}
-
 function renderFlat(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
@@ -255,11 +232,9 @@ function renderNested(
     const { node, depth } = stack.pop()!;
     if (printsLine(node, contentRoles)) {
       const { count, sides } = foldedChildren(node, offscreen, contentRoles);
-      let shown = node;
-      if (count > 0) shown = { ...shown, scrollHidden: count };
-      const name = foldedName(node, offscreen);
-      if (name) shown = { ...shown, label: name };
-      lines.push(formatLine(shown, depth, source, sides));
+      lines.push(
+        formatLine(count > 0 ? { ...node, scrollHidden: count } : node, depth, source, sides)
+      );
     }
     pushChildren(node, depth + 1);
   }
