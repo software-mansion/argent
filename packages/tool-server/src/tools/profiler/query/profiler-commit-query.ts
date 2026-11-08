@@ -24,6 +24,7 @@ import {
   formatRenderSummaryReason,
   renderNameOutsideStoredCommits,
   renderSummaryNameMiss,
+  storedOnlyNote,
   type RenderSummary,
 } from "../../../utils/react-profiler/render-summary";
 
@@ -171,22 +172,6 @@ function formatReason(commit: DevToolsFiberCommit): string {
   }
   if (cd.context) parts.push("(context)");
   return parts.join(" ");
-}
-
-/** Only when commits under 16ms hold renders the stored total cannot show. */
-function storedOnlyNote(
-  name: string,
-  storedRenders: number,
-  summary: RenderSummary | null
-): string {
-  const row = summary?.components.find((c) => c.name === name);
-  if (!summary || !row) return "";
-  const allRenders = row.rerenders + row.mounts + row.untrackedRenders;
-  if (allRenders <= storedRenders) return "";
-  return (
-    ` (stored commits only; ${formatCount(allRenders)} renders over all ` +
-    `${formatCount(summary.totalCommits)} commits, see mode=\`render_counts\`)`
-  );
 }
 
 function renderByComponent(

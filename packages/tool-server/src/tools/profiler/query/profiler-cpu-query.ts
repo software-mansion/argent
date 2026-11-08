@@ -23,6 +23,7 @@ import {
 import {
   parseRenderSummary,
   renderNameOutsideStoredCommits,
+  storedOnlyNote,
   type RenderSummary,
 } from "../../../utils/react-profiler/render-summary";
 import { renderNoStoredCommits } from "./profiler-commit-query";
@@ -382,7 +383,13 @@ function renderComponentCpu(
     `## CPU During \`${resolvedName}\` Commits`,
     "",
     ...(resolutionNote ? [resolutionNote, ""] : []),
-    `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms`,
+    `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms` +
+      storedOnlyNote(
+        resolvedName,
+        componentCommits.length,
+        commitTree.renderSummary,
+        "`profiler-commit-query` mode=`render_counts`"
+      ),
     "",
     "| Function | Self (ms) | Total (ms) | Location |",
     "|---|---|---|---|",
@@ -434,7 +441,7 @@ Modes:
 - top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
 - time_window: CPU breakdown for time_window_ms (e.g. during a slow commit or hang).
 - call_tree: For a given function_name, show its callees, and its callers with include_callers.
-- component_cpu: For a given component_name, aggregate CPU activity across all its commits.
+- component_cpu: For a given component_name, aggregate CPU activity across its stored commits.
 In top_functions and time_window, self-times are the summed sampling intervals of the samples that
 landed in the window, so they measure sampled coverage rather than the window's width and do not
 change if you widen the query. Their tables state how many samples they cover and how much was idle.

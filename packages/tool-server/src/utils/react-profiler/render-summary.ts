@@ -411,6 +411,27 @@ export function renderNameOutsideStoredCommits(
   );
 }
 
+/**
+ * Only when commits under 16ms hold renders the stored total cannot show.
+ * `renderCounts` names where to read them: a tool other than
+ * `profiler-commit-query` has to name that tool too.
+ */
+export function storedOnlyNote(
+  name: string,
+  storedRenders: number,
+  summary: RenderSummary | null,
+  renderCounts = "mode=`render_counts`"
+): string {
+  const row = summary?.components.find((c) => c.name === name);
+  if (!summary || !row) return "";
+  const allRenders = row.rerenders + row.mounts + row.untrackedRenders;
+  if (allRenders <= storedRenders) return "";
+  return (
+    ` (stored commits only; ${formatCount(allRenders)} renders over all ` +
+    `${formatCount(summary.totalCommits)} commits, see ${renderCounts})`
+  );
+}
+
 export function formatRenderSummaryReason(c: RenderSummaryComponent): string {
   switch (c.reason) {
     case null:

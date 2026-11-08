@@ -656,18 +656,18 @@ describe("profiler-cpu-query component_cpu", () => {
     meta: Record<string, unknown>
   ): Promise<void> {
     const cpuProfilePath = join(scratch, `${deviceId}_cpu.json`);
-    const root = {
-      id: 1,
-      callFrame: { functionName: "[root]", scriptId: "0", url: "", lineNumber: 0, columnNumber: 0 },
-    };
+    const frame = { scriptId: "0", url: "", lineNumber: 0, columnNumber: 0 };
+    const root = { id: 1, callFrame: { ...frame, functionName: "[root]" }, children: [2] };
+    const work = { id: 2, callFrame: { ...frame, functionName: "work" } };
     await fs.writeFile(
       cpuProfilePath,
       JSON.stringify({
         startTime: 1000,
-        endTime: 2000,
-        nodes: [root],
-        samples: [1, 1],
-        timeDeltas: [0, 1000],
+        endTime: 1_001_000,
+        nodes: [root, work],
+        // One sample of `work` spans the first second, where the fixtures' commits sit.
+        samples: [2, 2],
+        timeDeltas: [0, 1_000_000],
       })
     );
     await cacheSession(deviceId, commits, meta, cpuProfilePath);
@@ -694,6 +694,30 @@ describe("profiler-cpu-query component_cpu", () => {
     expect(out).toContain("mode=`render_counts` component_name=`ClockRow`");
     expect(out).toContain("mode=`top_functions`");
     expect(out).not.toContain("not found");
+  });
+
+  it("says when its totals cover only the stored commits, and names the other tool", async () => {
+    const stored = [fiber("ClockRow", 7, 0.07), fiber("ClockRow", 8, 0.07)];
+    await cacheCpuSession("cpu-partial-device", stored, {
+      hotCommitIndices: [7],
+      totalReactCommits: 468,
+      renderSummary: clockSummary(),
+    });
+    const out = await componentCpu("cpu-partial-device", "ClockRow");
+    expect(out).toContain(
+      "**Commits:** 2  **Total commit time:** 40.0ms (stored commits only; 14,040 renders over all 468 commits, see `profiler-commit-query` mode=`render_counts`)"
+    );
+  });
+
+  it("adds nothing when the stored commits hold every render", async () => {
+    const stored = [fiber("Row", 0, 20), fiber("Row", 1, 20)];
+    await cacheCpuSession("cpu-complete-device", stored, {
+      hotCommitIndices: [0, 1],
+      totalReactCommits: 2,
+      renderSummary: summarizeRenders(stored, timings([20, 20]), 1000),
+    });
+    const out = await componentCpu("cpu-complete-device", "Row");
+    expect(out).toContain("**Commits:** 2  **Total commit time:** 40.0ms\n");
   });
 
   it("counts a missing name against the whole session", async () => {
