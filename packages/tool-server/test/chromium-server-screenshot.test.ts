@@ -134,6 +134,23 @@ describe("chromium-server/screenshot", () => {
       await capture(cdp);
       expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
     });
+
+    it("discards the clip and takes a plain capture when the page moved during the capture", async () => {
+      const positions = [flatMetrics(0, 2000), flatMetrics(0, 2400)];
+      let reads = 0;
+      const send = vi.fn(async (method: string) => {
+        if (method === "Runtime.evaluate") {
+          return { result: { value: JSON.stringify({ w: 1024, h: 653, dpr: 2 }) } };
+        }
+        if (method === "Page.getLayoutMetrics") return positions[reads++];
+        return { data: ONE_PX_PNG_BASE64 };
+      });
+      await capture({ send } as unknown as CDPClient);
+      const calls = captureArgs(send);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toHaveProperty("clip");
+      expect(calls[1]).not.toHaveProperty("clip");
+    });
   });
 
   it("uses the provided id in the filename", async () => {

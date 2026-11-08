@@ -88,18 +88,35 @@ async function cssPixelClip(cdp: CDPClient): Promise<WindowClip | undefined> {
   }
 }
 
+/**
+ * A clip holds a position in the document. A page that scrolled between reading
+ * it and the capture is painted around the new position and comes out partly or
+ * entirely blank, so a capture whose window moved cannot be used.
+ */
+async function clipStillOnWindow(cdp: CDPClient, clip: WindowClip): Promise<boolean> {
+  const now = await readWindowClipOrigin(cdp);
+  return now !== null && Math.abs(now.x - clip.x) < 1 && Math.abs(now.y - clip.y) < 1;
+}
+
+async function capturePng(cdp: CDPClient, clip?: WindowClip): Promise<{ data?: string }> {
+  // PNG, not JPEG: matches sim-server's output and survives the downscale.
+  return (await cdp.send("Page.captureScreenshot", {
+    format: "png",
+    captureBeyondViewport: false,
+    ...(clip ? { clip } : {}),
+  })) as { data?: string };
+}
+
 /** Capture, optionally rotate / downscale with sharp, persist under `mediaDir()`. */
 export async function captureScreenshot(
   ctx: CaptureContext,
   opts: ScreenshotOpts = {}
 ): Promise<MediaReady> {
   const clip = opts.cssPixels ? await cssPixelClip(ctx.cdp) : undefined;
-  // PNG, not JPEG: matches sim-server's output and survives the downscale.
-  const cdpResult = (await ctx.cdp.send("Page.captureScreenshot", {
-    format: "png",
-    captureBeyondViewport: false,
-    ...(clip ? { clip } : {}),
-  })) as { data?: string };
+  let cdpResult = await capturePng(ctx.cdp, clip);
+  if (clip && !(await clipStillOnWindow(ctx.cdp, clip))) {
+    cdpResult = await capturePng(ctx.cdp);
+  }
   if (!cdpResult.data) {
     throw new FailureError("Chromium CDP: Page.captureScreenshot returned no data.", {
       error_code: FAILURE_CODES.CHROMIUM_SCREENSHOT_FAILED,
