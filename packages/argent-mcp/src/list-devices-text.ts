@@ -8,16 +8,16 @@
  * - no `isEmulator` (it repeats `kind`), no null fields, and no
  *   `runtimeKind: "mobile"` (only `"tv"` changes what the agent does);
  * - an iOS runtime as `iOS 27.0`, not `com.apple.CoreSimulator.SimRuntime.iOS-27-0`;
- * - iOS simulators that are not booted after the object, one short line each.
+ * - iOS simulators that are shut down after the object, one short line each.
  *
- * Usually most entries are simulators that are not booted, and agents seldom use them, but they do
+ * Usually most entries are simulators that are shut down, and agents seldom use them, but they do
  * boot them, so each keeps its udid, name, runtime, state and tags.
  */
 
 const RUNTIME_PREFIX = "com.apple.CoreSimulator.SimRuntime.";
 
 export const STOPPED_SIMULATORS_HEADER =
-  "iOS simulators that are not booted, one per line (platform, udid, name, runtime, state, tags); start one with boot-device:";
+  "iOS simulators that are shut down, one per line (platform, udid, name, runtime, state, tags); start one with boot-device:";
 
 type Entry = Record<string, unknown>;
 
@@ -46,13 +46,14 @@ function cleanEntry(device: Entry): Entry {
 
 /**
  * A simulator boot-device can start: a local or remote iOS simulator that is
- * not booted. A physical iPhone (`kind: "device"`) and a provider's device
- * (`external`) are not, so they keep their full entry.
+ * shut down. boot-device fails on one that is still `Booting`, `Shutting Down`
+ * or `Creating`, so those keep their full entry, as do a physical iPhone
+ * (`kind: "device"`) and a provider's device (`external`).
  */
 function isStoppedSimulator(device: Entry): boolean {
   if (device.platform !== "ios" && device.platform !== "ios-remote") return false;
   if ("kind" in device || "external" in device) return false;
-  return typeof device.udid === "string" && device.state !== "Booted";
+  return typeof device.udid === "string" && device.state === "Shutdown";
 }
 
 const ONE_LINE_FIELDS = new Set(["platform", "udid", "name", "runtime", "state"]);

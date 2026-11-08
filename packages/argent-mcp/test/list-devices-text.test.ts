@@ -114,6 +114,32 @@ describe("listDevicesText", () => {
     });
   });
 
+  it("keeps a simulator in a transitional state in the JSON", () => {
+    const booting = { ...stoppedDuo, state: "Booting", foldable: undefined };
+    const shuttingDown = { ...stoppedTv, state: "Shutting Down" };
+    const text = listDevicesText({ devices: [booting, shuttingDown], avds: [] })!;
+    // `boot-device` cannot start either, so the header must not name them.
+    expect(text).not.toContain(STOPPED_SIMULATORS_HEADER);
+    const parsed = JSON.parse(text) as { devices: Array<Record<string, unknown>> };
+    expect(parsed.devices.map((d) => d.state)).toEqual(["Booting", "Shutting Down"]);
+    expect(parsed.devices[1]!.runtimeKind).toBe("tv");
+  });
+
+  it("carries fields it does not know in both forms", () => {
+    const inUse = { ...booted, inUse: true, idleSeconds: 8 };
+    const stopped = { ...stoppedDuo, spareField: "a b", count: 3 };
+    const text = listDevicesText({ devices: [inUse, stopped], avds: [] })!;
+    const lines = text.split("\n");
+    const header = lines.indexOf(STOPPED_SIMULATORS_HEADER);
+    const object = JSON.parse(lines.slice(0, header).join("\n")) as {
+      devices: Array<Record<string, unknown>>;
+    };
+    expect(object.devices[0]).toMatchObject({ inUse: true, idleSeconds: 8 });
+    expect(lines[header + 1]).toBe(
+      'ios B7A9BA8A-0CE7-453D-9011-9E241846427A "iPhone Duo" iOS 27.1 Shutdown foldable spareField="a b" count=3'
+    );
+  });
+
   it("keeps physical devices, unready phones and their states in full", () => {
     const text = listDevicesText({ devices: [pairedIphone, phone], avds: [] })!;
     const parsed = JSON.parse(text) as { devices: Array<Record<string, unknown>> };
