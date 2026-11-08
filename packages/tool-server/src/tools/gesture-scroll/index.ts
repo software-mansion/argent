@@ -66,7 +66,7 @@ type Params = z.infer<typeof zodSchema>;
 export const gestureScrollTool: ToolDefinition<Params, Result> = {
   id: "gesture-scroll",
   description: `Send mouse-wheel events at a point to scroll content in a Chromium app. The anchor x/y and the deltas are fractions of the window (not pixels); x/y match gesture-tap and describe.
-Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
+Use when content is below/above the fold (describe counts it as \`[scrollHidden=N(below)]\` on a parent) or a list needs scrolling. Chromium only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
 Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
   zodSchema,
   searchHint: "scroll wheel list page chromium mouse down up content fold",
