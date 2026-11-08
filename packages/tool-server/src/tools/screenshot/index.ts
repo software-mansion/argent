@@ -231,7 +231,7 @@ const zodSchema = z.object({
     .describe(
       "Scale factor. Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.25 if unset for iOS/Android<flag:harmonyos>/HarmonyOS</flag:harmonyos>. " +
         "On a local Apple TV simulator, an Android TV or Vega, with neither set, the capture is downscaled to a 576 px long side (0.15 of a 4K capture). " +
-        "On Chromium the default is one image pixel per CSS pixel, or device pixels when the page is zoomed or still scrolling; pass 1.0 for device pixels, <1 to downscale those. Downscaling on Chromium requires the optional `sharp` dependency."
+        "On Chromium the default is one image pixel per CSS pixel; pass 1.0 for device pixels, <1 to downscale those, which requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
     .boolean()
