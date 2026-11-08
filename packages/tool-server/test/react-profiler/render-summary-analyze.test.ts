@@ -224,7 +224,7 @@ describe("source index on a hot session with a frequent component outside its fi
   });
 
   it("is built for a stored session whose hot commit cannot be shown", async () => {
-    // Saved when stop still called a commit hot whose named fiber did no work.
+    // Stop does not produce this state today; the report must still hold up.
     buildIndex.mockResolvedValue({
       index: new Map([["ClockRow", { file: "/app/src/Clock.tsx", line: 25 }]]),
       treeSitterAvailable: true,

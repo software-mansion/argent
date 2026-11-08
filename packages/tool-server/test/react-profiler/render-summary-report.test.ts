@@ -224,7 +224,7 @@ describe("report with no hot commit", () => {
   });
 
   it("uses the summary when a hot commit could not be shown", async () => {
-    // Stop marked a commit hot, but its only named fiber did no work.
+    // Stop does not produce this state today; the report must still hold up.
     const report = await render({
       noHotCommits: false,
       renderSummary: { ...CLOCK, maxCommitMs: 40, components: [] },
