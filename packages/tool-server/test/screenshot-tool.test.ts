@@ -116,6 +116,33 @@ describe("screenshot tool", () => {
     expect(result).not.toHaveProperty("url");
   });
 
+  it.each([
+    ["no scale", {}, true],
+    ["scale 1.0", { scale: 1.0 }, false],
+    ["a scale below 1", { scale: 0.5 }, false],
+  ])(
+    "on Chromium, with %s, asks for CSS pixels only without a scale",
+    async (_n, extra, cssPixels) => {
+      const captureScreenshot = vi.fn().mockResolvedValue({
+        url: "file:///tmp/chromium.png",
+        path: "/tmp/chromium.png",
+      });
+      const registry = {
+        resolveService: vi.fn().mockResolvedValue({ captureScreenshot }),
+      } as unknown as import("@argent/registry").Registry;
+      const screenshotTool = createScreenshotTool(registry);
+
+      await screenshotTool.execute(
+        {},
+        { udid: "chromium-cdp-9222", includeImageInContext: false, ...extra },
+        { artifacts: new ArtifactStore() }
+      );
+
+      expect(captureScreenshot).toHaveBeenCalledTimes(1);
+      expect(captureScreenshot.mock.calls[0]![0]).toMatchObject({ cssPixels });
+    }
+  );
+
   it("refuses a rotation override on HarmonyOS rather than returning an unrotated capture", async () => {
     const registry = {
       resolveService: vi.fn(),
