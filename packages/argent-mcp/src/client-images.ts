@@ -36,7 +36,8 @@ function matches(patterns: RegExp[], clientName: string | undefined): boolean {
 }
 
 /**
- * Form for a screenshot the agent asked for (the `screenshot` tool).
+ * Form for a screenshot the agent asked for (the `screenshot` tool), and for the images in
+ * `e2e-execute` and `screenshot-diff` results.
  * Default: `image-and-path`. Only `IMAGES_AS_TEXT` clients get `path`. Never returns `image`.
  */
 export function screenshotForm(clientName: string | undefined): ScreenshotForm {

@@ -299,6 +299,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         deviceId: getDeviceIdFromArgs(params.arguments),
       };
 
+      const form = screenshotForm(server.getClientVersion()?.name);
       const describeText =
         canonicalToolId(params.name) === "describe" ? describeResultText(result) : undefined;
       let content: ContentBlock[];
@@ -309,19 +310,13 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         ("e2eTest" in result || "flow" in result) &&
         "steps" in result
       ) {
-        content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
+        content = await flowRunToMcpContent(result as FlowExecuteResult, ctx, form);
       } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
-        content = await screenshotDiffToMcpContent(result, ctx);
+        content = await screenshotDiffToMcpContent(result, ctx, form);
       } else if (describeText !== undefined) {
         content = [{ type: "text" as const, text: describeText }];
       } else {
-        content = await toMcpContent(
-          result,
-          outputHint,
-          ctx,
-          params.arguments,
-          screenshotForm(server.getClientVersion()?.name)
-        );
+        content = await toMcpContent(result, outputHint, ctx, params.arguments, form);
       }
 
       const udid = getUdidFromArgs(params.arguments);

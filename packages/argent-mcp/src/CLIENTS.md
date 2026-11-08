@@ -36,7 +36,9 @@ Two pickers, both keyed off `clientInfo.name`:
 ### Explicit `screenshot` tool — `screenshotForm`
 
 Used when the agent called `screenshot` (or any other `outputHint: "image"` result
-routed through the normal tool path in `mcp-server.ts`).
+routed through the normal tool path in `mcp-server.ts`). The same form applies to
+the images in `e2e-execute` and `screenshot-diff` results. In the `path` form these
+results list a diff image by its file path only, with no note.
 
 | Client                       | Form                 |
 | ---------------------------- | -------------------- |
