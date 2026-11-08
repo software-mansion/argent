@@ -600,7 +600,7 @@ describe("formatDescribeTree", () => {
       const out = formatDescribeTree(page([visible, row(1), row(2), row(3)]), {
         source: "cdp-dom",
       });
-      expect(out).toMatch(/^ {2}ul \[scrollHidden=3\] {2}\(/m);
+      expect(out).toMatch(/^ {2}ul \[scrollHidden=3\(below\)\] {2}\(/m);
       expect(out).toContain("item-0");
       expect(out).not.toContain("item-1");
     });
@@ -619,7 +619,7 @@ describe("formatDescribeTree", () => {
         children: [row(1), row(2)],
       };
       const out = formatDescribeTree(page([nested]), { source: "cdp-dom" });
-      expect(out).toContain("[scrollHidden=1]");
+      expect(out).toContain("[scrollHidden=1(below)]");
       expect(out).not.toContain("section");
     });
 
@@ -632,7 +632,7 @@ describe("formatDescribeTree", () => {
       });
       const parent: DescribeNode = { role: "section", frame: offFrame, children: [fixed, row(1)] };
       const out = formatDescribeTree(page([parent]), { source: "cdp-dom" });
-      expect(out).toMatch(/section \[scrollHidden=1\]/);
+      expect(out).toMatch(/section \[scrollHidden=1\(below\)\]/);
       expect(out).toContain('"Help"');
     });
 
@@ -649,8 +649,61 @@ describe("formatDescribeTree", () => {
         children: [row(1)],
       };
       const out = formatDescribeTree(root, { source: "cdp-dom" });
-      expect(out).toContain("ROOT  html [scrollHidden=1] (0.000, 0.000, 1.000, 1.000)");
+      expect(out).toContain("ROOT  html [scrollHidden=1(below)] (0.000, 0.000, 1.000, 1.000)");
       expect(out).not.toContain("item-1");
+    });
+
+    describe("the side of the window", () => {
+      const at = (id: string, frame: DescribeNode["frame"]): DescribeNode =>
+        leaf({ role: "li", identifier: id, frame });
+      const above = { x: 0.02, y: 0, width: 0.9, height: 0 };
+      const right = { x: 1, y: 0.2, width: 0, height: 0.1 };
+      const left = { x: 0, y: 0.2, width: 0, height: 0.1 };
+
+      it("names one side when every folded row lies there", () => {
+        const out = formatDescribeTree(page([at("a", above), at("b", above)]), {
+          source: "cdp-dom",
+        });
+        expect(out).toContain("[scrollHidden=2(above)]");
+      });
+
+      it("names every side a mid-page parent has rows on, in a fixed order", () => {
+        const out = formatDescribeTree(page([row(1), at("a", above), at("b", above)]), {
+          source: "cdp-dom",
+        });
+        expect(out).toContain("[scrollHidden=3(above,below)]");
+      });
+
+      it("tells a carousel's rows to the right from a page's rows below", () => {
+        const out = formatDescribeTree(page([at("slide", right)]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(right)]");
+      });
+
+      it("reads left from a row clamped to the left edge", () => {
+        const out = formatDescribeTree(page([at("skip", left)]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(left)]");
+      });
+
+      it("reads a box-less wrapper's side from its children, not its (0,0,0,0) frame", () => {
+        const wrapper: DescribeNode = {
+          role: "section",
+          frame: { x: 0, y: 0, width: 0, height: 0 },
+          children: [row(1)],
+        };
+        const out = formatDescribeTree(page([wrapper]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(below)]");
+      });
+
+      it("prints only the count for a (0,0,0,0) leaf, which gives no side", () => {
+        const skip = leaf({
+          role: "a",
+          value: "Skip to content",
+          clickable: true,
+          frame: { x: 0, y: 0, width: 0, height: 0 },
+        });
+        const out = formatDescribeTree(page([skip]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1]");
+      });
     });
 
     it("leaves zero-area rows of other sources in the text", () => {
