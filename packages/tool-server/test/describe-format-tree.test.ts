@@ -749,6 +749,70 @@ describe("formatDescribeTree", () => {
       });
     });
 
+    describe("the name of a clickable row", () => {
+      const onScreen = { x: 0.1, y: 0.1, width: 0.05, height: 0.06 };
+      const offLeft = { x: 0, y: 0.1, width: 0, height: 0.02 };
+      const label = (value: string): DescribeNode => leaf({ role: "span", value, frame: offLeft });
+      const button = (partial: Partial<DescribeNode>): DescribeNode =>
+        leaf({ role: "button", clickable: true, frame: onScreen, ...partial });
+      const render = (row: DescribeNode) => formatDescribeTree(page([row]), { source: "cdp-dom" });
+
+      it("takes it from a folded label when the row shows none", () => {
+        const out = render(button({ children: [label("Close dialog")] }));
+        expect(out).toMatch(
+          /^ {4}button "Close dialog" \[clickable,scrollHidden=1\(left\)\] {2}\(/m
+        );
+        expect(out).not.toContain("value=");
+      });
+
+      it("finds the label under an on-screen wrapper", () => {
+        const wrapper: DescribeNode = {
+          role: "span",
+          frame: onScreen,
+          children: [label("Open settings")],
+        };
+        expect(render(button({ children: [wrapper] }))).toContain(
+          'button "Open settings" [clickable]'
+        );
+      });
+
+      it("reads a name nested inside the folded child", () => {
+        const folded: DescribeNode = {
+          role: "div",
+          frame: offLeft,
+          children: [leaf({ role: "header", label: "Card title", frame: offLeft })],
+        };
+        expect(render(button({ children: [folded] }))).toContain('button "Card title"');
+      });
+
+      it("keeps a name the row already has or shows", () => {
+        const hidden = label("hidden extra");
+        expect(render(button({ label: "Own", children: [hidden] }))).not.toContain("hidden extra");
+        expect(render(button({ value: "Own", children: [hidden] }))).not.toContain("hidden extra");
+        const shown = leaf({ role: "span", value: "Visible", frame: onScreen });
+        expect(render(button({ children: [hidden, shown] }))).not.toContain("hidden extra");
+      });
+
+      it("does not name a row after its contents", () => {
+        const hidden = label("Row 30");
+        const scroller = button({ role: "div", scrollable: true, children: [hidden] });
+        expect(render(scroller)).not.toContain("Row 30");
+        const plain = leaf({ role: "div", frame: onScreen, children: [hidden] });
+        expect(render(plain)).not.toContain("Row 30");
+        const link = leaf({ role: "a", value: "Next", clickable: true, frame: offLeft });
+        expect(render(button({ role: "div", children: [link] }))).not.toContain("Next");
+      });
+
+      it("leaves the tree data and other sources as they were", () => {
+        const row = button({ children: [label("Close dialog")] });
+        render(row);
+        expect(row.label).toBeUndefined();
+        const out = formatDescribeTree(page([row]), { source: "uiautomator" });
+        expect(out).toMatch(/^ {4}button \[clickable\]/m);
+        expect(out).toContain('value="Close dialog"');
+      });
+    });
+
     it("leaves zero-area rows of other sources in the text", () => {
       for (const source of ["uiautomator", "android-devtools", "vega-automation"] as const) {
         const out = formatDescribeTree(page([row(1)]), { source });
