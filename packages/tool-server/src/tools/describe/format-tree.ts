@@ -106,8 +106,9 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   const labelPart = formatLabel(n.label);
   const valuePart = formatAttr("value", dedupedValue);
   const idPart = formatAttr("id", n.identifier);
+  const hintPart = formatAttr("hint", n.hint);
   const flagPart = formatFlags(n, source);
-  const annotations = `${labelPart}${valuePart}${idPart}${flagPart}`.trim();
+  const annotations = `${labelPart}${valuePart}${idPart}${hintPart}${flagPart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }

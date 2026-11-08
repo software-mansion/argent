@@ -74,10 +74,11 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
 
-On an iOS simulator, a line of `describe` shows these states:
+On an iOS simulator, a line of `describe` can show:
 
 - `[disabled]` for a control that is not enabled.
 - `[selected]` for a selected control.
+- `hint="..."` for an element that has a VoiceOver hint. A physical iPhone does not report the VoiceOver hint.
 
 ## Interacting
 

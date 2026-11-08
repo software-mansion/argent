@@ -76,6 +76,29 @@ describe("describe native adapter", () => {
     );
   });
 
+  it("carries the VoiceOver hint onto the element's line, and no hint when there is none", () => {
+    const element = {
+      frame: { x: 16, y: 80, width: 100, height: 44 },
+      tapPoint: { x: 66, y: 102 },
+      normalizedFrame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+      normalizedTapPoint: { x: 0.25, y: 0.25 },
+      traits: ["button"],
+    };
+    const root = adaptNativeDescribeToDescribeResult({
+      screenFrame: { x: 0, y: 0, width: 390, height: 844 },
+      elements: [{ ...element, label: "Merge", hint: "Combines both accounts" }],
+    } satisfies NativeDescribeScreenResult);
+    expect(formatDescribeTree(root, { source: "native-devtools" })).toContain(
+      'AXButton "Merge" hint="Combines both accounts"'
+    );
+
+    const noHint = adaptNativeDescribeToDescribeResult({
+      screenFrame: { x: 0, y: 0, width: 390, height: 844 },
+      elements: [{ ...element, label: "Merge" }],
+    } satisfies NativeDescribeScreenResult);
+    expect(formatDescribeTree(noHint, { source: "native-devtools" })).not.toContain("hint=");
+  });
+
   it("clamps partially off-screen normalized frames into the public [0,1] contract", () => {
     const node = adaptNativeDescribeElementToDescribeNode({
       frame: { x: -10, y: 800, width: 420, height: 100 },

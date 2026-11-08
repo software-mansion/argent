@@ -80,6 +80,39 @@ describe("describe ax-service adapter", () => {
     );
   });
 
+  it("carries the VoiceOver hint onto the element's line", () => {
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          label: "Merge",
+          hint: "Combines both accounts",
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          traits: ["button"],
+        },
+      ],
+    });
+    expect(root.children[0]?.hint).toBe("Combines both accounts");
+    expect(formatDescribeTree(root, { source: "ax-service" })).toContain(
+      'AXButton "Merge" hint="Combines both accounts"'
+    );
+  });
+
+  it("prints no hint for a daemon that does not send the field", () => {
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          label: "Merge",
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          traits: ["button"],
+        },
+      ],
+    });
+    expect(root.children[0]?.hint).toBeUndefined();
+    expect(formatDescribeTree(root, { source: "ax-service" })).not.toContain("hint=");
+  });
+
   it("defaults to AXGroup for empty traits", () => {
     const node = adaptAXElement({
       label: "Container",

@@ -57,6 +57,7 @@ export function adaptNativeDescribeElementToDescribeNode(
     frame,
     children: [],
     label: element.label,
+    hint: element.hint,
     identifier: element.identifier,
     value: element.value,
     ...(element.traits.includes("notEnabled") ? { disabled: true } : {}),

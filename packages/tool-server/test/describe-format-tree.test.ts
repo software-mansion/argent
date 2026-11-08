@@ -416,6 +416,41 @@ describe("formatDescribeTree", () => {
   // identifier is the Android resource-id (and the iOS native-devtools
   // accessibility identifier). It's the most stable thing to match on, so it
   // must round-trip through the formatter verbatim.
+  it("prints the VoiceOver hint after the id and before the flags, escaped like the other attributes", () => {
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXButton",
+          label: "Pay",
+          value: "Ready",
+          identifier: "pay",
+          hint: 'Line one\nsays "go" C:\\tmp',
+          selected: true,
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+        }),
+      ],
+    };
+    const [line] = elementLines(formatDescribeTree(root, { source: "ax-service" }));
+    expect(line).toContain(
+      'AXButton "Pay" value="Ready" id="pay" hint="Line one\\nsays "go" C:\\\\tmp" [selected]'
+    );
+  });
+
+  it("prints no hint attribute when the hint is absent or empty", () => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({ role: "AXButton", label: "A", frame }),
+        leaf({ role: "AXButton", label: "B", hint: "", frame }),
+      ],
+    };
+    expect(formatDescribeTree(root, { source: "ax-service" })).not.toContain("hint=");
+  });
+
   it("surfaces the identifier as an id= attribute", () => {
     const root: DescribeNode = {
       role: "AXGroup",

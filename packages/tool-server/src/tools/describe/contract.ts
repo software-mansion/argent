@@ -14,6 +14,9 @@ export interface DescribeNode {
   frame: DescribeFrame;
   children: DescribeNode[];
   label?: string;
+  // The element's VoiceOver hint (iOS simulator). Not the same thing as the
+  // result-level `hint` on DescribeTreeData, which is a note about the read.
+  hint?: string;
   identifier?: string;
   value?: string;
   // Descendant text hoisted onto container leaves by the flow adapters'
@@ -43,6 +46,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       frame: describeFrameSchema,
       children: z.array(describeNodeSchema),
       label: z.string().optional(),
+      hint: z.string().optional(),
       identifier: z.string().optional(),
       value: z.string().optional(),
       subtreeText: z.string().optional(),
