@@ -4,7 +4,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import { mediaDir } from "./cdp-session";
 import type { DownscalerType, MediaReady, Rotation, ScreenshotOpts } from "./types";
-import { readScrollOffset, readViewport } from "./viewport";
+import { readViewport, readWindowClipOrigin } from "./viewport";
 
 interface SharpModule {
   (input: Buffer): {
@@ -67,19 +67,22 @@ interface CaptureContext {
   deviceId: string;
 }
 
+type WindowClip = { x: number; y: number; width: number; height: number; scale: number };
+
 /**
  * The window as a capture `clip` of one image pixel per CSS pixel. `clip.scale`
  * multiplies with the device pixel ratio while the page is rasterized, so a 1024×740
  * window on a 2x display comes out at 1024×740, not 2048×1480, without `sharp`.
- * No clip when the window already has that density or cannot be read: a plain
- * capture is then the right image, only larger.
+ * No clip when the window already has that density or cannot be clipped as a
+ * whole: a plain capture is then the right image, only larger.
  */
-async function cssPixelClip(cdp: CDPClient) {
+async function cssPixelClip(cdp: CDPClient): Promise<WindowClip | undefined> {
   try {
     const { width, height, devicePixelRatio } = await readViewport(cdp);
     if (devicePixelRatio <= 1) return undefined;
-    const { x, y } = await readScrollOffset(cdp);
-    return { x, y, width, height, scale: 1 / devicePixelRatio };
+    const origin = await readWindowClipOrigin(cdp);
+    if (!origin) return undefined;
+    return { ...origin, width, height, scale: 1 / devicePixelRatio };
   } catch {
     return undefined;
   }

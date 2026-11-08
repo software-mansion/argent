@@ -93,3 +93,26 @@ export async function readScrollOffset(cdp: CDPClient): Promise<{ x: number; y: 
     return { x: 0, y: 0 };
   }
 }
+
+// Exact 1 in practice; the tolerance only keeps float noise from costing a clip.
+const isOne = (n: number | undefined): boolean => typeof n === "number" && Math.abs(n - 1) < 1e-3;
+
+/**
+ * The origin for a clip of the whole window, or null when such a clip cannot be
+ * trusted. Page zoom is the catch: CDP sizes the output from the widget's device
+ * scale factor while `devicePixelRatio` also carries the zoom, so at 150% the
+ * clip crops the window, or comes out blank on a scrolled page. Pinch zoom is
+ * the same trap: `innerWidth` stays at the layout size while less of the page
+ * is visible. A read that fails is null too, so nothing is clipped at a guess.
+ */
+export async function readWindowClipOrigin(
+  cdp: CDPClient
+): Promise<{ x: number; y: number } | null> {
+  try {
+    const metrics = (await cdp.send("Page.getLayoutMetrics")) as LayoutMetrics;
+    const { zoom, scale } = metrics.cssVisualViewport ?? {};
+    return isOne(zoom) && isOne(scale) ? scrollOffsetFrom(metrics) : null;
+  } catch {
+    return null;
+  }
+}

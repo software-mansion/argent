@@ -62,7 +62,10 @@ describe("chromium-server/screenshot", () => {
           if (viewport instanceof Error) throw viewport;
           return { result: { value: JSON.stringify(viewport) } };
         }
-        if (method === "Page.getLayoutMetrics") return metrics;
+        if (method === "Page.getLayoutMetrics") {
+          if (metrics instanceof Error) throw metrics;
+          return metrics;
+        }
         return { data: ONE_PX_PNG_BASE64 };
       });
       return { cdp: { send } as unknown as CDPClient, send };
@@ -113,6 +116,24 @@ describe("chromium-server/screenshot", () => {
       expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
     });
 
+    it("takes a plain capture when the page position cannot be read", async () => {
+      const { cdp, send } = cdpWith({ w: 1024, h: 740, dpr: 2 }, new Error("detached"));
+      await capture(cdp);
+      expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
+    });
+
+    it.each([
+      ["page zoom", { zoom: 1.5, scale: 1 }],
+      ["pinch zoom", { zoom: 1, scale: 1.8 }],
+      ["a protocol that reports neither", {}],
+    ])("takes a plain capture under %s", async (_name, viewport) => {
+      const { cdp, send } = cdpWith(
+        { w: 682, h: 435, dpr: 3 },
+        { cssLayoutViewport: { pageX: 0, pageY: 900 }, cssVisualViewport: viewport }
+      );
+      await capture(cdp);
+      expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
+    });
   });
 
   it("uses the provided id in the filename", async () => {
