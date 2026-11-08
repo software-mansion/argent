@@ -427,7 +427,11 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         });
       }
 
-      if (api.profilingActive) {
+      // A replaced run's sampler is still on, also when this session node did
+      // not start it. Hermes ignores `Profiler.start` while it runs and clears
+      // samples only on `Profiler.stop`, so the new profile would begin where
+      // the replaced run began.
+      if (api.profilingActive || tookOver) {
         await cdp.send("Profiler.stop").catch(ignore);
         api.profilingActive = false;
       }
