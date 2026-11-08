@@ -59,6 +59,8 @@ export function adaptNativeDescribeElementToDescribeNode(
     label: element.label,
     identifier: element.identifier,
     value: element.value,
+    ...(element.traits.includes("notEnabled") ? { disabled: true } : {}),
+    ...(element.traits.includes("selected") ? { selected: true } : {}),
   };
 }
 

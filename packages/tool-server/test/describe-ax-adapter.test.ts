@@ -3,6 +3,7 @@ import {
   adaptAXElement,
   adaptAXDescribeToDescribeResult,
 } from "../src/tools/describe/platforms/ios/ios-ax-adapter";
+import { formatDescribeTree } from "../src/tools/describe/format-tree";
 import type { AXDescribeResponse } from "../src/blueprints/ax-service";
 
 describe("describe ax-service adapter", () => {
@@ -48,6 +49,35 @@ describe("describe ax-service adapter", () => {
     expect(idle?.focused).toBeUndefined();
     expect(editing?.role).toBe("AXTextField");
     expect(editing?.focused).toBe(true);
+  });
+
+  it("maps notEnabled to disabled and selected to selected, absent otherwise", () => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+    expect(adaptAXElement({ frame, traits: ["button", "notEnabled"] })).toMatchObject({
+      disabled: true,
+    });
+    expect(adaptAXElement({ frame, traits: ["button", "selected"] })).toMatchObject({
+      selected: true,
+    });
+    const plain = adaptAXElement({ frame, traits: ["button"] });
+    expect(plain).not.toHaveProperty("disabled");
+    expect(plain).not.toHaveProperty("selected");
+  });
+
+  it("prints the disabled and selected states on the element's line", () => {
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          label: "Pay",
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          traits: ["button", "notEnabled", "selected"],
+        },
+      ],
+    });
+    expect(formatDescribeTree(root, { source: "ax-service" })).toContain(
+      'AXButton "Pay" [selected,disabled]'
+    );
   });
 
   it("defaults to AXGroup for empty traits", () => {
