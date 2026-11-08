@@ -15,7 +15,6 @@ import {
   httpScreenshot,
   resolveCapturePanel,
 } from "../../utils/simulator-client";
-import { readScrollOffset } from "../../chromium-server/viewport";
 import { settleWithin } from "../../utils/timing";
 import { downscalePngInPlace, tvScreenshot } from "../screenshot";
 import type { ActionEnv } from "./flow-actions";
@@ -253,7 +252,7 @@ async function captureChromiumPng(env: ActionEnv): Promise<Buffer> {
   const ref = chromiumCdpRef(env.device);
   const api = (await env.registry.resolveService(ref.urn, ref.options)) as ChromiumCdpApi;
   const { width, height } = api.getViewport();
-  const { x, y } = await readScrollOffset(api.cdp);
+  const { x, y } = await chromiumScrollOffset(api);
   const shot = (await api.cdp.send("Page.captureScreenshot", {
     format: "png",
     captureBeyondViewport: false,
@@ -261,6 +260,40 @@ async function captureChromiumPng(env: ActionEnv): Promise<Buffer> {
   })) as { data?: string };
   if (!shot.data) throw new Error("Page.captureScreenshot returned no data");
   return Buffer.from(shot.data, "base64");
+}
+
+/** What `Page.getLayoutMetrics` reports about where the window sits in the page. */
+interface CssViewportMetrics {
+  pageX?: number;
+  pageY?: number;
+}
+
+/**
+ * Where the window's top-left corner sits in document coordinates, in CSS
+ * pixels — the origin {@link captureChromiumPng} must clip from.
+ *
+ * `cssVisualViewport` is preferred because it also carries a pinch-zoom offset;
+ * `cssLayoutViewport` is the fallback for a protocol that predates it. A read
+ * that fails or answers with nothing usable falls back to the document origin,
+ * which is the unscrolled answer and no worse than not asking.
+ */
+async function chromiumScrollOffset(api: ChromiumCdpApi): Promise<{ x: number; y: number }> {
+  try {
+    const metrics = (await api.cdp.send("Page.getLayoutMetrics")) as {
+      cssVisualViewport?: CssViewportMetrics;
+      cssLayoutViewport?: CssViewportMetrics;
+      layoutViewport?: CssViewportMetrics;
+    };
+    const vp = metrics.cssVisualViewport ?? metrics.cssLayoutViewport ?? metrics.layoutViewport;
+    const x = vp?.pageX;
+    const y = vp?.pageY;
+    return {
+      x: typeof x === "number" && Number.isFinite(x) ? x : 0,
+      y: typeof y === "number" && Number.isFinite(y) ? y : 0,
+    };
+  } catch {
+    return { x: 0, y: 0 };
+  }
 }
 
 /**
