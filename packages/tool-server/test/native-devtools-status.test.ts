@@ -93,6 +93,12 @@ function makeNativeApi(options: {
 }
 
 describe("native-devtools-status tool", () => {
+  // Agents get the disabled and selected states and the VoiceOver hint from
+  // describe; the SDK still calls the tool directly.
+  it("hides native-describe-screen from MCP", () => {
+    expect(nativeDescribeScreenTool.hideFromMcp).toBe(true);
+  });
+
   it("reports a running uninjected app as needing restart", async () => {
     const { api, ensureEnvReady } = makeNativeApi({ appRunning: true, connected: false });
 

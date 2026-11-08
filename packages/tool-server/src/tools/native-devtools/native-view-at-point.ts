@@ -17,7 +17,7 @@ const zodSchema = z.object({
   x: z
     .number()
     .describe(
-      "Raw X coordinate in points, on the portrait axes of the screen (the axes of native-describe-screen frames). NOT normalized [0,1] tap space."
+      "Raw X coordinate in points, on the portrait axes of the screen. NOT normalized [0,1] tap space."
     ),
   y: z
     .number()
@@ -74,6 +74,7 @@ view is null when nothing is drawn at that point.
 
 To get x and y from a normalized describe frame, multiply its values by the
 screen size in points, also when the UI is landscape.
+native-full-hierarchy returns that size as screen (pass maxDepth: 1 and fields: ["className"] to keep it small).
 
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
