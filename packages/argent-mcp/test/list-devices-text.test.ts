@@ -90,7 +90,7 @@ describe("listDevicesText", () => {
     );
   });
 
-  it("puts each simulator that is not booted on one line after the object", () => {
+  it("puts each simulator that is shut down on one line after the object", () => {
     const text = listDevicesText({ devices: [booted, stoppedDuo, stoppedTv], avds: [] })!;
     const lines = text.split("\n");
     const header = lines.indexOf(STOPPED_SIMULATORS_HEADER);

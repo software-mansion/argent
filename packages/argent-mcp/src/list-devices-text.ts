@@ -45,9 +45,9 @@ function cleanEntry(device: Entry): Entry {
 }
 
 /**
- * A simulator boot-device can start: a local or remote iOS simulator that is
- * shut down. boot-device fails on one that is still `Booting`, `Shutting Down`
- * or `Creating`, so those keep their full entry, as do a physical iPhone
+ * A simulator the header tells the agent to start: a local or remote iOS
+ * simulator that is shut down. One that is changing state (`Booting`,
+ * `Shutting Down`, `Creating`) keeps its full entry, as do a physical iPhone
  * (`kind: "device"`) and a provider's device (`external`).
  */
 function isStoppedSimulator(device: Entry): boolean {
