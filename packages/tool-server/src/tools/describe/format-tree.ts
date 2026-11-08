@@ -167,23 +167,19 @@ function printsLine(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
   return shouldEmit(n, contentRoles) || n.children.length > 0;
 }
 
-/** The side of the window a folded row lies on, from the edge `normRect` clamped it to. */
-function foldedSide(node: DescribeNode): WindowSide | undefined {
+/** The sides of the window a folded row lies on, from the edges `normRect` clamped it to. */
+function foldedSides(node: DescribeNode): WindowSide[] {
   const { x, y, width, height } = node.frame;
   if (x === 0 && y === 0 && width === 0 && height === 0) {
     // What `unionFrame` gives a box-less wrapper, so it says nothing about where the
     // row is: its children do. A leaf like this (a skip link) has no known side.
-    for (const child of node.children) {
-      const side = foldedSide(child);
-      if (side) return side;
-    }
-    return undefined;
+    return node.children.flatMap(foldedSides);
   }
-  if (height <= 0 && y >= 1) return "below";
-  if (height <= 0 && y <= 0) return "above";
-  if (width <= 0 && x >= 1) return "right";
-  if (width <= 0 && x <= 0) return "left";
-  return undefined;
+  if (height <= 0 && y >= 1) return ["below"];
+  if (height <= 0 && y <= 0) return ["above"];
+  if (width <= 0 && x >= 1) return ["right"];
+  if (width <= 0 && x <= 0) return ["left"];
+  return [];
 }
 
 interface FoldedChildren {
@@ -198,7 +194,7 @@ function foldedChildren(
   contentRoles: ReadonlySet<string>
 ): FoldedChildren {
   const folded = node.children.filter((c) => offscreen.has(c) && printsLine(c, contentRoles));
-  const present = new Set(folded.map(foldedSide));
+  const present = new Set(folded.flatMap(foldedSides));
   return { count: folded.length, sides: WINDOW_SIDES.filter((side) => present.has(side)) };
 }
 

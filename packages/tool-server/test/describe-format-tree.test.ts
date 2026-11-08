@@ -694,6 +694,20 @@ describe("formatDescribeTree", () => {
         expect(out).toContain("[scrollHidden=1(below)]");
       });
 
+      it("names every side of a box-less wrapper, in either child order", () => {
+        const noBox = { x: 0, y: 0, width: 0, height: 0 };
+        const sub: DescribeNode = { role: "div", frame: noBox, children: [row(1)] };
+        const link = at("a", above);
+        for (const children of [
+          [sub, link],
+          [link, sub],
+        ]) {
+          const wrapper: DescribeNode = { role: "section", frame: noBox, children };
+          const out = formatDescribeTree(page([wrapper]), { source: "cdp-dom" });
+          expect(out).toContain("[scrollHidden=1(above,below)]");
+        }
+      });
+
       it("prints only the count for a (0,0,0,0) leaf, which gives no side", () => {
         const skip = leaf({
           role: "a",
