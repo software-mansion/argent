@@ -79,6 +79,8 @@ import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
   deviceResolutionError,
   resolveFlowDevice,
+  assertDeviceMeetsRequires,
+  assertPlatformMeetsRequires,
   bindDeviceArgs,
   flowRequiresDevice,
   flowScopesDevice,
@@ -1535,13 +1537,13 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id<flag:macos-apps>, Mac app id</flag:macos-apps>), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches; with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
+        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id<flag:macos-apps>, Mac app id</flag:macos-apps>), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform` and the e2e test's `requires:` block); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
       ),
     platform: z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`.<flag:macos-apps> `macos` with no `device` runs a standalone e2e test on the Mac app its `launch` names, which need not be running (a single-key `launch: { macos: … }` map does this on its own). Auto-detection never picks a Mac app otherwise.</flag:macos-apps>"
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`.<flag:macos-apps> `macos` with no `device` runs a standalone e2e test on the Mac app its `launch` names, which need not be running (a single-key `launch: { macos: … }` map does this on its own). Auto-detection never picks a Mac app otherwise.</flag:macos-apps>"
       )
       .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
     updateBaselines: z
@@ -1731,12 +1733,27 @@ Without a link, every step kind runs.`,
         }
       }
 
+      // After the file checks, so an invalid test never reads as a skip, and before the
+      // prerequisite handshake asks the caller to set up a run that cannot happen.
+      if (params.device) {
+        await assertDeviceMeetsRequires(resolveDevice(params.device), flow.requires);
+      } else if (params.platform) {
+        assertPlatformMeetsRequires(
+          params.platform,
+          flow.requires,
+          `the ${params.platform} target this run was pointed at`
+        );
+      }
+
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
       // launch step cannot declare one — validated at parse, and a leading
       // run: chain into a launch is rejected just above unless that launch
       // merely attaches). The chromium-pinned run exempted above lands here and
       // takes the ordinary notice/acknowledge path.
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
+        // Fail now rather than ask the caller to set up a run that cannot happen. No boot is
+        // possible here: a leading launch was refused above unless the run is pinned to a device.
+        await resolveRunDevice(registry, ctx, flow, params, flowsDir, seed, viaUpload, project);
         return {
           e2eTest: flowName,
           flow: flowName,
@@ -1911,8 +1928,17 @@ async function resolveRunDevice(
     // The executor's own runStack seed, so a boot can never precede a chain it
     // then refuses.
     const leading = await leadingLaunch(flow, runStack, { registry, project });
-    const spec = leading && chromiumBootSpec(leading.app, params.platform);
+    // A block that allows only chromium (or only macos) picks that entry of a multi-platform launch.
+    const only = flow.requires?.platform?.length === 1 ? flow.requires.platform[0] : undefined;
+    const platform =
+      params.platform ?? (only === "chromium" || only === "macos" ? only : undefined);
+    const spec = leading && chromiumBootSpec(leading.app, platform);
     if (spec) {
+      assertPlatformMeetsRequires(
+        "chromium",
+        flow.requires,
+        "the chromium app its leading launch boots"
+      );
       let booted: BootedChromium;
       try {
         booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
@@ -1924,12 +1950,11 @@ async function resolveRunDevice(
     // A Mac app is the device, and its id is built from the bundle id, so a
     // flow led by a macOS launch needs nothing running: the launch starts the
     // app. Resolved as an explicit id, so the flag refusal applies.
-    const macosDevice = leading && macosLaunchDeviceId(leading.app, params.platform);
+    const macosDevice = leading && macosLaunchDeviceId(leading.app, platform);
     if (macosDevice) {
-      return {
-        device: await resolveFlowDevice(registry, ctx, { device: macosDevice }),
-        booted: null,
-      };
+      const device = await resolveFlowDevice(registry, ctx, { device: macosDevice });
+      await assertDeviceMeetsRequires(device, flow.requires);
+      return { device, booted: null };
     }
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
@@ -1948,16 +1973,29 @@ async function resolveRunDevice(
       // path exists to avoid.
       try {
         return {
-          device: await resolveFlowDevice(registry, ctx, resolveOpts(params)),
+          device: await resolveFlowDevice(registry, ctx, {
+            ...resolveOpts(params),
+            requires: flow.requires,
+          }),
           booted: null,
         };
       } catch (err) {
-        if (getFailureSignal(err)?.error_code !== FAILURE_CODES.FLOW_DEVICE_RESOLUTION) throw err;
+        const signal = getFailureSignal(err);
+        // An unreadable `requires.runtimeKind` shares the code but is a failed probe.
+        if (
+          signal?.error_code !== FAILURE_CODES.FLOW_DEVICE_RESOLUTION ||
+          signal.failure_stage === "flow_requirements"
+        ) {
+          throw err;
+        }
         return { device: null, booted: null };
       }
     }
   }
-  const device = await resolveFlowDevice(registry, ctx, resolveOpts(params));
+  const device = await resolveFlowDevice(registry, ctx, {
+    ...resolveOpts(params),
+    requires: flow.requires,
+  });
   return { device, booted: null };
 }
 
@@ -2787,6 +2825,15 @@ async function execRunStep(
   // part-executed up to the offending step.
   const refusal = fragmentLoadRefusal(state.registry, fragment, target);
   if (refusal !== undefined) return fail(refusal);
+
+  // A failure, not a skip: a fragment that silently did not run would leave a green report.
+  if (state.device) {
+    try {
+      await assertDeviceMeetsRequires(state.device, fragment.requires, `Fragment "${target}"`);
+    } catch (err) {
+      return fail(errMsg(err));
+    }
+  }
 
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory

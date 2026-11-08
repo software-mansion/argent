@@ -284,6 +284,33 @@ describe("the device of a flow led by a macOS launch", () => {
   });
 });
 
+describe("a requires: block on a flow led by a macOS launch", () => {
+  it("runs the macos entry of a multi-platform launch when the block allows only macos", async () => {
+    await writeFlow("only", {
+      executionPrerequisite: "",
+      requires: { platform: ["macos"] },
+      steps: [{ kind: "launch", app: { ios: "com.argent.ios", macos: APP } }],
+    });
+    const { registry } = makeRegistry();
+    expect((await run(registry, "only")).device).toBe(MAC_DEVICE);
+  });
+
+  it.each([
+    ["platform", { platform: ["ios" as const] }],
+    ["runtimeKind", { runtimeKind: "mobile" as const }],
+  ])("refuses the Mac app before the launch when %s excludes it", async (_key, requires) => {
+    await writeFlow("excluded", {
+      executionPrerequisite: "",
+      requires,
+      steps: [{ kind: "launch", app: { macos: APP } }],
+    });
+    const { registry, calls } = makeRegistry();
+    const err = await run(registry, "excluded").catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.FLOW_REQUIREMENTS_UNMET);
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("the launch step on a Mac app", () => {
   async function writeLaunch(root = tmpDir): Promise<void> {
     await writeFlow(
