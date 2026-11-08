@@ -24,7 +24,7 @@ export function scaleDecodedPng(src: PNG, scale?: number): PNG {
 
 /**
  * Average each `factor`×`factor` square of pixels into one, for a whole-number
- * ratio. Page text reads as well as after lanczos, at about a tenth of the CPU
+ * ratio. Page text reads as well as after lanczos, at a fraction of the CPU
  * and a much smaller PNG.
  */
 export function boxDownscaleDecodedPng(src: PNG, factor: number): PNG {

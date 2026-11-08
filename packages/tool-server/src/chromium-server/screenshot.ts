@@ -69,7 +69,10 @@ interface CaptureContext {
   deviceId: string;
 }
 
-/** The async parser inflates on the thread pool, so it does not hold the event loop. */
+/**
+ * The async parser moves only the inflate to the thread pool. Unfiltering and
+ * the pixel conversion after it run on the event loop, in one synchronous stretch.
+ */
 function decodePng(png: Buffer): Promise<PNG> {
   return new Promise((resolve, reject) => {
     new PNG().parse(png, (err, decoded) => (err ? reject(err) : resolve(decoded)));
