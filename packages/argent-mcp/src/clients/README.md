@@ -37,19 +37,19 @@ information rather than less.
 
 `test/client-profiles.test.ts` checks this table against `profiles.ts`.
 
-| `clientInfo.name`                                     | Profile             | `screenshot` tool | Auto-screenshot  | Keyword facts copied | Telemetry slug |
-| ----------------------------------------------------- | ------------------- | ----------------- | ---------------- | -------------------- | -------------- |
-| `claude-code`                                         | `claude-code`       | `image-and-path`  | `image`          | no                   | `claude_code`  |
-| `codex-mcp-client`                                    | `codex`             | `image-and-path`  | `image`          | yes                  | `codex`        |
-| `Cursor`, `cursor-vscode`                             | `cursor`            | `image-and-path`  | `image`          | yes                  | `cursor`       |
-| `opencode`                                            | `opencode`          | `image-and-path`  | `image`          | yes                  | `opencode`     |
-| `gemini-cli-mcp-client`                               | `gemini-cli`        | `image-and-path`  | `image`          | no                   | `gemini`       |
-| `Zed`                                                 | `zed`               | `image-and-path`  | `image`          | no                   | `zed`          |
-| `Visual Studio Code`, `Visual Studio Code - Insiders` | `vscode`            | `image-and-path`  | `image`          | yes                  | `vscode`       |
-| `copilot-cli`                                         | `vscode-agent-host` | `image-and-path`  | `image`          | no                   | `other`        |
-| `kiro`                                                | `kiro`              | `image-and-path`  | `image`          | no                   | `other`        |
-| `Q DEV CLI`                                           | `kiro-cli-v2`       | `path`            | `path`           | no                   | `other`        |
-| unnamed or unknown                                    | `default`           | `image-and-path`  | `image-and-path` | yes                  |                |
+| `clientInfo.name`                                     | Profile             | `screenshot` tool | Auto-screenshot  | Keyword facts copied | Telemetry slug           |
+| ----------------------------------------------------- | ------------------- | ----------------- | ---------------- | -------------------- | ------------------------ |
+| `claude-code`                                         | `claude-code`       | `image-and-path`  | `image`          | no                   | `claude_code`            |
+| `codex-mcp-client`                                    | `codex`             | `image-and-path`  | `image`          | yes                  | `codex`                  |
+| `Cursor`, `cursor-vscode`                             | `cursor`            | `image-and-path`  | `image`          | yes                  | `cursor`                 |
+| `opencode`                                            | `opencode`          | `image-and-path`  | `image`          | yes                  | `opencode`               |
+| `gemini-cli-mcp-client`                               | `gemini-cli`        | `image-and-path`  | `image`          | no                   | `gemini`                 |
+| `Zed`                                                 | `zed`               | `image-and-path`  | `image`          | no                   | `zed`                    |
+| `Visual Studio Code`, `Visual Studio Code - Insiders` | `vscode`            | `image-and-path`  | `image`          | yes                  | `vscode`                 |
+| `copilot-cli`                                         | `vscode-agent-host` | `image-and-path`  | `image`          | no                   | `other`                  |
+| `kiro`                                                | `kiro`              | `image-and-path`  | `image`          | no                   | `other`                  |
+| `Q DEV CLI`                                           | `kiro-cli-v1-v2`    | `path`            | `path`           | no                   | `other`                  |
+| unnamed or unknown                                    | `default`           | `image-and-path`  | `image-and-path` | yes                  | `other`; none if unnamed |
 
 ## Screenshot form
 
@@ -90,11 +90,12 @@ keywords. A repeated fact costs less than a missing one.
 
 ## Telemetry
 
-Every tool-server request carries an `X-Argent-AI-Client` slug. The mapping from
-`clientInfo.name` to the slug stays in `packages/telemetry/src/ai-identity.ts`,
-because its slug list is also the list of values that telemetry may record. The
-`telemetry` field in each row records what that mapping returns, and a test checks
-it.
+Tool listings and tool calls carry an `X-Argent-AI-Client` header. It holds the
+slug for a name telemetry knows, and `other` for any other name. When the handshake
+has no name, there is no header. The mapping from `clientInfo.name` to the slug
+stays in `packages/telemetry/src/ai-identity.ts`, because its slug list is also the
+list of values that telemetry may record. The `telemetry` field in each row records
+what that mapping returns, and a test checks it.
 
 Some names have a telemetry slug but no row here: `code - oss`, `windsurf`,
 `github-copilot-developer`, and `rmcp` with `WINDSURF_IDE_TYPE` set. They get the

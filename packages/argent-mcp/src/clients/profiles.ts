@@ -174,7 +174,7 @@ export const KNOWN_CLIENTS: readonly KnownClient[] = [
     // see (captured and live, 2.37.1). v1 is assumed to match: only the source of its
     // predecessor, Amazon Q CLI 1.19.7, was read. The CLI's own file-read tool sends a PNG as
     // an image on Claude models (live, v2), so the server sends the path and says to open it.
-    id: "kiro-cli-v2",
+    id: "kiro-cli-v1-v2",
     names: [/^q dev cli\b/],
     seen: ["Q DEV CLI"],
     screenshot: "path",

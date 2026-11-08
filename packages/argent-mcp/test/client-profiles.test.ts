@@ -32,8 +32,8 @@ const EXPECTED: Expected[] = [
   ["Visual Studio Code - Insiders", "vscode", "image-and-path", "image", true],
   ["copilot-cli", "vscode-agent-host", "image-and-path", "image", false],
   ["kiro", "kiro", "image-and-path", "image", false],
-  ["Q DEV CLI", "kiro-cli-v2", "path", "path", false],
-  ["q dev cli", "kiro-cli-v2", "path", "path", false],
+  ["Q DEV CLI", "kiro-cli-v1-v2", "path", "path", false],
+  ["q dev cli", "kiro-cli-v1-v2", "path", "path", false],
 ];
 
 // Unnamed, SDK-default and look-alike names keep the image, the path and the facts.
@@ -43,9 +43,18 @@ const UNKNOWN = [
   "mcp",
   "rmcp",
   "some-new-client",
-  "claude-codex",
-  "kirox",
   "my-cursor",
+  // One per row: the row's name and one more word character, which its `\b` rejects.
+  "claude-codex",
+  "codex-mcp-clientx",
+  "cursorx",
+  "opencodex",
+  "gemini-cli-mcp-clientx",
+  "zedx",
+  "visual studio codex",
+  "copilot-clix",
+  "kirox",
+  "q dev clix",
 ];
 
 describe("clientProfile", () => {
@@ -157,7 +166,7 @@ describe("clients/README.md", () => {
         code(DEFAULT_PROFILE.screenshot),
         code(DEFAULT_PROFILE.autoScreenshot),
         yesNo(DEFAULT_PROFILE.keywordFacts),
-        "",
+        `${code("other")}; none if unnamed`,
       ],
     ]);
   });
