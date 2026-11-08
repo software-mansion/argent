@@ -44,7 +44,7 @@ After an action moves you to a different screen, or whenever you don't know an e
 | Need                                           | Tool                                                                                                                           |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | Any screen: app, system dialog, Home screen    | `describe`                                                                                                                     |
-| UIKit properties of a view (iOS simulator)     | `native-find-views` (needs `bundleId` and a class, id, label, tag or `nativeID` to match)                                      |
+| App-scoped UIKit properties (iOS simulator)    | `native-describe-screen` (needs `bundleId`)                                                                                    |
 | What sits at a known raw point (iOS simulator) | `native-user-interactable-view-at-point` (the view that receives touch) or `native-view-at-point` (the visually deepest view)  |
 | Final visual fallback                          | `screenshot`, only when the tools above cannot expose the control. Do not derive routine in-app navigation targets from pixels |
 

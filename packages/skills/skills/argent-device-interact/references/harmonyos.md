@@ -17,7 +17,7 @@ Refused as unsupported on harmony:
 
 - `gesture-rotate` and `gesture-custom`: the device moves each contact along one straight line per call, so there is no arc and no long-press. There is no long-press tool on HarmonyOS.
 - `gesture-drag` and `gesture-scroll` (Chromium-only), and `rotate`: the device has no orientation command.
-- `native-view-at-point`, `native-user-interactable-view-at-point`, `debugger-component-tree`, the rest of the debugger (`debugger-evaluate`, `debugger-log-registry`), `view-network-logs` and the profilers.
+- `native-describe-screen`, `native-view-at-point`, `native-user-interactable-view-at-point`, `debugger-component-tree`, the rest of the debugger (`debugger-evaluate`, `debugger-log-registry`), `view-network-logs` and the profilers.
 - `paste`, so a `{{secret:...}}` placeholder goes through `keyboard` only.
 - Screen recording: HarmonyOS exposes no readable frame stream. Use `screenshot` for a still frame.
 

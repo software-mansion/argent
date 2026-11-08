@@ -162,7 +162,8 @@ On a TV target (Apple TV / Android TV: a \`list-devices\` entry with runtimeKind
 Returns \`{ description, source }\`: \`description\` renders the tree one line per element, with its role, label/value/id, interactivity flags and frame. Frames are normalized [0,1] fractions of the screen / window width and height (not pixels); tap an element at the centre of its frame. The tree has no z-order or occlusion information: an element may be covered by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
 Fails if the tree cannot be read, e.g. on a physical iOS device before launch-app has started an app.
 
-For UIKit properties of a view (class name, accessibilityIdentifier), use native-find-views (iOS simulator only).
+For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
+use native-describe-screen with an explicit bundleId instead (iOS simulator only).
 For React Native component names, or a testID describe does not list, use debugger-component-tree.`,
     zodSchema,
     alwaysLoad: true,

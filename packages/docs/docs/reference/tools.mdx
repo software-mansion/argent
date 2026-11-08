@@ -115,6 +115,7 @@ Call `screenshot` or `describe` to read the screen again.
 
 | Tool                                     | Description                                                                             |
 | ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| `native-describe-screen`                 | Read the app's native accessibility screen description                                  |
 | `native-full-hierarchy`                  | Get the complete UIKit view tree                                                        |
 | `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`                      |
 | `native-view-at-point`                   | Inspect the deepest visible view at a native window point                               |
@@ -260,7 +261,6 @@ Argent hides these tools from MCP, so the agent does not see them. Call them wit
 | `ui-tree`                         | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                       |
 | `foreground-app`                  | Get the app in front, iOS simulator and Android                          | None                                             |
 | `fill`                            | Set the text of the focused text field                                   | `keyboard`                                       |
-| `native-describe-screen`          | Read the app's native accessibility screen description                   | `describe`                                       |
 | `native-devtools-status`          | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                        |
 | `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                              |
 | `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions`       |
@@ -273,7 +273,6 @@ Some agent tools do not always give the same result as the hidden tool:
 - `restart-app` always relaunches the app. No agent tool leaves an app stopped. When the app is not installed, `restart-app` fails and `terminate-app` succeeds.
 - `describe` returns pruned text with one line for each element, not the raw tree. On an iOS simulator, the text does not show which element contains which. `describe` does not give the `hidden`, `covered`, `alertVisible`, `keyboardVisible` or `foregroundApp` fields.
 - `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` does not.
-- `describe` reads the same native screen description as `native-describe-screen` when the accessibility service returns no elements. `describe` does not give the class name of a view or frames in points. `native-find-views` gives the class name.
 - `native-find-views`, `native-full-hierarchy`, `native-view-at-point`, `native-user-interactable-view-at-point` and, on iOS, `native-network-logs` return the same `message` as `native-devtools-status` when native devtools are not connected. Their `status` names the remedy, where `native-devtools-status` gives `state`. They fail instead for an Apple system app and for an app that a device provider did not lend. `native-profiler-*` do not use native devtools.
 - `chromium-storage` with no key returns every entry. Through `debugger-evaluate`, a bare `localStorage` returns `{}`, so use `Object.fromEntries(Object.entries(localStorage))`.
 - `profiler-cpu-query` measures each CPU sample with its own interval and does not list idle time as a function. Thus its times can be different from the times of `react-profiler-cpu-summary`. `react-profiler-cpu-summary` lists anonymous functions as `(anonymous)`. `profiler-cpu-query` counts them as idle.

@@ -56,10 +56,6 @@ If status is restart_required: follow the message (usually restart-app), then re
 An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
-  // Agents get the same read from `describe`, which falls back to this RPC
-  // (ViewHierarchy.describeScreen) when the ax-service returns nothing. The SDK
-  // still calls it directly.
-  hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `Reading native screen for ${params.bundleId}`,
     completedMsg: ({ params }) => `Read native screen for ${params.bundleId}`,
