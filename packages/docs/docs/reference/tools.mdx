@@ -268,7 +268,7 @@ These calls fail when the app that Argent runs answers the quit with a prompt, f
 - `restart-app`
 - a `launch` step of an e2e test
 
-The app continues to run. The agent answers the prompt, then tries again. Until the agent answers the prompt, each try of the same tool-server fails in the same way. Argent does not ask the app to quit again, because the app then quits without saving. For the panel that asks to keep a new document, the agent uses `file-panel`, for example with `discard`. Argent force-quits an app that does not answer the quit or does not quit within 5 seconds. A dialog that was open before the quit does not stop the force-quit. After a force-quit, the result has a `note`, because the unsaved changes of the app can be lost. The result also has a `note` when the app quits while it shows a dialog. The dialog can be the prompt of a quit that the tool-server did not ask for, for example the quit of another tool-server.
+The app continues to run. The agent answers the prompt, then tries again. Until the agent answers the prompt, each try fails in the same way. Argent does not ask the app to quit again, because the app then quits without saving. For the panel that asks to keep a new document, the agent uses `file-panel`, for example with `discard`. Argent force-quits an app that does not answer the quit or does not quit within 5 seconds. A dialog that was open before the quit does not stop the force-quit. After a force-quit, the result has a `note`, because the unsaved changes of the app can be lost. The result also has a `note` when the app quits while it shows a dialog. The dialog can be the prompt of a quit that the tool-server did not ask for, for example a quit that you chose.
 
 The other app tools on a Mac app:
 
@@ -282,13 +282,11 @@ The other app tools on a Mac app:
 
 On a Mac app, the results of `launch-app` and `restart-app` have `appPath`, the `.app` bundle that runs, and `args`, the arguments it runs with. When several folders, for example git worktrees, build the same app, `appPath` shows which build runs.
 
-One tool-server at a time drives a Mac app. While one tool-server is connected, each call of a second tool-server fails with `MACOS_APP_IN_USE`. The call also fails with `MACOS_APP_IN_USE` while a different program holds the connection to the Argent library. This also applies to `boot-device` with `force`, to `restart-app`, to `open-url` and to a `launch` step of an e2e test. The second tool-server does not quit the app. When the first tool-server stops, the next tool-server connects. A start or a restart from a second tool-server waits while the first tool-server starts or quits the app. After the wait, the call fails with `MACOS_APP_IN_USE` while the first tool-server stays connected. When the wait takes more than 60 seconds, the call also fails with `MACOS_APP_IN_USE`. Thus two tool-servers usually do not start two copies of the app. Two copies can start when the first tool-server pauses for more than 10 seconds during the start, for example in a debugger. Two copies can also start when one of the tool-servers is an Argent version without this wait.
-
-A sandboxed app has no listening socket when its bundle id and the path of your home folder together have more than 59 characters. For example, with the home folder `/Users/anna`, the limit is 48 characters. Argent then reaches the app only through the connection of its start. Another tool-server cannot reach the app. When the connection closes, for example after `stop-simulator-server`, `stop-all-simulator-servers` or a restart of the tool-server, no tool-server can reach the app. Then:
+A sandboxed app has no listening socket when its bundle id and the path of your home folder together have more than 59 characters. For example, with the home folder `/Users/anna`, the limit is 48 characters. Argent then reaches the app only through the connection of its start. When the connection closes, for example after `stop-simulator-server`, `stop-all-simulator-servers` or a restart of the tool-server, Argent cannot reach the app. Then:
 
 - `launch-app`, and `boot-device` without `force`, fail with `MACOS_APP_ALREADY_RUNNING`.
-- Each other call fails with `MACOS_APP_NOT_CONNECTED`, also `restart-app` and a `launch` step. The app continues to run.
-- `boot-device` with `force` quits the app and starts it again.
+- `restart-app`, a `launch` step and `boot-device` with `force` quit the app and start it again.
+- Each other call fails with `MACOS_APP_NOT_CONNECTED`. The app continues to run.
 
 ### Inspection and input
 

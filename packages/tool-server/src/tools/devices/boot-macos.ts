@@ -46,7 +46,6 @@ export async function bootMacosApp(
     args: opts.args,
     noLastArgs: true,
     takeOver: opts.force,
-    force: opts.force,
   });
   return {
     platform: "macos",

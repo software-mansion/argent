@@ -77,8 +77,6 @@ export const macosImpl: PlatformImpl<{ macosApp: MacosAppApi }, OpenUrlParams, O
         "validation"
       );
     }
-    // Another tool-server may drive the app.
-    await services.macosApp.connect();
     try {
       await execFileAsync("open", ["-g", "-a", app.appPath, params.url], { timeout: 10_000 });
     } catch (err) {

@@ -35,7 +35,6 @@ import {
   recordTrackedMacosApp,
   runningTrackedApp,
   stageLibraryFor,
-  withMacosLaunchLock,
 } from "../utils/macos-apps";
 import {
   isInjectableBundleId,
@@ -54,9 +53,8 @@ import {
  * started.
  *
  * Wire format: newline-delimited JSON. The first message on each connection is
- * the handshake `{"type":"Control","payload":{"bundleId","pid","platform":"macos","protocol","libraryVersion"}}`,
- * or `{"type":"Control","payload":{"busy":true}}` while another tool-server
- * holds the app. A request is `{"type":"ViewInspector","payload":{"id","method","params","deadline"}}`;
+ * the handshake `{"type":"Control","payload":{"bundleId","pid","platform":"macos","protocol","libraryVersion"}}`.
+ * A request is `{"type":"ViewInspector","payload":{"id","method","params","deadline"}}`;
  * its reply carries the same id with `result` or `error: {message}`. `deadline`
  * (ms since 1970) is when argent stops waiting: a request that has not run by
  * then never runs, so a retry after a timeout does not type or click twice.
@@ -106,12 +104,6 @@ interface MacosLaunchOptions {
    * A copy of another build is never quit, argent's own included.
    */
   takeOver?: boolean;
-  /**
-   * With `takeOver`, also quit argent's copy when this tool-server cannot reach
-   * it and it has no listening socket: another tool-server may drive it. Only
-   * boot-device `force` sets it.
-   */
-  force?: boolean;
 }
 
 export interface MacosLaunchResult extends MacosLibraryHandshake {
@@ -142,8 +134,6 @@ export interface MacosAppApi {
     opts?: { timeoutMs?: number; runLate?: boolean }
   ): Promise<T>;
   launch(opts?: MacosLaunchOptions): Promise<MacosLaunchResult>;
-  /** Connects to the app as call() does, and fails as it does, with MACOS_APP_IN_USE among others. */
-  connect(): Promise<void>;
   isConnected(): boolean;
   handshake(): MacosLibraryHandshake | null;
   /**
@@ -465,18 +455,6 @@ class LibraryChannel {
       // The handshake comes first; anything before it is not ours to read.
       if (msg.type !== "Control") return;
       try {
-        if (msg.payload?.busy === true) {
-          throw macosFailure(
-            `${this.bundleId} is driven by another client: the argent library in the app ` +
-              `serves one connection at a time, and another process holds it, most likely ` +
-              `another argent tool-server. Stop that tool-server (another argent install, for ` +
-              `example in another worktree), or start this build under a bundle id of its own ` +
-              `to drive both.`,
-            FAILURE_CODES.MACOS_APP_IN_USE,
-            "macos_app_handshake",
-            "validation"
-          );
-        }
         this.hello = parseHandshake(msg.payload, this.bundleId, this.expectedPid);
         this.settleHello.resolve(this.hello);
       } catch (err) {
@@ -706,8 +684,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       throw macosFailure(
         `${bundleId} is running (pid ${app.pid}), but argent reaches it only through the ` +
           `connection of its start, which this tool-server does not hold: its bundle id is too ` +
-          `long for a listening socket. Another tool-server may be driving it. Quit the app, or ` +
-          `call boot-device with force: true to quit it and start it again.`,
+          `long for a listening socket. Quit the app, or run restart-app (or boot-device with ` +
+          `force: true) to quit it and start it again.`,
         FAILURE_CODES.MACOS_APP_NOT_CONNECTED,
         "macos_app_reconnect",
         "unknown"
@@ -723,8 +701,6 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       await ch.waitForHandshake(RECONNECT_TIMEOUT_MS);
     } catch (err) {
       ch.close();
-      // Busy is not broken: restart-app would quit the other tool-server's app.
-      if (errorCode(err) === FAILURE_CODES.MACOS_APP_IN_USE) throw err;
       throw notConnected(errorMessage(err), err);
     }
     // A launch in flight closes the channel at its end.
@@ -834,9 +810,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         open = new Set(shown.map((w) => w.number));
         await ch.request("Application.terminate", {}, 2_000);
       }
-    } catch (err) {
-      // Another tool-server drives the app: quitting it would stop that agent's work.
-      if (errorCode(err) === FAILURE_CODES.MACOS_APP_IN_USE) throw err;
+    } catch {
       // No channel, or no answer even after the wait: the signals stop it.
       ch = null;
     }
@@ -868,8 +842,9 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       );
     }
     if (signalled.length === 0) {
-      // The dialog may ask about a quit that this tool-server does not know of,
-      // such as another tool-server's: asked to quit again, AppKit quits without saving.
+      // The dialog may ask about a quit that this tool-server does not know of, such as
+      // one from before a tool-server restart, or the user's own Quit: asked to quit
+      // again, AppKit quits without saving.
       return open.size > 0
         ? `argent quit ${bundleId} (pid ${app.pid}) while it showed a dialog. Unsaved ` +
             `changes in it may be lost.`
@@ -897,19 +872,13 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         "unsupported"
       );
     }
-    // Another tool-server's start would otherwise pass the same checks and start a second copy.
-    return withMacosLaunchLock(bundleId, () => launchLocked(opts));
-  };
-
-  const launchLocked = async (opts: MacosLaunchOptions): Promise<MacosLaunchResult> => {
     const own = await runningTrackedApp(bundleId);
     const refuse = (message: string, code: FailureCode) =>
       macosFailure(message, code, "macos_app_launch", "validation");
 
     if (own) {
       // Returning that copy would let the caller test another build without knowing, and a
-      // take-over would quit a build that may be another agent's: every tool-server of the
-      // user shares the record, and the agents of a user normally share one tool-server.
+      // take-over would quit a build that may be another agent's.
       if (opts.appPath && opts.appPath !== own.appPath) {
         throw refuse(
           `${bundleId} already runs from ${own.appPath} (pid ${own.pid}), a different build ` +
@@ -920,34 +889,11 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           FAILURE_CODES.MACOS_APP_ALREADY_RUNNING
         );
       }
-      // Another tool-server drives the copy: that comes first, whatever the checks below say.
-      try {
-        const ch = await ensureChannel();
-        if (!opts.takeOver) {
-          const { appPath, sandboxed, logPath, args } = own;
-          const asked = opts.args && JSON.stringify(opts.args);
-          const note = [
-            asked && asked !== JSON.stringify(args)
-              ? `${bundleId} already runs with the arguments ${JSON.stringify(args)}, so it ` +
-                `did not get ${asked}. To start it with them, call boot-device with force: true.`
-              : undefined,
-            own.listenSocket ? undefined : noListenSocketNote(bundleId),
-          ]
-            .filter(Boolean)
-            .join(" ");
-          return {
-            ...ch.handshake!,
-            args,
-            appPath,
-            sandboxed,
-            logPath,
-            alreadyRunning: true,
-            ...(note ? { note } : {}),
-          };
-        }
-      } catch (err) {
-        if (errorCode(err) === FAILURE_CODES.MACOS_APP_IN_USE) throw err;
-        if (!opts.takeOver) {
+      if (!opts.takeOver) {
+        let ch: LibraryChannel;
+        try {
+          ch = await ensureChannel();
+        } catch (err) {
           throw macosFailure(
             errorMessage(err),
             FAILURE_CODES.MACOS_APP_ALREADY_RUNNING,
@@ -956,10 +902,28 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
             err
           );
         }
-        // Without a listening socket, argent cannot tell whether another tool-server drives the app.
-        if (!own.listenSocket && !opts.force) throw err;
-        // No answer: the quit below falls back to signals.
+        const { appPath, sandboxed, logPath, args } = own;
+        const asked = opts.args && JSON.stringify(opts.args);
+        const note = [
+          asked && asked !== JSON.stringify(args)
+            ? `${bundleId} already runs with the arguments ${JSON.stringify(args)}, so it ` +
+              `did not get ${asked}. To start it with them, call boot-device with force: true.`
+            : undefined,
+          own.listenSocket ? undefined : noListenSocketNote(bundleId),
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return {
+          ...ch.handshake!,
+          args,
+          appPath,
+          sandboxed,
+          logPath,
+          alreadyRunning: true,
+          ...(note ? { note } : {}),
+        };
       }
+      // A take-over quits the copy below, through the library when it answers, else with signals.
     }
 
     const tracked = own ?? getTrackedMacosApp(bundleId);
@@ -1130,7 +1094,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     // Recorded before the handshake: if this tool-server dies now, the next
     // one still knows which process to stop.
     try {
-      await recordTrackedMacosApp({
+      recordTrackedMacosApp({
         bundleId,
         appPath: info.appPath,
         executable: info.executable,
@@ -1144,7 +1108,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
         startedAt: Date.now(),
       });
     } catch (err) {
-      // A copy that no record names is one that no tool-server lists or stops.
+      // A copy that no record names is one that argent never lists or stops.
       ch.close();
       await stopProcesses([pid], null, true);
       throw err;
@@ -1254,10 +1218,6 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       void entry.settled.then(() => (entry.pending = false));
       lifecycles.set(bundleId, entry);
       return run;
-    },
-    async connect() {
-      await lifecycles.get(bundleId)?.settled;
-      await ensureChannel();
     },
     isConnected: () => Boolean(channel?.isOpen && channel.handshake),
     handshake: () => (channel?.isOpen ? channel.handshake : null),

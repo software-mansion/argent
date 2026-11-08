@@ -11,7 +11,7 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 - One app is one device: id `macos-app-<bundle id>`. `list-devices` shows only apps argent started that still run, also those of other sessions: never pick one unless the user named that app or this session started it.
 - Start an app with `boot-device {macosAppPath: "<abs path>.app"}`, never with `launch-app`, `open` or Xcode.
 - Build the `.app` without starting it: `xcodebuild ... build`, then take the bundle from `BUILT_PRODUCTS_DIR` (`xcodebuild -showBuildSettings`). Xcode Run and `react-native run-macos` start a copy without the argent library: `boot-device` then fails with `already running ... without the argent library`. Retry with `force: true`. It quits that copy, which loses its unsaved changes, so ask the user first when they may have work open in it.
-- Never pass `force` when the error names another build path or another tool-server; report it.
+- Never pass `force` when the error names another build path; report it.
 - After a code change: rebuild, then `restart-app`.
 - A start result with a `note` that the app showed no window: taps and screenshots need one. Tell the user, and read the log file it names.
 - On a hardened-runtime refusal, report it to the user. Do not sign files or change code signing.

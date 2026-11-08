@@ -25,7 +25,6 @@ import {
   macosAppIdFromBundleId,
   parseMacosAppBundleId,
 } from "./device-info";
-import { withFileLock } from "./file-lock";
 import { PS_BIN } from "./vega-process";
 
 const execFileAsync = promisify(execFile);
@@ -133,13 +132,6 @@ export function stageMacosLibraries(
 
   fs.mkdirSync(libRoot, { recursive: true, mode: 0o700 });
   fs.chmodSync(macosArgentDir(), 0o700);
-  // The time a tool-server last chose the directory, which the removal reads.
-  try {
-    const now = new Date();
-    fs.utimesSync(target, now, now);
-  } catch {
-    // Not staged yet.
-  }
   void removeUnusedLibraries(libRoot, hash);
   if (isComplete()) return staged;
   if (fs.existsSync(target)) {
@@ -153,21 +145,14 @@ export function stageMacosLibraries(
     fs.renameSync(temp, target);
   } catch (err) {
     fs.rmSync(temp, { recursive: true, force: true });
-    // Another tool-server renamed the same contents into place first.
-    const code = (err as NodeJS.ErrnoException).code;
-    if ((code === "ENOTEMPTY" || code === "EEXIST") && isComplete()) return staged;
     throw err;
   }
   return staged;
 }
 
-const UNUSED_LIBRARY_MS = 24 * 60 * 60 * 1000;
-
 /**
  * Removes the staged directories in `libRoot` of builds other than `keep`
- * (another release, another argent install) that no process maps, as `lsof`
- * reports, and that no tool-server chose for a day: a tool-server that has just
- * chosen one may not have started its app yet. Never fails.
+ * (another release) that no process maps, as `lsof` reports. Never fails.
  */
 export async function removeUnusedLibraries(libRoot: string, keep: string): Promise<void> {
   try {
@@ -190,12 +175,9 @@ export async function removeUnusedLibraries(libRoot: string, keep: string): Prom
         .filter((line) => line.startsWith(`n${root}/`))
         .map((line) => line.slice(root.length + 2).split("/")[0])
     );
-    const cutoff = Date.now() - UNUSED_LIBRARY_MS;
     for (const name of fs.readdirSync(root)) {
       if (name.startsWith(keep) || used.has(name)) continue;
-      const dir = path.join(root, name);
-      const stat = fs.statSync(dir, { throwIfNoEntry: false });
-      if (stat && stat.mtimeMs < cutoff) fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(path.join(root, name), { recursive: true, force: true });
     }
   } catch {
     // The directory is gone, or a removal failed: the next start tries again.
@@ -306,8 +288,8 @@ export function noListenSocketNote(bundleId: string): string {
   return (
     `The bundle id ${bundleId} is too long for a listening socket, so argent reaches the app ` +
     `only through the connection of this start. Once that closes (a tool-server restart, ` +
-    `stop-simulator-server), quit the app or start it again with boot-device force: true. ` +
-    `A shorter bundle id avoids this.`
+    `stop-simulator-server), quit the app or start it again with restart-app or boot-device ` +
+    `force: true. A shorter bundle id avoids this.`
   );
 }
 
@@ -371,64 +353,15 @@ function readTrackedApps(): TrackedMacosApp[] {
   return Array.isArray(raw) ? raw.filter(isTrackedMacosApp) : [];
 }
 
-/**
- * Adds or replaces the record for `app.bundleId`. The read and the write run
- * under a lock: every tool-server of the user writes the file, and two that
- * record at the same moment would each drop the other's record.
- */
-export async function recordTrackedMacosApp(app: TrackedMacosApp): Promise<void> {
+/** Adds or replaces the record for `app.bundleId`. */
+export function recordTrackedMacosApp(app: TrackedMacosApp): void {
   const file = trackedAppsFile();
+  const others = readTrackedApps().filter((a) => a.bundleId !== app.bundleId);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  // The hold is a read and a write.
-  const timeoutMs = 10_000;
-  const lock = {
-    staleMs: 5_000,
-    timeoutMs,
-    timeoutError: (holder: number | null) =>
-      macosFailure(
-        `argent could not record ${app.bundleId} in ${file}: another process` +
-          `${holder === null ? "" : ` (pid ${holder})`} has held ${file}.lock for more than ` +
-          `${timeoutMs / 1000} s. If that process hangs, stop it, then start the app again.`,
-        FAILURE_CODES.MACOS_APP_IN_USE,
-        "macos_app_record",
-        "timeout"
-      ),
-  };
-  await withFileLock(`${file}.lock`, lock, () => {
-    const others = readTrackedApps().filter((a) => a.bundleId !== app.bundleId);
-    // tmp+rename so a concurrent reader never sees a torn file.
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify([...others, app], null, 2) + "\n");
-    fs.renameSync(tmp, file);
-  });
-}
-
-/**
- * Runs `fn`, a start or a restart of `bundleId`, while no other tool-server
- * starts or quits that app: the checks for a running copy, the quit, the spawn,
- * the record and the handshake, after which a second tool-server finds the app
- * in use. The in-process launch queue does the same within one tool-server only.
- */
-export async function withMacosLaunchLock<T>(bundleId: string, fn: () => Promise<T>): Promise<T> {
-  fs.mkdirSync(macosArgentDir(), { recursive: true, mode: 0o700 });
-  const timeoutMs = 60_000;
-  return withFileLock(
-    path.join(macosArgentDir(), `${bundleId}.launch.lock`),
-    {
-      staleMs: 10_000,
-      timeoutMs,
-      timeoutError: (holder) =>
-        macosFailure(
-          `Another argent tool-server${holder === null ? "" : ` (pid ${holder})`} is starting ` +
-            `or quitting ${bundleId} and has not finished within ${timeoutMs / 1000} s. Try ` +
-            `again once it has finished: that tool-server drives the app then.`,
-          FAILURE_CODES.MACOS_APP_IN_USE,
-          "macos_app_launch_lock",
-          "timeout"
-        ),
-    },
-    fn
-  );
+  // tmp+rename so a reader never sees a torn file, also after a crash mid-write.
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify([...others, app], null, 2) + "\n");
+  fs.renameSync(tmp, file);
 }
 
 /**

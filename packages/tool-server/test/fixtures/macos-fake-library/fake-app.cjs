@@ -1,7 +1,6 @@
 // A stand-in for a Mac app with the argent library loaded, for the
 // macos-foundation tests. It speaks the library's wire format on the inherited
-// descriptor and on the listening socket, and turns away a second client while
-// one is connected, as the library does.
+// descriptor and on the listening socket.
 // `--mode=<m>` picks a misbehaviour: crash, silent, bad-protocol,
 // ignore-terminate, ask-save (answers quit with an alert; asked to quit again
 // while it shows it, it quits without saving, as AppKit does; `Prompt.cancel`
@@ -142,25 +141,10 @@ function windows() {
   ];
 }
 
-/**
- * One client at a time: the fake tells a second client on the listening socket
- * that the app is busy while the first one is connected. After the first one
- * closes, the fake lets the next one in, so a tool-server that reconnects right
- * after it closes is not refused.
- */
+/** A new client on the listening socket replaces the current one, as the library does. */
 function serveListening(socket) {
-  socket.on("error", () => {});
-  const live = () => [...clients].some((c) => !c.destroyed && !c.readableEnded);
-  if (!live()) return serve(socket);
-  setTimeout(() => {
-    if (!live()) return serve(socket);
-    socket.end(
-      JSON.stringify({
-        type: "Control",
-        payload: { busy: true, bundleId, pid: process.pid, platform: "macos", protocol: 1 },
-      }) + "\n"
-    );
-  }, 30);
+  for (const client of clients) client.destroy();
+  serve(socket);
 }
 
 serve(
