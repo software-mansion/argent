@@ -460,7 +460,8 @@ describe("selectFrequentRerenders", () => {
         component("ClockRow", 14040, 1007.8, { reason: "props", topProps: ["now"] }),
         component("View", 14508, 482),
         component("ClockScreen", 468, 295.6),
-        component("ClockHeader", 468, 14.7),
+        // The app row that re-renders most and costs least, so a sort by rate would put it first.
+        component("ClockHeader", 20000, 14.7),
       ]),
       classify
     );

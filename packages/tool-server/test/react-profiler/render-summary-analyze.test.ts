@@ -123,6 +123,10 @@ describe("source index on a session with no hot commit", () => {
     expect(buildIndex).not.toHaveBeenCalled();
   });
 
+  it("prints the session's peak commit, which analyze reads from the summary", async () => {
+    expect(await analyze("Outlet", 0.01)).toContain("No commit reached 16ms (peak commit: 5.0ms).");
+  });
+
   it("is built when a row needs it to tell app code from library code", async () => {
     await analyze("ClockRow", 1);
     expect(buildIndex).toHaveBeenCalledOnce();
