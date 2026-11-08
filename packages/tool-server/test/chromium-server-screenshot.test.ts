@@ -68,7 +68,7 @@ describe("chromium-server/screenshot", () => {
       pngBase64(width, height, () => [10, 20, 30, 255]);
 
     function cdpWith(capture: string, viewport: unknown) {
-      const send = vi.fn(async (method: string) => {
+      const send = vi.fn(async (method: string, _params?: unknown, _timeoutMs?: number) => {
         if (method === "Runtime.evaluate") {
           if (viewport instanceof Error) throw viewport;
           return { result: { value: JSON.stringify(viewport) } };
@@ -156,6 +156,13 @@ describe("chromium-server/screenshot", () => {
       const shot = flat(2048, 1480);
       const { cdp } = cdpWith(shot, new Error("detached"));
       expect((await capture(cdp)).toString("base64")).toBe(shot);
+    });
+
+    it("gives the window read a short timeout, not the CDP default", async () => {
+      const { cdp, send } = cdpWith(flat(2048, 1480), { w: 1024, h: 740, dpr: 2 });
+      await capture(cdp);
+      const read = send.mock.calls.find(([method]) => method === "Runtime.evaluate");
+      expect(read?.[2]).toBe(2_000);
     });
 
     it("returns the capture when the window reports no size", async () => {

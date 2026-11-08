@@ -86,6 +86,12 @@ const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 // and smaller files on page screenshots (flat fills and text).
 const ENCODE_OPTIONS = { filterType: 2, deflateStrategy: 0, deflateLevel: 6 };
 
+// A capture still succeeds while the renderer cannot run JS (debugger paused, a
+// navigation waiting on its host). Without a limit the read then waits out the
+// CDP default, only to return the capture unchanged. 2 s is several times the
+// slowest read on real pages while they load, even under a 4x CPU throttle.
+const VIEWPORT_READ_TIMEOUT_MS = 2_000;
+
 /**
  * One image pixel per CSS pixel, made from the capture already taken, so nothing
  * on the page or in the window changes. The ratio is the image against
@@ -97,7 +103,7 @@ async function toCssPixels(cdp: CDPClient, capture: Buffer): Promise<Buffer> {
   try {
     const size = readPngSize(capture);
     if (!size) return capture;
-    const viewport = await readViewport(cdp);
+    const viewport = await readViewport(cdp, VIEWPORT_READ_TIMEOUT_MS);
     if (size.width <= viewport.width) return capture;
     const decoded = await decodePng(capture);
     await yieldToEventLoop();
