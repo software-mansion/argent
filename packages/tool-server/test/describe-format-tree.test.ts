@@ -636,6 +636,23 @@ describe("formatDescribeTree", () => {
       expect(out).toContain('"Help"');
     });
 
+    it("keeps a row with a sliver inside the window, at every edge", () => {
+      const sliver = 0.001;
+      const frames = [
+        { x: 0.02, y: 1 - sliver, width: 0.9, height: sliver },
+        { x: 0.02, y: 0, width: 0.9, height: sliver },
+        { x: 1 - sliver, y: 0.2, width: sliver, height: 0.1 },
+        { x: 0, y: 0.2, width: sliver, height: 0.1 },
+      ];
+      for (const frame of frames) {
+        const out = formatDescribeTree(page([leaf({ role: "li", identifier: "edge", frame })]), {
+          source: "cdp-dom",
+        });
+        expect(out).toContain('id="edge"');
+        expect(out).not.toContain("scrollHidden");
+      }
+    });
+
     it("does not count a row that would not have printed", () => {
       const silent = leaf({ role: "div", frame: offFrame });
       const out = formatDescribeTree(page([silent]), { source: "cdp-dom" });
@@ -692,6 +709,18 @@ describe("formatDescribeTree", () => {
         };
         const out = formatDescribeTree(page([wrapper]), { source: "cdp-dom" });
         expect(out).toContain("[scrollHidden=1(below)]");
+      });
+
+      it("reads a corner frame as one side, the vertical one", () => {
+        const corners = [
+          { frame: { x: 1, y: 1, width: 0, height: 0 }, side: "below" },
+          { frame: { x: 0, y: 1, width: 0, height: 0 }, side: "below" },
+          { frame: { x: 1, y: 0, width: 0, height: 0 }, side: "above" },
+        ];
+        for (const { frame, side } of corners) {
+          const out = formatDescribeTree(page([at("corner", frame)]), { source: "cdp-dom" });
+          expect(out).toContain(`[scrollHidden=1(${side})]`);
+        }
       });
 
       it("names every side of a box-less wrapper, in either child order", () => {
