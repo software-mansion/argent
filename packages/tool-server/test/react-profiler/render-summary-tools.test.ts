@@ -318,6 +318,11 @@ function fiber(name: string, commitIndex: number, selfDuration: number): DevTool
   };
 }
 
+/** A context provider's fiber: no change data on any render. */
+function providerFiber(commitIndex: number): DevToolsFiberCommit {
+  return { ...fiber("ListContext.Provider", commitIndex, 0.1), changeDescription: null };
+}
+
 async function cacheSession(
   deviceId: string,
   commits: DevToolsFiberCommit[],
@@ -579,6 +584,41 @@ describe("profiler-commit-query render_counts", () => {
     });
     const out = await query("complete-device", { mode: "by_component", component_name: "Row" });
     expect(out).toContain("**Total occurrences:** 2 across 2 commits\n");
+  });
+
+  it("by_component counts a provider that rendered only in unstored commits", async () => {
+    const hot = fiber("Hot", 5, 30);
+    await cacheSession("provider-cold-device", [hot], {
+      hotCommitIndices: [5],
+      renderSummary: summarizeRenders(
+        [providerFiber(0), providerFiber(1), providerFiber(2), hot],
+        timings([1, 1, 1, 30]),
+        1000
+      ),
+    });
+    const out = await query("provider-cold-device", {
+      mode: "by_component",
+      component_name: "ListContext.Provider",
+    });
+    expect(out).toContain("`ListContext.Provider` rendered 3 times in this session");
+  });
+
+  it("by_component keeps the stored-only note for a provider with stored renders", async () => {
+    await cacheSession("provider-partial-device", [providerFiber(2)], {
+      hotCommitIndices: [2],
+      renderSummary: summarizeRenders(
+        [providerFiber(0), providerFiber(1), providerFiber(2)],
+        timings([1, 1, 30]),
+        1000
+      ),
+    });
+    const out = await query("provider-partial-device", {
+      mode: "by_component",
+      component_name: "ListContext.Provider",
+    });
+    expect(out).toContain(
+      "**Total occurrences:** 1 across 1 commits (stored commits only; 3 renders over all 3 commits, see mode=`render_counts`)"
+    );
   });
 
   it("a name render_counts cannot find points at the full list, not at by_index", async () => {

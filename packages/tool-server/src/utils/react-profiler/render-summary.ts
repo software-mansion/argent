@@ -385,6 +385,11 @@ export function renderSummaryNameMiss(
   });
 }
 
+/** A context provider has no change data on any render, so `untrackedRenders` counts too. */
+function allRenderCount(row: RenderSummaryComponent): number {
+  return row.rerenders + row.mounts + row.untrackedRenders;
+}
+
 /**
  * For a name the stored commits do not hold. It may have rendered only in commits
  * under 16ms, which stop does not keep, so answer from the summary: a component
@@ -403,7 +408,7 @@ export function renderNameOutsideStoredCommits(
     return renderSummaryNameMiss(resolution, summary);
   }
   const row = summary.components.find((c) => c.name === resolution.rawName)!;
-  const renders = row.rerenders + row.mounts + row.untrackedRenders;
+  const renders = allRenderCount(row);
   return (
     `_\`${row.name}\` rendered ${formatCount(renders)} ${renders === 1 ? "time" : "times"} in this session, ` +
     `but never in a stored commit: only commits of 16ms or more and their neighbours are stored._\n\n` +
@@ -424,7 +429,7 @@ export function storedOnlyNote(
 ): string {
   const row = summary?.components.find((c) => c.name === name);
   if (!summary || !row) return "";
-  const allRenders = row.rerenders + row.mounts + row.untrackedRenders;
+  const allRenders = allRenderCount(row);
   if (allRenders <= storedRenders) return "";
   return (
     ` (stored commits only; ${formatCount(allRenders)} renders over all ` +
