@@ -36,7 +36,7 @@ Through the MCP server, `list-devices` returns a shorter text than the SDK and `
 - Each device is one line of compact JSON.
 - The text does not include `isEmulator`, which repeats `kind`. It also does not include fields without a value or `runtimeKind: "mobile"`.
 - An iOS runtime is shortened, for example to `iOS 27.0`.
-- The iOS simulators that are not booted come after the JSON object, one line for each simulator. A line gives the platform, the udid, the name, the runtime, the state and the tags, for example `foldable` or `runtimeKind=tv`.
+- The iOS simulators that are shut down come after the JSON object, one line for each simulator. A line gives the platform, the udid, the name, the runtime, the state and the tags, for example `foldable` or `runtimeKind=tv`. A simulator in another state, for example `Booting`, stays in the JSON object.
 
 The SDK and `argent run` return the full JSON object.
 
