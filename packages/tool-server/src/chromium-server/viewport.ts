@@ -50,6 +50,29 @@ export async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
 interface CssViewportMetrics {
   pageX?: number;
   pageY?: number;
+  offsetX?: number;
+  offsetY?: number;
+  scale?: number;
+  zoom?: number;
+}
+
+interface LayoutMetrics {
+  cssVisualViewport?: CssViewportMetrics;
+  cssLayoutViewport?: CssViewportMetrics;
+  layoutViewport?: CssViewportMetrics;
+}
+
+const finite = (n: number | undefined): number =>
+  typeof n === "number" && Number.isFinite(n) ? n : 0;
+
+function scrollOffsetFrom(metrics: LayoutMetrics): { x: number; y: number } {
+  const layout = metrics.cssLayoutViewport;
+  const visual = metrics.cssVisualViewport;
+  const page = layout ?? visual ?? metrics.layoutViewport;
+  return {
+    x: finite(page?.pageX) + (layout ? finite(visual?.offsetX) : 0),
+    y: finite(page?.pageY) + (layout ? finite(visual?.offsetY) : 0),
+  };
 }
 
 /**
@@ -57,25 +80,15 @@ interface CssViewportMetrics {
  * pixels. A `Page.captureScreenshot` clip is measured from there: clipping from
  * the document origin on a scrolled page captures the blank area above the window.
  *
- * `cssVisualViewport` is preferred because it also carries a pinch-zoom offset;
- * `cssLayoutViewport` is the fallback for a protocol that predates it. A read
- * that fails or answers with nothing usable falls back to the document origin,
- * which is the unscrolled answer and no worse than not asking.
+ * The layout viewport plus the visual offset, not `cssVisualViewport.pageX`: on
+ * a right-to-left or vertical-rl page that one follows `window.scrollX` and is
+ * 0 or negative, while a clip counts from the left edge of the document.
+ * A read that fails or answers with nothing usable falls back to the document
+ * origin, which is the unscrolled answer and no worse than not asking.
  */
 export async function readScrollOffset(cdp: CDPClient): Promise<{ x: number; y: number }> {
   try {
-    const metrics = (await cdp.send("Page.getLayoutMetrics")) as {
-      cssVisualViewport?: CssViewportMetrics;
-      cssLayoutViewport?: CssViewportMetrics;
-      layoutViewport?: CssViewportMetrics;
-    };
-    const vp = metrics.cssVisualViewport ?? metrics.cssLayoutViewport ?? metrics.layoutViewport;
-    const x = vp?.pageX;
-    const y = vp?.pageY;
-    return {
-      x: typeof x === "number" && Number.isFinite(x) ? x : 0,
-      y: typeof y === "number" && Number.isFinite(y) ? y : 0,
-    };
+    return scrollOffsetFrom((await cdp.send("Page.getLayoutMetrics")) as LayoutMetrics);
   } catch {
     return { x: 0, y: 0 };
   }

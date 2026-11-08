@@ -52,7 +52,11 @@ describe("chromium-server/screenshot", () => {
   });
 
   describe("cssPixels", () => {
-    function cdpWith(viewport: unknown, metrics: unknown = {}) {
+    const flatMetrics = (pageX: number, pageY: number) => ({
+      cssLayoutViewport: { pageX, pageY },
+      cssVisualViewport: { pageX, pageY, offsetX: 0, offsetY: 0, scale: 1, zoom: 1 },
+    });
+    function cdpWith(viewport: unknown, metrics: unknown = flatMetrics(0, 0)) {
       const send = vi.fn(async (method: string) => {
         if (method === "Runtime.evaluate") {
           if (viewport instanceof Error) throw viewport;
@@ -64,35 +68,51 @@ describe("chromium-server/screenshot", () => {
       return { cdp: { send } as unknown as CDPClient, send };
     }
     const captureArgs = (send: ReturnType<typeof vi.fn>) =>
-      send.mock.calls.find(([method]) => method === "Page.captureScreenshot")![1];
+      send.mock.calls.filter(([method]) => method === "Page.captureScreenshot").map(([, a]) => a);
 
-    it("clips to the window at 1 / devicePixelRatio", async () => {
-      const { cdp, send } = cdpWith(
-        { w: 1024, h: 740, dpr: 2 },
-        { cssVisualViewport: { pageX: 0, pageY: 300 } }
-      );
+    async function capture(cdp: CDPClient) {
       const out = await captureScreenshot({ cdp, deviceId: "t" }, { cssPixels: true });
       filesToCleanup.push(out.path);
-      expect(captureArgs(send)).toEqual({
-        format: "png",
-        captureBeyondViewport: false,
-        clip: { x: 0, y: 300, width: 1024, height: 740, scale: 0.5 },
-      });
+    }
+
+    it("clips to the window at 1 / devicePixelRatio", async () => {
+      const { cdp, send } = cdpWith({ w: 1024, h: 740, dpr: 2 }, flatMetrics(0, 300));
+      await capture(cdp);
+      expect(captureArgs(send)).toEqual([
+        {
+          format: "png",
+          captureBeyondViewport: false,
+          clip: { x: 0, y: 300, width: 1024, height: 740, scale: 0.5 },
+        },
+      ]);
+    });
+
+    it("starts the clip from the layout viewport, so a right-to-left page is not blank", async () => {
+      // A right-to-left page scrolled to its start: window.scrollX is 0, the document's left edge
+      // is 4991 CSS pixels further left.
+      const { cdp, send } = cdpWith(
+        { w: 1024, h: 653, dpr: 2 },
+        {
+          cssLayoutViewport: { pageX: 4991, pageY: 0 },
+          cssVisualViewport: { pageX: 0, pageY: 0, offsetX: 0, offsetY: 0, scale: 1, zoom: 1 },
+        }
+      );
+      await capture(cdp);
+      expect(captureArgs(send)[0].clip).toMatchObject({ x: 4991, y: 0 });
     });
 
     it("takes a plain capture at one device pixel per CSS pixel", async () => {
       const { cdp, send } = cdpWith({ w: 1024, h: 740, dpr: 1 });
-      const out = await captureScreenshot({ cdp, deviceId: "t" }, { cssPixels: true });
-      filesToCleanup.push(out.path);
-      expect(captureArgs(send)).not.toHaveProperty("clip");
+      await capture(cdp);
+      expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
     });
 
     it("takes a plain capture when the window cannot be read", async () => {
       const { cdp, send } = cdpWith(new Error("detached"));
-      const out = await captureScreenshot({ cdp, deviceId: "t" }, { cssPixels: true });
-      filesToCleanup.push(out.path);
-      expect(captureArgs(send)).not.toHaveProperty("clip");
+      await capture(cdp);
+      expect(captureArgs(send)).toEqual([{ format: "png", captureBeyondViewport: false }]);
     });
+
   });
 
   it("uses the provided id in the filename", async () => {
