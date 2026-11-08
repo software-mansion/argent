@@ -244,18 +244,34 @@ function renderByComponent(
   return lines.join("\n");
 }
 
+/**
+ * Set when the session has commits that were not stored. It is about the whole
+ * session: the summary has no per-commit timestamps, so no count exists for one
+ * time range.
+ */
+function unstoredCommits(
+  data: StoredCommitData
+): { stored: number; total: number; counts: string } | null {
+  const stored = new Set(data.commits.map((c) => c.commitIndex)).size;
+  if (data.totalReactCommits === null || data.totalReactCommits <= stored) return null;
+  return {
+    stored,
+    total: data.totalReactCommits,
+    counts: data.renderSummary
+      ? " mode=`render_counts` counts them over the whole session, without timing."
+      : "",
+  };
+}
+
 function renderEmptyTimeRange(data: StoredCommitData, start: number, end: number): string {
   const range = `${start.toFixed(0)}ms → ${end.toFixed(0)}ms`;
-  const stored = new Set(data.commits.map((c) => c.commitIndex)).size;
-  if (data.totalReactCommits === null || data.totalReactCommits <= stored) {
+  const unstored = unstoredCommits(data);
+  if (!unstored) {
     return `_No commits found in the range ${range}._`;
   }
-  const counts = data.renderSummary
-    ? " mode=`render_counts` counts them over the whole session, without timing."
-    : "";
   return (
     `_No stored commits in the range ${range}: only commits of 16ms or more and their ` +
-    `neighbours are stored, so commits under 16ms in this range are not listed.${counts}_`
+    `neighbours are stored, so commits under 16ms in this range are not listed.${unstored.counts}_`
   );
 }
 
@@ -291,11 +307,20 @@ function renderByTimeRange(
     .sort((a, b) => b.commitDuration - a.commitDuration)
     .slice(0, topN);
 
+  const unstored = unstoredCommits(data);
   const lines: string[] = [
     `## Commits in ${start.toFixed(0)}ms → ${end.toFixed(0)}ms`,
     "",
     `**Commits:** ${byCommit.size}  **Fiber renders:** ${matching.length}`,
     "",
+    ...(unstored
+      ? [
+          `_Only commits of 16ms or more and their neighbours are stored (${formatCount(unstored.stored)} of ` +
+            `${formatCount(unstored.total)} commits in this session), so this range can hold commits that are ` +
+            `not listed.${unstored.counts}_`,
+          "",
+        ]
+      : []),
   ];
 
   for (const s of summaries) {

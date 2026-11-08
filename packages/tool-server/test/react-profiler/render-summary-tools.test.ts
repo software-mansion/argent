@@ -685,6 +685,65 @@ describe("profiler-commit-query by_time_range outside the stored commits", () =>
       "_No commits found in the range 0ms → 4000ms._"
     );
   });
+
+  // Commit 5 sits at t = 80 ms, inside the window above.
+  const inWindow = [fiber("Hot", 5, 30)];
+
+  it("notes commits that were not stored when the window holds a stored commit", async () => {
+    await cacheSession("range-partial-device", inWindow, {
+      hotCommitIndices: [5],
+      totalReactCommits: 468,
+      renderSummary: clockSummary(),
+    });
+    const out = await query("range-partial-device", window);
+    expect(out).toContain("**Commits:** 1  **Fiber renders:** 1");
+    expect(out).toContain(
+      "_Only commits of 16ms or more and their neighbours are stored (1 of 468 commits in this session), so this range can hold commits that are not listed. mode=`render_counts` counts them over the whole session, without timing._"
+    );
+  });
+
+  it("does not offer render_counts next to a stored commit without a summary", async () => {
+    await cacheSession("range-partial-old-device", inWindow, {
+      hotCommitIndices: [5],
+      totalReactCommits: 468,
+    });
+    const out = await query("range-partial-old-device", window);
+    expect(out).toContain("(1 of 468 commits in this session)");
+    expect(out).not.toContain("render_counts");
+  });
+
+  it("adds no note next to a stored commit when every commit is stored", async () => {
+    await cacheSession("range-partial-all-device", inWindow, {
+      hotCommitIndices: [5],
+      totalReactCommits: 1,
+      renderSummary: summarizeRenders(inWindow, timings([30]), 1000),
+    });
+    const out = await query("range-partial-all-device", window);
+    expect(out).toContain("**Commits:** 1  **Fiber renders:** 1");
+    expect(out).not.toContain("are stored");
+  });
+
+  it("compares the session total with stored commits, not with their fibers", async () => {
+    // 6 fiber entries, 2 commits, 4 commits in the session: 2 commits were not stored.
+    const manyFibers = [5, 6].flatMap((i) => [
+      fiber("A", i, 10),
+      fiber("B", i, 10),
+      fiber("C", i, 10),
+    ]);
+    await cacheSession("range-fibers-device", manyFibers, {
+      hotCommitIndices: [5, 6],
+      totalReactCommits: 4,
+    });
+    expect(await query("range-fibers-device", window)).toContain(
+      "(2 of 4 commits in this session)"
+    );
+    expect(
+      await query("range-fibers-device", {
+        mode: "by_time_range",
+        time_range_ms: { start: 1000, end: 4000 },
+      })
+    ).toContain("No stored commits in the range 1000ms → 4000ms");
+  });
 });
 
 // ── profiler-cpu-query ────────────────────────────────────────────────
