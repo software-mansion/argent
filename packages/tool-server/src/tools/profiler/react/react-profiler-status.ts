@@ -222,7 +222,9 @@ export function createReactProfilerStatusTool(
           `Your run${sessionId ? ` (session ${sessionId})` : ""} was not saved: ${lostRunCauseText(cause)}. ` +
           (stillRecording
             ? "The app is still recording it, but react-profiler-stop can no longer collect it. Call react-profiler-start: it stops that recording and starts a new run, no force needed."
-            : "Call react-profiler-start to record again."),
+            : cause === "ended_in_app"
+              ? "Call react-profiler-stop to collect it. A react-profiler-start would discard it."
+              : "Call react-profiler-start to record again."),
         ...lastRun,
         lost_run: { session_id: sessionId, cause },
       });

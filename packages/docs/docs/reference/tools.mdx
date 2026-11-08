@@ -232,12 +232,14 @@ One React profiler run at a time can record in an app. `react-profiler-status` r
 | ------------------ | ----------------------------------------------------------------------------------------------------- |
 | `active`           | A run that this tool-server started records, or `react-profiler-stop` collects the run                |
 | `saved`            | No run records. `saved_session` names the files of the last run, or of a session from `profiler-load` |
-| `lost`             | The last run of this tool-server ended without its data. `lost_run.cause` gives the reason            |
+| `lost`             | Argent did not save the last run of this tool-server. `lost_run.cause` gives the reason               |
 | `taken_over`       | Another session records, or another session replaced the run of this tool-server                      |
 | `not_started`      | No run records, and this tool-server has no run on record for the device                              |
 | `no_react_runtime` | Argent cannot read the React runtime of the app                                                       |
 
-The `lost_run.cause` values are `js_reload`, `cdp_disconnected`, `session_torn_down`, `taken_over`, `stop_failed` and `ended_in_app`. The tool-server keeps this record in memory only. After a restart, it shows a run that it started before as `taken_over`.
+The `lost_run.cause` values are `js_reload`, `cdp_disconnected`, `session_torn_down`, `taken_over`, `stop_failed` and `ended_in_app`. After `ended_in_app`, the data stays in the app. Call `react-profiler-stop` to collect the data. A `react-profiler-start` discards the data.
+
+The tool-server keeps this record in memory only. After a crash or a `kill -9`, the run continues in the app, and the new tool-server shows the run as `taken_over`. A graceful restart, for example on SIGTERM, an update or the idle shutdown, ends the run in the app first. `react-profiler-status` then returns `not_started`.
 
 A run is stale when its heartbeat is older than 5 minutes, also while you use the app during a long recording. `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` refresh the heartbeat of a run that their tool-server records. They do not refresh the heartbeat of a session that replaced this run.
 
@@ -250,6 +252,8 @@ For an `active` run, `react-profiler-status` returns `stale` and `heartbeat_age_
 - A stale run of another tool-server, a run without an owner record, or a lost run of this tool-server: `react-profiler-start` stops the run and starts a new one. It does the same for any run when you pass `force: true`. The result has `took_over` with the replaced session and the reason.
 
 When another session replaced the run, `react-profiler-stop` fails with `REACT_PROFILER_SESSION_TAKEN_OVER`, also after that session stopped. It does not stop the other recording. If profiling stopped outside Argent and no session replaced the run, `react-profiler-stop` collects the data of the run.
+
+On React Native 0.84 and older, Metro allows one debugger for each app. Any connection from a second tool-server, also a read-only `react-profiler-status`, disconnects the first tool-server. This happens before the second agent can ask the user. Argent records the run of the first tool-server as `cdp_disconnected`, and its `react-profiler-stop` fails with `REACT_PROFILER_NO_ACTIVE_SESSION`, not `REACT_PROFILER_SESSION_TAKEN_OVER`. On 0.85 and newer, Metro disconnects the earlier debugger only for a page without the `supportsMultipleDebuggers` capability.
 
 While `react-profiler-stop` collects a run, wait for its result:
 
