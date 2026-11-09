@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
@@ -42,10 +42,21 @@ vi.mock("../src/utils/vega-process", async () => {
 });
 
 const fakeHome = vi.hoisted(() => ({ dir: "" }));
+// A temp dir of this run's own: the sweep would otherwise meet real profiles
+// and those of a concurrent run of this file.
+const fakeTmp = vi.hoisted(() => ({ dir: "" }));
 const failPidWrite = vi.hoisted(() => ({ on: false, made: [] as string[] }));
+const rmCalls = vi.hoisted(() => [] as string[]);
 vi.mock("node:os", async () => {
   const actual = await vi.importActual<typeof import("node:os")>("node:os");
-  return { ...actual, homedir: () => fakeHome.dir || actual.homedir() };
+  const { mkdtempSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const { join } = await vi.importActual<typeof import("node:path")>("node:path");
+  fakeTmp.dir = mkdtempSync(join(actual.tmpdir(), "boot-browser-test-"));
+  return {
+    ...actual,
+    homedir: () => fakeHome.dir || actual.homedir(),
+    tmpdir: () => fakeTmp.dir,
+  };
 });
 
 // Paths present on the fake host and what each one is. Only the temp dir (the
@@ -60,6 +71,10 @@ vi.mock("node:fs", async () => {
   };
   return {
     ...actual,
+    rm: ((p: fs.PathLike, ...rest: unknown[]) => {
+      rmCalls.push(String(p));
+      return (actual.rm as (...a: unknown[]) => void)(p, ...rest);
+    }) as typeof fs.rm,
     mkdtempSync: ((prefix: string, opts?: fs.EncodingOption) => {
       const dir = actual.mkdtempSync(prefix, opts);
       failPidWrite.made.push(String(dir));
@@ -92,6 +107,10 @@ import {
   browserExecutableCandidates,
   snapName,
 } from "../src/tools/devices/boot-browser";
+
+afterAll(() => {
+  fs.rmSync(fakeTmp.dir, { recursive: true, force: true });
+});
 
 describe("browserExecutableCandidates", () => {
   it("looks in /Applications then ~/Applications on macOS", () => {
@@ -398,7 +417,7 @@ describe("bootBrowser", () => {
       ];
       await vi.waitFor(() => expect(gone.filter((d) => fs.existsSync(d))).toEqual([]));
       const kept = [live, locked, browser, noPidFile, foreign, justLeft];
-      expect(kept.filter((d) => fs.existsSync(d))).toEqual(kept);
+      expect(rmCalls.filter((d) => kept.includes(d))).toEqual([]);
     });
 
     it("treats a Windows lockfile as held", async () => {
@@ -448,7 +467,8 @@ describe("bootBrowser", () => {
           },
         ],
       ] as const) {
-        it(`keeps a live browser's profile when ps ${name}`, async () => {
+        // A hung ps costs its 2 s timeout per live profile.
+        it(`keeps a live browser's profile when ps ${name}`, { timeout: 15_000 }, async () => {
           const browser = make("argent-browser-psbrowser");
           fs.writeFileSync(
             path.join(browser, "argent-browser.pid"),
@@ -462,7 +482,7 @@ describe("bootBrowser", () => {
           installed.set(chrome!, "exec");
           await bootBrowser({ browser: "chrome" });
           await vi.waitFor(() => expect(fs.existsSync(dead)).toBe(false));
-          expect([browser, locked].filter((d) => fs.existsSync(d))).toEqual([browser, locked]);
+          expect(rmCalls.filter((d) => d === browser || d === locked)).toEqual([]);
         });
       }
     });
@@ -480,6 +500,12 @@ describe("bootBrowser", () => {
     expect(failPidWrite.made).toHaveLength(1);
     expect(fs.existsSync(failPidWrite.made[0]!)).toBe(false);
     expect(bootElectronAppMock).not.toHaveBeenCalled();
+  });
+
+  it("asks the browser for its command line", async () => {
+    installed.set(chrome!, "exec");
+    await bootBrowser({ browser: "chrome" });
+    expect(cdpSend.mock.calls.map((c) => c[0])).toEqual(["SystemInfo.getInfo"]);
   });
 
   it("closes its identity-check connection whether or not the browser is ours", async () => {

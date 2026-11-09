@@ -116,6 +116,9 @@ describe("guidance platform-correctness", () => {
       expect(r.guidance).toMatch(/boot-device with browser starts a fresh .*under a new id/);
       // boot-device refuses an electronPort the frozen instance still holds.
       expect(r.guidance).not.toMatch(/force/);
+      expect(r.guidance).toMatch(
+        /for an Electron app, quit .*then boot-device with electronAppPath/
+      );
     }
   });
 });
