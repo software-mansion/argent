@@ -76,16 +76,19 @@ type LentAgent = {
   handshake: () => void;
   /** Sends a CDP event, as the provider does with the app's network events. */
   sendEvent: (method: string, params: Record<string, unknown>) => void;
+  /** Turns capture on or off, as the user can in the provider at any time. */
+  setCaptureOn: (on: boolean) => void;
   received: Array<{ type: string; payload: Record<string, unknown> }>;
   socketPath: string;
 };
 
 async function startLentAgent(
-  options: { deferHandshake?: boolean; captureOn?: boolean } = {}
+  options: { deferHandshake?: boolean; captureOn?: boolean; conditionsError?: string } = {}
 ): Promise<LentAgent> {
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
+  let captureOn = options.captureOn ?? true;
 
   const sendHandshake = (socket: net.Socket) =>
     socket.write(JSON.stringify({ payload: { bundleId: BUNDLE_ID }, type: "Control" }) + "\n");
@@ -100,15 +103,21 @@ async function startLentAgent(
 
       /**
        * Answer CDP requests and `ViewInspector` RPCs the way the agent in the
-       * app would. Its provider keeps capture on unless `captureOn` is false.
+       * app would. Its provider keeps capture on unless `captureOn` is false,
+       * and answers the read of it with `conditionsError` when that is set.
        */
       if (message.type === "CDP") {
-        const result =
-          message.payload.method === "NativeDevtoolsIos.getConditions"
-            ? { enabled: options.captureOn ?? true, offline: false, latency: 2000 }
-            : {};
+        const readsConditions = message.payload.method === "NativeDevtoolsIos.getConditions";
+        const answer =
+          readsConditions && options.conditionsError !== undefined
+            ? { error: { message: options.conditionsError } }
+            : {
+                result: readsConditions
+                  ? { enabled: captureOn, offline: false, latency: 2000 }
+                  : {},
+              };
         socket.write(
-          JSON.stringify({ payload: { id: message.payload.id, result }, type: "CDP" }) + "\n"
+          JSON.stringify({ payload: { id: message.payload.id, ...answer }, type: "CDP" }) + "\n"
         );
       }
       if (message.type === "ViewInspector") {
@@ -137,6 +146,9 @@ async function startLentAgent(
       for (const socket of sockets) {
         socket.write(JSON.stringify({ payload: { method, params }, type: "CDP" }) + "\n");
       }
+    },
+    setCaptureOn: (on) => {
+      captureOn = on;
     },
     received,
     socketPath,
@@ -511,6 +523,76 @@ describe("a provider that lends its native-devtools agent", () => {
     expect(nativeNetworkCaptureWarning(DEVICE_ID)).toBeUndefined();
     expect(nativeNetworkCaptureWarning(IOS_UDID)).toBeUndefined();
     expect(liveIosNetworkCaptureDevices(BUNDLE_ID)).toEqual([]);
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  /**
+   * The provider can turn capture off between two calls. The second call must
+   * say so, not repeat what the first one read.
+   */
+  it("says capture is off when the provider turned it off after an earlier call", async () => {
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+    const call = () =>
+      nativeNetworkLogsTool.execute(
+        { nativeDevtools: instance.api },
+        { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+      ) as Promise<{ armed: boolean; header: string }>;
+
+    const first = await call();
+    agent.setCaptureOn(false);
+    const second = await call();
+
+    expect(first.armed).toBe(true);
+    expect(first.header).toMatch(/^ios-native: armed, 0 requests/);
+    expect(second.armed).toBe(false);
+    expect(second.header).toMatch(
+      /^ios-native: not armed, 0 requests \(the device provider has capture off for the app;/
+    );
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  /**
+   * A provider that cannot pass the read on answers it with an error. The note
+   * must say what argent asked, and not name Network.enable, which argent never
+   * sends here.
+   */
+  it("says the agent did not say whether capture is on when the provider answers the read with an error", async () => {
+    const agent = await startLentAgent({
+      conditionsError: "native devtools connection is not available",
+    });
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+
+    const listing = (await nativeNetworkLogsTool.execute(
+      { nativeDevtools: instance.api },
+      { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+    )) as { armed: boolean; header: string };
+
+    expect(listing.armed).toBe(false);
+    expect(listing.header).toMatch(
+      /^ios-native: not armed, 0 requests \(the agent did not say whether capture is on \([^)]*native devtools connection is not available\); the next call asks again/
+    );
+    expect(listing.header).not.toMatch(/Network\.enable/);
 
     await instance.dispose();
     await agent.close();
