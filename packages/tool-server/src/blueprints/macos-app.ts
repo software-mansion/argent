@@ -97,11 +97,16 @@ interface MacosLaunchOptions {
   /** How long a new process gets to show its first window. Default 10 s. */
   windowTimeoutMs?: number;
   /**
-   * Quit the running copies of the app and start it again: argent's own copy,
-   * instead of handing it back, and the copies that run without the argent
-   * library (the user opened the app, or Xcode Run started it), instead of
-   * refusing. They are quit only after every check that can refuse the start.
-   * A copy of another build is never quit, argent's own included.
+   * Quit argent's own copy and start it again, instead of handing it back. A
+   * copy that runs without the argent library is still refused.
+   */
+  restart?: boolean;
+  /**
+   * As `restart`, and also quit the copies of the same build that run without
+   * the argent library (the user opened the app, or Xcode Run started it),
+   * instead of refusing. Only `boot-device` with `force` asks for it. Copies
+   * are quit only after every check that can refuse the start. A copy of
+   * another build is never quit, argent's own included.
    */
   takeOver?: boolean;
 }
@@ -889,7 +894,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
           FAILURE_CODES.MACOS_APP_ALREADY_RUNNING
         );
       }
-      if (!opts.takeOver) {
+      if (!opts.takeOver && !opts.restart) {
         let ch: LibraryChannel;
         try {
           ch = await ensureChannel();
@@ -997,9 +1002,9 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     if (copies.same.length > 0 && !opts.takeOver) {
       throw refuse(
         `${bundleId} is already running (pid ${copies.same.join(", ")}) without the argent ` +
-          `library, and argent drives only a copy that it starts. Quit that copy, or call ` +
-          `boot-device with force: true (restart-app does the same): argent then quits it and ` +
-          `starts the app with the library. Unsaved changes in that copy are lost.`,
+          `library, and argent drives only a copy that it starts. That copy may be the user's: ` +
+          `ask the user to quit it, or to agree to boot-device with force: true, which quits it ` +
+          `and starts the app with the library. Unsaved changes in that copy are lost.`,
         FAILURE_CODES.MACOS_APP_ALREADY_RUNNING
       );
     }

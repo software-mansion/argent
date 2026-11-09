@@ -105,10 +105,12 @@ const LIBRARY_NAME = "libNativeDevtoolsMacos.dylib";
  * share a directory because the bootstrap loads the library from its own.
  *
  * The directory is named after the files' contents, so a new release gets a
- * new directory and a running app keeps the files it has mapped. A complete
- * directory is never written again: it is built under a temporary name and
- * renamed into place, and an incomplete one is moved aside. The directories
- * of other builds go once no app maps them ({@link removeUnusedLibraries}).
+ * new directory and a running app keeps the files it has mapped. The files of
+ * a complete directory are never written again: it is built under a temporary
+ * name and renamed into place, and an incomplete one is moved aside. Its
+ * {@link SOURCES_NAME} file lists the installs that staged it, and the
+ * directory goes once none of them ships these files and no app maps them
+ * ({@link removeUnusedLibraries}).
  */
 export function stageMacosLibraries(
   bootstrapPath: string,
@@ -117,13 +119,7 @@ export function stageMacosLibraries(
 ): string {
   const bootstrap = fs.readFileSync(bootstrapPath);
   const library = fs.readFileSync(libraryPath);
-  const hash = createHash("sha256")
-    .update(`${bootstrap.length}:`)
-    .update(bootstrap)
-    .update(`${library.length}:`)
-    .update(library)
-    .digest("hex")
-    .slice(0, 16);
+  const hash = libraryHash(bootstrap, library);
   const name = teamId ? `${hash}-${teamId}` : hash;
   const libRoot = path.join(macosArgentDir(), "lib");
   const target = path.join(libRoot, name);
@@ -133,7 +129,11 @@ export function stageMacosLibraries(
   fs.mkdirSync(libRoot, { recursive: true, mode: 0o700 });
   fs.chmodSync(macosArgentDir(), 0o700);
   void removeUnusedLibraries(libRoot, hash);
-  if (isComplete()) return staged;
+  const source = JSON.stringify([path.resolve(bootstrapPath), path.resolve(libraryPath)]);
+  if (isComplete()) {
+    recordLibrarySource(target, source);
+    return staged;
+  }
   if (fs.existsSync(target)) {
     fs.renameSync(target, path.join(libRoot, `.damaged-${name}-${process.pid}-${Date.now()}`));
   }
@@ -142,6 +142,7 @@ export function stageMacosLibraries(
   try {
     fs.writeFileSync(path.join(temp, BOOTSTRAP_NAME), bootstrap, { mode: 0o755 });
     fs.writeFileSync(path.join(temp, LIBRARY_NAME), library, { mode: 0o755 });
+    fs.writeFileSync(path.join(temp, SOURCES_NAME), `${source}\n`, { mode: 0o600 });
     fs.renameSync(temp, target);
   } catch (err) {
     fs.rmSync(temp, { recursive: true, force: true });
@@ -150,9 +151,75 @@ export function stageMacosLibraries(
   return staged;
 }
 
+/** In a staged directory: one JSON line `[bootstrap, library]` per install that staged it. */
+const SOURCES_NAME = "sources";
+
+function libraryHash(bootstrap: Buffer, library: Buffer): string {
+  return createHash("sha256")
+    .update(`${bootstrap.length}:`)
+    .update(bootstrap)
+    .update(`${library.length}:`)
+    .update(library)
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function recordLibrarySource(dir: string, source: string): void {
+  const file = path.join(dir, SOURCES_NAME);
+  try {
+    const known = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n") : [];
+    if (!known.includes(source)) fs.appendFileSync(file, `${source}\n`, { mode: 0o600 });
+  } catch {
+    // Without the line, the directory goes once no app maps it: the next start stages it again.
+  }
+}
+
+/** Folders that macOS guards with a privacy prompt: a read there can show one. */
+function inPrivacyProtectedFolder(file: string): boolean {
+  const home = os.homedir();
+  return ["Desktop", "Documents", "Downloads", "Library/Mobile Documents"].some((folder) =>
+    file.startsWith(path.join(home, folder) + path.sep)
+  );
+}
+
+/**
+ * Whether an install listed in the directory's {@link SOURCES_NAME} still ships
+ * the files the directory is named after. An unreadable install counts as there,
+ * and so does one in a privacy-protected folder, which is never read.
+ */
+async function librarySourceInstalled(dir: string, name: string): Promise<boolean> {
+  let lines: string[];
+  try {
+    lines = (await fs.promises.readFile(path.join(dir, SOURCES_NAME), "utf8")).split("\n");
+  } catch {
+    return false;
+  }
+  for (const line of lines) {
+    let files: unknown;
+    try {
+      files = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(files) || files.length !== 2) continue;
+    if (files.some((file) => inPrivacyProtectedFolder(String(file)))) return true;
+    try {
+      const [bootstrap, library] = await Promise.all(
+        files.map((file) => fs.promises.readFile(String(file)))
+      );
+      if (name.startsWith(libraryHash(bootstrap!, library!))) return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Removes the staged directories in `libRoot` of builds other than `keep`
- * (another release) that no process maps, as `lsof` reports. Never fails.
+ * (another release) that no process maps, as `lsof` reports, and that no
+ * argent install still ships: another installed version keeps its directory,
+ * which the user may have signed. Never fails.
  */
 export async function removeUnusedLibraries(libRoot: string, keep: string): Promise<void> {
   try {
@@ -177,7 +244,9 @@ export async function removeUnusedLibraries(libRoot: string, keep: string): Prom
     );
     for (const name of fs.readdirSync(root)) {
       if (name.startsWith(keep) || used.has(name)) continue;
-      fs.rmSync(path.join(root, name), { recursive: true, force: true });
+      const dir = path.join(root, name);
+      if (!name.startsWith(".") && (await librarySourceInstalled(dir, name))) continue;
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   } catch {
     // The directory is gone, or a removal failed: the next start tries again.
@@ -768,9 +837,10 @@ export function macosVersionRefusal(darwinRelease: string): string | null {
  * `disable-library-validation`, or a library signed by the app's own team
  * (see {@link stageLibraryFor}). Measured on macOS 27.
  *
- * Without the first the app is a release build: notarized apps, other
+ * Without the first the app is a release build: most notarized apps, other
  * developers' among them, or the Release configuration of the user's own. No
- * project setting opens that one, so the refusal asks for no rebuild.
+ * project setting opens that one, so the refusal asks for no rebuild. A
+ * notarized app that has both entitlements (many JVM apps do) is not refused.
  *
  * The `library-validation` flag (`codesign -o library`) blocks the library
  * with or without the hardened runtime, and `disable-library-validation` does
@@ -784,9 +854,9 @@ export function hardenedRuntimeRefusal(info: MacosAppInfo): string | null {
   if (info.hardenedRuntime && !getTaskAllow && !allowDyldEnvironmentVariables) {
     return (
       `${info.bundleId} is a release build with the hardened runtime, so macOS does not load ` +
-      `the argent library into it, and argent cannot drive it. Notarized apps, including apps ` +
-      `from other developers, are built this way. argent drives Debug builds of your own app: ` +
-      `if this app is yours, start its Debug build.`
+      `the argent library into it, and argent cannot drive it. Most notarized apps, including ` +
+      `apps from other developers, are built this way. argent drives Debug builds of your own ` +
+      `app: if this app is yours, start its Debug build.`
     );
   }
   if (info.libraryValidation) {

@@ -1105,24 +1105,41 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     expect(helperRuns()).toBe(0);
   });
 
-  it("launch-app refuses a copy argent did not start and names boot-device force; restart-app takes it over", async () => {
+  it("restart-app refuses while a copy argent did not start runs beside argent's own, and quits neither", async () => {
+    const own = await run("boot-device", { macosAppPath: appPath });
+    const outside = await startOutsideCopy();
+    const err = await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID }).catch(
+      (e: unknown) => e
+    );
+    expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_ALREADY_RUNNING);
+    expect((err as Error).message).toContain(`pid ${outside.pid}`);
+    expect(outside.signals()).toEqual([]);
+    expect(pidAlive(own.pid)).toBe(true);
+    await expect((await macosApp()).call("Echo")).resolves.toMatchObject({ pid: own.pid });
+  });
+
+  it("launch-app and restart-app refuse a copy argent did not start and name boot-device force; force takes it over", async () => {
     // A record, so launch-app and restart-app know the app's path.
     await quit((await run("boot-device", { macosAppPath: appPath })).pid);
     const outside = await startOutsideCopy();
     const launchesBefore = helperRuns();
 
-    const err = await run("launch-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID }).catch(
-      (e: unknown) => e
-    );
-    expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_ALREADY_RUNNING);
-    expect((err as Error).message).toContain(`pid ${outside.pid}`);
-    expect((err as Error).message).toContain("boot-device with force: true");
+    for (const tool of ["launch-app", "restart-app"]) {
+      const err = await run(tool, { udid: DEVICE_ID, bundleId: BUNDLE_ID }).catch(
+        (e: unknown) => e
+      );
+      expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_ALREADY_RUNNING);
+      expect((err as Error).message).toContain(`pid ${outside.pid}`);
+      expect((err as Error).message).toContain("ask the user to quit it");
+      expect((err as Error).message).toContain("boot-device with force: true");
+      expect((err as Error).message).not.toContain("restart-app does");
+    }
     expect(outside.signals()).toEqual([]);
     expect(fakeAppPids()).toEqual([outside.pid]);
     expect(helperRuns()).toBe(launchesBefore);
 
-    const restarted = await run("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
-    expect(restarted).toMatchObject({ restarted: true, bundleId: BUNDLE_ID, args: [] });
+    const restarted = await run("boot-device", { macosAppPath: appPath, force: true });
+    expect(restarted).toMatchObject({ bundleId: BUNDLE_ID, args: [] });
     expect(restarted.note).toContain(
       `argent quit the copy of ${BUNDLE_ID} that ran without the argent library (pid ${outside.pid})`
     );
@@ -1440,6 +1457,71 @@ describe("stageMacosLibraries", () => {
       fs.closeSync(mapped);
     }
     expect(fs.readdirSync(libRoot()).sort()).toEqual(["aaaa", "aaaa-ABCDE12345", "dddd"]);
+  });
+
+  it("keeps the directories of another installed version, also a team's, until that install is gone or changed", async () => {
+    const [bootstrap1, library1] = shipped("1");
+    const ours = path.basename(path.dirname(stageMacosLibraries(...shipped("2"))));
+    const other = path.basename(path.dirname(stageMacosLibraries(bootstrap1, library1)));
+    const otherTeam = path.basename(
+      path.dirname(stageMacosLibraries(bootstrap1, library1, "ABCDE12345"))
+    );
+    expect(otherTeam).toBe(`${other}-ABCDE12345`);
+    // A directory from before the sources file: no install claims it.
+    fs.mkdirSync(path.join(libRoot(), "eeee"));
+    const names = () => fs.readdirSync(libRoot()).sort();
+
+    await removeUnusedLibraries(libRoot(), ours.slice(0, 16));
+    expect(names()).toEqual([ours, other, otherTeam].sort());
+
+    // That install is upgraded in place: its files no longer match.
+    fs.writeFileSync(library1, "library 1b");
+    await removeUnusedLibraries(libRoot(), ours.slice(0, 16));
+    expect(names()).toEqual([ours]);
+  });
+
+  it("never reads an install in a privacy-protected folder, and keeps its directory", async () => {
+    const ours = path.basename(path.dirname(stageMacosLibraries(...shipped("2"))));
+    const protectedInstall = path.join(process.env.HOME!, "Desktop", "argent", "missing");
+    fs.mkdirSync(path.join(libRoot(), "cccc"));
+    fs.writeFileSync(
+      path.join(libRoot(), "cccc", "sources"),
+      `${JSON.stringify([`${protectedInstall}/a.dylib`, `${protectedInstall}/b.dylib`])}\n`
+    );
+    const read = vi.spyOn(fs.promises, "readFile");
+    try {
+      await removeUnusedLibraries(libRoot(), ours);
+      expect(read.mock.calls.map(([file]) => String(file))).not.toContain(
+        `${protectedInstall}/a.dylib`
+      );
+    } finally {
+      read.mockRestore();
+    }
+    expect(fs.readdirSync(libRoot()).sort()).toEqual(["cccc", ours].sort());
+  });
+
+  it("keeps a directory while one of the installs that staged it remains", async () => {
+    const [bootstrap1, library1] = shipped("1");
+    const copyDir = path.join(dir, "shipped-1-copy");
+    fs.cpSync(path.dirname(bootstrap1), copyDir, { recursive: true });
+    const other = path.basename(path.dirname(stageMacosLibraries(bootstrap1, library1)));
+    stageMacosLibraries(
+      path.join(copyDir, path.basename(bootstrap1)),
+      path.join(copyDir, path.basename(library1))
+    );
+    expect(
+      fs
+        .readFileSync(path.join(libRoot(), other, "sources"), "utf8")
+        .trim()
+        .split("\n")
+    ).toHaveLength(2);
+    const ours = path.basename(path.dirname(stageMacosLibraries(...shipped("2"))));
+    fs.rmSync(path.dirname(bootstrap1), { recursive: true });
+    await removeUnusedLibraries(libRoot(), ours);
+    expect(fs.readdirSync(libRoot())).toContain(other);
+    fs.rmSync(copyDir, { recursive: true });
+    await removeUnusedLibraries(libRoot(), ours);
+    expect(fs.readdirSync(libRoot())).toEqual([ours]);
   });
 
   describe("stageLibraryFor", () => {

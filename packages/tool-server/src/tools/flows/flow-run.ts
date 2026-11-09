@@ -724,8 +724,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
-  // A Mac app's note: argent quit a copy without its library, or the new
-  // process showed no window in time. The launch worked either way.
+  // A Mac app's note: argent force-quit its own copy, or the new process
+  // showed no window in time. The launch worked either way.
   const warnings = [
     (restart as { note?: string } | null)?.note,
     networkCaptureWarning(state, bundleId, restart),

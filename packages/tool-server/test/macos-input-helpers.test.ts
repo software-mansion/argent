@@ -136,6 +136,22 @@ describe("macosTypeText - the keyboard split", () => {
     ]);
   });
 
+  it("presses Enter once for CRLF, and for a lone CR", async () => {
+    const { app, calls } = fakeMacosApp();
+    const count = await macosTypeText(app, "a\r\nb\rc\n\r\nd", { delayMs: 0 });
+    expect(count).toBe(10);
+    expect(calls.map((c) => c.params.key ?? c.params.text)).toEqual([
+      "a",
+      "enter",
+      "b",
+      "enter",
+      "c",
+      "enter",
+      "enter",
+      "d",
+    ]);
+  });
+
   it("stops on a library error", async () => {
     const { app } = fakeMacosApp({
       "Input.key": () => {

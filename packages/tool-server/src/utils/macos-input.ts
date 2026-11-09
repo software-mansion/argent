@@ -299,8 +299,13 @@ export async function macosTypeText(
     pending = "";
     await sleep(delay);
   };
+  let afterCr = false;
   for (const char of text) {
     count++;
+    // CRLF is one line break: its LF presses nothing.
+    const crlf = afterCr && char === "\n";
+    afterCr = char === "\r";
+    if (crlf) continue;
     if (char === "\n" || char === "\r" || char === "\t") {
       await flush();
       await pressKey(app, { key: char === "\t" ? "tab" : "enter", modifiers: [] });
