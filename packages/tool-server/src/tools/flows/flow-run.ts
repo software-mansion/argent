@@ -2657,8 +2657,8 @@ async function execRunStep(
 ): Promise<void> {
   const index = state.reports.length;
   const target = step.flow;
-  // Reasons quote the target; their own error text stays raw (a YAML error's
-  // code frame is multi-line).
+  // Reasons quote the target escaped. A YAML error stays raw (its code frame
+  // is multi-line); a file system error quotes the path, so it is escaped.
   const shown = escapeInline(target);
   // Shared with stepFlow so the marker/error reports here and every skip path
   // there attribute the same `run:` step identically; the fragment's expanded
@@ -2688,7 +2688,7 @@ async function execRunStep(
   try {
     hop = await resolveRunTarget(state.project, scopeFlowDir(scope), target);
   } catch (err) {
-    return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
+    return fail(`could not load fragment "${shown}": ${escapeInline(errMsg(err))}`);
   }
   const { canonical, spelling } = hop;
 
@@ -2753,14 +2753,19 @@ async function execRunStep(
   //
   // A missing file reports the same ENOENT shape on both sides, so a reason
   // reads the same whichever machine lacked the fragment.
+  let text: string | null;
+  try {
+    text = await hop.read();
+  } catch (err) {
+    return fail(`could not load fragment "${shown}": ${escapeInline(errMsg(err))}`);
+  }
+  if (text === null) {
+    return fail(
+      `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(canonical)}'`
+    );
+  }
   let fragment: FlowFile;
   try {
-    const text = await hop.read();
-    if (text === null) {
-      return fail(
-        `could not load fragment "${shown}": ENOENT: no such file or directory, open '${escapeInline(canonical)}'`
-      );
-    }
     fragment = parseFlow(text);
   } catch (err) {
     return fail(`could not load fragment "${shown}": ${errMsg(err)}`);
@@ -2774,7 +2779,7 @@ async function execRunStep(
   // A failure, not a skip: a fragment that silently did not run would leave a green report.
   if (state.device) {
     try {
-      await assertDeviceMeetsRequires(state.device, fragment.requires, `Fragment "${target}"`);
+      await assertDeviceMeetsRequires(state.device, fragment.requires, `Fragment "${shown}"`);
     } catch (err) {
       return fail(errMsg(err));
     }

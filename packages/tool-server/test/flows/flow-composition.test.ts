@@ -1313,6 +1313,29 @@ describe("flow composition (run:)", () => {
     expect(result.steps[0]?.reason).toContain("\n  - echo: a: b\n");
   });
 
+  it("keeps a run: step's file system error on one line", async () => {
+    // A file where the directory should be: reading through it fails with an
+    // error that quotes the path.
+    await fs.mkdir(path.join(tmpDir, ".argent", "flows"), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, ".argent", "flows", "sub\nx"), "", "utf8");
+    await writeFlow("main", {
+      executionPrerequisite: "",
+      steps: [{ kind: "run", flow: "sub\nx/frag.yaml" }],
+    });
+
+    const result = asRun(
+      await createRunFlowTool(mockRegistry()).execute(
+        {},
+        { name: "main", project_root: tmpDir, device: DEVICE }
+      )
+    );
+
+    expect(result.steps[0]?.status).toBe("error");
+    expect(result.steps[0]?.reason).toMatch(/^could not load fragment "sub\\nx\/frag\.yaml": /);
+    expect(result.steps[0]?.reason).toContain("sub\\nx");
+    expect(result.steps[0]?.reason).not.toContain("\n");
+  });
+
   it("reports a run: target with a newer version as a step error", async () => {
     await writeFlow("main", {
       executionPrerequisite: "",
