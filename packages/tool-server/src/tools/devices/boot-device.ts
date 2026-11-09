@@ -615,12 +615,18 @@ async function bootIos(
   const deviceSet = await deviceSetForUdid(udid);
   const prefix = simctlPrefix(deviceSet);
 
+  // Booting: e.g. the boot of a call whose `simctl boot` timed out, which CoreSimulator still finishes.
+  const booting = simState === "Booting";
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
-  if (force && simState === "Booted") {
+  // A booting one is waited for first, so the shutdown sees it Booted.
+  if (force && booting) {
+    await bootSimctl(prefix, ["bootstatus", udid, "-b"], 480_000);
+  }
+  if (force && (simState === "Booted" || booting)) {
     await bootSimctl(prefix, ["shutdown", udid], 30_000);
   }
 
-  const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
+  const needsPreBoot = simState === "Shutdown" || (force && (simState === "Booted" || booting));
   if (needsPreBoot) {
     await setAccessibilityPrefsPreBoot(udid).catch((err: unknown) => {
       process.stderr.write(
@@ -633,7 +639,7 @@ async function bootIos(
 
   await bootSimctl(prefix, ["boot", udid], 120_000).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
-    // Booting: CoreSimulator still finishes a boot whose `simctl boot` timed out; bootstatus waits for it.
+    // bootstatus below waits for a Booting one.
     if (!/Unable to boot device in current state: Boot(ed|ing)\b/.test(message)) {
       throw err;
     }
@@ -647,7 +653,7 @@ async function bootIos(
   // fire-and-forget, so TV button presses silently no-op. Dropping the cached
   // TvControl service forces the next TV call to rebuild it against the new
   // boot. ServiceNotFoundError just means nothing was cached.
-  if (isTvOs && needsPreBoot) {
+  if (isTvOs && (needsPreBoot || booting)) {
     await registry.disposeService(`${TV_CONTROL_NAMESPACE}:${udid}`).catch((err: unknown) => {
       if (err instanceof ServiceNotFoundError) return;
       process.stderr.write(
@@ -781,14 +787,19 @@ async function bootIosRemote(
     simState = undefined;
   }
 
-  if (force && simState === "Booted") {
+  const booting = simState === "Booting";
+  // A booting one is waited for first, so the shutdown sees it Booted.
+  if (force && booting) {
+    await simRemoteBootstatus(id, { boot: true });
+  }
+  if (force && (simState === "Booted" || booting)) {
     await simRemoteShutdown(id).catch(() => undefined);
   }
 
-  // A `Booted` error from sim-remote just means it is already up; bootstatus
-  // below normalizes the state either way.
+  // A `Booted` or `Booting` error from sim-remote just means it is up or on its
+  // way; bootstatus below waits for it either way.
   await simRemoteBoot(id).catch((err: Error) => {
-    if (!/Booted/i.test(err.message)) throw err;
+    if (!/Booted|current state: Booting\b/i.test(err.message)) throw err;
   });
   await simRemoteBootstatus(id, { boot: true });
 

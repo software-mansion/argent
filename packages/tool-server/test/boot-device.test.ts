@@ -426,6 +426,7 @@ describe("boot-device — iOS path", () => {
 
     expect(getFailureSignal(err)).toMatchObject({
       error_code: "BOOT_IOS_SIMCTL_LIST_TIMEOUT",
+      failure_stage: "boot_ios_state_probe",
       error_kind: "timeout",
     });
     expect((err as Error).message).toContain("call boot-device again shortly");
@@ -622,6 +623,8 @@ describe("boot-device — iOS path", () => {
         error_code: FAILURE_CODES.BOOT_IOS_SIMCTL_TIMEOUT,
         failure_stage: `boot_ios_simctl_${sub}`,
         error_kind: "timeout",
+        failure_command: "xcrun_simctl",
+        failure_signal: "SIGKILL",
       });
       const subs = mockExecFile.mock.calls
         .filter(([file, args]) => file === "xcrun" && args[0] === "simctl")
@@ -720,6 +723,51 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: TV_UDID, force: true });
 
     expect(disposeService).toHaveBeenCalledWith(`TvControl:${TV_UDID}`);
+  });
+
+  it("recycles TvControl when a retry finds the tvOS sim still Booting", async () => {
+    scannedSimulatorsMock.mockResolvedValueOnce([
+      { udid: TV_UDID, state: "Booting", runtimeKind: "tv" },
+    ]);
+    mockExecFile.mockImplementation((...args: unknown[]) => {
+      const sub = (args[1] as string[])[1];
+      if (sub === "boot") {
+        getCallback(args)(new Error("Unable to boot device in current state: Booting"));
+      } else {
+        getCallback(args)(null, { stdout: "", stderr: "" } as never);
+      }
+      return {} as never;
+    });
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const disposeService = vi.fn(async () => undefined);
+    const registry = { resolveService, disposeService } as unknown as Registry;
+
+    await createBootDeviceTool(registry).execute!({}, { udid: TV_UDID });
+
+    expect(disposeService).toHaveBeenCalledWith(`TvControl:${TV_UDID}`);
+  });
+
+  it("waits out a Booting sim, then shuts it down and reboots it on force", async () => {
+    const udid = "44444444-4444-4444-4444-444444444444";
+    scannedSimulatorsMock.mockResolvedValueOnce([{ udid, state: "Booting" }]);
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+
+    await createBootDeviceTool({ resolveService } as unknown as Registry).execute!(
+      {},
+      { udid, force: true }
+    );
+
+    const simctl = mockExecFile.mock.calls
+      .filter(([file, args]) => file === "xcrun" && args[0] === "simctl")
+      .map(([, args]) => args[1]);
+    expect(simctl).toEqual(["bootstatus", "shutdown", "boot", "bootstatus"]);
+    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(udid);
   });
 
   it("does NOT dispose TvControl for an iOS (non-tv) sim boot — that daemon self-heals", async () => {
@@ -947,6 +995,52 @@ describe("boot-device — input validation (exclusive udid/avdName)", () => {
       "sim-remote simctl boot 11111111-1111-1111-1111-111111111111",
       "sim-remote simctl bootstatus 11111111-1111-1111-1111-111111111111 -b",
     ]);
+  });
+
+  describe("a remote simulator that is still Booting", () => {
+    const id = "11111111-1111-1111-1111-111111111111";
+    const udid = `remote:${id}`;
+    const simRemote = () => {
+      __resetDepCacheForTests();
+      __primeDepCacheForTests(["sim-remote"]);
+      mockExecFile.mockReset().mockImplementation((...args: unknown[]) => {
+        const argv = args[1] as string[];
+        const cb = getCallback(args) as (e: unknown, r?: unknown) => void;
+        if (argv[1] === "list") {
+          cb(null, {
+            stdout: JSON.stringify({ devices: { r: [{ udid: id, name: "x", state: "Booting" }] } }),
+            stderr: "",
+          });
+        } else if (argv[1] === "boot") {
+          cb(
+            Object.assign(new Error("Command failed"), {
+              stderr: "Unable to boot device in current state: Booting",
+            })
+          );
+        } else {
+          cb(null, { stdout: "", stderr: "" });
+        }
+        return {} as never;
+      });
+      return createBootDeviceTool({
+        resolveService: async () => ({ getInitFailure: () => null }),
+      } as unknown as Registry);
+    };
+    const calls = () =>
+      mockExecFile.mock.calls.map((c) => (c[1] as string[]).slice(1, 2).join(" "));
+
+    it("waits for the boot instead of failing", async () => {
+      await expect(simRemote().execute!({}, { udid })).resolves.toMatchObject({ booted: true });
+      expect(calls()).toEqual(["list", "boot", "bootstatus"]);
+    });
+
+    it("waits for the boot, then reboots it on force", async () => {
+      mockExecFile.mockClear();
+      await expect(simRemote().execute!({}, { udid, force: true })).resolves.toMatchObject({
+        booted: true,
+      });
+      expect(calls()).toEqual(["list", "bootstatus", "shutdown", "boot", "bootstatus"]);
+    });
   });
 
   it("bounds bootTimeoutMs to [30s, 15min]", () => {
