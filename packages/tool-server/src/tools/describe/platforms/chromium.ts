@@ -93,6 +93,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getRootNode = Node.prototype.getRootNode;
   const containsNode = Node.prototype.contains;
   const docElementsFromPoint = docProto.elementsFromPoint;
+  // Unset in the test harness's mock DOM or under a page's own global HTMLSlotElement,
+  // where a <slot> reads as its own children.
+  const slotAssignedNodes =
+    typeof HTMLSlotElement === "undefined" ? null : HTMLSlotElement.prototype.assignedNodes;
   // A document's named getter can shadow elementsFromPoint; a shadow root has none.
   function elementsAt(root, x, y) {
     return docElementsFromPoint && getNodeType.call(root) === 9
@@ -126,7 +130,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         }
         if (text !== null) parts.push(text);
       }
-      if (parts.length) return parts.join(" ").slice(0, 200);
+      if (parts.length) return parts.filter(Boolean).join(" ").slice(0, 200);
     }
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       if (el.placeholder) return el.placeholder.slice(0, 200);
@@ -180,15 +184,41 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return s.replace(WHITESPACE, " ").trim();
   }
 
-  // An aria-labelledby target's text (text and CDATA), read by a subset of Chrome's
-  // accessible-name rules: an aria-label, an <img>'s alt, or an SVG element's <title>
-  // stands in for an element's content, a <select> or <textarea> reads as it shows, a
-  // non-inline element, an <svg> with content or a <br> parts the words around it, and
-  // script, style and noscript text never counts. A shown target leaves out its
-  // display:none, visibility:hidden and aria-hidden subtrees, and SVG elements SVG never
-  // renders (one it does not know, <metadata>, <script>); a hidden one reads them all, and
-  // there a script-like element or any <svg> parts words, as does every element under
-  // display:none, which has no layout to run inline in. An <input>'s value is not read.
+  // Chrome hides for any aria-hidden value but "false" and "undefined", in any ASCII case.
+  function isAriaHidden(el) {
+    const v = getAttr.call(el, "aria-hidden");
+    return !!v && !/^(false|undefined)$/i.test(v);
+  }
+
+  // A node's children in the flat tree: an open shadow root's in place of the host's,
+  // and a <slot>'s assigned nodes, else its fallback content.
+  function flatChildNodes(node) {
+    if (getNodeType.call(node) === 1) {
+      const shadow = getShadowRoot.call(node);
+      if (shadow) return getChildNodes.call(shadow);
+      if (
+        slotAssignedNodes &&
+        getLocalName.call(node) === "slot" &&
+        getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml"
+      ) {
+        const assigned = slotAssignedNodes.call(node);
+        if (assigned.length) return assigned;
+      }
+    }
+    return getChildNodes.call(node);
+  }
+
+  // An aria-labelledby target's text (text and CDATA) in the flat tree, read by a subset
+  // of Chrome's accessible-name rules: an aria-label, an <img>'s alt, or an SVG element's
+  // <title> stands in for an element's content, a <select> or <textarea> reads as it
+  // shows, a non-inline element, an <svg> with content, an SVG <style> or a <br> parts
+  // the words around it, and an SVG <style>'s text never counts. Nor does the text of a
+  // <noscript>, or of a <script> or <style> with no box, which parts words only under
+  // display:none. A shown target leaves out its display:none, visibility:hidden and
+  // aria-hidden subtrees, and SVG elements SVG never renders (one it does not know,
+  // <metadata>, <script>); a hidden one reads them all, and there any <svg> parts words,
+  // as does every element under display:none, which has no layout to run inline in. An
+  // <input>'s value is not read.
   // Iterative: the target's depth has no MAX_DEPTH bound.
   function labelText(root) {
     const own = controlText(root) ?? altText(root);
@@ -200,7 +230,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (window.getComputedStyle(n).display === "none") {
         unrendered = 1;
         shown = false;
-      } else if (getAttr.call(n, "aria-hidden") === "true") {
+      } else if (isAriaHidden(n)) {
         shown = false;
       }
     }
@@ -211,7 +241,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const RENDERED = {};
     const stack = [];
     const pushChildren = (node) => {
-      const kids = getChildNodes.call(node);
+      const kids = flatChildNodes(node);
       for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
     };
     pushChildren(root);
@@ -243,7 +273,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         shown &&
         (style.display === "none" ||
           style.visibility === "hidden" ||
-          getAttr.call(node, "aria-hidden") === "true" ||
+          isAriaHidden(node) ||
           (svg &&
             (tag === "metadata" ||
               tag === "script" ||
@@ -258,13 +288,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
       // A shown <svg> holding at most whitespace reads as nothing: SVG drops that text.
       const emptySvg = svg && tag === "svg" && shown && !hasContent(node);
-      const rawText =
-        (ns === "http://www.w3.org/1999/xhtml" && /^(script|style|noscript)$/.test(tag)) ||
-        (svg && tag === "style");
+      // A <noscript> has no box while scripts run, nor a <script> or <style> undisplayed.
+      const noBox =
+        ns === "http://www.w3.org/1999/xhtml" &&
+        (tag === "noscript" ||
+          (/^(script|style)$/.test(tag) && (style.display === "none" || unrendered)));
+      const svgStyle = svg && tag === "style";
       if (
-        !isInlineBox(style) ||
+        (!isInlineBox(style) && !noBox) ||
         (svg && tag === "svg" && !emptySvg) ||
-        (rawText && !shown) ||
+        svgStyle ||
         unrendered
       ) {
         s += " ";
@@ -274,7 +307,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         unrendered++;
         stack.push(RENDERED);
       }
-      if (!rawText && !emptySvg) pushChildren(node);
+      if (!noBox && !svgStyle && !emptySvg) pushChildren(node);
     }
     return s.replace(WHITESPACE, " ");
   }

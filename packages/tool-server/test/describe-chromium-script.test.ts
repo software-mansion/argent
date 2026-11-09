@@ -236,6 +236,7 @@ function el(opts: Opts = {}): MockElement {
       nodeType: 11,
       host: node,
       children: opts.shadow,
+      __childNodes: opts.shadow,
       elementsFromPoint: (x: number, y: number) => {
         // A script hit-testing one point over and over would otherwise hang the suite.
         if (++hitTests > 10_000) throw new Error("hit-tested a shadow root without end");
@@ -816,8 +817,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       child("span", "HIDDEN", { display: "none" }),
       child("span", "INVISIBLE", { visibility: "hidden" }),
       child("span", "IGNORED", {}, { "aria-hidden": "true" }),
-      child("script", "var q = 1"),
-      child("style", ".z{}"),
+      child("script", "var q = 1", { display: "none" }),
+      child("style", ".z{}", { display: "none" }),
       child("b", "monthly"),
       child("span", "inner", {}, { "aria-label": "billed" }),
       child("img", "", { display: "inline-block" }, { alt: "now" }),
@@ -999,6 +1000,122 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     (inner.__style as Record<string, string>).display = "none";
     const hidden = { display: "inline", visibility: "hidden" };
     expect(labelledBy([text("x"), inner, span("y"), span("z")], hidden)).toBe("x a b yz");
+  });
+
+  it("reads a script, style or noscript by whether it has a box, as Chrome does", () => {
+    const code = (tag: string, display: string) => {
+      const node = elementNode(tag, [text("q")]);
+      (node.__style as Record<string, string>).display = display;
+      return node;
+    };
+    const hidden = { display: "inline", visibility: "hidden" };
+    // Undisplayed, or a <noscript> while scripts run: no text, and no break in a hidden
+    // target either.
+    for (const tag of ["script", "style"]) {
+      expect(labelledBy([text("A"), code(tag, "none"), text("B")], hidden), tag).toBe("AB");
+    }
+    expect(labelledBy([text("A"), code("noscript", "inline"), text("B")], hidden)).toBe("AB");
+    expect(labelledBy([text("A"), code("noscript", "inline"), text("B")])).toBe("AB");
+    // Displayed, it reads like any element, but not under display:none.
+    expect(labelledBy([text("A"), code("script", "inline"), text("B")])).toBe("AqB");
+    expect(labelledBy([text("A"), code("style", "block"), text("B")], hidden)).toBe("A q B");
+    expect(labelledBy([text("A"), code("script", "block"), text("B")], { display: "none" })).toBe(
+      "A B"
+    );
+    // An SVG <style> parts words, shown or hidden.
+    const svgStyle = elementNode("style", [text(".a{}")], {
+      namespaceURI: "http://www.w3.org/2000/svg",
+    });
+    (svgStyle.__style as Record<string, string>).display = "inline";
+    expect(labelledBy([text("x"), svgStyle, text("y")])).toBe("x y");
+  });
+
+  it("reads aria-hidden as Chrome does: hidden for any value but false or undefined", () => {
+    const hiding = (value: string) =>
+      labelledBy([
+        text("A "),
+        elementNode("span", [text("B")], { __attrs: { "aria-hidden": value } }),
+        text(" C"),
+      ]);
+    for (const value of ["true", "TRUE", "True", " true", "yes", "fals\u0435"]) {
+      expect(hiding(value), JSON.stringify(value)).toBe("A C");
+    }
+    for (const value of ["", "false", "FALSE", "undefined", "Undefined"]) {
+      expect(hiding(value), JSON.stringify(value)).toBe("A B C");
+    }
+    // An ancestor's aria-hidden hides the target, which then reads its display:none content.
+    const none = elementNode("span", [text("D")]);
+    (none.__style as Record<string, string>).display = "none";
+    const label = elementNode("span", [text("A"), none, text("B")], { __attrs: { id: "lbl" } });
+    const wrapper = el({ rect: BOX, attrs: { "aria-hidden": "True" }, children: [label] });
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    expect(findById(run([button, wrapper]).tree, "btn")!.label).toBe("A D B");
+  });
+
+  it("reads a custom element in an aria-labelledby target through its open shadow tree", () => {
+    class MockSlot extends MockHTMLElement {
+      assignedNodes(this: Record<string, unknown>) {
+        return this.__assigned;
+      }
+    }
+    const slot = (assigned: unknown[], fallback: unknown[] = []) => {
+      const node = elementNode("slot", fallback, { __assigned: assigned });
+      Object.setPrototypeOf(node, MockSlot.prototype);
+      (node.__style as Record<string, string>).display = "contents";
+      return node;
+    };
+    const host = (light: unknown[], shadow: unknown[], attrs: Record<string, string> = {}) => {
+      const node = el({
+        tag: "x-lab",
+        rect: BOX,
+        attrs,
+        shadow: [],
+        style: { display: "inline" },
+      }) as MockElement & Record<string, unknown>;
+      Object.assign(node, { nodeType: 1 });
+      node.childNodes = light;
+      (node.shadowRoot as Record<string, unknown>).__childNodes = shadow;
+      return node;
+    };
+    const labelOf = (target: MockElement, HTMLSlotElement: unknown = MockSlot) => {
+      const button = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "btn", "aria-labelledby": "lbl" },
+      });
+      return findById(
+        run([button, target], undefined, {}, "CSS1Compat", { HTMLSlotElement }).tree,
+        "btn"
+      )!.label;
+    };
+    const shadowText = () => [elementNode("span", [text("Shadow text")])];
+    expect(labelOf(host([], shadowText(), { id: "lbl" }))).toBe("Shadow text");
+    const total = elementNode("span", [text("Total "), host([], shadowText())], {
+      __attrs: { id: "lbl" },
+    });
+    expect(labelOf(total)).toBe("Total Shadow text");
+    // Only slotted light children count, in their slots' order; an empty slot shows its fallback.
+    const light = elementNode("b", [text("light")]);
+    const unslotted = elementNode("i", [text("unslotted")]);
+    expect(
+      labelOf(host([light, unslotted], [text("pre "), slot([light]), text(" post")], { id: "lbl" }))
+    ).toBe("pre light post");
+    expect(
+      labelOf(host([], [text("pre "), slot([], [text("fb")]), text(" post")], { id: "lbl" }))
+    ).toBe("pre fb post");
+    const first = elementNode("i", [text("first")]);
+    const second = elementNode("b", [text("second")]);
+    expect(labelOf(host([second, first], [slot([first]), slot([second])], { id: "lbl" }))).toBe(
+      "first second"
+    );
+    // A page's own global HTMLSlotElement leaves a slot reading its own children.
+    const own = () =>
+      host([light], [text("pre "), slot([light], [text("fb")]), text(" post")], { id: "lbl" });
+    expect(labelOf(own(), function HTMLSlotElement() {})).toBe("pre fb post");
   });
 
   it("keeps inline elements joined in a target hidden without losing its layout", () => {
@@ -1239,6 +1356,28 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "b1")!.label).toBe("One");
     expect(findById(tree, "b2")!.label).toBe("Two");
     expect(findById(tree, "b3")!.label).toBe("One Two");
+  });
+
+  it("joins aria-labelledby targets without a separator for an empty one", () => {
+    const icon = el({ tag: "span", rect: BOX, attrs: { id: "icon" } });
+    const blank = el({ tag: "span", rect: BOX, attrs: { id: "blank" } });
+    const close = el({ tag: "span", text: "Close", rect: BOX, attrs: { id: "close" } });
+    const now = el({ tag: "span", text: "Now", rect: BOX, attrs: { id: "now" } });
+    const button = (id: string, labelledBy: string) =>
+      el({ tag: "button", rect: BOX, attrs: { id, "aria-labelledby": labelledBy, "title": "T" } });
+    const { tree } = run([
+      button("b1", "icon close"),
+      button("b2", "close icon now"),
+      button("b3", "icon blank"),
+      icon,
+      blank,
+      close,
+      now,
+    ]);
+    expect(findById(tree, "b1")!.label).toBe("Close");
+    expect(findById(tree, "b2")!.label).toBe("Close Now");
+    // Targets that all resolve to nothing leave no label, and no title fallback (#1564).
+    expect(findById(tree, "b3")!.label).toBeUndefined();
   });
 
   it("collapses whitespace in an aria-labelledby target, as in own text", () => {
