@@ -491,11 +491,25 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // Each emitted node's unclipped extent and the scrollers measured against it.
   const extents = nodeMap();
 
+  // An element's parent in the flat tree: its slot, else its parent, a shadow root's host.
+  function flatParent(n) {
+    const p = (getNodeType.call(n) === 1 && getAssignedSlot.call(n)) || getParentNode.call(n);
+    return p && getNodeType.call(p) === 11 ? p.host : p;
+  }
+
+  // The innermost scroller along an axis on a walked element's chain.
+  function chainScroller(el, axis) {
+    const chain = chains.get(el) || [];
+    for (let i = chain.length - 1; i >= 0; i--) if (chain[i][axis]) return chain[i].el;
+    return null;
+  }
+
   // The scroller a wheel at (x, y) scrolls along an axis: the innermost on the
   // painted element's chain, the one Chrome latches to. Null where that is unknown:
   // over a frame, whose own document may take the wheel, or where a scroll container
   // short of that scroller, scrollable or not, keeps the wheel with its
-  // overscroll-behavior on the axis.
+  // overscroll-behavior on the axis. \`stop\` is the element that settled it: that frame
+  // or container (\`kept\`), else the walked element whose chain was read.
   function wheelScroller(x, y, axis) {
     let hit = elementsAt(document, x, y)[0];
     for (let sr = hit && getShadowRoot.call(hit); sr; sr = getShadowRoot.call(hit)) {
@@ -503,27 +517,67 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (!deeper || deeper === hit) break;
       hit = deeper;
     }
-    if (hit && /^(IFRAME|FRAME|EMBED|OBJECT)$/.test(htmlTag(hit))) return null;
+    if (hit && /^(IFRAME|FRAME|EMBED|OBJECT)$/.test(htmlTag(hit))) {
+      return { scroller: null, stop: hit, kept: true };
+    }
     const overscroll = axis === "sx" ? "overscrollBehaviorX" : "overscrollBehaviorY";
     let scroller;
-    for (let n = hit; n; ) {
+    let stop = null;
+    for (let n = hit; n; n = flatParent(n)) {
       if (scroller === undefined && chains.has(n)) {
-        const chain = chains.get(n) || [];
-        scroller = null;
-        for (let i = chain.length - 1; i >= 0 && !scroller; i--) {
-          if (chain[i][axis]) scroller = chain[i].el;
-        }
-        if (!scroller) return null;
+        stop = n;
+        scroller = chainScroller(n, axis);
+        if (!scroller) break;
       }
-      if (n === scroller) return scroller;
+      if (n === scroller) return { scroller, stop };
       const st = getNodeType.call(n) === 1 && window.getComputedStyle(n);
       const contains = st && (st[overscroll] === "contain" || st[overscroll] === "none");
       const clips = (o) => o !== "visible" && o !== "clip";
-      if (contains && (clips(st.overflowX) || clips(st.overflowY))) return null;
-      const p = getAssignedSlot.call(n) || getParentNode.call(n);
-      n = p && getNodeType.call(p) === 11 ? p.host : p;
+      if (contains && (clips(st.overflowX) || clips(st.overflowY))) {
+        return { scroller: null, stop: n, kept: true };
+      }
     }
-    return null;
+    return { scroller: null, stop };
+  }
+
+  // Every cut under one cutter probes the same points.
+  const probed = Object.create(null);
+  function wheelProbe(x, y, axis) {
+    const key = axis + x + "," + y;
+    return probed[key] || (probed[key] = wheelScroller(x, y, axis));
+  }
+
+  // What a wheel at (x, y) that missed the movers landed on: the frame or container
+  // keeping it, else the largest box around the point whose content wheels the same
+  // scroller, short of a mover or one holding a mover (\`holders\`).
+  function wheelBlocker(probe, holders, axis, x, y) {
+    const over = (el) => {
+      const b = getBCR.call(el);
+      return b.left <= x && x <= b.right && b.top <= y && y <= b.bottom ? b : null;
+    };
+    let n = probe.stop;
+    if (!n) return null;
+    let box = over(n);
+    if (probe.kept) return box;
+    const target = chainScroller(n, axis);
+    for (let p = flatParent(n); p && getNodeType.call(p) === 1; p = flatParent(p)) {
+      if (holders.includes(p)) break;
+      if (!chains.has(p) || chainScroller(p, axis) !== target) break;
+      box = over(p) || box;
+    }
+    return box;
+  }
+
+  // Region q less rect b: the bands of q above, below, left and right of b.
+  function outside(q, b) {
+    const top = Math.max(q.top, b.top);
+    const bottom = Math.min(q.bottom, b.bottom);
+    return [
+      { left: q.left, top: q.top, right: q.right, bottom: Math.min(q.bottom, b.top) },
+      { left: q.left, top: Math.max(q.top, b.bottom), right: q.right, bottom: q.bottom },
+      { left: q.left, top, right: Math.min(q.right, b.left), bottom },
+      { left: Math.max(q.left, b.right), top, right: q.right, bottom },
+    ].filter((v) => v.right - v.left >= 1 && v.bottom - v.top >= 1);
   }
 
   // A point where a wheel scrolls the element (visible part r) against a scroller
@@ -531,27 +585,55 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // scrollers \`scs\`. Elsewhere the wheel may move an overlay's scroller, the element's
   // own, or one holding the cutter. The shown part of the innermost cutter's window is
   // tried first, its points farthest along the axis first: content scrolling under the
-  // point mid-wheel takes the rest of it. With no such point on screen, the centre of
-  // the cut window \`win\` across the element.
+  // point mid-wheel takes the rest of it. A 3x3 grid of each window is tried, then,
+  // for a few rounds, the parts of it left beside the boxes its missed points landed
+  // on, so a strip too thin for the grid is still found. With no such point on screen,
+  // the centre of the cut window \`win\` across the element.
   function wheelAnchor(r, scs, cutters, win, axis) {
     const movers = scs.slice(scs.indexOf(cutters[0])).filter((s) => s[axis]);
     const away = ([x, y]) =>
       axis === "sx" ? Math.max(r.left - x, x - r.right) : Math.max(r.top - y, y - r.bottom);
-    const points = [];
+    const holders = [];
+    for (const m of movers) for (let n = m.el; n; n = flatParent(n)) holders.push(n);
+    const at = (q, f, g) => [q.left + (q.right - q.left) * f, q.top + (q.bottom - q.top) * g];
+    // Probes past the grids, each an elementsFromPoint and a walk up its path.
+    let spare = 24;
     for (let i = cutters.length - 1; i >= 0; i--) {
-      const v = intersect(cutters[i].shown, { left: 0, top: 0, right: w, bottom: h });
-      const grid = [];
-      for (const f of [0.1, 0.5, 0.9]) {
-        for (const g of [0.1, 0.5, 0.9]) {
-          grid.push([v.left + (v.right - v.left) * f, v.top + (v.bottom - v.top) * g]);
+      let regions = [intersect(cutters[i].shown, { left: 0, top: 0, right: w, bottom: h })];
+      for (let round = 0; round < 4 && regions.length; round++) {
+        const points = [];
+        for (const q of regions) {
+          for (const f of [0.1, 0.5, 0.9]) {
+            if (round) points.push([axis === "sx" ? at(q, f, 0.5) : at(q, 0.5, f), q]);
+            else for (const g of [0.1, 0.5, 0.9]) points.push([at(q, f, g), q]);
+          }
         }
+        points.sort((a, b) => away(b[0]) - away(a[0]));
+        const boxes = [];
+        const blocked = [];
+        for (const [[x, y], q] of points) {
+          if (round && spare-- <= 0) break;
+          const probe = wheelProbe(x, y, axis);
+          if (movers.some((m) => m.el === probe.scroller)) return { x: x / w, y: y / h };
+          const box = wheelBlocker(probe, holders, axis, x, y);
+          if (box) {
+            boxes.push(box);
+            blocked.push(q);
+          }
+        }
+        if (spare <= 0) break;
+        // Bounded: each box can split every part in four.
+        regions = regions
+          .filter((q) => blocked.includes(q))
+          .flatMap((q) =>
+            boxes.reduce((parts, b) => parts.flatMap((v) => outside(v, b)).slice(0, 8), [q])
+          )
+          .slice(0, 8);
       }
-      points.push(...grid.sort((a, b) => away(b) - away(a)));
     }
-    points.push([(r.left + r.right) / 2, (r.top + r.bottom) / 2]);
-    for (const [x, y] of points) {
-      const s = wheelScroller(x, y, axis);
-      if (s && movers.some((m) => m.el === s)) return { x: x / w, y: y / h };
+    const [x, y] = [(r.left + r.right) / 2, (r.top + r.bottom) / 2];
+    if (movers.some((m) => m.el === wheelProbe(x, y, axis).scroller)) {
+      return { x: x / w, y: y / h };
     }
     return axis === "sx"
       ? { x: (win.left + win.right) / 2 / w, y: (r.top + r.bottom) / 2 / h }

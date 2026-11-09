@@ -2034,9 +2034,10 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     });
     const carried = run([pane([inner])]).tree;
     expect(findById(carried, "cut")!.clipAnchors).toEqual({ y: { x: 0.0285, y: 0.1 } });
-    // Else the row's visible centre.
+    // Else the row's visible centre: the cover's box spans the row, though it paints
+    // (a clip-path) only above it.
     const cover = el({
-      rect: { x: 0, y: 0, w: 300, h: 950 },
+      rect: { x: 0, y: 0, w: 300, h: H },
       painted: { x: 0, y: 0, w: 300, h: 950 },
       style: { position: "fixed" },
     });
@@ -2058,6 +2059,54 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     const unseen = run([pane([cutRow()])]).tree;
     expect(pxFrame(unseen, "cut", "clipBounds")).toEqual({ x: 0, y: 0, w: W, h: H });
     expect(findById(unseen, "cut")!.clipAnchors).toEqual(fallback);
+  });
+
+  it("anchors a cut in a strip beside the box every grid point lands on", () => {
+    const LIST = { x: 0, y: 0, w: 300, h: 200 };
+    const list = (kids: MockElement[]) =>
+      scroller(kids, {
+        rect: LIST,
+        client: { left: 0, top: 0, width: 300, height: 200 },
+        offset: { width: 300, height: 200 },
+        scrollSize: { width: 300, height: 600 },
+        painted: LIST,
+      });
+    // A carousel keeping the wheel fills the list but for a header strip above it, both
+    // in a content container.
+    const header = el({
+      rect: { x: 0, y: 0, w: 300, h: 10 },
+      painted: { x: 0, y: 0, w: 300, h: 10 },
+    });
+    const carousel = el({
+      attrs: { id: "cut" },
+      rect: { x: 0, y: 10, w: 300, h: 400 },
+      client: { left: 0, top: 0, width: 300, height: 400 },
+      offset: { width: 300, height: 400 },
+      scrollSize: { width: 300, height: 400 },
+      style: { overflowX: "hidden", overflowY: "auto", overscrollBehaviorY: "contain" },
+      painted: { x: 0, y: 10, w: 300, h: 190 },
+    });
+    const content = el({ rect: { x: 0, y: 0, w: 300, h: 410 }, children: [header, carousel] });
+    expect(findById(run([list([content])]).tree, "cut")!.clipAnchors).toEqual({
+      y: { x: 0.15, y: 0.001 },
+    });
+    // A fixed overlay, its content inset in it, leaves a strip of the list at its right.
+    const row = el({
+      attrs: { id: "cut" },
+      rect: { x: 0, y: 150, w: 300, h: 100 },
+      painted: { x: 0, y: 150, w: 300, h: 50 },
+    });
+    const OVERLAY = { x: 0, y: 0, w: 290, h: 200 };
+    const INSET = { x: 4, y: 4, w: 282, h: 192 };
+    const overlay = el({
+      rect: OVERLAY,
+      painted: OVERLAY,
+      style: { position: "fixed" },
+      children: [el({ attrs: { id: "sheet" }, rect: INSET, painted: INSET })],
+    });
+    expect(findById(run([list([row]), overlay]).tree, "cut")!.clipAnchors).toEqual({
+      y: { x: 0.295, y: 0.02 },
+    });
   });
 
   it("anchors a horizontal cut farthest from the element along x", () => {
