@@ -56,7 +56,10 @@ describe("CDPClient.connect", () => {
     await vi.advanceTimersByTimeAsync(1);
     const err = await settled;
     expect(err).toBeInstanceOf(FailureError);
-    expect((err as FailureError).message).toContain("did not complete within 10000ms");
+    expect((err as FailureError).message).toBe(
+      `CDP WebSocket handshake with ${silent.url} did not complete within 10000ms. The host` +
+        " may be unreachable, or the target frozen or not a CDP endpoint."
+    );
     expect(getFailureSignal(err)).toMatchObject({
       error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
       error_kind: "timeout",

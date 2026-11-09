@@ -195,8 +195,8 @@ export class CDPClient {
         reject(
           new FailureError(
             `CDP WebSocket handshake with ${this.wsUrl} did not complete within ` +
-              `${DEFAULT_TIMEOUT_MS}ms. The target accepted the connection but never ` +
-              `answered the upgrade; it may be frozen or not a CDP endpoint.`,
+              `${DEFAULT_TIMEOUT_MS}ms. The host may be unreachable, or the target frozen ` +
+              `or not a CDP endpoint.`,
             {
               error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
               failure_stage: "debugger_cdp_connect",
