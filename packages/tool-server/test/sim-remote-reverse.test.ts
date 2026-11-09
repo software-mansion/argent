@@ -98,6 +98,7 @@ describe("reverseStart / reverseStop", () => {
     "error: port forwarder: POST /rules answered HTTP 500 Internal Server Error",
     "error: port forwarder: POST /rules answered HTTP 408 Request Timeout",
     "error: the request to sim-router timed out",
+    "error: bind ephemeral TCP listener on both loopback families: no port free on each after 10 attempts (last: Address already in use (os error 48))",
   ])("does not retry a forwarder that stays down or refuses (%s)", async (stderr) => {
     outcomes = [stderr, null];
     const err = await start();
@@ -179,13 +180,14 @@ describe("callers open the tunnel with `sim-remote reverse`", () => {
     ]);
   });
 
-  it("JS runtime debugger on a remote simulator", async () => {
+  it("JS runtime debugger on a remote simulator fails with the tunnel's error", async () => {
     vi.useRealTimers();
-    outcomes = [null];
-    // Nothing serves Metro on port 1, so the factory fails right after the tunnel.
+    const stderr =
+      "error: the host's port forwarder is unreachable (connection failed); reverse tunnels cannot be set up on this machine";
+    outcomes = [stderr];
     await expect(
       jsRuntimeDebuggerBlueprint.factory({}, `1:remote:${UDID}`, undefined)
-    ).rejects.toThrow();
-    expect(calls[0]).toEqual(["reverse", "start", UDID, "1"]);
+    ).rejects.toThrow(`sim-remote reverse start ${UDID} 1 failed: ${stderr}`);
+    expect(calls).toEqual([["reverse", "start", UDID, "1"]]);
   });
 });

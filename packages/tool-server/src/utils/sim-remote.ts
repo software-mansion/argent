@@ -269,10 +269,9 @@ const REVERSE_START_RETRY_WINDOW_MS = 15_000;
 /**
  * Whether a failed `reverse start` is worth repeating: the daemon's connection
  * to the orchestrator closed under the request (the next call redials), or the
- * host's port forwarder answered 502/504. Every attempt first clears the
- * forwarder's rules for the (udid, port), so a repeat does not stack rules. An
- * unreachable forwarder, or one that lost its proxy tunnel (503), is reported
- * without the `port forwarder:` prefix and stays down on that machine.
+ * host's port forwarder answered 502/504. An unreachable forwarder, or one that
+ * lost its proxy tunnel (503), is reported without the `port forwarder:` prefix
+ * and stays down on that machine.
  */
 function isTransientReverseStartError(message: string): boolean {
   return /tunnel-mux (connection closed|control send:)|port forwarder: .* answered HTTP 50[24]\b/.test(
@@ -284,8 +283,8 @@ function isTransientReverseStartError(message: string): boolean {
  * Start a reverse TCP tunnel on `<port>`, forwarding the remote simulator's
  * `localhost:<port>` to this host.
  *
- * Idempotent: re-running with the same (udid, port) tolerates "already
- * started" errors so blueprints don't have to track tunnel ownership across
+ * Idempotent: the daemon's "tunnel already active" for the same (udid, port)
+ * counts as started, so blueprints don't have to track tunnel ownership across
  * service restarts. Transient orchestrator failures are retried a bounded
  * number of times.
  */
@@ -298,7 +297,7 @@ export async function reverseStart(udid: string, port: number): Promise<void> {
       return;
     } catch (err) {
       const message = (err as Error).message ?? "";
-      if (/already/i.test(message)) return;
+      if (/tunnel already active/.test(message)) return;
       const delay = REVERSE_START_RETRY_DELAYS_MS[attempt];
       if (
         delay === undefined ||

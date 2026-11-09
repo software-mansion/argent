@@ -203,8 +203,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     // A remote (cloud) sim reaches the developer's LOCAL Metro over a sim-remote
     // reverse tunnel: the sim's localhost:<port> is forwarded out to this host.
     // Only the app→Metro hop needs it — discoverMetro below still reaches Metro
-    // directly. reverseStart tolerates "already started", so re-ensuring it on
-    // every connect is cheap.
+    // directly. reverseStart counts an already-active tunnel as started, so
+    // re-ensuring it on every connect is cheap.
     if (classifyDevice(deviceId) === "ios-remote") {
       await reverseStart(deviceId, port);
     }
