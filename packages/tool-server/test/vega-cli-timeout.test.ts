@@ -367,8 +367,8 @@ describe("runVega timeout (real subprocess)", () => {
     // message match but re-introduce the stacked ~40s stall; this assertion catches it.
     expect(getFailureSignal(err)?.error_kind).toBe("timeout");
     const elapsed = Date.now() - start;
-    // Settles right around the 400ms deadline — proving it does NOT wait on the
-    // worker that holds the stdout pipe open.
+    // Settles near the 400ms deadline. The reap kills the pipe-holding worker within
+    // milliseconds, so this cannot tell settling at the deadline from waiting on `close`.
     expect(elapsed).toBeLessThan(2_500);
   });
 
