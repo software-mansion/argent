@@ -43,7 +43,7 @@ Obey these lifecycle rules:
 2. Record a plain `restart-app` as the first action that is neither an echo nor a script. Pass only the device id and app id. The recorder converts it to `launch:`.
 3. Record `await-ui-element` for the real first screen immediately after restart.
 
-Extra restart arguments prevent `launch:` conversion. An Android `activity`, for example, leaves a raw tool step and therefore a fragment. On iOS, `launchArgs` is the exception: it records as `launch: { native: <app id>, ios: { app, args } }`.
+Extra restart arguments prevent `launch:` conversion. An Android `activity`, for example, leaves a raw tool step and therefore a fragment. On iOS, `launchArgs` is the exception: it records as `launch: { native: <app id>, ios: { app, args } }`. Chromium ignores both arguments, so they never block the conversion there. Only a leading Chromium `restart-app` of a test without an `executionPrerequisite` becomes `launch:`; a later one stays a raw tool step that relaunches the instance of the run.
 
 Do not use splash content as a selector or landmark. Wait for the first real screen.
 

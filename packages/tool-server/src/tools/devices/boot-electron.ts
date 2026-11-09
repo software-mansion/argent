@@ -203,6 +203,25 @@ export function electronLaunchSpec(port: number): ElectronLaunchSpec | undefined
   return launchSpecs.get(port);
 }
 
+/** Per-port tail of the in-flight {@link withPortLock} tasks. */
+const portTasks = new Map<number, Promise<unknown>>();
+
+/**
+ * Run `task` after every earlier task on `port` settles. Restarts and run
+ * teardowns of one instance go through here: overlapping, they would spawn two
+ * instances on one port (the readiness probe accepts either), or leave a
+ * relaunched copy running after its teardown.
+ */
+export async function withPortLock<T>(port: number, task: () => Promise<T>): Promise<T> {
+  const run = (portTasks.get(port) ?? Promise.resolve()).catch(() => {}).then(task);
+  portTasks.set(port, run);
+  try {
+    return await run;
+  } finally {
+    if (portTasks.get(port) === run) portTasks.delete(port);
+  }
+}
+
 /** Drop `port`'s launch spec, so restart-app no longer relaunches its app. */
 export function forgetElectronLaunchSpec(port: number): void {
   launchSpecs.delete(port);

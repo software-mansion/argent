@@ -71,7 +71,7 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
     // Android's device probes, force-stop and `am start -W` can outlast the 30s MCP fetch timeout.
     longRunning: true,
     description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega, or Chromium.
-Use when you need a clean in-memory state without a full reinstall. On Chromium it relaunches an Electron app that boot-device started in this tool-server session, on the same port and device id; any other Chromium runtime cannot be restarted. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).
+Use when you need a clean in-memory state without a full reinstall. On Chromium it relaunches an Electron app that this tool-server session booted (boot-device, or an e2e run), on the same port and device id; any other Chromium runtime cannot be restarted. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).
 Returns { restarted, bundleId, networkCapture? }. networkCapture (Android) says whether native network capture followed the launch. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.`,
     zodSchema,
     alwaysLoad: true,

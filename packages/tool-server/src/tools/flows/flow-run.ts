@@ -115,6 +115,7 @@ import {
   bootElectronApp,
   forgetElectronLaunchSpec,
   killChromiumByPortAndWait,
+  withPortLock,
 } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
@@ -2204,26 +2205,28 @@ async function bootChromiumForFlow(
  * Tear down a Chromium instance the runner booted. Best-effort — never fail a
  * run here: dispose the CDP session (if a tool opened one), kill the process,
  * and forget its port so `list-devices` stops probing it and restart-app does
- * not relaunch it. The kill is awaited
+ * not relaunch it, after any restart-app of the instance in flight. The kill is awaited
  * to the process's actual exit (bounded — see {@link killChromiumByPortAndWait})
  * because every next boot of the same app would otherwise race the dying
  * instance's lock.
  */
 async function teardownBootedChromium(registry: Registry, booted: BootedChromium): Promise<void> {
-  const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
-  try {
-    const entry = registry.getSnapshot().services.get(urn);
-    if (entry && isLiveServiceState(entry.state)) await registry.disposeService(urn);
-  } catch {
-    /* the kill below frees the real resource regardless */
-  }
-  try {
-    await killChromiumByPortAndWait(booted.port, booted.pid);
-    forgetElectronLaunchSpec(booted.port);
-    untrackChromiumPort(booted.port);
-  } catch {
-    /* one unreachable instance must not strand the others */
-  }
+  await withPortLock(booted.port, async () => {
+    const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
+    try {
+      const entry = registry.getSnapshot().services.get(urn);
+      if (entry && isLiveServiceState(entry.state)) await registry.disposeService(urn);
+    } catch {
+      /* the kill below frees the real resource regardless */
+    }
+    try {
+      await killChromiumByPortAndWait(booted.port, booted.pid);
+      forgetElectronLaunchSpec(booted.port);
+      untrackChromiumPort(booted.port);
+    } catch {
+      /* one unreachable instance must not strand the others */
+    }
+  });
 }
 
 /**

@@ -15,14 +15,9 @@ import {
   bootElectronApp,
   electronLaunchSpec,
   killChromiumByPortAndWait,
+  withPortLock,
 } from "../../devices/boot-electron";
 import type { RestartAppParams, RestartAppResult } from "../types";
-
-/**
- * Per-port tail of in-flight restarts. Overlapping restarts would spawn two
- * instances on one port, and the readiness probe would accept either.
- */
-const restarts = new Map<number, Promise<unknown>>();
 
 /**
  * Relaunch an Electron app this tool-server booted, on the same port, so the
@@ -36,13 +31,25 @@ export function makeChromiumImpl(
   async function restart(port: number, params: RestartAppParams): Promise<RestartAppResult> {
     const spec = electronLaunchSpec(port);
     if (!spec) throw notBooted(params.udid);
+    // The pid is cleared when the app exits, as after a crash.
+    const wasRunning = spec.pid !== undefined;
     try {
       assertElectronAppLaunchable(spec.appPath);
     } catch (err) {
-      throw withPrefix(err, "restart-app did not stop the app, which keeps running: ");
+      throw withPrefix(
+        err,
+        wasRunning
+          ? "restart-app did not stop the app, which keeps running: "
+          : "restart-app did not relaunch the app, whose process has exited: "
+      );
     }
     await killChromiumByPortAndWait(port, spec.pid);
-    await assertPortReleased(port);
+    await assertPortReleased(
+      port,
+      wasRunning
+        ? "restart-app stopped the app but did not relaunch it"
+        : "restart-app did not relaunch the app"
+    );
     // After the kill, so a frozen renderer cannot stall the dispose's CDP calls.
     const urn = `${CHROMIUM_CDP_NAMESPACE}:${params.udid}`;
     const entry = registry.getSnapshot().services.get(urn);
@@ -50,7 +57,12 @@ export function makeChromiumImpl(
     try {
       await bootElectronApp({ appPath: spec.appPath, port, extraArgs: spec.extraArgs });
     } catch (err) {
-      throw withPrefix(err, "restart-app stopped the app but could not relaunch it: ");
+      throw withPrefix(
+        err,
+        wasRunning
+          ? "restart-app stopped the app but could not relaunch it: "
+          : "restart-app could not relaunch the app: "
+      );
     }
     return { restarted: true, bundleId: params.bundleId };
   }
@@ -70,15 +82,7 @@ export function makeChromiumImpl(
           }
         );
       }
-      const run = (restarts.get(port) ?? Promise.resolve())
-        .catch(() => {})
-        .then(() => restart(port, params));
-      restarts.set(port, run);
-      try {
-        return await run;
-      } finally {
-        if (restarts.get(port) === run) restarts.delete(port);
-      }
+      return withPortLock(port, () => restart(port, params));
     },
   };
 }
@@ -90,7 +94,7 @@ export function makeChromiumImpl(
  * by binding asks exactly what the relaunch needs, including of a holder that
  * accepts connections but never answers CDP.
  */
-async function assertPortReleased(port: number): Promise<void> {
+async function assertPortReleased(port: number, lead: string): Promise<void> {
   const bindError = await new Promise<NodeJS.ErrnoException | null>((resolve) => {
     const srv = net.createServer();
     srv.once("error", (err: NodeJS.ErrnoException) => resolve(err));
@@ -98,7 +102,7 @@ async function assertPortReleased(port: number): Promise<void> {
   });
   if (!bindError) return;
   throw new FailureError(
-    `restart-app stopped the app but did not relaunch it: port ${port} is still held ` +
+    `${lead}: port ${port} is still held ` +
       `(${bindError.code ?? bindError.message}), so a new copy could not bind it. Quit the ` +
       `process listening on port ${port} (it can be a leftover process of the app), then ` +
       `retry restart-app.`,
@@ -113,12 +117,12 @@ async function assertPortReleased(port: number): Promise<void> {
 
 function notBooted(udid: string): FailureError {
   return new FailureError(
-    `restart-app can only relaunch an Electron app that boot-device started in this ` +
-      `tool-server session, and ${udid} is not one: boot-device did not start it, an e2e run ` +
-      `booted it and stopped it at its end, or the tool-server restarted since the boot (an ` +
-      `auto-started one exits after 30 idle minutes) and no longer knows how the app was ` +
-      `launched. Start the app again: for an Electron app, boot-device with electronAppPath; ` +
-      `otherwise quit it if it runs and relaunch it with --remote-debugging-port.`,
+    `restart-app can only relaunch an Electron app that this tool-server session booted ` +
+      `(boot-device, or an e2e run), and ${udid} is not one: argent did not boot it, an e2e ` +
+      `run booted it and stopped it at its end, or the tool-server restarted since the boot ` +
+      `(an auto-started one exits after 30 idle minutes) and no longer knows how the app was ` +
+      `launched. Quit the app if it still runs, then start it again: for an Electron app, ` +
+      `boot-device with electronAppPath; otherwise relaunch it with --remote-debugging-port.`,
     {
       error_code: FAILURE_CODES.CHROMIUM_RESTART_NOT_BOOTED,
       failure_stage: "chromium_restart_spec_lookup",

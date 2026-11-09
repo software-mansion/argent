@@ -29,6 +29,7 @@ import {
   describeSelector,
   foldStepFromArgs,
   isLinkedRecorderCall,
+  precedesLeadingLaunch,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -758,7 +759,8 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     rewriteCondition:
       "when it carries only the bundle id, or `launchArgs` on iOS (any other extra arg, e.g. an " +
       "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it); " +
-      "on Chromium, when it is the recording's first launch, as the app's path and boot args",
+      "on Chromium, as the app's path and boot args, only as the leading step of a recording " +
+      "without an executionPrerequisite",
   },
   run: {
     tool: "e2e-execute",
@@ -1569,9 +1571,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // no args. On Chromium the bundleId is a tag and the other args are
       // ignored, so the step records the relaunched app's path and boot args
       // instead, and a pinned replay attaches rather than relaunching (see
-      // runChromiumLaunch). Only the recording's first launch maps there: a
-      // later Chromium launch boots another instance, so a later restart stays
-      // the raw step, which relaunches the run's instance in place.
+      // runChromiumLaunch). Only a leading restart of a standalone recording
+      // maps there: anywhere else a Chromium launch attaches or boots another
+      // instance, so such a restart stays the raw step, which relaunches the
+      // run's instance in place.
       // `launch-app` is NOT rewritten — it foregrounds without terminating.
       const strippedArgs = stripDeviceKeys(args);
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
@@ -1594,7 +1597,9 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
         (chromiumPort !== null
-          ? chromiumSpec !== undefined && !session.flow.steps.some((st) => st.kind === "launch")
+          ? chromiumSpec !== undefined &&
+            !session.flow.executionPrerequisite &&
+            session.flow.steps.every(precedesLeadingLaunch)
           : Object.keys(extraLaunchArgs).length === 0 && (noLaunchArgs || iosArgs !== undefined));
 
       // A recorded `fold` becomes the `fold:` directive, the same posture change

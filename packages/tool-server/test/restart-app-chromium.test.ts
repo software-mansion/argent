@@ -334,16 +334,43 @@ describe("restart-app on Chromium", () => {
         () => undefined,
         (e: unknown) => e
       );
-      fs.rmSync(otherBin, { recursive: true, force: true });
       expect(getFailureSignal(again)?.error_code).toBe(
         FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID
       );
       expect(children[0]!.kill).not.toHaveBeenCalled();
 
-      vi.stubEnv("PATH", emptyBin);
+      // Found in a later PATH entry, as the spawn would find it.
+      fs.rmSync(path.join(otherBin, "electron"), { recursive: true });
+      vi.stubEnv("PATH", [otherBin, emptyBin].join(path.delimiter));
       fs.chmodSync(path.join(emptyBin, "electron"), 0o755);
       await registry.invokeTool("restart-app", { udid, bundleId: "tag" });
+      fs.rmSync(otherBin, { recursive: true, force: true });
       expect(children).toHaveLength(2);
+    } finally {
+      fs.rmSync(bare, { recursive: true, force: true });
+      fs.rmSync(emptyBin, { recursive: true, force: true });
+    }
+  });
+
+  it("says the app has exited when a crashed app's launcher is gone", async () => {
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-crashed-"));
+    const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-path-"));
+    try {
+      fs.writeFileSync(path.join(bare, "package.json"), JSON.stringify({ main: "main.js" }));
+      await bootElectronApp({ appPath: bare, port });
+      await exitChild(children[0]!, 1, null);
+      vi.stubEnv("PATH", emptyBin);
+
+      const err = await registryWithRestartApp()
+        .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
+        .then(
+          () => undefined,
+          (e: unknown) => e
+        );
+
+      expect((err as Error).message).toContain(
+        "restart-app did not relaunch the app, whose process has exited"
+      );
     } finally {
       fs.rmSync(bare, { recursive: true, force: true });
       fs.rmSync(emptyBin, { recursive: true, force: true });
@@ -448,6 +475,7 @@ describe("restart-app on Chromium", () => {
     expect((err as Error).message).toContain("--remote-debugging-port");
     expect((err as Error).message).toContain("tool-server restarted since the boot");
     expect((err as Error).message).toContain("an e2e run booted it and stopped it");
+    expect((err as Error).message).toContain("Quit the app if it still runs, then start it again");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -468,6 +496,13 @@ describe("restart-app on Chromium", () => {
 
   it.each([
     ["path and args", ["--feature-x"], {}, false, () => ({ path: appDir, args: ["--feature-x"] })],
+    [
+      "args without the port flag Argent manages",
+      ["--remote-debugging-port=1", "--feature-x"],
+      {},
+      false,
+      () => ({ path: appDir, args: ["--feature-x"] }),
+    ],
     ["bare path", [], {}, false, () => appDir],
     ["absolute path when booted by a relative one", [], {}, true, () => appDir],
     [
@@ -486,6 +521,10 @@ describe("restart-app on Chromium", () => {
         extraArgs,
       });
       expect(electronLaunchSpec(port)?.appPath).toBe(appDir);
+      const recorded = expected();
+      expect(electronLaunchSpec(port)?.extraArgs).toEqual(
+        typeof recorded === "string" ? [] : recorded.args
+      );
       const registry = registryWithRestartApp();
       const projectRoot = fs.mkdtempSync(
         path.join(os.tmpdir(), "argent-restart-app-chromium-flow-")
@@ -520,34 +559,52 @@ describe("restart-app on Chromium", () => {
     }
   );
 
-  it("records only the first restart of a recording as the launch", async () => {
-    await bootElectronApp({ appPath: appDir, port });
-    const registry = registryWithRestartApp();
-    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-flow-"));
-    try {
-      await flowStartRecordingTool.execute({}, { name: "two-restarts", project_root: projectRoot });
-      for (let i = 0; i < 2; i++) {
-        await createFlowAddStepTool(registry).execute(
-          {},
-          {
-            name: "two-restarts",
-            project_root: projectRoot,
-            command: "restart-app",
-            args: JSON.stringify({ udid: `chromium-cdp-${port}`, bundleId: "tag" }),
-          }
-        );
-      }
-
-      const yaml = fs.readFileSync(
-        path.join(projectRoot, ".argent", "e2e", "two-restarts.yaml"),
-        "utf8"
+  it.each([
+    ["two restarts", undefined, [{}, {}], 0],
+    ["a restart behind a step that is not a launch", undefined, [{ delayMs: 1 }, {}], -1],
+    ["a restart in a fragment", "the app shows its home screen", [{}], -1],
+  ])(
+    "records a Chromium restart as the launch only when it leads a standalone test: %s",
+    async (_name, executionPrerequisite, restarts, launchAt) => {
+      await bootElectronApp({ appPath: appDir, port });
+      const registry = registryWithRestartApp();
+      const projectRoot = fs.mkdtempSync(
+        path.join(os.tmpdir(), "argent-restart-app-chromium-flow-")
       );
-      expect(parseFlow(yaml).steps).toEqual([
-        { kind: "launch", app: { chromium: appDir } },
-        { kind: "tool", name: "restart-app", args: { bundleId: "tag" } },
-      ]);
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true });
+      try {
+        await flowStartRecordingTool.execute(
+          {},
+          { name: "restarts", project_root: projectRoot, executionPrerequisite }
+        );
+        for (const extra of restarts) {
+          await createFlowAddStepTool(registry).execute(
+            {},
+            {
+              name: "restarts",
+              project_root: projectRoot,
+              command: "restart-app",
+              args: JSON.stringify({ udid: `chromium-cdp-${port}`, bundleId: "tag" }),
+              ...extra,
+            }
+          );
+        }
+
+        const yaml = fs.readFileSync(
+          path.join(projectRoot, ".argent", "e2e", "restarts.yaml"),
+          "utf8"
+        );
+        const steps = parseFlow(yaml).steps;
+        expect(steps).toHaveLength(restarts.length);
+        steps.forEach((step, i) =>
+          expect(step).toMatchObject(
+            i === launchAt
+              ? { kind: "launch", app: { chromium: appDir } }
+              : { kind: "tool", name: "restart-app", args: { bundleId: "tag" } }
+          )
+        );
+      } finally {
+        fs.rmSync(projectRoot, { recursive: true, force: true });
+      }
     }
-  });
+  );
 });
