@@ -106,7 +106,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getActiveElement = protoGetter(docProto, "activeElement");
   const getDocBody = protoGetter(docProto, "body");
   const getRootNode = Node.prototype.getRootNode;
-  const containsNode = Node.prototype.contains;
   const docElementsFromPoint = docProto.elementsFromPoint;
   const slotAssignedNodes = HTMLSlotElement.prototype.assignedNodes;
   // A document's named getter can shadow elementsFromPoint; a shadow root has none.
@@ -1264,9 +1263,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     };
     const cx = (v.left + v.right) / 2;
     const cy = (v.top + v.bottom) / 2;
-    // A shadow root's elementsFromPoint returns nodes of its own tree, where the
-    // document's returns their host.
-    const root = getRootNode.call(el);
     return [
       [(v.left + Math.min(v.right, e.left)) / 2, cy],
       [(Math.max(v.left, e.right) + v.right) / 2, cy],
@@ -1279,7 +1275,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         y >= v.top &&
         y < v.bottom &&
         (x < e.left || x >= e.right || y < e.top || y >= e.bottom) &&
-        elementsAt(root, x, y).some((hit) => containsNode.call(el, hit) && carried(el, hit))
+        hitsAt(document, x, y).some((hit) => carried(el, hit))
     );
   }
 
@@ -1296,8 +1292,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     );
   }
 
-  // The border boxes of n and its element ancestors that clip their content, intersected;
-  // null when none does. Memoized: siblings share every ancestor.
+  // The border boxes of n and its flat-tree ancestors that clip their content,
+  // intersected; null when none does. Memoized: siblings share every ancestor.
   const clipperBoxes = nodeMap();
   function clipperBorders(n) {
     if (!n || getNodeType.call(n) !== 1) return null;
@@ -1305,19 +1301,40 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const st = window.getComputedStyle(n);
     const own =
       overflowApplies(n, st) && (overflowClips(st) || paintContained(st)) ? getBCR.call(n) : null;
-    const borders = intersect(clipperBorders(getParentNode.call(n)), own);
+    const borders = intersect(clipperBorders(flatParent(n)), own);
     clipperBoxes.set(n, borders);
     return borders;
   }
 
-  // Whether el's own painting puts hit where it is: no box between them is fixed or
-  // absolute, which would paint by its own containing block, escaping el's clips.
+  // The elements hit at (x, y) in root's tree and the open shadow trees under it. A tree
+  // lists a host for anything its shadow tree paints, a fixed popup included, so each
+  // host gives way to its shadow root's hits, which list it only where its own box is
+  // hit; the rest of root's tree there is root's own list's.
+  function hitsAt(root, x, y) {
+    const hits = [];
+    for (const hit of elementsAt(root, x, y)) {
+      const sr = getRootNode.call(hit) === root && getShadowRoot.call(hit);
+      if (!sr) {
+        hits.push(hit);
+        continue;
+      }
+      for (const n of hitsAt(sr, x, y)) {
+        if (n === hit || getRootNode.call(n) !== root) hits.push(n);
+      }
+    }
+    return hits;
+  }
+
+  // Whether hit is in el's flat tree and el's own painting puts it where it is: no box
+  // between them is fixed or absolute, which would paint by its own containing block,
+  // escaping el's clips.
   function carried(el, hit) {
-    for (let n = hit; n && n !== el; n = getParentNode.call(n)) {
+    for (let n = hit; n && getNodeType.call(n) === 1; n = flatParent(n)) {
+      if (n === el) return true;
       const position = window.getComputedStyle(n).position;
       if (position === "fixed" || position === "absolute") return false;
     }
-    return true;
+    return false;
   }
 
   // Smallest normalized box covering every surviving child frame — the frame we give

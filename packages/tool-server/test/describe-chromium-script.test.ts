@@ -114,13 +114,17 @@ elementProto.hasAttribute = function (this: Record<string, unknown>, n: string) 
   return n in ((this.__attrs as Record<string, string>) ?? {});
 };
 // Hit testing: the elements of a tree whose `painted` rect holds the point, the last in
-// tree order on top. A shadow root's own tree is separate, so the document never
-// returns a shadow tree's nodes.
+// tree order on top. A shadow root's own tree is separate: like Chrome's, the document
+// returns its host wherever that tree paints, never the tree's nodes.
+const paints = (n: Record<string, unknown>, x: number, y: number) => {
+  const p = n.__painted as Rect | undefined;
+  return !!p && x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h;
+};
 function paintedAt(nodes: unknown[], x: number, y: number): unknown[] {
   const hits: unknown[] = [];
   const visit = (n: Record<string, unknown>) => {
-    const p = n.__painted as Rect | undefined;
-    if (p && x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h) hits.push(n);
+    const sr = n.__shadowRoot as { children: unknown[] } | null | undefined;
+    if (paints(n, x, y) || (sr && paintedAt(sr.children, x, y).length)) hits.push(n);
     for (const k of (n.__children as Record<string, unknown>[]) ?? []) visit(k);
   };
   for (const n of nodes) visit(n as Record<string, unknown>);
@@ -257,14 +261,16 @@ function el(opts: Opts = {}): MockElement {
   // An open shadow root is a DocumentFragment exposing `.children`; the walker reads
   // `getShadowRoot.call(el)` then iterates `shadow.children`. null unless a fixture sets it.
   if (opts.shadow) {
-    // Like Chrome's, it hit-tests the host and its ancestors below its own tree's nodes.
-    const hostChain = () => {
-      const chain: unknown[] = [];
-      for (let n: unknown = node; n instanceof MockElement;) {
-        chain.push(n);
-        n = (n as Record<string, unknown>).__parentNode;
-      }
-      return chain;
+    // Like Chrome's, it lists the outer tree's hits below its own tree's nodes, the host
+    // among them only where its own box is hit.
+    const outerHits = (x: number, y: number) => {
+      const outer = (nodeProto.getRootNode as () => Record<string, unknown>).call(node);
+      const hits = (
+        outer.nodeType === 9
+          ? MockDocument.prototype.elementsFromPoint.call(outer as never, x, y)
+          : (outer.elementsFromPoint as (x: number, y: number) => unknown[])(x, y)
+      ) as unknown[];
+      return hits.filter((n) => n !== node || paints(node, x, y));
     };
     let hitTests = 0;
     const shadowRoot = {
@@ -275,7 +281,7 @@ function el(opts: Opts = {}): MockElement {
       elementsFromPoint: (x: number, y: number) => {
         // A script hit-testing one point over and over would otherwise hang the suite.
         if (++hitTests > 10_000) throw new Error("hit-tested a shadow root without end");
-        return [...paintedAt(opts.shadow!, x, y), ...hostChain()];
+        return [...paintedAt(opts.shadow!, x, y), ...outerHits(x, y)];
       },
     };
     const own = (n: Record<string, unknown>, parent: unknown) => {
@@ -2872,16 +2878,33 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
   });
 
   it.each([
-    { tag: "div", svg: false, framed: true },
-    { tag: "span", svg: false, framed: true },
-    { tag: "section", svg: false, framed: true },
-    { tag: "h3", svg: false, framed: true },
-    { tag: "ul", svg: false, framed: false },
+    ...[
+      "article",
+      "aside",
+      "blockquote",
+      "body",
+      "div",
+      "footer",
+      "h1",
+      "h3",
+      "h6",
+      "header",
+      "main",
+      "nav",
+      "p",
+      "section",
+      "span",
+    ].map((tag) => ({ tag, svg: false, framed: true })),
+    // Unlisted names, some holding a listed one.
+    ...["ul", "pre", "picture", "template", "caption", "h7", "hgroup"].map((tag) => ({
+      tag,
+      svg: false,
+      framed: false,
+    })),
     { tag: "font-face", svg: true, framed: false },
   ])("frames a <$tag> (svg: $svg) host's light child by where it hit-tests: $framed", (c) => {
-    // attachShadow accepts custom elements and a fixed list of HTML elements, neither <ul>
-    // nor anything in SVG among them; a closed root on one slots the child into a fixed
-    // popup.
+    // attachShadow accepts custom elements and a fixed list of HTML elements, nothing in
+    // SVG among them; a closed root on one slots the child into a fixed popup.
     const box = { x: 400, y: 400, w: 120, h: 40 };
     const { tree } = run([
       scroller(
@@ -3000,6 +3023,152 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       }),
     ]);
     expect(pxFrame(tree, "row")).toEqual(c.clipped);
+  });
+
+  it.each([
+    { edge: "left", rect: { x: 20, y: 120, w: 60, h: 40 } },
+    { edge: "top", rect: { x: 120, y: 20, w: 40, h: 60 } },
+    { edge: "right", rect: { x: 450, y: 120, w: 60, h: 40 } },
+    { edge: "bottom", rect: { x: 120, y: 250, w: 40, h: 60 } },
+  ])("frames a light child a closed root paints past only its clipper's $edge edge", (c) => {
+    // The clipper's border box is x 100..424, y 100..224.
+    const { tree } = run([
+      el({
+        rect: { x: 100, y: 100, w: 324, h: 124 },
+        client: { left: 12, top: 12, width: 300, height: 100 },
+        style: { contain: "paint" },
+        children: [
+          el({
+            tag: "app-row",
+            rect: ZERO,
+            style: { display: "contents" },
+            children: [el({ attrs: { id: "row" }, rect: c.rect, painted: c.rect })],
+          }),
+        ],
+      }),
+    ]);
+    expect(pxFrame(tree, "row")).toEqual(c.rect);
+  });
+
+  it("clips rows in an open shadow root that hit-test only across their scroller's border", () => {
+    // The host scrolls with a 4px border: its padding box is y 4..124, its border box
+    // y 0..128, and Chrome hit-tests the rows scrolled past the padding box up to the
+    // border box. The rows sit in a plain <div>, which could host a closed root.
+    const rows = [
+      el({
+        attrs: { id: "s1" },
+        rect: { x: 4, y: -24, w: 285, h: 51 },
+        painted: { x: 4, y: 0, w: 285, h: 27 },
+      }),
+      el({
+        attrs: { id: "s3" },
+        rect: { x: 4, y: 78, w: 285, h: 51 },
+        painted: { x: 4, y: 78, w: 285, h: 50 },
+      }),
+    ];
+    const { tree } = run([
+      el({
+        tag: "x-list",
+        rect: { x: 0, y: 0, w: 308, h: 128 },
+        client: { left: 4, top: 4, width: 285, height: 120 },
+        offset: { width: 308, height: 128 },
+        scrollSize: { width: 285, height: 153 },
+        style: { overflow: "auto" },
+        shadow: [el({ rect: { x: 4, y: -24, w: 285, h: 153 }, children: rows })],
+      }),
+    ]);
+    expect(pxFrame(tree, "s1")).toEqual({ x: 4, y: 4, w: 285, h: 23 });
+    expect(pxFrame(tree, "s3")).toEqual({ x: 4, y: 78, w: 285, h: 46 });
+    for (const id of ["s1", "s3"]) {
+      expect(findById(tree, id)!.clipBounds).toBeDefined();
+      expect(findById(tree, id)!.clipAnchors).toBeDefined();
+    }
+  });
+
+  it("clips a list that an open shadow tree's fixed popup, or a child slotted into it, overlaps", () => {
+    // Chrome hits the popup below the scroller, at y 150..210, as its host, and a light
+    // child slotted into it as that child; neither is the list's own painting.
+    const box = { x: 100, y: 150, w: 150, h: 60 };
+    const page = (slotted: boolean) => {
+      const item = el({ attrs: { id: "item" }, rect: box, painted: box });
+      const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
+      const menu = el({
+        rect: box,
+        painted: slotted ? undefined : box,
+        style: { position: "fixed" },
+        children: [slot],
+      });
+      const dd = el({
+        tag: "x-dd",
+        rect: { x: 1, y: 60, w: 285, h: 20 },
+        shadow: [menu],
+        children: slotted ? [item] : [],
+      });
+      if (slotted) (item as unknown as Record<string, unknown>).assignedSlot = slot;
+      return run([
+        scroller([
+          el({
+            attrs: { id: "list" },
+            rect: { x: 1, y: 1, w: 285, h: 280 },
+            children: [dd, row("hidden", { x: 1, y: 200, w: 100, h: 30 })],
+          }),
+        ]),
+      ]).tree;
+    };
+    for (const slotted of [false, true]) {
+      const tree = page(slotted);
+      expect(pxFrame(tree, "list")).toEqual({ x: 1, y: 1, w: 285, h: 98 });
+      expect(pxFrame(tree, "hidden").h).toBe(0);
+    }
+    expect(pxFrame(page(true), "item")).toEqual(box);
+  });
+
+  it("clips a list whose two open shadow trees' fixed popups overlap outside it", () => {
+    // Each shadow root lists the other's host for its popup, as the document does.
+    const box = { x: 100, y: 150, w: 150, h: 60 };
+    const dd = () =>
+      el({
+        tag: "x-dd",
+        rect: { x: 1, y: 60, w: 285, h: 20 },
+        shadow: [el({ rect: box, painted: box, style: { position: "fixed" } })],
+      });
+    const { tree } = run([
+      scroller([
+        el({
+          attrs: { id: "list" },
+          rect: { x: 1, y: 1, w: 285, h: 280 },
+          children: [dd(), dd(), row("hidden", { x: 1, y: 200, w: 100, h: 30 })],
+        }),
+      ]),
+    ]);
+    expect(pxFrame(tree, "list")).toEqual({ x: 1, y: 1, w: 285, h: 98 });
+    expect(pxFrame(tree, "hidden").h).toBe(0);
+  });
+
+  it("frames a closed root's slotted open-shadow host by where its own box hit-tests", () => {
+    // Its shadow tree paints only a corner of it, away from the point the walker probes.
+    const box = { x: 400, y: 400, w: 200, h: 60 };
+    const corner = { x: 400, y: 400, w: 30, h: 20 };
+    const { tree } = run([
+      scroller(
+        [
+          el({
+            rect: { x: 1, y: 1, w: 285, h: 20 },
+            children: [
+              el({
+                tag: "x-btn",
+                attrs: { id: "popped" },
+                rect: box,
+                painted: box,
+                shadow: [el({ tag: "button", rect: corner, painted: corner })],
+              }),
+            ],
+          }),
+        ],
+        { style: { overflow: "hidden" } }
+      ),
+    ]);
+    expect(pxFrame(tree, "popped")).toEqual(box);
   });
 
   it("frames closed-root popup content by where its descendants or a shadow tree hit-test", () => {
