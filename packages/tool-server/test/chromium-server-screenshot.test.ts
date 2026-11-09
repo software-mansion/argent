@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import { PNG } from "pngjs";
 import { __resetSharpCacheForTests, captureScreenshot } from "../src/chromium-server/screenshot";
+import type { ScreenshotOpts, ViewportSize } from "../src/chromium-server/types";
 import type { CDPClient } from "../src/utils/debugger/cdp-client";
 
 // 1×1 transparent PNG — small enough to embed inline, valid IHDR so the
@@ -78,8 +79,15 @@ describe("chromium-server/screenshot", () => {
       return { cdp: { send } as unknown as CDPClient, send };
     }
 
-    async function capture(cdp: CDPClient, opts: { cssPixels?: boolean } = { cssPixels: true }) {
-      const out = await captureScreenshot({ cdp, deviceId: "t" }, opts);
+    async function capture(
+      cdp: CDPClient,
+      opts: ScreenshotOpts = { cssPixels: true },
+      known?: ViewportSize
+    ) {
+      const out = await captureScreenshot(
+        { cdp, deviceId: "t", getViewport: known && (() => known) },
+        opts
+      );
       filesToCleanup.push(out.path);
       return fs.readFileSync(out.path);
     }
@@ -158,11 +166,25 @@ describe("chromium-server/screenshot", () => {
       expect((await capture(cdp)).toString("base64")).toBe(shot);
     });
 
+    it("uses the session's last ratio when the window cannot be read", async () => {
+      const { cdp } = cdpWith(flat(2048, 1480), new Error("timed out"));
+      const known = { width: 1024, height: 740, devicePixelRatio: 2 };
+      expect(sizeOf(await capture(cdp, { cssPixels: true }, known))).toEqual([1024, 740]);
+    });
+
+    it("does not read the window when the session already knows it is at 1x", async () => {
+      const shot = flat(1024, 740);
+      const { cdp, send } = cdpWith(shot, new Error("would hang"));
+      const known = { width: 1024, height: 740, devicePixelRatio: 1 };
+      expect((await capture(cdp, { cssPixels: true }, known)).toString("base64")).toBe(shot);
+      expect(send.mock.calls.map(([method]) => method)).toEqual(["Page.captureScreenshot"]);
+    });
+
     it("gives the window read a short timeout, not the CDP default", async () => {
       const { cdp, send } = cdpWith(flat(2048, 1480), { w: 1024, h: 740, dpr: 2 });
       await capture(cdp);
       const read = send.mock.calls.find(([method]) => method === "Runtime.evaluate");
-      expect(read?.[2]).toBe(2_000);
+      expect(read?.[2]).toBe(150);
     });
 
     it("returns the capture when the window reports no size", async () => {

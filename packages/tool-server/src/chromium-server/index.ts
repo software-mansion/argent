@@ -87,7 +87,7 @@ export async function createChromiumServer(
       return viewport;
     },
     captureScreenshot: (opts2?: ScreenshotOpts) =>
-      captureScreenshot({ cdp, deviceId: opts.deviceId }, opts2),
+      captureScreenshot({ cdp, deviceId: opts.deviceId, getViewport: () => viewport }, opts2),
     copyScreenshotToClipboard: (opts2?: { rotation?: Rotation }) =>
       copyScreenshotToClipboard({ cdp, deviceId: opts.deviceId }, opts2),
     sendTouch: (touchType: TouchType, point: Point, secondPoint?: Point | null) =>

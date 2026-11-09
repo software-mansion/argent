@@ -5,7 +5,7 @@ import { PNG } from "pngjs";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import { boxDownscaleDecodedPng, scaleDecodedPng } from "../utils/png-scale";
 import { mediaDir } from "./cdp-session";
-import type { DownscalerType, MediaReady, Rotation, ScreenshotOpts } from "./types";
+import type { DownscalerType, MediaReady, Rotation, ScreenshotOpts, ViewportSize } from "./types";
 import { readViewport } from "./viewport";
 
 interface SharpModule {
@@ -67,6 +67,8 @@ interface CaptureContext {
   cdp: CDPClient;
   /** Used in the persisted filename. */
   deviceId: string;
+  /** The session's last window read, for when the renderer cannot answer. */
+  getViewport?: () => ViewportSize;
 }
 
 /**
@@ -87,10 +89,23 @@ const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 const ENCODE_OPTIONS = { filterType: 2, deflateStrategy: 0, deflateLevel: 6 };
 
 // A capture still succeeds while the renderer cannot run JS (a navigation waiting
-// on its host, a debugger pause on an idle page). Without a limit the read then
-// waits out the CDP default, only to return the capture unchanged. 2 s is several
-// times the slowest read on real pages while they load, even under a 4x CPU throttle.
-const VIEWPORT_READ_TIMEOUT_MS = 2_000;
+// on its host, a debugger pause on an idle page). `Page.getLayoutMetrics` hangs the
+// same way during such a navigation, so no read can answer there. The wait can be
+// short because the session's last read is then almost always still right.
+const VIEWPORT_READ_TIMEOUT_MS = 150;
+
+async function devicePixelsPerCssPixel(
+  cdp: CDPClient,
+  imageWidth: number,
+  known: ViewportSize | undefined
+): Promise<number> {
+  try {
+    const viewport = await readViewport(cdp, VIEWPORT_READ_TIMEOUT_MS);
+    return imageWidth / viewport.width;
+  } catch {
+    return known?.devicePixelRatio ?? 1;
+  }
+}
 
 /**
  * One image pixel per CSS pixel, made from the capture already taken, so nothing
@@ -99,19 +114,21 @@ const VIEWPORT_READ_TIMEOUT_MS = 2_000;
  * at any browser zoom. Whatever cannot be read or decoded leaves the capture as
  * it came: larger, not wrong.
  */
-async function toCssPixels(cdp: CDPClient, capture: Buffer): Promise<Buffer> {
+async function toCssPixels(ctx: CaptureContext, capture: Buffer): Promise<Buffer> {
   try {
     const size = readPngSize(capture);
     if (!size) return capture;
-    const viewport = await readViewport(cdp, VIEWPORT_READ_TIMEOUT_MS);
-    if (size.width <= viewport.width) return capture;
+    const known = ctx.getViewport?.();
+    // One device pixel per CSS pixel as far as the session knows: no read to wait for.
+    if (known && size.width <= known.width) return capture;
+    const ratio = await devicePixelsPerCssPixel(ctx.cdp, size.width, known);
+    if (ratio <= 1) return capture;
     const decoded = await decodePng(capture);
     await yieldToEventLoop();
-    const factor = size.width / viewport.width;
     const scaled =
-      Number.isInteger(factor) && size.height === viewport.height * factor
-        ? boxDownscaleDecodedPng(decoded, factor)
-        : scaleDecodedPng(decoded, viewport.width / size.width);
+      Number.isInteger(ratio) && size.width % ratio === 0 && size.height % ratio === 0
+        ? boxDownscaleDecodedPng(decoded, ratio)
+        : scaleDecodedPng(decoded, 1 / ratio);
     await yieldToEventLoop();
     return PNG.sync.write(scaled, ENCODE_OPTIONS);
   } catch {
@@ -138,7 +155,7 @@ export async function captureScreenshot(
     });
   }
   let bytes: Buffer = Buffer.from(cdpResult.data, "base64");
-  if (opts.cssPixels) bytes = await toCssPixels(ctx.cdp, bytes);
+  if (opts.cssPixels) bytes = await toCssPixels(ctx, bytes);
 
   const rotation = opts.rotation && opts.rotation !== "Portrait" ? opts.rotation : null;
   const scale = opts.scale != null && opts.scale > 0 && opts.scale < 1 ? opts.scale : null;
