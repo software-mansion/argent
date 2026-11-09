@@ -25,7 +25,10 @@ function isRecord(value: unknown): value is Entry {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-/** `com.apple.CoreSimulator.SimRuntime.iOS-27-0` → `iOS 27.0`; any other string unchanged. */
+/**
+ * `com.apple.CoreSimulator.SimRuntime.iOS-27-0` → `iOS 27.0`. An id of another
+ * shape only loses the prefix; a string without the prefix is unchanged.
+ */
 export function shortRuntime(runtime: string): string {
   if (!runtime.startsWith(RUNTIME_PREFIX)) return runtime;
   const rest = runtime.slice(RUNTIME_PREFIX.length);

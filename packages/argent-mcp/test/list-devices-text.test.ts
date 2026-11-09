@@ -72,9 +72,13 @@ describe("shortRuntime", () => {
     expect(shortRuntime("com.apple.CoreSimulator.SimRuntime.xrOS-3-0")).toBe("xrOS 3.0");
   });
 
-  it("leaves other strings alone", () => {
+  it("leaves a string without the prefix alone", () => {
     expect(shortRuntime("iOS 26.6.1 (physical device)")).toBe("iOS 26.6.1 (physical device)");
+  });
+
+  it("only drops the prefix from an id of another shape", () => {
     expect(shortRuntime("com.apple.CoreSimulator.SimRuntime.odd_name")).toBe("odd_name");
+    expect(shortRuntime("com.apple.CoreSimulator.SimRuntime.iOS-18-0-beta")).toBe("iOS-18-0-beta");
   });
 });
 
@@ -112,6 +116,22 @@ describe("listDevicesText", () => {
       ],
       avds: [],
     });
+  });
+
+  it("puts a remote simulator that is shut down on one line, under the exact header", () => {
+    const stoppedRemote = {
+      platform: "ios-remote",
+      udid: "remote:ABC",
+      name: "Remote iPhone",
+      state: "Shutdown",
+      runtime: "com.apple.CoreSimulator.SimRuntime.iOS-27-0",
+      runtimeKind: "mobile",
+    };
+    expect(listDevicesText({ devices: [stoppedRemote], avds: [] })).toBe(
+      '{"devices":[],\n"avds":[]}\n' +
+        "iOS simulators that are shut down, one per line (platform, udid, name, runtime, state, tags); start one with boot-device:\n" +
+        'ios-remote remote:ABC "Remote iPhone" iOS 27.0 Shutdown'
+    );
   });
 
   it("keeps a simulator in a transitional state in the JSON", () => {
