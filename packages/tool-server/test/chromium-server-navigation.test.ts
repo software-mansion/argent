@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal, type DeviceInfo } from "@argent/registry";
 import { goBack, goForward, navigate, reload } from "../src/chromium-server/navigation";
 import {
   chromiumImpl,
@@ -51,6 +51,41 @@ describe("chromium-server/navigation", () => {
         " a page, such as tel:, mailto: or an unknown scheme, a response with no content, and a" +
         " navigation another one replaced."
     );
+  });
+
+  it("navigate: classifies Chromium's rejection of an invalid URL as a failed navigation", async () => {
+    const rejection = new FailureError("Cannot navigate to invalid URL", {
+      error_code: FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR,
+      failure_stage: "debugger_cdp_protocol",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+    });
+    const send = vi.fn().mockRejectedValue(rejection);
+    const err = await navigate({ send } as unknown as CDPClient, "example.com").catch(
+      (e: unknown) => e
+    );
+    expect((err as Error).message).toBe(
+      "Chromium could not navigate: Cannot navigate to invalid URL. Pass an absolute URL, such" +
+        " as https://example.com."
+    );
+    expect((err as Error).cause).toBe(rejection);
+    expect(getFailureSignal(err)).toEqual({
+      error_code: FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED,
+      failure_stage: "chromium_navigate",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  });
+
+  it("navigate: passes any other protocol error through unchanged", async () => {
+    const rejection = new FailureError("No frame with given id found", {
+      error_code: FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR,
+      failure_stage: "debugger_cdp_protocol",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+    });
+    const send = vi.fn().mockRejectedValue(rejection);
+    await expect(navigate({ send } as unknown as CDPClient, "http://h/")).rejects.toBe(rejection);
   });
 
   it("navigate: resolves on a download", async () => {

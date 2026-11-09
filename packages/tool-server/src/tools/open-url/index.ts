@@ -61,7 +61,7 @@ export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
   // slow openurl can pass the MCP fetch timeout, whose replay would open the URL twice.
   longRunning: true,
   description: `Open a URL or URL scheme on the device.
-Use when navigating to a web page or deep-linking into an app. On Chromium, this navigates the primary renderer to the given URL; a URL the renderer does not load in the page, such as tel:, mailto: or an unknown scheme, fails there.
+Use when navigating to a web page or deep-linking into an app. On Chromium, this navigates the primary renderer to the given URL; a URL that does not load a page, start a download or run as javascript:, such as tel:, mailto:, an unknown scheme or no scheme, fails there.
 Cross-platform schemes on native devices: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.<flag:harmonyos> HarmonyOS resolves any scheme through \`aa start -U\`.</flag:harmonyos>
 An https:// link opens the native app only if that app is verified for the link's domain (Universal Links / App Links); even then, an iOS simulator may open Safari. To reliably open an installed app, use its custom scheme (scheme://path) or launch-app.
 On a physical iPhone, the app that receives the URL becomes the app under automation.

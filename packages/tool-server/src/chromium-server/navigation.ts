@@ -38,8 +38,23 @@ export function navigate(cdp: CDPClient, url: string): Promise<void> {
   return started;
 }
 
+// Page.navigate's protocol error for a URL Chromium cannot parse.
+const INVALID_URL = "Cannot navigate to invalid URL";
+
 async function navigateOnce(cdp: CDPClient, url: string, isJavascript: boolean): Promise<void> {
-  const { errorText, isDownload } = (await cdp.send("Page.navigate", { url })) as {
+  const { errorText, isDownload } = (await cdp.send("Page.navigate", { url }).catch((err) => {
+    if (!(err instanceof Error) || err.message !== INVALID_URL) throw err;
+    throw new FailureError(
+      `Chromium could not navigate: ${INVALID_URL}. Pass an absolute URL, such as https://example.com.`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED,
+        failure_stage: "chromium_navigate",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      },
+      { cause: err }
+    );
+  })) as {
     errorText?: string;
     isDownload?: boolean;
   };
