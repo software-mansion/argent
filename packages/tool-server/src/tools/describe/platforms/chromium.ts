@@ -157,6 +157,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     );
   }
 
+  // Whether an element is a non-atomic inline box, whose words Chromium runs on into its
+  // neighbours' and whose overflow and transforms it ignores.
+  function isInlineBox(style) {
+    return /^(inline|ruby|ruby-text|inline list-item)$/.test(style.display);
+  }
+
   // JS \\s, minus U+FEFF: a zero-width no-break space must not collapse to a visible one.
   const WHITESPACE = /[^\\S\\uFEFF]+/g;
 
@@ -256,7 +262,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         (ns === "http://www.w3.org/1999/xhtml" && /^(script|style|noscript)$/.test(tag)) ||
         (svg && tag === "style");
       if (
-        style.display !== "inline" ||
+        !isInlineBox(style) ||
         (svg && tag === "svg" && !emptySvg) ||
         (rawText && !shown) ||
         unrendered
@@ -553,7 +559,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (isSet(style.filter) || isSet(style.backdropFilter) || hinted("filter", "backdrop-filter")) {
       return true;
     }
-    if (style.display === "inline") return false;
+    if (isInlineBox(style)) return false;
     if (
       isSet(style.transform) ||
       isSet(style.translate) ||
@@ -729,7 +735,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (!rootClips && !contained(rootStyle) && !contained(style)) return false;
     }
     if (el.namespaceURI === "http://www.w3.org/2000/svg") return true;
-    return style.display !== "inline" && !/^table-(row|column|header|footer)/.test(style.display);
+    return !isInlineBox(style) && !/^table-(row|column|header|footer)/.test(style.display);
   }
 
   function childClips(el, style, clips, clip, legend) {

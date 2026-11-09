@@ -856,6 +856,39 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   };
   const text = (nodeValue: string) => ({ nodeType: 3, nodeValue });
 
+  it("parts words around an element unless it is a non-atomic inline box", () => {
+    const styled = (display: string, kids: unknown[]) => {
+      const node = elementNode("span", kids);
+      (node.__style as Record<string, string>).display = display;
+      return node;
+    };
+    for (const display of ["inline", "ruby", "ruby-text", "inline list-item"]) {
+      expect(labelledBy([text("a"), styled(display, [text("b")]), text("c")]), display).toBe("abc");
+    }
+    for (const display of [
+      "inline-block",
+      "inline-flex",
+      "inline-table",
+      "inline flow-root list-item",
+      "block ruby",
+      "list-item",
+      "contents",
+      "math",
+    ]) {
+      expect(labelledBy([text("a"), styled(display, [text("b")]), text("c")]), display).toBe(
+        "a b c"
+      );
+    }
+    // <ruby>漢<rp>(</rp><rt>kan</rt><rp>)</rp></ruby>, with the UA's displays.
+    const ruby = styled("ruby", [
+      text("漢"),
+      styled("none", [text("(")]),
+      styled("ruby-text", [text("kan")]),
+      styled("none", [text(")")]),
+    ]);
+    expect(labelledBy([text("東京"), ruby, text("字")])).toBe("東京漢kan字");
+  });
+
   it("reads an embedded select's chosen options, not all of its options", () => {
     const small = elementNode("option", [text("Small")], { label: "Small" });
     const large = elementNode("option", [text("Large")], { label: "Large" });
@@ -2614,9 +2647,13 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
         "fixed"
       );
     const escapes: Record<string, string>[] = [
-      { display: "inline", transform: "matrix(1, 0, 0, 1, 0, 0)" },
-      { display: "inline", willChange: "transform" },
-      { display: "inline", contain: "paint" },
+      ...["inline", "ruby", "ruby-text", "inline list-item"].flatMap(
+        (display): Record<string, string>[] => [
+          { display, transform: "matrix(1, 0, 0, 1, 0, 0)" },
+          { display, willChange: "transform" },
+          { display, contain: "paint" },
+        ]
+      ),
       { display: "table-row", contain: "layout" },
     ];
     for (const style of escapes) {
@@ -3553,13 +3590,15 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     });
     const locked = run([row("save", { x: 10, y: 10, w: 80, h: 20 }, { position: "fixed" })], body);
     expect(pxFrame(locked.tree, "save")).toEqual({ x: 10, y: 10, w: 80, h: 20 });
-    const link = el({
-      tag: "a",
-      rect: { x: 0, y: 0, w: 0, h: 0 },
-      style: { display: "inline", overflow: "hidden" },
-      children: [row("icon", { x: 10, y: 10, w: 20, h: 20 }, { position: "absolute" })],
-    });
-    expect(pxFrame(run([link]).tree, "icon")).toEqual({ x: 10, y: 10, w: 20, h: 20 });
+    for (const display of ["inline", "ruby", "ruby-text", "inline list-item"]) {
+      const link = el({
+        tag: "a",
+        rect: { x: 0, y: 0, w: 0, h: 0 },
+        style: { display, overflow: "hidden" },
+        children: [row("icon", { x: 10, y: 10, w: 20, h: 20 }, { position: "absolute" })],
+      });
+      expect(pxFrame(run([link]).tree, "icon"), display).toEqual({ x: 10, y: 10, w: 20, h: 20 });
+    }
     // A block that clips its overflow still hides its content.
     const block = el({
       rect: { x: 0, y: 0, w: 0, h: 0 },
