@@ -107,6 +107,7 @@ describe("native-profiler-start malloc_stack_logging", () => {
     vi.doUnmock("../../src/utils/react-profiler/debug/dump");
     vi.doUnmock("../../src/utils/ios-profiler/notify");
     vi.doUnmock("../../src/utils/ios-profiler/startup");
+    vi.doUnmock("../../src/utils/simulator-watcher");
   });
 
   function applyCommonMocks(spawnFn: unknown, execSyncFn: unknown, execFileSyncFn: unknown) {
@@ -128,6 +129,37 @@ describe("native-profiler-start malloc_stack_logging", () => {
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
     }));
   }
+
+  it("waits for the simulator watcher's first poll before terminating and relaunching", async () => {
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+    let settleFirstPoll!: () => void;
+    const firstPoll = new Promise<void>((resolve) => {
+      settleFirstPoll = resolve;
+    });
+    vi.doMock("../../src/utils/simulator-watcher", () => ({
+      firstSimulatorPoll: () => firstPoll,
+    }));
+    const terminated = () =>
+      execFileSyncFn.mock.calls.some((c) => ((c[1] as string[]) ?? []).includes("terminate"));
+
+    const startNativeProfilerIos = await importStart();
+    const started = startNativeProfilerIos(fakeApi(), {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      malloc_stack_logging: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(terminated()).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+
+    settleFirstPoll();
+    await started;
+
+    expect(terminated()).toBe(true);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
 
   it("cold-launches the .app with MallocStackLogging when malloc_stack_logging is true", async () => {
     const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
