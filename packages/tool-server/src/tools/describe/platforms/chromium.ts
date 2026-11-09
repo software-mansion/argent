@@ -55,6 +55,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const HTMLTextAreaElement = made("http://www.w3.org/1999/xhtml", "textarea");
   const HTMLImageElement = made("http://www.w3.org/1999/xhtml", "img");
   const SVGSVGElement = made("http://www.w3.org/2000/svg", "svg");
+  const HTMLSlotElement = made("http://www.w3.org/1999/xhtml", "slot");
   const HTMLElement = Object.getPrototypeOf(HTMLInputElement);
   const Element = Object.getPrototypeOf(HTMLElement);
   const Node = Object.getPrototypeOf(Element);
@@ -107,10 +108,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getRootNode = Node.prototype.getRootNode;
   const containsNode = Node.prototype.contains;
   const docElementsFromPoint = docProto.elementsFromPoint;
-  // Unset in the test harness's mock DOM or under a page's own global HTMLSlotElement,
-  // where a <slot> reads as its own children.
-  const slotAssignedNodes =
-    typeof HTMLSlotElement === "undefined" ? null : HTMLSlotElement.prototype.assignedNodes;
+  const slotAssignedNodes = HTMLSlotElement.prototype.assignedNodes;
   // A document's named getter can shadow elementsFromPoint; a shadow root has none.
   function elementsAt(root, x, y) {
     return getNodeType.call(root) === 9
@@ -211,7 +209,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const shadow = getShadowRoot.call(node);
       if (shadow) return getChildNodes.call(shadow);
       if (
-        slotAssignedNodes &&
         getLocalName.call(node) === "slot" &&
         getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml"
       ) {

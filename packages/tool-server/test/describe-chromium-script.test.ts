@@ -31,6 +31,11 @@ class MockHTMLInputElement extends MockHTMLElement {}
 class MockHTMLTextAreaElement extends MockHTMLElement {}
 class MockHTMLImageElement extends MockHTMLElement {}
 class MockSVGSVGElement extends MockElement {}
+class MockHTMLSlotElement extends MockHTMLElement {
+  assignedNodes(this: Record<string, unknown>) {
+    return this.__assigned ?? [];
+  }
+}
 
 // The script reads childNodes / tagName / children through the native prototype getter
 // (Object.getOwnPropertyDescriptor(proto, prop).get.call(el)) so a DOM-clobbering <form>
@@ -135,6 +140,7 @@ class MockDocument {
           input: MockHTMLInputElement,
           textarea: MockHTMLTextAreaElement,
           img: MockHTMLImageElement,
+          slot: MockHTMLSlotElement,
         };
     return new (made[tag] ?? (svg ? MockElement : MockHTMLElement))();
   }
@@ -151,6 +157,7 @@ const builtins = {
   HTMLTextAreaElement: MockHTMLTextAreaElement,
   HTMLImageElement: MockHTMLImageElement,
   SVGSVGElement: MockSVGSVGElement,
+  HTMLSlotElement: MockHTMLSlotElement,
   Document: MockDocument,
 };
 // A node in a shadow tree carries that root as __root.
@@ -1064,14 +1071,9 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   });
 
   it("reads a custom element in an aria-labelledby target through its open shadow tree", () => {
-    class MockSlot extends MockHTMLElement {
-      assignedNodes(this: Record<string, unknown>) {
-        return this.__assigned;
-      }
-    }
     const slot = (assigned: unknown[], fallback: unknown[] = []) => {
       const node = elementNode("slot", fallback, { __assigned: assigned });
-      Object.setPrototypeOf(node, MockSlot.prototype);
+      Object.setPrototypeOf(node, MockHTMLSlotElement.prototype);
       (node.__style as Record<string, string>).display = "contents";
       return node;
     };
@@ -1088,16 +1090,13 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       (node.shadowRoot as Record<string, unknown>).__childNodes = shadow;
       return node;
     };
-    const labelOf = (target: MockElement, HTMLSlotElement: unknown = MockSlot) => {
+    const labelOf = (target: MockElement) => {
       const button = el({
         tag: "button",
         rect: BOX,
         attrs: { "id": "btn", "aria-labelledby": "lbl" },
       });
-      return findById(
-        run([button, target], undefined, {}, "CSS1Compat", { HTMLSlotElement }).tree,
-        "btn"
-      )!.label;
+      return findById(run([button, target]).tree, "btn")!.label;
     };
     const shadowText = () => [elementNode("span", [text("Shadow text")])];
     expect(labelOf(host([], shadowText(), { id: "lbl" }))).toBe("Shadow text");
@@ -1119,10 +1118,6 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelOf(host([second, first], [slot([first]), slot([second])], { id: "lbl" }))).toBe(
       "first second"
     );
-    // A page's own global HTMLSlotElement leaves a slot reading its own children.
-    const own = () =>
-      host([light], [text("pre "), slot([light], [text("fb")]), text(" post")], { id: "lbl" });
-    expect(labelOf(own(), function HTMLSlotElement() {})).toBe("pre fb post");
   });
 
   it("keeps inline elements joined in a target hidden without losing its layout", () => {
@@ -1938,6 +1933,18 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       typed(el({ tag: "img", attrs: { id: "im" }, rect: BOX }), MockHTMLImageElement, {
         alt: "Logo",
       }),
+      el({ tag: "button", attrs: { "id": "sb", "aria-labelledby": "sl" }, rect: BOX }),
+      Object.assign(el({ tag: "span", attrs: { id: "sl" }, style: { display: "inline" } }), {
+        childNodes: [
+          typed(
+            el({ tag: "slot", text: "fb", style: { display: "contents" } }),
+            MockHTMLSlotElement,
+            {
+              __assigned: [{ nodeType: 3, nodeValue: "slotted" }],
+            }
+          ),
+        ],
+      }),
       el({
         outerSvg: true,
         tag: "svg",
@@ -1951,6 +1958,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       expect(findById(builtin, "in")!.label).toBe("Search");
       expect(findById(builtin, "ta")!.label).toBe("Notes");
       expect(findById(builtin, "im")!.label).toBe("Logo");
+      expect(findById(builtin, "sb")!.label).toBe("slotted");
       expect(findById(builtin, "pw")!.password).toBe(true);
       expect(pxFrame(builtin, "padding").w).toBe(0);
       expect(pxFrame(builtin, "row")).toEqual(painted ? cut : { x: 1, y: 81, w: 285, h: 18 });
