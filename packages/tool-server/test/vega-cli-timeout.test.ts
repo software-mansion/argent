@@ -117,10 +117,11 @@ if (cmd === "hang-self") {
 }
 if (cmd === "orphan") {
   // A worker holding our stdio that neither reap reaches: the double fork leaves the
-  // launcher no ppid edge to it, and \`detached\` puts it in its own group. The launcher
-  // then wedges as \`hang-self\` does.
+  // launcher no ppid edge to it, and \`detached\` puts it in its own group. It sleeps only
+  // while both are our pipes, as \`hang\`'s does. The launcher then wedges as \`hang-self\` does.
   const holder =
-    'require("node:child_process").spawn("sleep", [' + JSON.stringify(secs) + '], ' +
+    'require("node:child_process").spawn("sh", ["-c", ' +
+    JSON.stringify("[ -S /dev/stdout ] && [ -S /dev/stderr ] && exec sleep " + secs) + '], ' +
     '{ detached: true, stdio: ["ignore", "inherit", "inherit"] }).unref()';
   spawn(process.execPath, ["-e", holder], { stdio: ["ignore", "inherit", "inherit"] });
   setTimeout(() => process.exit(0), Number(secs) * 1000);
@@ -162,8 +163,9 @@ if (cmd === "linger") {
   // stdout and stderr (holding the write ends open) and unref it, then write the result
   // and let the launcher exit 0 naturally. \`close\` on our parent won't fire until the worker
   // dies (its sentinel sleep), but \`exit\` fires now — runVega must resolve from the
-  // exit + drain grace with the captured stdout instead of waiting out the timeout.
-  const worker = spawn("sleep", [secs], { detached: true, stdio: ["ignore", "inherit", "inherit"] });
+  // exit + drain grace with the captured stdout instead of waiting out the timeout. It
+  // sleeps only while both are our pipes, as \`hang\`'s does.
+  const worker = spawn("sh", ["-c", "[ -S /dev/stdout ] && [ -S /dev/stderr ] && exec sleep " + secs], { detached: true, stdio: ["ignore", "inherit", "inherit"] });
   worker.unref();
   process.stdout.write("OK-linger");
   // No process.exit: with the worker unref'd nothing keeps our loop alive, so we exit
