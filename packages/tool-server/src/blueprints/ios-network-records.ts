@@ -36,7 +36,7 @@ export const IOS_NATIVE_REQUEST_ID = /^ios-[0-9a-f]{4}-\d+$/;
 /** Shared by every store of the tool-server, so ids never repeat across apps or devices. */
 let nextRecordNumber = 1;
 
-/** A request body read answers within this, with the body or with "still sending". */
+/** A request body read answers within this, with the body or with why it did not come. */
 const POST_DATA_WAIT_MS = 5_000;
 /**
  * A request body read stays open until the app answers it or its connection
@@ -48,6 +48,8 @@ const POST_DATA_TIMEOUT_MS = 2 ** 31 - 1;
 const RESPONSE_BODY_TIMEOUT_MS = 10_000;
 
 const STILL_SENDING = "the app is still sending this request body; read it again later";
+/** A request body read of a request that has ended, which the app did not answer in time. */
+const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; read it again later`;
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
 const RESPONSE_BODY_GONE = "the agent no longer holds this body";
@@ -76,7 +78,8 @@ export interface IosNetworkRecords {
    * The request body, read from the app once per record, or held by the host
    * when it came with the request. Waits at most 5 s for the app's answer,
    * after any body read before it on the connection, and answers "still
-   * sending" while the app has not sent the whole body yet. Never rejects.
+   * sending" while the request has no response yet, or that the app did not
+   * answer once it has. Never rejects.
    */
   requestPostData(id: string): Promise<NativeNetworkBody>;
 }
@@ -269,7 +272,7 @@ export function createIosNetworkRecords(
       // A read moves its body to the newest end, so the bodies read last are kept.
       bodies.delete(cacheKey);
       bodies.set(cacheKey, cached);
-      return shownOf(cached, kind);
+      return shownOf(cached, kind, record);
     }
     if (link.liveConnection() !== record.connection) {
       return Promise.resolve(unavailable(closedReason(record.connection)));
@@ -297,9 +300,9 @@ export function createIosNetworkRecords(
       markSent();
       // The lock is held until this read answers, or for a request body until
       // its wait ends: the next read goes out while this one may stay open.
-      return kind === "post" ? withinWait(answer) : answer;
+      return kind === "post" ? withinWait(answer, record) : answer;
     });
-    return shownOf(read, kind);
+    return shownOf(read, kind, record);
   }
 
   /**
@@ -465,17 +468,29 @@ interface BodyRead {
  * when its request went out, so a read waiting behind another one on the
  * connection is not answered "still sending" before the app was asked.
  */
-function shownOf(read: BodyRead, kind: "response" | "post"): Promise<NativeNetworkBody> {
-  return kind === "post" ? read.sent.then(() => withinWait(read.answer)) : read.answer;
+function shownOf(
+  read: BodyRead,
+  kind: "response" | "post",
+  record: NativeNetworkRecord
+): Promise<NativeNetworkBody> {
+  return kind === "post" ? read.sent.then(() => withinWait(read.answer, record)) : read.answer;
 }
 
 /**
- * A request body read as the app answers it, or "still sending" after 5 s.
- * The read itself stays open, so a later wait can still get its answer.
+ * A request body read as the app answers it, or a reason after 5 s: "still
+ * sending" while the request has no response yet, and otherwise that the app
+ * did not answer, since its upload has ended. The read itself stays open, so a
+ * later wait can still get its answer.
  */
-function withinWait(answer: Promise<NativeNetworkBody>): Promise<NativeNetworkBody> {
+function withinWait(
+  answer: Promise<NativeNetworkBody>,
+  record: NativeNetworkRecord
+): Promise<NativeNetworkBody> {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(unavailable(STILL_SENDING)), POST_DATA_WAIT_MS);
+    const timer = setTimeout(
+      () => resolve(unavailable(record.state === "pending" ? STILL_SENDING : NO_ANSWER)),
+      POST_DATA_WAIT_MS
+    );
     timer.unref();
     void answer.then((body) => {
       clearTimeout(timer);

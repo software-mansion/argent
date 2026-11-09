@@ -167,6 +167,7 @@ function refused(reason: string): NativeNetworkBody {
 }
 
 const STILL_SENDING = "the app is still sending this request body; read it again later";
+const NO_ANSWER = "the app did not answer within 5 s; read it again later";
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 
 interface RequestInit {
@@ -1242,6 +1243,34 @@ describe("iOS native network records: request body still being sent", () => {
 
     expect(await store.requestPostData(id)).toEqual(body("x".repeat(300)));
     expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the app did not answer, not that it is still sending, once the request has a response", async () => {
+    const { app, store, agent, id } = uploading();
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+
+    const read = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(read.value).toEqual(refused(NO_ANSWER));
+
+    // The read stayed open, so the app's late answer still comes.
+    const again = store.requestPostData(id);
+    app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives the reason by the request's state when the wait ends, not when the read went out", async () => {
+    const { store, agent, id } = uploading();
+
+    const read = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(3_000);
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(read.value).toEqual(refused(NO_ANSWER));
   });
 
   it("keeps a request body read open until the app answers, so a long upload is asked for once", async () => {

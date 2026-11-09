@@ -238,11 +238,12 @@ As in the other layers, Argent replaces the values of secret headers with `[REDA
 
 The details do not contain redirects, `fromCache` or an initiator.
 
-A body that Argent cannot read shows `[unavailable: <reason>]`, for example when the response has no body. The table gives two of the reasons:
+A body that Argent cannot read shows `[unavailable: <reason>]`, for example when the response has no body. The table gives three of the reasons:
 
 | Body                                                                             | Cause and action                                                                                                                                                                                                         |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `[unavailable: the app is still sending this request body; read it again later]` | The app did not send all of the request body yet. Argent gives this answer within about 5 seconds, or later while Argent reads another body of the app. Call `view-network-request-details` again after the upload ends. |
+| `[unavailable: the app did not answer within 5 s; read it again later]`          | The request has a response, but the app did not send the request body within about 5 seconds. For example, the app is busy or sends a large body. Call `view-network-request-details` again.                             |
 | `[unavailable: the app process that made the request is gone]`                   | The app process ended, for example after a relaunch or a crash, before the agent read the body.                                                                                                                          |
 
 Argent keeps a copy of the 64 bodies that the agent read most recently. A later read of one of these bodies uses the copy. After the app process ends, a body is available only if the agent read it before.
