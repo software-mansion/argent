@@ -9,9 +9,13 @@ import {
 import { discoverMetro } from "../utils/debugger/discovery";
 import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
-import { assertExternalCapability } from "../utils/external-devices";
+import { assertExternalCapability, externalNativeId } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
+import {
+  metroDeviceNamesFor,
+  noteHostedSimulatorOnMetro,
+} from "../utils/debugger/metro-device-name";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
@@ -152,6 +156,55 @@ export interface JsRuntimeDebuggerApi {
   consoleSocketUrl: string;
 }
 
+/**
+ * The device_id of the live or connecting debugger session on each target, by
+ * Metro port and the target's logicalDeviceId. Another spelling of the same
+ * UDID (its case or `ext:` form) keys a separate service, so it shows up here
+ * as a different id. An app that has switched bundlers is listed under one
+ * logicalDeviceId by both Metros, and each inspector-proxy has its own
+ * debugger slot, hence the port.
+ */
+const sessionsByTarget = new Map<string, string>();
+
+function targetSessionKey(port: number, logicalDeviceId: string): string {
+  return `${port}:${logicalDeviceId}`;
+}
+
+function sameDevice(a: string, b: string): boolean {
+  return externalNativeId(a).toUpperCase() === externalNativeId(b).toUpperCase();
+}
+
+/**
+ * Refuse a connect that would evict the live session on the selected target.
+ * Only point the caller at that session outright when `deviceId` is known to be
+ * its device; otherwise the target may be another device's app, so offer it
+ * only on that condition.
+ */
+function liveSessionConflict(
+  deviceId: string,
+  liveSessionId: string,
+  port: number,
+  selected: { logicalDeviceId: string; matchedDeviceId: boolean }
+): FailureError {
+  const namesTheApp = deviceId === selected.logicalDeviceId;
+  const sessionNamesTheApp = selected.matchedDeviceId && liveSessionId === selected.logicalDeviceId;
+  const isSameApp = sameDevice(liveSessionId, deviceId) || namesTheApp || sessionNamesTheApp;
+  const message = isSameApp
+    ? `device_id "${deviceId}" is the app already connected as "${liveSessionId}" on ` +
+      `Metro port ${port}. Pass device_id "${liveSessionId}" to keep using that session.`
+    : `No app on Metro port ${port} is known to belong to device_id "${deviceId}", and the ` +
+      `app it would attach to is already debugged as "${liveSessionId}", so connecting would ` +
+      `evict that session. If that app runs on "${deviceId}", pass device_id ` +
+      `"${liveSessionId}" to use that session; otherwise connect the app on "${deviceId}" to ` +
+      `this Metro, then retry.`;
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+    failure_stage: "debugger_select_target",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
 export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
   namespace: JS_RUNTIME_DEBUGGER_NAMESPACE,
 
@@ -207,6 +260,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     // every connect is cheap.
     if (classifyDevice(deviceId) === "ios-remote") {
       await proxyStart(deviceId, port);
+      noteHostedSimulatorOnMetro(port);
     }
 
     /**
@@ -233,9 +287,12 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
       throw error;
     });
+    const isLogicalId = metro.targets.some((t) => t.reactNative?.logicalDeviceId === deviceId);
+    const deviceNames = isLogicalId ? undefined : await metroDeviceNamesFor(deviceId, port);
     const selected = selectTarget(metro.targets, port, {
       ...options,
       deviceId,
+      deviceNames,
     });
 
     /**
@@ -264,28 +321,46 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
 
     const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
-    await cdp.connect();
 
-    const sourceMaps = new SourceMapsRegistry();
-
-    cdp.events.on("scriptParsed", (script) => {
-      sourceMaps.registerFromScriptParsed(script.url, script.scriptId, script.sourceMapURL);
-    });
-
-    const ignore = () => {};
-    const warnOnError = (label: string) => (err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      process.stderr.write(`[JsRuntimeDebugger:${port}] ${label} failed (non-fatal): ${msg}\n`);
+    const targetId = selected.target.reactNative?.logicalDeviceId;
+    const sessionKey = targetId ? targetSessionKey(port, targetId) : undefined;
+    const liveSessionId = sessionKey ? sessionsByTarget.get(sessionKey) : undefined;
+    // inspector-proxy keeps one debugger per device, so a second session on
+    // this target would evict the live one, whichever id keys it.
+    if (targetId && liveSessionId && liveSessionId !== deviceId) {
+      throw liveSessionConflict(deviceId, liveSessionId, port, {
+        logicalDeviceId: targetId,
+        matchedDeviceId: selected.matchedDeviceId,
+      });
+    }
+    const releaseTarget = () => {
+      if (sessionKey && sessionsByTarget.get(sessionKey) === deviceId) {
+        sessionsByTarget.delete(sessionKey);
+      }
     };
-
-    const runtimeApp: RuntimeAppMetadata = {};
-    cdp.events.on("event", (method, params) => {
-      if (method !== "ReactNativeApplication.metadataUpdated") return;
-      if (typeof params.appIdentifier === "string") runtimeApp.appId = params.appIdentifier;
-      if (typeof params.platform === "string") runtimeApp.platform = params.platform;
-    });
-
+    if (sessionKey) sessionsByTarget.set(sessionKey, deviceId);
     try {
+      await cdp.connect();
+
+      const sourceMaps = new SourceMapsRegistry();
+
+      cdp.events.on("scriptParsed", (script) => {
+        sourceMaps.registerFromScriptParsed(script.url, script.scriptId, script.sourceMapURL);
+      });
+
+      const ignore = () => {};
+      const warnOnError = (label: string) => (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`[JsRuntimeDebugger:${port}] ${label} failed (non-fatal): ${msg}\n`);
+      };
+
+      const runtimeApp: RuntimeAppMetadata = {};
+      cdp.events.on("event", (method, params) => {
+        if (method !== "ReactNativeApplication.metadataUpdated") return;
+        if (typeof params.appIdentifier === "string") runtimeApp.appId = params.appIdentifier;
+        if (typeof params.platform === "string") runtimeApp.platform = params.platform;
+      });
+
       /**
        * Through a provider's socket Argent is one of several clients on a single
        * connection, so this setup splits by what it touches.
@@ -380,7 +455,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       // opening a second one. See utils/debugger/device-alias.ts.
       rememberDeviceAlias(api.logicalDeviceId, deviceId);
       // Equal ids mean the caller connected with the logicalDeviceId itself, as
-      // `selectTarget` demands once a second device shares this Metro. Nothing
+      // `selectTarget` demands on a shared Metro for a serial, or for a
+      // simulator its name cannot single out. Nothing
       // then joins the session to a udid or serial, so a `list-devices`-scoped
       // `stop-all-simulator-servers` can only report it, never reach it.
       rememberLogicalKeyedDevice(api.logicalDeviceId, deviceId);
@@ -426,6 +502,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
           }
           forgetDeviceAlias(api.logicalDeviceId);
           forgetLogicalKeyedDevice(deviceId);
+          releaseTarget();
           await consoleServer.close();
           logWriter.close({ keepFile });
           await cdp.disconnect();
@@ -433,9 +510,10 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         events,
       };
     } catch (error) {
+      releaseTarget();
       // An open socket keeps the inspector's debugger session, and the next
       // connect's Runtime.enable then goes unanswered.
-      await cdp.disconnect();
+      if (cdp.isConnected()) await cdp.disconnect();
       throw error;
     }
   },

@@ -24,13 +24,17 @@ const logicalIdToConnectId = new Map<string, string>();
 
 /**
  * Record that `logicalDeviceId` names the same device as `connectDeviceId`.
- * No-op when the two are equal, or when there is no logicalDeviceId (Vega).
+ * No-op when the two are equal, when there is no logicalDeviceId (Vega), or
+ * when a live session is keyed by that logicalDeviceId itself: the alias applies
+ * on every Metro port, so it would reroute that session's calls (on another
+ * Metro the app also connected to) to `connectDeviceId`.
  */
 export function rememberDeviceAlias(
   logicalDeviceId: string | undefined,
   connectDeviceId: string
 ): void {
   if (!logicalDeviceId || logicalDeviceId === connectDeviceId) return;
+  if (isLogicalKeyedDevice(logicalDeviceId)) return;
   logicalIdToConnectId.set(logicalDeviceId, connectDeviceId);
 }
 
@@ -67,8 +71,9 @@ export function forgetDeviceAlias(logicalDeviceId: string | undefined): void {
  * nothing to record, the two ids being one string.
  *
  * It happens once two or more devices share one Metro: `selectTarget` refuses to
- * guess which target a udid or serial means and makes the caller re-target with
- * the logicalDeviceId, so that is what the debugger service ends up keyed by.
+ * guess which target a serial (or a simulator with two apps on that Metro)
+ * means and makes the caller re-target with the logicalDeviceId, so that is what the
+ * debugger service ends up keyed by.
  * Nothing joins such an id back to a device, so a teardown scoped to
  * `list-devices` ids cannot reach the session, and the caller's serial still
  * matches that device's other services, so the miss is invisible.

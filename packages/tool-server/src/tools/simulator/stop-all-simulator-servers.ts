@@ -37,7 +37,7 @@ export function createStopAllSimulatorServersTool(
     id: "stop-all-simulator-servers",
     description: `Stop the services a device owns - simulator-server processes (iOS + Android), native devtools, the iOS accessibility service, TV-control daemons, Chromium CDP sessions, screen recordings, native profiler sessions, Android native network capture (started by native-network-logs), and JS-runtime debugger sessions along with the network inspectors and React profiler sessions that ride on them - freeing their spawned processes, sockets and ports. Call this when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services mid-flow - not just because a task finished, since the next task reuses these services and would start cold again. To end only the native network capture of one app, call native-network-logs with stop: true instead.
 PASS \`devices\` with the device ids this session used: one tool-server serves every agent, subagent and CLI call using this argent install, and an unscoped call tears down THEIR devices too. Omit \`devices\` only when a machine-wide cleanup is what you actually want. An EMPTY array stops nothing; it does not ask for the machine-wide sweep.
-A JS-runtime debugger session is keyed by the id you called \`debugger-connect\` with. On a Metro serving two or more devices that id is not a udid or serial - connect refuses those and tells you to re-target with the \`logicalDeviceId\` it returns - so a scope built from \`list-devices\` ids cannot reach that session. Pass any such \`logicalDeviceId\` in \`devices\` ALONGSIDE the device id.
+A JS-runtime debugger session is keyed by the id you called \`debugger-connect\` with. On a Metro serving two or more devices, connect refuses an Android serial, a hosted \`remote:\` simulator, a simulator udid with two apps on that Metro, a simulator udid sharing its name with another booted simulator, and a simulator udid whose name it cannot read (an older Metro listing no device names, or a failing or slow simctl), and tells you to re-target with the \`logicalDeviceId\` it returns - a scope built from \`list-devices\` ids cannot reach a session keyed that way. Pass any such \`logicalDeviceId\` in \`devices\` ALONGSIDE the device id.
 Returns { stopped }: the URNs of the live services that were shut down; empty means nothing was still running. { unmatched }, present only when a supplied id owns no service here, lists those ids, so a typo or a device NAME passed instead of an id does not read as a clean machine. It is NOT proof the id is wrong: a Vega device you only booted and drove with the remote registers no service and lands here, as does any device this session never started anything on. { left_running } lists the URNs of live debugger sessions (and the network inspectors / React profiler sessions riding on them) whose id no device scope can name; re-call with the id after each URN's \`<namespace>:<port>:\` prefix to reap them. { aborted: true } means the request was cancelled part-way: the rest was left untouched and \`unmatched\` / \`left_running\` were not computed.
 Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); otherwise it always succeeds, and reaping nothing is a result, not a failure.`,
     zodSchema,
@@ -145,10 +145,11 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
         seen.add(key);
         return true;
       });
-      // A debugger session opened against a multi-device Metro is keyed by the
-      // `logicalDeviceId` Metro echoed, which no `list-devices` id equals — so
-      // no `devices` scope can reap it, and the ids that DID match keep it out
-      // of `unmatched`. Name it so the caller can re-call with that id.
+      // A debugger session connected by the `logicalDeviceId` Metro echoed (as
+      // a multi-device Metro demands for a serial) is keyed by that id, which
+      // no `list-devices` id equals — so no `devices` scope can reap it, and
+      // the ids that DID match keep it out of `unmatched`. Name it so the
+      // caller can re-call with that id.
       const leftRunning = unnameableSessionUrns(survivors);
       const result: { stopped: string[]; unmatched?: string[]; left_running?: string[] } = {
         stopped,
