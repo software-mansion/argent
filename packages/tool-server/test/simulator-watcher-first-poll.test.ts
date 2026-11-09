@@ -25,6 +25,7 @@ vi.mock("../src/utils/simctl-exec", async () => {
 
 import type { Registry } from "@argent/registry";
 import { firstSimulatorPoll, startSimulatorWatcher } from "../src/utils/simulator-watcher";
+import { SimctlTimeoutError } from "../src/utils/simctl-exec";
 
 const UDID = "11111111-1111-1111-1111-111111111111";
 
@@ -92,6 +93,30 @@ describe("firstSimulatorPoll", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(resolveService).toHaveBeenCalledWith(`NativeDevtools:${UDID}`, expect.anything());
     expect(await isSettled(firstSimulatorPoll())).toBe(true);
+  });
+
+  it("waits out the 15s cap when the first simctl times out and backs off past it", async () => {
+    vi.useFakeTimers();
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    simctlMock.mockImplementationOnce(() => {
+      throw new SimctlTimeoutError(["simctl", "list", "devices", "--json"], 10_000);
+    });
+    listsBooted();
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+
+    try {
+      ({ stop } = startSimulatorWatcher({ resolveService } as unknown as Registry));
+
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(simctlMock).toHaveBeenCalledTimes(1);
+      expect(await isSettled(firstSimulatorPoll())).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await isSettled(firstSimulatorPoll())).toBe(true);
+      expect(resolveService).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
   });
 
   it("settles at once while Xcode's component install is pending", async () => {
