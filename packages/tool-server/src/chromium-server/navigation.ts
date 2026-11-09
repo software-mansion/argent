@@ -14,6 +14,15 @@ function parseUrl(url: string): URL | undefined {
   }
 }
 
+// Chromium percent-encodes some characters Node's URL keeps, such as '|' in a path.
+function decoded(url: string): string {
+  try {
+    return decodeURI(url);
+  } catch {
+    return url;
+  }
+}
+
 const inFlight = new WeakMap<CDPClient, Map<string, Promise<void>>>();
 
 /**
@@ -81,7 +90,7 @@ async function navigateOnce(cdp: CDPClient, url: string, href: string | undefine
         frameTree: { frame: { url: string; urlFragment?: string } };
       }
     ).frameTree;
-    if (frame.url + (frame.urlFragment ?? "") === href) return;
+    if (decoded(frame.url + (frame.urlFragment ?? "")) === decoded(href)) return;
   }
   // The url is left out so credentials and tokens in it stay out of the logs.
   throw new FailureError(

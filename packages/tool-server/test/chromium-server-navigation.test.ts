@@ -183,6 +183,24 @@ describe("chromium-server/navigation", () => {
     expect(send).toHaveBeenLastCalledWith("Page.getFrameTree", {});
   });
 
+  it("navigate: matches another client's navigation that Chromium serializes differently", async () => {
+    const frameTree = (url: string) => (method: string) =>
+      Promise.resolve(
+        method === "Page.navigate"
+          ? { errorText: "net::ERR_ABORTED" }
+          : { frameTree: { frame: { url } } }
+      );
+    const send = vi.fn().mockImplementation(frameTree("http://h/x%7Cy"));
+    await expect(navigate({ send } as unknown as CDPClient, "http://h/x|y")).resolves.toBe(
+      undefined
+    );
+    // decodeURI throws on a malformed escape.
+    send.mockImplementation(frameTree("http://h/a%E0"));
+    await expect(navigate({ send } as unknown as CDPClient, "http://h/a%E0")).resolves.toBe(
+      undefined
+    );
+  });
+
   it("navigate: throws when a navigation that never started leaves the page elsewhere", async () => {
     const send = vi
       .fn()
