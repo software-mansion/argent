@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -417,6 +417,17 @@ describe("startMcpServer tool listing per client", () => {
       default: 20,
       description: "Rows to show.",
     });
+  });
+
+  // scripts/harness-check/README.md points to this line for the profile a real client matched.
+  it("logs the matched profile with each tool listing", async () => {
+    await topN("Q DEV CLI");
+    const listings = readFileSync(join(TEST_HOME, "mcp-calls.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.event === "list_tools");
+    expect(listings.at(-1)).toMatchObject({ client: "kiro-cli-v1-v2", keywordFacts: false });
   });
 });
 

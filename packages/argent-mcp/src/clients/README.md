@@ -14,7 +14,9 @@ and each row gives:
 - `telemetry`: the slug `@argent/telemetry` records for those names.
 
 An unnamed or unknown client gets `DEFAULT_PROFILE`. The default keeps more
-information rather than less.
+information rather than less. Devin and Hermes get it too and have no row: they
+send their SDK's default name (`rmcp`, `mcp`), which any other client on that SDK
+sends as well.
 
 `mcp-server.ts` calls `clientProfile()` and passes the fields on. `content.ts` and
 `keyword-facts.ts` do not know any client names.
@@ -56,17 +58,18 @@ information rather than less.
 `ScreenshotForm` in `content.ts` sets how a PNG reaches the model.
 `screenshotBlocks` in `content.ts` renders it.
 
-| Form                       | What the client receives                                                                     |
-| -------------------------- | -------------------------------------------------------------------------------------------- |
-| `image-and-path` (default) | The image blocks, then `Saved: <path>`.                                                      |
-| `image`                    | The image blocks only.                                                                       |
-| `path`                     | A path note only, with no image. It tells the model to open the PNG with its file-read tool. |
+| Form                       | What the client receives                                                                                                                                                                             |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image-and-path` (default) | The image blocks, then `Saved: <path>`.                                                                                                                                                              |
+| `image`                    | The image blocks only.                                                                                                                                                                               |
+| `path`                     | A path note only, with no image. It tells the model to open the PNG with its file-read tool. A diff image in an `e2e-execute` or `screenshot-diff` result is listed by its path alone, with no note. |
 
 A profile has two forms:
 
 - `screenshot`: a screenshot the agent asked for, with the `screenshot` tool or any
-  other `outputHint: "image"` result. It is never `image`, because the agent may want
-  to open the file again later.
+  other `outputHint: "image"` result, and the images in `e2e-execute` and
+  `screenshot-diff` results. It is never `image`, because the agent may want to open
+  the file again later.
 - `autoScreenshot`: the screenshot the server appends after an interaction
   (`--- Screen after action ---`, `captureScreenshotBlocks` in `mcp-server.ts`).
 
@@ -85,8 +88,10 @@ the server copies the missing facts into each property `description` when it
 answers `tools/list` (`withKeywordFacts` in `keyword-facts.ts`).
 
 The keywords stay on the schema in both cases, for the clients that validate with
-them. A client gets the copy unless every model it was checked with shows the
-keywords. A repeated fact costs less than a missing one.
+them. A client skips the copy only when captured requests show that the keywords
+reach the model, or that the client writes them into the description itself, on
+every model captured. A model quoting its schema is not enough, so Cursor gets the
+copy. A repeated fact costs less than a missing one.
 
 ## Telemetry
 

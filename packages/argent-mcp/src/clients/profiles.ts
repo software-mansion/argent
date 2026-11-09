@@ -9,8 +9,9 @@ export interface ClientProfile {
   /** Id of the matched row, or `default` for an unnamed or unknown client. */
   id: string;
   /**
-   * Form of a screenshot the agent asked for (the `screenshot` tool). Never `image`: the
-   * agent may want to open the file again later.
+   * Form of a screenshot the agent asked for (the `screenshot` tool) and of the images in
+   * `e2e-execute` and `screenshot-diff` results. Never `image`: the agent may want to open
+   * the file again later.
    */
   screenshot: Exclude<ScreenshotForm, "image">;
   /** Form of the screenshot the server appends after an interaction. */

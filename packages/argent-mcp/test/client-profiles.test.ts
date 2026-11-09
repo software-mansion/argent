@@ -43,7 +43,8 @@ const UNKNOWN = [
   "mcp",
   "rmcp",
   "some-new-client",
-  "my-cursor",
+  // One per seen name: the name after a prefix, which the row's `^` rejects.
+  ...KNOWN_CLIENTS.flatMap((client) => client.seen).map((name) => `my-${name}`),
   // One per row: the row's name and one more word character, which its `\b` rejects.
   "claude-codex",
   "codex-mcp-clientx",
