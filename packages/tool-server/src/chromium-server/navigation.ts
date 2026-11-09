@@ -45,7 +45,7 @@ async function navigateOnce(cdp: CDPClient, url: string, isJavascript: boolean):
   const { errorText, isDownload } = (await cdp.send("Page.navigate", { url }).catch((err) => {
     if (!(err instanceof Error) || err.message !== INVALID_URL) throw err;
     throw new FailureError(
-      `Chromium could not navigate: ${INVALID_URL}. Pass an absolute URL, such as https://example.com.`,
+      `Chromium could not navigate: ${INVALID_URL}.`,
       {
         error_code: FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED,
         failure_stage: "chromium_navigate",

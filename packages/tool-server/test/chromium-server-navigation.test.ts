@@ -65,8 +65,7 @@ describe("chromium-server/navigation", () => {
       (e: unknown) => e
     );
     expect((err as Error).message).toBe(
-      "Chromium could not navigate: Cannot navigate to invalid URL. Pass an absolute URL, such" +
-        " as https://example.com."
+      "Chromium could not navigate: Cannot navigate to invalid URL."
     );
     expect((err as Error).cause).toBe(rejection);
     expect(getFailureSignal(err)).toEqual({
