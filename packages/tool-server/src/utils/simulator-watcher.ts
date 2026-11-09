@@ -30,9 +30,11 @@ let firstPollSettled: Promise<void> = Promise.resolve();
 /**
  * Settles once a poll has read the booted simulators and attempted injection for
  * each, once a tick finds Xcode's component install pending (no poll runs and
- * `simctl` launches nothing), or {@link FIRST_POLL_WAIT_MS} after startup. A tool
- * that can launch an app without arming injection itself waits on this, so the
- * app is not started uninjected. Settled when no watcher runs.
+ * `simctl` launches nothing), or {@link FIRST_POLL_WAIT_MS} after startup.
+ * Settled when no watcher runs. Awaited by whatever can start an app without
+ * arming injection itself, so the app does not start uninjected: open-url, the
+ * native profiler's malloc relaunch, and the simulator-server and tv-control
+ * services every input to a local iOS or Apple TV simulator goes through.
  */
 export function firstSimulatorPoll(): Promise<void> {
   return firstPollSettled;
