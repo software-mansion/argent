@@ -2275,6 +2275,38 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       ]),
     ]).tree;
     expect(pxFrame(carousel, "r", "clipBounds")).toEqual({ x: 150, y: 0, w: 136, h: 1000 });
+    // An inner window that starts before the outer's (at 50, the outer's at 101) shows
+    // only from the outer's edge.
+    const shifted = (outer: Opts, inner: Rect, scrollSize: Opts["scrollSize"], rect: Rect) =>
+      run([
+        scroller(
+          [
+            el({
+              rect: inner,
+              client: { left: 0, top: 0, width: inner.w, height: inner.h },
+              offset: { width: inner.w, height: inner.h },
+              scrollSize,
+              style: { overflow: "auto" },
+              children: [row("r", rect)],
+            }),
+          ],
+          outer
+        ),
+      ]).tree;
+    const below = shifted(
+      { rect: { x: 0, y: 100, w: 300, h: 100 } },
+      { x: 1, y: 50, w: 200, h: 100 },
+      { width: 200, height: 400 },
+      { x: 1, y: 130, w: 200, h: 40 }
+    );
+    expect(pxFrame(below, "r", "clipBounds")).toEqual({ x: 0, y: 101, w: 1000, h: 49 });
+    const right = shifted(
+      { rect: { x: 100, y: 0, w: 300, h: 100 }, scrollSize: { width: 285, height: 98 } },
+      { x: 50, y: 5, w: 200, h: 90 },
+      { width: 800, height: 90 },
+      { x: 230, y: 10, w: 50, h: 40 }
+    );
+    expect(pxFrame(right, "r", "clipBounds")).toEqual({ x: 101, y: 0, w: 149, h: 1000 });
   });
 
   it("reports the scroll container's window, not a fixed clip's inside it", () => {
@@ -3294,10 +3326,10 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
   });
 
   it("takes as a fieldset's rendered legend only a <legend> that generates a box", () => {
-    const fieldset = (children: MockElement[]) =>
+    const fieldset = (children: MockElement[], tag = "fieldset") =>
       run([
         el({
-          tag: "fieldset",
+          tag,
           rect: { x: 0, y: 0, w: 300, h: 240 },
           client: { left: 0, top: 0, width: 300, height: 240 },
           offset: { width: 300, height: 240 },
@@ -3334,6 +3366,12 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     // A display:contents legend's content is the fieldset's content, which its overflow clips.
     const outside = row("outside", { x: 20, y: 250, w: 60, h: 10 });
     expect(pxFrame(fieldset([boxless("contents", [outside])]), "outside").h).toBe(0);
+    // Only a <legend> child is a legend, and only a fieldset's.
+    const box = (tag: string) =>
+      el({ tag, rect: { x: 0, y: 0, w: 60, h: 80 }, offset: { width: 60, height: 80 } });
+    const unclipped = { x: 20, y: 50, w: 260, h: 100 };
+    expect(pxFrame(fieldset([box("div")]), "under")).toEqual(unclipped);
+    expect(pxFrame(fieldset([box("legend")], "div"), "under")).toEqual(unclipped);
   });
 
   it("scales the padding box by the clipper's transform", () => {
@@ -3706,6 +3744,34 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
 });
 
 describe("DESCRIBE_DOM_SCRIPT wheel anchors", () => {
+  it("hit-tests a document whose elementsFromPoint a named element shadows", () => {
+    const list = () => [
+      scroller([row("part", { x: 1, y: 81, w: 285, h: 40 })], {
+        painted: { x: 0, y: 0, w: 300, h: 100 },
+      }),
+    ];
+    const plain = findById(run(list()).tree, "part")!.clipAnchors;
+    expect(plain).toHaveProperty("y");
+    // Read once run() has built the document: an <img name="elementsFromPoint"> takes
+    // the name, while Document.prototype keeps the method.
+    const page = {
+      get Document() {
+        const doc = (globalThis as Record<string, unknown>).document as Record<string, unknown>;
+        const native = doc.elementsFromPoint as (x: number, y: number) => unknown[];
+        doc.elementsFromPoint = el({ tag: "img" });
+        return Object.assign(function Document() {}, {
+          prototype: {
+            elementsFromPoint(this: unknown, x: number, y: number) {
+              return native.call(this, x, y);
+            },
+          },
+        });
+      },
+    };
+    const clobbered = run(list(), undefined, {}, "CSS1Compat", page).tree;
+    expect(findById(clobbered, "part")!.clipAnchors).toEqual(plain);
+  });
+
   it("anchors a cut only where the clips above its innermost cutter leave that cutter showing", () => {
     // An outer pane holds a 100px clipper over a list that cuts the button; the pane's
     // next child shows below the clipper, where a wheel scrolls only the pane.

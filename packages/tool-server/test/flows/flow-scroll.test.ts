@@ -1174,6 +1174,24 @@ describe("scroll-to directive", () => {
     }
   });
 
+  it("moves a cut target its whole room even when that is under the minimum increment", async () => {
+    // The card's start is 0.02 below its 0.4-0.8 window's; a 0.05 step would hide 0.03 of it.
+    const swipes = await scrollTo(
+      "room-sliver",
+      (scrolled) => [
+        n({
+          identifier: "card",
+          frame: { x: 0.6, y: scrolled ? 0.4 : 0.42, width: 0.3, height: 0.38 },
+          clipBounds: scrolled ? undefined : { x: 0, y: 0.4, width: 1, height: 0.4 },
+          clipAnchors: scrolled ? undefined : { y: { x: 0.75, y: 0.45 } },
+        }),
+      ],
+      { target: { identifier: "card" } }
+    );
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromY - swipes[0].toY).toBeCloseTo(0.02, 5);
+  });
+
   it("measures a `within` target against an inner scroller cutting it, not the container's window", async () => {
     // The page pane's window runs on to 0.9; the inner list cuts the row at 0.8.
     const pane = n({
