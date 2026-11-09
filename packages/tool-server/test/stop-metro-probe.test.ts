@@ -157,6 +157,19 @@ describe("stop-metro port probe", () => {
     );
   });
 
+  it("fails when lsof exits 1 on an error, e.g. a sandbox denying it the process list", async () => {
+    const stderr = "lsof: can't get PID byte count: Operation not permitted\n";
+    lsofThrows({
+      message: `Command failed: lsof -ti tcp:8081 -sTCP:LISTEN\n${stderr}`,
+      status: 1,
+      stderr,
+    });
+
+    await expect(runStopMetro(8081)).rejects.toThrow(
+      "Could not determine what is listening on port 8081: Command failed: lsof -ti tcp:8081 -sTCP:LISTEN\nlsof: can't get PID byte count"
+    );
+  });
+
   it("fails instead of claiming the port is free when lsof exits 2", async () => {
     lsofThrows({ message: "Command failed: lsof -ti tcp:8081 -sTCP:LISTEN", status: 2 });
 

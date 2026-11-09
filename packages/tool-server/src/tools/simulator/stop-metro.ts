@@ -146,8 +146,10 @@ function listeningPids(port: number): number[] {
       timeout: 5_000,
     }).trim();
   } catch (error) {
-    // lsof exits 1 when it finds no listener it can see.
-    if ((error as { status?: unknown }).status !== 1) throw error;
+    // lsof exits 1 both on no visible listener and on a fatal error (e.g.
+    // sandboxed); -t implies -w, so only the error writes to stderr.
+    const { status, stderr } = error as { status?: unknown; stderr?: string };
+    if (status !== 1 || stderr?.trim()) throw error;
     // Non-root lsof cannot see another user's sockets, e.g. a Metro started with sudo.
     if (process.platform === "darwin") {
       const netstat = execFileSync(DARWIN_NETSTAT_BIN, ["-an", "-p", "tcp"], {
@@ -182,7 +184,7 @@ export const stopMetroTool: ToolDefinition<
   { stopped: boolean; port: number; pids: number[] }
 > = {
   id: "stop-metro",
-  description: `Stop the Metro bundler process listening on \`port\`. Use when the user asks to stop Metro or when Metro must be restarted - do not offer it when a task wraps up, since the next task would wait on a cold Metro start. Returns { stopped, port, pids }; stopped=false when no process listens on the port. Fails if the port lookup cannot run or times out, or if it finds a listener but not the process that owns it. This is DESTRUCTIVE: always ask the user for confirmation before calling this tool.`,
+  description: `Stop the Metro bundler process listening on \`port\`. Use when the user asks to stop Metro or when Metro must be restarted - do not offer it when a task wraps up, since the next task would wait on a cold Metro start. Returns { stopped, port, pids }: stopped=true when it sent SIGTERM to the listening pids it found, stopped=false when it found none. Fails if the port lookup cannot run or times out, or if it finds a listener but not the process that owns it. On macOS another user's listener is detected only when no other listener on the port is visible, so it can survive stopped=true. This is DESTRUCTIVE: always ask the user for confirmation before calling this tool.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Stopping Metro on port ${params.port}`,
