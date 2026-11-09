@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createRegistry } from "../../src/utils/setup-registry";
-import { toolStepUploadIssue } from "../../src/tools/flows/flow-tool-inputs";
+import { prepareToolStepInputs, toolStepUploadIssue } from "../../src/tools/flows/flow-tool-inputs";
+import { ClientProjectAccess } from "../../src/tools/flows/project-access";
 
 describe("toolStepUploadIssue", () => {
   it("runs an e2e-read-prerequisite step whose e2e_test_path the client sends, beside a project_root", () => {
@@ -38,5 +39,20 @@ describe("toolStepUploadIssue", () => {
     );
 
     expect(issue?.line).toBe("tool: screenshot-diff (/p/out)");
+  });
+});
+
+describe("prepareToolStepInputs over a link", () => {
+  it("keeps the reason on one line when the client sent no file for a path with a newline", async () => {
+    const run = prepareToolStepInputs(
+      createRegistry(),
+      new ClientProjectAccess({}),
+      "screenshot-diff",
+      { baselinePath: "/p/a\nb.png", currentPath: "/p/c.png", udid: "x" }
+    );
+
+    await expect(run).rejects.toThrow(
+      'the client has no file at "/p/a\\nb.png" (argument baselinePath of screenshot-diff)'
+    );
   });
 });
