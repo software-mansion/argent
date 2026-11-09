@@ -25,11 +25,14 @@ function gitRoot() {
   }
 }
 
-// mkdirSync throws EEXIST on a dangling link, so create what it points at first.
+// mkdirSync fails on a dangling link, so create what its chain ends at first.
 function ensureDir(dir) {
-  if (!existsSync(dir) && lstatSync(dir, { throwIfNoEntry: false })?.isSymbolicLink()) {
-    mkdirSync(resolve(realpathSync(dirname(dir)), readlinkSync(dir)), { recursive: true });
+  let end = dir;
+  for (let hop = 0; hop < 40; hop++) {
+    if (!lstatSync(end, { throwIfNoEntry: false })?.isSymbolicLink()) break;
+    end = resolve(realpathSync(dirname(end)), readlinkSync(end));
   }
+  mkdirSync(end, { recursive: true });
   mkdirSync(dir, { recursive: true });
 }
 

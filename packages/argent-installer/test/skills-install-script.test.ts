@@ -71,11 +71,14 @@ describe("install-skills script", () => {
       path.join("..", "..", ".agents", "skills"),
       path.join(project, "config", "claude", "skills")
     );
+    // A chain: `.agents/skills` is a dangling link too.
+    fs.mkdirSync(path.join(project, "store"));
+    fs.symlinkSync(path.join("..", "store", "skills"), path.join(project, ".agents", "skills"));
 
     execFileSync(process.execPath, [SCRIPT], { cwd: project, stdio: "pipe" });
 
     expect(fs.lstatSync(path.join(project, ".claude", "skills")).isSymbolicLink()).toBe(true);
-    expect(fs.readdirSync(path.join(project, ".agents", "skills")).sort()).toEqual(
+    expect(fs.readdirSync(path.join(project, "store", "skills")).sort()).toEqual(
       fs.readdirSync(BUNDLED_SKILLS).sort()
     );
   });
