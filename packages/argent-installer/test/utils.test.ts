@@ -796,10 +796,14 @@ describe("detectGlobalPackageManager", () => {
     it.each([
       ["Yarn classic's default folder", ".config/yarn/global/node_modules"],
       ["a custom Yarn classic global-folder", "yg/node_modules"],
-      ["bun's global folder", ".bun/install/global/node_modules"],
     ])("returns yarn over a global in %s, which npm would duplicate", (_shape, parent) => {
       putGlobalOnPath(parent);
       expect(detectGlobalPackageManager()).toBe("yarn");
+    });
+
+    it("returns bun over a global in bun's folder", () => {
+      putGlobalOnPath(".bun/install/global/node_modules");
+      expect(detectGlobalPackageManager()).toBe("bun");
     });
 
     function putShimFirst(exitCode: number): void {
@@ -872,6 +876,12 @@ describe("detectGlobalPackageManager", () => {
       it("returns yarn over Yarn classic's shim", () => {
         putWindowsShim("Yarn/bin", '@"%~dp0\\..\\Data\\global\\node_modules\\.bin\\argent.cmd" %*');
         expect(detectGlobalPackageManager()).toBe("yarn");
+      });
+
+      it("returns bun over bun's .exe shim beside its .bunx", () => {
+        putWindowsShim(".bun/bin", "MZ");
+        fs.writeFileSync(path.join(dir, ".bun", "bin", "argent.bunx"), "");
+        expect(detectGlobalPackageManager()).toBe("bun");
       });
 
       it("returns pnpm over pnpm's shim", () => {

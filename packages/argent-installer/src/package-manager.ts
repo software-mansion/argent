@@ -38,6 +38,13 @@ const PNPM_GLOBAL_TARGET = new RegExp(
     String.raw`[\\/]`
 );
 
+// bun keeps globals under <BUN_INSTALL>/install/global/node_modules.
+const BUN_GLOBAL_ROOT = new RegExp(
+  String.raw`[\\/]install[\\/]global[\\/]node_modules[\\/]` +
+    PACKAGE_NAME.split("/").join(String.raw`[\\/]`) +
+    "$"
+);
+
 // A shim script's text, or null for a binary (a Volta or mise shim) or an
 // unreadable file. 64 KiB is far above any shim script.
 function readShimScript(binaryPath: string): string | null {
@@ -54,11 +61,12 @@ function readShimScript(binaryPath: string): string | null {
 // place. `yarn` then fails without installing anything. npm's layout puts
 // <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent, or on
 // Windows <prefix>\argent.cmd beside <prefix>\node_modules\@swmansion\argent.
-// A bin that resolves to no package is a shim script: pnpm's names its global
-// folder, so pnpm owns it. A shim that names no node_modules path (nodenv's,
-// asdf's) or is a binary (Volta's) runs a version manager's npm global, so it
-// keeps npm. Any other names a package outside npm's layout (Yarn classic's on
-// Windows) and gets `yarn`.
+// A global in bun's folder gets bun; on Windows its bin is an .exe beside a
+// .bunx. A bin that resolves to no package is a shim script: pnpm's names its
+// global folder, so pnpm owns it. A shim that names no node_modules path
+// (nodenv's, asdf's) or is a binary (Volta's) runs a version manager's npm
+// global, so it keeps npm. Any other names a package outside npm's layout
+// (Yarn classic's) and gets `yarn`.
 export function detectGlobalPackageManager(): PackageManager {
   const pm = detectPackageManager();
   const agent = process.env.npm_config_user_agent ?? "";
@@ -71,9 +79,13 @@ export function detectGlobalPackageManager(): PackageManager {
       ? path.join(binDir, "node_modules", PACKAGE_NAME)
       : path.join(path.dirname(binDir), "lib", "node_modules", PACKAGE_NAME);
   const root = packageRootOf(binaryPath);
-  if (root) return canonicalPath(npmCopy) === canonicalPath(root) ? "npm" : "yarn";
-  if (process.platform === "win32" && fs.existsSync(path.join(npmCopy, "package.json"))) {
-    return "npm";
+  if (root) {
+    if (canonicalPath(npmCopy) === canonicalPath(root)) return "npm";
+    return BUN_GLOBAL_ROOT.test(root) ? "bun" : "yarn";
+  }
+  if (process.platform === "win32") {
+    if (fs.existsSync(path.join(npmCopy, "package.json"))) return "npm";
+    if (fs.existsSync(binaryPath.replace(/\.exe$/i, "") + ".bunx")) return "bun";
   }
   const shim = readShimScript(binaryPath);
   if (shim === null || !/node_modules[\\/]/.test(shim)) return "npm";
