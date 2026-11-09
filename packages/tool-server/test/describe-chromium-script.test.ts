@@ -3307,6 +3307,60 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     }
   });
 
+  it("takes the first legend in a fieldset's flat tree, through display:contents boxes, as rendered", () => {
+    const legend = () =>
+      el({
+        tag: "legend",
+        attrs: { id: "legend" },
+        rect: { x: 20, y: 0, w: 60, h: 30 },
+        offset: { width: 60, height: 30 },
+      });
+    const fieldset = (children: MockElement[]) =>
+      el({
+        tag: "fieldset",
+        rect: { x: 0, y: 0, w: 300, h: 100 },
+        client: { left: 2, top: 2, width: 296, height: 96 },
+        offset: { width: 300, height: 100 },
+        style: { overflow: "hidden" },
+        children,
+      });
+    const contents = (opts: Opts) => el({ rect: ZERO, style: { display: "contents" }, ...opts });
+    const fixtures: [string, () => MockElement][] = [
+      [
+        "slotted",
+        () => {
+          const light = [legend(), row("content", { x: 20, y: 20, w: 60, h: 40 })];
+          const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
+          Object.setPrototypeOf(slot, MockHTMLSlotElement.prototype);
+          (slot as Record<string, unknown>).__assigned = light;
+          for (const n of light) (n as Record<string, unknown>).assignedSlot = slot;
+          return el({ tag: "x-host", rect: ZERO, children: light, shadow: [fieldset([slot])] });
+        },
+      ],
+      [
+        "wrapped",
+        () =>
+          fieldset([
+            contents({ children: [legend()] }),
+            row("content", { x: 20, y: 20, w: 60, h: 40 }),
+          ]),
+      ],
+      [
+        "in a shadow tree",
+        () =>
+          fieldset([
+            contents({ tag: "x-host", shadow: [legend()] }),
+            row("content", { x: 20, y: 20, w: 60, h: 40 }),
+          ]),
+      ],
+    ];
+    for (const [why, page] of fixtures) {
+      const { tree } = run([page()]);
+      expect(pxFrame(tree, "legend"), why).toEqual({ x: 20, y: 0, w: 60, h: 30 });
+      expect(pxFrame(tree, "content"), why).toEqual({ x: 20, y: 30, w: 60, h: 30 });
+    }
+  });
+
   it("clips a fieldset's content by overflow where its rendered legend's margin box ends", () => {
     // Each fieldset renders at 2x (a 150x120 layout box); "under" spans x 20..280, y 50..150.
     const pad = { left: 0, top: 0, width: 150, height: 120 };

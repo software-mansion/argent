@@ -208,15 +208,28 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (getNodeType.call(node) === 1) {
       const shadow = getShadowRoot.call(node);
       if (shadow) return getChildNodes.call(shadow);
-      if (
-        getLocalName.call(node) === "slot" &&
-        getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml"
-      ) {
+      if (isSlot(node)) {
         const assigned = slotAssignedNodes.call(node);
         if (assigned.length) return assigned;
       }
     }
     return getChildNodes.call(node);
+  }
+
+  // An element's element children in the flat tree.
+  function flatChildElements(el) {
+    const shadow = getShadowRoot.call(el);
+    if (shadow) return shadow.children;
+    const assigned = isSlot(el) ? slotAssignedNodes.call(el) : [];
+    return assigned.length
+      ? assigned.filter((n) => getNodeType.call(n) === 1)
+      : getChildrenEls.call(el);
+  }
+
+  function isSlot(el) {
+    return (
+      getLocalName.call(el) === "slot" && getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml"
+    );
   }
 
   // An aria-labelledby target's text (text and CDATA) in the flat tree, read by a subset
@@ -462,6 +475,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // A slotted element paints where its <slot> sits in the shadow tree, so it takes the
   // clips in force there; each host's shadow tree is walked before its light children.
   const slotClips = nodeMap();
+  // A rendered legend takes its fieldset's own clips, wherever in the DOM it sits.
+  const legendClips = nodeMap();
   // Elements hidden() pruned: a slot inside one paints nothing.
   const pruned = nodeMap();
   function inPruned(node) {
@@ -830,15 +845,20 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   // A fieldset's rendered legend, which its overflow never clips: the first <legend>
-  // child that generates a box and is neither floated nor out of flow.
-  function renderedLegend(el, kids) {
-    if (htmlTag(el) !== "FIELDSET") return null;
+  // among its flat-tree children, seen through display:contents boxes (slots included),
+  // that generates a box and is neither floated nor out of flow.
+  function renderedLegend(el) {
+    return htmlTag(el) === "FIELDSET" ? firstLegend(flatChildElements(el)) : null;
+  }
+  function firstLegend(kids) {
     for (const kid of kids) {
-      if (htmlTag(kid) !== "LEGEND") continue;
       const ks = window.getComputedStyle(kid);
-      if (
+      if (ks.display === "contents") {
+        const found = firstLegend(flatChildElements(kid));
+        if (found) return found;
+      } else if (
+        htmlTag(kid) === "LEGEND" &&
         ks.display !== "none" &&
-        ks.display !== "contents" &&
         ks.cssFloat === "none" &&
         ks.position !== "absolute" &&
         ks.position !== "fixed"
@@ -1079,7 +1099,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       clip = null;
     }
     const kids = getChildrenEls.call(el);
-    const legend = renderedLegend(el, kids);
+    const legend = renderedLegend(el);
+    if (legend) legendClips.set(legend, clipsWithin(el, style, clips, clip));
     const inner = childClips(el, style, clips, clip, legend);
     if (htmlTag(el) === "SLOT") slotClips.set(el, inner);
     chains.set(el, inner.flow && inner.flow.scrollers);
@@ -1096,7 +1117,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const shadow = getShadowRoot.call(el);
     if (shadow) {
       for (const child of shadow.children) {
-        const c = walk(child, depth + 1, inner);
+        const c = walk(child, depth + 1, legendClips.has(child) ? legendClips.get(child) : inner);
         if (c) shadowResults.push(c);
       }
     }
@@ -1111,10 +1132,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (slot && !slotClips.has(slot) && inPruned(slot)) continue;
       const kidClips = inPicker(el, kids[i], i)
         ? NO_CLIP
-        : slot && slotClips.has(slot)
-          ? slotClips.get(slot)
-          : kids[i] === legend
-            ? clipsWithin(el, style, clips, clip)
+        : legendClips.has(kids[i])
+          ? legendClips.get(kids[i])
+          : slot && slotClips.has(slot)
+            ? slotClips.get(slot)
             : inner;
       const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot);
       if (c) childResults.push(c);
