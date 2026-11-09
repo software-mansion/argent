@@ -1101,21 +1101,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
     childResults.push(...shadowResults);
 
-    // Same-origin iframes: pierce contentDocument if accessible. Cross-origin
-    // contentDocument access throws SecurityError — swallowed silently so the
-    // walker doesn't abort the whole tree.
-    if (getTagName.call(el) === "IFRAME") {
-      try {
-        const doc = el.contentDocument;
-        if (doc && doc.documentElement) {
-          const c = walk(doc.documentElement, depth + 1);
-          if (c) childResults.push(c);
-        }
-      } catch (e) {
-        /* cross-origin iframe — skip */
-      }
-    }
-
     // A visibility:hidden element paints nothing itself, but a descendant can override
     // visibility back to visible, so walk() descended instead of pruning (see hidden()).
     // Suppress this element's own paint — its text / name / interactivity are invisible —
@@ -1216,10 +1201,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           bottom: Math.min(h, ...cutsY.map((s) => s.shown.bottom)),
         };
         clipBounds = normRect(win);
-        if (getOwnerDocument.call(el) === document) {
-          const vis = intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h });
-          cut = { r: vis, scs, win, cutsX, cutsY };
-        }
+        const vis = intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h });
+        cut = { r: vis, scs, win, cutsX, cutsY };
       }
     }
 
@@ -1268,9 +1251,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // The body is excluded — it's the default holder when nothing is focused,
     // and its screen-spanning frame would satisfy any overlap check. A host
     // <iframe>/<frame> is excluded too: it is the outer document's
-    // activeElement whenever focus merely sits inside its subdocument, and the
-    // inner element (that document's own activeElement, checked per-document)
-    // is the one that carries the flag — flagging both would double-report.
+    // activeElement whenever focus merely sits anywhere inside its
+    // subdocument, so it does not mark where the caret is.
     if (!invisibleSelf) {
       const tag = getTagName.call(el);
       if (tag !== "IFRAME" && tag !== "FRAME") {

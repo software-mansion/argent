@@ -1048,7 +1048,6 @@ describe("scroll-to directive", () => {
   });
 
   it("scrolls a cut target with no wheel anchor on the axis like an uncut one", async () => {
-    // The walker withholds clipAnchors outside the top document.
     const swipes = await scrollTo(
       "unanchored-cut",
       (scrolled) => [n({ ...cutRow(scrolled), clipAnchors: undefined })],

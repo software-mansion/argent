@@ -14,7 +14,7 @@ import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
  * whatever transform-like property a fixture sets), client{Left,Top,Width,Height} and
  * offset{Width,Height} (padding-box clipping), children,
  * childNodes (text, and <br> / comment nodes), localName/namespaceURI,
- * getAttribute/hasAttribute, open shadowRoot, iframe contentDocument,
+ * getAttribute/hasAttribute, open shadowRoot,
  * and a Range whose rect unions the element's own painted content with the still-laid-out
  * boxes of its descendants (everything but display:none) — so it reproduces the real
  * behaviour where a box-less wrapper's Range is non-zero purely from a visibility:hidden /
@@ -189,7 +189,6 @@ type Opts = {
   attrs?: Record<string, string>;
   children?: MockElement[];
   shadow?: MockElement[]; // open shadow root children (walker pierces these)
-  iframeDoc?: MockElement; // <iframe> contentDocument.documentElement (same-origin pierce)
   clobber?: boolean; // set .title/.id to non-string objects (DOM-clobbering)
   clobberStructural?: boolean; // shadow .children/.childNodes/.tagName with named controls (LegacyOverrideBuiltins)
   clobberAccessors?: boolean; // shadow getAttribute/hasAttribute/getBoundingClientRect/shadowRoot with a control element
@@ -279,11 +278,6 @@ function el(opts: Opts = {}): MockElement {
     node.shadowRoot = shadowRoot;
   } else {
     node.shadowRoot = null;
-  }
-  // A same-origin <iframe> exposes contentDocument.documentElement (read directly, not via
-  // a prototype getter). Only meaningful when tag === "iframe".
-  if (opts.iframeDoc) {
-    (node as Record<string, unknown>).contentDocument = { documentElement: opts.iframeDoc };
   }
   (node as Record<string, unknown>).__content = opts.content ?? null;
   if (opts.clobber) {
@@ -1648,24 +1642,6 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(valuesOf(tree)).toContain("SHADOWTEXT");
   });
 
-  it("pierces a same-origin iframe's contentDocument", () => {
-    const innerDoc = el({
-      tag: "html",
-      rect: { x: 0, y: 0, w: W, h: H },
-      children: [
-        el({
-          tag: "body",
-          rect: { x: 0, y: 0, w: W, h: H },
-          children: [el({ text: "IFRAMETEXT", rect: BOX })],
-        }),
-      ],
-    });
-    const { tree } = run([
-      el({ tag: "iframe", rect: { x: 0, y: 0, w: 500, h: 500 }, iframeDoc: innerDoc }),
-    ]);
-    expect(valuesOf(tree)).toContain("IFRAMETEXT");
-  });
-
   it("reads a <br> between own text nodes as a space", () => {
     const div = el({ rect: BOX, attrs: { id: "nl" } }) as MockElement & Record<string, unknown>;
     const br = Object.assign(el({ tag: "br", rect: ZERO }), { nodeType: 1 });
@@ -1776,38 +1752,11 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(unfocusedTree, "the-body")!.focused).toBeUndefined();
   });
 
-  it("flags a focused input inside a same-origin iframe once — never its host <iframe>", () => {
-    // Focus inside a subdocument makes BOTH activeElements point at it: the
-    // inner document's is the input, the outer document's is the host iframe
-    // element. Only the inner element carries the flag; flagging the host too
-    // would double-report the focus.
-    const innerInput = el({ tag: "input", attrs: { id: "iframe-input" }, rect: BOX });
-    const innerBody = el({
-      tag: "body",
-      rect: { x: 0, y: 0, w: 500, h: 500 },
-      children: [innerInput],
-    });
-    const innerHtml = el({
-      tag: "html",
-      rect: { x: 0, y: 0, w: 500, h: 500 },
-      children: [innerBody],
-    });
-    const innerDoc = { documentElement: innerHtml, activeElement: innerInput, body: innerBody };
-    for (const n of [innerHtml, innerBody, innerInput]) {
-      (n as unknown as Record<string, unknown>).ownerDocument = innerDoc;
-    }
-    const iframe = el({
-      tag: "iframe",
-      attrs: { id: "the-iframe" },
-      rect: { x: 0, y: 0, w: 500, h: 500 },
-    });
-    (iframe as unknown as Record<string, unknown>).contentDocument = innerDoc;
-    // The outer document reports the host iframe as ITS activeElement.
-    const outerDoc = { activeElement: iframe, body: null };
-    (iframe as unknown as Record<string, unknown>).ownerDocument = outerDoc;
-
+  it("never flags the host <iframe> that holds the focus of its subdocument", () => {
+    // The outer document reports the host as its activeElement.
+    const iframe = el({ tag: "iframe", attrs: { id: "the-iframe" }, rect: BOX });
+    (iframe as unknown as Record<string, unknown>).ownerDocument = { activeElement: iframe };
     const { tree } = run([iframe]);
-    expect(findById(tree, "iframe-input")!.focused).toBe(true);
     expect(findById(tree, "the-iframe")!.focused).toBeUndefined();
   });
 
@@ -2262,31 +2211,6 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       }),
     ]);
     expect(findById(tree, "cut")!.clipAnchors).toEqual({ y: { x: 0.03, y: 0.1 } });
-  });
-
-  it("clips a row cut inside a same-origin iframe but gives it no top-document wheel anchor", () => {
-    const area = { x: 0, y: 0, w: 300, h: 100 };
-    const innerHtml = el({
-      tag: "html",
-      rect: { x: 0, y: 0, w: W, h: H },
-      children: [
-        el({
-          tag: "body",
-          rect: { x: 0, y: 0, w: W, h: H },
-          children: [scroller([row("cut", { x: 1, y: 81, w: 285, h: 40 })], { painted: area })],
-        }),
-      ],
-    });
-    const innerDoc = { documentElement: innerHtml, compatMode: "CSS1Compat", body: null };
-    const own = (n: Record<string, unknown>) => {
-      n.ownerDocument = innerDoc;
-      for (const k of (n.__children as Record<string, unknown>[]) ?? []) own(k);
-    };
-    own(innerHtml as unknown as Record<string, unknown>);
-    const { tree } = run([el({ tag: "iframe", rect: area, painted: area, iframeDoc: innerHtml })]);
-    expect(pxFrame(tree, "cut")).toEqual({ x: 1, y: 81, w: 285, h: 18 });
-    expect(findById(tree, "cut")!.clipBounds).toBeDefined();
-    expect(findById(tree, "cut")!.clipAnchors).toBeUndefined();
   });
 
   it("reports clipBounds for a box-less element by what it spans under its scrollers", () => {
