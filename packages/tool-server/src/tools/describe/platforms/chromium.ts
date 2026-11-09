@@ -952,6 +952,16 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // outside.
   function paintsOutside(el, clip) {
     const v = intersect(getBCR.call(el), { left: 0, top: 0, right: w, bottom: h });
+    // Nothing in view outside the clip to probe; most calls end here.
+    if (v.left >= v.right || v.top >= v.bottom) return false;
+    if (
+      v.left >= clip.left &&
+      v.right <= clip.right &&
+      v.top >= clip.top &&
+      v.bottom <= clip.bottom
+    ) {
+      return false;
+    }
     const b = clipperBorders(getParentNode.call(el)) || clip;
     const e = {
       left: Math.min(clip.left, b.left) - 1,
@@ -977,6 +987,19 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         y < v.bottom &&
         (x < e.left || x >= e.right || y < e.top || y >= e.bottom) &&
         elementsAt(root, x, y).some((hit) => containsNode.call(el, hit) && carried(el, hit))
+    );
+  }
+
+  // Whether attachShadow accepts el: a custom element or one of the DOM spec's listed
+  // HTML elements.
+  function canHostShadow(el) {
+    if (getNamespaceURI.call(el) !== "http://www.w3.org/1999/xhtml") return false;
+    const name = getLocalName.call(el);
+    return (
+      name.includes("-") ||
+      /^(article|aside|blockquote|body|div|footer|h[1-6]|header|main|nav|p|section|span)$/.test(
+        name
+      )
     );
   }
 
@@ -1079,9 +1102,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
 
     const childResults = [];
-    // A custom element with no open shadow root may have a closed one, whose slots the
-    // walker cannot see.
-    const closedHost = !shadow && getTagName.call(el).includes("-");
+    // An element with no open shadow root may have a closed one, whose slots the walker
+    // cannot see.
+    const closedHost = !shadow && canHostShadow(el);
     for (let i = 0; i < kids.length; i++) {
       const slot = getAssignedSlot.call(kids[i]);
       // A slot in a pruned subtree paints none of its assigned nodes.

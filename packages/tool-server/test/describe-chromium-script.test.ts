@@ -2673,18 +2673,56 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(card(), "popped").h).toBe(0);
   });
 
+  it.each([
+    { tag: "div", svg: false, framed: true },
+    { tag: "span", svg: false, framed: true },
+    { tag: "section", svg: false, framed: true },
+    { tag: "h3", svg: false, framed: true },
+    { tag: "ul", svg: false, framed: false },
+    { tag: "font-face", svg: true, framed: false },
+  ])("frames a <$tag> (svg: $svg) host's light child by where it hit-tests: $framed", (c) => {
+    // attachShadow accepts custom elements and a fixed list of HTML elements, neither <ul>
+    // nor anything in SVG among them; a closed root on one slots the child into a fixed
+    // popup.
+    const box = { x: 400, y: 400, w: 120, h: 40 };
+    const { tree } = run([
+      scroller(
+        [
+          el({
+            tag: c.tag,
+            svg: c.svg,
+            rect: { x: 1, y: 1, w: 285, h: 20 },
+            children: [el({ attrs: { id: "popped" }, rect: box, painted: box })],
+          }),
+        ],
+        { style: { overflow: "hidden" } }
+      ),
+    ]);
+    expect(pxFrame(tree, "popped").h).toBe(c.framed ? 40 : 0);
+  });
+
   it("reads a clipper's style once however many light children of a custom element it holds", () => {
-    const rows = Array.from({ length: 20 }, (_, i) =>
-      row(`r${i}`, { x: 1, y: 1 + i * 4, w: 285, h: 4 })
-    );
-    const list = el({ tag: "app-list", rect: { x: 1, y: 1, w: 285, h: 80 }, children: rows });
-    const sc = scroller([list]) as MockElement & Record<string, unknown>;
-    const style = sc.__style;
-    let reads = 0;
-    Object.defineProperty(sc, "__style", { get: () => (reads++, style) });
-    run([sc]);
-    // Once for its own walk, once for the clips its descendants' hit tests cross.
-    expect(reads).toBe(2);
+    const reads = (step: number, top = 1) => {
+      const rows = Array.from({ length: 20 }, (_, i) =>
+        row(`r${i}`, { x: 1, y: top + i * step, w: 285, h: step })
+      );
+      const list = el({
+        tag: "app-list",
+        rect: { x: 1, y: top, w: 285, h: 20 * step },
+        children: rows,
+      });
+      const sc = scroller([list]) as MockElement & Record<string, unknown>;
+      const style = sc.__style;
+      let n = 0;
+      Object.defineProperty(sc, "__style", { get: () => (n++, style) });
+      run([sc]);
+      return n;
+    };
+    // Once for its own walk, once for the clips its overflowing rows' hit tests cross.
+    expect(reads(8)).toBe(2);
+    // Rows within the clip, or out of view, have no point outside it to hit-test.
+    expect(reads(4)).toBe(1);
+    expect(reads(8, H)).toBe(1);
   });
 
   it("clips a custom element's light child that hit-tests only across its clipper's border", () => {
