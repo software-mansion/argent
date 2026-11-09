@@ -187,7 +187,28 @@ export class CDPClient {
           })
         );
       };
+      // `ws` sets no handshake deadline: a target that accepts the TCP connection
+      // but never answers the upgrade would leave this pending indefinitely.
+      const timer = setTimeout(() => {
+        cleanup();
+        ws.terminate();
+        reject(
+          new FailureError(
+            `CDP WebSocket handshake with ${this.wsUrl} did not complete within ` +
+              `${DEFAULT_TIMEOUT_MS}ms. The target accepted the connection but never ` +
+              `answered the upgrade; it may be frozen or not a CDP endpoint.`,
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
+              failure_stage: "debugger_cdp_connect",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              network_failure: "timeout",
+            }
+          )
+        );
+      }, DEFAULT_TIMEOUT_MS);
       const cleanup = () => {
+        clearTimeout(timer);
         ws.removeListener("open", onOpen);
         ws.removeListener("error", onError);
         ws.removeListener("close", onClose);
