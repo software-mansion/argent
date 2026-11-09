@@ -186,8 +186,8 @@ Fails if a recording is already running on the device, the device is not booted,
         }
       }
 
-      // capture.ts arms the visualizer once the encoder is live and restores it
-      // to off when the recording ends. The toggles are best-effort: a failure
+      // The capture arms the visualizer once the recording is live and restores
+      // it to off when the recording ends. The toggles are best-effort: a failure
       // only costs the overlay, surfaced as a warning at stop.
       const pointer: PointerControl | undefined = showTouches
         ? makePointerControl(simulator)

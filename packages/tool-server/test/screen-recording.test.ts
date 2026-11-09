@@ -1551,7 +1551,7 @@ describe("server-side recording", () => {
   async function fakeServer(
     overrides: {
       durationMs?: number;
-      wallClockMs?: number | null;
+      wallClockMs?: number;
       trimmedMs?: number | null;
       warning?: string | null;
       bytes?: Buffer;
@@ -1562,9 +1562,8 @@ describe("server-side recording", () => {
     await fs.writeFile(serverFile, overrides.bytes ?? Buffer.from("fake mp4 payload"));
     const stop = vi.fn(async () => ({
       path: serverFile,
-      sizeBytes: 16,
       durationMs: overrides.durationMs ?? 2_000,
-      wallClockMs: overrides.wallClockMs === undefined ? 2_000 : overrides.wallClockMs,
+      wallClockMs: overrides.wallClockMs ?? 2_000,
       trimmedMs: overrides.trimmedMs === undefined ? null : overrides.trimmedMs,
       warning: overrides.warning ?? null,
     }));
@@ -1675,20 +1674,6 @@ describe("server-side recording", () => {
     const stopped = await stopCapture(api);
 
     expect(stopped.durationMs).toBe(3_029);
-    expect(stopped).not.toHaveProperty("trimmedMs");
-    expect(stopped).not.toHaveProperty("wallClockMs");
-    await fs.rm(stopped.outputFile, { force: true });
-    await fs.rm(server.serverDir, { recursive: true, force: true });
-  });
-
-  it("omits the trim fields when the server reports a trim but no wall clock", async () => {
-    const api = await makeSession(iosDevice);
-    const server = await fakeServer({ durationMs: 3_000, wallClockMs: null, trimmedMs: 2_000 });
-    await startOnServer(api, server, {});
-
-    const stopped = await stopCapture(api);
-
-    expect(stopped.durationMs).toBe(3_000);
     expect(stopped).not.toHaveProperty("trimmedMs");
     expect(stopped).not.toHaveProperty("wallClockMs");
     await fs.rm(stopped.outputFile, { force: true });
@@ -1993,7 +1978,7 @@ describe("server-side recording", () => {
     await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 
-  it("keeps the recording recoverable when the stop request times out", async () => {
+  it("drops a recording whose stop timed out, saying it is lost", async () => {
     const api = await makeSession(iosDevice);
     const server = await fakeServer();
     await startOnServer(api, server, {});
@@ -2001,37 +1986,42 @@ describe("server-side recording", () => {
       throw stopTimedOut();
     });
 
-    await expect(stopCapture(api)).rejects.toThrow("timed out");
+    const err = await stopCapture(api).catch((e: unknown) => e);
 
-    expect(api.serverStop).toBe(server.stop);
-    expect(api.pendingRetrieval).toBe(true);
-    expect(api.outputFile).not.toBeNull();
-    expect(api.stopPending).toBe(false);
-    expect(getActiveScreenRecordings()).toMatchObject([
-      { deviceId: IOS_UDID, status: "finalized" },
-    ]);
-
-    const stopped = await stopCapture(api);
-    expect(server.stop).toHaveBeenCalledTimes(2);
-    await fs.rm(stopped.outputFile, { force: true });
+    expect((err as Error).message).toBe(
+      "screen-recording-stop failed: simulator-server did not answer in time, and the recording is lost. Start a new one."
+    );
+    expect(getFailureSignal(err)?.network_failure).toBe("timeout");
+    expect(api.serverStop).toBeNull();
+    expect(api.pendingRetrieval).toBe(false);
+    expect(api.outputFile).toBeNull();
+    expect(getActiveScreenRecordings()).toEqual([]);
+    await expect(stopCapture(api)).rejects.toThrow("No active screen recording");
+    expect(server.stop).toHaveBeenCalledTimes(1);
     await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 
-  it("still ends the recording on dispose after its stop request timed out", async () => {
-    const instance = await screenRecordingSessionBlueprint.factory({}, iosDevice, {
-      device: iosDevice,
-    } as never);
+  it("says the recording is lost when simulator-server refuses its stop", async () => {
+    const api = await makeSession(iosDevice);
     const server = await fakeServer();
-    await startOnServer(instance.api, server, {});
+    await startOnServer(api, server, {});
     server.stop.mockImplementationOnce(async () => {
-      throw stopTimedOut();
+      throw new FailureError(
+        "screen-recording-stop failed: simulator-server rejected the recording command (HTTP 200: not found).",
+        {
+          error_code: FAILURE_CODES.SCREEN_RECORDING_PROCESS_ERROR,
+          failure_stage: "screen_recording_server_stop",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+          failure_command: "simulator_server",
+        }
+      );
     });
-    await stopCapture(instance.api).catch(() => {});
 
-    await instance.dispose();
-
-    expect(server.stop).toHaveBeenCalledTimes(2);
-    expect(instance.api.serverStop).toBeNull();
+    await expect(stopCapture(api)).rejects.toThrow(
+      "(HTTP 200: not found). The recording is lost; start a new one."
+    );
+    expect(getActiveScreenRecordings()).toEqual([]);
     await fs.rm(server.serverDir, { recursive: true, force: true });
   });
 
@@ -2043,7 +2033,10 @@ describe("server-side recording", () => {
       throw stopConnectionRefused();
     });
 
-    await expect(stopCapture(api)).rejects.toThrow("connection refused");
+    await expect(stopCapture(api)).rejects.toThrow(
+      "simulator-server could not be reached, and the recording is lost with it. " +
+        "If the simulator is booted, call stop-simulator-server for that UDID before starting a new one."
+    );
 
     expect(api.serverStop).toBeNull();
     expect(api.pendingRetrieval).toBe(false);
@@ -2188,7 +2181,9 @@ describe("server recording wire protocol", () => {
         if (url.endsWith("/start")) {
           throw Object.assign(new Error("The operation was aborted"), { name: "AbortError" });
         }
-        return new Response(JSON.stringify({ status: "ok", path: leftBehind, duration_ms: 1 }));
+        return new Response(
+          JSON.stringify({ status: "ok", path: leftBehind, duration_ms: 1, wall_clock_ms: 1 })
+        );
       })
     );
 
@@ -2212,7 +2207,9 @@ describe("server recording wire protocol", () => {
       "fetch",
       vi.fn(async (_url: string, init?: RequestInit) => {
         signals.push(init?.signal);
-        return new Response(JSON.stringify({ status: "ok", path: "/tmp/x.mp4", duration_ms: 1 }));
+        return new Response(
+          JSON.stringify({ status: "ok", path: "/tmp/x.mp4", duration_ms: 1, wall_clock_ms: 1 })
+        );
       })
     );
 
@@ -2277,14 +2274,17 @@ describe("server recording wire protocol", () => {
     );
 
     const err = await stopServerRecording(fakeApi, "rec-1").catch((e: unknown) => e);
-    expect((err as Error).message).toContain("video path or duration");
+    expect((err as Error).message).toContain("path, duration or wall clock");
     expect(getFailureSignal(err)?.failure_command).toBe("simulator_server");
   });
 
   it("fails a stop reply that carries a path but no duration", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ path: "/tmp/x.mp4" }), { status: 200 }))
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ path: "/tmp/x.mp4", wall_clock_ms: 1 }), { status: 200 })
+      )
     );
 
     await expect(stopServerRecording(fakeApi, "rec-1")).rejects.toThrow("duration");
@@ -2312,27 +2312,10 @@ describe("server recording wire protocol", () => {
 
     await expect(stopServerRecording(fakeApi, "rec-1")).resolves.toEqual({
       path: "/tmp/simserver-x/media/rec-1-1794250860142-recording.mp4",
-      sizeBytes: 4096,
       durationMs: 967,
       wallClockMs: 10_026,
       trimmedMs: 9_059,
       warning: null,
-    });
-  });
-
-  it("maps an absent wall_clock_ms to null rather than the video length", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ path: "/tmp/x.mp4", duration_ms: 967, trimmed_ms: 9_059 }))
-      )
-    );
-
-    await expect(stopServerRecording(fakeApi, "rec-1")).resolves.toMatchObject({
-      durationMs: 967,
-      wallClockMs: null,
-      trimmedMs: 9_059,
     });
   });
 
@@ -2342,7 +2325,9 @@ describe("server recording wire protocol", () => {
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         calls.push({ url, id: JSON.parse(init!.body as string).id });
-        return new Response(JSON.stringify({ status: "ok", path: "/tmp/x.mp4", duration_ms: 1 }));
+        return new Response(
+          JSON.stringify({ status: "ok", path: "/tmp/x.mp4", duration_ms: 1, wall_clock_ms: 1 })
+        );
       })
     );
 
@@ -2358,14 +2343,14 @@ describe("server recording wire protocol", () => {
     expect(stopSecond!.id).toBe(startSecond!.id);
   });
 
-  it("fails a stop that comes back without a video path", async () => {
+  it("fails a stop that comes back without a wall clock", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ duration_ms: 100 })))
+      vi.fn(async () => new Response(JSON.stringify({ path: "/tmp/x.mp4", duration_ms: 100 })))
     );
 
     await expect(stopServerRecording(fakeApi, "rec-1")).rejects.toMatchObject({
-      message: expect.stringContaining("video path or duration"),
+      message: expect.stringContaining("path, duration or wall clock"),
     });
   });
 });

@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
+import { FAILURE_CODES, FailureError, getFailureSignal, wrapFailure } from "@argent/registry";
 import {
   DISPOSE_SERVER_STOP_MS,
   type ScreenRecordingSessionApi,
@@ -130,10 +130,6 @@ export async function stopServerCapture(
   // Taken before the await so a dispose cannot issue a second stop.
   api.serverStop = null;
 
-  // Only a timeout leaves the recording possibly still running, so only it is
-  // retryable.
-  let finalizeRequestFailed = false;
-
   try {
     if (api.recordingActive) {
       api.recordingActive = false;
@@ -143,8 +139,7 @@ export async function stopServerCapture(
     try {
       result = await stop();
     } catch (err) {
-      finalizeRequestFailed = getFailureSignal(err)?.network_failure === "timeout";
-      throw err;
+      throw recordingLost(err);
     }
     try {
       await fs.copyFile(result.path, outputFile);
@@ -182,7 +177,7 @@ export async function stopServerCapture(
       outputFile,
       sizeBytes: size,
       durationMs: result.durationMs,
-      ...(result.trimmedMs !== null && result.trimmedMs > 0 && result.wallClockMs !== null
+      ...(result.trimmedMs !== null && result.trimmedMs > 0
         ? { wallClockMs: result.wallClockMs, trimmedMs: result.trimmedMs }
         : {}),
       ...(warning ? { warning } : {}),
@@ -195,31 +190,45 @@ export async function stopServerCapture(
     if (empty) await fs.rm(outputFile, { force: true }).catch(() => {});
     throw err;
   } finally {
-    if (finalizeRequestFailed) {
-      // Keep what a retried stop or dispose needs; the touch visualizer stays
-      // armed until one of them ends the recording.
-      api.stopPending = false;
-      api.pendingRetrieval = true;
-      api.serverStop = stop;
-      markScreenRecordingFinalized(
-        api.deviceId,
-        "its stop request failed before simulator-server confirmed the hand-over"
-      );
-    } else {
-      await disablePointer(api);
-      api.recordingActive = false;
-      api.stopPending = false;
-      api.pendingRetrieval = false;
-      api.serverStop = null;
-      api.serverCapture = false;
-      api.outputFile = null;
-      api.pointerFailed = false;
-      api.wallClockStartMs = null;
-      api.wallClockEndMs = null;
-      api.timeLimitSeconds = null;
-      api.recordingTimedOut = false;
-      api.recordingExitedUnexpectedly = false;
-      clearActiveScreenRecording(api.deviceId);
-    }
+    await disablePointer(api);
+    api.recordingActive = false;
+    api.stopPending = false;
+    api.pendingRetrieval = false;
+    api.serverStop = null;
+    api.serverCapture = false;
+    api.outputFile = null;
+    api.pointerFailed = false;
+    api.wallClockStartMs = null;
+    api.wallClockEndMs = null;
+    api.timeLimitSeconds = null;
+    api.recordingTimedOut = false;
+    api.recordingExitedUnexpectedly = false;
+    clearActiveScreenRecording(api.deviceId);
   }
+}
+
+/**
+ * A failed stop cannot be retried: simulator-server drops a recording once a
+ * stop reaches it, and a server that exits takes its videos with it.
+ */
+function recordingLost(err: unknown): FailureError {
+  const failure = getFailureSignal(err)?.network_failure;
+  const message =
+    failure === "timeout"
+      ? "screen-recording-stop failed: simulator-server did not answer in time, and the recording is lost. Start a new one."
+      : failure === "connection_refused" || failure === "connection_reset" || failure === "other"
+        ? "screen-recording-stop failed: simulator-server could not be reached, and the recording is lost with it. " +
+          "If the simulator is booted, call stop-simulator-server for that UDID before starting a new one."
+        : `${err instanceof Error ? err.message : String(err)} The recording is lost; start a new one.`;
+  return wrapFailure(
+    err,
+    {
+      error_code: FAILURE_CODES.SCREEN_RECORDING_PROCESS_ERROR,
+      failure_stage: "screen_recording_server_stop",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+      failure_command: "simulator_server",
+    },
+    message
+  );
 }

@@ -16,9 +16,9 @@ import type { ServerRecordingResult } from "../utils/simulator-client";
 import { stripRemotePrefix } from "../utils/device-info";
 
 // Session for the `screen-recording-*` tools, one shape for every platform.
-// On a local iOS/Android device simulator-server records the video itself
-// where its build can (`serverStop` ends it); otherwise its MJPEG stream is
-// paced into an ffmpeg child that writes the mp4 host-side. Remote (`remote:`)
+// On a macOS host simulator-server records the video itself (`serverStop`
+// ends it), except for foldables and provider devices; otherwise its MJPEG
+// stream is paced into an ffmpeg child that writes the mp4 host-side. Remote (`remote:`)
 // simulators record on the runner instead and leave a buffer there that a
 // teardown has to end (`remote.end`). Mirrors the native-profiler session.
 export const SCREEN_RECORDING_SESSION_NAMESPACE = "ScreenRecordingSession";

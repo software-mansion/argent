@@ -615,10 +615,9 @@ async function pointerPost(
 export interface ServerRecordingResult {
   /** The mp4 in simulator-server's session directory. */
   path: string;
-  sizeBytes: number;
   /** Video length, after static trimming. */
   durationMs: number;
-  wallClockMs: number | null;
+  wallClockMs: number;
   trimmedMs: number | null;
   warning: string | null;
 }
@@ -669,17 +668,20 @@ export async function stopServerRecording(
 ): Promise<ServerRecordingResult> {
   const body = await videoPost<{
     path?: string;
-    size_bytes?: number;
     duration_ms?: number;
-    wall_clock_ms?: number | null;
+    wall_clock_ms?: number;
     trimmed_ms?: number | null;
     warning?: string | null;
     error?: string;
   }>(api, "stop", { id }, signal);
-  if (typeof body.path !== "string" || typeof body.duration_ms !== "number") {
+  if (
+    typeof body.path !== "string" ||
+    typeof body.duration_ms !== "number" ||
+    typeof body.wall_clock_ms !== "number"
+  ) {
     throw new FailureError(
       `screen-recording-stop failed: simulator-server returned a recording result missing its video ` +
-        `path or duration (${JSON.stringify(body).slice(0, 200)}).`,
+        `path, duration or wall clock (${JSON.stringify(body).slice(0, 200)}).`,
       {
         error_code: FAILURE_CODES.SCREEN_RECORDING_OUTPUT_MISSING,
         failure_stage: "screen_recording_server_stop",
@@ -691,9 +693,8 @@ export async function stopServerRecording(
   }
   return {
     path: body.path,
-    sizeBytes: body.size_bytes ?? 0,
     durationMs: body.duration_ms,
-    wallClockMs: typeof body.wall_clock_ms === "number" ? body.wall_clock_ms : null,
+    wallClockMs: body.wall_clock_ms,
     trimmedMs: body.trimmed_ms ?? null,
     warning: body.warning ?? null,
   };

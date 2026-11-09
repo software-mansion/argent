@@ -60,7 +60,7 @@ The files stay in the working tree. Add the directory to `.gitignore` when you d
 
 - Argent records iOS simulators, remote simulators, Android emulators, and physical Android devices. Argent does not record tvOS simulators, physical iPhones, Chromium apps, Vega devices, or HarmonyOS devices.
 - One recording per device at a time. Different devices can record at the same time.
-- On a Mac, the simulator server encodes the video itself. On Linux and Windows, and on a foldable simulator, Argent uses `ffmpeg` to encode the video. Install `ffmpeg` there before the first recording. On a remote simulator `ffmpeg` is optional: without it the video still comes back, with no watermark and with the still parts left in.
+- On a Mac, the simulator server encodes the video itself. On Linux and Windows, on a foldable simulator, and on a device from a [device provider](/docs/reference/device-providers), Argent uses `ffmpeg` to encode the video. Install `ffmpeg` there before the first recording. On a remote simulator `ffmpeg` is optional: without it the video still comes back, with no watermark and with the still parts left in.
 - On Android, a secure screen such as a password field or a DRM video comes out black.
 - A recording needs a stop call before the agent can give you the file. This is also the case when the time limit stopped the recording.
 

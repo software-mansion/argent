@@ -123,7 +123,7 @@ describe("HTTP screen-recording reminder note", () => {
     expect(res.body.note).toContain("screen-recording-stop");
   });
 
-  it("does not claim a server-side finalized video exists when the server may be gone", async () => {
+  it("tells a server-side recording that ended on its own to be copied out while its server is up", async () => {
     registerActiveScreenRecording(UDID, Date.now(), 180, /* serverSide */ true);
     markScreenRecordingFinalized(UDID, "it hit its 180s time limit");
     handle = createHttpApp(stubRegistry());
