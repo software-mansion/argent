@@ -1057,7 +1057,7 @@ describe("iOS native network records: body reads", () => {
     expect(app.request).toHaveBeenCalledTimes(1);
   });
 
-  it("reads a request body by the app's request id with a 60 s timeout, once per record", async () => {
+  it("reads a request body by the app's request id with no timeout of its own, once per record", async () => {
     const { app, store, agent } = bodyStore();
     const rid = randomUUID();
     agent.requestWillBeSent(rid, "https://api.example.com/upload", {
@@ -1073,7 +1073,7 @@ describe("iOS native network records: body reads", () => {
       CONN,
       "Network.getRequestPostData",
       { requestId: rid },
-      60_000
+      2 ** 31 - 1
     );
 
     app.sent[0]!.reply({ postData: '{"name":"demo"}', base64Encoded: false });
@@ -1210,7 +1210,7 @@ describe("iOS native network records: request body still being sent", () => {
       method: "POST",
       hasPostData: true,
     });
-    return { app, store, id: idOf(store, "upload") };
+    return { app, store, agent, id: idOf(store, "upload") };
   }
 
   it("a request body read answers within 5 s while the app is still sending it, and later reads wait on the same request", async () => {
@@ -1244,33 +1244,56 @@ describe("iOS native network records: request body still being sent", () => {
     expect(app.request).toHaveBeenCalledTimes(1);
   });
 
-  it("drops a request body read the app has not answered in 60 s, so the next read asks again", async () => {
+  it("keeps a request body read open until the app answers, so a long upload is asked for once", async () => {
     const { app, store, id } = uploading();
 
+    // Read every 6 s through a 150 s upload.
+    for (let at = 0; at < 150_000; at += 6_000) {
+      const read = track(store.requestPostData(id));
+      await settle();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(read.value).toEqual(refused(STILL_SENDING));
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(app.request).toHaveBeenCalledTimes(1);
+
+    const last = store.requestPostData(id);
+    app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+    expect(await last).toEqual(body("done"));
+    expect(await store.requestPostData(id)).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
+  it(`keeps a request body read open while ${MAX_CACHED_BODIES} newer bodies are read`, async () => {
+    const { app, store, agent, id } = uploading();
     const first = track(store.requestPostData(id));
     await settle();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(first.value).toEqual(refused(STILL_SENDING));
 
-    // At 57 s; its own wait would end at 62 s.
-    await vi.advanceTimersByTimeAsync(52_000);
-    const waiting = track(store.requestPostData(id));
-    await vi.advanceTimersByTimeAsync(2_999);
-    expect(waiting.settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(waiting.value).toEqual(refused(STILL_SENDING));
-    expect(app.request).toHaveBeenCalledTimes(1);
+    const lastSent = (): SentRead => app.sent[app.sent.length - 1]!;
+    for (let i = 0; i < MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      const read = store.responseBody(idOf(store, `r${i}`));
+      await settle();
+      lastSent().reply({ body: `body ${i}`, base64Encoded: false, wasTruncated: false });
+      expect(await read).toEqual(body(`body ${i}`));
+    }
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
 
-    const next = store.requestPostData(id);
+    // The open read stayed: a read sends nothing, and the app's answer ends it.
+    const again = store.requestPostData(id);
     await settle();
-    expect(app.request).toHaveBeenCalledTimes(2);
-    expect(app.sent[1]).toMatchObject({
-      method: "Network.getRequestPostData",
-      params: { requestId: "upload" },
-      timeoutMs: 60_000,
-    });
-    app.sent[1]!.reply({ postData: "done", base64Encoded: false });
-    expect(await next).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+    app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+
+    // The bound held: the body read longest ago, r0, made room instead.
+    const r0 = store.responseBody(idOf(store, "r0"));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+    lastSent().reply({ body: "body 0", base64Encoded: false, wasTruncated: false });
+    expect(await r0).toEqual(body("body 0"));
   });
 });
 

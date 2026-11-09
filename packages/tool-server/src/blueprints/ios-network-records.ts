@@ -39,10 +39,12 @@ let nextRecordNumber = 1;
 /** A request body read answers within this, with the body or with "still sending". */
 const POST_DATA_WAIT_MS = 5_000;
 /**
- * A request body read stays open until the app has sent the whole body, across
- * several waits. Past this it is dropped, and the next read asks again.
+ * A request body read stays open until the app answers it or its connection
+ * closes, across several waits: the app answers each read it got once it has
+ * sent the whole body, so asking again would only bring the body once more.
+ * This is setTimeout's longest delay.
  */
-const POST_DATA_TIMEOUT_MS = 60_000;
+const POST_DATA_TIMEOUT_MS = 2 ** 31 - 1;
 const RESPONSE_BODY_TIMEOUT_MS = 10_000;
 
 const STILL_SENDING = "the app is still sending this request body; read it again later";
@@ -281,12 +283,14 @@ export function createIosNetworkRecords(
     const sent = new Promise<void>((resolve) => {
       markSent = resolve;
     });
-    const read: BodyRead = { sent, answer };
+    const read: BodyRead = { sent, answer, settled: false };
     bodies.set(cacheKey, read);
-    while (bodies.size > MAX_CACHED_BODIES) bodies.delete(bodies.keys().next().value!);
+    dropOldBodies();
     // Only a body is kept: every reason may change at the next read.
     void answer.then((body) => {
+      read.settled = true;
       if (!body.available && bodies.get(cacheKey) === read) bodies.delete(cacheKey);
+      dropOldBodies();
     });
     void withKeyedLock(bodyReads, String(record.connection), () => {
       adoptAnswer(sendBodyRead(record, kind));
@@ -296,6 +300,17 @@ export function createIosNetworkRecords(
       return kind === "post" ? withinWait(answer) : answer;
     });
     return shownOf(read, kind);
+  }
+
+  /**
+   * Drops the bodies read longest ago past the bound. A read still open stays,
+   * because dropping it would send it to the app again.
+   */
+  function dropOldBodies(): void {
+    for (const [key, read] of bodies) {
+      if (bodies.size <= MAX_CACHED_BODIES) return;
+      if (read.settled) bodies.delete(key);
+    }
   }
 
   function sendBodyRead(
@@ -329,9 +344,6 @@ export function createIosNetworkRecords(
     switch (getFailureSignal(err)?.error_code) {
       case FAILURE_CODES.NDJSON_CDP_CONNECTION_CLOSED:
         return closedReason(record.connection);
-      case FAILURE_CODES.NDJSON_CDP_REQUEST_TIMEOUT:
-        if (kind === "post") return STILL_SENDING;
-        break;
       case FAILURE_CODES.NDJSON_CDP_REQUEST_FAILED: {
         // The agent's own answer, after the requester's "<label>: <method> failed: ".
         const marker = `${method} failed: `;
@@ -444,6 +456,8 @@ export function createIosNetworkRecords(
 interface BodyRead {
   sent: Promise<void>;
   answer: Promise<NativeNetworkBody>;
+  /** The app answered, or the read failed. */
+  settled: boolean;
 }
 
 /**
