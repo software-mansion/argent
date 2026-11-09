@@ -128,6 +128,27 @@ describe("chromium-server/screenshot", () => {
       expect([...out.data.subarray(4, 8)]).toEqual([30, 30, 30, 255]);
     });
 
+    it("takes each output pixel from its own square of device pixels, channel by channel", async () => {
+      // Every 2x2 square is one colour and its four channels differ, so reading the
+      // wrong row, column or channel changes a value.
+      const colour = (x: number, y: number): Rgba => [
+        10 + x * 20,
+        100 + y * 30,
+        200 - x * 10 - y * 15,
+        255 - y,
+      ];
+      const shot = pngBase64(6, 6, (x, y) => colour(x >> 1, y >> 1));
+      const { cdp } = cdpWith(shot, { w: 3, h: 3, dpr: 2 });
+      const out = PNG.sync.read(await capture(cdp));
+      expect([out.width, out.height]).toEqual([3, 3]);
+      for (let y = 0; y < 3; y++) {
+        for (let x = 0; x < 3; x++) {
+          const at = (y * 3 + x) * 4;
+          expect([...out.data.subarray(at, at + 4)]).toEqual(colour(x, y));
+        }
+      }
+    });
+
     it("takes the ratio from the image, not devicePixelRatio", async () => {
       // dpr 3 fits the height but not the width: a ratio of 3 would give a 682-wide image.
       const { cdp } = cdpWith(flat(2048, 1305), { w: 683, h: 435, dpr: 3 });
@@ -192,6 +213,34 @@ describe("chromium-server/screenshot", () => {
     it("still downscales a window of exactly 2000 CSS pixels", async () => {
       const { cdp } = cdpWith(flat(4000, 2), { w: 2000, h: 1, dpr: 2 });
       expect(sizeOf(await capture(cdp))).toEqual([2000, 1]);
+    });
+
+    it("downscales before a rotation, while the image still matches the window", async () => {
+      // Rotated first, a 2048x1480 capture is 1480 wide against a 1024 window: a wrong ratio.
+      const Module = require("node:module") as { _load: (...args: unknown[]) => unknown };
+      const originalLoad = Module._load;
+      const sharpInputs: Buffer[] = [];
+      const sharp = (input: Buffer) => {
+        sharpInputs.push(input);
+        const pipeline = {
+          rotate: () => pipeline,
+          resize: () => pipeline,
+          png: () => pipeline,
+          toBuffer: async () => input,
+        };
+        return pipeline;
+      };
+      Module._load = ((request: string, ...rest: unknown[]) =>
+        request === "sharp"
+          ? sharp
+          : originalLoad.call(Module, request, ...rest)) as typeof Module._load;
+      try {
+        const { cdp } = cdpWith(flat(2048, 1480), { w: 1024, h: 740, dpr: 2 });
+        await capture(cdp, { cssPixels: true, rotation: "LandscapeLeft" });
+        expect(sharpInputs.map(sizeOf)).toEqual([[1024, 740]]);
+      } finally {
+        Module._load = originalLoad;
+      }
     });
 
     it("gives the window read a short timeout, not the CDP default", async () => {
