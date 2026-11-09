@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 let outcomes: Array<string | null> = [];
 let latencyMs = 0;
 const calls: string[][] = [];
+const callTimes: number[] = [];
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -17,6 +18,7 @@ vi.mock("node:child_process", async () => {
       cb: (err: Error | null, out?: { stdout: string; stderr: string }) => void
     ) => {
       calls.push([...args]);
+      callTimes.push(Date.now());
       const stderr = outcomes.shift() ?? null;
       setTimeout(() => {
         if (stderr === null) return cb(null, { stdout: "", stderr: "" });
@@ -27,6 +29,8 @@ vi.mock("node:child_process", async () => {
 });
 
 import { reverseStart, reverseStop } from "../src/utils/sim-remote";
+import { remoteIosHost } from "../src/utils/ios-host";
+import { jsRuntimeDebuggerBlueprint } from "../src/blueprints/js-runtime-debugger";
 
 const UDID = "6F1C3E4A-0000-4000-8000-000000000001";
 
@@ -44,6 +48,7 @@ beforeEach(() => {
   outcomes = [];
   latencyMs = 0;
   calls.length = 0;
+  callTimes.length = 0;
 });
 
 afterEach(() => {
@@ -69,48 +74,35 @@ describe("reverseStart / reverseStop", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("retries a closed tunnel control channel", async () => {
-    outcomes = ["error: tunnel control channel closed", null];
+  it("retries a control send that failed because the connection closed", async () => {
+    outcomes = ["error: tunnel-mux control send: connection lost", null];
     expect(await start()).toBeUndefined();
     expect(calls).toHaveLength(2);
   });
 
   it.each([
     "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout",
-    "error: port forwarder: POST /rules answered HTTP 504",
     "error: port forwarder: POST /rules answered HTTP 502 Bad Gateway",
-    "error: port forwarder: POST /rules timed out",
   ])("retries a forwarder gateway failure (%s)", async (stderr) => {
     outcomes = [stderr, null];
     expect(await start()).toBeUndefined();
     expect(calls).toHaveLength(2);
   });
 
+  // Verbatim from sim-orchestrator's ForwarderError and sim-remote-core's ClientError.
   it.each([
-    "error: port forwarder: POST /rules answered HTTP 503 Service Unavailable",
-    "error: port forwarder: POST /rules answered HTTP 503 Service Unavailable (upstream timeout)",
-    "error: port forwarder: lost its proxy tunnel",
-    "error: port forwarder: lost its proxy tunnel (keepalive timed out)",
-    "error: port forwarder: unreachable",
-    "error: port forwarder: unreachable (connect timed out)",
+    "error: the host's port forwarder has lost its proxy tunnel (HTTP 503); reverse tunnels cannot be set up on this machine until it reconnects",
+    "error: the host's port forwarder is unreachable (no answer within 10s); reverse tunnels cannot be set up on this machine",
+    "error: the host's port forwarder is unreachable (connection failed); reverse tunnels cannot be set up on this machine",
     "error: port forwarder: POST /rules answered HTTP 400 Bad Request",
+    "error: port forwarder: POST /rules answered HTTP 500 Internal Server Error",
+    "error: port forwarder: POST /rules answered HTTP 408 Request Timeout",
+    "error: the request to sim-router timed out",
   ])("does not retry a forwarder that stays down or refuses (%s)", async (stderr) => {
     outcomes = [stderr, null];
     const err = await start();
     expect((err as Error).message).toBe(`sim-remote reverse start ${UDID} 37223 failed: ${stderr}`);
     expect(calls).toHaveLength(1);
-  });
-
-  it("does not retry an unrelated failure", async () => {
-    outcomes = ["error: unauthorized", null];
-    expect(await start()).toBeInstanceOf(Error);
-    expect(calls).toHaveLength(1);
-  });
-
-  it("classifies the CLI output, not the port in the argv", async () => {
-    outcomes = ["error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout", null];
-    expect(await start(503)).toBeUndefined();
-    expect(calls).toHaveLength(2);
   });
 
   it("stops after three attempts and throws the last error", async () => {
@@ -136,9 +128,64 @@ describe("reverseStart / reverseStop", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("treats an already-active tunnel as started, including after a retry", async () => {
+  it("treats an already-active tunnel as started", async () => {
+    outcomes = [`error: tunnel already active for ${UDID} port 37223`];
+    expect(await start()).toBeUndefined();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("pauses 0.5 s, then 2 s, between attempts", async () => {
+    outcomes = ["error: tunnel-mux connection closed", "error: tunnel-mux connection closed", null];
+    expect(await start()).toBeUndefined();
+    expect(callTimes.map((t) => t - callTimes[0]!)).toEqual([0, 500, 2_500]);
+  });
+
+  it.each([
+    [14_500, 2],
+    [14_501, 1],
+  ])("starts a retry only within 15 s of the first attempt (504 after %i ms)", async (ms, n) => {
+    latencyMs = ms;
+    outcomes = ["error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout", null];
+    await start();
+    expect(calls).toHaveLength(n);
+  });
+
+  it("swallows a failed stop", async () => {
+    outcomes = [`error: no active tunnel for ${UDID} port 37223`];
+    const stop = reverseStop(`remote:${UDID}`, 37223);
+    await vi.runAllTimersAsync();
+    await expect(stop).resolves.toBeUndefined();
+  });
+
+  it("treats an already-active tunnel as started after a retry", async () => {
     outcomes = ["error: tunnel-mux connection closed", "error: tunnel already active"];
     expect(await start()).toBeUndefined();
     expect(calls).toHaveLength(2);
+  });
+});
+
+describe("callers open the tunnel with `sim-remote reverse`", () => {
+  it("remote iOS host", async () => {
+    outcomes = [null, null];
+    const started = remoteIosHost.startProxy(`remote:${UDID}`, 40001);
+    await vi.runAllTimersAsync();
+    await started;
+    const stopped = remoteIosHost.stopProxy(`remote:${UDID}`, 40001);
+    await vi.runAllTimersAsync();
+    await stopped;
+    expect(calls).toEqual([
+      ["reverse", "start", UDID, "40001"],
+      ["reverse", "stop", UDID, "40001"],
+    ]);
+  });
+
+  it("JS runtime debugger on a remote simulator", async () => {
+    vi.useRealTimers();
+    outcomes = [null];
+    // Nothing serves Metro on port 1, so the factory fails right after the tunnel.
+    await expect(
+      jsRuntimeDebuggerBlueprint.factory({}, `1:remote:${UDID}`, undefined)
+    ).rejects.toThrow();
+    expect(calls[0]).toEqual(["reverse", "start", UDID, "1"]);
   });
 });

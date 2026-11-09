@@ -261,24 +261,23 @@ export async function setSimulatorEnv(udid: string, key: string, value: string):
 
 // Pauses before the second and third `reverse start` attempt.
 const REVERSE_START_RETRY_DELAYS_MS = [500, 2_000];
-// No retry starts later than this after the first attempt: a forwarder 504
-// alone takes ~9 s, and the services that open tunnels are created inside tool
-// calls the MCP client cuts off at 30 s.
+// No retry starts later than this after the first attempt, so a forwarder 504
+// (~9 s) is retried once and the start ends well inside the 30 s the MCP client
+// allows a tool call. It bounds when a retry starts, not how long that runs.
 const REVERSE_START_RETRY_WINDOW_MS = 15_000;
 
 /**
- * Whether a failed `reverse start` is worth repeating. A tunnel-mux connection
- * the daemon closed under the registration is redialled fresh on the next
- * call, and a forwarder 502/504 or timeout is a gateway hiccup; every attempt
- * clears stale rules for the (udid, port) first, so repeating one is safe. A
- * forwarder that answers 503, or that lost its tunnel or is unreachable, stays
- * down on that machine.
+ * Whether a failed `reverse start` is worth repeating: the daemon's connection
+ * to the orchestrator closed under the request (the next call redials), or the
+ * host's port forwarder answered 502/504. Every attempt first clears the
+ * forwarder's rules for the (udid, port), so a repeat does not stack rules. An
+ * unreachable forwarder, or one that lost its proxy tunnel (503), is reported
+ * without the `port forwarder:` prefix and stays down on that machine.
  */
-function isTransientReverseStartError(detail: string): boolean {
-  if (/tunnel-mux connection closed|tunnel control channel closed/i.test(detail)) return true;
-  if (!/port forwarder:/i.test(detail)) return false;
-  if (/\b503\b|lost its proxy tunnel|unreachable/i.test(detail)) return false;
-  return /\b50[24]\b|timed? ?out/i.test(detail);
+function isTransientReverseStartError(message: string): boolean {
+  return /tunnel-mux (connection closed|control send:)|port forwarder: .* answered HTTP 50[24]\b/.test(
+    message
+  );
 }
 
 /**
@@ -292,8 +291,6 @@ function isTransientReverseStartError(detail: string): boolean {
  */
 export async function reverseStart(udid: string, port: number): Promise<void> {
   const args = ["reverse", "start", stripRemotePrefix(udid), String(port)];
-  // Classify only the CLI's output: the argv holds the port, which may itself be 503.
-  const prefix = `sim-remote ${args.join(" ")} failed: `;
   const startedAt = Date.now();
   for (let attempt = 0; ; attempt++) {
     try {
@@ -301,12 +298,11 @@ export async function reverseStart(udid: string, port: number): Promise<void> {
       return;
     } catch (err) {
       const message = (err as Error).message ?? "";
-      const detail = message.startsWith(prefix) ? message.slice(prefix.length) : message;
-      if (/already/i.test(detail)) return;
+      if (/already/i.test(message)) return;
       const delay = REVERSE_START_RETRY_DELAYS_MS[attempt];
       if (
         delay === undefined ||
-        !isTransientReverseStartError(detail) ||
+        !isTransientReverseStartError(message) ||
         Date.now() + delay - startedAt > REVERSE_START_RETRY_WINDOW_MS
       ) {
         throw err;
