@@ -197,11 +197,7 @@ export const stopMetroTool: ToolDefinition<
     try {
       pids = listeningPids(port);
     } catch (error) {
-      const { code, status, signal } = error as {
-        code?: unknown;
-        status?: unknown;
-        signal?: unknown;
-      };
+      const { code } = error as { code?: unknown };
       // Only a child process error carries `status`; procfs and parse failures do not.
       const subprocess = typeof error === "object" && error !== null && "status" in error;
       throw new FailureError(
@@ -211,10 +207,7 @@ export const stopMetroTool: ToolDefinition<
           failure_stage: "stop_metro_port_probe",
           failure_area: "tool_server",
           error_kind: code === "ETIMEDOUT" ? "timeout" : subprocess ? "subprocess" : "unknown",
-          // execFileSync reports the exit code in `status`, where the helper reads `code`.
-          ...(subprocess
-            ? subprocessFailureMetadata({ code: status ?? code, signal }, "unknown")
-            : {}),
+          ...(subprocess ? subprocessFailureMetadata(error, "unknown") : {}),
         },
         { cause: error as Error }
       );

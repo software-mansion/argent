@@ -177,15 +177,18 @@ export function subprocessFailureMetadata(
   > = { failure_command };
   const err = error as {
     code?: string | number | null;
+    // execFileSync reports the exit code here; execFile in `code`.
+    status?: number | null;
     signal?: string | null;
   };
+  const exitCode = typeof err.code === "number" ? err.code : err.status;
   if (
-    typeof err.code === "number" &&
-    Number.isInteger(err.code) &&
-    err.code >= 0 &&
-    err.code <= 255
+    typeof exitCode === "number" &&
+    Number.isInteger(exitCode) &&
+    exitCode >= 0 &&
+    exitCode <= 255
   ) {
-    metadata.failure_exit_code = err.code;
+    metadata.failure_exit_code = exitCode;
   } else if (
     typeof err.code === "string" &&
     FAILURE_SPAWN_CODE_SET.has(err.code as FailureSpawnCode)
