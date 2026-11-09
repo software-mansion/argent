@@ -50,13 +50,18 @@ steps:
   - await: { idle: true }
 ```
 
-The file has three top-level keys:
+The file has four top-level keys:
 
-| Key                     | Required | Description                                                               |
-| ----------------------- | -------- | ------------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                         |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it   |
-| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements) |
+| Key                     | Required | Description                                                                                        |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                  |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                            |
+| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                          |
+| `version`               | no       | The file format version. The value is `1`. Argent writes it. A file without `version` is version 1 |
+
+Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
+
+Argent releases from before the `version` key refuse a file that has the key. To run the file on such a release, delete the `version` line.
 
 An e2e test has one of two shapes:
 
@@ -503,6 +508,7 @@ The outcome line of an e2e test that produced a report gives the result, the ste
 | Outcome line                        | Meaning                                                                                   |
 | ----------------------------------- | ----------------------------------------------------------------------------------------- |
 | `not run (invalid e2e test)`        | The tool-server rejected the e2e test file or one of its steps                            |
+| `not run (needs a newer Argent)`    | The e2e test file has a `version` that is higher than the version this Argent reads       |
 | `not run (no device resolved)`      | Argent did not resolve one device for the e2e test                                        |
 | `not run (requires not met)`        | The target does not satisfy the `requires` block. Single e2e test runs only               |
 | `skipped (requires not met)`        | The target does not satisfy the `requires` block. Directory runs only                     |
@@ -637,7 +643,7 @@ Set `ARGENT_E2E_FILES_LOG=1` to see what the CLI does with each fragment, nested
 
 The tool-server runs the uploaded copy even when it has a file at the same path. This is also true over a link to `127.0.0.1`. Only the copy from the client is certain to be the latest. Without a link, the tool-server reads the file in place, and all step kinds run.
 
-A rejected e2e test gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected e2e test on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next e2e test and keeps the rejected e2e test in its `e2eTests` array.
+A rejected e2e test gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected e2e test on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. For a file with a `version` that is higher than the version this Argent reads, the object holds `"error_code": "FLOW_FILE_NEWER_VERSION"`. A directory run continues with the next e2e test and keeps the rejected e2e test in its `e2eTests` array.
 
 When the upload of a fragment to `POST /upload` fails, the e2e test does not run. The CLI prints the reason. The exit code is 1. The JSON object holds `"error_code": "FILE_INPUT_UPLOAD_FAILED"` and `"error_kind": "validation"`. A directory run continues with the next e2e test.
 
