@@ -16,6 +16,14 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * `tar -t` output grows with the member count; Node's default 1 MiB `maxBuffer`
+ * kills the listing of a large bundle (a `.app`/`.trace` with tens of thousands
+ * of files) with "stdout maxBuffer length exceeded". 512 MiB is far above any
+ * real bundle's listing while still bounding a hostile archive.
+ */
+const TAR_LIST_MAX_BUFFER = 512 * 1024 * 1024;
+
 /** Thrown when an archive is empty or holds an unsafe (tar-slip / bad-type) member. */
 export class ArchiveError extends Error {}
 
@@ -60,7 +68,9 @@ function isSafeTarMember(memberPath: string, destDir: string): boolean {
 
 /** List an archive's members without extracting, so they can be vetted first. */
 async function listTarMembers(tarPath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("tar", ["-tzf", tarPath]);
+  const { stdout } = await execFileAsync("tar", ["-tzf", tarPath], {
+    maxBuffer: TAR_LIST_MAX_BUFFER,
+  });
   return stdout
     .split("\n")
     .map((line) => line.trim())
@@ -81,7 +91,9 @@ function isEscapingLinkTarget(target: string): boolean {
  * are read — the column-formatted name is not stable across tar variants.
  */
 async function assertSafeMemberTypes(tarPath: string): Promise<void> {
-  const { stdout } = await execFileAsync("tar", ["-tzvf", tarPath]);
+  const { stdout } = await execFileAsync("tar", ["-tzvf", tarPath], {
+    maxBuffer: TAR_LIST_MAX_BUFFER,
+  });
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue;
     const type = line[0];

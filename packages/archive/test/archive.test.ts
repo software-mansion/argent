@@ -145,6 +145,24 @@ describe("safeExtractTarGz hardening", () => {
     await expect(safeExtractTarGz(tarPath, dest, "hlbundle")).rejects.toBeInstanceOf(ArchiveError);
   });
 
+  it("extracts a bundle whose member listing exceeds execFile's default 1 MiB maxBuffer", async () => {
+    const src = path.join(tmpDir, "bigbundle");
+    await fs.mkdir(src);
+    const pad = "x".repeat(100);
+    // Create sequentially so we never hold thousands of fds open at once (EMFILE).
+    for (let i = 0; i < 12000; i++) {
+      await fs.writeFile(path.join(src, `${pad}-${i}`), "");
+    }
+    const tarPath = path.join(tmpDir, "big.tar.gz");
+    await createTarGzFile(src, tarPath);
+
+    const dest = path.join(tmpDir, "dest-big");
+    await fs.mkdir(dest);
+    const out = await safeExtractTarGz(tarPath, dest, "bigbundle");
+    expect(out).toBe(path.join(dest, "bigbundle"));
+    expect(await fs.readdir(out)).toHaveLength(12000);
+  }, 60_000);
+
   it("errors instead of guessing when the member can't be identified", async () => {
     // Two top-level entries, neither matching the expected name → ambiguous.
     await fs.mkdir(path.join(tmpDir, "one"));
