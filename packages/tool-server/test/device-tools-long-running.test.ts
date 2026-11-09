@@ -66,6 +66,7 @@ import { createRestartAppTool } from "../src/tools/restart-app/index";
 import { createDescribeTool } from "../src/tools/describe/index";
 import { createLaunchAppTool } from "../src/tools/launch-app/index";
 import { nativeProfilerStartTool } from "../src/tools/profiler/native-profiler/native-profiler-start";
+import { openUrlTool } from "../src/tools/open-url/index";
 
 const registry = new Registry();
 const slowDeviceTools: { id: string; longRunning?: boolean }[] = [
@@ -75,6 +76,7 @@ const slowDeviceTools: { id: string; longRunning?: boolean }[] = [
   createDescribeTool(registry),
   createLaunchAppTool(registry),
   nativeProfilerStartTool,
+  openUrlTool,
 ];
 
 describe("device tools that can outlive the MCP fetch timeout", () => {
