@@ -9,7 +9,12 @@ import {
 } from "../../utils/adb";
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
-import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import {
+  scanIosSimulators,
+  simctlListTimeoutAdvice,
+  simulatorRuntimeKind,
+  type IosSimulator,
+} from "../../utils/ios-devices";
 import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
 import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
@@ -56,6 +61,7 @@ type IosRemoteDevice = {
   name: string;
   state: string;
   runtime: string;
+  runtimeKind?: "mobile" | "tv";
 };
 
 type AndroidDevice = {
@@ -126,12 +132,11 @@ type ListDevicesResult = {
   devices: Array<ListedDevice & DeviceUsage>;
   avds: Array<{ name: string; foldable?: true }>;
   /**
-   * Why local iOS targets are missing, present only while Xcode's component
-   * install is pending; rules for a provider's device, present only when one is
-   * listed; and how to reach the adb server, present only when it is not adb's
-   * default. Most installs need none of them, and the description is read once
-   * per session, so a state that appears later would be missed. This is re-read
-   * per call.
+   * Present only when it applies, unlike the description, which is read once
+   * per session: why local iOS targets are missing while Xcode's component
+   * install is pending, a retry notice when `simctl` timed out, the rules for a
+   * provider's device when one is listed, and how to reach the adb server when
+   * it is not adb's default.
    */
   hint?: string;
 };
@@ -146,6 +151,10 @@ const EXTERNAL_DEVICES_HINT =
   `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
   `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
   `withheld fails with a clear message naming the provider.`;
+
+function iosListTimedOutHint(): string {
+  return `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice("list-devices")}`;
+}
 
 /**
  * The agent's shell does not inherit the tool-server's environment, so its adb
@@ -213,6 +222,7 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
           name: d.name,
           state: d.state,
           runtime,
+          runtimeKind: simulatorRuntimeKind(runtime),
         });
       }
     }
@@ -400,7 +410,9 @@ Booted/ready devices are listed first, but use a physical phone (kind 'device') 
         harmonyTargets,
         external,
       ] = await Promise.all([
-        xcodeInstallPending.includes("simctl") ? [] : withDeadline(listIosSimulators(), [], "ios"),
+        xcodeInstallPending.includes("simctl")
+          ? { simulators: [], timedOut: false }
+          : withDeadline(scanIosSimulators(), { simulators: [], timedOut: true }, "ios"),
         withDeadline(
           listIosPhysicalDevices().catch(() => []),
           [],
@@ -455,7 +467,7 @@ Booted/ready devices are listed first, but use a physical phone (kind 'device') 
 
       const externalShadows = externalShadowIds(external);
 
-      const iosTagged: IosDevice[] = ios
+      const iosTagged: IosDevice[] = ios.simulators
         .filter((simulator) => !externalShadows.has(simulator.udid))
         .map((simulator) => ({ platform: "ios", ...simulator }));
 
@@ -544,6 +556,7 @@ Booted/ready devices are listed first, but use a physical phone (kind 'device') 
       const adbPrefix = adbCommandPrefix(process.env);
       const hints = [
         ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
+        ...(ios.timedOut ? [iosListTimedOutHint()] : []),
         ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
         ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
       ];
@@ -551,7 +564,7 @@ Booted/ready devices are listed first, but use a physical phone (kind 'device') 
       return {
         devices: withUsage(devices, registry),
         avds: avdsTagged,
-        ...(hints.length > 0 ? { hint: hints.join(" ") } : {}),
+        ...(hints.length > 0 ? { hint: hints.join("\n\n") } : {}),
       };
     },
   };
