@@ -254,7 +254,9 @@ describe("flow recording with a remote client (probe miss)", () => {
     const savedTo = result.savedTo as { [CLIENT_FILE_MARKER]: true; path: string; content: string };
     expect(savedTo[CLIENT_FILE_MARKER]).toBe(true);
     expect(savedTo.path).toBe(CLIENT_FLOW_PATH);
-    expect(parseFlow(savedTo.content).steps).toEqual([{ kind: "echo", message: "only step" }]);
+    expect(savedTo.content).toBe(
+      "version: 1\nsteps:\n  - echo: only step\nexecutionPrerequisite: Home\n"
+    );
     // The finished YAML the caller is shown and the one the client writes must
     // be the same bytes.
     expect(savedTo.content).toBe(result.flowFile);
