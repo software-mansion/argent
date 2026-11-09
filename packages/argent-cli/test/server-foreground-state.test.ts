@@ -97,7 +97,7 @@ it("keeps a state file that another server wrote over ours", async () => {
 it.each([
   ["SIGINT", "SIGINT", 130],
   ["SIGTERM", "SIGTERM", 143],
-  ["SIGHUP", "SIGTERM", 143],
+  ["SIGHUP", "SIGHUP", 129],
 ] as const)(
   "forwards %s to the child as %s and removes the state file",
   async (signal, _, code) => {

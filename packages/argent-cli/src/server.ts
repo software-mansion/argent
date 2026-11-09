@@ -414,10 +414,10 @@ async function runForeground(
   });
 
   // The child has its own SIGINT/SIGTERM handlers that drain HTTP and dispose the
-  // registry, so forwarding lets a supervisor stop us cleanly. A SIGHUP sent to us
-  // goes on as SIGTERM. A closed terminal hangs up the whole process group: the
-  // child has no SIGHUP handler and dies at once, and catching it keeps us alive
-  // to remove the state file.
+  // registry, so forwarding lets a supervisor stop us cleanly. SIGHUP is caught
+  // only to keep us alive to remove the state file. The child has no SIGHUP
+  // handler, so it dies as it would from the hangup itself: a graceful shutdown
+  // logging to a hung-up terminal spins on EIO and never exits.
   const forward = (signal: NodeJS.Signals) => () => {
     try {
       child.kill(signal);
@@ -427,7 +427,7 @@ async function runForeground(
   };
   const onInt = forward("SIGINT");
   const onTerm = forward("SIGTERM");
-  const onHup = forward("SIGTERM");
+  const onHup = forward("SIGHUP");
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
   process.on("SIGHUP", onHup);

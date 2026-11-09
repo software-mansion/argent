@@ -54,6 +54,7 @@ describe("argent tools --help", () => {
     [["--jsno", "--help"]],
     [["--help", "describe", "gesture-tap"]],
     [["describe", "--help", "gesture-tap"]],
+    [["describe", "-x", "--help"]],
   ])("prints usage for %j without contacting the tool-server", async (argv) => {
     await invoke(argv);
 
