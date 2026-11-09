@@ -241,6 +241,8 @@ describe("the contract's tool-server facade", () => {
     expect([...EXTERNAL_CAPABILITIES]).toContain("simulator-server");
     expect([...ALLOWED_SIM_SERVER_ENDPOINTS]).toEqual([
       "/api/clipboard/text",
+      "/api/display",
+      "/api/hinge",
       "/api/pointer",
       "/api/screenshot",
       "/ws",

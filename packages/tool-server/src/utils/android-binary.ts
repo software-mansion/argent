@@ -93,7 +93,12 @@ function defaultAndroidRoots(): string[] {
     join(home, "android-sdk"), // manual-install convention; no installer picks it
     "/opt/android-sdk",
     "/usr/lib/android-sdk", // Debian/Ubuntu `android-sdk` apt package
-    "/usr/local/share/android-sdk", // Homebrew cask
+    "/usr/local/share/android-sdk", // Homebrew cask (Intel prefix)
+    // Where `brew install --cask android-commandlinetools` roots the SDK, so an
+    // `sdkmanager`-installed platform-tools is found without setting ANDROID_HOME
+    // — otherwise following the missing-adb hint still leaves the tool failing.
+    "/opt/homebrew/share/android-commandlinetools",
+    "/usr/local/share/android-commandlinetools",
   ];
   // Windows Studio default is %LOCALAPPDATA%\Android\Sdk; also probe the
   // canonical AppData\Local layout in case LOCALAPPDATA wasn't inherited.

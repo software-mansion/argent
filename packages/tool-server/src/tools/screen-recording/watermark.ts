@@ -8,7 +8,33 @@ import { WATERMARK_PNG_BASE64, WATERMARK_PNG_WIDTH, WATERMARK_PNG_HEIGHT } from 
 const execFileAsync = promisify(execFile);
 
 /** Frame rate of the recorded video; every input in the graph runs at it. */
-const OUTPUT_FPS = 30;
+export const OUTPUT_FPS = 30;
+
+/**
+ * Drops the odd edge row or column: yuv420p rejects an odd width or height,
+ * and some devices are odd on one axis (iPhone 16 / 15 Pro / 15 / 14 Pro at
+ * 1179x2556). Even frames pass through unchanged.
+ */
+export const EVEN_CROP = "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0";
+
+/** The encoder tail of every recording's ffmpeg command line. */
+export function encoderArgs(outputFile: string): string[] {
+  return [
+    "-c:v",
+    "libx264",
+    "-crf",
+    "20",
+    "-preset",
+    "veryfast",
+    "-pix_fmt",
+    "yuv420p",
+    "-movflags",
+    "+faststart",
+    "-an",
+    "-y",
+    outputFile,
+  ];
+}
 
 // Package-manager prefixes, for hosts where the tool-server's PATH is
 // sanitized (launchd / login-shell differences).
@@ -33,7 +59,7 @@ const DARK_LOGO_LEVEL = 0.08;
 const MASK_DARK_MAX_LUMA = 90;
 const MASK_LIGHT_MIN_LUMA = 165;
 
-interface Dimensions {
+export interface Dimensions {
   width: number;
   height: number;
 }
@@ -69,6 +95,18 @@ export function resolveFfmpeg(): Promise<string | null> {
   return resolveBinary("ffmpeg", FFMPEG_FALLBACK_PATHS);
 }
 
+/**
+ * The ffprobe next to that ffmpeg; null if absent. Ships with ffmpeg in every
+ * common package, but is optional here — it only reads back the length and
+ * frame size of a finished file.
+ */
+export function resolveFfprobe(): Promise<string | null> {
+  return resolveBinary(
+    "ffprobe",
+    FFMPEG_FALLBACK_PATHS.map((p) => p.replace(/ffmpeg$/, "ffprobe"))
+  );
+}
+
 // yuv420p subsamples chroma 2x, so crop/scale dimensions AND offsets must be
 // even: on an odd value ffmpeg rounds the video crop down but scales the rgba
 // logo to the odd value, and maskedmerge aborts on the size mismatch.
@@ -76,6 +114,34 @@ const even = (n: number) => 2 * Math.round(n / 2);
 // Rounds DOWN, for the frame-fitting clamps where rounding up could push the
 // box one pixel past the frame edge.
 const evenFloor = (n: number) => 2 * Math.floor(n / 2);
+
+/**
+ * The filter chain that fits every frame into the recording's canvas: the
+ * first frame's size, evened. The video keeps that one size for its whole
+ * length, and a frame of another size (a foldable's other panel, a rotated
+ * screen) is scaled to fit inside it with its aspect ratio kept, and centred
+ * on black bars, rather than stretched to fill it.
+ *
+ * The even-crop comes first so that a frame of the canvas's own size is never
+ * resampled: it only loses the odd edge pixel (1179x2556 -> 1178x2556), and
+ * then fits the canvas exactly, which the scale and the pad pass through
+ * unchanged. Scaled the other way round, every frame of an odd-sized device
+ * would be resampled into a canvas one pixel narrower. The second even-crop
+ * trims a fitted size that came out odd by its edge row or column, so the
+ * content ends on yuv420p's 2x2 chroma grid. The scale's `force_divisible_by`
+ * would do that too, but only ffmpeg 4.3 and later have it, and on an older
+ * ffmpeg the unknown option fails every recording.
+ */
+export function letterboxFilter(canvas: Dimensions): string {
+  const w = evenFloor(canvas.width);
+  const h = evenFloor(canvas.height);
+  return (
+    `crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0,` +
+    `scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+    `crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0,` +
+    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`
+  );
+}
 
 /** The bottom-left watermark rectangle in pixels (all even) for a frame size. */
 export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox {
@@ -101,21 +167,33 @@ export function computeWatermarkBox({ width, height }: Dimensions): WatermarkBox
  * Input 1 is opened looped, so it is an endless stream and `shortest=1` on the
  * overlay is what ends the graph when the frame pipe closes. Every input runs
  * at OUTPUT_FPS so maskedmerge's per-frame streams stay in lockstep.
+ *
+ * `dims` is the first frame's size. The base is letterboxed into it (see
+ * {@link letterboxFilter}) ahead of the split, so a frame of another size
+ * mid-stream still meets a box and an overlay that lie inside it.
+ *
+ * `prefilter` is a filter chain run on input 0 before anything else — ahead
+ * of the graph's own `fps`, which would otherwise re-time what it drops.
  */
-export function buildWatermarkGraph(dims: Dimensions): string {
+export function buildWatermarkGraph(dims: Dimensions, opts?: { prefilter?: string }): string {
   // libx264 with yuv420p fails on an odd frame size, and some devices stream
-  // one (1179x2556). Even the base up front and derive the box from the same
-  // evened size so the mask crop stays inside it; an even frame is unchanged.
-  const evenW = evenFloor(dims.width);
-  const evenH = evenFloor(dims.height);
-  const { w, h, x, y } = computeWatermarkBox({ width: evenW, height: evenH });
-  const evenCrop =
-    evenW !== dims.width || evenH !== dims.height ? `,crop=${evenW}:${evenH}:0:0` : "";
+  // one (1179x2556). The letterbox evens the base, and the box is derived
+  // from the same evened size so the mask crop stays inside it.
+  const { w, h, x, y } = computeWatermarkBox({
+    width: evenFloor(dims.width),
+    height: evenFloor(dims.height),
+  });
+  // The explicit format keeps the letterbox's scale honest: left to
+  // negotiate, it would answer the mask branch's `gray`, and the whole
+  // recording would lose its colour. yuv420p is the format the encoder takes
+  // anyway, so the pin adds no conversion of its own.
+  const base = `,${letterboxFilter(dims)},format=yuv420p`;
   const span = MASK_LIGHT_MIN_LUMA - MASK_DARK_MAX_LUMA;
   // High where the background is dark (-> keep the white logo), low where light.
   const maskRamp = `lut=y='clip((${MASK_LIGHT_MIN_LUMA}-val)/${span}*255,0,255)'`;
+  const prefilter = opts?.prefilter ? `${opts.prefilter},` : "";
   return [
-    `[0:v]fps=${OUTPUT_FPS}${evenCrop},split=2[base][under]`,
+    `[0:v]${prefilter}fps=${OUTPUT_FPS}${base},split=2[base][under]`,
     `[under]crop=${w}:${h}:${x}:${y},format=gray,${maskRamp},format=gbrap[mask]`,
     `[1:v]fps=${OUTPUT_FPS},format=rgba,scale=${w}:${h},split=2[white][darksrc]`,
     `[darksrc]colorchannelmixer=rr=${DARK_LOGO_LEVEL}:gg=${DARK_LOGO_LEVEL}:bb=${DARK_LOGO_LEVEL}[dark]`,

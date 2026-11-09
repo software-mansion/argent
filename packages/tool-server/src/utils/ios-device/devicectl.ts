@@ -12,6 +12,7 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { appendHintToMessage } from "./usbmux-protocol";
+import { assertXcodeFirstLaunchDone } from "../dependency-errors";
 
 /**
  * Wrappers around `xcrun devicectl` for discovery, app lifecycle, and connection readiness.
@@ -123,6 +124,7 @@ async function runDevicectl(
   action: string,
   opts: RunDevicectlOptions = {}
 ): Promise<{ stdout: string; stderr: string; json: unknown | null }> {
+  assertXcodeFirstLaunchDone("devicectl");
   const timeoutMs = opts.timeoutMs ?? DEVICECTL_TIMEOUT_MS;
   let jsonPath: string | null = null;
   const argv = ["devicectl", ...args];
@@ -216,7 +218,7 @@ interface DevicectlListPayload {
 /**
  * List physical iPhones CoreDevice can currently see. Physical-device support
  * is iPhone-only for now: iPads are deliberately skipped. Returns an empty
- * list off-macOS and when devicectl is missing or fails.
+ * list off-macOS and when devicectl is missing, refused, or fails.
  */
 export async function listIosPhysicalDevices(): Promise<IosPhysicalDevice[]> {
   if (process.platform !== "darwin") {
@@ -316,6 +318,8 @@ interface LaunchAppOptions {
   terminateExisting?: boolean;
   /** Deliver this URL to the app at launch through the payload-url flag. */
   payloadUrl?: string;
+  /** Arguments for the app process. */
+  args?: string[];
 }
 
 /**
@@ -323,6 +327,7 @@ interface LaunchAppOptions {
  *
  * @param opts.terminateExisting kill an already-running instance first.
  * @param opts.payloadUrl pass this URL to the app at launch.
+ * @param opts.args pass these arguments to the app process.
  */
 export async function launchApp(
   udid: string,
@@ -340,6 +345,14 @@ export async function launchApp(
   }
 
   args.push(bundleId);
+
+  // Without `--`, devicectl parses an argument like `-FeatureFlag` as its own
+  // option. The app also receives the `--` as its first argument; UserDefaults
+  // overrides still apply.
+  if (opts.args?.length) {
+    args.push("--", ...opts.args);
+  }
+
   await runDevicectl(args, `launch ${bundleId}`, { bundleId });
 }
 

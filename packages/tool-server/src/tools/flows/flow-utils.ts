@@ -2,14 +2,24 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import {
+  canonicalToolArgs,
+  E2E_DIRS,
+  FAILURE_CODES,
+  FailureError,
+  LEGACY_E2E_DIRS,
+  e2eDirFor,
+} from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 import {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
   SCRIPT_FILE_NAME_PATTERN,
+  completeRunExtension,
   type ClientFileDirective,
+  type OnDiskSpelling,
+  type ToolContext,
 } from "@argent/registry";
 import {
   hasVisibleText,
@@ -29,13 +39,37 @@ import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
-const FLOWS_DIR_NAME = path.join(".argent", "flows");
+/**
+ * The refusal for a Windows client path on a macOS or Linux tool-server, which
+ * reads `C:\work` as relative: the path is absolute where it was written, so
+ * "must be absolute" would blame its author for a mistake they did not make.
+ * Undefined for every other path.
+ */
+export function windowsPathRefusal(label: string, value: string): string | undefined {
+  if (process.platform === "win32" || path.isAbsolute(value) || !path.win32.isAbsolute(value)) {
+    return undefined;
+  }
+  return (
+    `${label} "${value}" is a Windows path. A tool-server on macOS or Linux cannot open ` +
+    `Windows paths. Use argent on the computer that runs the tool-server, or start the ` +
+    `tool-server on the Windows computer.`
+  );
+}
 
 /**
  * Validate a caller-supplied `project_root`. Absolute and no ".." are what keep
  * a recording's files inside the project the agent named.
  */
 export function assertValidProjectRoot(root: string): void {
+  const windows = windowsPathRefusal("project_root", root);
+  if (windows) {
+    throw new FailureError(windows, {
+      error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_INVALID,
+      failure_stage: "flow_project_root_set",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
   if (!path.isAbsolute(root)) {
     throw new FailureError(
       `project_root must be an absolute path (got "${root}"). ` +
@@ -62,13 +96,22 @@ export function assertValidProjectRoot(root: string): void {
 }
 
 /**
- * The flows dir under an explicit root, as pure path math. Validates nothing, so
- * a caller with its own root rejection (see flow-add-step) raises only that
- * message rather than a second, differently-worded one from here.
+ * The dir new e2e tests are recorded into under an explicit root
+ * (`.argent/e2e`), as pure path math. Validates nothing, so a caller with its
+ * own root rejection (see flow-add-step) raises only that message rather than
+ * a second, differently-worded one from here.
  */
 export function flowsDirFor(root: string): string {
-  return path.join(root, FLOWS_DIR_NAME);
+  return e2eDirFor(root);
 }
+
+/**
+ * The `fileInputs` path templates of a saved test addressed by `name`, one per
+ * e2e test dir, in lookup order (`FileInputSpec.paths`).
+ */
+export const E2E_FILE_TEMPLATES: string[] = E2E_DIRS.map(
+  (dir) => `\${project_root}/${dir.split(path.sep).join("/")}/\${name}.yaml`
+);
 
 /** The flows dir under a root that has not been validated yet. */
 function getFlowsDir(projectRoot: string): string {
@@ -79,7 +122,7 @@ function getFlowsDir(projectRoot: string): string {
 export function assertSafeFlowName(name: string): void {
   if (!FLOW_NAME_PATTERN.test(name)) {
     throw new FailureError(
-      `Invalid flow name "${name}". Flow names must match ${FLOW_NAME_PATTERN} ` +
+      `Invalid e2e test name "${name}". E2E test names must match ${FLOW_NAME_PATTERN} ` +
         `(letters, digits, underscore, hyphen — no path separators, no "..", no spaces).`,
       {
         error_code: FAILURE_CODES.FLOW_NAME_INVALID,
@@ -92,7 +135,7 @@ export function assertSafeFlowName(name: string): void {
 }
 
 /**
- * The flow file `<project_root>/.argent/flows/<name>.yaml`, as the CALLER
+ * The recording file `<project_root>/.argent/e2e/<name>.yaml`, as the CALLER
  * spelled it — the path reported back to the agent, not the recording-session
  * key (that is {@link resolveFlowKey}, which asks the filesystem instead).
  *
@@ -104,18 +147,33 @@ export function assertSafeFlowName(name: string): void {
  * file.
  */
 export function getFlowPath(projectRoot: string, name: string): string {
-  const flowsDir = getFlowsDir(projectRoot);
+  return flowPathIn(getFlowsDir(projectRoot), name);
+}
+
+/**
+ * The legacy recording file `<project_root>/.argent/flows/<name>.yaml`, for a
+ * client released before the rename, which writes client files only there.
+ */
+export function getLegacyFlowPath(projectRoot: string, name: string): string {
+  assertValidProjectRoot(projectRoot);
+  return flowPathIn(path.join(projectRoot, LEGACY_E2E_DIRS[0]), name);
+}
+
+function flowPathIn(flowsDir: string, name: string): string {
   assertSafeFlowName(name);
   const filePath = path.join(flowsDir, `${name}.yaml`);
   // Defense-in-depth, in case FLOW_NAME_PATTERN is ever weakened.
   const rel = path.relative(flowsDir, filePath);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    throw new FailureError(`Invalid flow name "${name}": resolves outside the flows directory.`, {
-      error_code: FAILURE_CODES.FLOW_NAME_INVALID,
-      failure_stage: "flow_name_traversal",
-      failure_area: "tool_server",
-      error_kind: "validation",
-    });
+    throw new FailureError(
+      `Invalid e2e test name "${name}": resolves outside the e2e test directory.`,
+      {
+        error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+        failure_stage: "flow_name_traversal",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
   return filePath;
 }
@@ -138,9 +196,11 @@ export function getFlowPath(projectRoot: string, name: string): string {
  * A case-SENSITIVE volume (ext4) keeps `Login` and `login` apart on its own:
  * `realpath` there simply fails to find the variant spelling.
  *
- * "client" mode needs no special case: the caller's root does not exist on this
- * host, so both `realpath` calls fail and the fallback returns
- * {@link getFlowPath} unchanged.
+ * "client" mode needs no special case. When the caller's root does not exist
+ * on this host, both `realpath` calls fail and the fallback returns
+ * {@link getFlowPath} unchanged. When it does (a link to 127.0.0.1, or a
+ * client path this host also has), the key is this host's real path, which is
+ * harmless: the key is only an identity.
  */
 // `async`, so `getFlowPath`'s validation throws land as a rejection like every
 // other failure here rather than synchronously out of a promise-returning call.
@@ -174,61 +234,62 @@ async function resolveFlowKey(projectRoot: string, name: string): Promise<string
 const keyResolutions = new Map<string, Promise<string>>();
 
 /**
- * How the flow file a caller addressed is spelled in its own directory.
- * `listed`: the directory carries that basename byte-for-byte — or its listing
- * could not be read at all (an execute-only parent lets stat through while
- * refusing readdir), which vouches for nothing and so must refuse nothing.
- * `case_folded`: no entry carries it, but one differs only by case — what a
- * case-insensitive filesystem (APFS, NTFS) opens for a spelling nothing on disk
- * has. `absent`: nothing matches even case-insensitively. `addressable` says
- * whether the on-disk spelling is one the flow layer's own ladders accept, so a
- * caller can be pointed at it instead of at a rename.
+ * Where a recording's YAML is persisted:
+ * - `"host"`   — this process writes `<project_root>/.argent/e2e/<name>.yaml`
+ *                directly; the caller's project root is on this machine and
+ *                the recording did not start over a link.
+ * - `"client"` — the recording started over a link (`argent link` or
+ *                `ARGENT_TOOLS_URL`, a link to 127.0.0.1 included), or the
+ *                caller's project root is NOT on this machine. The flow lives
+ *                in memory here and every mutating tool returns a
+ *                {@link ClientFileDirective} so the *client* writes the YAML
+ *                into the agent's project.
  */
-export type OnDiskSpelling =
-  | { state: "listed" }
-  | { state: "case_folded"; actual: string; addressable: boolean }
-  | { state: "absent" };
+type FlowPersistMode = "host" | "client";
 
 /**
- * Classify the supplied basename against `dir`'s listing. One classifier serves
- * every route that turns a caller's spelling into a file it will open — a flow,
- * or since the `script:` step a plain `.mjs` — so they can never drift apart in
- * which spellings they accept.
- *
- * readdir, not realpath: realpath rewrites a symlinked flow to its target's
- * name, and a flow deliberately runs — and composes — under the link's own
- * name. Every call site hands a pure-ASCII basename (the flow-name charset,
- * plus ".yaml" or ".mjs"), so Unicode-normalizing filesystems cannot make the
- * comparison lie.
- *
- * What an `absent` verdict means is the caller's to decide, and they differ:
- * `flow_path` arrives with the boundary's stat already vouching for the file,
- * so a listing that lacks it is itself the phantom-spelling bug, while a `name`
- * may simply not name a saved flow — an ordinary missing-flow error the later
- * read reports far better than a casing complaint could.
+ * The refusal of a flow passed by `name` whose file a case-insensitive
+ * filesystem matched under another spelling: the name keys the report and
+ * `__baselines__/`, and no directory entry carries it.
  */
-export async function classifyOnDiskSpelling(
-  dir: string,
-  base: string,
-  addressable: RegExp = FLOW_FILE_NAME_PATTERN
-): Promise<OnDiskSpelling> {
-  const entries = await fs.readdir(dir).catch(() => null);
-  if (entries === null || entries.includes(base)) return { state: "listed" };
-  const actual = entries.find((entry) => entry.toLowerCase() === base.toLowerCase());
-  if (actual === undefined) return { state: "absent" };
-  return { state: "case_folded", actual, addressable: addressable.test(actual) };
+export function flowNameCasingError(
+  flowName: string,
+  spelling: Extract<OnDiskSpelling, { state: "case_folded" }>
+): FailureError {
+  // Hand back a name only when one can reach the file: an on-disk .YAML is
+  // addressable by no name at all (the name route always builds
+  // "<name>.yaml"), it is omitted from `argent flow list`, and e2e_test_path
+  // refuses it too.
+  const recovery = spelling.addressable
+    ? `Pass name "${path.basename(spelling.actual, ".yaml")}".`
+    : `Rename "${spelling.actual}" to "${flowName}.yaml" to run it — e2e test files must be ` +
+      `lowercase .yaml.`;
+  return new FailureError(
+    `Invalid e2e test name "${flowName}": no saved e2e test is named "${flowName}.yaml" — this ` +
+      `filesystem matched it case-insensitively to "${spelling.actual}", so the e2e test name ` +
+      `(which keys the report and __baselines__/) would be one no directory entry carries. ` +
+      recovery,
+    {
+      error_code: FAILURE_CODES.FLOW_NAME_INVALID,
+      failure_stage: "flow_name_casing",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
 }
 
 /**
- * Where a recording's YAML is persisted:
- * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
- *                directly; the caller's project root is on this machine.
- * - `"client"` — the caller's project root is NOT on this machine (remote
- *                tool-server). The flow lives in memory here and every mutating
- *                tool returns a {@link ClientFileDirective} so the *client*
- *                writes the YAML into the agent's project.
+ * Whether a recorder call is over a link, for every recorder check that asks.
+ * A `client` take is (also one an older client started), and so is a call
+ * that carries the link header, also into a take that started in `host` mode.
+ * Over a link the recorder accepts only what a replay over the same link runs.
  */
-export type FlowPersistMode = "host" | "client";
+export function isLinkedRecorderCall(
+  session: RecordingSession,
+  ctx: Pick<ToolContext, "linked"> | undefined
+): boolean {
+  return session.persist === "client" || ctx?.linked === true;
+}
 
 /**
  * One recorded step's warning, plus the anchor saying WHICH step it judged.
@@ -274,7 +335,8 @@ export interface RecordingSession {
   /**
    * Absolute path of the flow file as the CALLER knows it. A real host path in
    * "host" mode; in "client" mode it names a file on the client's machine and
-   * is only echoed back inside the directive.
+   * is echoed back inside the directive. Over a link it also anchors what the
+   * recorder asks the client to resolve beside the recording.
    */
   filePath: string;
   /** In-memory flow content — authoritative in "client" mode. */
@@ -471,8 +533,8 @@ export async function requireRecordingSession(
     // case destroys the others. Same doctrine as
     // {@link assertSessionStillLive}, which faces the identical ambiguity.
     throw new FailureError(
-      `No active recording for flow "${name}" in ${projectRoot}. ` +
-        `If you have not started it yet, call flow-start-recording — but note it ` +
+      `No active recording for e2e test "${name}" in ${projectRoot}. ` +
+        `If you have not started it yet, call e2e-start-recording — but note it ` +
         `truncates, so if ${getFlowPath(projectRoot, name)} already holds a take you ` +
         `want (finished, or interrupted by a restart), copy it aside or record under ` +
         `a fresh name instead. Active recordings: ${activeList}.`,
@@ -506,8 +568,8 @@ export async function requireRecordingSession(
         `and ${asked} are the same file on this filesystem (a symlink, or a case-insensitive ` +
         `volume), and the live take on it is registered as "${session.name}" in ` +
         `${session.projectRoot}. If that is your own recording spelled another way, re-address ` +
-        `it exactly as you passed it to flow-start-recording — the take is intact and still ` +
-        `recording. If it is another caller's, their flow-start-recording truncated yours; ` +
+        `it exactly as you passed it to e2e-start-recording — the take is intact and still ` +
+        `recording. If it is another caller's, their e2e-start-recording truncated yours; ` +
         `record under a name that resolves to its own file rather than restarting here, which ` +
         `would destroy their take in turn.`,
       {
@@ -557,21 +619,28 @@ export function __flowFileLockCountForTesting(): number {
  * so it must exist on the tool-server host; a relative path resolves against
  * the ROOT flow file's canonical (symlink-resolved) directory.
  */
-export type ChromiumLaunch = string | { path: string; args?: string[] };
+type ChromiumLaunch = string | { path: string; args?: string[] };
+
+/**
+ * An ios `launch` target: a bundle id (bare string) or a bundle id plus the
+ * arguments passed to the app process at launch, on a simulator or a physical
+ * iPhone.
+ */
+type IosLaunch = string | { app: string; args?: string[] };
 
 /**
  * The app a `launch` step starts from scratch. A bare string applies to every
  * platform; the map targets a specific id per platform (chromium takes a path —
- * see {@link ChromiumLaunch}). `native` is a shared id for the installed-app
- * platforms (ios/android/vega), overridden by a specific `ios`/`android`/`vega`
- * key. A flow that BEGINS with a `launch` step is an e2e flow; one that doesn't
+ * see {@link ChromiumLaunch}), and `ios` may carry launch args ({@link IosLaunch}).
+ * `native` is a shared id for the installed-app platforms (ios/android/vega),
+ * overridden by a specific `ios`/`android`/`vega` key. A flow that BEGINS with a `launch` step is standalone; one that doesn't
  * is a fragment.
  */
 export type Launch =
   | string
   | {
       native?: string;
-      ios?: string;
+      ios?: IosLaunch;
       android?: string;
       vega?: string;
       chromium?: ChromiumLaunch;
@@ -649,7 +718,7 @@ function selectorTree(sel: FlowSelector): FlowSelector[] {
  * drift. Narrower than {@link SelectablePlatform}, which a RUN is selected
  * with: a guard is authored text, and `ios-remote` is not writable.
  */
-export type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
+type WhenPlatform = (typeof LAUNCH_PLATFORMS)[number];
 
 /**
  * The guard of a `when:` block: either a UI condition — the await/assert
@@ -714,12 +783,35 @@ export type FlowStep =
   | { kind: "scroll-to"; target: FlowSelector; direction: ScrollDirection; within?: FlowSelector }
   | { kind: "pinch"; selector?: FlowSelector; scale: number }
   | { kind: "rotate"; selector?: FlowSelector; by: number }
+  /**
+   * Fold or unfold a foldable simulator: exactly one of `posture` and `angle`.
+   * The `fold` tool's own contract; the runner dispatches it to that tool.
+   */
+  | { kind: "fold"; posture?: FoldPosture; angle?: number }
   | { kind: "snapshot"; name: string; maxMismatch?: number; cropOn?: FlowSelector }
   | { kind: "script"; path: string; timeout?: number };
+
+const FOLD_POSTURES = ["closed", "half-open", "open"] as const;
+type FoldPosture = (typeof FOLD_POSTURES)[number];
+
+function isFoldPosture(value: unknown): value is FoldPosture {
+  return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
+}
+
+export const RUNTIME_KINDS = ["mobile", "tv"] as const;
+export type FlowRuntimeKind = (typeof RUNTIME_KINDS)[number];
+
+/** The targets a flow supports. The keys are ANDed; `ios` covers a remote simulator. */
+export type FlowRequires = {
+  platform?: WhenPlatform[];
+  runtimeKind?: FlowRuntimeKind;
+};
 
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
+  /** Absent when the flow runs on any target. */
+  requires?: FlowRequires;
   steps: FlowStep[];
 };
 
@@ -778,6 +870,7 @@ export function precedesLeadingLaunch(step: FlowStep): boolean {
     case "scroll-to":
     case "pinch":
     case "rotate":
+    case "fold":
     case "snapshot":
       return false;
     default: {
@@ -789,7 +882,7 @@ export function precedesLeadingLaunch(step: FlowStep): boolean {
 }
 
 /**
- * A flow is end-to-end iff it BEGINS by launching an app — the first step a
+ * A flow is standalone iff it BEGINS by launching an app — the first step a
  * launch cannot sit behind ({@link precedesLeadingLaunch}) is a `launch`. Such
  * a flow controls its own start state, so it must not declare an
  * `executionPrerequisite`. Everything else is a fragment.
@@ -816,8 +909,24 @@ export function appIdForPlatform(launch: Launch | undefined, platform: string): 
     if (c === undefined) return null;
     return typeof c === "string" ? c : c.path;
   }
-  const v = (launch as Record<string, string | undefined>)[authoringPlatform(platform)];
+  const key = authoringPlatform(platform);
+  if (key === "ios") {
+    const i = launch.ios;
+    if (i !== undefined) return typeof i === "string" ? i : i.app;
+    return launch.native ?? null;
+  }
+  const v = (launch as Record<string, string | undefined>)[key];
   return v ?? launch.native ?? null;
+}
+
+/**
+ * The launch args an ios `{ app, args }` entry declares, or undefined when it
+ * declares none (a bare-string launch, a bare ios id, or no ios key at all).
+ */
+export function iosLaunchArgs(launch: Launch | undefined): string[] | undefined {
+  if (launch === undefined || typeof launch === "string") return undefined;
+  const i = launch.ios;
+  return i !== undefined && typeof i !== "string" ? i.args : undefined;
 }
 
 /**
@@ -943,8 +1052,7 @@ type YamlIdleCondition = { idle: true; stableFor?: number; timeout?: number };
 
 /** `scroll-to` body: a bare target (scrolls down), or a map with options. */
 type YamlScrollBody =
-  | YamlSelector
-  | { target: YamlSelector; direction?: ScrollDirection; within?: YamlSelector };
+  YamlSelector | { target: YamlSelector; direction?: ScrollDirection; within?: YamlSelector };
 
 /**
  * A `when:` guard body: exactly one UI condition key (the await/assert shapes,
@@ -972,10 +1080,15 @@ type YamlStep =
   | { "scroll-to": YamlScrollBody }
   | { pinch: { on?: YamlSelector; scale: number } }
   | { rotate: { on?: YamlSelector; by: number } }
+  | { fold: YamlFoldBody }
   | { snapshot: string | { name: string; maxMismatch?: number; cropOn?: YamlSelector } }
   | { script: { path: string; timeout?: number } };
 
+type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
+
 type YamlFlowFile = {
+  version?: number;
+  requires?: { platform?: WhenPlatform | WhenPlatform[]; runtimeKind?: FlowRuntimeKind };
   executionPrerequisite?: string;
   steps: YamlStep[];
 };
@@ -996,7 +1109,7 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   const unknown = Object.keys(sel).filter((key) => !WRITABLE_SELECTOR_KEYS.includes(key));
   if (unknown.length > 0) {
     throw new Error(
-      `Cannot serialize flow selector: ${describeUnknownKeys(unknown, WRITABLE_SELECTOR_KEYS)} - ` +
+      `Cannot serialize e2e test selector: ${describeUnknownKeys(unknown, WRITABLE_SELECTOR_KEYS)} - ` +
         `allowed keys: ${WRITABLE_SELECTOR_KEYS.join(", ")}.`
     );
   }
@@ -1007,8 +1120,8 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   // quietly weakening the selector.
   if (sel.text !== undefined && sel.textMatches !== undefined) {
     throw new Error(
-      "Cannot serialize flow selector without losing constraints: both `text` and " +
-        "`textMatches` are set, but flow YAML can represent only one `text` constraint " +
+      "Cannot serialize e2e test selector without losing constraints: both `text` and " +
+        "`textMatches` are set, but e2e test YAML can represent only one `text` constraint " +
         '(a literal string or `{ matches: "<regex>" }`). Use either literal or regex text matching.'
     );
   }
@@ -1022,7 +1135,7 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   // selector fails loudly instead of writing a flow no one can read or replay.
   if (sel.text !== undefined && (typeof sel.text !== "string" || !hasVisibleText(sel.text))) {
     throw new Error(
-      "Cannot serialize flow selector: `text` must contain at least one visible character " +
+      "Cannot serialize e2e test selector: `text` must contain at least one visible character " +
         "(icon-font/private-use and zero-width characters render as nothing). Select by " +
         "identifier or role, or use a coordinate tap."
     );
@@ -1037,19 +1150,19 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
   if (sel.any !== undefined) {
     if (sel.any !== true) {
       throw new Error(
-        "Cannot serialize flow selector: `any` is the universal selector and takes only `true` — " +
+        "Cannot serialize e2e test selector: `any` is the universal selector and takes only `true` — " +
           "omit it to select by text/id/role."
       );
     }
     if (sel.text !== undefined || sel.textMatches !== undefined || sel.identifier || sel.role) {
       throw new Error(
-        "Cannot serialize flow selector: `any` already matches every element, so it cannot be " +
+        "Cannot serialize e2e test selector: `any` already matches every element, so it cannot be " +
           "combined with text/id/role — keep one or the other."
       );
     }
     if (scopeCount === 0) {
       throw new Error(
-        "Cannot serialize flow selector: `any` matches every element on screen, so it needs a " +
+        "Cannot serialize e2e test selector: `any` matches every element on screen, so it needs a " +
           `scope (${SELECTOR_RELATIONS.join("/")}) to narrow what it selects.`
       );
     }
@@ -1061,7 +1174,7 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
     !sel.role
   ) {
     throw new Error(
-      `Cannot serialize flow selector: a scope (${SELECTOR_RELATIONS.join("/")}) only narrows ` +
+      `Cannot serialize e2e test selector: a scope (${SELECTOR_RELATIONS.join("/")}) only narrows ` +
         "where to look — the selector still needs its own text/id/role naming what to find " +
         "there, or `any: true` for any element."
     );
@@ -1087,7 +1200,7 @@ export function selectorToYaml(sel: FlowSelector): YamlSelector {
       ...SELECTOR_RELATIONS.map((relation) => (sel[relation] !== undefined ? relation : undefined)),
     ].filter((field): field is string => field !== undefined);
     throw new Error(
-      "Cannot serialize loose flow selector without changing its meaning: bare-string YAML " +
+      "Cannot serialize loose e2e test selector without changing its meaning: bare-string YAML " +
         "can represent only a loose text-only selector" +
         (incompatible.length > 0 ? `; incompatible fields: ${incompatible.join(", ")}` : "") +
         "."
@@ -1233,19 +1346,19 @@ function targetToYaml(step: { selector?: FlowSelector; x?: number; y?: number })
   if (step.selector !== undefined) {
     if (hasPointField) {
       throw new Error(
-        "Cannot serialize flow gesture target: use a selector or x/y coordinates, not both"
+        "Cannot serialize e2e test gesture target: use a selector or x/y coordinates, not both"
       );
     }
     return selectorToYaml(step.selector);
   }
   if (typeof step.x !== "number" || typeof step.y !== "number") {
     throw new Error(
-      "Cannot serialize flow gesture target: a coordinate target needs numeric x and y"
+      "Cannot serialize e2e test gesture target: a coordinate target needs numeric x and y"
     );
   }
   if (!(step.x >= 0 && step.x <= 1) || !(step.y >= 0 && step.y <= 1)) {
     throw new Error(
-      "Cannot serialize flow gesture target: coordinates are normalized 0–1 fractions of the screen, not pixels"
+      "Cannot serialize e2e test gesture target: coordinates are normalized 0–1 fractions of the screen, not pixels"
     );
   }
   return { x: step.x, y: step.y };
@@ -1264,7 +1377,7 @@ function swipeTargetToYaml(target: GestureTarget, label: string): YamlTarget {
     "x" in yaml &&
     !Object.keys(target).every((key) => key === "x" || key === "y")
   ) {
-    throw new Error(`Cannot serialize flow ${label}: a coordinate target takes only { x, y }`);
+    throw new Error(`Cannot serialize e2e test ${label}: a coordinate target takes only { x, y }`);
   }
   return yaml;
 }
@@ -1317,12 +1430,12 @@ const LONG_PRESS_MAX_DURATION_MS = SWIPE_MAX_DURATION_MS;
 function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number } {
   const keys = Object.keys(by);
   if (keys.some((key) => key !== "x" && key !== "y")) {
-    throw new Error("Cannot serialize flow swipe.by: accepts only x and y");
+    throw new Error("Cannot serialize e2e test swipe.by: accepts only x and y");
   }
 
   const axes = (["x", "y"] as const).filter((axis) => by[axis] !== undefined);
   if (axes.length === 0) {
-    throw new Error("Cannot serialize flow swipe.by: needs at least one of x or y");
+    throw new Error("Cannot serialize e2e test swipe.by: needs at least one of x or y");
   }
 
   const result: { x?: number; y?: number } = {};
@@ -1330,7 +1443,7 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
     const value = by[axis]!;
     if (!Number.isFinite(value) || value === 0 || value < -1 || value > 1) {
       throw new Error(
-        `Cannot serialize flow swipe.by.${axis}: must be a non-zero fraction of the screen between -1 and 1`
+        `Cannot serialize e2e test swipe.by.${axis}: must be a non-zero fraction of the screen between -1 and 1`
       );
     }
     result[axis] = value;
@@ -1340,7 +1453,7 @@ function swipeByToYaml(by: { x?: number; y?: number }): { x?: number; y?: number
   const magnitude = Math.hypot(result.x ?? 0, result.y ?? 0);
   if (magnitude < SWIPE_MIN_TRAVEL) {
     throw new Error(
-      `Cannot serialize flow swipe.by: travels only ${magnitude} — below the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a travel that small is a tap, not a swipe`
+      `Cannot serialize e2e test swipe.by: travels only ${magnitude} — below the minimum swipe travel of ${SWIPE_MIN_TRAVEL} — a travel that small is a tap, not a swipe`
     );
   }
   return result;
@@ -1364,7 +1477,7 @@ function isPositiveMs(raw: unknown): raw is number {
  * corresponding parser rejects when a FlowStep is constructed in code. */
 function positiveMsToYaml(value: number, label: string): number {
   if (!isPositiveMs(value)) {
-    throw new Error(`Cannot serialize flow ${label}: needs a positive number of milliseconds`);
+    throw new Error(`Cannot serialize e2e test ${label}: needs a positive number of milliseconds`);
   }
   return value;
 }
@@ -1375,12 +1488,12 @@ function swipeDurationToYaml(value: number): number {
   const duration = positiveMsToYaml(value, "swipe.duration");
   if (duration < SWIPE_MIN_DURATION_MS) {
     throw new Error(
-      `Cannot serialize flow swipe.duration: only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms — that leaves too few 16ms frames for the content to track the travel it was given, so it overshoots instead of landing on it`
+      `Cannot serialize e2e test swipe.duration: only ${duration}ms — below the minimum swipe duration of ${SWIPE_MIN_DURATION_MS}ms — that leaves too few 16ms frames for the content to track the travel it was given, so it overshoots instead of landing on it`
     );
   }
   if (duration > SWIPE_MAX_DURATION_MS) {
     throw new Error(
-      `Cannot serialize flow swipe.duration: ${duration}ms - above the maximum swipe duration of ${SWIPE_MAX_DURATION_MS}ms - the step would hold a finger on the screen for exactly that long, one dispatched frame per 16ms`
+      `Cannot serialize e2e test swipe.duration: ${duration}ms - above the maximum swipe duration of ${SWIPE_MAX_DURATION_MS}ms - the step would hold a finger on the screen for exactly that long, one dispatched frame per 16ms`
     );
   }
   return duration;
@@ -1392,7 +1505,7 @@ function longPressDurationToYaml(value: number): number {
   const duration = positiveMsToYaml(value, "long-press.duration");
   if (duration > LONG_PRESS_MAX_DURATION_MS) {
     throw new Error(
-      `Cannot serialize flow long-press.duration: ${duration}ms - above the maximum long-press duration of ${LONG_PRESS_MAX_DURATION_MS}ms - the step would hold a finger down for exactly that long`
+      `Cannot serialize e2e test long-press.duration: ${duration}ms - above the maximum long-press duration of ${LONG_PRESS_MAX_DURATION_MS}ms - the step would hold a finger down for exactly that long`
     );
   }
   return duration;
@@ -1481,14 +1594,16 @@ function toYamlStep(step: FlowStep): YamlStep {
       // travel invariant before the direction sugar below drops the other fields.
       const travels = (["direction", "to", "by"] as const).filter((key) => step[key] !== undefined);
       if (travels.length !== 1) {
-        throw new Error("Cannot serialize flow swipe: needs exactly one of direction, to, or by");
+        throw new Error(
+          "Cannot serialize e2e test swipe: needs exactly one of direction, to, or by"
+        );
       }
 
       // Same reason, and before the sugar below: that sugar and the body builder
       // both test against `false` only, so `momentum: 0` would serialize to the
       // momentum the author asked to turn off.
       if (step.momentum !== undefined && typeof step.momentum !== "boolean") {
-        throw new Error("Cannot serialize flow swipe.momentum: must be true or false");
+        throw new Error("Cannot serialize e2e test swipe.momentum: must be true or false");
       }
 
       // A direction with no other field round-trips to the bare sugar
@@ -1572,6 +1687,17 @@ function toYamlStep(step: FlowStep): YamlStep {
           ? { on: selectorToYaml(step.selector), by: step.by }
           : { by: step.by },
       };
+    case "fold": {
+      // The bare form: parseFold takes exactly one of posture and angle (and
+      // accepts the map spelling), so every parsed step comes back bare; the
+      // map is only for a step that breaks that invariant.
+      if (step.posture !== undefined && step.angle === undefined) return { fold: step.posture };
+      if (step.angle !== undefined && step.posture === undefined) return { fold: step.angle };
+      const body: Exclude<YamlFoldBody, FoldPosture | number> = {};
+      if (step.posture !== undefined) body.posture = step.posture;
+      if (step.angle !== undefined) body.angle = step.angle;
+      return { fold: body };
+    }
     case "snapshot": {
       // A name-only snapshot sugars to a bare string.
       if (step.maxMismatch === undefined && step.cropOn === undefined) {
@@ -1616,12 +1742,14 @@ function toYamlStep(step: FlowStep): YamlStep {
 // 200 chars still shows a genuine flow entry in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
-function badEntry(raw: unknown, detail: string): never {
+function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
-  // throw and mask the validation message.
+  // throw and mask the validation message. It also returns the *value*
+  // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
+  // declared `string` return type hides, and renders `.inf`/`.nan` as `null`.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw);
+    rendered = typeof raw === "number" ? String(raw) : (JSON.stringify(raw) ?? String(raw));
   } catch {
     rendered = "[cyclic entry]";
   }
@@ -1629,7 +1757,11 @@ function badEntry(raw: unknown, detail: string): never {
     const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
     rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
-  throw new FailureError(`Unrecognized flow entry (${detail}): ${rendered}`, {
+  return rendered;
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${renderEntry(raw)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
@@ -2195,7 +2327,7 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
  * The platforms an AUTHOR can name in a flow file: launch-map keys and
  * `when: { platform }` guards ({@link WhenPlatform}).
  */
-const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 
 /**
  * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
@@ -2226,6 +2358,60 @@ export function authoringPlatform(platform: string): string {
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
 
+const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
+
+export function parseRequires(raw: unknown): FlowRequires {
+  const bad = (detail: string): never => badEntry({ requires: raw }, detail);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    bad(`requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
+  }
+  const b = raw as Record<string, unknown>;
+  rejectUnknownKeys({ requires: raw }, b, REQUIRES_KEYS, "requires");
+
+  const out: FlowRequires = {};
+  if (b.platform !== undefined) {
+    const list: unknown[] = Array.isArray(b.platform) ? b.platform : [b.platform];
+    const oneOf = `one of ${LAUNCH_PLATFORMS.join(", ")}`;
+    if (list.length === 0) bad(`requires.platform must name at least ${oneOf}`);
+    const platforms: WhenPlatform[] = [];
+    for (const p of list) {
+      if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
+        bad(`requires.platform must be ${oneOf} (or a list of them)`);
+      }
+      platforms.push(p as WhenPlatform);
+    }
+    out.platform = platforms;
+  }
+  if (b.runtimeKind !== undefined) {
+    const kind = b.runtimeKind;
+    if (typeof kind !== "string" || !(RUNTIME_KINDS as readonly string[]).includes(kind)) {
+      bad(`requires.runtimeKind must be one of ${RUNTIME_KINDS.join(", ")}`);
+    }
+    out.runtimeKind = kind as FlowRuntimeKind;
+  }
+  if (out.platform === undefined && out.runtimeKind === undefined) {
+    bad(
+      `requires must declare at least one of ${REQUIRES_KEYS.join(", ")} ` +
+        `(omit the block for a flow that runs on any target)`
+    );
+  }
+  return out;
+}
+
+/**
+ * YAML reads an unquoted `5` or `true` as a number or boolean, not a string.
+ * Name that launch arg and say to quote it instead of the generic launch error.
+ */
+function rejectUnquotedLaunchArg(raw: unknown, args: unknown[], where: string): void {
+  const i = args.findIndex((a) => typeof a === "number" || typeof a === "boolean");
+  if (i === -1) return;
+  const v = String(args[i]);
+  badEntry(
+    raw,
+    `${where}.args[${i}] is a ${typeof args[i]} (${v}); quote it so it stays a string: "${v}"`
+  );
+}
+
 /**
  * Parse a chromium launch value: an app path (bare string) or `{ path, args? }`.
  * Returns null when the shape is invalid (caller reports the launch error).
@@ -2237,8 +2423,29 @@ function parseChromiumLaunch(raw: unknown): ChromiumLaunch | null {
     rejectUnknownKeys({ launch: { chromium: raw } }, b, ["path", "args"], "launch.chromium");
     if (typeof b.path !== "string" || b.path.length === 0) return null;
     if (b.args === undefined) return { path: b.path };
+    if (Array.isArray(b.args))
+      rejectUnquotedLaunchArg({ launch: { chromium: raw } }, b.args, "launch.chromium");
     if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
     return { path: b.path, args: b.args as string[] };
+  }
+  return null;
+}
+
+/**
+ * Parse an ios launch value: a bundle id (bare string) or `{ app, args? }`.
+ * Returns null when the shape is invalid (caller reports the launch error).
+ */
+function parseIosLaunch(raw: unknown): IosLaunch | null {
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const b = raw as Record<string, unknown>;
+    rejectUnknownKeys({ launch: { ios: raw } }, b, ["app", "args"], "launch.ios");
+    if (typeof b.app !== "string" || b.app.length === 0) return null;
+    if (b.args === undefined) return { app: b.app };
+    if (Array.isArray(b.args))
+      rejectUnquotedLaunchArg({ launch: { ios: raw } }, b.args, "launch.ios");
+    if (!Array.isArray(b.args) || !b.args.every((a) => typeof a === "string")) return null;
+    return { app: b.app, args: b.args as string[] };
   }
   return null;
 }
@@ -2255,7 +2462,7 @@ function parseLaunch(raw: unknown): Launch {
     if (keys.length > 0) {
       const out: {
         native?: string;
-        ios?: string;
+        ios?: IosLaunch;
         android?: string;
         vega?: string;
         chromium?: ChromiumLaunch;
@@ -2269,6 +2476,13 @@ function parseLaunch(raw: unknown): Launch {
             break;
           }
           out.chromium = c;
+        } else if (k === "ios") {
+          const i = parseIosLaunch(b[k]);
+          if (i === null) {
+            valid = false;
+            break;
+          }
+          out.ios = i;
         } else if (typeof b[k] === "string" && (b[k] as string).length > 0) {
           (out as Record<string, string>)[k] = b[k] as string;
         } else {
@@ -2283,7 +2497,7 @@ function parseLaunch(raw: unknown): Launch {
     { launch: raw },
     `launch needs an app id (bare string) or a per-platform map ` +
       `({ native | ${LAUNCH_PLATFORMS.filter((p) => p !== "chromium").join(" | ")}: <app id>, ` +
-      `chromium: <app path> | { path, args } })`
+      `ios: { app, args }, chromium: <app path> | { path, args } })`
   );
 }
 
@@ -2305,6 +2519,7 @@ export const STEP_DIRECTIVE_KEYS: readonly string[] = [
   "scroll-to",
   "pinch",
   "rotate",
+  "fold",
   "snapshot",
   "script",
 ];
@@ -2599,6 +2814,64 @@ function parseRotate(body: unknown, entry: unknown): FlowStep {
   return step;
 }
 
+const FOLD_SHAPE_HINT =
+  `fold takes a posture (${FOLD_POSTURES.join(", ")}), an angle in degrees (0-180), or an ` +
+  `options map — e.g. fold: open, fold: 120, fold: { angle: 120 }`;
+
+function parseFoldAngle(value: unknown, entry: unknown, what: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 180) {
+    badEntry(entry, `${what} must be a number of degrees between 0 (closed) and 180 (open)`);
+  }
+  return value;
+}
+
+/**
+ * Parse a `fold` body: a bare posture (`fold: open`), a bare angle
+ * (`fold: 120`), or an options map with exactly one of `posture` and `angle`.
+ * The same contract as the `fold` tool the step dispatches to.
+ */
+function parseFold(body: unknown, entry: unknown): FlowStep {
+  if (typeof body === "string") {
+    if (!isFoldPosture(body)) badEntry(entry, FOLD_SHAPE_HINT);
+    return { kind: "fold", posture: body };
+  }
+  if (typeof body === "number") {
+    return { kind: "fold", angle: parseFoldAngle(body, entry, "fold") };
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    badEntry(entry, FOLD_SHAPE_HINT);
+  }
+  const obj = body as Record<string, unknown>;
+  rejectUnknownKeys(entry, obj, ["posture", "angle"], "fold");
+  const hasPosture = obj.posture !== undefined;
+  const hasAngle = obj.angle !== undefined;
+  if (hasPosture === hasAngle) {
+    badEntry(entry, "fold takes exactly one of posture and angle");
+  }
+  const step: FlowStep = { kind: "fold" };
+  if (hasPosture) {
+    if (!isFoldPosture(obj.posture)) {
+      badEntry(entry, `fold.posture must be one of ${FOLD_POSTURES.join(", ")}`);
+    }
+    step.posture = obj.posture;
+  }
+  if (hasAngle) step.angle = parseFoldAngle(obj.angle, entry, "fold.angle");
+  return step;
+}
+
+/**
+ * The `fold:` step a recorded `fold` tool call becomes, or undefined when the
+ * call's args are not the directive's (the recorder then keeps a raw
+ * `tool: fold` step, as it does for any call it cannot rewrite).
+ */
+export function foldStepFromArgs(args: Record<string, unknown>): FlowStep | undefined {
+  try {
+    return parseFold(args, { fold: args });
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Parse a `when:` guard — exactly one condition key: a UI condition
  * (exists|visible|hidden|text, the await/assert shapes) or `platform` (a static
@@ -2735,7 +3008,7 @@ function parseWhenStep(raw: Record<string, unknown>, depth: number): FlowStep {
   if ("else" in raw) {
     badEntry(
       raw,
-      "when has no else — paths may only reconverge, never diverge; two genuinely different paths are two flows"
+      "when has no else — paths may only reconverge, never diverge; two genuinely different paths are two e2e tests"
     );
   }
   if (!Object.keys(raw).every((k) => k === "when" || k === "steps")) {
@@ -2785,8 +3058,8 @@ function parseRunTarget(raw: unknown, value: unknown): string {
     badEntry(
       raw,
       value === null || value === undefined
-        ? "`run` has no target — give it a YAML path relative to this flow's file, e.g. `run: fragments/login.yaml`"
-        : "a `run` target must be a YAML path string relative to this flow's file, e.g. `run: fragments/login.yaml`"
+        ? "`run` has no target — give it a YAML path relative to this e2e test's file, e.g. `run: fragments/login.yaml`"
+        : "a `run` target must be a YAML path string relative to this e2e test's file, e.g. `run: fragments/login.yaml`"
     );
   }
   if (value.includes("\\")) {
@@ -2797,7 +3070,7 @@ function parseRunTarget(raw: unknown, value: unknown): string {
   // win32.isAbsolute passes but which resolves against the drive's cwd). No
   // `\`-separated absolute survives the backslash rejection above.
   if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
-    badEntry(raw, "a `run` path must be relative to the flow file that references it");
+    badEntry(raw, "a `run` path must be relative to the e2e test file that references it");
   }
   const target = completeRunExtension(value);
   if (!target.endsWith(".yaml")) {
@@ -2808,7 +3081,7 @@ function parseRunTarget(raw: unknown, value: unknown): string {
     // quoted too: "must end in .yaml" alone would contradict the documented rule
     // for an author who deliberately left the extension off and tripped the
     // charset (`run: my flow`) or a trailing slash (`run: shared/`).
-    badEntry(raw, "a `run` path must end in .yaml, or name a sibling flow (`run: login`)");
+    badEntry(raw, "a `run` path must end in .yaml, or name a sibling e2e test (`run: login`)");
   }
   if (!FLOW_FILE_NAME_PATTERN.test(path.posix.basename(target))) {
     badEntry(
@@ -2817,34 +3090,6 @@ function parseRunTarget(raw: unknown, value: unknown): string {
     );
   }
   return target;
-}
-
-/**
- * Complete a `run:` target's optional `.yaml` extension: `run: login` means
- * `login.yaml` beside the containing flow file, exactly as the spelled-out form
- * does. This is the compatibility path for flows written when a `run:` target
- * was a saved-flow NAME looked up in `.argent/flows` — a bare name resolves to
- * the same file it always did, since those flows sit in that one directory.
- *
- * Completed HERE rather than at resolution time so exactly one spelling reaches
- * everything downstream: canonicalFlowPath's read, the fragment's on-disk casing
- * check, the report's `target`, and runDisplayName — which slices a fixed
- * `".yaml".length` off the target and would truncate a real path segment given a
- * bare one (see flow-run.ts). Re-serializing a parsed flow therefore writes the
- * completed spelling back, which is the intended one-way migration.
- *
- * The test is the CANDIDATE's basename, not the supplied value's: basename()
- * strips a trailing slash, so testing `${basename(value)}.yaml` would complete
- * `shared/` to the unopenable `shared/.yaml`. Anything else the candidate cannot
- * name — a wrong extension (`login.yml`), a mis-cased one (`Login.YAML`), an
- * empty target — leaves the value untouched for the caller's extension
- * diagnostics, which name the real problem better than a silent completion to
- * `login.yml.yaml` could.
- */
-function completeRunExtension(value: string): string {
-  if (value.endsWith(".yaml")) return value;
-  const candidate = `${value}.yaml`;
-  return FLOW_FILE_NAME_PATTERN.test(path.posix.basename(candidate)) ? candidate : value;
 }
 
 function parseScriptStep(raw: unknown, body: unknown): FlowStep {
@@ -2871,7 +3116,7 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
     badEntry(
       raw,
-      "a `script` step needs a `path` — a .mjs file path relative to this flow's file, e.g. `script: { path: scripts/seed.mjs }`"
+      "a `script` step needs a `path` — a .mjs file path relative to this e2e test's file, e.g. `script: { path: scripts/seed.mjs }`"
     );
   }
   if (value.includes("\\")) {
@@ -2881,7 +3126,7 @@ export function parseScriptPath(raw: unknown, value: unknown): string {
   // forms it does not — absolute ("C:/") and drive-RELATIVE ("C:foo", which
   // resolves against that drive's own current directory).
   if (path.posix.isAbsolute(value) || /^[A-Za-z]:/.test(value)) {
-    badEntry(raw, "a `script` path must be relative to the flow file that references it");
+    badEntry(raw, "a `script` path must be relative to the e2e test file that references it");
   }
   if (!value.endsWith(".mjs")) {
     if (value.toLowerCase().endsWith(".mjs")) {
@@ -3121,6 +3366,7 @@ function* outputReferenceFields(step: FlowStep): Generator<StepField> {
     case "run":
     case "idle":
     case "wait":
+    case "fold":
       return;
     default: {
       const unclassified: never = step;
@@ -3482,6 +3728,8 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("rotate" in raw) return parseRotate((raw as { rotate: unknown }).rotate, raw);
 
+  if ("fold" in raw) return parseFold((raw as { fold: unknown }).fold, raw);
+
   if ("snapshot" in raw) {
     const body = (raw as { snapshot: unknown }).snapshot;
     // A misspelled `maxMissmatch` would silently drop the tolerance.
@@ -3511,10 +3759,18 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
     }
     const step: FlowStep = { kind: "snapshot", name: b.name };
     if (b.maxMismatch !== undefined) {
-      // The runner compares `mismatchPercentage <= maxMismatch` — a NaN here
+      // The runner compares the diff against `maxMismatch` — a NaN here
       // (e.g. from "5%") would make every comparison false, failing the snapshot
       // even on byte-identical frames.
-      const m = Number(b.maxMismatch);
+      // Only real numbers and plain decimal strings count: `Number()` alone would
+      // turn null/false/[]/blank into 0, true into 1 and "0x10" into 16.
+      const rawMax: unknown = b.maxMismatch;
+      const m =
+        typeof rawMax === "number"
+          ? rawMax
+          : typeof rawMax === "string" && /^\s*[-+]?(\d+\.?\d*|\.\d+)\s*$/.test(rawMax)
+            ? Number(rawMax)
+            : NaN;
       if (!Number.isFinite(m) || m < 0 || m > 100) {
         badEntry(
           raw,
@@ -3536,7 +3792,13 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
 
   if ("tool" in raw) {
     const r = raw as { tool: string; args?: Record<string, unknown>; delayMs?: number };
-    const step: FlowStep = { kind: "tool", name: r.tool, args: r.args ?? {} };
+    let args = r.args ?? {};
+    try {
+      args = canonicalToolArgs(r.tool, args);
+    } catch (err) {
+      badEntry(raw, err instanceof Error ? err.message : String(err));
+    }
+    const step: FlowStep = { kind: "tool", name: r.tool, args };
     if (r.delayMs !== undefined) step.delayMs = r.delayMs;
     return step;
   }
@@ -3544,9 +3806,26 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   return badEntry(raw, "unrecognized step kind");
 }
 
-/** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
+/**
+ * The e2e file format version this build writes and the newest it reads. A file
+ * without `version` is version 1.
+ */
+const FLOW_FILE_VERSION = 1;
+
+function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["requires"] {
+  return {
+    ...(platform ? { platform: platform.length === 1 ? platform[0] : platform } : {}),
+    ...(runtimeKind ? { runtimeKind } : {}),
+  };
+}
+
+/** Serialize a full flow file to YAML: `version` always, other fields only when not empty or defaulted. */
 export function serializeFlow(flow: FlowFile): string {
-  const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
+  const doc: YamlFlowFile = {
+    version: FLOW_FILE_VERSION,
+    ...(flow.requires ? { requires: requiresToYaml(flow.requires) } : {}),
+    steps: flow.steps.map(toYamlStep),
+  };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
@@ -3563,7 +3842,7 @@ export function validateFlow(flow: FlowFile): void {
   assertNoOutputReferences(flow.steps);
   if (isE2eFlow(flow) && flow.executionPrerequisite) {
     throw new FailureError(
-      "A flow whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",
+      "An e2e test whose first step other than `echo:`/`script:` is a `launch` must not declare executionPrerequisite — it launches its own app and controls its start state. Drop that launch to make it a fragment, or drop executionPrerequisite.",
       {
         error_code: FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE,
         failure_stage: "flow_file_validate",
@@ -3588,7 +3867,7 @@ export function parseFlow(content: string): FlowFile {
     parsed = yamlParse(trimmed) as YamlFlowFile;
   } catch (err) {
     throw new FailureError(
-      `Invalid flow file: ${err instanceof Error ? err.message : String(err)}`,
+      `Invalid e2e test file: ${err instanceof Error ? err.message : String(err)}`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_file_parse",
@@ -3599,27 +3878,48 @@ export function parseFlow(content: string): FlowFile {
     );
   }
 
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("steps" in parsed) ||
-    !Array.isArray(parsed.steps)
-  ) {
-    throw new FailureError("Invalid flow file: expected an object with a steps array", {
+  const notAFlow = () =>
+    new FailureError("Invalid e2e test file: expected an object with a steps array", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_file_parse",
       failure_area: "tool_server",
       error_kind: "validation",
     });
+  if (typeof parsed !== "object" || parsed === null) throw notAFlow();
+
+  // Before the shape checks: a newer version may change the shape.
+  const version: unknown = parsed.version ?? 1;
+  if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
+    throw new FailureError(
+      `Invalid e2e test file: version must be a positive integer, got ${renderEntry(version)}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  if (version > FLOW_FILE_VERSION) {
+    throw new FailureError(
+      `The e2e test file is version ${version}, but this Argent reads up to version ${FLOW_FILE_VERSION}. Update Argent to run it.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys, so
-  // a misspelled `executionPrerequisite` must not silently become "".
-  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  if (!("steps" in parsed) || !Array.isArray(parsed.steps)) throw notAFlow();
+
+  // Same strictness as step bodies: a misspelled top-level key must not be silently dropped.
+  const topKeys: readonly string[] = ["version", "executionPrerequisite", "requires", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
-      `Invalid flow file: ${describeUnknownKeys(unknownTop, topKeys)} — ` +
+      `Invalid e2e test file: ${describeUnknownKeys(unknownTop, topKeys)} — ` +
         `allowed top-level keys: ${topKeys.join(", ")}`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
@@ -3637,6 +3937,7 @@ export function parseFlow(content: string): FlowFile {
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
+    ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
     steps,
   };
   validateFlow(flow);
@@ -3688,13 +3989,13 @@ function writeFailureHint(
     case "EROFS":
       return (
         `an append replaces the file via a sibling temp file and rename, so ${dir} must be ` +
-        `writable — permission on the flow file itself is not enough${via}.`
+        `writable — permission on the e2e test file itself is not enough${via}.`
       );
     case "ENOSPC":
     case "EDQUOT":
       return `the filesystem holding ${dir} is out of space (or over quota)${via}.`;
     case "ENAMETOOLONG":
-      return `the flow name makes ${path.basename(target)} longer than this filesystem allows — use a shorter name.`;
+      return `the e2e test name makes ${path.basename(target)} longer than this filesystem allows — use a shorter name.`;
     case "ENOENT":
       return `${dir} does not exist${via}.`;
     default:
@@ -3851,10 +4152,10 @@ async function writeFlowFile(filePath: string, content: string): Promise<void> {
     // EACCES into a silent success that also relaxed the mode to the umask
     // default. Refuse instead.
     throw new FailureError(
-      `Failed to write flow file ${filePath} (EACCES) — ${target} is not writable ` +
+      `Failed to write e2e test file ${filePath} (EACCES) — ${target} is not writable ` +
         `(mode ${previousMode.toString(8).padStart(4, "0")}). An append replaces the file via a ` +
         `sibling temp file and rename, which needs permission on the directory rather than on ` +
-        `the file — so this is refused explicitly rather than quietly overwriting a flow you ` +
+        `the file — so this is refused explicitly rather than quietly overwriting an e2e test you ` +
         `made read-only. chmod it writable to record over it.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_WRITE_FAILED,
@@ -3866,7 +4167,7 @@ async function writeFlowFile(filePath: string, content: string): Promise<void> {
   }
   const tmpPath = path.join(
     path.dirname(target),
-    `.argent-flow-${process.pid}-${++flowWriteSeq}.tmp`
+    `.argent-e2e-${process.pid}-${++flowWriteSeq}.tmp`
   );
   try {
     await fs.writeFile(tmpPath, content, "utf8");
@@ -3892,7 +4193,7 @@ async function writeFlowFile(filePath: string, content: string): Promise<void> {
     const errno = err instanceof Error ? (err as NodeJS.ErrnoException) : undefined;
     const code = typeof errno?.code === "string" ? errno.code : undefined;
     throw new FailureError(
-      `Failed to write flow file ${filePath}${code ? ` (${code})` : ""} — ${writeFailureHint(code, filePath, target, resolvedDir)}`,
+      `Failed to write e2e test file ${filePath}${code ? ` (${code})` : ""} — ${writeFailureHint(code, filePath, target, resolvedDir)}`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_WRITE_FAILED,
         failure_stage: "flow_file_write",
@@ -3951,7 +4252,7 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
   } catch (err) {
     const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
     throw new FailureError(
-      `Failed to create the flows directory ${dir}${typeof code === "string" ? ` (${code})` : ""} — ` +
+      `Failed to create the e2e test directory ${dir}${typeof code === "string" ? ` (${code})` : ""} — ` +
         mkdirFailureHint(typeof code === "string" ? code : undefined, dir),
       {
         error_code: FAILURE_CODES.FLOW_FILE_WRITE_FAILED,
@@ -3974,7 +4275,7 @@ export async function writeNewFlowFile(filePath: string, content: string): Promi
  * and this host cannot read it at all, so the in-memory copy is both the take
  * and the only thing countable — the guarantee below does not carry across that
  * boundary. The agent-facing statement of it lives in
- * `packages/skills/skills/argent-create-flow/references/live-authoring.md`.
+ * `packages/skills/skills/argent-create-e2e/references/live-authoring.md`.
  *
  * The file — not the session's in-memory `flow` — is the take in "host" mode:
  * {@link appendStep} re-reads it before every append and `flow-finish-recording`
@@ -4079,9 +4380,9 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
   // reader after the wrong cause.
   const whatIsAtStake =
     state === "restarted"
-      ? `This key now belongs to another take and flow-start-recording truncates, so re-record ` +
+      ? `This key now belongs to another take and e2e-start-recording truncates, so re-record ` +
         `under a fresh name rather than restarting this one.`
-      : `The key is now free, but the finished take is on disk and flow-start-recording truncates ` +
+      : `The key is now free, but the finished take is on disk and e2e-start-recording truncates ` +
         `it unconditionally, so re-record under a fresh name rather than restarting this one.`;
   const alreadySpent =
     step.kind === "echo"
@@ -4089,7 +4390,7 @@ function assertSessionStillLive(session: RecordingSession, step: FlowStep): void
       : step.kind === "script"
         ? ", but the script already ran — repeating it repeats whatever it did. "
         : ", but the step itself already ran on the device — repeating it repeats that action. ";
-  const recovery = `Nothing was added to the flow file` + alreadySpent + whatIsAtStake;
+  const recovery = `Nothing was added to the e2e test file` + alreadySpent + whatIsAtStake;
   throw new FailureError(
     `Recording of "${session.name}" in ${session.projectRoot} is no longer active — ${why}. ` +
       recovery,

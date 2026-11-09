@@ -7,6 +7,7 @@ import type { NativeProfilerSessionApi } from "../../../../blueprints/native-pro
 import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
+import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import {
   listenForDarwinNotification,
@@ -120,6 +121,8 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
       }
     );
   } catch (err) {
+    // Its message says what to do, and a flow step reports only the thrown message.
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
       `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
@@ -229,7 +232,9 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
   let runningUserApps: { info: AppInfo; pid: number }[];
   try {
     runningUserApps = enumerateRunningUserApps(udid);
-  } catch {
+  } catch (err) {
+    // A refused `simctl` says nothing about the app, so this is not "it isn't running yet".
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     return { executable: name, pid: null };
   }
   const matched = runningUserApps.find(
@@ -266,6 +271,7 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
       maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
       `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
@@ -458,7 +464,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
         `ARGENT_IOS_CAPTURE="${reason.rawValue}" forces the "${reason.strategyName}" capture ` +
         `strategy, which attaches host-wide and cannot \`--launch\` a cold start. Unset ` +
         `ARGENT_IOS_CAPTURE (or set it to "device") to use malloc_stack_logging, or re-run without ` +
-        `malloc_stack_logging (leaks are still detected, just unattributed).`,
+        `malloc_stack_logging.`,
       {
         error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE,
         failure_stage: "native_profiler_start_malloc_capability",
@@ -472,8 +478,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
   return new FailureError(
     `malloc_stack_logging needs to cold-launch the app under \`xctrace --device\`, but ` +
       `${versionNote} has the --device recording-start deadlock (Xcode 26.4 and later), so it would ` +
-      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging ` +
-      `(leaks are still detected, just unattributed), profile on a non-degraded Xcode, or set ` +
+      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging, or set ` +
       `ARGENT_IOS_CAPTURE=device to force the device path if you know it works on your host.`,
     {
       error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE,
@@ -955,11 +960,19 @@ export async function analyzeNativeProfilerIos(
   const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
     await runIosProfilerPipeline(api.exportedFiles, { cpuFilterPid: api.cpuFilterPid });
 
+  // No leaks export means no leak data, not zero leaks: a trace whose template
+  // has the Leaks instrument exports an empty table when nothing leaked. The
+  // all-processes fallback records the built-in Time Profiler template, which
+  // has none. A leaks file that stop wrote but is now gone or unreadable is no
+  // leak data either.
+  const leaksRecorded = api.exportedFiles.leaks != null && !leaksMissing;
+
   api.parsedData = {
     cpuSamples,
     uiHangs,
     cpuHotspots,
     memoryLeaks,
+    leaksRecorded,
     // Freeze the capture mode with the parsed data so drill-down consumers
     // (leak_stacks, combined report) stay paired with it after a newer capture
     // re-stamps the session fields.
@@ -1019,5 +1032,6 @@ export async function analyzeNativeProfilerIos(
     // capture-mode sidecar, so a restored session renders with null (the
     // unattributed-leaks note then goes by the attributed-leak count instead).
     mallocStackLogging: api.mallocStackLogging,
+    leaksRecorded,
   });
 }

@@ -13,10 +13,11 @@
  * Drives the real Registry → JsRuntimeDebugger → debugger-log-registry path
  * against a mock Metro, disposing the service exactly as the teardown does.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
+import * as fs from "node:fs";
 import * as http from "node:http";
-import { Registry } from "@argent/registry";
+import { Registry, ServiceState } from "@argent/registry";
 import {
   jsRuntimeDebuggerBlueprint,
   type JsRuntimeDebuggerApi,
@@ -35,6 +36,7 @@ let mockServer: http.Server;
 let wss: WebSocketServer;
 let mockPort: number;
 let registry: Registry;
+let appRunning = true;
 
 const LOGICAL_ID = "logical-only-device";
 
@@ -54,19 +56,23 @@ beforeAll(async () => {
       if (req.url === "/json/list") {
         res.setHeader("Content-Type", "application/json");
         res.end(
-          JSON.stringify([
-            {
-              id: "page-0",
-              title: "app (Test Device)",
-              description: "[C++ connection]",
-              webSocketDebuggerUrl: `ws://localhost:${mockPort}/inspector/debug?device=${LOGICAL_ID}&page=1`,
-              deviceName: "Test Device",
-              reactNative: {
-                logicalDeviceId: LOGICAL_ID,
-                capabilities: { prefersFuseboxFrontend: true },
-              },
-            },
-          ])
+          JSON.stringify(
+            appRunning
+              ? [
+                  {
+                    id: "page-0",
+                    title: "app (Test Device)",
+                    description: "[C++ connection]",
+                    webSocketDebuggerUrl: `ws://localhost:${mockPort}/inspector/debug?device=${LOGICAL_ID}&page=1`,
+                    deviceName: "Test Device",
+                    reactNative: {
+                      logicalDeviceId: LOGICAL_ID,
+                      capabilities: { prefersFuseboxFrontend: true },
+                    },
+                  },
+                ]
+              : []
+          )
         );
         return;
       }
@@ -99,6 +105,7 @@ beforeEach(async () => {
   // connected would be reused — carrying its entry count into the next case.
   await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${LOGICAL_ID}`).catch(() => {});
   __resetReapedSessionsForTesting();
+  appRunning = true;
 });
 
 async function connectAndCapture(deviceId: string, entries: number): Promise<string> {
@@ -120,9 +127,11 @@ async function connectAndCapture(deviceId: string, entries: number): Promise<str
 describe("a debugger session reaped by stop-all-simulator-servers", () => {
   it("says the console history was deleted rather than reporting a silent app", async () => {
     const urn = await connectAndCapture(LOGICAL_ID, 60);
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
 
     // Exactly what the teardown does to this device's debugger.
     await registry.disposeService(urn);
+    expect(fs.existsSync(api.logWriter.getFilePath())).toBe(false);
 
     // The registry reconnects transparently — a brand new writer over a new
     // file. The count really is 0; the question is whether anything says why.
@@ -186,32 +195,34 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
   });
 
   it("is dropped by an explicit debugger-connect, which starts a capture of its own", async () => {
-    // The consumer is gated on an EMPTY registry, so a breadcrumb survives every
-    // read that finds entries — and would then attach "a teardown ate your logs"
-    // to some later, unrelated empty read. An explicit connect makes it wrong
-    // anyway: from there the capture is this session's own, so empty honestly
-    // means nothing has been logged since. Same discipline as the
-    // screen-recording and native-profiler starts.
+    // The consumer is gated on an empty or not-connected read, so a breadcrumb
+    // survives every read that finds entries — and would then attach "a teardown
+    // ate your logs" to some later, unrelated empty read. An explicit connect
+    // makes it wrong anyway: from there the capture is this session's own, so
+    // empty honestly means nothing has been logged since. Same discipline as
+    // the screen-recording and native-profiler starts.
     const urn = await connectAndCapture(LOGICAL_ID, 40);
     await registry.disposeService(urn);
 
-    await registry.invokeTool("debugger-connect", { port: mockPort, device_id: LOGICAL_ID });
+    const connect = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { note?: string };
 
     const result = (await registry.invokeTool("debugger-log-registry", {
       port: mockPort,
       device_id: LOGICAL_ID,
     })) as { totalEntries: number; note?: string };
 
+    expect(connect.note).toBeUndefined();
     expect(result.totalEntries).toBe(0);
     expect(result.note).toBeUndefined();
   });
 
   describe("when the connect id and the logicalDeviceId differ", () => {
-    // Every case above connects with LOGICAL_ID, so `api.logicalDeviceId ===
-    // deviceId` and the disposer's SECOND recordReapedSession never fires —
-    // that is the Chromium/Vega shape. On iOS/Android the caller connects with
-    // a udid/serial and Metro echoes its own logical id, so one teardown writes
-    // two breadcrumbs. They describe one event and must be spent as one.
+    // Every case above connects with LOGICAL_ID (the Chromium/Vega shape). On
+    // iOS/Android the caller connects with a udid/serial and Metro echoes its
+    // own logical id, so the disposer files one breadcrumb under both ids.
     const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
 
     beforeEach(async () => {
@@ -278,5 +289,85 @@ describe("a debugger session reaped by stop-all-simulator-servers", () => {
         expect(result.note).toBeUndefined();
       }
     });
+  });
+});
+
+describe("a debugger session whose app crashed", () => {
+  async function crash(urn: string): Promise<string> {
+    const api = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
+    appRunning = false;
+    for (const ws of wss.clients) ws.terminate();
+    await vi.waitFor(() =>
+      expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR)
+    );
+    return api.logWriter.getFilePath();
+  }
+
+  it("keeps the log file and names it on the not-connected read", async () => {
+    const file = await crash(await connectAndCapture(LOGICAL_ID, 3));
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { status: string; note?: string };
+
+    expect(result.status).toBe("not_connected");
+    expect(fs.readFileSync(file, "utf-8")).toContain("captured 2");
+    expect(result.note).toContain(`kept at ${file}`);
+    expect(result.note).not.toContain("stop-all-simulator-servers");
+  });
+
+  it("names the kept file on the next debugger-connect", async () => {
+    const file = await crash(await connectAndCapture(LOGICAL_ID, 3));
+    appRunning = true;
+
+    const result = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { note?: string };
+
+    expect(result.note).toContain(`kept at ${file}`);
+  });
+
+  it("names the kept file to a read by the logicalDeviceId of a udid connect", async () => {
+    const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
+    const file = await crash(await connectAndCapture(CONNECT_ID, 3));
+
+    const result = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: LOGICAL_ID,
+    })) as { status: string; note?: string };
+
+    expect(result.status).toBe("not_connected");
+    expect(result.note).toContain(`kept at ${file}`);
+  });
+
+  it("reports the crash once when the connect id and the logicalDeviceId differ", async () => {
+    const CONNECT_ID = "00000000-0000-0000-0000-0000000000ab";
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`).catch(() => {});
+    const file = await crash(await connectAndCapture(CONNECT_ID, 3));
+
+    const first = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { status: string; note?: string };
+    expect(first.status).toBe("not_connected");
+    expect(first.note).toContain(`kept at ${file}`);
+
+    appRunning = true;
+    const emptyRead = (await registry.invokeTool("debugger-log-registry", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { status: string; note?: string };
+    const reconnect = (await registry.invokeTool("debugger-connect", {
+      port: mockPort,
+      device_id: CONNECT_ID,
+    })) as { note?: string };
+
+    expect(emptyRead.status).toBe("connected");
+    expect(emptyRead.note).toBeUndefined();
+    expect(reconnect.note).toBeUndefined();
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:${CONNECT_ID}`);
   });
 });

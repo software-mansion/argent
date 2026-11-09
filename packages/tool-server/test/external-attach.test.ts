@@ -35,6 +35,7 @@ import { scopeTempHome } from "./helpers/temp-home";
 
 vi.mock("../src/utils/ios-devices", () => ({
   isTvOsSimulator: vi.fn(async () => false),
+  isFoldableSimulator: vi.fn(async () => false),
   listIosSimulators: vi.fn(async () => []),
   getSimulatorRuntimeKind: vi.fn(async () => undefined),
   getCachedSimulatorRuntimeKind: vi.fn(() => undefined),
@@ -308,7 +309,7 @@ describe("attaching to a provider's simulator-server", () => {
     const simulatorServer = await startSimulatorServer();
     const device = attachTo(simulatorServer);
     const instance = await simulatorServerBlueprint.factory({}, device, { device });
-    await expect(setSimulatorClipboardText(instance.api, "hello")).resolves.toBeUndefined();
+    await expect(setSimulatorClipboardText(instance.api, "hello")).resolves.toBe("set");
     expect(simulatorServer.clipboardTexts).toEqual(["hello"]);
   });
 

@@ -349,17 +349,58 @@ describe("flowRunToMcpContent", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("names the same-named test a run's test hides, under the header", async () => {
+    const warning =
+      "/p/.argent/flows/f.yaml is not used: /p/.argent/e2e/f.yaml has the same name and is read first.";
+    const blocks = await flowRunToMcpContent({ flow: "f", steps: [], warning });
+
+    expect(blocks.slice(0, 2)).toEqual([
+      { type: "text", text: 'Running e2e test "f" (0 steps)' },
+      { type: "text", text: `⚠ ${warning}` },
+    ]);
+  });
+
+  it("names each baseline a run over a link returned but could not write", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [],
+      baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+    });
+
+    expect(blocks).toContainEqual({
+      type: "text",
+      text: "✗ baseline not written: /p/b.png: EACCES: permission denied",
+    });
+  });
+
+  it("names the e2e test from e2eTest, falling back to the flow an older tool-server sends", async () => {
+    const texts = async (input: FlowExecuteResult) =>
+      (await flowRunToMcpContent(input)).map((b) => (b.type === "text" ? b.text : ""));
+    expect(await texts({ e2eTest: "new", flow: "old", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ e2eTest: "new", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ flow: "old", steps: [] })).toEqual([
+      'Running e2e test "old" (0 steps)',
+      'E2E test "old" complete.',
+    ]);
+  });
+
   it("produces header and footer text blocks", async () => {
     const input: FlowExecuteResult = { flow: "test", steps: [] };
     const blocks = await flowRunToMcpContent(input);
 
     expect(blocks[0]).toEqual({
       type: "text",
-      text: 'Running flow "test" (0 steps)',
+      text: 'Running e2e test "test" (0 steps)',
     });
     expect(blocks[blocks.length - 1]).toEqual({
       type: "text",
-      text: 'Flow "test" complete.',
+      text: 'E2E test "test" complete.',
     });
   });
 
@@ -563,7 +604,7 @@ describe("flowRunToMcpContent", () => {
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text);
 
-    expect(texts[0]).toBe('Running flow "checkout" on SIM (4 steps)');
+    expect(texts[0]).toBe('Running e2e test "checkout" on SIM (4 steps)');
     expect(texts[1]).toBe("[1] ✓ tap");
     expect(texts[2]).toBe("[2] ✓ assert");
     expect(texts[3]).toBe("[3] ✗ snapshot — diff 3.10% > 0.5% (home)");
@@ -571,6 +612,47 @@ describe("flowRunToMcpContent", () => {
     expect(texts[texts.length - 1]).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
     // No invalid (text: undefined) blocks even though directive steps carry no result.
     expect(blocks.every((b) => b.type !== "text" || typeof b.text === "string")).toBe(true);
+  });
+
+  it("puts each step's time before its reason and the run time on the verdict", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      device: "SIM",
+      ok: false,
+      passed: 1,
+      failed: 1,
+      errored: 0,
+      skipped: 1,
+      durationMs: 92_400,
+      steps: [
+        { index: 0, kind: "echo", status: "pass", message: "opening", durationMs: 0 },
+        { index: 1, kind: "launch", status: "pass", target: "com.acme.shop", durationMs: 3100 },
+        {
+          index: 2,
+          kind: "tap",
+          status: "fail",
+          target: '"Checkout"',
+          reason: "no match",
+          warning: "moving",
+          depth: 1,
+          durationMs: 5002,
+        },
+        { index: 3, kind: "await", status: "skip", target: 'visible "Done"' },
+        { index: 4, kind: "tap", status: "pass", durationMs: -1 },
+      ],
+    };
+    const texts = (await flowRunToMcpContent(input))
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text);
+
+    expect(texts.slice(1)).toEqual([
+      "[1] ✓ opening",
+      "[2] ✓ launch com.acme.shop (3.1s)",
+      '[3] ✗   tap "Checkout" (5.0s) — no match ⚠ moving',
+      '[4] · await visible "Done"',
+      "[5] ✓ tap",
+      "FAIL — 1 passed, 1 failed, 0 errored, 1 skipped (1m 32s)",
+    ]);
   });
 
   it("surfaces a legacy passed step's warning on its status line (older tool-servers adopted missing baselines)", async () => {
@@ -833,7 +915,7 @@ describe("flowRunToMcpContent", () => {
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text);
 
-    expect(texts[0]).toContain("Running flow");
+    expect(texts[0]).toContain("Running e2e test");
     expect(texts[1]).toBe("[1] Start");
     expect(texts[2]).toBe("[2] gesture-tap");
     // [3] is JSON result

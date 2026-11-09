@@ -190,13 +190,13 @@ describe("readAllToolsServerStates", () => {
 
 describe("killToolServer — empty state cases", () => {
   it("is a no-op when no state file exists", async () => {
-    await expect(launcher.killToolServer()).resolves.toBeUndefined();
-    await expect(launcher.killToolServer(BUNDLE)).resolves.toBeUndefined();
+    await expect(launcher.killToolServer()).resolves.toBe(false);
+    await expect(launcher.killToolServer(BUNDLE)).resolves.toBe(false);
   });
 
   it("clears state pointing at a long-dead pid without throwing", async () => {
     await launcher.writeToolsServerState({ ...sampleState, pid: DEAD_PID });
-    await launcher.killToolServer(BUNDLE);
+    expect(await launcher.killToolServer(BUNDLE)).toBe(false);
     expect(await launcher.readToolsServerState(BUNDLE)).toBeNull();
   });
 
@@ -211,6 +211,18 @@ describe("killToolServer — empty state cases", () => {
     expect(await launcher.readToolsServerState(BUNDLE)).toBeNull();
     expect(await launcher.readToolsServerState(OTHER_BUNDLE)).not.toBeNull();
   });
+
+  // win32 has no `ps`, so the guard is deliberately disabled there — this test
+  // would SIGTERM the test runner itself.
+  it.skipIf(process.platform === "win32")(
+    "signals nothing and keeps the record when the LIVE pid is not our tool-server",
+    async () => {
+      // A recycled pid: alive, but its command line is the vitest runner.
+      await launcher.writeToolsServerState({ ...sampleState, pid: process.pid });
+      expect(await launcher.killToolServer(BUNDLE)).toBe(false);
+      expect(await launcher.readToolsServerState(BUNDLE)).not.toBeNull();
+    }
+  );
 });
 
 describe("killToolServerForInstallDir", () => {

@@ -8,8 +8,7 @@ import {
 } from "@argent/tools-client";
 
 export type ContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 
 /**
  * Context for resolving artifact handles. Omitted ⇒ rendering falls back to the
@@ -186,7 +185,7 @@ export async function screenshotDiffToMcpContent(
   return blocks;
 }
 
-export type FlowStepResult = {
+type FlowStepResult = {
   index?: number;
   kind: string;
   status?: "pass" | "fail" | "skip" | "error";
@@ -217,12 +216,15 @@ export type FlowStepResult = {
   artifacts?: Record<string, unknown>;
   scriptLog?: string;
   scriptLogTruncated?: boolean;
+  durationMs?: number;
   /** Legacy field from pre-report flow-execute results. */
   error?: string;
 };
 
 export type FlowExecuteResult = {
-  flow: string;
+  e2eTest?: string;
+  /** The `e2eTest` of a tool-server that predates that field. */
+  flow?: string;
   device?: string;
   executionPrerequisite?: string;
   ok?: boolean;
@@ -231,6 +233,15 @@ export type FlowExecuteResult = {
   skipped?: number;
   errored?: number;
   steps: FlowStepResult[];
+  startedAt?: number;
+  durationMs?: number;
+  /**
+   * The baselines a run over a link returned: each the path the client
+   * wrote, or `{ path, error }` for one it could not write.
+   */
+  baselineWrites?: unknown[];
+  /** A test of the same name that this one hides. */
+  warning?: string;
 };
 
 const STATUS_GLYPH: Record<string, string> = {
@@ -252,6 +263,14 @@ const MAX_RENDER_DEPTH = 20;
 function stepIndent(depth: unknown): string {
   if (typeof depth !== "number" || !Number.isInteger(depth) || depth <= 0) return "";
   return "  ".repeat(Math.min(depth, MAX_RENDER_DEPTH));
+}
+
+function durationSuffix(ms: unknown): string {
+  if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return "";
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) return ` (${(tenths / 10).toFixed(1)}s)`;
+  const seconds = Math.round(ms / 1000);
+  return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
 function stepLabel(step: FlowStepResult): string {
@@ -276,6 +295,7 @@ export async function flowRunToMcpContent(
   ctx?: ContentContext
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
+  const name = result.e2eTest ?? result.flow;
 
   if (result.executionPrerequisite) {
     blocks.push({ type: "text", text: `Prerequisite: ${result.executionPrerequisite}` });
@@ -283,8 +303,10 @@ export async function flowRunToMcpContent(
 
   blocks.push({
     type: "text",
-    text: `Running flow "${result.flow}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
+    text: `Running e2e test "${name}"${result.device ? ` on ${result.device}` : ""} (${result.steps.length} steps)`,
   });
+  if (typeof result.warning === "string")
+    blocks.push({ type: "text", text: `⚠ ${result.warning}` });
 
   for (let i = 0; i < result.steps.length; i++) {
     const step = result.steps[i]!;
@@ -295,9 +317,10 @@ export async function flowRunToMcpContent(
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
     const warning = step.warning ? ` ⚠ ${step.warning}` : "";
+    const timing = step.kind === "echo" ? "" : durationSuffix(step.durationMs);
     blocks.push({
       type: "text",
-      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
+      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${timing}${suffix}${warning}`,
     });
 
     const scriptLog = typeof step.scriptLog === "string" ? step.scriptLog : "";
@@ -319,6 +342,15 @@ export async function flowRunToMcpContent(
     }
   }
 
+  // A baseline the run reports written but this client could not store:
+  // the step passed, the file is not there.
+  for (const write of result.baselineWrites ?? []) {
+    const { path, error } = (isRecord(write) ? write : {}) as { path?: unknown; error?: unknown };
+    if (typeof path === "string" && typeof error === "string") {
+      blocks.push({ type: "text", text: `✗ baseline not written: ${path}: ${error}` });
+    }
+  }
+
   if (result.ok !== undefined) {
     // Echo steps are narration and go uncounted, so an all-echo flow counts
     // nothing — say so rather than reporting four zeros on a passing run.
@@ -327,10 +359,10 @@ export async function flowRunToMcpContent(
     const note = result.ok && counted === 0 ? " (no test steps)" : "";
     blocks.push({
       type: "text",
-      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}`,
+      text: `${result.ok ? "PASS" : "FAIL"} — ${result.passed ?? 0} passed, ${result.failed ?? 0} failed, ${result.errored ?? 0} errored, ${result.skipped ?? 0} skipped${note}${durationSuffix(result.durationMs)}`,
     });
   } else {
-    blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+    blocks.push({ type: "text", text: `E2E test "${name}" complete.` });
   }
   return blocks;
 }

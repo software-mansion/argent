@@ -1,6 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { consolePortFromAdbSerial, isAndroidTv, runAdb } from "../../../utils/adb";
+import { consolePortFromAdbSerial, isAndroidTv } from "../../../utils/adb";
+import { runEmuConsole } from "../../../utils/emulator-console";
 import { UnsupportedOperationError } from "../../../utils/capability";
 import type { ShakeParams, ShakeResult, ShakeServices } from "../types";
 
@@ -81,29 +82,6 @@ const fmt = (v: Vec3) => `${v.x.toFixed(4)}:${v.y.toFixed(4)}:${v.z.toFixed(4)}`
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Run an emulator-console command, failing when the console rejects it.
- *
- * `adb emu` exits 0 even on refusal — the only sign is a `KO:` line in the reply,
- * so `runAdb`, which inspects the exit code alone, reads a rejected sensor write
- * as a successful one and the tool reports a shake that never reached the device.
- *
- * Only the LAST non-empty line is the verdict: an unrelated `KO:` (an
- * authentication banner, say) can precede a command that then succeeds with `OK`.
- */
-async function emuConsole(serial: string, args: string[]): Promise<string> {
-  const { stdout } = await runAdb(["-s", serial, "emu", ...args], { timeoutMs: 10_000 });
-  const lines = stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const verdict = lines[lines.length - 1];
-  if (verdict?.startsWith("KO:")) {
-    throw new Error(`emulator console rejected \`${args.join(" ")}\` — ${verdict}`);
-  }
-  return stdout;
-}
-
-/**
  * Serializes shakes per device.
  *
  * A burst is not atomic: it overrides the accelerometer, then restores the
@@ -162,7 +140,7 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
     }
 
     const setAcceleration = async (v: Vec3) => {
-      await emuConsole(serial, ["sensor", "set", "acceleration", fmt(v)]);
+      await runEmuConsole(serial, ["sensor", "set", "acceleration", fmt(v)]);
     };
 
     // Capture, burst and restore are one critical section: a concurrent shake
@@ -170,7 +148,7 @@ export const androidImpl: PlatformImpl<ShakeServices, ShakeParams, ShakeResult> 
     return withDeviceLock(serial, async () => {
       let rest: Vec3;
       try {
-        rest = restingVectorFrom(await emuConsole(serial, ["sensor", "get", "acceleration"]));
+        rest = restingVectorFrom(await runEmuConsole(serial, ["sensor", "get", "acceleration"]));
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         throw new FailureError(

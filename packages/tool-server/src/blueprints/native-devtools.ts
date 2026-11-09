@@ -10,6 +10,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
+import { XcodeFirstLaunchPendingError } from "../utils/dependency-errors";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -62,7 +63,7 @@ export function isInjectableBundleId(bundleId: string): boolean {
 export const NON_INJECTABLE_NATIVE_WARNING =
   "Do not fall back to the native-devtools feature tools (native-describe-screen, " +
   "native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, " +
-  "native-user-interactable-view-at-point) — they run the same injection precheck and fail " +
+  "native-user-interactable-view-at-point): they run the same injection precheck and fail " +
   "with the same non-injectable error.";
 
 /**
@@ -352,7 +353,13 @@ export async function precheckNativeDevtools(
 
   try {
     await api.ensureEnvReady();
-  } catch {
+  } catch (err) {
+    // Not a fault of the simulator, so not recorded as one: let it say what to do.
+    if (err instanceof XcodeFirstLaunchPendingError) {
+      // A connected app is read over its own socket, which needs no simctl.
+      if (bundleId !== undefined && api.isConnected(bundleId)) return null;
+      throw err;
+    }
     const failure = api.getInitFailure();
     if (failure) return buildInitFailedResult(udid, failure);
     return buildInitFailedResult(udid, {
@@ -369,7 +376,10 @@ export async function precheckNativeDevtools(
   // other consumer rather than letting a raw `Invalid device: <udid>` out: a
   // failure recorded by that re-apply means the sim itself is gone
   // (init_failed's case), anything else leaves the connection unmeasured.
-  const state = await api.appConnectionState(bundleId).catch(() => {
+  const state = await api.appConnectionState(bundleId).catch((err: unknown) => {
+    // On an armed service `ensureEnvReady` above runs no simctl, so this is where
+    // the refusal lands. A connected app answers before it needs simctl.
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const failure = api.getInitFailure();
     return failure ? buildInitFailedResult(udid, failure) : ("indeterminate" as const);
   });
@@ -419,7 +429,7 @@ export interface NetworkEvent {
   timestamp: number;
 }
 
-export type ViewInspectorMethod =
+type ViewInspectorMethod =
   | "ViewHierarchy.getFullHierarchy"
   | "ViewHierarchy.findViews"
   | "ViewHierarchy.viewAtPoint"
@@ -428,7 +438,7 @@ export type ViewInspectorMethod =
 
 type InspectorMethod = ViewInspectorMethod | "Application.getState";
 
-export type NativeApplicationState = "active" | "inactive" | "background" | "unknown";
+type NativeApplicationState = "active" | "inactive" | "background" | "unknown";
 
 export interface NativeAppState {
   bundleId: string;
@@ -668,6 +678,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
+      /**
+       * Refused because Xcode's component install is pending. That ends when
+       * the user installs the components, so counting it would give up for
+       * good on a simulator that then works.
+       */
+      if (err instanceof XcodeFirstLaunchPendingError) return;
       const lastError = err instanceof Error ? err.message : String(err);
       const attempts = (initFailure?.attempts ?? 0) + 1;
       const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;

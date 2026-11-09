@@ -19,6 +19,9 @@
  *   node scripts/next-canary-version.mjs           print the canary version
  *   node scripts/next-canary-version.mjs --write    also stamp it into
  *                                                    packages/argent/package.json
+ *   ... --taken <version>                            count <version> as published
+ *                                                    (npm staged it, but does not
+ *                                                    list it yet)
  */
 
 import { execFileSync } from "node:child_process";
@@ -68,6 +71,8 @@ function main() {
   );
   // npm returns a bare string when a package has exactly one published version.
   const versions = Array.isArray(raw) ? raw : [raw];
+  const takenIdx = processArgv.indexOf("--taken");
+  if (takenIdx !== -1) versions.push(processArgv[takenIdx + 1]);
   const version = computeCanaryVersion(versions);
 
   if (write) {
