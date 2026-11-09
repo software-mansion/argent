@@ -1,7 +1,7 @@
 /** Convert raw tool results into MCP content blocks (text / image). */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute } from "node:path";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -80,7 +80,7 @@ export async function toMcpContent(
       const legacy = await legacyImageContent(rewritten, suppressImage);
       const out = requestedOut(args);
       if (!out) return legacy;
-      const notSaved = `Could not save to ${resolve(out)}: no image file came back, so any file already there is not this capture.`;
+      const notSaved = `Could not save to ${out}: no image file came back, so any file already there is not this capture.`;
       return [...legacy, { type: "text", text: notSaved }];
     }
 
@@ -108,16 +108,18 @@ async function savedText(scratchPath: string, data: Buffer, args: unknown): Prom
   if (!isAbsolute(out)) {
     return `Saved: ${scratchPath}\nCould not save to ${out}: not an absolute path on this computer`;
   }
-  const target = resolve(out);
   try {
-    // The raw `out`: resolve() drops a trailing separator ("shots/" would become a file)
-    // and folds "missing/.." away, which the kernel does not.
+    // Not normalized: path.resolve treats `..` and a trailing separator unlike the kernel.
     await mkdir(dirname(out), { recursive: true });
+    // A FIFO would block the write and a device would take the bytes.
+    if ((await stat(out).catch(() => null))?.isFile() === false) {
+      throw new Error("not a regular file");
+    }
     await writeFile(out, data);
-    return `Saved: ${target}`;
+    return `Saved: ${out}`;
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    return `Saved: ${scratchPath}\nCould not save to ${target}: ${reason}`;
+    return `Saved: ${scratchPath}\nCould not save to ${out}: ${reason}`;
   }
 }
 

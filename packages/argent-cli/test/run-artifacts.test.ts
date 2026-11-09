@@ -246,23 +246,31 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(fs.readFileSync(join(outDir, "rel.png"))).toEqual(PNG);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "refuses a Windows-absolute `out`, which is cwd-relative on POSIX",
-    async () => {
-      state.screenshotData = { image: await localScreenshotHandle() };
-      const own = `C:\\argent-test-${process.pid}.png`;
-      try {
-        await expect(
-          run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: own })], opts)
-        ).rejects.toThrow(
-          `process.exit(1) called: Failed to save image: out is not an absolute path on this computer: ${own}`
-        );
-        expect(fs.existsSync(own)).toBe(false);
-      } finally {
-        fs.rmSync(own, { force: true });
-      }
+  it.each([
+    ["relative", `rel-${process.pid}.png`],
+    ["blank", "  "],
+    ...(process.platform === "win32" ? [] : [["Windows-absolute", `C:\\shot-${process.pid}.png`]]),
+  ])("refuses a %s payload `out` before the capture", async (_label, own) => {
+    state.screenshotData = { image: await localScreenshotHandle() };
+    try {
+      await expect(
+        run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: own })], opts)
+      ).rejects.toThrow(
+        "process.exit(2) called: Error: `out` must be an absolute path on this computer; `--out <path>` also takes a relative one"
+      );
+      expect(state.screenshotBody).toBe("");
+    } finally {
+      if (own.trim()) fs.rmSync(own, { force: true });
     }
-  );
+  });
+
+  it("refuses an `out` that is not a regular file", async () => {
+    state.screenshotData = { image: await localScreenshotHandle() };
+
+    await expect(run(["screenshot", "--udid", "SIM-1", "--out", outDir], opts)).rejects.toThrow(
+      `process.exit(1) called: Failed to save image: ${outDir} is not a regular file`
+    );
+  });
 
   it.each([
     ["null", null],

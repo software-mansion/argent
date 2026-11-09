@@ -363,7 +363,26 @@ describe("toMcpContent with artifact ctx", () => {
     expect(result[0]?.type).toBe("image");
     const text = (result[1] as { text: string }).text;
     expect(text).toMatch(/^Saved: .*shot\.png\nCould not save to /);
-    expect(text).toContain(out);
+    expect(text).toContain(`Could not save to ${out}: E`);
+  });
+
+  it("refuses an `out` that is not a regular file", async () => {
+    const out = join(root, "isdir");
+    await fs.mkdir(out);
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img10", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE]),
+      },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    const lines = (result[0] as { text: string }).text.split("\n");
+    expect(lines[1]).toBe(`Could not save to ${out}: not a regular file`);
   });
 
   it("refuses a directory-shaped `out` instead of writing a file there", async () => {
@@ -397,7 +416,7 @@ describe("toMcpContent with artifact ctx", () => {
     );
 
     expect(await fs.readFile(join(root, "base.png"))).toEqual(Buffer.from(pngBytes));
-    expect(result).toEqual([{ type: "text", text: `Saved: ${join(root, "base.png")}` }]);
+    expect(result).toEqual([{ type: "text", text: `Saved: ${root}/a/../base.png` }]);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -422,6 +441,16 @@ describe("toMcpContent with artifact ctx", () => {
           new RegExp(
             `^Saved: .*shot\\.png\\nCould not save to C:\\\\argent-test-${process.pid}\\.png: not an absolute path on this computer$`
           )
+        );
+
+        const legacy = await toMcpContent(
+          { url: "http://host/shot.png", path: "/host/shot.png" },
+          "image",
+          { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning([]) },
+          { udid: "DEV-1", out, includeImageInContext: false }
+        );
+        expect((legacy[1] as { text: string }).text).toMatch(
+          new RegExp(`^Could not save to C:\\\\argent-test-${process.pid}\\.png: no image`)
         );
       } finally {
         await fs.rm(out, { force: true });

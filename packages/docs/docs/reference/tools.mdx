@@ -261,9 +261,9 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 ## Footnotes
 
-Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation. `screenshot` does not have it because its `out` parameter can replace a file.
+Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation. `screenshot` does not have it because its `out` parameter can replace a file. So Claude Code asks before it runs `screenshot` in plan mode, and does not run it in parallel with other tools.
 
-`out` of `screenshot` is an absolute path. The MCP server and `argent run` save the PNG at that path on the computer that runs them. They create the missing directories and replace an existing file. If they cannot save the file, the MCP result says `Could not save to <path>` and `argent run` exits with an error. An e2e test step and the Node client write nothing. A path in `--out` of `argent run` outranks `out`.
+`out` of `screenshot` is an absolute path. The MCP server and `argent run` save the PNG at that path on the computer that runs them. They create the missing directories and replace an existing regular file. They do not write to a directory, a device or a pipe. If they cannot save the file, the MCP result says `Could not save to <path>` and `argent run` exits with an error. An e2e test step and the Node client write nothing. A path in `--out` of `argent run` outranks `out`.
 
 `terminate-app`, `ui-tree`, `foreground-app`, `fill` and `gather-workspace-data` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 

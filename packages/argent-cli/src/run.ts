@@ -102,7 +102,9 @@ function printToolHelp(meta: ToolMeta): void {
   }
   console.log("  --<field>-json <json>  Pass a single field as JSON (objects/nested arrays)");
   console.log("  --json                 Print the raw JSON result");
-  console.log("  --out <path>           For image results, save to <path> instead of fetching URL");
+  console.log(
+    "  --out <path>           For image results, save to <path>; outranks a payload `out`"
+  );
   console.log("  --help, -h             Show this help");
 }
 
@@ -122,9 +124,17 @@ async function fetchImageToFile(
   }
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, buf);
+  writeImageFile(outPath, Buffer.from(await res.arrayBuffer()));
+}
+
+function writeImageFile(file: string, data: Buffer): void {
+  // Not normalized: path.resolve treats `..` and a trailing separator unlike the kernel.
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // A FIFO would block the write and a device would take the bytes.
+  if (fs.statSync(file, { throwIfNoEntry: false })?.isFile() === false) {
+    throw new Error(`${file} is not a regular file`);
+  }
+  fs.writeFileSync(file, data);
 }
 
 function renderResult(
@@ -356,6 +366,20 @@ Examples:
     await failValidation({ missing, invalid: [], rawIssues: null }, "cli_run_required_flags");
   }
 
+  // Not left to the tool-server: its message would name the global `--out`, and it accepts
+  // Windows-absolute paths, which are cwd-relative on POSIX.
+  const payloadOut = typeof payload.out === "string" ? payload.out.trim() : null;
+  if (meta.outputHint === "image" && payloadOut !== null && !path.isAbsolute(payloadOut)) {
+    await failInvocation(
+      "`out` must be an absolute path on this computer; `--out <path>` also takes a relative one",
+      null,
+      {
+        error_code: FAILURE_CODES.CLI_RUN_INPUT_VALIDATION_FAILED,
+        failure_stage: "cli_run_payload_out",
+      }
+    );
+  }
+
   let result: unknown;
   let note: string | undefined;
   let images: MaterializedImage[] = [];
@@ -392,17 +416,11 @@ Examples:
 
   // Prefer the bytes the materializer already resolved; fall back to fetching the
   // legacy `{ url }` for older tool-servers that don't emit artifact handles.
-  const imageOut = outPath ?? (typeof payload.out === "string" ? payload.out.trim() : null);
+  const imageOut = outPath ?? payloadOut;
   if (imageOut && meta.outputHint === "image") {
     try {
-      // The tool-server accepts Windows-absolute paths, which are cwd-relative on POSIX.
-      if (!outPath && !path.isAbsolute(imageOut)) {
-        throw new Error(`out is not an absolute path on this computer: ${imageOut}`);
-      }
       if (images.length > 0) {
-        // The raw path: resolve() folds "missing/.." away, which the kernel does not.
-        fs.mkdirSync(path.dirname(imageOut), { recursive: true });
-        fs.writeFileSync(imageOut, images[0]!.data);
+        writeImageFile(imageOut, images[0]!.data);
       } else {
         await fetchImageToFile(result as { url?: string; path?: string } | null, imageOut);
       }
