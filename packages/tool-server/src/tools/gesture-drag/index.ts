@@ -41,46 +41,6 @@ const capability: ToolCapability = {
   macos: { app: true },
 };
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target Chromium device id from `list-devices` (chromium-cdp-<port>)<flag:macos-apps>, or a Mac app id</flag:macos-apps>."
-    ),
-  fromX: z.number().min(0).max(1).describe("Press x."),
-  fromY: z.number().min(0).max(1).describe("Press y."),
-  toX: z.number().min(0).max(1).describe("Release x."),
-  toY: z.number().min(0).max(1).describe("Release y."),
-  durationMs: z
-    .number()
-    .max(MAX_DURATION_MS, {
-      message: `durationMs must be at most ${MAX_DURATION_MS} (10s): the drag holds the left button down for exactly this long, one frame per ~16ms, so a larger value is that much wall clock spent mid-press.`,
-    })
-    .optional()
-    .describe(
-      "Total drag duration in milliseconds (default 300<flag:macos-apps>, 800 for a long press on a Mac app</flag:macos-apps>); the button stays down this long."
-    ),
-  momentum: z
-    .boolean()
-    .optional()
-    .describe(
-      "Whether the drag releases with momentum; default true (a constant-speed drag). false decelerates into the release point, so an app that derives a fling from the release velocity (carousels, drag libraries) applies little to no momentum: use it when the drag must stop where it was aimed. Under ~100ms durationMs some fling survives; keep the default 300 when the fling must be fully suppressed."
-    ),
-  // `momentum`'s earlier spelling, with the opposite polarity. Declared so this
-  // non-strict object refuses it instead of stripping it and running the default.
-  settle: z
-    .never({
-      error:
-        "gesture-drag's `settle` was renamed to `momentum`, with the opposite sense - write `momentum: false` for the momentum-free drag that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)",
-    })
-    .optional()
-    .describe(
-      "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 type Point = { x: number; y: number };
 
 /**
@@ -167,6 +127,46 @@ async function runPointerDrag(
     throw err;
   }
 }
+
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe(
+      "Target Chromium device id from `list-devices` (chromium-cdp-<port>)<flag:macos-apps>, or a Mac app id</flag:macos-apps>."
+    ),
+  fromX: z.number().min(0).max(1).describe("Press x."),
+  fromY: z.number().min(0).max(1).describe("Press y."),
+  toX: z.number().min(0).max(1).describe("Release x."),
+  toY: z.number().min(0).max(1).describe("Release y."),
+  durationMs: z
+    .number()
+    .max(MAX_DURATION_MS, {
+      message: `durationMs must be at most ${MAX_DURATION_MS} (10s): the drag holds the left button down for exactly this long, one frame per ~16ms, so a larger value is that much wall clock spent mid-press.`,
+    })
+    .optional()
+    .describe(
+      "Total drag duration in milliseconds (default 300<flag:macos-apps>, 800 for a long press on a Mac app</flag:macos-apps>); the button stays down this long."
+    ),
+  momentum: z
+    .boolean()
+    .optional()
+    .describe(
+      "Whether the drag releases with momentum; default true (a constant-speed drag). false decelerates into the release point, so an app that derives a fling from the release velocity (carousels, drag libraries) applies little to no momentum: use it when the drag must stop where it was aimed. Under ~100ms durationMs some fling survives; keep the default 300 when the fling must be fully suppressed."
+    ),
+  // `momentum`'s earlier spelling, with the opposite polarity. Declared so this
+  // non-strict object refuses it instead of stripping it and running the default.
+  settle: z
+    .never({
+      error:
+        "gesture-drag's `settle` was renamed to `momentum`, with the opposite sense - write `momentum: false` for the momentum-free drag that `settle: true` used to mean (plain `settle: false` was the default, so just drop it)",
+    })
+    .optional()
+    .describe(
+      "Retired: renamed to `momentum` with the opposite sense. Pass `momentum: false` for what `settle: true` meant; `settle: false` was the default, so drop the key."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
 
 export const gestureDragTool: ToolDefinition<Params, Result> = {
   id: "gesture-drag",
