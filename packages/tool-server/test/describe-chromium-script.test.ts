@@ -126,6 +126,33 @@ nodeProto.contains = function (this: Record<string, unknown>, other: unknown): b
     (nodeProto.contains as (o: unknown) => boolean).call(k, other)
   );
 };
+class MockDocument {
+  createElementNS(ns: string, tag: string): MockElement {
+    const svg = ns === "http://www.w3.org/2000/svg";
+    const made: Record<string, typeof MockElement> = svg
+      ? { svg: MockSVGSVGElement }
+      : {
+          input: MockHTMLInputElement,
+          textarea: MockHTMLTextAreaElement,
+          img: MockHTMLImageElement,
+        };
+    return new (made[tag] ?? (svg ? MockElement : MockHTMLElement))();
+  }
+  elementsFromPoint(this: { documentElement: unknown }, x: number, y: number): unknown[] {
+    return paintedAt([this.documentElement], x, y);
+  }
+}
+// The browser's globals of those names, which a page's own can replace.
+const builtins = {
+  Node: MockNode,
+  Element: MockElement,
+  HTMLElement: MockHTMLElement,
+  HTMLInputElement: MockHTMLInputElement,
+  HTMLTextAreaElement: MockHTMLTextAreaElement,
+  HTMLImageElement: MockHTMLImageElement,
+  SVGSVGElement: MockSVGSVGElement,
+  Document: MockDocument,
+};
 // A node in a shadow tree carries that root as __root.
 nodeProto.getRootNode = function (this: Record<string, unknown>) {
   return this.__root ?? (globalThis as Record<string, unknown>).document;
@@ -345,13 +372,7 @@ function run(
     ...Object.fromEntries(Object.keys(pageGlobals).map((k) => [k, g[k]])),
     window: g.window,
     document: g.document,
-    Node: g.Node,
-    Element: g.Element,
-    HTMLInputElement: g.HTMLInputElement,
-    HTMLTextAreaElement: g.HTMLTextAreaElement,
-    HTMLImageElement: g.HTMLImageElement,
-    HTMLElement: g.HTMLElement,
-    SVGSVGElement: g.SVGSVGElement,
+    ...Object.fromEntries(Object.keys(builtins).map((k) => [k, g[k]])),
   };
   g.window = {
     innerWidth: W,
@@ -362,7 +383,7 @@ function run(
       return e.__style;
     },
   };
-  g.document = {
+  g.document = Object.assign(new MockDocument(), {
     nodeType: 9,
     documentElement: root,
     compatMode,
@@ -380,7 +401,6 @@ function run(
       };
       return find(root);
     },
-    elementsFromPoint: (x: number, y: number) => paintedAt([root], x, y),
     createRange: () => {
       let target: Record<string, unknown> | null = null;
       return {
@@ -429,17 +449,10 @@ function run(
         },
       };
     },
-  };
+  });
   (body as Record<string, unknown>).ownerDocument = g.document;
   root.parentNode = g.document;
-  g.Node = MockNode;
-  g.Element = MockElement;
-  g.HTMLInputElement = MockHTMLInputElement;
-  g.HTMLTextAreaElement = MockHTMLTextAreaElement;
-  g.HTMLImageElement = MockHTMLImageElement;
-  g.HTMLElement = MockHTMLElement;
-  g.SVGSVGElement = MockSVGSVGElement;
-  Object.assign(g, pageGlobals);
+  Object.assign(g, builtins, pageGlobals);
   try {
     const payload = (0, eval)(DESCRIBE_DOM_SCRIPT) as string;
     return JSON.parse(payload);
@@ -1745,9 +1758,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       rect: { x: 0, y: 0, w: W, h: H },
       children: [focusedInput, otherInput],
     });
-    // The mock defines no Document constructor, so the script's protoGetter
-    // falls back to direct reads: a stub document with activeElement/body is
-    // enough. The body being activeElement (the no-focus default) must NOT
+    // MockDocument defines no activeElement/body accessors, so the script's
+    // protoGetter falls back to direct reads: a stub document with them is enough. The body being activeElement (the no-focus default) must NOT
     // mark it focused.
     const doc = { activeElement: focusedInput, body };
     for (const n of [focusedInput, otherInput, body]) {
@@ -1952,6 +1964,54 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(builtin, "cut")!.clipAnchors).toBeDefined();
     expect(pxFrame(builtin, "slot-out").h).toBe(0);
     expect(findById(builtin, "gone")).toBeNull();
+  });
+
+  it("describes a page whose own globals take the DOM interfaces' names", () => {
+    const typed = <T extends object>(node: MockElement, C: new () => T, fields: object) =>
+      Object.assign(Object.setPrototypeOf(node, C.prototype), fields) as MockElement;
+    // A light child of a shadowless custom element, past its scroller's clip, is
+    // hit-tested there.
+    const cut = { x: 1, y: 81, w: 285, h: 40 };
+    const page = (painted?: Rect) => [
+      scroller([
+        el({
+          tag: "app-row",
+          rect: ZERO,
+          style: { display: "contents" },
+          children: [el({ attrs: { id: "row", onclick: "" }, text: "row", rect: cut, painted })],
+        }),
+      ]),
+      inputEl({ attrs: { id: "in" }, rect: BOX, placeholder: "Search" }),
+      inputEl({ attrs: { id: "pw" }, rect: BOX, type: "password", value: "secret" }),
+      typed(el({ tag: "textarea", attrs: { id: "ta" }, rect: BOX }), MockHTMLTextAreaElement, {
+        placeholder: "Notes",
+      }),
+      typed(el({ tag: "img", attrs: { id: "im" }, rect: BOX }), MockHTMLImageElement, {
+        alt: "Logo",
+      }),
+      el({
+        outerSvg: true,
+        tag: "svg",
+        rect: { x: 0, y: 200, w: 150, h: 90 },
+        style: { display: "inline", overflow: "hidden", paddingRight: "20px" },
+        children: [row("padding", { x: 135, y: 230, w: 10, h: 10 })],
+      }),
+    ];
+    for (const painted of [undefined, cut]) {
+      const builtin = run(page(painted)).tree;
+      expect(findById(builtin, "in")!.label).toBe("Search");
+      expect(findById(builtin, "ta")!.label).toBe("Notes");
+      expect(findById(builtin, "im")!.label).toBe("Logo");
+      expect(findById(builtin, "pw")!.password).toBe(true);
+      expect(pxFrame(builtin, "padding").w).toBe(0);
+      expect(pxFrame(builtin, "row")).toEqual(painted ? cut : { x: 1, y: 81, w: 285, h: 18 });
+      for (const name of Object.keys(builtins)) {
+        for (const value of [function () {}, class {}, { tiles: [] }, 5]) {
+          const replaced = run(page(painted), undefined, {}, "CSS1Compat", { [name]: value }).tree;
+          expect(replaced, `${name} = ${String(value)}`).toEqual(builtin);
+        }
+      }
+    }
   });
 
   it("anchors a cut where a wheel reaches a scroller moving it in the cutter, farthest from the element", () => {
@@ -3896,15 +3956,8 @@ describe("DESCRIBE_DOM_SCRIPT wheel anchors", () => {
     const page = {
       get Document() {
         const doc = (globalThis as Record<string, unknown>).document as Record<string, unknown>;
-        const native = doc.elementsFromPoint as (x: number, y: number) => unknown[];
         doc.elementsFromPoint = el({ tag: "img" });
-        return Object.assign(function Document() {}, {
-          prototype: {
-            elementsFromPoint(this: unknown, x: number, y: number) {
-              return native.call(this, x, y);
-            },
-          },
-        });
+        return function Document() {};
       },
     };
     const clobbered = run(list(), undefined, {}, "CSS1Compat", page).tree;

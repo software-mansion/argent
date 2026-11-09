@@ -42,6 +42,23 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const h = window.innerHeight;
   if (!w || !h) return JSON.stringify({ tree: null, error: "viewport is zero" });
 
+  // A page script's global named after a DOM interface (\`function Node\`, \`var Element =
+  // 5\`, a top-level \`class HTMLElement\`) is in scope here, so these shadow it with the
+  // builtins, taken from elements the document makes: no page binding replaces document.
+  let docProto = Object.getPrototypeOf(document);
+  while (!Object.getOwnPropertyDescriptor(docProto, "createElementNS")) {
+    docProto = Object.getPrototypeOf(docProto);
+  }
+  const made = (ns, tag) =>
+    Object.getPrototypeOf(docProto.createElementNS.call(document, ns, tag)).constructor;
+  const HTMLInputElement = made("http://www.w3.org/1999/xhtml", "input");
+  const HTMLTextAreaElement = made("http://www.w3.org/1999/xhtml", "textarea");
+  const HTMLImageElement = made("http://www.w3.org/1999/xhtml", "img");
+  const SVGSVGElement = made("http://www.w3.org/2000/svg", "svg");
+  const HTMLElement = Object.getPrototypeOf(HTMLInputElement);
+  const Element = Object.getPrototypeOf(HTMLElement);
+  const Node = Object.getPrototypeOf(Element);
+
   // Native prototype accessors, captured once. HTMLFormElement (and HTMLObject/Embed)
   // is [LegacyOverrideBuiltins]: a control named the same as an inherited member shadows
   // it on the <form>, so el.children returns the control element (not iterable) and
@@ -83,10 +100,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const matchesSel = Element.prototype.matches;
   // Document's named getter is [LegacyOverrideBuiltIns] (like a form's): a
   // <form name="activeElement"> shadows document.activeElement, so both focus
-  // reads go through prototype accessors. The typeof guard covers the test
-  // harness's mock DOM, which defines no Document constructor — protoGetter's
-  // direct-read fallback then degrades focus reporting instead of throwing.
-  const docProto = typeof Document === "undefined" ? {} : Document.prototype;
+  // reads go through prototype accessors.
   const getOwnerDocument = protoGetter(Node.prototype, "ownerDocument");
   const getActiveElement = protoGetter(docProto, "activeElement");
   const getDocBody = protoGetter(docProto, "body");
@@ -99,7 +113,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     typeof HTMLSlotElement === "undefined" ? null : HTMLSlotElement.prototype.assignedNodes;
   // A document's named getter can shadow elementsFromPoint; a shadow root has none.
   function elementsAt(root, x, y) {
-    return docElementsFromPoint && getNodeType.call(root) === 9
+    return getNodeType.call(root) === 9
       ? docElementsFromPoint.call(root, x, y)
       : root.elementsFromPoint(x, y);
   }
@@ -952,7 +966,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const cy = (v.top + v.bottom) / 2;
     // A shadow root's elementsFromPoint returns nodes of its own tree, where the
     // document's returns their host.
-    const root = getRootNode ? getRootNode.call(el) : document;
+    const root = getRootNode.call(el);
     return [
       [(v.left + Math.min(v.right, e.left)) / 2, cy],
       [(Math.max(v.left, e.right) + v.right) / 2, cy],
