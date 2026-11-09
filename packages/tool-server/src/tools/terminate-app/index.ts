@@ -1,10 +1,17 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  type ToolCapability,
+  type ToolDefinition,
+} from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../utils/simctl-config";
 import {
   remoteSimctl,
   SIMCTL_NOTHING_TO_TERMINATE,
@@ -65,10 +72,24 @@ Succeeds when the app is not running or not installed.`,
       handler: async (_services, { udid, bundleId }) => {
         // Built outside the tolerance so a provider's entitlement denial still throws.
         const args = await simctlArgsForUdid(udid, ["terminate", udid, bundleId]);
-        const terminated = await tolerateNothingToTerminate(
-          execFileAsync("xcrun", args),
-          SIMCTL_NOTHING_TO_TERMINATE
-        );
+        const terminate = execFileAsync("xcrun", args, {
+          timeout: 15_000,
+          killSignal: SIMCTL_KILL_SIGNAL,
+        }).catch((err: unknown) => {
+          if (!(err as { killed?: boolean }).killed) throw err;
+          throw new FailureError(
+            `Terminating iOS app ${bundleId} on ${udid} did not finish within 15s.`,
+            {
+              error_code: FAILURE_CODES.IOS_TERMINATE_APP_FAILED,
+              failure_stage: "ios_terminate_app_simctl_terminate",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              ...subprocessFailureMetadata(err, "xcrun_simctl"),
+            },
+            { cause: err as Error }
+          );
+        });
+        const terminated = await tolerateNothingToTerminate(terminate, SIMCTL_NOTHING_TO_TERMINATE);
         return { terminated, bundleId };
       },
     },
