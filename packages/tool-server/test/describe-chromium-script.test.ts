@@ -2918,7 +2918,13 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
 
   it("does not clip a fieldset's rendered legend by the fieldset's overflow", () => {
     const legend = (id: string, y: number, style: Record<string, string> = {}) =>
-      el({ tag: "legend", attrs: { id }, rect: { x: 20, y, w: 60, h: 10 }, style });
+      el({
+        tag: "legend",
+        attrs: { id },
+        rect: { x: 20, y, w: 60, h: 10 },
+        offset: { width: 60, height: 10 },
+        style,
+      });
     const rendered = legend("rendered", 3);
     (rendered as Record<string, unknown>).children = [
       row("pinned", { x: 20, y: 500, w: 60, h: 10 }, { position: "fixed" }),
@@ -2957,6 +2963,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     const pad = { left: 0, top: 0, width: 150, height: 120 };
     const sides = { marginLeft: "3px", marginRight: "5px" };
     // A relative offset moves where the legend paints (here 8 or 20px), not the clip edge.
+    // The legend's layout box is half its rect.
     const shiftX = { ...sides, position: "relative", left: "4px" };
     const shiftY = { position: "relative", top: "10px", marginBottom: "6px" };
     const cases: [Record<string, string>, Rect, Record<string, string>, typeof pad, Rect][] = [
@@ -2969,7 +2976,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       ],
       // A border wider than the legend keeps the padding box edge.
       [
-        { overflow: "auto" },
+        { overflow: "auto", borderTopWidth: "40px" },
         { x: 0, y: 0, w: 300, h: 40 },
         { marginBottom: "6px" },
         { ...pad, top: 40, height: 80 },
@@ -3029,7 +3036,12 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
           offset: { width: 150, height: 120 },
           style,
           children: [
-            el({ tag: "legend", rect: legendRect, style: legendStyle }),
+            el({
+              tag: "legend",
+              rect: legendRect,
+              offset: { width: legendRect.w / 2, height: legendRect.h / 2 },
+              style: legendStyle,
+            }),
             row("under", { x: 20, y: 50, w: 260, h: 100 }),
           ],
         }),
@@ -3040,7 +3052,13 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
 
   it("clips a fixed legend like the fieldset's other content: it is not the rendered legend", () => {
     const legend = (id: string, style: Record<string, string> = {}) =>
-      el({ tag: "legend", attrs: { id }, rect: { x: 20, y: 3, w: 60, h: 10 }, style });
+      el({
+        tag: "legend",
+        attrs: { id },
+        rect: { x: 20, y: 3, w: 60, h: 10 },
+        offset: { width: 60, height: 10 },
+        style,
+      });
     const { tree } = run([
       el({
         tag: "fieldset",
@@ -3055,53 +3073,73 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(tree, "rendered")).toEqual({ x: 20, y: 3, w: 60, h: 10 });
   });
 
-  it("undoes only a relative legend's offset where a fieldset's overflow clips", () => {
-    // "under" spans x 5..295, y 5..235; each legend's margin box ends at 40 from its side.
-    const legendAt = (writingMode: string, rect: Rect, legendStyle: Record<string, string>) =>
+  it("clips a fieldset's content where layout puts its legend, not where the legend paints", () => {
+    // "under" spans x 5..295, y 5..235; each legend's layout margin box ends 40 from its side,
+    // and it paints 30 further in.
+    const legendAt = (
+      writingMode: string,
+      rect: Rect,
+      legendStyle: Record<string, string>,
+      border: Record<string, string> = {},
+      client = { left: 0, top: 0, width: 300, height: 240 }
+    ) =>
       pxFrame(
         run([
           el({
             tag: "fieldset",
             rect: { x: 0, y: 0, w: 300, h: 240 },
-            client: { left: 0, top: 0, width: 300, height: 240 },
+            client,
             offset: { width: 300, height: 240 },
-            style: { overflow: "hidden", writingMode },
+            style: { overflow: "hidden", writingMode, ...border },
             children: [
-              el({ tag: "legend", rect, style: legendStyle }),
+              el({
+                tag: "legend",
+                rect,
+                offset: { width: Math.min(rect.w, 40), height: Math.min(rect.h, 40) },
+                style: legendStyle,
+              }),
               row("under", { x: 5, y: 5, w: 290, h: 230 }),
             ],
           }),
         ]).tree,
         "under"
       );
-    const top = { x: 0, y: 0, w: 300, h: 40 };
-    const right = { x: 260, y: 0, w: 40, h: 240 };
-    const left = { x: 0, y: 0, w: 40, h: 240 };
-    const below = { x: 5, y: 40, w: 290, h: 195 };
-    for (const position of ["static", "sticky"]) {
-      const offset = { position, top: "30px", left: "30px" };
-      expect(legendAt("horizontal-tb", top, offset), position).toEqual(below);
-      expect(legendAt("vertical-rl", right, offset), position).toEqual({
+    const top = { x: 0, y: 30, w: 300, h: 40 };
+    const right = { x: 230, y: 0, w: 40, h: 240 };
+    const left = { x: 30, y: 0, w: 40, h: 240 };
+    for (const legendStyle of <Record<string, string>[]>[
+      { position: "static", top: "30px", left: "30px" },
+      { position: "relative", top: "30px", left: "-30px" },
+      { position: "sticky", top: "70px", right: "70px", left: "70px" },
+      { transform: "matrix(1, 0, 0, 1, 30, 30)" },
+    ]) {
+      const why = JSON.stringify(legendStyle);
+      expect(legendAt("horizontal-tb", top, legendStyle), why).toEqual({
+        x: 5,
+        y: 40,
+        w: 290,
+        h: 195,
+      });
+      expect(legendAt("vertical-rl", right, legendStyle), why).toEqual({
         x: 5,
         y: 5,
         w: 255,
         h: 230,
       });
-      expect(legendAt("vertical-lr", left, offset), position).toEqual({
+      expect(legendAt("vertical-lr", left, legendStyle), why).toEqual({
         x: 40,
         y: 5,
         w: 255,
         h: 230,
       });
     }
-    const relative = { position: "relative", top: "30px", left: "-30px" };
-    expect(legendAt("horizontal-tb", { ...top, y: 30 }, relative)).toEqual(below);
-    expect(legendAt("vertical-rl", { ...right, x: 230 }, relative)).toEqual({
-      x: 5,
-      y: 5,
-      w: 255,
-      h: 230,
-    });
+    // A border thicker than the legend centres it, so a margin can end past the border.
+    const thick = (side: string) => ({ ["border" + side + "Width"]: "60px" });
+    const margin = { marginBottom: "35px", marginLeft: "35px", marginRight: "35px" };
+    const inside = (l: number, t: number) => ({ left: l, top: t, width: 240, height: 180 });
+    expect(legendAt("horizontal-tb", top, margin, thick("Top"), inside(0, 60)).y).toBe(85);
+    expect(legendAt("vertical-rl", right, margin, thick("Right"), inside(0, 0)).w).toBe(210);
+    expect(legendAt("vertical-lr", left, margin, thick("Left"), inside(60, 0)).x).toBe(85);
   });
 
   it("scales a fieldset's legend margins along the axis each one lies on", () => {
@@ -3119,6 +3157,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
               el({
                 tag: "legend",
                 rect,
+                offset: { width: rect.w / 3, height: rect.h },
                 style: { marginBottom: "10px", marginLeft: "5px", marginRight: "7px" },
               }),
               row("under", { x: 5, y: 5, w: 290, h: 230 }),
@@ -3170,7 +3209,11 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
         style: { display, marginBottom: "300px" },
         children,
       });
-    const rendered = el({ tag: "legend", rect: { x: 0, y: 0, w: 60, h: 80 } });
+    const rendered = el({
+      tag: "legend",
+      rect: { x: 0, y: 0, w: 60, h: 80 },
+      offset: { width: 60, height: 80 },
+    });
     for (const display of ["none", "contents"]) {
       expect(pxFrame(fieldset([boxless(display)]), "under"), display).toEqual({
         x: 20,

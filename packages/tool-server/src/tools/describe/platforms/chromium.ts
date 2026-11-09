@@ -745,7 +745,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const cy = paint || style.overflowY !== "visible";
       if (cx || cy) {
         const p = paddingBox(el, style);
-        if (legend) belowLegend(p, style, legend);
+        if (legend) belowLegend(el, p, style, legend);
         const ox = style.overflowX;
         const oy = style.overflowY;
         const own = {
@@ -802,21 +802,28 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   // A fieldset's overflow (but not its paint containment) clips its content no nearer
-  // its block-start side than where its rendered legend's margin box ends. A relative
-  // offset moves where the legend paints, not that edge; a sticky offset or a transform
-  // is not undone.
-  function belowLegend(p, style, legend) {
-    const r = getBCR.call(legend);
+  // its block-start side than where its rendered legend's margin box ends, as laid out: the
+  // legend's border box at the fieldset's block-start edge, centred on a thicker border. A
+  // relative or sticky offset or a transform moves only where the legend paints.
+  function belowLegend(el, p, style, legend) {
+    const f = getBCR.call(el);
     const ls = window.getComputedStyle(legend);
-    const px = (prop) => parseFloat(ls[prop]) || 0;
-    const shift = (prop) => (ls.position === "relative" ? px(prop) : 0);
+    const px = (st, prop) => parseFloat(st[prop]) || 0;
+    // How far past the border-box edge the legend's margin box ends, unscaled.
+    const end = (border, size, margin) =>
+      Math.max(0, (px(style, border) - size) / 2) + size + px(ls, margin);
     const wm = style.writingMode;
     if (wm === "horizontal-tb") {
       if (style.overflowY === "visible") return;
-      p.top = Math.max(p.top, r.bottom + (px("marginBottom") - shift("top")) * p.sy);
+      const h = getOffsetHeight.call(legend);
+      p.top = Math.max(p.top, f.top + end("borderTopWidth", h, "marginBottom") * p.sy);
     } else if (style.overflowX !== "visible") {
-      if (wm.endsWith("rl")) p.right = Math.min(p.right, r.left - (px("marginLeft") + shift("left")) * p.sx);
-      else p.left = Math.max(p.left, r.right + (px("marginRight") - shift("left")) * p.sx);
+      const w = getOffsetWidth.call(legend);
+      if (wm.endsWith("rl")) {
+        p.right = Math.min(p.right, f.right - end("borderRightWidth", w, "marginLeft") * p.sx);
+      } else {
+        p.left = Math.max(p.left, f.left + end("borderLeftWidth", w, "marginRight") * p.sx);
+      }
     }
   }
 
