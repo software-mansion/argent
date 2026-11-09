@@ -169,8 +169,9 @@ function listeningPids(port: number): number[] {
   if (!output) return [];
   const lines = output.split("\n").map((s) => s.trim());
   // Never SIGTERM the leading digits of a line that is not a bare PID.
-  if (!lines.every((s) => /^\d+$/.test(s))) {
-    throw new Error(`lsof did not print a PID list: ${lines[0]}`);
+  const notPid = lines.find((s) => !/^\d+$/.test(s));
+  if (notPid !== undefined) {
+    throw new Error(`lsof did not print a PID list: ${notPid}`);
   }
   return lines.map((s) => parseInt(s, 10));
 }

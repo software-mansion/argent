@@ -197,6 +197,22 @@ describe("stop-metro port probe", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
+  it("kills nothing when lsof prints PIDs mixed with other lines", async () => {
+    execFileSyncMock.mockReturnValue("4242\n1\t/bin/busybox\t0\t/dev/null\n");
+
+    await expect(runStopMetro(8081)).rejects.toThrow(
+      "Could not determine what is listening on port 8081: lsof did not print a PID list: 1\t/bin/busybox\t0\t/dev/null"
+    );
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("reports stopped:false when lsof exits 0 without output", async () => {
+    execFileSyncMock.mockReturnValue("\n");
+
+    await expect(runStopMetro(8081)).resolves.toEqual({ stopped: false, port: 8081, pids: [] });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
   it("kills every PID lsof reports", async () => {
     execFileSyncMock.mockReturnValue("4242\n4243\n");
 
@@ -209,6 +225,19 @@ describe("stop-metro port probe", () => {
       [4242, "SIGTERM"],
       [4243, "SIGTERM"],
     ]);
+  });
+
+  it.each([
+    ["lsof", "darwin", () => execFileSyncMock.mockReturnValue("4242\n"), 0],
+    ["macOS netstat", "darwin", () => lsofFindsNothing(NETSTAT_HEADER), 1],
+    ["Windows netstat", "win32", () => execFileSyncMock.mockReturnValue(""), 0],
+  ] as const)("bounds %s at 5 s", async (_probe, platform, mockProbe, call) => {
+    setPlatform(platform);
+    mockProbe();
+
+    await runStopMetro(8081);
+
+    expect(execFileSyncMock.mock.calls[call][2]).toMatchObject({ timeout: 5_000 });
   });
 
   it("runs lsof by absolute path, for listeners only", async () => {
@@ -351,6 +380,7 @@ describe("procListeningPids", () => {
     writeTable("tcp", [
       row("0100007F:1F91", "00000000:0000", "0A", 111), // 127.0.0.1:8081 LISTEN
       row("0100007F:1F91", "0100007F:D431", "01", 222), // 127.0.0.1:8081 ESTABLISHED
+      row("0100007F:1F91", "0100007F:D3F8", "06", 0), // 127.0.0.1:8081 TIME_WAIT, no inode
       row("00000000:46A1", "00000000:0000", "0A", 333), // 0.0.0.0:18081 LISTEN
     ]);
     writeTable("tcp6", [
