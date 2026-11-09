@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
@@ -10,14 +11,17 @@ vi.mock("../src/tools/devices/boot-electron", () => ({
 }));
 
 // SystemInfo.getInfo on the browser that answers the booted port.
+const WS_URL = "ws://127.0.0.1/devtools/browser/x";
+const wsUrlMock = vi.fn();
+const cdpConnect = vi.fn();
 const cdpSend = vi.fn();
-const cdpDisconnect = vi.fn(async () => {});
+const cdpDisconnect = vi.fn();
 vi.mock("../src/chromium-server/cdp-session", () => ({
-  browserWebSocketUrl: async () => "ws://127.0.0.1/devtools/browser/x",
+  browserWebSocketUrl: (port: number, signal?: AbortSignal) => wsUrlMock(port, signal),
 }));
 vi.mock("../src/utils/debugger/cdp-client", () => ({
   CDPClient: class {
-    connect = async () => {};
+    connect = () => cdpConnect();
     disconnect = () => cdpDisconnect();
     send = (method: string) => cdpSend(method);
   },
@@ -141,9 +145,15 @@ describe("bootBrowser", () => {
     cdpSend.mockImplementation(async () => ({
       commandLine: `chrome ${bootElectronAppMock.mock.lastCall![0].extraArgs.join(" ")}`,
     }));
-    cdpDisconnect.mockClear();
+    cdpDisconnect.mockReset();
+    cdpDisconnect.mockImplementation(async () => {});
+    cdpConnect.mockReset();
+    cdpConnect.mockImplementation(async () => {});
+    wsUrlMock.mockReset();
+    wsUrlMock.mockImplementation(async () => WS_URL);
   });
   afterEach(() => {
+    for (const child of holders.splice(0)) child.kill("SIGKILL");
     for (const call of bootElectronAppMock.mock.calls) {
       const dir = profileDirOf(call[0].extraArgs);
       if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -223,6 +233,13 @@ describe("bootBrowser", () => {
   const lockFor = (dir: string, pid: number) =>
     fs.symlinkSync(`some-host-${pid}`, path.join(dir, "SingletonLock"));
   const DEAD_PID = 2147483646;
+  // A live process whose command line names `dir`, as a browser on it does.
+  const holders: ChildProcess[] = [];
+  const browserOn = (dir: string) => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", dir]);
+    holders.push(child);
+    return child.pid!;
+  };
 
   it("gives every launch its own profile and deletes it once the process is gone", async () => {
     installed.set(chrome!, "exec");
@@ -256,7 +273,7 @@ describe("bootBrowser", () => {
     const [relaunched, crashed] = bootElectronAppMock.mock.calls.map((c) => c[0]);
     const relaunchedDir = profileDirOf(relaunched.extraArgs)!;
     const crashedDir = profileDirOf(crashed.extraArgs)!;
-    lockFor(relaunchedDir, process.pid);
+    lockFor(relaunchedDir, browserOn(relaunchedDir));
     lockFor(crashedDir, DEAD_PID);
 
     vi.useFakeTimers({ toFake: ["setTimeout"] });
@@ -283,7 +300,7 @@ describe("bootBrowser", () => {
     await bootBrowser({ browser: "chrome" });
     expect(bootElectronAppMock).toHaveBeenCalledTimes(1);
     const dir = profileDirOf(bootElectronAppMock.mock.calls[0]![0].extraArgs)!;
-    expect(fs.readFileSync(path.join(dir, "argent-browser.pid"), "utf8")).toBe("4242");
+    expect(fs.readFileSync(path.join(dir, "argent-browser.pid"), "utf8")).toBe("browser 4242");
   });
 
   describe("sweeping leftover profiles", () => {
@@ -318,7 +335,13 @@ describe("bootBrowser", () => {
       lockFor(crashed, DEAD_PID);
       const live = make("argent-browser-live", process.pid);
       const locked = make("argent-browser-locked", DEAD_PID);
-      lockFor(locked, process.pid);
+      lockFor(locked, browserOn(locked));
+      const browser = make("argent-browser-browser");
+      fs.writeFileSync(path.join(browser, "argent-browser.pid"), `browser ${browserOn(browser)}`);
+      // A dead browser's pid that an unrelated process (this one) took over.
+      const reusedLock = make("argent-browser-reusedlock", DEAD_PID);
+      lockFor(reusedLock, process.pid);
+      const reusedPid = make("argent-browser-reusedpid", `browser ${process.pid}`);
       const noPidFile = make("argent-browser-nopid");
       const foreign = make("other-dead", DEAD_PID);
       // pid 0 and negative pids would probe a process group, which always answers.
@@ -337,15 +360,19 @@ describe("bootBrowser", () => {
 
       installed.set(chrome!, "exec");
       await bootBrowser({ browser: "chrome" });
-      const gone = [dead, crashed, emptyPid, groupPid, hostOnlyLock, otherSnap];
+      const gone = [
+        dead,
+        crashed,
+        emptyPid,
+        groupPid,
+        hostOnlyLock,
+        otherSnap,
+        reusedLock,
+        reusedPid,
+      ];
       await vi.waitFor(() => expect(gone.filter((d) => fs.existsSync(d))).toEqual([]));
-      expect([live, locked, noPidFile, foreign, justLeft].filter((d) => fs.existsSync(d))).toEqual([
-        live,
-        locked,
-        noPidFile,
-        foreign,
-        justLeft,
-      ]);
+      const kept = [live, locked, browser, noPidFile, foreign, justLeft];
+      expect(kept.filter((d) => fs.existsSync(d))).toEqual(kept);
     });
 
     it("treats a Windows lockfile as held", async () => {
@@ -402,6 +429,54 @@ describe("bootBrowser", () => {
     const err = await bootBrowser({ browser: "chrome" }).catch((e: unknown) => e);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
     expect(killMock).toHaveBeenCalledWith(9333);
+  });
+
+  it("waits out a browser that stops answering right after it starts", async () => {
+    installed.set(chrome!, "exec");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let signal: AbortSignal | undefined;
+      wsUrlMock.mockImplementation(async (_port: number, s?: AbortSignal) => {
+        signal = s;
+        await new Promise((r) => setTimeout(r, 10_000));
+        return WS_URL;
+      });
+      const boot = bootBrowser({ browser: "chrome" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(boot).resolves.toMatchObject({ port: 9333 });
+      // Without a signal of its own the request gives up after 5 s.
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal!.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails and kills its browser when it stays silent for the whole identity deadline", async () => {
+    installed.set(chrome!, "exec");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let drop: (() => void) | undefined;
+      cdpConnect.mockImplementation(
+        () => new Promise((_, reject) => (drop = () => reject(new Error("closed before open"))))
+      );
+      cdpDisconnect.mockImplementation(async () => drop?.());
+      const boot = bootBrowser({ browser: "chrome" }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(killMock).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      const err = await boot;
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
+        failure_stage: "browser_identity_check",
+      });
+      expect((err as Error).message).toBe(
+        "Browser boot: the browser on port 9333 stopped answering CDP for 20000 ms right after it started."
+      );
+      expect(killMock).toHaveBeenCalledWith(9333);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("kills its browser when the identity check itself fails", async () => {

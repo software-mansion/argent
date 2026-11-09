@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -5,6 +6,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { browserWebSocketUrl } from "../../chromium-server/cdp-session";
 import { CDPClient } from "../../utils/debugger/cdp-client";
 import { pidIsAlive } from "../../utils/process-kill";
+import { PS_BIN } from "../../utils/vega-process";
 import { bootElectronApp, killChromiumByPort, type ElectronBootResult } from "./boot-electron";
 
 export const BROWSER_NAMES = ["chrome", "chromium", "edge", "brave"] as const;
@@ -70,10 +72,12 @@ function findBrowserExecutable(browser: BrowserName): string | null {
 
 const PROFILE_PREFIX = "argent-browser-";
 /**
- * Holds the booting tool-server's pid until the boot succeeds, then the
- * browser's, so the sweep spares a profile that is still booting.
+ * Holds the booting tool-server's pid until the boot succeeds, then
+ * `BROWSER_PID_TAG` and the browser's, so the sweep spares a profile that is
+ * still booting.
  */
 const PID_FILE = "argent-browser.pid";
+const BROWSER_PID_TAG = "browser ";
 /**
  * A relaunch (chrome://restart, an update) ends our process and starts a new
  * browser on the profile, which takes the lock only after a moment.
@@ -85,6 +89,18 @@ function holderAlive(pid: number): boolean {
   return pid > 0 && pidIsAlive(pid);
 }
 
+/** Whether `pid` is a browser on `dir`; a dead browser's pid can pass to an unrelated process. */
+function browserOnProfile(pid: number, dir: string): boolean {
+  if (!holderAlive(pid)) return false;
+  // Windows has no POSIX ps; one from Git Bash would reject these flags.
+  if (process.platform === "win32") return true;
+  const ps = spawnSync(PS_BIN, ["-ww", "-o", "command=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 2000,
+  });
+  return ps.error !== undefined || ps.stdout.includes(path.basename(dir));
+}
+
 /**
  * Whether a browser holds `dir`, by Chromium's own profile lock: on POSIX a
  * `SingletonLock` symlink to `<host>-<pid>`, which a crash leaves behind; on
@@ -94,10 +110,17 @@ function profileLocked(dir: string): boolean {
   if (process.platform === "win32") return fs.existsSync(path.join(dir, "lockfile"));
   try {
     const owner = fs.readlinkSync(path.join(dir, "SingletonLock"));
-    return holderAlive(Number(owner.slice(owner.lastIndexOf("-") + 1)));
+    return browserOnProfile(Number(owner.slice(owner.lastIndexOf("-") + 1)), dir);
   } catch {
     return false;
   }
+}
+
+/** Whether the pid in `dir`'s pid file is still booting it or running on it. */
+function holderOf(dir: string, pidFile: string): boolean {
+  return pidFile.startsWith(BROWSER_PID_TAG)
+    ? browserOnProfile(Number(pidFile.slice(BROWSER_PID_TAG.length)), dir)
+    : holderAlive(Number(pidFile));
 }
 
 /**
@@ -156,21 +179,27 @@ function removeStaleProfiles(): void {
     }
   });
   for (const dir of dirs) {
-    let pid: number;
+    let pidFile: string;
     let mtimeMs: number;
     try {
-      pid = Number(fs.readFileSync(path.join(dir, PID_FILE), "utf8"));
+      pidFile = fs.readFileSync(path.join(dir, PID_FILE), "utf8");
       ({ mtimeMs } = fs.statSync(dir));
     } catch {
       continue; // not ours, or already gone
     }
     // A browser exiting deletes its lock, so a fresh mtime may be a relaunch.
     const settled = Date.now() - mtimeMs >= RELAUNCH_GRACE_MS;
-    if (settled && !holderAlive(pid) && !profileLocked(dir)) {
+    if (settled && !holderOf(dir, pidFile) && !profileLocked(dir)) {
       fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }, () => {});
     }
   }
 }
+
+/**
+ * Bounds the identity check. A browser can stop answering right after its
+ * first CDP reply: Edge on macOS blocks ~10 s in a Spotlight call.
+ */
+const IDENTITY_CHECK_TIMEOUT_MS = 20_000;
 
 /**
  * Whether the browser answering on 127.0.0.1:`port` runs on `profileDir`. A
@@ -178,14 +207,41 @@ function removeStaleProfiles(): void {
  * process binds [::1] instead, and our readiness probe reaches the other one.
  */
 async function answersOnProfile(port: number, profileDir: string): Promise<boolean> {
-  const browser = new CDPClient(await browserWebSocketUrl(port), { sendOrigin: false });
-  await browser.connect();
+  const deadline = new AbortController();
+  let browser: CDPClient | undefined;
+  // Closing the socket fails a pending connect or send.
+  deadline.signal.addEventListener("abort", () => void browser?.disconnect());
+  const timer = setTimeout(() => deadline.abort(), IDENTITY_CHECK_TIMEOUT_MS);
   try {
-    const { commandLine } = (await browser.send("SystemInfo.getInfo")) as { commandLine?: string };
+    browser = new CDPClient(await browserWebSocketUrl(port, deadline.signal), {
+      sendOrigin: false,
+    });
+    await browser.connect();
+    const { commandLine } = (await browser.send(
+      "SystemInfo.getInfo",
+      undefined,
+      IDENTITY_CHECK_TIMEOUT_MS
+    )) as { commandLine?: string };
     // The random dir name is matched rather than the path, which Windows may quote.
     return commandLine?.includes(path.basename(profileDir)) ?? false;
+  } catch (err) {
+    if (!deadline.signal.aborted) throw err;
+    throw new FailureError(
+      `Browser boot: the browser on port ${port} stopped answering CDP for ` +
+        `${IDENTITY_CHECK_TIMEOUT_MS} ms right after it started.`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
+        failure_stage: "browser_identity_check",
+        failure_area: "tool_server",
+        error_kind: "network",
+        failure_command: "cdp",
+        network_failure: "timeout",
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
+    );
   } finally {
-    await browser.disconnect().catch(() => {});
+    clearTimeout(timer);
+    await browser?.disconnect().catch(() => {});
   }
 }
 
@@ -254,7 +310,7 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     },
   });
   try {
-    fs.writeFileSync(path.join(profileDir, PID_FILE), String(result.pid));
+    fs.writeFileSync(path.join(profileDir, PID_FILE), `${BROWSER_PID_TAG}${result.pid}`);
   } catch {
     // The tool-server's pid it already holds keeps the profile until that exits.
   }
