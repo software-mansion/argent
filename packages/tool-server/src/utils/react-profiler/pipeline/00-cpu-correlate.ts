@@ -91,13 +91,14 @@ function isIdleFrame(name: string | undefined): boolean {
  * adjoining windows and independent of how wide the caller made the query —
  * apportioning the requested width by hit share did not (#619).
  * `withCallers` also lists the frames on the sampled stacks that took no self sample.
+ * `unrounded` skips rounding the times to 0.01 ms, for callers that sum them.
  */
 export function queryCpuWindow(
   index: CpuSampleIndex,
   startMs: number,
   endMs: number,
   topN: number = 5,
-  { withCallers = false }: { withCallers?: boolean } = {}
+  { withCallers = false, unrounded = false }: { withCallers?: boolean; unrounded?: boolean } = {}
 ): CpuWindowResult {
   const { timestampsMs, intervalStartsMs, sampleNodeIds, nodeMap } = index;
   const n = timestampsMs.length;
@@ -176,6 +177,7 @@ export function queryCpuWindow(
     }
   }
 
+  const round = (ms: number) => (unrounded ? ms : Math.round(ms * 100) / 100);
   const entries: CpuCommitHotspot[] = [];
   for (const nodeId of (withCallers ? totalMsByNode : selfMsByNode).keys()) {
     const node = nodeMap.get(nodeId);
@@ -187,8 +189,8 @@ export function queryCpuWindow(
     entries.push({
       name,
       nodeId,
-      selfMs: Math.round(ms * 100) / 100,
-      totalMs: Math.round(totalMsByNode.get(nodeId)! * 100) / 100,
+      selfMs: round(ms),
+      totalMs: round(totalMsByNode.get(nodeId)!),
       url: node.callFrame.url || undefined,
       lineNumber: node.callFrame.lineNumber >= 0 ? node.callFrame.lineNumber : undefined,
     });

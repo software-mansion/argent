@@ -104,6 +104,37 @@ describe("renderComponentCpu — one function as several call-tree nodes", () =>
     expect(self).toBeCloseTo(7, 5);
     expect(total).toBeCloseTo(7, 5);
   });
+
+  it("rounds a recursion's summed times once, so Self never exceeds Total", () => {
+    // root → map → map, one 1.006 ms sample in each frame, in each of 50 commits.
+    // Rounding per node reads Self 50 × (1.01 + 1.01) = 101 against Total 50 × 2.01.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, { id: 1, hitCount: 0, callFrame: frame("(root)"), children: [2] });
+    nodeMap.set(2, { id: 2, hitCount: 0, callFrame: frame("map"), children: [3] });
+    nodeMap.set(3, { id: 3, hitCount: 0, callFrame: frame("map"), children: [] });
+    const starts: number[] = [];
+    const ends: number[] = [];
+    const commits = [];
+    for (let c = 0; c < 50; c++) {
+      starts.push(c * 10, c * 10 + 1.006);
+      ends.push(c * 10 + 1.006, c * 10 + 2.012);
+      commits.push({
+        commitIndex: c,
+        timestamp: c * 10,
+        commitDuration: 2.012,
+        componentName: "Login",
+      });
+    }
+    const index: CpuSampleIndex = {
+      timestampsMs: Float64Array.from(ends),
+      intervalStartsMs: Float64Array.from(starts),
+      sampleNodeIds: starts.map((_, i) => (i % 2 === 0 ? 2 : 3)),
+      nodeMap,
+      durationMs: 500,
+    };
+    const md = renderComponentCpu(index, { commits }, "Login", 10);
+    expect(readRow(md, "map")).toEqual({ self: 100.6, total: 100.6 });
+  });
 });
 
 describe("renderComponentCpu — which same-name frames count as outermost", () => {
@@ -279,6 +310,20 @@ describe("renderComponentCpu — frames without self samples", () => {
     expect(md).not.toContain("`wrap`");
   });
 
+  it("leaves out a frame whose self time rounds to 0 ms", () => {
+    // sliver's interval [2, 3] overlaps the [0, 2.001] commit by 0.001 ms.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2, 3]));
+    nodeMap.set(2, mk(2, "work", []));
+    nodeMap.set(3, mk(3, "sliver", []));
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 2.001, componentName: "Login" }],
+    };
+    const md = renderComponentCpu(indexOf(nodeMap, [2, 2, 3]), commit, "Login", 10);
+    expect(readRow(md, "work")).toEqual({ self: 2, total: 2 });
+    expect(md).not.toContain("`sliver`");
+  });
+
   it("lists the callers of the sampled frames only when asked to", () => {
     // root → wrap (0 samples) → leaf (2 samples).
     const nodeMap = new Map<number, HermesProfileNode>();
@@ -290,6 +335,24 @@ describe("renderComponentCpu — frames without self samples", () => {
     expect(names(queryCpuWindow(index, 0, 2))).toEqual(["leaf"]);
     const all = queryCpuWindow(index, 0, 2, Infinity, { withCallers: true });
     expect(all.hotspots.find((h) => h.name === "wrap")).toMatchObject({ selfMs: 0, totalMs: 2 });
+  });
+
+  it("rounds a window's times to 0.01 ms unless asked not to", () => {
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2]));
+    nodeMap.set(2, mk(2, "leaf", []));
+    const index: CpuSampleIndex = {
+      timestampsMs: Float64Array.from([1.006]),
+      intervalStartsMs: Float64Array.from([0]),
+      sampleNodeIds: [2],
+      nodeMap,
+      durationMs: 1.006,
+    };
+    expect(queryCpuWindow(index, 0, 2).hotspots[0]).toMatchObject({ selfMs: 1.01, totalMs: 1.01 });
+    expect(queryCpuWindow(index, 0, 2, 5, { unrounded: true }).hotspots[0]).toMatchObject({
+      selfMs: 1.006,
+      totalMs: 1.006,
+    });
   });
 
   it("adds a function's self and inclusive time across the component's commits", () => {

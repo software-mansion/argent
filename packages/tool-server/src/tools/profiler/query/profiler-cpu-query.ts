@@ -344,9 +344,11 @@ export function renderComponentCpu(
 
   for (const window of commitWindows.values()) {
     // Every node on the sampled stacks: a name's outer frame can rank below the cut, or
-    // take no self sample at all, while its nested one does.
+    // take no self sample at all, while its nested one does. Unrounded, since a row
+    // sums many nodes and rounding each could print its Self above its Total.
     const { hotspots } = queryCpuWindow(index, window.start, window.end, Infinity, {
       withCallers: true,
+      unrounded: true,
     });
     // Rows are per call-tree node. Self time adds; inclusive time sums only
     // the outermost of a name's nodes, since recursion nests them.
@@ -388,7 +390,7 @@ export function renderComponentCpu(
   }
 
   const sorted = [...aggregated.entries()]
-    .filter(([, row]) => row.selfMs > 0)
+    .filter(([, row]) => roundMs(row.selfMs) > 0)
     .sort((a, b) => b[1].selfMs - a[1].selfMs)
     .slice(0, topN);
 
@@ -415,9 +417,7 @@ export function renderComponentCpu(
     }
     const { url, lineNumber } = top!;
     const loc = url ? `${shortenUrl(url)}${lineNumber != null ? `:${lineNumber}` : ""}` : "—";
-    lines.push(
-      `| \`${name}\` | ${Math.round(selfMs * 100) / 100} | ${Math.round(totalMs * 100) / 100} | ${loc} |`
-    );
+    lines.push(`| \`${name}\` | ${roundMs(selfMs)} | ${roundMs(totalMs)} | ${loc} |`);
   }
 
   return lines.join("\n");
@@ -427,6 +427,10 @@ interface SourceSelfTime {
   url?: string;
   lineNumber?: number;
   selfMs: number;
+}
+
+function roundMs(ms: number): number {
+  return Math.round(ms * 100) / 100;
 }
 
 function shortenUrl(url: string): string {
