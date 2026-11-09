@@ -340,12 +340,10 @@ describe("a recording of a foldable follows the live panel", () => {
   });
 
   it("records host-side even where simulator-server could record for itself", async () => {
-    const fetchMock = vi.fn(async (url: string) =>
-      url.endsWith("/api/recording/start")
-        ? new Response(JSON.stringify({ status: "ok", id: "rec-1" }))
-        : new Response(JSON.stringify({ status: "ok" }))
-    );
+    const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify({ status: "ok" })));
     vi.stubGlobal("fetch", fetchMock);
+    const hostPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     try {
       const startTool = (display?: object) =>
         createScreenRecordingStartTool({
@@ -357,7 +355,7 @@ describe("a recording of a foldable follows the live panel", () => {
           })),
         } as unknown as Registry);
       const recordingStarts = () =>
-        fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/recording/start")).length;
+        fetchMock.mock.calls.filter(([url]) => url.endsWith("/api/video/start")).length;
       const params = { udid: DUO, showTouches: false, trimStatic: false, timeLimitSeconds: 60 };
 
       resolveLivePanelMock.mockResolvedValue(live(3));
@@ -382,6 +380,7 @@ describe("a recording of a foldable follows the live panel", () => {
       expect(mockSpawn).toHaveBeenCalledTimes(1);
     } finally {
       vi.unstubAllGlobals();
+      Object.defineProperty(process, "platform", { value: hostPlatform, configurable: true });
     }
   });
 

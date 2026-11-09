@@ -27,15 +27,12 @@ import { disablePointer, type PointerControl } from "./pointer-control";
 
 /** simulator-server's recording endpoints, bound by the start tool. */
 export interface ServerRecordingControl {
-  /**
-   * Resolves the finalizer for this recording, or null when the build has no
-   * recording endpoint.
-   */
+  /** Resolves the finalizer for this recording. */
   start(opts: {
     watermark: boolean;
     trimStatic: boolean;
     timeLimitSeconds: number;
-  }): Promise<ServerRecordingStop | null>;
+  }): Promise<ServerRecordingStop>;
 }
 
 /** Finalizes one server-side recording and hands back the muxed video. */
@@ -52,14 +49,13 @@ export async function startServerCapture(
     trimStatic: boolean;
     pointer?: PointerControl;
   }
-): Promise<StartRecordingResult | null> {
+): Promise<StartRecordingResult> {
   assertNotDisposed(api, "screen_recording_start");
   const stop = await params.server.start({
     watermark: params.watermark,
     trimStatic: params.trimStatic,
     timeLimitSeconds: params.timeLimitSeconds,
   });
-  if (!stop) return null;
 
   // A dispose during the request could not see this recording; end it here.
   if (api.disposed) {
@@ -130,7 +126,6 @@ export async function stopServerCapture(
 
   const outputFile = api.outputFile!;
   const stop = api.serverStop!;
-  const endedEarly = api.recordingTimedOut;
   const pointerFailed = api.pointerFailed;
   // Taken before the await so a dispose cannot issue a second stop.
   api.serverStop = null;
@@ -173,11 +168,7 @@ export async function stopServerCapture(
     await fs.rm(result.path, { force: true }).catch(() => {});
 
     const warnings: string[] = [];
-    if (endedEarly) {
-      warnings.push(
-        `Recording already ended at its ${api.timeLimitSeconds ?? "?"}s time limit; returning the finalized video.`
-      );
-    }
+    // The server reports its own time limit, so it is not repeated here.
     if (result.warning) warnings.push(result.warning);
     if (pointerFailed) {
       warnings.push(

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
 import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
 import {
   screenRecordingSessionRef,
@@ -197,10 +199,14 @@ Fails if a recording is already running on the device, the device is not booted,
         watermark,
         trimStatic: params.trimStatic ?? true,
         pointer,
-        // The server recorder keeps to one panel. A provider's server is outside
-        // the endpoint allowlist, and its video path is on another host.
+        // Only the macOS simulator-server records for itself (VideoToolbox). A
+        // foldable records here, where the capture follows the live panel. A
+        // provider's server is outside the endpoint allowlist, and its video
+        // path is on another host.
         server:
-          followPanel || simulator.external ? undefined : makeServerRecordingControl(simulator),
+          process.platform !== "darwin" || followPanel || simulator.external
+            ? undefined
+            : makeServerRecordingControl(simulator),
         followPanel,
       });
       return warning !== undefined ? { ...started, warning } : started;
@@ -251,16 +257,26 @@ export function makePointerControl(simulator: SimulatorServerApi): PointerContro
 }
 
 export function makeServerRecordingControl(simulator: SimulatorServerApi): ServerRecordingControl {
+  const stop = (id: string) =>
+    stopServerRecording(simulator, id, AbortSignal.timeout(RECORDING_STOP_TIMEOUT_MS));
   return {
     async start(opts) {
-      const id = await startServerRecording(
-        simulator,
-        opts,
-        AbortSignal.timeout(RECORDING_START_TIMEOUT_MS)
-      );
-      if (id === null) return null;
-      return () =>
-        stopServerRecording(simulator, id, AbortSignal.timeout(RECORDING_STOP_TIMEOUT_MS));
+      const id = `argent-recording-${randomUUID()}`;
+      try {
+        await startServerRecording(
+          simulator,
+          id,
+          opts,
+          AbortSignal.timeout(RECORDING_START_TIMEOUT_MS)
+        );
+      } catch (err) {
+        // A start that timed out may be recording anyway, and only this id ends it.
+        void stop(id)
+          .then((result) => fs.rm(result.path, { force: true }))
+          .catch(() => {});
+        throw err;
+      }
+      return () => stop(id);
     },
   };
 }

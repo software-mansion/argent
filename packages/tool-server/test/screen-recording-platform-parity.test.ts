@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../src/tools/screen-recording/capture", () => ({
   startCapture: vi.fn(async () => ({
@@ -28,6 +28,11 @@ function makeTool(simulator: object = {}) {
 
 const services = { session: {} } as never;
 
+const hostPlatform = process.platform;
+function setPlatform(value: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value, configurable: true });
+}
+
 const RECORDABLE = [
   { what: "an iOS simulator", udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" },
   { what: "an Android emulator", udid: "emulator-5554" },
@@ -37,6 +42,11 @@ const RECORDABLE = [
 describe("screen-recording start — platform parity", () => {
   beforeEach(() => {
     vi.mocked(startCapture).mockClear();
+    setPlatform("darwin");
+  });
+
+  afterEach(() => {
+    setPlatform(hostPlatform);
   });
 
   it.each(RECORDABLE)("offers $what simulator-server's own recorder", async ({ udid }) => {
@@ -57,6 +67,13 @@ describe("screen-recording start — platform parity", () => {
       seen.push({ streamUrl: params.streamUrl, pointer: typeof params.pointer });
     }
     expect(seen).toEqual(RECORDABLE.map(() => ({ streamUrl: STREAM_URL, pointer: "object" })));
+  });
+
+  it.each(["linux", "win32"] as const)("records host-side on a %s host", async (platform) => {
+    setPlatform(platform);
+    await makeTool().execute(services, { udid: RECORDABLE[0].udid });
+
+    expect(vi.mocked(startCapture).mock.calls[0][1].server).toBeUndefined();
   });
 
   it("records a provider's device host-side", async () => {

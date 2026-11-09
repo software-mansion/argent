@@ -357,7 +357,7 @@ interface StartCaptureParams {
   watermark: boolean;
   trimStatic: boolean;
   pointer?: PointerControl;
-  /** Tried first; absent or unsupported, the host pipeline records. */
+  /** Records inside simulator-server; absent, the host pipeline records. */
   server?: ServerRecordingControl;
   /** Set for a foldable: the capture then moves with the live panel. */
   followPanel?: PanelFollow;
@@ -378,12 +378,7 @@ export async function startCapture(
   );
   try {
     if (params.server) {
-      const started = await startServerCapture(api, {
-        ...params,
-        server: params.server,
-        outputFile,
-      });
-      if (started) return started;
+      return await startServerCapture(api, { ...params, server: params.server, outputFile });
     }
     return await startCaptureLocked(api, { ...params, outputFile });
   } finally {
