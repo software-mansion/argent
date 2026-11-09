@@ -180,6 +180,20 @@ describe("chromium-server/screenshot", () => {
       expect(send.mock.calls.map(([method]) => method)).toEqual(["Page.captureScreenshot"]);
     });
 
+    it.each([
+      ["wide", 4002, 2, { w: 2001, h: 1, dpr: 2 }],
+      ["tall", 2, 4002, { w: 1, h: 2001, dpr: 2 }],
+    ])("leaves a %s capture untouched above 2000 CSS pixels", async (_n, width, height, vp) => {
+      const shot = flat(width, height);
+      const { cdp } = cdpWith(shot, vp);
+      expect((await capture(cdp)).toString("base64")).toBe(shot);
+    });
+
+    it("still downscales a window of exactly 2000 CSS pixels", async () => {
+      const { cdp } = cdpWith(flat(4000, 2), { w: 2000, h: 1, dpr: 2 });
+      expect(sizeOf(await capture(cdp))).toEqual([2000, 1]);
+    });
+
     it("gives the window read a short timeout, not the CDP default", async () => {
       const { cdp, send } = cdpWith(flat(2048, 1480), { w: 1024, h: 740, dpr: 2 });
       await capture(cdp);

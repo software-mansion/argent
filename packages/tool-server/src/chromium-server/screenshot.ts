@@ -94,6 +94,11 @@ const ENCODE_OPTIONS = { filterType: 2, deflateStrategy: 0, deflateLevel: 6 };
 // short because the session's last read is then almost always still right.
 const VIEWPORT_READ_TIMEOUT_MS = 150;
 
+// Claude Code scales a longer image down to this, and model APIs have similar
+// limits. Reducing a capture that stays above it would save no tokens, at the
+// highest CPU and memory cost.
+const MAX_CSS_IMAGE_LONG_SIDE = 2_000;
+
 async function devicePixelsPerCssPixel(
   cdp: CDPClient,
   imageWidth: number,
@@ -122,7 +127,9 @@ async function toCssPixels(ctx: CaptureContext, capture: Buffer): Promise<Buffer
     // One device pixel per CSS pixel as far as the session knows: no read to wait for.
     if (known && size.width <= known.width) return capture;
     const ratio = await devicePixelsPerCssPixel(ctx.cdp, size.width, known);
-    if (ratio <= 1) return capture;
+    if (ratio <= 1 || Math.max(size.width, size.height) / ratio > MAX_CSS_IMAGE_LONG_SIDE) {
+      return capture;
+    }
     const decoded = await decodePng(capture);
     await yieldToEventLoop();
     const scaled =
