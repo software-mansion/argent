@@ -357,12 +357,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         consoleEvents.emit("log", entry);
       });
 
-      const consoleServer = await createConsoleLogServer(consoleEvents, logWriter).catch(
-        (error: unknown) => {
-          logWriter.close();
-          throw error;
-        }
-      );
+      const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
 
       const api: JsRuntimeDebuggerApi = {
         port,
