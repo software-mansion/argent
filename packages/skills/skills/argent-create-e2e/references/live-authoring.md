@@ -194,6 +194,7 @@ e2e-finish-recording { TEST }
 After meaning-preserving conversion:
 
 ```yaml
+version: 1
 steps:
   - echo: Restart Acme Notes. Expect Home
   - launch: com.acme.notes

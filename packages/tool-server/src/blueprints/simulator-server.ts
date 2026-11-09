@@ -32,6 +32,7 @@ import {
 } from "../utils/external-devices";
 import { simctlPbcopy } from "../utils/sim-remote";
 import { registerCaptureOnDemandSender } from "../utils/profiling-devices";
+import { firstSimulatorPoll } from "../utils/simulator-watcher";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -575,7 +576,9 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
             "presses, and `keyboard` to type (see the argent-tv-interact skill)"
         );
       }
-      await ensureAutomationEnabled(device.id).catch(() => {});
+      // Input could open an app from the home screen, which must not launch
+      // before the watcher has armed native-devtools injection.
+      await Promise.all([ensureAutomationEnabled(device.id).catch(() => {}), firstSimulatorPoll()]);
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).

@@ -104,8 +104,7 @@ vi.mock("../src/http", () => ({
 vi.mock("../src/utils/update-checker", () => ({
   startUpdateChecker: vi.fn(() => updateCheckerMock),
 }));
-// Unlike the startup-failure test, the readiness gate RESOLVES here so control
-// reaches app.listen() and the bind-error handler is what fires.
+// Keeps the real watcher from spawning `simctl`.
 vi.mock("../src/utils/simulator-watcher", () => ({
   startSimulatorWatcher: vi.fn(() => ({
     stop: watcherMock.stop,
