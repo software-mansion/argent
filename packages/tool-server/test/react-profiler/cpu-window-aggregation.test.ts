@@ -106,6 +106,108 @@ describe("renderComponentCpu — one function as several call-tree nodes", () =>
   });
 });
 
+describe("renderComponentCpu — which same-name frames count as outermost", () => {
+  const mk = (id: number, name: string, children: number[]): HermesProfileNode => ({
+    id,
+    hitCount: 0,
+    callFrame: frame(name),
+    children,
+  });
+  const run = (nodeMap: Map<number, HermesProfileNode>, sampleNodeIds: number[]) => {
+    const n = sampleNodeIds.length;
+    const index: CpuSampleIndex = {
+      timestampsMs: Float64Array.from({ length: n }, (_, i) => i + 1),
+      intervalStartsMs: Float64Array.from({ length: n }, (_, i) => i),
+      sampleNodeIds,
+      nodeMap,
+      durationMs: n,
+    };
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: n, componentName: "Login" }],
+    };
+    return renderComponentCpu(index, commit, "Login", 10);
+  };
+
+  it("nests a frame under a namesake that is not its parent, at any depth", () => {
+    // root → walk (1) → step (1) → walk (1) → walk (2): one recursion, 5ms inclusive.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2]));
+    nodeMap.set(2, mk(2, "walk", [3]));
+    nodeMap.set(3, mk(3, "step", [4]));
+    nodeMap.set(4, mk(4, "walk", [5]));
+    nodeMap.set(5, mk(5, "walk", []));
+    const md = run(nodeMap, [2, 3, 4, 5, 5]);
+    expect(readRow(md, "walk")).toEqual({ self: 4, total: 5 });
+    expect(readRow(md, "step")).toEqual({ self: 1, total: 4 });
+  });
+
+  it("counts each of two sibling recursions as outermost", () => {
+    // root → [a → walk (1) → walk (2), b → walk (3) → walk (1)].
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2, 5]));
+    nodeMap.set(2, mk(2, "a", [3]));
+    nodeMap.set(3, mk(3, "walk", [4]));
+    nodeMap.set(4, mk(4, "walk", []));
+    nodeMap.set(5, mk(5, "b", [6]));
+    nodeMap.set(6, mk(6, "walk", [7]));
+    nodeMap.set(7, mk(7, "walk", []));
+    const md = run(nodeMap, [3, 4, 4, 6, 6, 6, 7]);
+    expect(readRow(md, "walk")).toEqual({ self: 7, total: 7 });
+  });
+
+  it("follows the parent each node's time is attributed to when a profile lists a child twice", () => {
+    // walk (5) is listed under both `a` and `b`; its time goes up through `b`,
+    // the later parent, so `a`'s walk does not enclose it. 99 is listed but absent.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2, 3, 99]));
+    nodeMap.set(2, mk(2, "walk", [5]));
+    nodeMap.set(3, mk(3, "b", [5]));
+    nodeMap.set(5, mk(5, "walk", []));
+    const md = run(nodeMap, [2, 5, 5]);
+    expect(readRow(md, "walk")).toEqual({ self: 3, total: 3 });
+  });
+
+  it("looks up each parent link a bounded number of times on a deep recursion", () => {
+    // root → walk → walk → … 2000 deep, one sample at the bottom: every frame is a row.
+    const depth = 2000;
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(0, mk(0, "(root)", [1]));
+    for (let id = 1; id <= depth; id++) {
+      nodeMap.set(id, mk(id, "walk", id < depth ? [id + 1] : []));
+    }
+    class CountingMap extends Map<number, number> {
+      lookups = 0;
+      override get(key: number) {
+        this.lookups++;
+        return super.get(key);
+      }
+      override has(key: number) {
+        this.lookups++;
+        return super.has(key);
+      }
+    }
+    const childToParent = new CountingMap();
+    for (let id = 1; id <= depth; id++) childToParent.set(id, id - 1);
+    const index: CpuSampleIndex = {
+      timestampsMs: Float64Array.of(1),
+      intervalStartsMs: Float64Array.of(0),
+      sampleNodeIds: [depth],
+      nodeMap,
+      durationMs: 1,
+      childToParent,
+    };
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 1, componentName: "Login" }],
+    };
+    expect(readRow(renderComponentCpu(index, commit, "Login", 10), "walk")).toEqual({
+      self: 1,
+      total: 1,
+    });
+    // Linear in depth; walking to the root once per frame costs depth² / 2.
+    expect(childToParent.lookups).toBeLessThan(10 * depth);
+  });
+});
+
 describe("renderComponentCpu — a window with more call-tree nodes than one hotspot page", () => {
   it("still sees the outer frame of a recursion that ranks below 50 other nodes", () => {
     // root → walk (1 sample) → walk (3 samples), beside 50 busier siblings (2 samples
@@ -277,5 +379,16 @@ describe("renderComponentCpu — the Location of a row", () => {
     );
     expect(readRow(md, "render").self).toBe(7);
     expect(locationOf(md, "render")).toBe("src/render.js:10");
+  });
+
+  it("is the line that overtakes in a later commit the one that led the first", () => {
+    // Commit 0: render@10 2 samples, render@20 1; commit 1: render@20 2. Totals 2 vs 3.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, { id: 1, hitCount: 0, callFrame: frame("(root)"), children: [2, 3] });
+    nodeMap.set(2, at(2, "render", 10, []));
+    nodeMap.set(3, at(3, "render", 20, []));
+    const md = renderComponentCpu(index(nodeMap, [2, 2, 3, 3, 3]), twoCommits(3, 2), "Login", 10);
+    expect(readRow(md, "render").self).toBe(5);
+    expect(locationOf(md, "render")).toBe("src/render.js:20");
   });
 });

@@ -334,8 +334,13 @@ export function renderComponentCpu(
   // Hermes can give one function a different line in each call-tree node, so rows
   // go by name and show the line that took the most self time.
   const selfMsByLocation = new Map<string, Map<string, SourceSelfTime>>();
+  // By node, so a node's rows in later windows skip rebuilding its location key.
+  const locationOfNode = new Map<number, SourceSelfTime>();
 
-  const childToParent = index.childToParent ?? buildChildToParent(index.nodeMap);
+  const nestedInSameName = nodesNestedInSameName(
+    index.nodeMap,
+    index.childToParent ?? buildChildToParent(index.nodeMap)
+  );
 
   for (const window of commitWindows.values()) {
     // Every node on the sampled stacks: a name's outer frame can rank below the cut, or
@@ -344,39 +349,31 @@ export function renderComponentCpu(
       withCallers: true,
     });
     // Rows are per call-tree node. Self time adds; inclusive time sums only
-    // the outermost of a name's nodes (`members`), since recursion nests them.
-    const perWindow = new Map<
-      string,
-      {
-        selfMs: number;
-        totalMs: number;
-        members: { nodeId: number; totalMs: number }[];
-      }
-    >();
+    // the outermost of a name's nodes, since recursion nests them.
+    const perWindow = new Map<string, { selfMs: number; totalMs: number }>();
     for (const hs of hotspots) {
-      const locations = selfMsByLocation.get(hs.name) ?? new Map<string, SourceSelfTime>();
-      selfMsByLocation.set(hs.name, locations);
-      const locationKey = `${hs.url ?? ""}:${hs.lineNumber ?? ""}`;
-      const location = locations.get(locationKey);
-      if (location) location.selfMs += hs.selfMs;
-      else
-        locations.set(locationKey, { url: hs.url, lineNumber: hs.lineNumber, selfMs: hs.selfMs });
+      let location = locationOfNode.get(hs.nodeId);
+      if (!location) {
+        const locations = selfMsByLocation.get(hs.name) ?? new Map<string, SourceSelfTime>();
+        selfMsByLocation.set(hs.name, locations);
+        const locationKey = `${hs.url ?? ""}:${hs.lineNumber ?? ""}`;
+        location = locations.get(locationKey);
+        if (!location) {
+          location = { url: hs.url, lineNumber: hs.lineNumber, selfMs: 0 };
+          locations.set(locationKey, location);
+        }
+        locationOfNode.set(hs.nodeId, location);
+      }
+      location.selfMs += hs.selfMs;
+      // A frame's ancestors are rows of the same window, so a nested frame's
+      // outer namesake is always counted.
+      const totalMs = nestedInSameName.has(hs.nodeId) ? 0 : hs.totalMs;
       const seen = perWindow.get(hs.name);
       if (seen) {
         seen.selfMs += hs.selfMs;
-        if (!seen.members.some((m) => isAncestor(m.nodeId, hs.nodeId, childToParent))) {
-          seen.members = seen.members.filter(
-            (m) => !isAncestor(hs.nodeId, m.nodeId, childToParent)
-          );
-          seen.members.push({ nodeId: hs.nodeId, totalMs: hs.totalMs });
-          seen.totalMs = seen.members.reduce((sum, m) => sum + m.totalMs, 0);
-        }
+        seen.totalMs += totalMs;
       } else {
-        perWindow.set(hs.name, {
-          selfMs: hs.selfMs,
-          totalMs: hs.totalMs,
-          members: [{ nodeId: hs.nodeId, totalMs: hs.totalMs }],
-        });
+        perWindow.set(hs.name, { selfMs: hs.selfMs, totalMs });
       }
     }
     for (const [name, win] of perWindow) {
@@ -437,16 +434,38 @@ function shortenUrl(url: string): string {
   return parts.slice(-2).join("/");
 }
 
-function isAncestor(ancestor: number, nodeId: number, childToParent: Map<number, number>): boolean {
-  const seen = new Set<number>([nodeId]);
-  let current = nodeId;
-  while (childToParent.has(current)) {
-    current = childToParent.get(current)!;
-    if (current === ancestor) return true;
-    if (seen.has(current)) return false;
-    seen.add(current);
+/** Call-tree nodes with an ancestor of the same function name, as recursion produces. */
+function nodesNestedInSameName(
+  nodeMap: Map<number, HermesProfileNode>,
+  childToParent: Map<number, number>
+): Set<number> {
+  const nested = new Set<number>();
+  // Frames of each name on the current root-to-node path.
+  const onPath = new Map<string, number>();
+  const stack: { id: number; leaving: boolean }[] = [];
+  for (const id of nodeMap.keys()) {
+    if (!childToParent.has(id)) stack.push({ id, leaving: false });
   }
-  return false;
+  while (stack.length > 0) {
+    const { id, leaving } = stack.pop()!;
+    const node = nodeMap.get(id)!;
+    const name = node.callFrame.functionName;
+    const count = onPath.get(name) ?? 0;
+    if (leaving) {
+      onPath.set(name, count - 1);
+      continue;
+    }
+    if (count > 0) nested.add(id);
+    onPath.set(name, count + 1);
+    stack.push({ id, leaving: true });
+    for (const child of node.children ?? []) {
+      // Follow the parent links queryCpuWindow sums inclusive time along.
+      if (childToParent.get(child) === id && nodeMap.has(child)) {
+        stack.push({ id: child, leaving: false });
+      }
+    }
+  }
+  return nested;
 }
 
 const timeWindowSchema = z.object({
