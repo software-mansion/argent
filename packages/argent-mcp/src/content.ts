@@ -51,8 +51,8 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
 
 /**
  * How a screenshot reaches the client. Default / unknown clients use `image-and-path`.
- * `screenshotForm` / `autoScreenshotForm` in client-images.ts pick the form per
- * `clientInfo.name`; see CLIENTS.md for the full matrix.
+ * The client's profile (clients/profiles.ts) picks the form; clients/README.md has the
+ * full matrix.
  * - `image-and-path` (default): the image, then `Saved: <path>`.
  * - `image`: the image alone, for a client whose model sees it (auto-screenshots only).
  * - `path`: no image, only the path and how to open it, for a client that would send the image

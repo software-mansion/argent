@@ -4,9 +4,10 @@ Runs real coding-agent CLIs (harnesses) against the Argent MCP server of your ch
 shows what each harness's model actually gets from Argent: which tools, which facts from
 the tool schemas, and whether the server instructions arrive.
 
-Run it by hand when you change tool schemas, tool descriptions, the server instructions or
-`packages/argent-mcp/src/keyword-facts.ts`, or when a harness ships a major release. It is
-not part of CI: two of the harnesses need a signed-in account.
+Run it by hand when you change tool schemas, tool descriptions, the server instructions,
+`packages/argent-mcp/src/keyword-facts.ts` or `packages/argent-mcp/src/clients/profiles.ts`,
+or when a harness ships a major release. It is not part of CI: two of the harnesses need a
+signed-in account.
 
 ## Why
 
@@ -15,7 +16,7 @@ model sees it. Codex, for example, deletes `default`, `minimum` and `maximum`, s
 that only such a keyword states never reaches its model. Argent copies those values into
 the param descriptions for such clients (`keyword-facts.ts`). This check shows whether that
 works, and whether anything is lost or repeated. The full per-client matrix (keyword facts,
-screenshot forms, telemetry) is in `packages/argent-mcp/src/CLIENTS.md`.
+screenshot forms, telemetry) is in `packages/argent-mcp/src/clients/README.md`.
 
 ## How it works
 
@@ -112,7 +113,7 @@ Kiro CLI                    2.34.2   Q DEV CLI         77/77  0 of 140    0     
 ```
 
 - **Sent as:** the name the harness gives in the MCP handshake. The server decides by this
-  name whether to add text (`showsSchemaKeywords` in `keyword-facts.ts`).
+  name whether to add text (`keywordFacts` in `clients/profiles.ts`).
 - **Tools:** Argent tools whose schema is in the request. Claude Code loads most tools only
   when needed, so its first request has about a dozen.
 - **Facts lost:** facts the model can't read anywhere in the request. This should be 0.
@@ -148,7 +149,7 @@ The results folder holds:
   - `requests/`: the saved requests;
   - `output.txt`: the harness output;
   - `server.log`: the client name in each handshake;
-  - `server-home/mcp-calls.log`: the server's own log, with `keywordFacts` per tool listing.
+  - `server-home/mcp-calls.log`: the server's own log, with the matched client profile and `keywordFacts` per tool listing.
 
 ## Limits
 

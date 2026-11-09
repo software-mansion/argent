@@ -34,7 +34,7 @@ function withoutRetiredParams(schema: Record<string, unknown>): Record<string, u
  * BM25 ranker. `readOnly` becomes the `readOnlyHint` annotation, which lets Claude Code
  * run the tool without a prompt in plan mode. With `keywordFacts`, facts stated only by
  * schema keywords are copied into the param descriptions, for a client that may drop those
- * keywords (see `showsSchemaKeywords`).
+ * keywords (`keywordFacts` in clients/profiles.ts).
  */
 export function toMcpTool(t: ToolMeta, { keywordFacts = false }: MappingOptions = {}): McpTool {
   const meta: Record<string, unknown> = {};
