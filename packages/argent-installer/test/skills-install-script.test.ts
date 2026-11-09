@@ -33,6 +33,53 @@ describe("install-skills script", () => {
     expect(fs.readdirSync(canonical).sort()).toEqual(fs.readdirSync(BUNDLED_SKILLS).sort());
   });
 
+  it("writes through per-skill and per-file links into their canonical targets", () => {
+    const [dirSkill, fileSkill] = fs.readdirSync(BUNDLED_SKILLS).sort();
+    const canonical = path.join(project, ".agents", "skills");
+    fs.mkdirSync(path.join(canonical, dirSkill), { recursive: true });
+    fs.writeFileSync(path.join(canonical, dirSkill, "SKILL.md"), "stale");
+    fs.writeFileSync(path.join(canonical, "canonical.md"), "stale");
+    const skills = path.join(project, ".claude", "skills");
+    fs.mkdirSync(path.join(skills, fileSkill), { recursive: true });
+    fs.symlinkSync(
+      path.join("..", "..", ".agents", "skills", dirSkill),
+      path.join(skills, dirSkill)
+    );
+    fs.symlinkSync(
+      path.join("..", "..", "..", ".agents", "skills", "canonical.md"),
+      path.join(skills, fileSkill, "SKILL.md")
+    );
+
+    execFileSync(process.execPath, [SCRIPT], { cwd: project, stdio: "pipe" });
+
+    expect(fs.lstatSync(path.join(skills, dirSkill)).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(path.join(skills, fileSkill, "SKILL.md")).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(path.join(canonical, dirSkill, "SKILL.md"), "utf8")).toBe(
+      fs.readFileSync(path.join(BUNDLED_SKILLS, dirSkill, "SKILL.md"), "utf8")
+    );
+    expect(fs.readFileSync(path.join(canonical, "canonical.md"), "utf8")).toBe(
+      fs.readFileSync(path.join(BUNDLED_SKILLS, fileSkill, "SKILL.md"), "utf8")
+    );
+  });
+
+  it("creates the missing target of a dangling .claude/skills link", () => {
+    // `.claude` is a link too, so the relative target resolves against the real dir.
+    fs.mkdirSync(path.join(project, ".agents"));
+    fs.mkdirSync(path.join(project, "config", "claude"), { recursive: true });
+    fs.symlinkSync(path.join("config", "claude"), path.join(project, ".claude"));
+    fs.symlinkSync(
+      path.join("..", "..", ".agents", "skills"),
+      path.join(project, "config", "claude", "skills")
+    );
+
+    execFileSync(process.execPath, [SCRIPT], { cwd: project, stdio: "pipe" });
+
+    expect(fs.lstatSync(path.join(project, ".claude", "skills")).isSymbolicLink()).toBe(true);
+    expect(fs.readdirSync(path.join(project, ".agents", "skills")).sort()).toEqual(
+      fs.readdirSync(BUNDLED_SKILLS).sort()
+    );
+  });
+
   // A fresh clone runs it before any build, so it must not import a workspace package.
   it("runs from a copy outside the workspace, writing through linked skills and agents dirs", () => {
     const pkg = path.join(project, "pkg");
