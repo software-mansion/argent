@@ -885,10 +885,6 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual(steps);
   });
 
-  // Flows are hand-authored YAML, so a misspelled option key must fail at
-  // parse time — silently dropping it would apply the default instead and
-  // surface later as a misleading runtime failure (wrong scroll direction,
-  // lost submit opt-out, lost timeout, lost snapshot tolerance).
   describe("format version", () => {
     const thrown = (content: string): unknown => {
       try {
@@ -959,6 +955,10 @@ describe("parseFlow", () => {
     });
   });
 
+  // Flows are hand-authored YAML, so a misspelled option key must fail at
+  // parse time — silently dropping it would apply the default instead and
+  // surface later as a misleading runtime failure (wrong scroll direction,
+  // lost submit opt-out, lost timeout, lost snapshot tolerance).
   describe("unknown option keys are rejected at parse time", () => {
     it("rejects a misspelled scroll-to direction key with a suggestion", async () => {
       expect(() =>
