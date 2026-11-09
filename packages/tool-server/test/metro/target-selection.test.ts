@@ -82,6 +82,17 @@ describe("selectTarget", () => {
     expect(result.isNewDebugger).toBe(false);
   });
 
+  it("picks the app's runtime when the C++ packager connection suffixes its title", () => {
+    // RN 0.74 with inspectorEnableCxxInspectorPackagerConnection and no modern
+    // CDP registry: legacy pages keep their names, plus " [C++ connection]".
+    const reanimated = makeTarget({ id: "0-2", title: "Reanimated UI runtime [C++ connection]" });
+    const hermes = makeTarget({ id: "0-1", title: "Hermes React Native [C++ connection]" });
+
+    const result = selectTarget([reanimated, hermes], 8081);
+    expect(result.target.id).toBe("0-1");
+    expect(result.isNewDebugger).toBe(false);
+  });
+
   it("normalizes WebSocket URL to localhost with correct port", () => {
     const target = makeTarget({
       webSocketDebuggerUrl: "ws://10.0.2.2:9999/inspector/debug?device=0&page=1",

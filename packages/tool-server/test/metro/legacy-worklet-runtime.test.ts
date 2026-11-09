@@ -11,9 +11,9 @@ scopeTempHome("argent-legacy-worklet-home-");
 
 /**
  * An RN 0.75 legacy-inspector app using Reanimated (#1836). Metro lists the
- * Reanimated UI runtime first; it accepts the socket and never answers. The app's
- * Hermes runtime answers -32601 for methods it lacks, Runtime.addBinding among
- * them.
+ * Reanimated UI runtime first; it is idle, so it accepts the socket and never
+ * answers. The app's Hermes runtime answers -32601 for methods it lacks,
+ * Runtime.addBinding among them.
  */
 const TARGETS = [
   { id: "0-2", page: 2, title: "Reanimated UI runtime", vm: "Hermes" },

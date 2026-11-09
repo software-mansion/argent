@@ -105,10 +105,12 @@ export function selectTarget(
   if (bridge) return makeResult(bridge, port, false);
 
   // The legacy inspector also lists worklet runtimes (Reanimated's "Reanimated
-  // UI runtime", or one named by `createWorkletRuntime`), in any order. They
-  // never answer `Runtime.enable`, so the app's runtime is picked by the title
-  // React Native registers it under.
-  const hermes = candidates.find((t) => LEGACY_APP_RUNTIME_TITLES.has(t.title));
+  // UI runtime", or one named by `createWorkletRuntime`), in any order. They are
+  // not the app's runtime, and an idle one leaves `Runtime.enable` unanswered,
+  // so the app's runtime is picked by the title React Native registers it under.
+  const hermes = candidates.find((t) =>
+    LEGACY_APP_RUNTIME_TITLES.has(t.title?.replace(CXX_CONNECTION_SUFFIX, ""))
+  );
   if (hermes) return makeResult(hermes, port, false);
 
   return makeResult(candidates[0]!, port, false);
@@ -119,6 +121,9 @@ const LEGACY_APP_RUNTIME_TITLES = new Set([
   "Hermes React Native",
   "Hermes Bridgeless React Native",
 ]);
+
+/** RN 0.74's opt-in C++ packager connection appends this to every page title. */
+const CXX_CONNECTION_SUFFIX = / \[C\+\+ connection\]$/;
 
 function makeResult(target: CDPTarget, port: number, isNewDebugger: boolean): SelectedTarget {
   return {
