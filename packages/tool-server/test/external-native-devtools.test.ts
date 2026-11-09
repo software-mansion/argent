@@ -388,6 +388,51 @@ describe("a provider that lends its native-devtools agent", () => {
   });
 
   /**
+   * A provider that has no app yet accepts us and hands the app over when its
+   * agent arrives with the app's launch. We hear that app from its launch on,
+   * so nothing was missed and the note must not say the launch was.
+   */
+  it("does not note a missed launch when the app's agent arrived after argent connected", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      const agent = await startLentAgent({ deferHandshake: true });
+      publishDescriptor({ socketPath: agent.socketPath });
+
+      const instance = await instantiate();
+      const { createNativeNetworkLogsTool } =
+        await import("../src/tools/native-devtools/native-network-logs");
+      const { Registry } = await import("@argent/registry");
+      const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+
+      // The app launches a while after argent connected.
+      vi.advanceTimersByTime(5_000);
+      agent.handshake();
+      await waitForConnectedBundle(instance.api);
+      agent.sendEvent("Network.requestWillBeSent", {
+        requestId: "r1",
+        request: { url: "https://example.com/at-launch", method: "GET", headers: {} },
+      });
+      agent.sendEvent("Network.loadingFinished", { requestId: "r1" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const listing = (await nativeNetworkLogsTool.execute(
+        { nativeDevtools: instance.api },
+        { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+      )) as { header: string; requests: Array<{ url: string }> };
+
+      expect(listing.requests.map((request) => request.url)).toEqual([
+        "https://example.com/at-launch",
+      ]);
+      expect(listing.header).not.toMatch(/were not recorded/);
+
+      await instance.dispose();
+      await agent.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
    * A lent agent's events reach argent from the handshake on, before any call
    * asks for capture. The note must not say a request it lists was missed.
    */

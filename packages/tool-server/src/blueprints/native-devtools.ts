@@ -440,6 +440,11 @@ export function nativeDevtoolsRef(
 const NETWORK_ENABLE_TIMEOUT_MS = 5_000;
 /** How long a launch waits for its new process to be armed before it says it is not yet. */
 const LAUNCH_ARM_WAIT_MS = 5_000;
+/**
+ * A provider that is lending an app sends its handshake as it accepts us, so
+ * one that comes later than this is an agent that arrived after we connected.
+ */
+const LENT_HANDSHAKE_PROMPT_MS = 1_000;
 const WAITING_FOR_ENABLE = "waiting for the agent to acknowledge Network.enable";
 const WAITING_FOR_CAPTURE_STATE = "waiting for the agent to say whether capture is on";
 const PROVIDER_CAPTURE_OFF =
@@ -516,8 +521,9 @@ export interface NativeDevtoolsApi {
   /**
    * True once per gap: capture for this app was turned on while it was already
    * running, so the requests before that (its launch among them) were missed.
-   * In attach mode the gap is the time before argent connected to the app's
-   * agent. Reading it clears it, so only the answer that reports the log says so.
+   * In attach mode the gap is the time before argent connected to the agent
+   * of an app that was already running. Reading it clears it, so only the
+   * answer that reports the log says so.
    */
   takeCaptureGap(bundleId: string): boolean;
   /** The app's request records, from its first connection on; undefined before that. */
@@ -1025,10 +1031,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               );
             }
 
-            // A lent agent is an app that was already running, and its
-            // events reach us from this handshake on whether or not capture
-            // was asked for, so the gap is the time before the handshake.
-            if (lentSocketPath) captureGaps.add(bundleId);
+            // A lent agent's events reach us from this handshake on whether or
+            // not capture was asked for. A provider that has the app hands it
+            // over as it accepts us, so the app was already running and the
+            // gap is the time before the handshake. One that hands it over
+            // later had no app yet: its agent arrived with the app's launch.
+            if (lentSocketPath && performance.now() - lentConnectedAt < LENT_HANDSHAKE_PROMPT_MS) {
+              captureGaps.add(bundleId);
+            }
             if (activatedBundleIds.has(bundleId)) {
               // Our own listener hears an app at its launch, so nothing was missed.
               if (!lentSocketPath) captureGaps.delete(bundleId);
@@ -1081,6 +1091,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // In attach mode nothing dials us, so there is no listener to open.
     const server = lentSocketPath ? null : net.createServer(serveAgentConnection);
     let lentSocket: net.Socket | null = null;
+    /** When we connected to the provider's socket. */
+    let lentConnectedAt = 0;
     /** Our own hang-up must not read as the provider dropping us. */
     let disposed = false;
 
@@ -1119,6 +1131,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         });
       });
 
+      lentConnectedAt = performance.now();
       serveAgentConnection(lentSocket);
 
       /**
