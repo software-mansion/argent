@@ -43,19 +43,7 @@ export async function describeAndroid(
 
   if (registry) {
     try {
-      const device = resolveDevice(serial);
-      const ref = androidDevtoolsRef(device);
-      const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
-      const [{ xml }, size] = await Promise.all([
-        devtools.getHierarchy(),
-        devtools.getScreenSize(),
-      ]);
-      const tree = await awaitWebViewPublished(
-        parseUiAutomatorDump(xml, size.width, size.height),
-        async () =>
-          parseUiAutomatorDump((await devtools.getHierarchy()).xml, size.width, size.height)
-      );
-      return { tree, source: "android-devtools", hint };
+      return await describeAndroidWithHelper(registry, serial, hint);
     } catch (serviceErr) {
       // Debug level: the legacy path below is expected to recover, so this
       // shouldn't leak into the per-call result.
@@ -73,6 +61,25 @@ export async function describeAndroid(
     parseDump(await uiautomatorDump(serial), size)
   );
   return { tree, source: "uiautomator", hint };
+}
+
+/**
+ * Reads through the `android-devtools` helper only. For callers that abandon a
+ * slow read: a `uiautomator dump` left running on the device kills the next one.
+ */
+export async function describeAndroidWithHelper(
+  registry: Registry,
+  serial: string,
+  hint?: string
+): Promise<DescribeTreeData> {
+  const ref = androidDevtoolsRef(resolveDevice(serial));
+  const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+  const [{ xml }, size] = await Promise.all([devtools.getHierarchy(), devtools.getScreenSize()]);
+  const tree = await awaitWebViewPublished(
+    parseUiAutomatorDump(xml, size.width, size.height),
+    async () => parseUiAutomatorDump((await devtools.getHierarchy()).xml, size.width, size.height)
+  );
+  return { tree, source: "android-devtools", hint };
 }
 
 /**
