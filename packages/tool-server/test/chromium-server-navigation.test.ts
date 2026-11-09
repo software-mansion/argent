@@ -41,15 +41,20 @@ describe("chromium-server/navigation", () => {
   });
 
   it("navigate: explains an aborted navigation without echoing the url", async () => {
-    const send = vi.fn().mockResolvedValue({ errorText: "net::ERR_ABORTED", isDownload: false });
+    const send = vi.fn().mockResolvedValue({
+      errorText: "net::ERR_ABORTED",
+      isDownload: false,
+      loaderId: "L",
+    });
     const err = await navigate(
       { send } as unknown as CDPClient,
       "http://user:pass@h/?token=secret"
     ).catch((e: unknown) => e);
     expect((err as Error).message).toBe(
       "Chromium could not navigate: net::ERR_ABORTED. Chromium aborts a URL it does not load in" +
-        " a page, such as tel:, mailto: or an unknown scheme, a response with no content, and a" +
-        " navigation another one replaced."
+        " a page, such as tel:, mailto: or an unknown scheme, a response with no content, a" +
+        " navigation another one replaced, and one a beforeunload handler on the current page" +
+        " cancelled."
     );
   });
 
@@ -115,7 +120,7 @@ describe("chromium-server/navigation", () => {
     const send = vi
       .fn()
       .mockReturnValueOnce(new Promise((r) => (finish = r)))
-      .mockResolvedValue({ errorText: "net::ERR_ABORTED" });
+      .mockResolvedValue({ errorText: "net::ERR_ABORTED", loaderId: "L" });
     const cdp = { send } as unknown as CDPClient;
     const first = navigate(cdp, "http://h/slow");
     const repeat = navigate(cdp, "http://H/slow");
@@ -133,7 +138,7 @@ describe("chromium-server/navigation", () => {
     const cdp = { send } as unknown as CDPClient;
     const first = navigate(cdp, "http://h/slow").catch((e: unknown) => e);
     const repeat = navigate(cdp, "http://h/slow").catch((e: unknown) => e);
-    finish({ errorText: "net::ERR_ABORTED" });
+    finish({ errorText: "net::ERR_ABORTED", loaderId: "L" });
     for (const err of await Promise.all([first, repeat])) {
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED);
     }
@@ -156,10 +161,61 @@ describe("chromium-server/navigation", () => {
     void navigate(cdp, "http://h/a");
     expect(send).toHaveBeenCalledTimes(3);
 
-    abortFirst({ errorText: "net::ERR_ABORTED" });
+    abortFirst({ errorText: "net::ERR_ABORTED", loaderId: "L" });
     await first;
     void navigate(cdp, "http://h/a");
     expect(send).toHaveBeenCalledTimes(3);
+  });
+
+  it("navigate: resolves when Chromium drops it as a repeat of another client's navigation", async () => {
+    const send = vi
+      .fn()
+      .mockImplementation((method: string) =>
+        Promise.resolve(
+          method === "Page.navigate"
+            ? { errorText: "net::ERR_ABORTED" }
+            : { frameTree: { frame: { url: "http://h/slow", urlFragment: "#top" } } }
+        )
+      );
+    await expect(navigate({ send } as unknown as CDPClient, "http://H/slow#top")).resolves.toBe(
+      undefined
+    );
+    expect(send).toHaveBeenLastCalledWith("Page.getFrameTree", {});
+  });
+
+  it("navigate: throws when a navigation that never started leaves the page elsewhere", async () => {
+    const send = vi
+      .fn()
+      .mockImplementation((method: string) =>
+        Promise.resolve(
+          method === "Page.navigate"
+            ? { errorText: "net::ERR_ABORTED", isDownload: false }
+            : { frameTree: { frame: { url: "http://h/slow" } } }
+        )
+      );
+    await expect(navigate({ send } as unknown as CDPClient, "http://h/slow#top")).rejects.toThrow(
+      "net::ERR_ABORTED"
+    );
+  });
+
+  it("navigate: sends a repeat again after the navigation it would wait for rejected", async () => {
+    const send = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("CDP connection closed"))
+      .mockResolvedValue({});
+    const cdp = { send } as unknown as CDPClient;
+    await expect(navigate(cdp, "http://h/a")).rejects.toThrow("CDP connection closed");
+    await expect(navigate(cdp, "http://h/a")).resolves.toBe(undefined);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("navigate: does not share an in-flight navigation between CDP clients", async () => {
+    const a = vi.fn().mockReturnValue(new Promise(() => {}));
+    const b = vi.fn().mockReturnValue(new Promise(() => {}));
+    void navigate({ send: a } as unknown as CDPClient, "http://h/a");
+    void navigate({ send: b } as unknown as CDPClient, "http://h/a");
+    expect(a).toHaveBeenCalledTimes(1);
+    expect(b).toHaveBeenCalledTimes(1);
   });
 
   it("navigate: sends a different URL, or a repeated javascript: URL, while one is in flight", async () => {
