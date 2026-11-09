@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { WebSocketServer } from "ws";
 import * as http from "node:http";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
@@ -17,7 +20,7 @@ let server: http.Server;
 let wss: WebSocketServer;
 let port: number;
 /** The method the mock runtime rejects, and whether it advertises Fusebox. */
-let rejected = "Runtime.enable";
+let rejected: string | null = "Runtime.enable";
 let fusebox = false;
 
 beforeAll(async () => {
@@ -74,14 +77,16 @@ afterAll(async () => {
   await new Promise<void>((resolve) => wss.close(() => server.close(() => resolve())));
 });
 
-async function connectAndCountOpenSockets(): Promise<number> {
+async function connectAndCountOpenSockets(
+  expectedError: string | RegExp = `${rejected} wasn't found`
+): Promise<number> {
   const registry = new Registry();
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerTool(debuggerConnectTool);
   try {
     await expect(
       registry.invokeTool("debugger-connect", { port, device_id: "emulator-5554" })
-    ).rejects.toThrow(`${rejected} wasn't found`);
+    ).rejects.toThrow(expectedError);
 
     const deadline = Date.now() + 2_000;
     while (wss.clients.size > 0 && Date.now() < deadline) {
@@ -109,5 +114,13 @@ describe("debugger-connect failing partway", () => {
     rejected = "Runtime.addBinding";
     fusebox = true;
     expect(await connectAndCountOpenSockets()).toBe(0);
+  });
+
+  it("closes the socket when the console log file cannot be created", async () => {
+    rejected = null;
+    fusebox = false;
+    fs.mkdirSync(path.join(os.homedir(), ".argent"));
+    fs.writeFileSync(path.join(os.homedir(), ".argent", "tmp"), "");
+    expect(await connectAndCountOpenSockets(/EEXIST|ENOTDIR/)).toBe(0);
   });
 });
