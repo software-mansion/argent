@@ -78,6 +78,7 @@ function makeNativeApi(options: {
         return options.state ?? (options.appRunning ? "stale_process" : "not_running");
       },
       activateNetworkInspection: () => {},
+      setNetworkConditions: () => {},
       getNetworkLog: () => [],
       clearNetworkLog: () => {},
       getAppState: async () => {

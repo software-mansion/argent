@@ -128,6 +128,7 @@ function makeApi(): NativeDevtoolsApi {
     listConnectedBundleIds: () => [],
     appConnectionState: async () => "stale_process",
     activateNetworkInspection: () => {},
+    setNetworkConditions: () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
     getAppState: async () => {

@@ -61,6 +61,7 @@ function makeNativeDevtoolsApi(options: {
     appConnectionState: async () =>
       options.state ?? (options.requiresRestart ? "stale_process" : "connected"),
     activateNetworkInspection: () => {},
+    setNetworkConditions: () => {},
     getNetworkLog: () => [],
     clearNetworkLog: () => {},
     getAppState: async (bundleId) => ({

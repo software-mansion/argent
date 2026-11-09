@@ -25,6 +25,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `rotate`                     | Set the device orientation to portrait or either landscape                                                                    |
 | `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                     |
 | `shake`                      | Shake the device                                                                                                              |
+| `network-conditions`         | Add latency, limit the download and upload speed, or set the network offline                                                  |
 | `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                 |
 | `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                            |
 | `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                              |
@@ -61,6 +62,37 @@ On an Android emulator:
 - A physical device and an emulator without a hinge reject the call.
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
+
+### Network conditions
+
+`network-conditions` sets the network conditions of an iOS simulator app, an Android emulator or a Chromium tab. Each call replaces the conditions of the previous call.
+
+| Parameter      | Description                                                   |
+| -------------- | ------------------------------------------------------------- |
+| `udid`         | The device                                                    |
+| `bundleId`     | iOS only, and required on iOS: the app to throttle            |
+| `latencyMs`    | Added latency in milliseconds, from 0 to 60000                |
+| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.  |
+| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.    |
+| `offline`      | `true` makes every request fail as if no network is available |
+
+A call without `latencyMs`, `downloadKbps`, `uploadKbps` and `offline` removes the throttle. The result contains `scope` and `conditions`. `conditions` is `null` after a removal. `scope` tells which traffic Argent changes:
+
+| `scope`  | Target             | Traffic                                                                                  |
+| -------- | ------------------ | ---------------------------------------------------------------------------------------- |
+| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`) |
+| `device` | Android emulator   | All traffic of the emulator. Argent uses the emulator console.                           |
+| `tab`    | Chromium, Electron | The active tab. Argent applies the conditions again after a tab switch.                  |
+
+On iOS:
+
+- The app must not be an Apple system app, and the native devtools must connect to it. If the result has a `status` field, follow its `message`, as for `native-network-logs`.
+- Argent delays the data that the app receives. The server gets each request immediately.
+- After a restart of the app, Argent applies the conditions again when the native devtools connect. Requests before that time have no throttle.
+
+On Android, `offline: true` turns off Wi-Fi and mobile data with `svc`. A call without conditions always turns on Wi-Fi and mobile data. A call with other conditions turns them on only if Argent turned them off.
+
+`network-conditions` fails on a physical iPhone and on a physical Android device.
 
 ## Inspecting the screen
 

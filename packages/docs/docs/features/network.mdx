@@ -95,6 +95,20 @@ Argent also shortens a body that is longer than 1000 characters. A message befor
 
 Argent removes the bundle traffic and the HMR traffic of Metro from the network log. Thus the network log contains the requests of your app only. This removal applies only when the app connects to Metro on a local address. If a physical Android device connects to Metro on a network address, for example `192.168.1.20:8081`, the network log also contains the requests to Metro.
 
+## Network conditions
+
+Argent can make the network slow or offline. The agent then tests loading states, timeouts, retries and the offline behavior of the app.
+
+The agent sets an added latency, a download limit, an upload limit, or offline mode. The scope of the change depends on the platform:
+
+| Platform              | Scope                                                       |
+| --------------------- | ----------------------------------------------------------- |
+| iOS simulator         | One app. Argent slows the `URLSession` requests of the app. |
+| Android emulator      | The full emulator                                           |
+| Chromium and Electron | The active tab                                              |
+
+The conditions stay until the agent changes them or removes them. Argent does not set network conditions on a physical device.
+
 ## Example instructions
 
 - "The list screen is empty. Examine the response of the API."
@@ -102,6 +116,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - "Show the requests that this screen sends at mount. Show their durations."
 - "Make sure that the app sends the second request after the error 500."
 - "Show the requests from the analytics SDK in my Android app."
+- "Make the network slow and show me the loading state of the feed."
 
 ## Limits
 
@@ -155,4 +170,4 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
 - On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a network log of this layer as you protect other data of the app.
 
-Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.
+Argent does this with these four tools: `view-network-logs`, `view-network-request-details`, `native-network-logs` and `network-conditions`. The [tools reference](/docs/reference/tools) contains all tools.

@@ -11,6 +11,7 @@ import {
 } from "@argent/registry";
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
 import { XcodeFirstLaunchPendingError } from "../utils/dependency-errors";
+import type { CdpNetworkConditions } from "../utils/network-conditions";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -264,7 +265,7 @@ export type NativeDevtoolsPrecheckBlock =
 
 /**
  * Every tool whose handler answers a blocked precheck with one of these status
- * objects instead of doing its work. The six feature tools run the 3-arg
+ * objects instead of doing its work. The seven feature tools run the 3-arg
  * overload and can return any of the four; the rest run the 2-arg one and can
  * only return `init_failed`.
  */
@@ -273,6 +274,7 @@ const NATIVE_DEVTOOLS_PRECHECK_TOOLS = new Set([
   "native-find-views",
   "native-full-hierarchy",
   "native-network-logs",
+  "network-conditions",
   "native-view-at-point",
   "native-user-interactable-view-at-point",
   "native-devtools-status",
@@ -495,6 +497,12 @@ export interface NativeDevtoolsApi {
    * relaunch.
    */
   activateNetworkInspection(bundleId: string): void;
+  /**
+   * Throttles one app's URL loading, or with `null` removes the throttle.
+   * Sticky like {@link activateNetworkInspection}: re-sent after every
+   * activation and reconnect, since both reset the app's conditions.
+   */
+  setNetworkConditions(bundleId: string, conditions: CdpNetworkConditions | null): void;
   getNetworkLog(bundleId: string): NetworkEvent[];
   clearNetworkLog(bundleId: string): void;
   getAppState(bundleId: string): Promise<NativeAppState>;
@@ -675,6 +683,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     let envRetired = false;
 
     const activatedBundleIds = new Set<string>();
+    const networkConditions = new Map<string, CdpNetworkConditions>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
@@ -736,6 +745,27 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const reverifyEnv = (): Promise<void> => {
       if (initFailure?.givenUp) return Promise.resolve();
       return runEnsureEnv();
+    };
+
+    const writeMessage = (socket: net.Socket, type: string, payload: unknown): void => {
+      socket.write(JSON.stringify({ type, payload }) + "\n");
+    };
+
+    const writeActivation = (socket: net.Socket): void => {
+      writeMessage(socket, "Control", { command: "activateNetworkInspection" });
+    };
+
+    const writeConditions = (socket: net.Socket, conditions: CdpNetworkConditions): void => {
+      writeMessage(socket, "CDP", {
+        method: "Network.emulateNetworkConditions",
+        params: conditions,
+      });
+    };
+
+    const sendNetworkSetup = (bundleId: string, socket: net.Socket): void => {
+      if (activatedBundleIds.has(bundleId)) writeActivation(socket);
+      const conditions = networkConditions.get(bundleId);
+      if (conditions) writeConditions(socket, conditions);
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
@@ -825,15 +855,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             }
 
             connections.set(bundleId, { socket, networkLog: [] });
-
-            if (activatedBundleIds.has(bundleId)) {
-              socket.write(
-                JSON.stringify({
-                  type: "Control",
-                  payload: { command: "activateNetworkInspection" },
-                }) + "\n"
-              );
-            }
+            sendNetworkSetup(bundleId, socket);
             return;
           }
 
@@ -1089,14 +1111,17 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       activateNetworkInspection(bundleId) {
         activatedBundleIds.add(bundleId);
         const conn = connections.get(bundleId);
-        if (conn) {
-          conn.socket.write(
-            JSON.stringify({
-              type: "Control",
-              payload: { command: "activateNetworkInspection" },
-            }) + "\n"
-          );
-        }
+        if (conn) sendNetworkSetup(bundleId, conn.socket);
+      },
+
+      setNetworkConditions(bundleId, conditions) {
+        if (conditions) networkConditions.set(bundleId, conditions);
+        else networkConditions.delete(bundleId);
+        const conn = connections.get(bundleId);
+        if (!conn) return;
+        if (conditions) writeConditions(conn.socket, conditions);
+        else if (activatedBundleIds.has(bundleId)) writeActivation(conn.socket);
+        else writeMessage(conn.socket, "CDP", { method: "Network.disable" });
       },
 
       getNetworkLog: (bundleId) => [...(connections.get(bundleId)?.networkLog ?? [])],
@@ -1172,6 +1197,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
         connections.clear();
         activatedBundleIds.clear();
+        networkConditions.clear();
         /**
          * Attach mode owns only its end of the connection: hang up and leave
          * the provider's socket file and server exactly as they were.

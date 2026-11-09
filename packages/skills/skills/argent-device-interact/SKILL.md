@@ -15,27 +15,28 @@ Each tool's own description carries its parameters, defaults, return shape and e
 
 ## 2. Choosing the Right Tool
 
-| Action                         | Tool                | Notes                                                          |
-| ------------------------------ | ------------------- | -------------------------------------------------------------- |
-| Several known steps            | `run-sequence`      | One call, one screenshot at the end (§5)                       |
-| Open an app                    | `launch-app`        | **Never tap home-screen icons**                                |
-| Restart an app                 | `restart-app`       | Clean in-memory state                                          |
-| Open URL / deep link           | `open-url`          | Web pages, deep links, URL schemes                             |
-| Tap                            | `gesture-tap`       | Buttons, links, checkboxes                                     |
-| Scroll / swipe                 | `gesture-swipe`     | Touch targets; not Chromium                                    |
-| Scroll (Chromium)              | `gesture-scroll`    | Mouse wheel                                                    |
-| Drag (Chromium)                | `gesture-drag`      | Sliders, drag-and-drop, text selection                         |
-| Long press, drag & drop        | `gesture-custom`    | Also any other non-linear touch sequence                       |
-| Pinch / zoom                   | `gesture-pinch`     |                                                                |
-| Two-finger rotation            | `gesture-rotate`    |                                                                |
-| Hardware key                   | `button`            | Home, back, power, volume, appSwitch, actionButton             |
-| Type text or press a named key | `keyboard`          | Every platform; text or one key per call (§6)                  |
-| Paste text                     | `paste`             | Only where a user would paste (§6). Sim/emu only               |
-| Rotate device                  | `rotate`            | Orientation changes                                            |
-| Fold device                    | `fold`              | Foldables only: `references/foldables.md`                      |
-| Shake device                   | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |
-| Wait for UI                    | `await-ui-element`  | Block until an element is visible/hidden/exists/contains text  |
-| Wait for idle                  | `await-screen-idle` | Block until a non-empty screen tree stops changing (§4)        |
+| Action                         | Tool                 | Notes                                                                    |
+| ------------------------------ | -------------------- | ------------------------------------------------------------------------ |
+| Several known steps            | `run-sequence`       | One call, one screenshot at the end (§5)                                 |
+| Open an app                    | `launch-app`         | **Never tap home-screen icons**                                          |
+| Restart an app                 | `restart-app`        | Clean in-memory state                                                    |
+| Open URL / deep link           | `open-url`           | Web pages, deep links, URL schemes                                       |
+| Tap                            | `gesture-tap`        | Buttons, links, checkboxes                                               |
+| Scroll / swipe                 | `gesture-swipe`      | Touch targets; not Chromium                                              |
+| Scroll (Chromium)              | `gesture-scroll`     | Mouse wheel                                                              |
+| Drag (Chromium)                | `gesture-drag`       | Sliders, drag-and-drop, text selection                                   |
+| Long press, drag & drop        | `gesture-custom`     | Also any other non-linear touch sequence                                 |
+| Pinch / zoom                   | `gesture-pinch`      |                                                                          |
+| Two-finger rotation            | `gesture-rotate`     |                                                                          |
+| Hardware key                   | `button`             | Home, back, power, volume, appSwitch, actionButton                       |
+| Type text or press a named key | `keyboard`           | Every platform; text or one key per call (§6)                            |
+| Paste text                     | `paste`              | Only where a user would paste (§6). Sim/emu only                         |
+| Rotate device                  | `rotate`             | Orientation changes                                                      |
+| Fold device                    | `fold`               | Foldables only: `references/foldables.md`                                |
+| Shake device                   | `shake`              | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu           |
+| Slow or offline network        | `network-conditions` | Latency, bandwidth, offline. iOS sim app, Android emulator, Chromium tab |
+| Wait for UI                    | `await-ui-element`   | Block until an element is visible/hidden/exists/contains text            |
+| Wait for idle                  | `await-screen-idle`  | Block until a non-empty screen tree stops changing (§4)                  |
 
 ## 3. Finding Tap Targets
 
