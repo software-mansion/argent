@@ -364,19 +364,19 @@ describe("fill: Chromium", () => {
       [string, Record<string, unknown>, number]
     >;
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toEqual(["Runtime.evaluate", { expression: "0" }, 2_000]);
+    expect(calls[0]).toEqual(["Runtime.evaluate", { expression: "0" }, 10_000]);
     expect(calls[1]![0]).toBe("Runtime.evaluate");
     expect(calls[1]![1]).toMatchObject({ awaitPromise: true, returnByValue: true });
     expect(calls[1]![1].expression).toContain('"hello"');
     expect(calls[1]![2]).toBe(10_000);
   });
 
-  it("bounds a connect by the no-op's 2 s, as a page under a dialog answers no setup step", async () => {
+  it("bounds a connect by the no-op's 10 s, as a page under a dialog answers no setup step", async () => {
     const registry = registryWith({ cdp: cdpAnswering({ status: "ok", verified: true }) });
     await createFillTool(registry).execute({}, { udid: CHROMIUM, text: "hello" });
     expect(registry.resolveService).toHaveBeenCalledWith(
       `ChromiumCdp:${CHROMIUM}`,
-      expect.objectContaining({ answerTimeoutMs: 2_000 })
+      expect.objectContaining({ answerTimeoutMs: 10_000 })
     );
   });
 

@@ -192,8 +192,12 @@ export function buildChromiumFillScript(text: string): string {
 })()`;
 }
 
-/** How long a no-op evaluation may take before fill decides the page is blocked. */
-const PAGE_ANSWER_TIMEOUT_MS = 2_000;
+/**
+ * How long a no-op evaluation may take before fill decides the page is blocked.
+ * Until a long task ends, a busy page answers no command, like a page under a
+ * JavaScript dialog, so the no-op gets the budget of any CDP command.
+ */
+const PAGE_ANSWER_TIMEOUT_MS = 10_000;
 const FILL_TIMEOUT_MS = 10_000;
 
 async function withTimeoutError<T>(send: () => Promise<T>, timeoutError: () => Error): Promise<T> {
