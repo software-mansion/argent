@@ -37,9 +37,9 @@ function fmtCoord(n: number): string {
   return clampFinite(n).toFixed(3);
 }
 
-// A tree prints this for every row, so the spaces are worth dropping. The
-// leading zero stays: `.5` is not a valid JSON number, and a model copying the
-// value into a tool call would have the call rejected.
+// A tree prints this on every row, so the numbers are not separated by spaces.
+// The leading zeros are needed: `.5` is not a valid JSON number, and a model
+// copying the value into a tool call would have the call rejected.
 function fmtFrame(f: DescribeFrame): string {
   return `(${fmtCoord(f.x)},${fmtCoord(f.y)},${fmtCoord(f.width)},${fmtCoord(f.height)})`;
 }
