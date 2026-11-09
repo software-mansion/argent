@@ -147,17 +147,17 @@ async function waitForCdpReady(
 }
 
 /**
- * Whether `arg` is Chromium switch `name`, bare or with `=value`. Chromium takes
- * `--` and `-` as switch prefixes, and on Windows `/` too, case-insensitively.
+ * The switch name `arg` sets, or undefined for an argument. Chromium trims each
+ * argument and takes `--` and `-` as switch prefixes, and on Windows `/` too,
+ * case-insensitively.
  */
-export function isChromiumSwitch(
+export function chromiumSwitchName(
   arg: string,
-  name: string,
   platform: NodeJS.Platform = process.platform
-): boolean {
+): string | undefined {
   const win = platform === "win32";
-  const key = (win ? /^(?:--|-|\/)([^=]*)/ : /^(?:--|-)([^=]*)/).exec(arg)?.[1];
-  return key !== undefined && (win ? key.toLowerCase() : key) === name;
+  const key = (win ? /^(?:--|-|\/)([^=]*)/ : /^(?:--|-)([^=]*)/).exec(arg.trim())?.[1];
+  return win ? key?.toLowerCase() : key;
 }
 
 /**
@@ -167,7 +167,7 @@ export function isChromiumSwitch(
  */
 function sanitizeExtraArgs(extra: string[]): string[] {
   return extra.filter((a) => {
-    if (isChromiumSwitch(a, "remote-debugging-port")) {
+    if (chromiumSwitchName(a) === "remote-debugging-port") {
       process.stderr.write(
         `[electron-boot] dropping user-supplied "${a}" — Argent manages the CDP port.\n`
       );
@@ -333,14 +333,15 @@ const bootingPorts = new Set<number>();
 /** The killed children of failed fixed-port boots, which hold the port until they are gone. */
 const dyingChildren = new Map<number, ChildProcess>();
 
-/** Whether something answers on loopback `port` once a failed boot's child there has exited. */
+/**
+ * Whether something answers on loopback `port` once a failed boot's child there
+ * has exited; until then it may still bind the port.
+ */
 async function portHeld(port: number): Promise<boolean> {
-  if (!(await isLoopbackPortAnswering(port))) return false;
   const dying = dyingChildren.get(port);
   dyingChildren.delete(port);
-  if (!dying) return true;
   const deadline = Date.now() + EXIT_WAIT_TIMEOUT_MS;
-  while (dying.exitCode === null && dying.signalCode === null && Date.now() < deadline) {
+  while (dying?.exitCode === null && dying.signalCode === null && Date.now() < deadline) {
     await sleepUnref(EXIT_POLL_MS);
   }
   return isLoopbackPortAnswering(port);

@@ -38,7 +38,11 @@ function makeFakeChild(pid?: number): FakeChild {
   ee.pid = pid;
   ee.stderr = new EventEmitter();
   ee.unref = () => {};
-  ee.kill = () => true;
+  // Records the signal as the exit it would cause, so a later boot on the port sees it gone.
+  ee.kill = (sig?: NodeJS.Signals) => {
+    ee.signalCode ??= sig ?? "SIGTERM";
+    return true;
+  };
   ee.exitCode = null;
   ee.signalCode = null;
   return ee;

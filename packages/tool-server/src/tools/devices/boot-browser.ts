@@ -10,7 +10,7 @@ import { PS_BIN } from "../../utils/vega-process";
 import {
   abortedBootError,
   bootElectronApp,
-  isChromiumSwitch,
+  chromiumSwitchName,
   killChromiumByPortAndWait,
   type ElectronBootResult,
 } from "./boot-electron";
@@ -285,7 +285,7 @@ interface BootBrowserOptions {
  */
 export async function bootBrowser(options: BootBrowserOptions): Promise<ElectronBootResult> {
   // Chromium takes the last --user-data-dir, so one here would replace the throwaway profile.
-  const userDataDir = options.extraArgs?.find((a) => isChromiumSwitch(a, "user-data-dir"));
+  const userDataDir = options.extraArgs?.find((a) => chromiumSwitchName(a) === "user-data-dir");
   if (userDataDir) {
     throw new FailureError(
       `Browser boot: \`electronArgs\` cannot set ${userDataDir}: a browser boot always runs ` +
@@ -323,7 +323,7 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
   // Chromium reads every non-flag argument, an empty one too, as a start URL,
   // and headless mode exits on more than one, so about:blank is only the default.
   const extraArgs = (options.extraArgs ?? []).filter((a) => a !== "");
-  const hasStartUrl = extraArgs.some((a) => !a.startsWith("-"));
+  const hasStartUrl = extraArgs.some((a) => chromiumSwitchName(a) === undefined);
   const snap = snapName(executable);
   const root = snap ? path.join(os.homedir(), "snap", snap, "common") : os.tmpdir();
   fs.mkdirSync(root, { recursive: true });

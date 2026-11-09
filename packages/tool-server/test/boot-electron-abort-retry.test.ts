@@ -22,7 +22,7 @@ vi.mock("../src/blueprints/chromium-cdp", () => ({
   ensureCdpReachable: (port: number) => readyMock(port),
 }));
 
-import { bootElectronApp, isChromiumSwitch } from "../src/tools/devices/boot-electron";
+import { bootElectronApp, chromiumSwitchName } from "../src/tools/devices/boot-electron";
 
 interface FakeChild extends EventEmitter {
   pid: number;
@@ -63,20 +63,23 @@ beforeEach(() => {
   readyMock.mockRejectedValue(new Error("ECONNREFUSED"));
 });
 
-describe("isChromiumSwitch", () => {
+describe("chromiumSwitchName", () => {
   it.each([
-    ["--user-data-dir=/p", "linux", true],
-    ["--user-data-dir", "darwin", true],
-    ["-user-data-dir=/p", "linux", true],
-    ["---user-data-dir=/p", "linux", false],
-    ["--user-data-dir-x=/p", "linux", false],
-    ["/user-data-dir=/p", "linux", false],
-    ["--User-Data-Dir=/p", "linux", false],
-    ["/user-data-dir=C:\\p", "win32", true],
-    ["--User-Data-Dir=C:\\p", "win32", true],
-    ["http://localhost/--user-data-dir", "linux", false],
-  ] as const)("%s on %s -> %s", (arg, platform, expected) => {
-    expect(isChromiumSwitch(arg, "user-data-dir", platform)).toBe(expected);
+    ["--user-data-dir=/p", "linux", "user-data-dir"],
+    ["--user-data-dir", "darwin", "user-data-dir"],
+    ["-user-data-dir=/p", "linux", "user-data-dir"],
+    [" \t--user-data-dir=/p\n", "linux", "user-data-dir"],
+    ["---user-data-dir=/p", "linux", "-user-data-dir"],
+    ["/user-data-dir=/p", "linux", undefined],
+    ["--User-Data-Dir=/p", "linux", "User-Data-Dir"],
+    ["/user-data-dir=C:\\p", "win32", "user-data-dir"],
+    ["--User-Data-Dir=C:\\p", "win32", "user-data-dir"],
+    ["http://localhost/--user-data-dir", "linux", undefined],
+    ["-user-data-dir=C:\\p", "win32", "user-data-dir"],
+    ["about:blank", "win32", undefined],
+    ["C:\\page.html", "win32", undefined],
+  ] as const)("%j on %s -> %s", (arg, platform, expected) => {
+    expect(chromiumSwitchName(arg, platform)).toBe(expected);
   });
 });
 
@@ -130,6 +133,26 @@ describe("bootElectronApp", () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(spawnMock).toHaveBeenCalledTimes(1);
     await new Promise<void>((resolve) => holder.close(() => resolve()));
+    first.signalCode = "SIGTERM";
+
+    expect(getFailureSignal(await retry)?.error_code).toBe(
+      FAILURE_CODES.CHROMIUM_ELECTRON_CDP_TIMEOUT
+    );
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a dying child that has not bound its fixed port yet", async () => {
+    const port = await pickFreePort();
+    const first = makeFakeChild();
+    spawnMock.mockReturnValueOnce(first);
+    await bootElectronApp({ appPath: appBinary, port, readyTimeoutMs: 50 }).catch(() => {});
+
+    spawnMock.mockReturnValueOnce(makeFakeChild());
+    const retry = bootElectronApp({ appPath: appBinary, port, readyTimeoutMs: 50 }).catch(
+      (e: unknown) => e
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    expect(spawnMock).toHaveBeenCalledTimes(1);
     first.signalCode = "SIGTERM";
 
     expect(getFailureSignal(await retry)?.error_code).toBe(

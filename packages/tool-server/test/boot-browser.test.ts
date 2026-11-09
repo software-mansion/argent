@@ -8,7 +8,7 @@ const killMock = vi.fn();
 vi.mock("../src/tools/devices/boot-electron", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/tools/devices/boot-electron")>()),
   bootElectronApp: (opts: unknown) => bootElectronAppMock(opts),
-  killChromiumByPortAndWait: async (port: number) => killMock(port),
+  killChromiumByPortAndWait: (port: number) => killMock(port),
 }));
 
 // SystemInfo.getInfo on the browser that answers the booted port.
@@ -227,6 +227,14 @@ describe("bootBrowser", () => {
       "--headless=new",
       "about:blank",
     ]);
+  });
+
+  it("reads a whitespace-padded flag as a flag, not as a start URL", async () => {
+    installed.set(chrome!, "exec");
+    await bootBrowser({ browser: "chrome", extraArgs: [" --headless=new"] });
+
+    const args: string[] = bootElectronAppMock.mock.calls[0]![0].extraArgs;
+    expect(args.slice(-2)).toEqual([" --headless=new", "about:blank"]);
   });
 
   it("opens the caller's start URL instead of about:blank", async () => {
@@ -663,6 +671,23 @@ describe("bootBrowser", () => {
     expect((err as Error).message).toBe("Browser boot was cancelled.");
     expect(killMock).toHaveBeenCalledWith(9333);
     expect(signal!.aborted).toBe(true);
+  });
+
+  it("fails an identity check only once its browser's kill has finished", async () => {
+    installed.set(chrome!, "exec");
+    cdpSend.mockRejectedValue(new Error("socket hang up"));
+    let killed!: () => void;
+    killMock.mockImplementation(() => new Promise<void>((resolve) => (killed = resolve)));
+    let settled = false;
+    const boot = bootBrowser({ browser: "chrome" }).catch((e: unknown) => {
+      settled = true;
+      return e;
+    });
+    await vi.waitFor(() => expect(killMock).toHaveBeenCalledWith(9333));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(settled).toBe(false);
+    killed();
+    expect(((await boot) as Error).message).toBe("socket hang up");
   });
 
   it("kills its browser when the identity check itself fails", async () => {
