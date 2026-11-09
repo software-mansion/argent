@@ -10,7 +10,8 @@ import { PS_BIN } from "../../utils/vega-process";
 import {
   abortedBootError,
   bootElectronApp,
-  killChromiumByPort,
+  isChromiumSwitch,
+  killChromiumByPortAndWait,
   type ElectronBootResult,
 } from "./boot-electron";
 
@@ -239,8 +240,7 @@ async function answersOnProfile(
       deadline.abort();
       reject(abortedBootError("Browser"));
     };
-    if (signal?.aborted) onAbort();
-    else signal?.addEventListener("abort", onAbort, { once: true });
+    signal?.addEventListener("abort", onAbort, { once: true });
     timer = setTimeout(() => {
       deadline.abort();
       reject(
@@ -285,9 +285,7 @@ interface BootBrowserOptions {
  */
 export async function bootBrowser(options: BootBrowserOptions): Promise<ElectronBootResult> {
   // Chromium takes the last --user-data-dir, so one here would replace the throwaway profile.
-  const userDataDir = options.extraArgs?.find(
-    (a) => a === "--user-data-dir" || a.startsWith("--user-data-dir=")
-  );
+  const userDataDir = options.extraArgs?.find((a) => isChromiumSwitch(a, "user-data-dir"));
   if (userDataDir) {
     throw new FailureError(
       `Browser boot: \`electronArgs\` cannot set ${userDataDir}: a browser boot always runs ` +
@@ -365,14 +363,14 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
   }
 
   const ours = await answersOnProfile(result.port, profileDir, options.signal).catch(
-    (err: unknown) => {
-      killChromiumByPort(result.port);
+    async (err: unknown) => {
+      await killChromiumByPortAndWait(result.port);
       throw err;
     }
   );
   if (!ours) {
     // The port stays tracked: the browser holding it is still a device.
-    killChromiumByPort(result.port);
+    await killChromiumByPortAndWait(result.port);
     throw new FailureError(
       `Browser boot: another browser took port ${result.port} on 127.0.0.1 while this one ` +
         `started. ` +

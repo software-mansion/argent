@@ -7,6 +7,11 @@ vi.mock("../src/tools/devices/boot-browser", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/tools/devices/boot-browser")>()),
   bootBrowser: (opts: unknown) => bootBrowserMock(opts),
 }));
+const bootElectronAppMock = vi.fn();
+vi.mock("../src/tools/devices/boot-electron", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tools/devices/boot-electron")>()),
+  bootElectronApp: (opts: unknown) => bootElectronAppMock(opts),
+}));
 
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 
@@ -28,6 +33,20 @@ describe("boot-device browser", () => {
       signal,
     });
     expect(res).toEqual({ platform: "chromium", id: "chromium-cdp-9333" });
+  });
+
+  it("passes the call's signal to an Electron boot", async () => {
+    bootElectronAppMock.mockResolvedValue({ platform: "chromium", id: "chromium-cdp-9334" });
+    const { signal } = new AbortController();
+    await tool.execute!({}, { electronAppPath: "/x.app", electronPort: 9334 }, {
+      signal,
+    } as ToolContext);
+    expect(bootElectronAppMock).toHaveBeenCalledWith({
+      appPath: "/x.app",
+      port: 9334,
+      signal,
+      extraArgs: undefined,
+    });
   });
 
   it("counts browser as a target in the exactly-one check", async () => {

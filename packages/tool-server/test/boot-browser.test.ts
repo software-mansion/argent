@@ -6,10 +6,9 @@ import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 const bootElectronAppMock = vi.fn();
 const killMock = vi.fn();
 vi.mock("../src/tools/devices/boot-electron", async (importOriginal) => ({
-  abortedBootError: (await importOriginal<typeof import("../src/tools/devices/boot-electron")>())
-    .abortedBootError,
+  ...(await importOriginal<typeof import("../src/tools/devices/boot-electron")>()),
   bootElectronApp: (opts: unknown) => bootElectronAppMock(opts),
-  killChromiumByPort: (port: number) => killMock(port),
+  killChromiumByPortAndWait: async (port: number) => killMock(port),
 }));
 
 // SystemInfo.getInfo on the browser that answers the booted port.
@@ -627,7 +626,7 @@ describe("bootBrowser", () => {
 
   it("refuses a --user-data-dir in electronArgs before creating a profile", async () => {
     installed.set(chrome!, "exec");
-    for (const flag of ["--user-data-dir=/p", "--user-data-dir"]) {
+    for (const flag of ["--user-data-dir=/p", "--user-data-dir", "-user-data-dir=/p"]) {
       const made = failPidWrite.made.length;
       const err = await bootBrowser({
         browser: "chrome",

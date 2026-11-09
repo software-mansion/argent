@@ -2178,7 +2178,7 @@ function bootHarmony(params: {
 const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
   android: "Boot an Android emulator by passing `avdName` (an AVD name from `list-devices`).",
   chromium:
-    "A Chromium app listed by `list-devices` is already running and needs no boot; to start an Electron app, pass `electronAppPath`.",
+    "A Chromium app listed by `list-devices` is already running and needs no boot; to start an Electron app, pass `electronAppPath`, or a web browser, `browser`.",
   vega: "Boot a Vega (Fire TV) Virtual Device by passing `vvdImage`.",
 };
 

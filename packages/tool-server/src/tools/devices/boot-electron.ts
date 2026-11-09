@@ -147,13 +147,27 @@ async function waitForCdpReady(
 }
 
 /**
+ * Whether `arg` is Chromium switch `name`, bare or with `=value`. Chromium takes
+ * `--` and `-` as switch prefixes, and on Windows `/` too, case-insensitively.
+ */
+export function isChromiumSwitch(
+  arg: string,
+  name: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  const win = platform === "win32";
+  const key = (win ? /^(?:--|-|\/)([^=]*)/ : /^(?:--|-)([^=]*)/).exec(arg)?.[1];
+  return key !== undefined && (win ? key.toLowerCase() : key) === name;
+}
+
+/**
  * Drop user-supplied --remote-debugging-port: Chromium honours the last
  * occurrence, so an override would leave Electron listening somewhere other
  * than the port we tracked and reported to the caller.
  */
 function sanitizeExtraArgs(extra: string[]): string[] {
   return extra.filter((a) => {
-    if (a === "--remote-debugging-port" || a.startsWith("--remote-debugging-port=")) {
+    if (isChromiumSwitch(a, "remote-debugging-port")) {
       process.stderr.write(
         `[electron-boot] dropping user-supplied "${a}" — Argent manages the CDP port.\n`
       );
@@ -316,6 +330,22 @@ function portInUseError(message: string, kind: LauncherKind): FailureError {
 /** Fixed ports with a boot in progress, whose child may not have bound yet. */
 const bootingPorts = new Set<number>();
 
+/** The killed children of failed fixed-port boots, which hold the port until they are gone. */
+const dyingChildren = new Map<number, ChildProcess>();
+
+/** Whether something answers on loopback `port` once a failed boot's child there has exited. */
+async function portHeld(port: number): Promise<boolean> {
+  if (!(await isLoopbackPortAnswering(port))) return false;
+  const dying = dyingChildren.get(port);
+  dyingChildren.delete(port);
+  if (!dying) return true;
+  const deadline = Date.now() + EXIT_WAIT_TIMEOUT_MS;
+  while (dying.exitCode === null && dying.signalCode === null && Date.now() < deadline) {
+    await sleepUnref(EXIT_POLL_MS);
+  }
+  return isLoopbackPortAnswering(port);
+}
+
 /**
  * Refuses a caller-chosen port that is taken: the new instance cannot bind it
  * yet keeps running, and readiness would accept the existing listener, so boot
@@ -350,7 +380,7 @@ async function bootOnce(
   let port: number;
   let launcher: { command: string; args: string[] };
   try {
-    if (options.port !== undefined && (await isLoopbackPortAnswering(options.port))) {
+    if (options.port !== undefined && (await portHeld(options.port))) {
       throw portInUseError(
         `${label} boot: port ${options.port} is already in use on 127.0.0.1. If an app or ` +
           `browser with remote debugging holds it, drive that one as ` +
@@ -523,6 +553,7 @@ async function bootOnce(
     // cleanup and reject the orphan promises.
     detachBootListeners();
     killChildEscalating(child);
+    if (options.port !== undefined) dyingChildren.set(options.port, child);
     if (!exitStatus) throw err;
     // 'exit' can fire before the last stderr chunk arrives.
     const stderr = child.stderr;
