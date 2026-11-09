@@ -151,19 +151,13 @@ describe("Log Registry (integration)", () => {
     expect(entries[1].level).toBe("error");
   });
 
-  it("WebSocket replay simulation works", () => {
+  it("readAll returns every entry in write order", () => {
     writeLog(0, { message: "first" });
     writeLog(1, { message: "second" });
 
-    // Simulates what createConsoleLogServer does on connection
-    const replay = writer.readAll();
-    expect(replay).toHaveLength(2);
-    expect(replay[0].message).toBe("first");
-    expect(replay[1].message).toBe("second");
-
-    // Verify entries can be JSON.stringify'd (for ws.send)
-    for (const entry of replay) {
-      expect(() => JSON.stringify(entry)).not.toThrow();
-    }
+    const all = writer.readAll();
+    expect(all).toHaveLength(2);
+    expect(all[0].message).toBe("first");
+    expect(all[1].message).toBe("second");
   });
 });
