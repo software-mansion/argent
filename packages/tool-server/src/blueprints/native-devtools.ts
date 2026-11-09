@@ -1377,7 +1377,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     const unregisterCaptures = registerIosNetworkCaptures({
       udid,
-      bundleIds: activatedBundleIds,
+      // A lent agent's capture is its provider's, so argent has none on there.
+      bundleIds: lentSocketPath ? new Set() : activatedBundleIds,
       stores: networkStores,
     });
 

@@ -483,6 +483,40 @@ describe("a provider that lends its native-devtools agent", () => {
   });
 
   /**
+   * The capture here is the provider's: argent did not turn it on, and the
+   * profiler's remedy (stop this device's services, then restart the app)
+   * neither ends it nor suits a device where a relaunch ends capture.
+   */
+  it("does not warn a profiler start about the provider's capture after a read", async () => {
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { nativeNetworkCaptureWarning } =
+      await import("../src/utils/profiler-shared/network-capture-warning");
+    const { liveIosNetworkCaptureDevices } = await import("../src/blueprints/ios-network-records");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+
+    const listing = (await nativeNetworkLogsTool.execute(
+      { nativeDevtools: instance.api },
+      { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+    )) as { armed: boolean };
+
+    expect(listing.armed).toBe(true);
+    expect(nativeNetworkCaptureWarning(DEVICE_ID)).toBeUndefined();
+    expect(nativeNetworkCaptureWarning(IOS_UDID)).toBeUndefined();
+    expect(liveIosNetworkCaptureDevices(BUNDLE_ID)).toEqual([]);
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  /**
    * We are the client on this path, so nothing re-dials on its own. Without a
    * terminated signal the registry would keep serving this instance and its
    * dead socket for the rest of the session, and an app relaunch would never

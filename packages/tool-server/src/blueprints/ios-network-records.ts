@@ -245,9 +245,10 @@ export function createIosNetworkRecords(
 }
 
 /**
- * One native-devtools service's view of its device: the apps capture is on
- * for, and the records of every app that connected. Both are live, owned by
- * the service.
+ * One native-devtools service's view of its device: the apps argent turned
+ * capture on for (none on a device whose provider lent its agent, where the
+ * capture is the provider's), and the records of every app that connected.
+ * Both are live, owned by the service.
  */
 interface IosNetworkCaptures {
   readonly udid: string;
