@@ -295,7 +295,10 @@ describe("a tap recorded in a web editor of a Mac app", () => {
     expect(await recordedSteps("editor")).toEqual([{ kind: "tap", ...step }]);
   });
 
-  it("keeps the coordinates of a click on the text of a paragraph in the editor", async () => {
+  it.each([
+    ["a paragraph", "p", rect(0.11, 0.61, 0.48, 0.06)],
+    ["a link", "a", rect(0.3, 0.63, 0.27, 0.04)],
+  ])("keeps the coordinates of a click on the text of %s in the editor", async (_l, tag, frame) => {
     const web = webTree([
       {
         role: "textbox",
@@ -303,12 +306,7 @@ describe("a tap recorded in a web editor of a Mac app", () => {
         text: "Alpha paragraph Beta paragraph",
         normalizedFrame: rect(0.1, 0.6, 0.5, 0.12),
       },
-      {
-        tag: "p",
-        text: "Alpha paragraph",
-        ownText: "Alpha paragraph",
-        normalizedFrame: rect(0.11, 0.61, 0.48, 0.06),
-      },
+      { tag, text: "Alpha paragraph", ownText: "Alpha paragraph", normalizedFrame: frame },
     ]);
     const read = await readMacosTree(fakeMacosLibrary({ web }).api);
     currentTreeData = () => ({ tree: adaptMacosTreeForFlows(read), source: "macos-devtools" });

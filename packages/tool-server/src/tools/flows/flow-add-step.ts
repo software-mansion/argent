@@ -705,11 +705,11 @@ const MACOS_POINT_ROLES: ReadonlySet<string> = new Set(["AXSlider", "AXIncrement
  */
 const MACOS_PART_ROLES: ReadonlySet<string> = new Set(["AXDisclosureTriangle"]);
 /** Mac text, which takes a click the same anywhere in it. */
-const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"]);
+const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading", "AXLink"]);
 
-/** Whether `node` is text in a text area of its own layer: a paragraph of a web editor. */
+/** Whether `node` is text in a text area of its own layer: a paragraph or a link of a web editor. */
 function inTextArea(tree: DescribeNode, node: DescribeNode): boolean {
-  if (node.clickable || !MACOS_TEXT_ROLES.has(node.role)) return false;
+  if (!MACOS_TEXT_ROLES.has(node.role)) return false;
   const walk = (n: DescribeNode): boolean =>
     (n !== node &&
       n.role === "AXTextArea" &&
