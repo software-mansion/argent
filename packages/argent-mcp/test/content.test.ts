@@ -285,6 +285,80 @@ describe("screenshotDiffToMcpContent", () => {
 
     expect(content).toEqual([{ type: "text", text: summary }]);
   });
+
+  it("lists raw host paths and attaches no image in the path form", async () => {
+    const contextDiffPath = path.join(dir, "context.diff.png");
+    await fs.writeFile(contextDiffPath, Buffer.from(PNG_SIGNATURE));
+    const diffPath = path.join(dir, "full.diff.png");
+
+    const content = await screenshotDiffToMcpContent(
+      { summary: "see diffPath", diffPath, contextDiffPath },
+      undefined,
+      "path"
+    );
+
+    expect(content).toEqual([
+      { type: "text", text: "see diffPath" },
+      { type: "text", text: `diffPath: ${diffPath}\ncontextDiffPath: ${contextDiffPath}` },
+    ]);
+  });
+
+  describe("with artifact handles", () => {
+    const ctx = { toolsUrl: "http://127.0.0.1:1", authToken: "token", deviceId: "DEV-1" };
+    const pngBytes = Buffer.from(PNG_SIGNATURE);
+
+    // `materializeArtifacts` uses `hostPath` only for a file of this exact size and mtime.
+    async function handleFor(id: string): Promise<{ file: string; handle: ArtifactHandle }> {
+      const file = path.join(dir, `${id}.png`);
+      await fs.writeFile(file, pngBytes);
+      const { size, mtimeMs } = await fs.stat(file);
+      return {
+        file,
+        handle: {
+          [ARTIFACT_MARKER]: true,
+          id,
+          filename: `${id}.png`,
+          kind: "screenshot-diff",
+          mimeType: "image/png",
+          size,
+          mtimeMs,
+          hostPath: file,
+        },
+      };
+    }
+
+    it("lists the materialized paths and attaches the context image", async () => {
+      const diff = await handleFor("full");
+      const context = await handleFor("context");
+
+      const content = await screenshotDiffToMcpContent(
+        { summary: "see diffPath", diffPath: diff.handle, contextDiffPath: context.handle },
+        ctx
+      );
+
+      expect(content).toEqual([
+        { type: "image", data: pngBytes.toString("base64"), mimeType: "image/png" },
+        { type: "text", text: "see diffPath" },
+        { type: "text", text: `diffPath: ${diff.file}\ncontextDiffPath: ${context.file}` },
+      ]);
+    });
+
+    it("lists the materialized paths and attaches no image in the path form", async () => {
+      const diff = await handleFor("full");
+      const context = await handleFor("context");
+
+      const content = await screenshotDiffToMcpContent(
+        { summary: "see diffPath", diffPath: diff.handle, contextDiffPath: context.handle },
+        ctx,
+        "path"
+      );
+
+      expect(content).toEqual([
+        { type: "text", text: "see diffPath" },
+        { type: "text", text: `diffPath: ${diff.file}\ncontextDiffPath: ${context.file}` },
+      ]);
+    });
+  });
 });
 
 // ── isScreenshotDiffResult ───────────────────────────────────────────
@@ -402,6 +476,26 @@ describe("toMcpContent with artifact ctx", () => {
     expect(result.filter((b) => b.type === "image")).toEqual([
       { type: "image", data: Buffer.from(pngBytes).toString("base64"), mimeType: "image/png" },
     ]);
+  });
+
+  it.each([
+    ["the default form", undefined, ["text", "image"]],
+    ["the path form", "path", ["text"]],
+  ] as const)("handles an image riding on a non-image result in %s", async (_, form, types) => {
+    const result = await toMcpContent(
+      { frame: artifactHandle("f1", "frame.png", "image/png") },
+      undefined,
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+      },
+      undefined,
+      form
+    );
+
+    expect(result.map((b) => b.type)).toEqual(types);
+    expect((result[0] as { text: string }).text).toContain("frame.png");
   });
 
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
@@ -808,6 +902,57 @@ describe("flowRunToMcpContent", () => {
     expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("/artifacts/d1");
   });
 
+  it.each([
+    ["the default form", undefined, 1],
+    ["the path form", "path", 0],
+  ] as const)("renders a failed snapshot's diff in %s", async (_, form, imageCount) => {
+    const blocks = await flowRunToMcpContent(
+      {
+        flow: "checkout",
+        steps: [
+          {
+            index: 0,
+            kind: "snapshot",
+            status: "fail",
+            artifacts: { diff: artifactHandle("d1", "home-diff.png", "image/png") },
+          },
+        ],
+      },
+      { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x02]) },
+      form
+    );
+
+    const texts = blocks.flatMap((b) => (b.type === "text" ? [b.text] : []));
+    expect(texts.join("\n")).toContain(`diff: ${root}`);
+    expect(texts.join("\n")).toMatch(/diff: .*home-diff\.png/);
+    expect(blocks.filter((b) => b.type === "image")).toHaveLength(imageCount);
+  });
+
+  it("renders a screenshot step as its path note in the path form", async () => {
+    vi.stubGlobal("fetch", mockOk([...PNG_SIGNATURE, 0x01]));
+
+    const blocks = await flowRunToMcpContent(
+      {
+        flow: "f",
+        steps: [
+          {
+            kind: "tool",
+            tool: "screenshot",
+            result: { url: "http://localhost/img.png", path: "/tmp/s.png" },
+            outputHint: "image",
+          },
+        ],
+      },
+      undefined,
+      "path"
+    );
+
+    expect(blocks[2]).toEqual({ type: "text", text: screenshotPathNote("/tmp/s.png") });
+    expect(blocks.filter((b) => b.type === "image")).toEqual([]);
+
+    vi.unstubAllGlobals();
+  });
+
   it("lists snapshot artifact paths without fetching anything when the step passed", async () => {
     const fetchImpl = vi.fn(fetchReturning([...PNG_SIGNATURE, 0x03]));
     const input: FlowExecuteResult = {
@@ -1065,6 +1210,43 @@ describe("describeResultText", () => {
     expect(describeResultText({ description, source: "ax-service" })).toBe(
       `${header}Text "a  (0, 0, 1, 1)" (0.1, 0.2, 0.3, 0.1)`
     );
+  });
+
+  describe.each([
+    ["U+2028", "\u2028"],
+    ["U+2029", "\u2029"],
+  ])("with %s in a label", (_, sep) => {
+    const frame = "(0.1, 0.2, 0.3, 0.1)";
+
+    it("treats the row like any other", () => {
+      const rows = [
+        `  textbox "a${sep}b"  ${frame}`,
+        `    button "child"  ${frame}`,
+        `  button "sibling"  ${frame}`,
+      ].join("\n");
+      expect(describeResultText({ description: `${header}${rows}`, source: "ax-service" })).toBe(
+        header +
+          [
+            `textbox "a${sep}b" ${frame}`,
+            `  button "child" ${frame}`,
+            `button "sibling" ${frame}`,
+          ].join("\n")
+      );
+    });
+
+    it("keeps two spaces after the separator", () => {
+      const description = `${header}  textbox "a${sep}  b"  ${frame}`;
+      expect(describeResultText({ description, source: "ax-service" })).toBe(
+        `${header}textbox "a${sep}  b" ${frame}`
+      );
+    });
+
+    it("does not take a frame before the separator for the row's frame", () => {
+      const description = `${header}  Text "a  (0, 0, 1, 1)${sep}b"  ${frame}`;
+      expect(describeResultText({ description, source: "ax-service" })).toBe(
+        `${header}Text "a  (0, 0, 1, 1)${sep}b" ${frame}`
+      );
+    });
   });
 
   it("leaves lines that are not tree rows alone", () => {

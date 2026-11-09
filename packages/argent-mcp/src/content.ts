@@ -56,7 +56,7 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
  * - `image-and-path` (default): the image, then `Saved: <path>`.
  * - `image`: the image alone, for a client whose model sees it (auto-screenshots only).
  * - `path`: no image, only the path and how to open it, for a client that would send the image
- *   to the model as base64 text.
+ *   to the model as base64 text. A diff image gets its path alone.
  */
 export type ScreenshotForm = "image-and-path" | "image" | "path";
 
@@ -97,8 +97,11 @@ export async function toMcpContent(
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
-    // Surface any images that rode along on a non-image result.
-    if (!suppressImage) for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
+    // Surface any images that rode along on a non-image result. In the `path`
+    // form the text above already carries their paths.
+    if (!suppressImage && form !== "path") {
+      for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
+    }
     return blocks;
   }
 
@@ -154,8 +157,10 @@ function compactJson(value: unknown): string {
  * One tree row: the indent every row shares, any deeper indent, the role and
  * its annotations, then two spaces and the frame, which always ends the row. A
  * label can't span lines, so a frame quoted in a label can't be taken for it.
+ * Only `\n` ends a row. `^`, `$` and `.` would also stop at U+2028 and U+2029,
+ * which a label can hold.
  */
-const TREE_ROW = /^ {2}( *)(.*?) {2}(\([-\d., ]+\))$/gm;
+const TREE_ROW = /(?<=^|\n) {2}( *)([^\n]*?) {2}(\([-\d., ]+\))(?=\n|$)/g;
 
 /**
  * `describe`'s `{ description, source, should_restart?, hint? }` as plain text:
@@ -243,7 +248,8 @@ export function isScreenshotDiffResult(value: unknown): value is ScreenshotDiffR
 
 export async function screenshotDiffToMcpContent(
   result: ScreenshotDiffResult,
-  ctx?: ContentContext
+  ctx?: ContentContext,
+  form: ScreenshotForm = "image-and-path"
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
 
@@ -259,7 +265,7 @@ export async function screenshotDiffToMcpContent(
     materializedImages = images;
   }
 
-  if (typeof contextDiffPath === "string") {
+  if (form !== "path" && typeof contextDiffPath === "string") {
     const fromMaterializer = materializedImages.find((img) => img.localPath === contextDiffPath);
     if (fromMaterializer) {
       blocks.push({
@@ -399,7 +405,8 @@ function stepLabel(step: FlowStepResult): string {
  */
 export async function flowRunToMcpContent(
   result: FlowExecuteResult,
-  ctx?: ContentContext
+  ctx?: ContentContext,
+  form: ScreenshotForm = "image-and-path"
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
   const name = result.e2eTest ?? result.flow;
@@ -440,12 +447,14 @@ export async function flowRunToMcpContent(
     }
 
     if (step.result !== undefined) {
-      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
+      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args, form)));
     }
 
     // Snapshot steps carry artifacts instead of a result.
     if (isRecord(step.artifacts)) {
-      blocks.push(...(await stepArtifactBlocks(step.artifacts, step.status, ctx, step.depth)));
+      blocks.push(
+        ...(await stepArtifactBlocks(step.artifacts, step.status, ctx, step.depth, form))
+      );
     }
   }
 
@@ -480,13 +489,14 @@ export async function flowRunToMcpContent(
  * Only that diff is materialized; baseline and current are full-res PNGs nobody
  * renders, so their handles print as paths without pulling bytes over the wire.
  * Lines carry the step's depth indent so they stay attached to a nested step's
- * label, matching the CLI renderer.
+ * label, matching the CLI renderer. The `path` form lists the diff without the image.
  */
 async function stepArtifactBlocks(
   artifacts: Record<string, unknown>,
   status: string | undefined,
   ctx?: ContentContext,
-  depth?: number
+  depth?: number,
+  form: ScreenshotForm = "image-and-path"
 ): Promise<ContentBlock[]> {
   const failed = status === "fail" || status === "error";
   const entries: [string, string][] = [];
@@ -499,7 +509,7 @@ async function stepArtifactBlocks(
       // null ⇒ the handle couldn't be fetched; say so, don't dangle a reference.
       entries.push([k, typeof result === "string" ? result : "(unavailable)"]);
       const img = images.find((i) => i.localPath === result);
-      if (img) diffImage = imageBlock(img.data, img.mimeType);
+      if (img && form !== "path") diffImage = imageBlock(img.data, img.mimeType);
     } else if (isArtifactHandle(v)) {
       entries.push([k, v.hostPath ?? v.filename]);
     } else if (typeof v === "string") {

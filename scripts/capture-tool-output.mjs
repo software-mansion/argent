@@ -30,6 +30,9 @@
  * Devices are real: the calls act on the simulators, emulators and apps you name. The
  * script uses your HOME (device folders, Argent flags and config), sends no telemetry and
  * leaves no tool-server running when it exits.
+ *
+ * The capture reaches the tool-server as a link, so the e2e recording tools and e2e-execute
+ * behave as they do over `argent link`. A `script:` step is refused, for example.
  */
 
 import { execFileSync } from "node:child_process";
@@ -62,6 +65,9 @@ if (values.help || (values.call.length === 0 && !values.steps)) {
 const tsc = createRequire(import.meta.url).resolve("typescript/bin/tsc");
 const projects = ["packages/tool-server", "packages/argent-tools-client", "packages/argent-mcp"];
 execFileSync(process.execPath, [tsc, "--build", ...projects], { cwd: REPO, stdio: "inherit" });
+// tsc skips the .mjs runner files and the Instruments template. stdout is the result table.
+const copyAssets = path.join(REPO, "packages/tool-server/scripts/copy-build-assets.mjs");
+execFileSync(process.execPath, [copyAssets], { cwd: REPO, stdio: ["inherit", 2, "inherit"] });
 
 function parseCall(spec) {
   const space = spec.indexOf(" ");

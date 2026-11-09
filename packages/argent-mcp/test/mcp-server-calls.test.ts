@@ -712,6 +712,141 @@ describe("startMcpServer screen capture after an interaction", () => {
   });
 });
 
+describe("images in e2e-execute and screenshot-diff results", () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  const IDS = ["step-shot", "ride-along", "step-diff", "full-diff", "context-diff"];
+  // No hostPath, so the adapter downloads each one from the stub, as over a link.
+  const handle = (id: string) => ({
+    __argentArtifact: true,
+    id,
+    filename: `${id}.png`,
+    kind: "screenshot-diff",
+    mimeType: "image/png",
+    size: PNG.length,
+  });
+  const REPORT = {
+    ok: false,
+    e2eTest: "demo",
+    passed: 2,
+    failed: 1,
+    skipped: 0,
+    errored: 0,
+    steps: [
+      {
+        index: 0,
+        kind: "tool",
+        tool: "screenshot",
+        status: "pass",
+        outputHint: "image",
+        result: { image: handle("step-shot") },
+      },
+      {
+        index: 1,
+        kind: "tool",
+        tool: "noted",
+        status: "pass",
+        result: { frame: handle("ride-along") },
+      },
+      {
+        index: 2,
+        kind: "snapshot",
+        status: "fail",
+        reason: "diff 3.10% > 0.5% (home)",
+        artifacts: { diff: handle("step-diff") },
+      },
+    ],
+  };
+  const DIFF = {
+    summary: "see diffPath (full size) and contextDiffPath in this result",
+    diffPath: handle("full-diff"),
+    contextDiffPath: handle("context-diff"),
+  };
+
+  let stub: Stub;
+  let client: Client;
+  let artifactsDir: string;
+
+  const answer =
+    (data: unknown): Route =>
+    (res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data }));
+    };
+  const png: Route = (res) => {
+    res.writeHead(200, { "Content-Type": "image/png" });
+    res.end(PNG);
+  };
+  const images = (result: Awaited<ReturnType<Client["callTool"]>>) =>
+    (result.content as Array<{ type: string }>).filter((c) => c.type === "image");
+
+  beforeEach(async () => {
+    artifactsDir = join(TEST_HOME, `artifacts-${randomUUID()}`);
+    stub = await startStub({
+      listing: {
+        tools: ["e2e-execute", "screenshot-diff"].map((name) => ({
+          name,
+          description: name,
+          inputSchema: { type: "object", properties: {} },
+        })),
+      },
+      routes: {
+        "/tools/e2e-execute": answer(REPORT),
+        "/tools/screenshot-diff": answer(DIFF),
+        ...Object.fromEntries(IDS.map((id) => [`/artifacts/${id}`, png])),
+      },
+    });
+    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
+    vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+    vi.stubEnv("ARGENT_ARTIFACTS_DIR", artifactsDir);
+  });
+
+  afterEach(async () => {
+    await client.close();
+    vi.unstubAllEnvs();
+    await stub.close();
+  });
+
+  const as = async (clientName: string) => {
+    client = await connect(
+      {
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      },
+      { clientName }
+    );
+  };
+
+  it("sends Q DEV CLI the paths and no image", async () => {
+    await as("Q DEV CLI");
+
+    const run = await client.callTool({ name: "e2e-execute", arguments: {} });
+    const diff = await client.callTool({ name: "screenshot-diff", arguments: {} });
+
+    expect(images(run)).toEqual([]);
+    expect(textOf(run)).toMatch(/^Screenshot saved to .*step-shot\.png$/m);
+    expect(textOf(run)).toContain("ride-along.png");
+    expect(textOf(run)).toMatch(new RegExp(`diff: ${artifactsDir}.*step-diff\\.png`));
+
+    expect(images(diff)).toEqual([]);
+    expect(textOf(diff)).toContain(DIFF.summary);
+    expect(textOf(diff)).toMatch(new RegExp(`^diffPath: ${artifactsDir}.*full-diff\\.png$`, "m"));
+    expect(textOf(diff)).toMatch(
+      new RegExp(`^contextDiffPath: ${artifactsDir}.*context-diff\\.png$`, "m")
+    );
+  });
+
+  it("keeps the images for any other client", async () => {
+    await as("probe");
+
+    const run = await client.callTool({ name: "e2e-execute", arguments: {} });
+    const diff = await client.callTool({ name: "screenshot-diff", arguments: {} });
+
+    expect(images(run)).toHaveLength(3);
+    expect(images(diff)).toHaveLength(1);
+  });
+});
+
 describe("startMcpServer with a local tool-server", () => {
   // No link and no ARGENT_TOOLS_URL: the adapter finds its tool-server through
   // the state file of its bundle, as an editor session does. The record names
