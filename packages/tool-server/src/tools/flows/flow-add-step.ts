@@ -1565,10 +1565,11 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // iOS device, which records as the `ios: { app, args }` entry beside a
       // `native` id so the flow still replays elsewhere; other extra args (e.g.
       // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
-      // no args. On Chromium the bundleId is a tag, so the step records the
-      // relaunched app's path and args instead, and a pinned replay attaches
-      // rather than relaunching (see runChromiumLaunch). `launch-app` is NOT rewritten —
-      // it foregrounds without terminating.
+      // no args. On Chromium the bundleId is a tag and the other args are
+      // ignored, so the step records the relaunched app's path and boot args
+      // instead, and a pinned replay attaches rather than relaunching (see
+      // runChromiumLaunch). `launch-app` is NOT rewritten — it foregrounds
+      // without terminating.
       const strippedArgs = stripDeviceKeys(args);
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
       const noLaunchArgs =
@@ -1580,12 +1581,17 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         platformOf(args.udid) === "ios"
           ? (launchArgs as string[])
           : undefined;
+      const chromiumPort =
+        command === "restart-app" && platformOf(args.udid) === "chromium"
+          ? parseChromiumCdpPort(args.udid as string)
+          : null;
+      const chromiumSpec = chromiumPort === null ? undefined : electronLaunchSpec(chromiumPort);
       const isLaunch =
         command === "restart-app" &&
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
-        Object.keys(extraLaunchArgs).length === 0 &&
-        (noLaunchArgs || iosArgs !== undefined);
+        (chromiumSpec !== undefined ||
+          (Object.keys(extraLaunchArgs).length === 0 && (noLaunchArgs || iosArgs !== undefined)));
 
       // A recorded `fold` becomes the `fold:` directive, the same posture change
       // the tool made; args the directive does not take keep the raw tool step.
@@ -1615,16 +1621,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         warning = captured?.warning;
       } else if (isLaunch) {
         const bundleId = strippedArgs.bundleId as string;
-        const chromiumPort =
-          platformOf(args.udid) === "chromium" ? parseChromiumCdpPort(args.udid as string) : null;
-        const chromium = chromiumPort === null ? undefined : electronLaunchSpec(chromiumPort);
         step = {
           kind: "launch",
-          app: chromium
+          app: chromiumSpec
             ? {
-                chromium: chromium.extraArgs.length
-                  ? { path: chromium.appPath, args: chromium.extraArgs }
-                  : chromium.appPath,
+                chromium: chromiumSpec.extraArgs.length
+                  ? { path: chromiumSpec.appPath, args: chromiumSpec.extraArgs }
+                  : chromiumSpec.appPath,
               }
             : iosArgs
               ? { native: bundleId, ios: { app: bundleId, args: iosArgs } }

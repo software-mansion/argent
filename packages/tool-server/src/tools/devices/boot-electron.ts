@@ -208,9 +208,42 @@ export function forgetElectronLaunchSpec(port: number): void {
   launchSpecs.delete(port);
 }
 
-/** Throws the boot's own path errors without launching anything. */
+/**
+ * Throws the boot's own path errors without launching anything, and fails when
+ * a project directory's fallback `electron` command is not on PATH, which the
+ * boot would only discover as a spawn ENOENT.
+ */
 export function assertElectronAppLaunchable(appPath: string): void {
-  resolveLauncher(appPath);
+  const { command } = resolveLauncher(appPath);
+  if (command !== "electron" || isOnPath(command)) return;
+  throw new FailureError(
+    `Electron boot: ${path.resolve(appPath)} has no node_modules/.bin/electron and no ` +
+      `'electron' is on PATH. Run npm install in the app directory, or install electron globally.`,
+    {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
+      failure_stage: "electron_launcher_missing",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/** Whether spawn() would find `command` on PATH (libuv also tries .com/.exe on Windows). */
+function isOnPath(command: string): boolean {
+  const exts = process.platform === "win32" ? ["", ".com", ".exe"] : [""];
+  return (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter(Boolean)
+    .some((dir) =>
+      exts.some((ext) => {
+        try {
+          fs.accessSync(path.join(dir, command + ext), fs.constants.X_OK);
+          return fs.statSync(path.join(dir, command + ext)).isFile();
+        } catch {
+          return false;
+        }
+      })
+    );
 }
 
 /**
