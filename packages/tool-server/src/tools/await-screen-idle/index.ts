@@ -131,7 +131,7 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     id: AWAIT_SCREEN_IDLE_TOOL_ID,
     description: `Block until the screen has rendered content and held it for minStableMs, or the timeout elapses. It polls the same element tree as \`describe\`.
 Use when a launch or navigation must finish rendering before you take a screenshot or tap.
-Returns { settled, waitedMs, polls<flag:harmonyos>, note?</flag:harmonyos> }. If that is not seen before timeoutMs, including when the tree cannot be read, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
+Returns { settled, waitedMs, polls<flag:harmonyos>, note?</flag:harmonyos> }. If that is not seen before timeoutMs, including when the tree cannot be read, it returns settled=false instead of failing. It fails at once while Xcode's first-launch component install is pending.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
     zodSchema,
     searchHint:
       "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
