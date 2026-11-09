@@ -6,7 +6,13 @@ import {
   warmTelemetryIdentitySync,
   writeConsentFlag,
 } from "@argent/telemetry";
-import { ALL_ADAPTERS, copyRulesAndAgents, type McpConfigAdapter } from "./mcp-configs.js";
+import {
+  ALL_ADAPTERS,
+  copyRulesAndAgents,
+  findRetiredRulesAndAgents,
+  type McpConfigAdapter,
+} from "./mcp-configs.js";
+import { reportRetiredFiles } from "./retired-files.js";
 import {
   RULES_DIR,
   AGENTS_DIR,
@@ -37,7 +43,7 @@ import { chooseScope, type Scope } from "./init-scope.js";
 import { writeMcpConfigs } from "./init-mcp-write.js";
 import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
 import { configureAllowlist } from "./init-allowlist.js";
-import { runSkillsStep, type SkillsStepResult } from "./init-skills.js";
+import { runSkillsStep, type SkillsMethod } from "./init-skills.js";
 
 // `argent init` orchestrator. Step modules signal a cancelled prompt by throwing
 // InitCancelled(step); the catch below turns that into cli_init_cancel + a clean exit.
@@ -162,7 +168,7 @@ export async function init(args: string[]): Promise<void> {
     tel.editorsConfiguredCount = writtenAdapters.length;
 
     track("installation:editors_select", {
-      editors: writtenAdapters.map((a) => sanitizeEditorName(a.name)),
+      editors: writtenAdapters.map((a) => a.telemetryName ?? sanitizeEditorName(a.name)),
       detected_editor_count: detected.length,
       scope,
       install_mode: tel.installMode,
@@ -257,7 +263,7 @@ export async function init(args: string[]): Promise<void> {
 
     // Step 2 — the module prints its own step header.
 
-    const skills = await runSkillsStep({
+    const skillsMethod = await runSkillsStep({
       nonInteractive: parsed.nonInteractive,
       fromTar: parsed.fromTar,
       version,
@@ -265,7 +271,7 @@ export async function init(args: string[]): Promise<void> {
       customRoot,
     });
 
-    p.log.step(pc.bold("Step 3: Rules & Agents"));
+    p.log.step(pc.bold("Step 3: Rules"));
 
     const copyResults = copyRulesAndAgents(
       writtenAdapters,
@@ -276,17 +282,27 @@ export async function init(args: string[]): Promise<void> {
     );
 
     if (copyResults.length > 0) {
-      p.note(copyResults.join("\n"), "Rules & Agents");
+      p.note(copyResults.join("\n"), "Rules");
     } else {
-      p.log.info(pc.dim("No rules or agents to copy for selected editors."));
+      p.log.info(pc.dim("No rules to copy for selected editors."));
     }
+
+    await reportRetiredFiles(
+      findRetiredRulesAndAgents(
+        [{ adapters: writtenAdapters, scope: normalizedScope }],
+        effectiveRoot,
+        RULES_DIR,
+        AGENTS_DIR
+      ),
+      !parsed.nonInteractive
+    );
 
     printSummary({
       installMode: tel.installMode,
       selectedAdapters: writtenAdapters,
       scope,
       allowlistEnabled: allowlist.enabled,
-      skills,
+      skillsMethod,
       copiedRules: copyResults.length > 0,
       wroteProjectTelemetryOptOut,
     });
@@ -340,31 +356,10 @@ interface SummaryArgs {
   selectedAdapters: McpConfigAdapter[];
   scope: Scope;
   allowlistEnabled: boolean;
-  skills: SkillsStepResult;
+  skillsMethod: SkillsMethod;
   copiedRules: boolean;
   /** `--no-telemetry` in local mode also wrote `.argent/config.json`. */
   wroteProjectTelemetryOptOut: boolean;
-}
-
-/**
- * The skills line of the summary, keyed on what actually happened rather than on
- * which method was chosen. Reporting "installed" after a visible failure is the
- * defect this fixes (#614), and a silent fallback is its quieter twin: the user
- * ends up with a machine-local lock entry and no idea why.
- *
- * A bundled source chosen deliberately — offline, `--from <tgz>`, unknown
- * version — is an ordinary success and must read as one; only a pinned attempt
- * that failed first is worth calling out.
- */
-function formatSkillsSummaryLine(skills: SkillsStepResult): string {
-  if (skills.method === "manual") return `${pc.green("Skills")} instructions printed`;
-  if (skills.outcome === "failure") {
-    return `${pc.yellow("Skills")} NOT installed — see the error above`;
-  }
-  if (skills.usedFallback) {
-    return `${pc.yellow("Skills")} installed from the bundled copy — the pinned source was unavailable`;
-  }
-  return `${pc.green("Skills")} installed`;
 }
 
 function printSummary({
@@ -372,7 +367,7 @@ function printSummary({
   selectedAdapters,
   scope,
   allowlistEnabled,
-  skills,
+  skillsMethod,
   copiedRules,
   wroteProjectTelemetryOptOut,
 }: SummaryArgs): void {
@@ -382,8 +377,8 @@ function printSummary({
       ? `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`
       : `${pc.yellow("MCP server")} NOT configured — no editor config was written`,
     `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
-    formatSkillsSummaryLine(skills),
-    `${pc.green("Rules & agents")} ${copiedRules ? "copied" : "n/a"}`,
+    `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
+    `${pc.green("Rules")} ${copiedRules ? "copied" : "n/a"}`,
   ];
 
   p.note(summaryLines.join("\n"), "Summary");
@@ -396,7 +391,7 @@ function printSummary({
         `${pc.bold("Commit")} so your team shares the same setup:`,
         `  ${pc.cyan("package.json")} + your lockfile`,
         `  the written MCP config (.mcp.json, .cursor/mcp.json, …)`,
-        `  ${pc.cyan(".argent/install.json")}${wroteProjectTelemetryOptOut ? ` + ${pc.cyan(".argent/config.json")}` : ""}, and the skills/rules/agents files`,
+        `  ${pc.cyan(".argent/install.json")}${wroteProjectTelemetryOptOut ? ` + ${pc.cyan(".argent/config.json")}` : ""}, and the skills and rules files`,
         "",
         `Teammates then get argent on ${pc.cyan("npm install")} — no global install, no ${pc.cyan("argent init")}.`,
         pc.dim(

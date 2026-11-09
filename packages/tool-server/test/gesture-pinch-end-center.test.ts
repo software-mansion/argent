@@ -4,7 +4,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 // fire-and-forget WebSocket send so no real socket is opened during the test.
 vi.mock("../src/utils/simulator-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/simulator-client")>()),
-  sendCommand: vi.fn(),
+  sendCommand: vi.fn(async () => ({})),
 }));
 
 import { gesturePinchTool } from "../src/tools/gesture-pinch";

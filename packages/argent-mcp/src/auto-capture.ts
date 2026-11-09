@@ -18,11 +18,14 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "keyboard",
   "paste",
   "rotate",
+  "fold",
   "launch-app",
   "restart-app",
   "open-url",
   "describe",
   "run-sequence",
+  // A wait is almost always followed by a look at the screen it waited for.
+  "await-ui-element",
 ]);
 
 /**
@@ -44,12 +47,30 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "run-sequence": 15000,
   "button": 1500,
   "rotate": 1000,
+  // The fold tool already waits for the panel hand-over; the cap covers the
+  // repaint after it.
+  "fold": 1500,
   "keyboard": 300,
   "paste": 300,
   "describe": 100,
+  // The wait returns on the first match, often mid-transition; the cap must
+  // leave `await-screen-idle` room to see two identical reads.
+  "await-ui-element": 1500,
 };
 
 const DEFAULT_DELAY_MS = 1400;
+
+/**
+ * The most the screenshot and the element tree may take together once the
+ * settle wait is over; the settle call gets this on top of its own cap. A
+ * capture call that times out is not sent again: the tool-server keeps reading
+ * after the adapter gives up, so a retry queues behind the read it abandoned.
+ * A frozen helper on a Huawei phone made the four retries of `describe` take
+ * two minutes.
+ * In the telemetry of the 14 days to 2026-10-28, 15 s cuts off 0.05-0.35% of
+ * `describe` calls on iOS and Android, and 2.3% on Android TV emulators.
+ */
+export const CAPTURE_TIMEOUT_MS = 15_000;
 
 // Opt-out only: the `disable-auto-screenshot` flag is off by default.
 // `options` lets tests point flag storage at a temp dir.
@@ -75,16 +96,25 @@ export const AUTO_DESCRIBE_TOOLS = new Set([
   "keyboard",
   "paste",
   "rotate",
+  "fold",
   "launch-app",
   "restart-app",
   "open-url",
   "run-sequence",
+  "await-ui-element",
 ]);
 
 // Opt-out only: the `disable-auto-describe` flag is off by default.
 export function autoDescribeEnabled(options?: FlagsPathOptions): boolean {
   return !isFlagEnabled("disable-auto-describe", options);
 }
+
+/**
+ * Appended instead of the screenshot and element tree while a profiler records
+ * on the call's device (the tool-server flags the call's envelope).
+ */
+export const PROFILING_CAPTURE_SKIPPED_NOTE =
+  "Auto-screenshot and element tree skipped while a profiler is recording on this device. Call screenshot or describe if you need to see the screen.";
 
 /** Header line that introduces the element tree appended after an action. */
 export const AUTO_DESCRIBE_HEADER = "--- Elements after action (describe) ---";

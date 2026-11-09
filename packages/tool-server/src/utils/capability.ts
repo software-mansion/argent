@@ -6,6 +6,7 @@ import {
   type Platform,
   type ToolCapability,
 } from "@argent/registry";
+import { HARMONY_DISABLED_REASON, isHarmonyEnabled } from "./harmony-flag";
 
 /**
  * Thrown when a device's platform/kind isn't in the tool's `capability`
@@ -14,7 +15,13 @@ import {
 export class UnsupportedOperationError extends Error {
   constructor(toolId: string, device: DeviceInfo, reason?: string) {
     const detail = reason ? ` (${reason})` : "";
-    super(`Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.`);
+    const next =
+      device.platform === "ios" && device.kind === "device"
+        ? " Use a simulator, or see the argent-ios-device-interact skill."
+        : "";
+    super(
+      `Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.${next}`
+    );
     this.name = "UnsupportedOperationError";
     withFailureSignal(this, {
       error_code: FAILURE_CODES.TOOL_CAPABILITY_UNSUPPORTED_OPERATION,
@@ -106,6 +113,8 @@ function platformMatrix(
       return capability.chromium;
     case "vega":
       return capability.vega;
+    case "harmony":
+      return capability.harmony;
   }
 }
 
@@ -120,13 +129,21 @@ export function assertSupported(
   device: DeviceInfo
 ): void {
   if (!capability) return;
+  if (device.platform === "harmony" && !isHarmonyEnabled()) {
+    throw new UnsupportedOperationError(toolId, device, HARMONY_DISABLED_REASON);
+  }
   const matrix = platformMatrix(device.platform, capability);
   if (!matrix) {
     throw new UnsupportedOperationError(toolId, device, `no ${device.platform} support declared`);
   }
   const supported = matrix[device.kind] === true;
   if (!supported) {
-    throw new UnsupportedOperationError(toolId, device, `kind '${device.kind}' not supported`);
+    const reason =
+      device.platform === "harmony" && device.kind === "emulator"
+        ? "a `harmony-emulator-` id names an instance only boot-device starts; drive the " +
+          '`harmony-<connectKey>` id of its `kind: "device"` entry in list-devices'
+        : `kind '${device.kind}' not supported`;
+    throw new UnsupportedOperationError(toolId, device, reason);
   }
   if (capability.supports && !capability.supports(device)) {
     throw new UnsupportedOperationError(toolId, device, "supports() refiner rejected device");

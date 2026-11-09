@@ -234,3 +234,15 @@ describe("parseUiAutomatorDump — clips off-screen rects to the screen", () => 
     }
   });
 });
+
+describe("parseUiAutomatorDump — unparseable output", () => {
+  it.each([
+    ["a stray line", "Killed\n", '(7 chars: "Killed\\n")'],
+    ["whitespace", " \n\t", "(empty)"],
+    ["a long blob, capped", "y".repeat(5000), `(5000 chars: "${"y".repeat(200)}")`],
+  ])("names what it got: %s", (_, raw, detail) => {
+    expect(() => parseUiAutomatorDump(raw, 1080, 1920)).toThrow(
+      `Failed to parse uiautomator dump output ${detail}`
+    );
+  });
+});

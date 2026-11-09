@@ -1,0 +1,32 @@
+{
+  "name": "argent",
+  "version": "0.0.0",
+  "description": "Alias for @swmansion/argent: `npx argent <command>` runs the @swmansion/argent CLI",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/software-mansion/argent.git"
+  },
+  "homepage": "https://docs.swmansion.com/argent",
+  "bin": {
+    "argent": "cli.cjs"
+  },
+  "scripts": {
+    "prepack": "node sync-readme.cjs",
+    "preinstall": "node preinstall.cjs"
+  },
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "files": [
+    "cli.cjs",
+    "preinstall.cjs"
+  ],
+  "dependencies": {
+    "@swmansion/argent": "0.0.0"
+  }
+}

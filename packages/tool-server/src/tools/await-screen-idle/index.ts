@@ -8,7 +8,7 @@ import type {
   ToolDefinition,
 } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
@@ -19,6 +19,7 @@ import { describeIos, iosRequires } from "../describe/platforms/ios";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
+import { pollHarmonyTree, harmonyRequires } from "../describe/platforms/harmony";
 
 const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
 
@@ -26,45 +27,13 @@ const DEFAULT_TIMEOUT_MS = 3000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_MIN_STABLE_MS = 250;
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
-  timeoutMs: z
-    .number()
-    .int()
-    .positive()
-    .max(120_000)
-    .optional()
-    .describe(
-      `Max time to wait for the screen to settle before giving up (default ${DEFAULT_TIMEOUT_MS}).`
-    ),
-  pollIntervalMs: z
-    .number()
-    .int()
-    .min(50)
-    .max(5000)
-    .optional()
-    .describe(`How often to re-read the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
-  minStableMs: z
-    .number()
-    .int()
-    .min(0)
-    .max(10_000)
-    .optional()
-    .describe(
-      `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 interface IdleResult {
   /** Screen rendered content and went still before the timeout. */
   settled: boolean;
   waitedMs: number;
   polls: number;
+  /** Why what it settled on may not be the live screen. */
+  note?: string;
 }
 
 const capability: ToolCapability = {
@@ -72,6 +41,7 @@ const capability: ToolCapability = {
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  harmony: { device: true },
 };
 
 // Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
@@ -90,6 +60,44 @@ function treeSignature(root: DescribeNode): string {
   return parts.join("\n");
 }
 
+const zodSchema = z
+  .object({
+    udid: z
+      .string()
+      .min(1)
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+      ),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(120_000)
+      .optional()
+      .describe(
+        `Max time to wait for the screen to settle before giving up (default ${DEFAULT_TIMEOUT_MS}).`
+      ),
+    pollIntervalMs: z
+      .number()
+      .int()
+      .min(50)
+      .max(5000)
+      .optional()
+      .describe(`How often to re-read the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
+    minStableMs: z
+      .number()
+      .int()
+      .min(0)
+      .max(10_000)
+      .optional()
+      .describe(
+        `The screen must hold the same content for at least this long to count as settled (default ${DEFAULT_MIN_STABLE_MS}).`
+      ),
+  })
+  .strict();
+
+type Params = z.infer<typeof zodSchema>;
+
 // The MCP layer times its auto-screenshot with this: capture once the screen is
 // stable instead of after a fixed delay.
 export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Params, IdleResult> {
@@ -97,7 +105,8 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     device: DeviceInfo,
     services: Record<string, unknown>,
     isTvOs: boolean,
-    androidIsTv: boolean
+    androidIsTv: boolean,
+    budgetMs: number
   ): Promise<DescribeTreeData> {
     // ios-remote reads the same AX tree through describeIos: the ax-service
     // blueprint routes it over the sim-remote tunnel, so only the preflight dep
@@ -112,11 +121,21 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
     }
+    if (device.platform === "harmony") {
+      return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
+    }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
 
   return {
     id: AWAIT_SCREEN_IDLE_TOOL_ID,
+    description: `Block until the screen has rendered content and stopped changing, or the timeout elapses. It polls the same element tree as \`describe\`.
+Use when a launch or navigation must finish rendering before you take a screenshot or tap.
+Returns { settled, waitedMs, polls<flag:harmonyos>, note?</flag:harmonyos> }. If the screen never goes still before timeoutMs, it returns settled=false instead of failing.<flag:harmonyos> A note on settled=true means the screen it settled on is not live: a suspended HarmonyOS panel settles instantly on its last frame, and taps land nowhere until it is woken.</flag:harmonyos>`,
+    zodSchema,
+    searchHint:
+      "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
+    readOnly: true,
     interaction: {
       startedMsg: () => "Waiting for screen to settle",
       completedMsg: ({ result }) =>
@@ -124,16 +143,7 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for screen to settle: ${failureSignal.error_code}`,
     },
-    description: `Block until the screen has rendered content and stopped changing, or a timeout elapses.
-
-Polls the same accessibility / DOM tree as \`describe\` every pollIntervalMs (default ${DEFAULT_POLL_INTERVAL_MS}ms) until it
-has content and that content holds identical for minStableMs (default ${DEFAULT_MIN_STABLE_MS}ms), or timeoutMs (default
-${DEFAULT_TIMEOUT_MS}ms) is reached. Returns { settled, waitedMs, polls } — settled=false means the screen never went
-still before the timeout. Use after a launch/navigation to wait for the UI to render before screenshotting or tapping.`,
-    searchHint:
-      "wait until screen settles idle stable stops changing animation transition rendered ready before screenshot",
     longRunning: true,
-    zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
@@ -148,6 +158,7 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
       if (device.platform === "ios") await ensureDeps(iosRequires);
       else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
+      else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
 
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
       const isTvOs =
@@ -159,7 +170,7 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
       let stableSince = 0;
 
       const poll = await pollDescribeTree<true>({
-        fetchTree: () => fetchTree(device, services, isTvOs, androidIsTv),
+        fetchTree: (budgetMs) => fetchTree(device, services, isTvOs, androidIsTv, budgetMs),
         timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         pollIntervalMs: params.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
         signal: ctx?.signal,
@@ -182,7 +193,13 @@ still before the timeout. Use after a launch/navigation to wait for the UI to re
         },
       });
 
-      return { settled: poll.result === true, waitedMs: poll.elapsedMs, polls: poll.polls };
+      const note = poll.result === true && poll.lastData?.stale ? poll.lastData.hint : undefined;
+      return {
+        settled: poll.result === true,
+        waitedMs: poll.elapsedMs,
+        polls: poll.polls,
+        ...(note ? { note } : {}),
+      };
     },
   };
 }

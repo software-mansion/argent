@@ -9,9 +9,11 @@ import type { TvControlApi } from "../../blueprints/tv-control-types";
  * expose the same `TvControlApi`. TV-ness is not checked here: the Apple
  * factory rejects a non-tvOS simulator, the Android one a non-leanback device.
  */
-export function tvServiceRef(udid: string): ServiceRef {
+export function tvServiceRef(udid: string, registry?: Registry): ServiceRef {
   const device = resolveDevice(udid);
-  return device.platform === "android" ? androidTvControlRef(device) : tvControlRef(device);
+  return device.platform === "android"
+    ? androidTvControlRef(device, registry)
+    : tvControlRef(device);
 }
 
 /**
@@ -22,7 +24,7 @@ export function tvServiceRef(udid: string): ServiceRef {
  * a tvOS udid it cannot drive.
  */
 export async function resolveTvApi(registry: Registry, udid: string): Promise<TvControlApi> {
-  const ref = tvServiceRef(udid);
+  const ref = tvServiceRef(udid, registry);
   return typeof ref === "string"
     ? registry.resolveService<TvControlApi>(ref)
     : registry.resolveService<TvControlApi>(ref.urn, ref.options);

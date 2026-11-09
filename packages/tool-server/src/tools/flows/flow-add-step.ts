@@ -2,11 +2,19 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  canonicalToolArgs,
+  canonicalToolId,
+  e2eFileCandidates,
+  e2eRunFallbackDirs,
   FAILURE_CODES,
   FailureError,
   getFailureSignal,
+  nestedFlowTarget,
   ToolNotFoundError,
   wrapFailure,
+  type ClientFileDirective,
+  type FileInputSpec,
+  type OnDiskSpelling,
   type Registry,
   type ToolDefinition,
 } from "@argent/registry";
@@ -18,9 +26,9 @@ import {
   authoringPlatform,
   parseFlow,
   assertSafeFlowName,
-  classifyOnDiskSpelling,
   describeSelector,
-  flowsDirFor,
+  foldStepFromArgs,
+  isLinkedRecorderCall,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -33,13 +41,30 @@ import {
   type UnmetUiWaitCause,
 } from "../await-ui-element";
 import { probeWhenCondition, type DirectiveOutcome } from "./flow-actions";
+import {
+  UPLOAD_STAGE_BY_KIND,
+  prepareToolStepInputs,
+  toolFilePathHints,
+  toolStepUploadIssue,
+  uploadUpdateHint,
+  withClientPaths,
+  type PreparedToolStep,
+} from "./flow-tool-inputs";
+import { nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import {
+  ClientProjectAccess,
+  HostProjectAccess,
+  resolveRunTarget,
+  resolveSavedTest,
+  type ProjectAccess,
+} from "./project-access";
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import { settleWithin } from "../../utils/timing";
 import { stripDeviceKeys } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import type { DescribeSource } from "../describe/contract";
 import {
   nodeAtPoint,
@@ -50,34 +75,6 @@ import {
   type TextMatchMode,
   type WaitCondition,
 } from "../../utils/ui-tree-match";
-
-const zodSchema = z.object({
-  name: z
-    .string()
-    .describe("Name of the flow being recorded — the one passed to flow-start-recording."),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root of the flow being recorded — the same value passed to flow-start-recording. Together with `name` it identifies which recording this step belongs to."
-    ),
-  command: z
-    .string()
-    .describe(
-      'MCP tool to execute and record, for example "gesture-tap". Do not pass a flow directive or a recording tool. Call flow-add-script directly for a requested script step.'
-    ),
-  args: z
-    .string()
-    .optional()
-    .describe(
-      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
-    ),
-  delayMs: z
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe("Milliseconds to sleep before executing this step during replay."),
-});
 
 // Replay gates on the platform's full-hierarchy source (`treeSourceGate` in
 // flow-run.ts) and refuses to degrade to the fallback tree, so a selector
@@ -118,6 +115,11 @@ function platformOf(udid: unknown): string | undefined {
   return typeof udid === "string" ? authoringPlatform(resolveDevice(udid).platform) : undefined;
 }
 
+/** Whether this device has a flow tree at all, so a silent source is absent rather than down. */
+function hasRunnerTree(udid: unknown): boolean {
+  return typeof udid === "string" && supportsFlowTree(resolveDevice(udid).platform);
+}
+
 /**
  * Fallback for a platform the clauses below do not name. Unreachable today: a
  * determinate verdict needs `fetchFlowTree`, which answers only on ios,
@@ -139,12 +141,12 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
       `but this verdict says that tree still HAS the element, so retargeting at ${idKind} it ` +
       "definitely carries is the wrong direction — either narrow the selector until it matches " +
       "only what you expect to leave, or gate on something that does leave, and prove it with " +
-      "`flow-execute`; or keep the step raw"
+      "`e2e-execute`; or keep the step raw"
     );
   }
   return (
     `so retarget the DIRECTIVE at ${idKind} the full hierarchy carries and prove it with ` +
-    "`flow-execute`, or keep the step raw"
+    "`e2e-execute`, or keep the step raw"
   );
 }
 
@@ -185,8 +187,8 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
     const settle =
       "No read-only tool exposes the runner's trimmed tree on Chromium — `describe` re-reads the " +
       "same DOM on a shorter walk, so it both lists nodes the runner drops and omits nodes the " +
-      "runner keeps — so settle it by running the conversion: put the directive in a flow and " +
-      "`flow-execute` it. ";
+      "runner keeps — so settle it by running the conversion: put the directive in an e2e test and " +
+      "`e2e-execute` it. ";
     if (condition === "hidden") {
       return (
         settle +
@@ -248,8 +250,8 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       return (
         "Both read the same DOM but project it differently, and here it is the RECORDER that " +
         "never saw the element: the live wait passed on absence, and this verdict says the " +
-        "runner's tree holds it — so nothing the flow tree DROPS can be the cause. What is " +
-        "left is the recorder's own limit: its walk stops at 5000 nodes where the flow tree's " +
+        "runner's tree holds it — so nothing the runner tree DROPS can be the cause. What is " +
+        "left is the recorder's own limit: its walk stops at 5000 nodes where the runner tree's " +
         "goes to 12000, so on a dense page the element is past the end of what it read." +
         SCREEN_MAY_HAVE_MOVED
       );
@@ -257,7 +259,7 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
     return (
       "Both read the same DOM but project it differently, and here it is the RUNNER's side to " +
       "check: the live wait passed, so the recorder's tree did hold a matching element and its " +
-      "5000-node walk limit is not what went wrong. The flow tree keeps only addressable nodes " +
+      "5000-node walk limit is not what went wrong. The runner tree keeps only addressable nodes " +
       "(id, label, value, clickable or focused) whose frame the walker did not clamp to zero " +
       "area for being off-viewport, and it redacts a password field's name to `[password]`." +
       SCREEN_MAY_HAVE_MOVED
@@ -270,7 +272,7 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
       "Both read the same `getHierarchy` dump from the android-devtools helper; this host then " +
       "parses it two ways. `describe`'s interactables trim collapses a `testID`-only container " +
       "into a passthrough and drops the node carrying the id, while borrowing a descendant's " +
-      "text into an unlabelled clickable's own label — where the flow adapter keeps every view " +
+      "text into an unlabelled clickable's own label — where the runner adapter keeps every view " +
       "with a `resource-id` or a label, and asks for 12000 nodes against the helper's 5000 " +
       "default. So each holds elements the other drops." +
       SCREEN_MAY_HAVE_MOVED
@@ -287,7 +289,7 @@ function treeDivergenceFor(udid: unknown, condition: WaitCondition): string {
         : "disagreement means the SCREEN changed between the live wait and this re-probe, not " +
           "that the two trees differ.";
     return (
-      "Both read the same automation-toolkit page source, and the flow tree only re-shapes it — " +
+      "Both read the same automation-toolkit page source, and the runner tree only re-shapes it — " +
       "it drops no element and its text hoist can only add matches — so on this platform a " +
       cause
     );
@@ -351,11 +353,11 @@ const SPELLING_CLAUSE =
  */
 const UNMET_WAIT_WARNING =
   "recorded, but the wait itself never held — `await-ui-element` reports an unmet condition by " +
-  "returning success:false instead of failing, so the step was written to the flow anyway. At " +
+  "returning success:false instead of failing, so the step was written to the e2e test anyway. At " +
   "replay an unmet wait FAILS the step and stops the run there, so re-record it once the " +
-  "condition can actually hold, and delete the failed step after `flow-finish-recording` rather " +
-  "than mid-recording: against a remote client the in-memory copy is authoritative and the next " +
-  "append writes the step straight back, and in host mode the recorder re-reads the file before " +
+  "condition can actually hold, and delete the failed step after `e2e-finish-recording` rather " +
+  "than mid-recording: over a link the in-memory copy is authoritative and the next " +
+  "append writes the step straight back, and without a link the recorder re-reads the file before " +
   "each append, so an edit that renumbers the steps costs the finish the verdicts it would " +
   "otherwise carry. The cross-tree re-probe was " +
   "skipped: it asks whether a check that PASSED would survive conversion to `await:`/`assert:`, " +
@@ -370,7 +372,7 @@ const UNMET_WAIT_WARNING =
 const UNREADABLE_WAIT_WARNING =
   "recorded, but this wait reached its deadline without a trustworthy read of the UI tree, so " +
   "the condition was never judged — `await-ui-element` returns success:false for that too, and " +
-  "the step was written to the flow anyway. Either no read in the window could be trusted, or " +
+  "the step was written to the e2e test anyway. Either no read in the window could be trusted, or " +
   "the reads went dark before the end and what they saw no longer describes it. Whether the " +
   "condition holds is UNKNOWN, not known-bad: `toolResult.note` names the tree-source error " +
   "where a fetch threw, and describes what was seen where the tree was merely empty or " +
@@ -381,7 +383,7 @@ const UNREADABLE_WAIT_WARNING =
 const CANCELLED_WAIT_WARNING =
   "recorded, but this wait was cancelled before its deadline, so the condition was never settled " +
   "— `await-ui-element` reports a cancelled wait as success:false, and the step was written to " +
-  "the flow anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
+  "the e2e test anyway. Whether it holds is UNKNOWN, not known-bad: re-record the step to find out. " +
   "The cross-tree re-probe was skipped for the same reason";
 
 function unmetWaitWarningFor(cause: UnmetUiWaitCause): string {
@@ -415,7 +417,7 @@ function indeterminateReasonCaveat(udid: unknown): string {
  */
 const CANCELLED_PROBE_WARNING =
   "recorded, but the re-probe against the tree the RUNNER reads was cancelled before it " +
-  "answered. The step itself ran and is written to the flow; only the verdict is missing, so " +
+  "answered. The step itself ran and is written to the e2e test; only the verdict is missing, so " +
   "whether it would convert to `await:`/`assert:` is UNKNOWN, not known-bad — record the wait " +
   "again, uncancelled, before trusting the conversion";
 
@@ -495,6 +497,13 @@ async function probeAgainstRunnerTree(
     return {};
   }
   if (typeof args.udid !== "string") return {}; // nothing to probe against
+  if (!hasRunnerTree(args.udid)) {
+    return {
+      warning:
+        `this platform's e2e runner has no UI tree, so an \`await:\`/\`assert:\` conversion of ` +
+        `this step always fails there; keep it as a \`tool:\` step.`,
+    };
+  }
   // No try/catch: a tree read that fails throws inside `fetchFlowTree`, which
   // the probe already reports as indeterminate.
   const device = resolveDevice(args.udid);
@@ -559,7 +568,7 @@ async function probeAgainstRunnerTree(
         // source is back" is nonsense for a source that never left.
         (timedOut
           ? `re-record this step when the device is quieter, or settle the conversion directly by ` +
-            `putting the directive in a flow and running \`flow-execute\`, which has no such ` +
+            `putting the directive in an e2e test and running \`e2e-execute\`, which has no such ` +
             `ceiling`
           : `re-probe once that tree source is back before trusting the conversion` +
             indeterminateReasonCaveat(args.udid)),
@@ -653,7 +662,7 @@ async function captureTapSelector(
   try {
     const device = resolveDevice(udid);
     const launched = recordedLaunchedApp(session, device.platform);
-    const { tree, source } = await fetchFlowTree(
+    const { tree, source, uiOrientation } = await fetchFlowTree(
       registry,
       device,
       launched ? { bundleId: launched, pinned: false, probeAnswered: false } : undefined
@@ -667,8 +676,9 @@ async function captureTapSelector(
     // smallest frame → reading order) is free to elect a DIFFERENT element than
     // the tapped one — e.g. the same label on an earlier row. Require the
     // winning frame to cover the tapped point, or the recorded step would
-    // silently retarget and coordinates are safer.
-    const resolved = selectorToFrame(tree, selector);
+    // silently retarget and coordinates are safer. Ranked in the reading order
+    // replay will rank in: the UI's, on a landscape UI.
+    const resolved = selectorToFrame(tree, selector, uiOrientation);
     if (!resolved) {
       // Defensive: a selector derived from a visible node matches that node
       // under matchNode's semantics, so this should be unreachable. Kept in
@@ -707,7 +717,7 @@ async function activeFlowState(
       return {
         stepCount: session.flow.steps.length,
         note:
-          `The persisted flow could not be read and parsed (${err instanceof Error ? err.message : String(err)}); ` +
+          `The persisted e2e test could not be read and parsed (${err instanceof Error ? err.message : String(err)}); ` +
           `the step count is from the last valid in-memory snapshot.`,
       };
     }
@@ -745,17 +755,16 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     tool: "restart-app",
     rewritten: true,
     rewriteCondition:
-      "when it carries only the bundle id (a call with an extra arg, e.g. an Android `activity`, " +
-      "is kept as a raw `tool: restart-app` step to convert during polish)",
+      "when it carries only the bundle id, or `launchArgs` on iOS (any other extra arg, e.g. an " +
+      "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it)",
   },
   run: {
-    tool: "flow-execute",
+    tool: "e2e-execute",
     rewritten: true,
     rewriteCondition:
-      "when the target resolves as a sibling flow in this recording's folder — a `name` that " +
-      "does not is kept as a raw `tool: flow-execute` step, and so is every target in a REMOTE " +
-      "recording (`run:` composition is host-resolved, so the host cannot validate the client's " +
-      "siblings); a `flow_path` that is not a sibling is refused outright and records nothing",
+      "when the target resolves as a sibling e2e test in this recording's folder, on the computer " +
+      "that has the project; a `name` that does not is kept as a raw `tool: e2e-execute` step, " +
+      "and an `e2e_test_path` that is not a sibling is refused outright and records nothing",
   },
   type: { tool: "keyboard", rewritten: false },
   await: { tool: AWAIT_UI_ELEMENT_TOOL_ID, rewritten: false },
@@ -764,21 +773,24 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
 };
 
 const NESTED_RECORDER_TOOLS: Record<string, string> = {
-  "flow-add-echo":
-    "`flow-add-echo` records a step itself, so it must be called DIRECTLY, not through " +
-    "flow-add-step — nesting it would write the echo AND a `tool: flow-add-echo` step that " +
+  "e2e-add-echo":
+    "`e2e-add-echo` records a step itself, so it must be called DIRECTLY, not through " +
+    "e2e-add-step — nesting it would write the echo AND a `tool: e2e-add-echo` step that " +
     "fails on every replay.",
-  "flow-add-script":
-    "`flow-add-script` records its own step. Call it directly, not through flow-add-step.",
-  "flow-add-step":
-    "flow-add-step cannot record itself. Pass the MCP tool you want to execute as `command`.",
-  "flow-start-recording":
-    "`flow-start-recording` truncates the flow it names. Recording it as a step would erase " +
-    "this flow at replay; call it directly when you want to start a recording.",
-  "flow-finish-recording":
-    "`flow-finish-recording` ends the recording, so it cannot also be a step in it. Call it " +
+  "e2e-add-script":
+    "`e2e-add-script` records its own step. Call it directly, not through e2e-add-step.",
+  "e2e-add-step":
+    "e2e-add-step cannot record itself. Pass the MCP tool you want to execute as `command`.",
+  "e2e-start-recording":
+    "`e2e-start-recording` truncates the e2e test it names. Recording it as a step would erase " +
+    "this e2e test at replay; call it directly when you want to start a recording.",
+  "e2e-finish-recording":
+    "`e2e-finish-recording` ends the recording, so it cannot also be a step in it. Call it " +
     "directly when the walkthrough is complete.",
 };
+
+/** The tools that write a flow file; a replayed flow refuses them when it arrives as an upload. */
+export const RECORDING_TOOL_IDS: ReadonlySet<string> = new Set(Object.keys(NESTED_RECORDER_TOOLS));
 
 /**
  * Keyed on the error's identity and its `toolId`, so a tool that ran and
@@ -796,6 +808,8 @@ function isToolNotFound(err: unknown, command: string): boolean {
 export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
   // A real `rotate` tool is registered, so the not-found path never fires.
   "rotate",
+  // Likewise `fold`: the tool runs, and the recorder rewrites it into `fold:`.
+  "fold",
   // `command` already is the tool name a `tool:` step wants.
   "tool",
 ];
@@ -803,39 +817,39 @@ export const UNHINTED_DIRECTIVE_KEYS: readonly string[] = [
 export function directiveCommandHint(command: string): string | undefined {
   if (command === "swipe") {
     return (
-      `"swipe" is a flow directive, not a tool. Record the movement by calling \`gesture-swipe\` ` +
-      `(\`gesture-drag\` on chromium, where gesture-swipe is not supported) through flow-add-step. ` +
+      `"swipe" is an e2e test directive, not a tool. Record the movement by calling \`gesture-swipe\` ` +
+      `(\`gesture-drag\` on chromium, where gesture-swipe is not supported) through e2e-add-step. ` +
       `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
       `\`swipe:\` is part of the polish pass.`
     );
   }
   if (command === "echo") {
     return (
-      `"echo" is a flow directive, not a tool. Call \`flow-add-echo\` DIRECTLY — not through ` +
-      `flow-add-step, which would run it as a nested tool AND record a \`tool: flow-add-echo\` ` +
+      `"echo" is an e2e test directive, not a tool. Call \`e2e-add-echo\` DIRECTLY — not through ` +
+      `e2e-add-step, which would run it as a nested tool AND record a \`tool: e2e-add-echo\` ` +
       `step that fails on every replay.`
     );
   }
   if (command === "script") {
-    return `"script" is a flow directive. Call \`flow-add-script\` directly.`;
+    return `"script" is an e2e test directive. Call \`e2e-add-script\` directly.`;
   }
   if (command === "wait") {
     return (
-      `"wait" is a flow directive, not a tool, and there is no tool that records one — a fixed ` +
+      `"wait" is an e2e test directive, not a tool, and there is no tool that records one — a fixed ` +
       `sleep is not a readiness signal. Record the thing you are actually waiting for with ` +
       `\`${AWAIT_UI_ELEMENT_TOOL_ID}\` instead.`
     );
   }
   if (command === "long-press") {
     return (
-      `"long-press" is a flow directive, not a tool, and no tool records one — there is no ` +
+      `"long-press" is an e2e test directive, not a tool, and no tool records one — there is no ` +
       `gesture-long-press. Record the rest of the path, then add the \`long-press:\` step by ` +
       `hand during polish and prove it with the replay.`
     );
   }
   if (command === "scroll-to") {
     return (
-      `"scroll-to" is a flow directive, not a tool, and no tool records one — it SEARCHES, ` +
+      `"scroll-to" is an e2e test directive, not a tool, and no tool records one — it SEARCHES, ` +
       `scrolling until the target is visible, which no single recorded gesture reproduces. ` +
       `Record the movement with \`gesture-swipe\` (\`gesture-scroll\` on chromium) if the path ` +
       `needs it, then add the \`scroll-to:\` step by hand during polish and prove it with the ` +
@@ -844,7 +858,7 @@ export function directiveCommandHint(command: string): string | undefined {
   }
   if (command === "snapshot") {
     return (
-      `"snapshot" is a flow directive, not a tool, and no tool records one — it compares the ` +
+      `"snapshot" is an e2e test directive, not a tool, and no tool records one — it compares the ` +
       `screen against a stored baseline, which \`screenshot-diff\` does not manage. Add the ` +
       `\`snapshot:\` step by hand during polish, then adopt its baseline with a run that sets ` +
       `updateBaselines, and review the PNG before committing it.`
@@ -852,7 +866,7 @@ export function directiveCommandHint(command: string): string | undefined {
   }
   if (command === "when") {
     return (
-      `"when" is a flow directive, not a tool, and no tool records one — it GUARDS the steps ` +
+      `"when" is an e2e test directive, not a tool, and no tool records one — it GUARDS the steps ` +
       `nested under it, so there is no action of its own to run. Record those steps, then wrap ` +
       `them in the \`when:\` block by hand during polish and prove both branches with the replay.`
     );
@@ -864,8 +878,8 @@ export function directiveCommandHint(command: string): string | undefined {
     : undefined;
   if (!hint) return undefined;
   return (
-    `"${command}" is a flow directive, not a tool. Record it by calling \`${hint.tool}\` ` +
-    `through flow-add-step` +
+    `"${command}" is an e2e test directive, not a tool. Record it by calling \`${hint.tool}\` ` +
+    `through e2e-add-step` +
     (hint.rewritten
       ? ` — the recorder rewrites it into the \`${command}:\` step ${hint.rewriteCondition ?? "for you"}. ` +
         `Where the call is recorded at all, a \`delayMs\` on it opts out of the rewrite: the step is then ` +
@@ -880,34 +894,40 @@ export function directiveCommandHint(command: string): string | undefined {
 // verbatim as a brittle `tool: flow-execute` step (baked-in project_root, no
 // portability). Capture it as a `run: <name>.yaml` composition directive
 // instead — mirroring the gesture-tap → tap rewrite.
-const RUN_TARGET_COMMAND = "flow-execute";
+const RUN_TARGET_COMMAND = "e2e-execute";
 
 /**
- * Rewrite a nested `flow-execute` target from `flow_path` to the equivalent
+ * Rewrite a nested `flow-execute` target from `e2e_test_path` to the equivalent
  * `name`, in place — or reject the call before anything runs.
  *
  * `flow-add-step` forwards the nested call's arguments as opaque JSON, so a
- * `flow_path` inside them never crosses flow-execute's file-input boundary and
- * `resolveFlowSource` would reject it outright. A sibling of the recording is
- * the one target with a boundary-verified equivalent: the same file the `name` +
- * `project_root` pair already resolves to, in a directory flow-start-recording
- * established through its own boundary. Every other flow_path is refused here —
+ * `e2e_test_path` inside them never crosses flow-execute's file-input boundary and
+ * `resolveFlowSource` would reject it outright. A sibling of the recording, or
+ * a test in the project's other e2e test directory, is the one target with a
+ * boundary-verified equivalent: the same file the `name` + `project_root` pair
+ * already resolves to, beside a directory flow-start-recording established
+ * through its own boundary. Every other e2e_test_path is refused here —
  * a raw `tool:` step has no boundary to resolve a path through at replay either.
+ * The on-disk spelling is the answer of `project`, on the client over a link;
+ * a linked call whose client sent no files has no answer to give, and is
+ * refused.
  */
 async function rewriteSiblingFlowPath(
-  session: RecordingSession | null,
-  args: Record<string, unknown>
+  session: RecordingSession,
+  args: Record<string, unknown>,
+  project: ProjectAccess,
+  linked: boolean
 ): Promise<void> {
-  const flowPath = args.flow_path;
+  const flowPath = args.e2e_test_path;
   // A call naming both sources — or neither — is flow-execute's schema to judge.
   if (typeof flowPath !== "string" || args.name !== undefined) return;
 
   const invalid = (detail: string): FailureError =>
     new FailureError(
-      `Cannot record a flow-execute of flow_path "${flowPath}": ${detail}. flow_path carries no ` +
-        `file-input resolution through flow-add-step's opaque args — pass name + project_root ` +
-        `for a flow saved beside the recording, or add a \`run: <relative path>.yaml\` step to ` +
-        `the flow YAML by hand for a cross-directory target.`,
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": ${detail}. e2e_test_path carries no ` +
+        `file-input resolution through e2e-add-step's opaque args — pass name + project_root ` +
+        `for an e2e test saved beside the recording, or add a \`run: <relative path>.yaml\` step to ` +
+        `the e2e test YAML by hand for a cross-directory target.`,
       {
         error_code: FAILURE_CODES.FLOW_FILE_INVALID,
         failure_stage: "flow_add_step_flow_path",
@@ -916,11 +936,6 @@ async function rewriteSiblingFlowPath(
       }
     );
 
-  if (!session || session.persist !== "host") {
-    throw invalid(
-      "the recording is not persisted on this host, so its siblings cannot be resolved here"
-    );
-  }
   // Reject ".." segments: the sibling checks below compare path.resolve
   // results, which collapse ".." lexically, but the kernel resolves a symlinked
   // directory component first — "<flowsDir>/link/../<stem>.yaml" can open a file
@@ -928,7 +943,7 @@ async function rewriteSiblingFlowPath(
   // <stem> instead. Same constraint as flow_path_dotdot in flow-run.ts.
   if (flowPath.split(/[\\/]+/).includes("..")) {
     throw invalid(
-      'flow paths must not contain ".." segments — sibling identity is decided lexically ' +
+      'e2e test paths must not contain ".." segments — sibling identity is decided lexically ' +
         "from this path, and a symlinked directory component would make the rewrite run a " +
         "different file than the path opens"
     );
@@ -943,17 +958,25 @@ async function rewriteSiblingFlowPath(
     // On case-insensitive filesystems the path looks valid to the user, so name the real problem.
     throw invalid(
       ext.toLowerCase() === ".yaml"
-        ? `flow files must use the lowercase .yaml extension, not "${ext}"`
-        : "flow files must use the .yaml extension"
+        ? `e2e test files must use the lowercase .yaml extension, not "${ext}"`
+        : "e2e test files must use the .yaml extension"
     );
   }
   // The recording's own dir, not getFlowsDir(): only a sibling of the flow
   // being recorded composes as `run:`.
+  // The project's other e2e test directory is accepted too: `name` reaches a
+  // test there as well, and the recorder composes it by its path from the
+  // recording (captureRunTarget).
   const flowsDir = path.dirname(session.filePath);
-  if (path.resolve(path.dirname(flowPath)) !== path.resolve(flowsDir)) {
+  const flowDir = path.dirname(flowPath);
+  const otherDirs = e2eRunFallbackDirs(flowsDir, path.basename(flowPath));
+  if (
+    path.resolve(flowDir) !== path.resolve(flowsDir) &&
+    !otherDirs.some((dir) => path.resolve(dir) === path.resolve(flowDir))
+  ) {
     throw invalid(
-      `it is not in the recording's flow directory ("${flowsDir}"), and a raw tool: step has ` +
-        `no boundary to resolve a path through at replay`
+      `it is not in the recording's e2e test directory ("${flowsDir}") or the project's other ` +
+        `e2e test directory, and a raw tool: step has no boundary to resolve a path through at replay`
     );
   }
   // basename leaves a suffix in place when stripping it would leave nothing, and
@@ -974,7 +997,11 @@ async function rewriteSiblingFlowPath(
       `project_root must be an absolute path (got ${typeof projectRoot === "string" ? `"${projectRoot}"` : "none"}) — a relative root would be resolved against the tool server's cwd, not the calling agent's`
     );
   }
-  if (path.resolve(flowsDirFor(projectRoot), `${stem}.yaml`) !== path.resolve(flowPath)) {
+  // A client older than the rename records into .argent/flows, so its sibling
+  // is a legacy candidate of `name`.
+  const candidates = e2eFileCandidates(projectRoot, stem);
+  const suppliedPath = path.resolve(flowPath);
+  if (!candidates.some((candidate) => path.resolve(candidate) === suppliedPath)) {
     throw invalid(`project_root "${projectRoot}" does not resolve "${stem}" to it`);
   }
 
@@ -989,29 +1016,64 @@ async function rewriteSiblingFlowPath(
   // `name`, this path names a file the caller says exists, so a listing lacking
   // it entirely is the same phantom spelling with no neighbour to name.
   const suppliedBase = path.basename(flowPath);
-  const spelling = await classifyOnDiskSpelling(flowsDir, suppliedBase);
+  // Asked last, so a path that no sibling can match gets its own reason. Only
+  // an argent client that is older than this tool-server sends a call over a
+  // link without the files of its step, and it sends no nested flow either.
+  if (linked && project.mode === "host") {
+    throw new FailureError(
+      `Cannot record an e2e-execute of e2e_test_path "${flowPath}": the argent client sent no ` +
+        `files with this call, so the recorder cannot check that the file is a sibling of the ` +
+        `recording. Update the argent CLI or MCP adapter on the client.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_add_step_flow_path",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  let spelling: OnDiskSpelling;
+  try {
+    ({ spelling } = await project.resolveFlowFile(flowDir, suppliedBase));
+  } catch (err) {
+    if (path.resolve(flowDir) === path.resolve(flowsDir)) throw err;
+    // An argent client older than this tool-server sends an e2e_test_path for this
+    // check only beside the recording.
+    throw invalid(
+      `over a link, this argent client sends an e2e_test_path only for an e2e test beside the ` +
+        `recording; update the argent CLI or MCP adapter on the client ` +
+        `(${err instanceof Error ? err.message : String(err)})`
+    );
+  }
   if (spelling.state !== "listed") {
     // Hint the real spelling only when this same ladder would accept it (a
     // stem-case slip like Sibling.yaml); an invalid real name (sibling.YAML)
-    // needs a rename, not a flow_path the extension arm will refuse.
+    // needs a rename, not an e2e_test_path the extension arm will refuse.
     const recovery =
       spelling.state === "absent"
         ? `pass the basename exactly as it appears on disk`
         : spelling.addressable
-          ? `pass flow_path with the on-disk basename "${spelling.actual}"`
-          : `rename "${spelling.actual}" to "${suppliedBase}" to record it — flow files must be lowercase .yaml`;
+          ? `pass e2e_test_path with the on-disk basename "${spelling.actual}"`
+          : `rename "${spelling.actual}" to "${suppliedBase}" to record it — e2e test files must be lowercase .yaml`;
     throw invalid(
       `the file must be named as it appears on disk — no directory entry is named ` +
         `"${suppliedBase}"` +
         (spelling.state === "case_folded"
           ? ` (this filesystem matched it case-insensitively to "${spelling.actual}")`
           : "") +
-        `, so the recorded run: step would name a flow no case-sensitive checkout can find — ` +
+        `, so the recorded run: step would name an e2e test no case-sensitive checkout can find — ` +
         recovery
     );
   }
+  // `name` reaches a legacy file only when no .argent/e2e copy shadows it.
+  if (path.resolve(candidates[0]) !== suppliedPath) {
+    const picked = await resolveSavedTest(project, candidates);
+    if (path.resolve(picked.path) !== suppliedPath) {
+      throw invalid(`project_root "${projectRoot}" resolves "${stem}" to "${picked.path}" instead`);
+    }
+  }
 
-  delete args.flow_path;
+  delete args.e2e_test_path;
   args.name = stem;
 }
 
@@ -1026,54 +1088,42 @@ async function rewriteSiblingFlowPath(
  * in flow-run.ts). The RECORDER deliberately emits only the sibling subset:
  * `<name>.yaml` beside the recording's REAL file is the one target shape it can
  * validate here and identity-check against the file the live sub-invoke
- * executed; a cross-directory composition is authored by editing the YAML. The
+ * executed, plus `../<dir>/<name>.yaml` for a test found only in the project's
+ * other e2e test directory; any other cross-directory composition is authored
+ * by editing the YAML. The
  * anchor is the realpath'd containing-file dir because the runner's is
  * (scopeFlowDir in flow-run.ts), so a recording made through a symlink
  * validates its sibling in the canonical directory. So the raw step is kept
- * only when the target can't be resolved as a sibling, the sibling is not the
- * file the live sub-invoke executed, or the recording is remote (the host can't
- * read the client's sibling files). A `flow_path` target reaches here as its
- * sibling `name` or not at all — see {@link rewriteSiblingFlowPath}.
+ * only when the target can't be resolved as a sibling, or the sibling is not
+ * the file the live sub-invoke executed. `project` resolves the recording,
+ * its sibling and the executed file where the project is: on this host, or
+ * on the client over a link. An `e2e_test_path` target reaches here as its sibling
+ * `name` or not at all — see {@link rewriteSiblingFlowPath}.
  *
  * "Resolved as a sibling" is the same two-part identity {@link
- * rewriteSiblingFlowPath} demands of a flow_path, asked of the name route: the
+ * rewriteSiblingFlowPath} demands of an e2e_test_path, asked of the name route: the
  * call's own `project_root` must resolve `name` to the very file `run:` will
  * resolve beside the recording's real file — compared canonically, since those
  * two anchors reach it by different spellings — and that directory must list
  * `<name>.yaml` byte-for-byte. Every refusal keeps the raw step rather than
  * throwing: unlike the rewrite, this runs AFTER the nested flow ran on the
  * device, so a throw would discard the record of a step that already happened.
- * The raw step still replays the flow that actually ran, carrying the caller's
- * own project_root.
+ * The raw step names the flow that ran by `name` and the caller's own
+ * `project_root`. Without a link, a replay reads that flow on this host. Over a
+ * link, a replay reads it from the files the client sends with the call, and
+ * only under the roots that the client sends files from.
  */
 async function captureRunTarget(
   session: RecordingSession,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  project: ProjectAccess
 ): Promise<{ flow?: string; warning?: string }> {
   const name = typeof args.name === "string" ? args.name : undefined;
   if (name === undefined) {
-    return { warning: "flow-execute call had no flow name; kept the raw step" };
-  }
-  if (session.persist !== "host") {
-    return {
-      warning: `kept the raw flow-execute step — run: composition is host-resolved, so a remote recording can't reference "${name}" portably`,
-    };
+    return { warning: "e2e-execute call had no e2e test name; kept the raw step" };
   }
   try {
     assertSafeFlowName(name);
-    // Resolve against THIS recording's own flows dir, not the project root the
-    // nested flow-execute ran under: `run:` composes siblings of the flow being
-    // recorded, which is not necessarily the project that nested call ran in —
-    // and against the recording's REAL file, because the runner resolves the
-    // recorded `run:` against the canonical containing-file directory
-    // (scopeFlowDir in flow-run.ts). When the recording is itself a symlink, a
-    // sibling beside the symlink's spelling would validate here yet fail at
-    // replay. A realpath failure lands in the catch below — an anchor we cannot
-    // canonicalize is one we cannot promise will replay.
-    const realFlowPath = await fs.realpath(session.filePath);
-    const flowsDir = path.dirname(realFlowPath);
-    const fragPath = path.join(flowsDir, `${name}.yaml`);
-
     // The live invoke resolved `name` under the CALL's project_root; a recorded
     // `run:` resolves it beside the recording. Those are the same file only
     // while that root's flows dir is this one — a nested call naming another
@@ -1089,11 +1139,26 @@ async function captureRunTarget(
     if (typeof projectRoot !== "string" || !path.isAbsolute(projectRoot)) {
       return {
         warning:
-          `kept the raw flow-execute step — project_root must be an absolute path ` +
+          `kept the raw e2e-execute step — project_root must be an absolute path ` +
           `(got ${typeof projectRoot === "string" ? `"${projectRoot}"` : "none"}) to confirm ` +
           `"${name}" names the recording's own sibling`,
       };
     }
+
+    // Resolve against THIS recording's own flows dir, not the project root the
+    // nested flow-execute ran under: `run:` composes siblings of the flow being
+    // recorded, which is not necessarily the project that nested call ran in —
+    // and against the recording's REAL file, because the runner resolves the
+    // recorded `run:` against the canonical containing-file directory
+    // (scopeFlowDir in flow-run.ts), on the client over a link
+    // (clientRootCanonical). When the recording is itself a symlink, a sibling
+    // beside the symlink's spelling would validate here yet fail at replay.
+    const self = await project.resolveFlowFile(
+      path.dirname(session.filePath),
+      path.basename(session.filePath)
+    );
+    const flowsDir = path.dirname(self.canonical);
+    const fragPath = path.join(flowsDir, `${name}.yaml`);
 
     // A composed `run:` name is written into the recorded YAML, the one output
     // that gets committed and replayed elsewhere. On a case-insensitive
@@ -1107,62 +1172,155 @@ async function captureRunTarget(
     // word of the tool it dispatched. Only a case-folded verdict keeps the raw
     // step: a name matching nothing at all is an ordinary missing sibling, which
     // the read below reports far better than a casing complaint could.
-    const spelling = await classifyOnDiskSpelling(flowsDir, `${name}.yaml`);
+    const sibling = await resolveRunTarget(project, flowsDir, `${name}.yaml`);
+    const spelling = sibling.spelling;
     if (spelling.state === "case_folded") {
       // Hint a name only when one can reach the file: an on-disk .YAML is
       // addressable by no name at all (this route always builds "<name>.yaml"),
       // so that fork asks for the rename it really needs.
       const recovery = spelling.addressable
         ? `re-run it as name "${path.basename(spelling.actual, ".yaml")}" to record it`
-        : `rename "${spelling.actual}" to "${name}.yaml" to record it — flow files must be ` +
+        : `rename "${spelling.actual}" to "${name}.yaml" to record it — e2e test files must be ` +
           `lowercase .yaml`;
       return {
         warning:
-          `kept the raw flow-execute step — no sibling is named "${name}.yaml" (this filesystem ` +
+          `kept the raw e2e-execute step — no sibling is named "${name}.yaml" (this filesystem ` +
           `matched it case-insensitively to "${spelling.actual}"), so a run: ${name} step would ` +
-          `name a flow no case-sensitive checkout can find — ${recovery}`,
+          `name an e2e test no case-sensitive checkout can find — ${recovery}`,
       };
     }
 
     // Parsing validates the sibling exists and is a well-formed flow; a failure
     // falls through to keeping the raw step.
-    parseFlow(await fs.readFile(fragPath, "utf8"));
+    const text = await sibling.read();
+    if (text === null) {
+      throw new Error(
+        `no ${name}.yaml beside the recording or in the project's other e2e test directory`
+      );
+    }
+    parseFlow(text);
     // The sibling validated above is the file the runner will replay — but the
     // live sub-invoke that just ran resolved `name` through getFlowPath, the
     // as-written flows dir under the caller's project_root. When the recording
     // is a symlink out of the flows dir the two anchors can name different
     // files, so require them to canonicalize to the same one, matching the
     // runner's own canonicalization (canonicalFlowPath in flow-file-refs.ts
-    // realpaths before reading). An executed path that cannot be canonicalized
-    // (e.g. ENOENT) means nothing verifiable ran from the flows dir, and the raw
-    // step is then the honest record: it replays via name + project_root.
-    let executedPath: string | undefined;
-    try {
-      executedPath = await fs.realpath(path.join(flowsDirFor(projectRoot), `${name}.yaml`));
-    } catch {
-      executedPath = undefined;
-    }
-    if (executedPath === undefined) {
+    // realpaths before reading). An executed file that is not there means
+    // nothing verifiable ran from the flows dir, and the raw step is then the
+    // honest record: it replays via name + project_root. Over a link the
+    // client sends both files with the call, as resolved on its own disk.
+    const executed = await resolveSavedTest(project, e2eFileCandidates(projectRoot, name));
+    if ((await executed.read()) === null) {
       return {
-        warning: `kept the raw flow-execute step — could not verify which file the live flow-execute ran ("${name}" has no canonical file in project_root's flows dir to compare the sibling against)`,
+        warning: `kept the raw e2e-execute step — could not verify which file the live e2e-execute ran ("${name}" has no canonical file in project_root's e2e test dir to compare the sibling against)`,
       };
     }
-    if (executedPath !== (await fs.realpath(fragPath))) {
+    if (executed.canonical !== sibling.canonical) {
       return {
         warning:
-          `kept the raw flow-execute step — project_root "${projectRoot}" resolves "${name}" to ` +
-          `"${executedPath}", not the recording's sibling "${fragPath}", so "${name}.yaml" beside ` +
-          `the recording's real file is not the file the live flow-execute ran and a run: ${name} ` +
-          `step would replay a different flow than the one that just ran`,
+          `kept the raw e2e-execute step — project_root "${projectRoot}" resolves "${name}" to ` +
+          `"${executed.canonical}", not the recording's sibling "${fragPath}", so "${name}.yaml" ` +
+          `beside the recording's real file is not the file the live e2e-execute ran and a ` +
+          `run: ${name} step would replay a different e2e test than the one that just ran`,
       };
+    }
+    // A fragment found only in the project's other e2e test directory is
+    // recorded by its path from the recording, not by the bare name the
+    // runner's fallback also finds: a runner without that fallback resolves
+    // it too, and a same-named test saved beside the recording later does not
+    // silently take its place.
+    if (path.resolve(sibling.anchorDir) !== path.resolve(flowsDir)) {
+      const dir = path.relative(flowsDir, sibling.anchorDir).split(path.sep).join("/");
+      return { flow: `${dir}/${name}.yaml` };
     }
     return { flow: `${name}.yaml` };
   } catch (err) {
     return {
-      warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw flow-execute step`,
+      warning: `could not resolve "${name}" as a sibling fragment (${err instanceof Error ? err.message : String(err)}); kept the raw e2e-execute step`,
     };
   }
 }
+
+/**
+ * The refusal of a call over a link whose step a replay over the same link
+ * refuses ({@link toolStepUploadIssue}): nothing runs, so the device gets no
+ * call that opens a client path on this host.
+ */
+function replayRefusal(
+  issue: NonNullable<ReturnType<typeof toolStepUploadIssue>>,
+  args: Record<string, unknown>
+): FailureError {
+  let hint: string;
+  if (issue.kind === "nested") {
+    hint =
+      nestedFlowTarget(args)?.kind === "name"
+        ? " Over a link, a nested e2e-execute runs only when the argent client sends the e2e test " +
+          "it names with the call. Update the argent CLI or MCP adapter on the client."
+        : " Over a link, a nested e2e-execute runs only when it names its e2e test with a test " +
+          "name in name, has an absolute project_root with no .. segment, and has no e2e_test_path.";
+  } else if (issue.fixes.length === 0) {
+    hint =
+      " A replay without a link runs this step. To keep it, add it to the YAML by hand after " +
+      "e2e-finish-recording.";
+  } else {
+    hint =
+      uploadUpdateHint(
+        issue.fixes.includes("update")
+          ? ["tool: steps with file arguments for a client that sends them with the call"]
+          : []
+      ) + toolFilePathHints(issue.fixes);
+  }
+  return new FailureError(
+    `Cannot record this call: the recording is over a link, and a replay over the same link ` +
+      `refuses the step "${issue.line}". Nothing ran and no step was recorded.${hint}`,
+    {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: UPLOAD_STAGE_BY_KIND[issue.kind],
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+/**
+ * Over a link, the argent client sends with the call the files the one
+ * recorded step makes this tool read, as a replay over the same link reads
+ * them: the file arguments of the step, the flow a nested `flow-execute` names
+ * with that flow's own files, and the recording file and the sibling the
+ * recorder checks a nested flow against. The probe passes `project_root`
+ * through unchanged.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "project_root", path: "${project_root}", kind: "probe", collect: "step" },
+];
+
+const zodSchema = z.object({
+  name: z
+    .string()
+    .describe("Name of the e2e test being recorded: the one passed to e2e-start-recording."),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root of the e2e test being recorded: the same value passed to e2e-start-recording."
+    ),
+  command: z
+    .string()
+    .describe(
+      'MCP tool to execute and record, for example "gesture-tap". Do not pass an e2e test directive or a recording tool. Call e2e-add-script directly for a requested script step.'
+    ),
+  args: z
+    .string()
+    .optional()
+    .describe(
+      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
+    ),
+  delayMs: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Milliseconds to sleep before executing this step during replay."),
+});
 
 export function createFlowAddStepTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
@@ -1172,40 +1330,46 @@ export function createFlowAddStepTool(registry: Registry): ToolDefinition<
     stepCount: number;
     recorded?: string;
     savedTo: FlowSavedTo;
+    /** Over a link: the baselines a nested run of the step wrote, which the client writes. */
+    baselineWrites?: ClientFileDirective[];
   }
 > {
   return {
-    id: "flow-add-step",
+    id: "e2e-add-step",
+    description: `Execute one MCP tool and record its step in the e2e test named by \`name\` + \`project_root\`. Use when recording and you want each action run and captured; the recording must already be open.
+A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
+Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`e2e-add-script\`, directly.`,
+    zodSchema,
+    aliases: ["flow-add-step"],
     interaction: {
       // Name the flow: recordings are concurrent, so several of these lines can
       // interleave in one log and "the recorded flow" would not say which.
-      startedMsg: ({ params }) => `Adding ${params.command} step to flow ${params.name}`,
+      startedMsg: ({ params }) => `Adding ${params.command} step to e2e test ${params.name}`,
       completedMsg: ({ params, result }) =>
         result.recorded === undefined
-          ? `Recorded no ${params.command} step in flow ${params.name}`
-          : `Added ${params.command} step to flow ${params.name}`,
+          ? `Recorded no ${params.command} step in e2e test ${params.name}`
+          : `Added ${params.command} step to e2e test ${params.name}`,
       failedMsg: ({ params, failureSignal }) =>
-        `Failed to add ${params.command} step to flow ${params.name}: ${failureSignal.error_code}`,
+        `Failed to add ${params.command} step to e2e test ${params.name}: ${failureSignal.error_code}`,
     },
-    description: `Execute one MCP tool and record its flow step, in the flow named by \`name\` + \`project_root\`. Use when recording a flow and you want each action run and captured; the recording must already be open.
-A coordinate \`gesture-tap\` records as a portable \`tap\` selector step; \`restart-app\` as a \`launch\`.
-Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status, says whether a step was appended. Fails with an error, recording nothing. Call recording tools, including \`flow-add-script\`, directly.`,
     // The recorded tool RUNS here, so this call lasts as long as whatever it
     // wraps, and the three it most often wraps declare this too. Without it the
     // MCP adapter capped the POST at 30s and retried the identical body four
     // more times — and every retry re-runs the action and appends another step,
     // because an aborted request still appends its first.
     longRunning: true,
-    zodSchema,
+    fileInputs,
     services: () => ({}),
     async execute(_services, params, ctx) {
       const session = await requireRecordingSession(params.project_root, params.name);
+      // Compared and recorded by the tool's current id; run by the id as called.
+      const command = canonicalToolId(params.command);
 
       // Before parsing `args`, so a malformed payload cannot pre-empt this
       // guidance with a bare JSON error. `Object.hasOwn`, not a bare index: an
       // inherited member would read truthy off the prototype chain.
-      const nested = Object.hasOwn(NESTED_RECORDER_TOOLS, params.command)
-        ? NESTED_RECORDER_TOOLS[params.command]
+      const nested = Object.hasOwn(NESTED_RECORDER_TOOLS, command)
+        ? NESTED_RECORDER_TOOLS[command]
         : undefined;
       if (nested) return recordNothing(session, nested);
 
@@ -1227,16 +1391,44 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // miss can be re-rendered against the keys the author wrote. Shallow is
       // enough: `rewriteSiblingFlowPath` only deletes and adds top-level keys.
       const authoredArgs = { ...args };
+      try {
+        args = canonicalToolArgs(command, args);
+      } catch {
+        // Both names of one param: the step's own tool refuses the call.
+      }
 
-      // A nested flow-execute must never carry a raw flow_path into the live
+      // Over a link the project is on the client, and the recorder records only
+      // what a replay over the same link runs. One predicate decides "over a
+      // link" for every check below. The files the step reads are those the
+      // client sent with the call; an older client sends none.
+      const linked = isLinkedRecorderCall(session, ctx);
+      const stepFiles = ctx?.fileInputs?.project_root?.members;
+      const project: ProjectAccess = stepFiles
+        ? new ClientProjectAccess(stepFiles)
+        : new HostProjectAccess();
+
+      // A nested flow-execute must never carry a raw e2e_test_path into the live
       // invoke — it has no boundary metadata there and would be rejected.
-      if (params.command === RUN_TARGET_COMMAND) await rewriteSiblingFlowPath(session, args);
+      if (command === RUN_TARGET_COMMAND) {
+        await rewriteSiblingFlowPath(session, args, project, linked);
+      }
+
+      // Refused before the tap capture and the invoke, so nothing runs.
+      if (linked) {
+        const issue = toolStepUploadIssue(
+          registry,
+          params.command,
+          args,
+          project.mode === "client"
+        );
+        if (issue) throw replayRefusal(issue, args);
+      }
 
       // Selector capture must read the tree BEFORE the tap runs: a navigating
       // tap (e.g. a list row that opens a detail screen) replaces the screen, so
       // the tapped element is gone by the time the tap returns.
       const isTap =
-        params.command === "gesture-tap" &&
+        command === "gesture-tap" &&
         params.delayMs === undefined &&
         typeof args.udid === "string" &&
         typeof args.x === "number" &&
@@ -1250,9 +1442,23 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         });
       }
 
+      // Over a link the call reads its files from those the client sent, as a
+      // replay does: a file argument, or the flow a nested flow-execute names,
+      // which finds its own files there too. The step is recorded from `args`,
+      // which keep the client paths.
+      let prepared: PreparedToolStep | undefined;
       let toolResult: unknown;
       try {
-        toolResult = await invokeSubTool(registry, ctx, params.command, args);
+        prepared = await prepareToolStepInputs(registry, project, params.command, args);
+        const nestedFromClient =
+          command === RUN_TARGET_COMMAND && prepared.fileInputs !== undefined;
+        toolResult = await invokeSubTool(registry, ctx, params.command, prepared.args, {
+          ...(prepared.fileInputs ? { fileInputs: prepared.fileInputs } : {}),
+          // A nested run whose flow came from the client gets a run stack even
+          // with no enclosing run, which marks it as nested: its refusals name
+          // the flow it runs, and this call returns the baselines it writes.
+          ...(nestedFromClient ? { flowStack: ctx?.flowStack ?? [] } : {}),
+        });
       } catch (err) {
         const hint = isToolNotFound(err, params.command)
           ? directiveCommandHint(params.command)
@@ -1263,16 +1469,46 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           registry,
           err,
           params.command,
-          args,
+          prepared?.args ?? args,
           authoredArgs
         );
-        if (reframed === undefined) throw err;
+        if (reframed === undefined) {
+          // A reason the tool wrote about a temp file names the client path.
+          if (prepared && err instanceof Error)
+            err.message = withClientPaths(prepared, err.message);
+          throw err;
+        }
         throw new FailureError(reframed, {
           error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
           failure_stage: "flow_add_step_nested_params",
           failure_area: "tool_server",
           error_kind: "validation",
         });
+      } finally {
+        await prepared?.cleanup();
+      }
+
+      // A nested run that did not pass returns its report instead of throwing.
+      // A replay over a link fails at the same step, so over a link it is not
+      // recorded. Without a link the call is recorded.
+      if (linked && command === RUN_TARGET_COMMAND) {
+        const outcome = nestedOrchestratorOutcome(RUN_TARGET_COMMAND, toolResult);
+        if (outcome) {
+          throw new FailureError(
+            outcome.status === "fail"
+              ? `Cannot record this call: the nested e2e test did not pass (${outcome.reason}). A ` +
+                  `replay over the same link fails at the same step. No step was recorded. Fix ` +
+                  `the nested e2e test, then call e2e-add-step again.`
+              : `Cannot record this call: the nested e2e test did not run (${outcome.reason}). No ` +
+                  `step was recorded.`,
+            {
+              error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+              failure_stage: "flow_add_step_nested_failed",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
+          );
+        }
       }
 
       // A blocked native-devtools precheck RESOLVES its block instead of
@@ -1282,7 +1518,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // flow-run.ts). Refusing here keeps the two verdicts identical.
       if (isNativeDevtoolsBlockResult(params.command, toolResult)) {
         throw new FailureError(
-          `${params.command} did not run (${toolResult.status}): ${toolResult.message} — nothing was recorded, so the take still matches what is on screen; clear the block and call flow-add-step again`,
+          `${params.command} did not run (${toolResult.status}): ${toolResult.message} — nothing was recorded, so the take still matches what is on screen; clear the block and call e2e-add-step again`,
           {
             error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
             failure_stage: "flow_add_step_native_devtools_block",
@@ -1302,7 +1538,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // The two are filed under different kinds because only the probe's answer
       // is about converting the step, and the finish counts them separately.
       let waitWarning: { warning: string; kind: "conversion" | "wait" } | undefined;
-      if (params.command === AWAIT_UI_ELEMENT_TOOL_ID) {
+      if (command === AWAIT_UI_ELEMENT_TOOL_ID) {
         if (isUnmetUiWaitResult(params.command, toolResult)) {
           waitWarning = {
             warning: unmetWaitWarningFor(unmetUiWaitCause(toolResult)),
@@ -1317,22 +1553,43 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // Running a fragment via flow-execute mid-recording is recorded as a
       // `run:` composition directive rather than a raw, non-portable tool call.
       const runTarget =
-        params.command === RUN_TARGET_COMMAND && params.delayMs === undefined
-          ? await captureRunTarget(session, args)
+        command === RUN_TARGET_COMMAND && params.delayMs === undefined
+          ? await captureRunTarget(session, args, project)
           : undefined;
 
       // A recorded `restart-app` is captured as the portable `launch` directive
       // (same terminate-and-relaunch semantics, plus the runner's post-launch
       // settle and readiness gate at replay). Recorded first, it makes the flow
-      // an e2e flow. Only the plain bundleId form maps; extra args (e.g. an
-      // Android `activity`) keep the raw tool step. `launch-app` is NOT
-      // rewritten — it foregrounds without terminating.
+      // standalone. Only the plain bundleId form maps, plus `launchArgs` on an
+      // iOS device, which records as the `ios: { app, args }` entry beside a
+      // `native` id so the flow still replays elsewhere; other extra args (e.g.
+      // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
+      // no args. `launch-app` is NOT rewritten — it foregrounds without
+      // terminating.
       const strippedArgs = stripDeviceKeys(args);
+      const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
+      const noLaunchArgs =
+        launchArgs === undefined || (Array.isArray(launchArgs) && launchArgs.length === 0);
+      const iosArgs =
+        !noLaunchArgs &&
+        Array.isArray(launchArgs) &&
+        launchArgs.every((a) => typeof a === "string") &&
+        platformOf(args.udid) === "ios"
+          ? (launchArgs as string[])
+          : undefined;
       const isLaunch =
-        params.command === "restart-app" &&
+        command === "restart-app" &&
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
-        Object.keys(strippedArgs).length === 1;
+        Object.keys(extraLaunchArgs).length === 0 &&
+        (noLaunchArgs || iosArgs !== undefined);
+
+      // A recorded `fold` becomes the `fold:` directive, the same posture change
+      // the tool made; args the directive does not take keep the raw tool step.
+      const foldStep =
+        command === "fold" && params.delayMs === undefined
+          ? foldStepFromArgs(strippedArgs)
+          : undefined;
 
       // A multi-tap (`clickCount: 2` = double-tap) must survive the rewrite as
       // `times`, or replay would fire a single tap for a recorded double.
@@ -1354,7 +1611,13 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         step = { kind: "tap", x: args.x as number, y: args.y as number, ...tapTimes };
         warning = captured?.warning;
       } else if (isLaunch) {
-        step = { kind: "launch", app: strippedArgs.bundleId as string };
+        const bundleId = strippedArgs.bundleId as string;
+        step = {
+          kind: "launch",
+          app: iosArgs ? { native: bundleId, ios: { app: bundleId, args: iosArgs } } : bundleId,
+        };
+      } else if (foldStep) {
+        step = foldStep;
       } else if (runTarget?.flow) {
         step = { kind: "run", flow: runTarget.flow };
       } else {
@@ -1364,7 +1627,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         // whatever device it resolves at replay.
         step = {
           kind: "tool",
-          name: params.command,
+          name: command,
           args: strippedArgs,
           delayMs: params.delayMs,
         };
@@ -1393,7 +1656,7 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
           holdsOutputReference(step)
             ? `The \`${params.command}\` call ran, but its step failed validation and was not ` +
                 `recorded. Check the call's changes before you retry. ${refused}`
-            : `The \`${params.command}\` call ran, but an existing flow step failed validation. ` +
+            : `The \`${params.command}\` call ran, but an existing e2e test step failed validation. ` +
                 `Fix the step named below. Check the call's changes before you retry. ${refused}`
         );
       }
@@ -1416,12 +1679,17 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         });
       }
 
+      const baselineWrites =
+        project instanceof ClientProjectAccess && ctx?.flowStack === undefined
+          ? project.baselineDirectives()
+          : [];
       return {
-        message: `Step added to "${params.name}" flow${warning ? ` — ${warning}` : ""}`,
+        message: `Step added to "${params.name}" e2e test${warning ? ` — ${warning}` : ""}`,
         toolResult,
         stepCount,
         recorded: summarizeStep(step, stepCount),
         savedTo,
+        ...(baselineWrites.length > 0 ? { baselineWrites } : {}),
       };
     },
   };

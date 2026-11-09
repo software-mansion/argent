@@ -9,12 +9,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { stopCapture } from "./capture";
-
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
-});
+import { stopRemoteCapture } from "./capture-remote";
 
 /**
  * Wire hint asking the client to save the mp4 durably instead of in temp; the
@@ -36,19 +31,40 @@ interface ScreenRecordingStopResult {
   wallClockMs?: number;
   /** Dead-air time removed. Present only when trimming actually removed frames. */
   trimmedMs?: number;
+  /**
+   * Foldables only, and only when it happened: how many times the capture
+   * moved to the other panel because the device was folded or unfolded. The
+   * video keeps one size, the panel it started on.
+   */
+  panelSwitches?: number;
   warning?: string;
 }
 
 const capability = {
   apple: { simulator: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 } as const;
+
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe("Target device id from `list-devices` (iOS Simulator UDID or Android serial)."),
+});
 
 export const screenRecordingStopTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   ScreenRecordingStopResult
 > = {
   id: "screen-recording-stop",
+  description: `Stop the screen recording started by \`screen-recording-start\` and retrieve the mp4 video.
+Also retrieves the video when the recording already ended on its own (time limit reached, capture process died); call it even after the cap fired.
+On a remote (\`remote:\`) simulator it downloads the mp4.
+Use when the interaction being captured is finished, or a tool-result note reminds you a recording is still running.
+Returns { video, durationMs, wallClockMs?, trimmedMs?, panelSwitches?, warning? }; video is a downloadable artifact materialized to a local path. When static-frame trimming removed dead air, durationMs is the trimmed video length and wallClockMs/trimmedMs report the real duration and how much was cut. On a foldable simulator the recording follows the panel that shows the UI: panelSwitches counts the panel changes, the video keeps the size of the first panel, and warning is set when argent could not find that panel during the recording.
+Fails if no recording (running or finished-but-unretrieved) exists for the given udid.`,
+  zodSchema,
+  searchHint: "stop end finish screen recording video capture save retrieve",
   interaction: {
     startedMsg: () => "Stopping screen recording",
     completedMsg: ({ result }) => `Saved screen recording ${result.video.filename}`,
@@ -56,13 +72,9 @@ export const screenRecordingStopTool: ToolDefinition<
       `Failed to stop screen recording: ${failureSignal.error_code}`,
   },
   capability,
-  description: `Stop the screen recording started by \`screen-recording-start\` and retrieve the video: frame capture ends and ffmpeg finalizes the mp4.
-Also retrieves the video when the recording already ended on its own (time limit reached, capture process died) — call it even after the cap fired.
-Use when the interaction being captured is finished, or a tool-result note reminds you a recording is still running.
-Returns { video, durationMs, wallClockMs?, trimmedMs?, warning? }; video is a downloadable artifact materialized to a local path. When static-frame trimming removed dead air, durationMs is the trimmed video length and wallClockMs/trimmedMs report the real duration and how much was cut.
-Fails if no recording (running or finished-but-unretrieved) exists for the given udid.`,
-  searchHint: "stop end finish screen recording video capture save retrieve",
-  zodSchema,
+  // A remote stop waits for the runner to finish the mp4, downloads it and
+  // re-encodes it locally, which routinely exceeds the 30s MCP fetch timeout.
+  longRunning: true,
   services: (params) => ({
     session: screenRecordingSessionRef(resolveDevice(params.udid)),
   }),
@@ -71,9 +83,11 @@ Fails if no recording (running or finished-but-unretrieved) exists for the given
     const device = resolveDevice(params.udid);
     assertSupported("screen-recording-stop", capability, device);
 
-    // The capture encodes straight to the final mp4, so the file is ready as
-    // soon as this returns — no post-processing pass.
-    const stopped = await stopCapture(api);
+    // A local capture encodes straight to the final mp4, so the file is ready
+    // as soon as this returns; a remote one ends the runner-side recording,
+    // downloads it, and post-processes it here.
+    const stopped =
+      device.platform === "ios-remote" ? await stopRemoteCapture(api) : await stopCapture(api);
 
     // After the stop, so a "no active recording" failure isn't masked by a
     // missing artifact store.
@@ -89,6 +103,7 @@ Fails if no recording (running or finished-but-unretrieved) exists for the given
     const result: ScreenRecordingStopResult = { video, durationMs: stopped.durationMs };
     if (stopped.wallClockMs !== undefined) result.wallClockMs = stopped.wallClockMs;
     if (stopped.trimmedMs !== undefined) result.trimmedMs = stopped.trimmedMs;
+    if (stopped.panelSwitches !== undefined) result.panelSwitches = stopped.panelSwitches;
     if (stopped.warning) result.warning = stopped.warning;
     return result;
   },

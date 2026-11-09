@@ -227,6 +227,7 @@ export const ALLOWED: ValidatorMap = {
   "tool:invoke": {
     device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
+    alias_used: bool,
     tool_invocation_id: UUID,
     platform: PLATFORM,
     device_kind: DEVICE_KIND,
@@ -235,6 +236,7 @@ export const ALLOWED: ValidatorMap = {
   "tool:complete": {
     device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
+    alias_used: bool,
     tool_invocation_id: UUID,
     platform: PLATFORM,
     device_kind: DEVICE_KIND,
@@ -244,6 +246,7 @@ export const ALLOWED: ValidatorMap = {
   "tool:fail": {
     device_provider: DEVICE_PROVIDER,
     tool: TOOL_NAME,
+    alias_used: bool,
     tool_invocation_id: UUID,
     platform: PLATFORM,
     device_kind: DEVICE_KIND,
@@ -262,6 +265,7 @@ export const ALLOWED: ValidatorMap = {
   },
   "cli:run_fail": {
     tool: TOOL_NAME,
+    alias_used: bool,
     duration_ms: DURATION_MS,
     ...FAILURE_SIGNAL,
   },

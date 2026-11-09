@@ -292,10 +292,9 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("tap_y = frame.y + frame.height / 2");
   });
 
-  // Physical iOS: the XCUITest runner is single-finger only, so the header
-  // must not recommend gesture-pinch (agents follow it verbatim, straight into
-  // a capability reject) and must say where zoom lives instead.
-  it("omits gesture-pinch from the xcuitest-runner header and names the alternative", () => {
+  // Physical iOS plays two fingers through the runner's touch synthesizer, so
+  // the header recommends gesture-pinch there like on every other source.
+  it("recommends gesture-pinch in the xcuitest-runner header", () => {
     const root: DescribeNode = {
       role: "Application",
       frame: { x: 0, y: 0, width: 1, height: 1 },
@@ -310,11 +309,10 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "xcuitest-runner" });
     expect(out).toContain("Source: xcuitest-runner");
     expect(out).toContain("Mode: nested");
-    expect(out).not.toContain("gesture-pinch");
     expect(out).toContain(
-      "Pass them straight to gesture-tap / gesture-swipe, which expect this same space. " +
-        "No two-finger gestures on physical iOS."
+      "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
+    expect(out).not.toContain("No two-finger gestures");
   });
 
   // format-tree.ts is deployed shared code: the xcuitest-runner branch above
@@ -387,6 +385,13 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "uiautomator" });
     expect(out).toMatch(/\[clickable,long-clickable,checked,disabled\]/);
     expect(out).toMatch(/\[scrollHidden=7\]/);
+
+    // `uitest` reports `longClickable`, but HarmonyOS has no long-press tool.
+    const harmony = formatDescribeTree(root, { source: "harmony-uitest" });
+    expect(harmony).toMatch(/\[clickable,checked,disabled\]/);
+    expect(harmony).not.toContain("long-clickable");
+    // Suppressed at render: most of those nodes carry no other flag.
+    expect(harmony).toMatch(/\[scrollHidden=7\]/);
   });
 
   // scrollHidden=0 is the "no clipped children" signal from the Android
@@ -531,6 +536,49 @@ describe("formatDescribeTree", () => {
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
     expect(elementLines(out)).toHaveLength(0);
+  });
+
+  // The Chromium walker sets `checked` alone, so a ticked box has to render
+  // differently from an unticked one without any `checkable` companion.
+  it("renders checked on a node that carries no checkable", () => {
+    const box = (checked: boolean): DescribeNode => ({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "input",
+          label: "Accept terms",
+          identifier: "terms",
+          frame: { x: 0, y: 0.1, width: 0.04, height: 0.04 },
+          clickable: true,
+          checked,
+        }),
+      ],
+    });
+    const ticked = elementLines(formatDescribeTree(box(true), { source: "cdp-dom" }));
+    const unticked = elementLines(formatDescribeTree(box(false), { source: "cdp-dom" }));
+    expect(ticked[0]).toContain("[clickable,checked]");
+    expect(unticked[0]).toContain("[clickable]");
+    expect(ticked[0]).not.toEqual(unticked[0]);
+  });
+
+  // A `<div role="checkbox" aria-checked="true">` carries no other content
+  // signal, so hasContent() has to count `checked` or the node is dropped.
+  it("keeps an unlabeled node whose only content signal is checked", () => {
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "div",
+          frame: { x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+          checked: true,
+        }),
+      ],
+    };
+    const lines = elementLines(formatDescribeTree(root, { source: "cdp-dom" }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("[checked]");
   });
 
   // Regression: nested mode previously keyed on "uiautomator" only, so

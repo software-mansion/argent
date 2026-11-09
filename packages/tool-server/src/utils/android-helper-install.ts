@@ -9,50 +9,68 @@ interface InstalledVersionProbe {
 }
 
 /**
- * `--show-versioncode` returns the version in the same round-trip; `pm path`
- * would need a follow-up `dumpsys package`.
+ * `--show-versioncode` returns the version in the same round-trip. Anything
+ * short of a listed versionCode — a throw, no matching line, or a line without
+ * one — falls back to `dumpsys package`: API 23 has no `cmd` (its shell prints
+ * `cmd: not found` and exits 0), and API 24-25 have no `--show-versioncode`.
  */
 async function probeInstalledVersion(
   serial: string,
   packageName: string
 ): Promise<InstalledVersionProbe> {
-  let out: string;
   try {
-    out = await adbShell(serial, `cmd package list packages --show-versioncode ${packageName}`, {
-      timeoutMs: 5_000,
-    });
-  } catch {
-    // `cmd package` is missing on older API levels.
-    try {
-      out = await adbShell(serial, `pm list packages ${packageName}`, { timeoutMs: 5_000 });
-    } catch {
-      return { installed: false, versionCode: null };
+    const out = await adbShell(
+      serial,
+      `cmd package list packages --show-versioncode ${packageName}`,
+      { timeoutMs: 5_000 }
+    );
+    for (const line of out.split("\n")) {
+      const match = line.trim().match(/^package:([^\s]+)\s+versionCode:(\d+)$/);
+      if (match?.[1] === packageName) {
+        return { installed: true, versionCode: parseInt(match[2]!, 10) };
+      }
     }
+  } catch {
+    // Fall through to `dumpsys package`.
   }
 
-  for (const line of out.split("\n")) {
-    const match = line.trim().match(/^package:([^\s]+)(?:\s+versionCode:(\d+))?$/);
-    if (!match) continue;
-    if (match[1] !== packageName) continue;
-    const versionCode = match[2] ? parseInt(match[2], 10) : null;
-    return { installed: true, versionCode: Number.isFinite(versionCode!) ? versionCode! : null };
+  let out: string;
+  try {
+    out = await adbShell(serial, `dumpsys package ${packageName}`, { timeoutMs: 5_000 });
+  } catch {
+    return { installed: false, versionCode: null };
   }
-  return { installed: false, versionCode: null };
+  const block = out.split(`Package [${packageName}]`)[1];
+  if (block === undefined) return { installed: false, versionCode: null };
+  const versionCode = block.match(/versionCode=(\d+)/);
+  return { installed: true, versionCode: versionCode ? parseInt(versionCode[1]!, 10) : null };
 }
 
 /**
  * Install the helper APK unless the device already has at least the bundled
  * versionCode.
  *
+ * An older helper is upgraded in place: `-r` keeps the package, and the APK is
+ * always signed with the same key, so nothing is uninstalled or prompted. A
+ * newer helper is left alone, so an older tool-server sharing the device keeps
+ * using the helper a newer one installed instead of the two swapping it on
+ * every start. That only holds while the bundled APK really carries the
+ * manifest's versionCode; download-native-binaries.sh refuses one that does
+ * not, since a lower one would be reinstalled on every call.
+ *
  * The probe runs on every call rather than being memoized per serial: a wipe or
  * a snapshot restore drops the package while the same serial stays connected,
  * and a memo would keep skipping the install for the life of the process. One
  * `cmd package list packages` per service instantiation is cheap enough to pay.
  *
- * `force` installs without probing, and with `-d` so the install may go
- * backwards in versionCode. The probe cannot tell a working helper from a
- * foreign build carrying the same versionCode (the manifest pins it at 1), so a
- * repair has to ignore its verdict.
+ * `force` installs without probing, and with `-d`. The probe cannot tell a
+ * working helper from a foreign build carrying the same or a higher
+ * versionCode, so a repair has to ignore its verdict. `-d` only lets the
+ * install go backwards on a debuggable build (emulator images without Play
+ * Store); release images reject a downgrade of the non-debuggable helper with
+ * INSTALL_FAILED_VERSION_DOWNGRADE. The repair runs only when the device says
+ * the instrumentation is missing, which a newer helper of the same package
+ * never does, so it does not touch a working newer helper.
  */
 export async function ensureAndroidDevtoolsInstalled(
   serial: string,
@@ -62,13 +80,10 @@ export async function ensureAndroidDevtoolsInstalled(
 
   if (!options.force) {
     const probe = await probeInstalledVersion(serial, manifest.packageName);
-    // A null versionCode means the `pm list packages` fallback answered (API
-    // levels without `cmd package`), which reports presence only. Treat a
-    // present package as current there: installing on every instantiation
-    // would replace a working helper each time, and a stale one is caught by
-    // the forced reinstall once `am instrument` refuses it. Only API 23 — the
-    // helper's minSdk — lacks `cmd package`, so the one device class that
-    // never upgrades a stale-but-present helper is also the oldest supported.
+    // A null versionCode means `dumpsys package` listed the package without one.
+    // Treat it as current: installing on every instantiation would replace a
+    // working helper each time, and a broken one is caught by the forced
+    // reinstall once `am instrument` refuses it.
     if (
       probe.installed &&
       (probe.versionCode === null || probe.versionCode >= manifest.versionCode)

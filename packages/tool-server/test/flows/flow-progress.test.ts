@@ -42,9 +42,16 @@ function asRun(r: FlowRunResult | { notice: string }): FlowRunResult {
   return r;
 }
 
-/** ToolContext carrying only the progress hook — the flows under test touch nothing else. */
+/**
+ * ToolContext carrying only the progress hook — the flows under test touch
+ * nothing else. Each event is copied when it is emitted, as the HTTP stream
+ * serializes it then: a field set on a report after it streamed (a step's
+ * `durationMs`, say) must not reach the copy.
+ */
 function progressCtx(events: StepReport[]): ToolContext {
-  return { emitProgress: (e: unknown) => events.push(e as StepReport) } as unknown as ToolContext;
+  return {
+    emitProgress: (e: unknown) => events.push(structuredClone(e) as StepReport),
+  } as unknown as ToolContext;
 }
 
 beforeEach(async () => {
@@ -75,7 +82,7 @@ describe("flow progress streaming (ctx.emitProgress)", () => {
       )
     );
 
-    // Every appended report streamed, in order, as the same objects.
+    // Every appended report streamed, in order, already complete.
     expect(events).toEqual(result.steps);
     expect(events.map((e) => `${e.kind}:${e.status}`)).toEqual([
       "echo:pass",

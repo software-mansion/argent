@@ -8,9 +8,12 @@ import {
   renderUnderStepLine,
   renderFailedSteps,
   renderBatchSummary,
+  renderFailedFlows,
+  renderSingleFailure,
+  summarizeFailure,
   type FlowReport,
   type StepReport,
-} from "../src/flow.js";
+} from "../src/e2e.js";
 
 function mkReport(steps: StepReport[], overrides: Partial<FlowReport> = {}): FlowReport {
   // Mirror the runner's summarize(): echo narration is not a counted step.
@@ -48,11 +51,11 @@ const STEPS: StepReport[] = [
 ];
 
 describe("flow report rendering", () => {
-  it("buffered renderReport keeps its historical shape", () => {
+  it("buffered renderReport prints every step, then the failure recap and the summary", () => {
     const out = renderReport(mkReport(STEPS));
     expect(out).toBe(
       [
-        'Flow "checkout" on UDID-1',
+        'E2E test "checkout" on UDID-1',
         "  › starting",
         "  ✓  1 launch",
         '  ✓  2 tap "Login" [login]',
@@ -61,9 +64,44 @@ describe("flow report rendering", () => {
         "       diff: /tmp/d.png",
         '  ·  4 await visible "Done"',
         "",
+        '  ✗ step 3 snapshot "home"',
+        "    diff 2.10% > 1%",
+        "",
         "FAIL — 2 passed, 1 failed, 0 errored, 1 skipped",
       ].join("\n")
     );
+  });
+
+  it("names the test and fragments from e2eTest, and from flow when only that is sent", () => {
+    const steps = (field: "e2eTest" | "flow"): StepReport[] => [
+      { index: 0, kind: "tap", status: "pass", [field]: "checkout", target: '"Pay"' },
+      { index: 1, kind: "tool", status: "fail", tool: "screenshot", [field]: "login" },
+    ];
+    const expected = [
+      'E2E test "checkout" on UDID-1',
+      '  ✓  1 tap "Pay"',
+      "  ✗  2 tool screenshot [login]",
+      "",
+      "  ✗ step 2 tool screenshot [login]",
+      "",
+      "FAIL — 1 passed, 1 failed, 0 errored, 0 skipped",
+    ].join("\n");
+
+    const current = mkReport(steps("e2eTest"), { e2eTest: "checkout" });
+    delete current.flow;
+    expect(renderReport(current)).toBe(expected);
+    expect(summarizeFailure(current).headline).toBe("step 2 tool screenshot [login]");
+
+    const older = mkReport(steps("flow"));
+    expect(renderReport(older)).toBe(expected);
+    expect(summarizeFailure(older).headline).toBe("step 2 tool screenshot [login]");
+
+    // A current tool-server sends both, with the same value.
+    const both = mkReport(
+      steps("e2eTest").map((s) => ({ ...s, flow: s.e2eTest })),
+      { e2eTest: "checkout" }
+    );
+    expect(renderReport(both)).toBe(expected);
   });
 
   it("live step lines match the buffered renderer's step lines", () => {
@@ -311,16 +349,151 @@ describe("flow report rendering", () => {
     expect(renderSummary(report)).toContain("1 warning");
   });
 
+  it("renderStepLine puts the step time between the label and the reason", () => {
+    const step: StepReport = {
+      index: 0,
+      kind: "tap",
+      status: "fail",
+      target: '"Pay"',
+      flow: "login",
+      reason: "no match",
+    };
+    expect(renderStepLine(step, 1, "checkout")).toBe('  ✗  1 tap "Pay" [login] — no match');
+    expect(renderStepLine({ ...step, durationMs: 5002 }, 1, "checkout")).toBe(
+      '  ✗  1 tap "Pay" [login] (5.0s) — no match'
+    );
+  });
+
+  it("formats a duration as tenths under a minute and minutes plus seconds from one", () => {
+    const line = (durationMs: unknown) =>
+      renderStepLine({ index: 0, kind: "tap", status: "pass", durationMs } as StepReport, 1, "f");
+    expect(line(0)).toBe("  ✓  1 tap (0.0s)");
+    expect(line(440)).toBe("  ✓  1 tap (0.4s)");
+    expect(line(12_345)).toBe("  ✓  1 tap (12.3s)");
+    expect(line(59_940)).toBe("  ✓  1 tap (59.9s)");
+    expect(line(59_950)).toBe("  ✓  1 tap (1m 0s)");
+    expect(line(92_400)).toBe("  ✓  1 tap (1m 32s)");
+    for (const bad of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY, "5000"]) {
+      expect(line(bad)).toBe("  ✓  1 tap");
+    }
+  });
+
+  it("renderSummary ends with the run time, after the warning and no-steps notes", () => {
+    expect(renderSummary(mkReport(STEPS, { durationMs: 9912 }))).toBe(
+      "FAIL — 2 passed, 1 failed, 0 errored, 1 skipped (9.9s)"
+    );
+    const warned = mkReport([{ index: 0, kind: "idle", status: "pass", warning: "moving" }], {
+      durationMs: 1200,
+    });
+    expect(renderSummary(warned)).toBe(
+      "PASS — 1 passed, 0 failed, 0 errored, 0 skipped, 1 warning (1.2s)"
+    );
+    expect(renderSummary(mkReport([], { durationMs: 50 }))).toBe(
+      "PASS — 0 passed, 0 failed, 0 errored, 0 skipped (no test steps) (0.1s)"
+    );
+  });
+
   it("renderBatchSummary mirrors the step summary's verdict shape", () => {
     expect(renderBatchSummary({ total: 3, passed: 2, failed: 1, skipped: 0 })).toBe(
-      "FAIL — 3 flows: 2 passed, 1 failed, 0 skipped"
+      "FAIL — 3 e2e tests: 2 passed, 1 failed, 0 skipped"
     );
     expect(renderBatchSummary({ total: 1, passed: 1, failed: 0, skipped: 0 })).toBe(
-      "PASS — 1 flow: 1 passed, 0 failed, 0 skipped"
+      "PASS — 1 e2e test: 1 passed, 0 failed, 0 skipped"
     );
-    // Skips only ever follow a failure, so they never turn the verdict alone.
     expect(renderBatchSummary({ total: 2, passed: 1, failed: 0, skipped: 1 })).toBe(
-      "PASS — 2 flows: 1 passed, 0 failed, 1 skipped"
+      "PASS — 2 e2e tests: 1 passed, 0 failed, 1 skipped"
     );
+    expect(renderBatchSummary({ total: 2, passed: 0, failed: 0, skipped: 2 })).toBe(
+      "NONE RAN — 2 e2e tests: 0 passed, 0 failed, 2 skipped"
+    );
+    expect(renderBatchSummary({ total: 2, passed: 1, failed: 1, skipped: 0 }, 92_400)).toBe(
+      "FAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped (1m 32s)"
+    );
+  });
+});
+
+describe("failure recap", () => {
+  it("numbers the failing step as the per-flow block does, skipping echo narration", () => {
+    expect(summarizeFailure(mkReport(STEPS))).toEqual({
+      headline: 'step 3 snapshot "home"',
+      detail: "diff 2.10% > 1%",
+    });
+  });
+
+  it("names the first failing step, errors included, with its fragment", () => {
+    const report = mkReport([
+      { index: 0, kind: "echo", status: "pass", message: "go" },
+      { index: 1, kind: "tap", status: "pass" },
+      { index: 2, kind: "tool", status: "error", tool: "screenshot", flow: "login" },
+      { index: 3, kind: "assert", status: "fail", reason: "later" },
+    ]);
+    expect(summarizeFailure(report)).toEqual({
+      headline: "step 2 tool screenshot [login]",
+      detail: undefined,
+    });
+  });
+
+  it("renders a non-string wire reason the way the step line does, instead of throwing", () => {
+    const step = { index: 0, kind: "tap", status: "fail", reason: 42 } as unknown as StepReport;
+    const report = mkReport([step]);
+    expect(renderStepLine(step, 1, "checkout")).toBe("  ✗  1 tap — 42");
+    expect(renderSingleFailure(report)).toEqual(["", "  ✗ step 1 tap", "    42"]);
+  });
+
+  it("says so when a failed report has no failing step", () => {
+    const report = mkReport([{ index: 0, kind: "tap", status: "skip" }], { ok: false });
+    expect(summarizeFailure(report)).toEqual({ headline: "failed with no failing step" });
+  });
+
+  it("prints nothing when no flow failed", () => {
+    expect(renderFailedFlows([])).toEqual([]);
+  });
+
+  it("lists each failed flow in the order given, with its detail and re-run command", () => {
+    expect(
+      renderFailedFlows([
+        {
+          path: "a-login.yaml",
+          headline: 'step 2 assert visible "Home"',
+          detail: 'no element matched selector text="Home"',
+          rerun: "argent e2e run flows/a-login.yaml --platform ios",
+        },
+        {
+          path: "sub/c-search.yaml",
+          headline: "not run (invalid e2e test)",
+          detail: "flow file is not valid YAML\n\n  at line 4",
+          rerun: "argent e2e run flows/sub/c-search.yaml --platform ios",
+        },
+        {
+          path: "b-checkout.yaml",
+          headline: "failed with no failing step",
+          rerun: "argent e2e run flows/b-checkout.yaml --platform ios",
+        },
+      ])
+    ).toEqual([
+      "",
+      "Failed e2e tests (3)",
+      "",
+      '  ✗ a-login.yaml › step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      "    re-run: argent e2e run flows/a-login.yaml --platform ios",
+      "",
+      "  ✗ sub/c-search.yaml › not run (invalid e2e test)",
+      "    flow file is not valid YAML",
+      "      at line 4",
+      "    re-run: argent e2e run flows/sub/c-search.yaml --platform ios",
+      "",
+      "  ✗ b-checkout.yaml › failed with no failing step",
+      "    re-run: argent e2e run flows/b-checkout.yaml --platform ios",
+    ]);
+  });
+
+  it("recaps a single failed run without a flow name or a re-run command", () => {
+    expect(renderSingleFailure(mkReport(STEPS))).toEqual([
+      "",
+      '  ✗ step 3 snapshot "home"',
+      "    diff 2.10% > 1%",
+    ]);
+    expect(renderSingleFailure(mkReport([{ index: 0, kind: "tap", status: "pass" }]))).toEqual([]);
   });
 });

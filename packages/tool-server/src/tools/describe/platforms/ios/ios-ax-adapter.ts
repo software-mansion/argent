@@ -20,8 +20,9 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
   const height = y2 - y1;
   if (width <= 0 || height <= 0) return null;
 
+  const traits = el.traits ?? [];
   return {
-    role: mapNativeTraitsToDescribeRole(el.traits ?? []),
+    role: mapNativeTraitsToDescribeRole(traits),
     frame: {
       x: roundNormalized(x1),
       y: roundNormalized(y1),
@@ -32,6 +33,8 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
     label: el.label,
     value: el.value,
     identifier: el.identifier,
+    // The text input that has the keyboard.
+    ...(traits.includes("isEditing") ? { focused: true } : {}),
   };
 }
 

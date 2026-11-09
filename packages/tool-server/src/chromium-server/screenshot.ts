@@ -89,11 +89,17 @@ export async function captureScreenshot(
   const rotation = opts.rotation && opts.rotation !== "Portrait" ? opts.rotation : null;
   const scale = opts.scale != null && opts.scale > 0 && opts.scale < 1 ? opts.scale : null;
 
+  const dropped: ("rotation" | "scale")[] = [];
+  let dropReason: MediaReady["dropReason"];
+
   if (rotation || scale) {
     const sharp = tryLoadSharp();
     if (!sharp) {
       const features = [rotation && "rotation", scale && "scale"].filter(Boolean).join(" + ");
       warnSharpMissingOnce(features);
+      if (rotation) dropped.push("rotation");
+      if (scale) dropped.push("scale");
+      dropReason = "sharp-missing";
     } else {
       let pipeline = sharp(bytes);
       if (rotation) pipeline = pipeline.rotate(ROTATION_DEGREES[rotation]);
@@ -101,12 +107,24 @@ export async function captureScreenshot(
         // Cheaper than asking sharp for `.metadata()`.
         const dims = readPngSize(bytes);
         if (dims) {
-          const targetW = Math.max(1, Math.round(dims.width * scale));
-          const targetH = Math.max(1, Math.round(dims.height * scale));
+          // sharp runs the rotation ahead of the resize regardless of call
+          // order, so a quarter turn means the resize sees swapped dimensions.
+          // Sizing the target from the unrotated header with `fit: "fill"`
+          // would squash the rotated image into the wrong aspect ratio.
+          const quarterTurn = rotation === "LandscapeLeft" || rotation === "LandscapeRight";
+          const rotatedW = quarterTurn ? dims.height : dims.width;
+          const rotatedH = quarterTurn ? dims.width : dims.height;
+          const targetW = Math.max(1, Math.round(rotatedW * scale));
+          const targetH = Math.max(1, Math.round(rotatedH * scale));
           pipeline = pipeline.resize(targetW, targetH, {
             kernel: DOWNSCALER_TO_KERNEL[opts.downscaler ?? "lanczos3"],
             fit: "fill",
           });
+        } else {
+          // Header unreadable: the rotation still runs, but the resize cannot
+          // be sized, so the scale the caller asked for is lost.
+          dropped.push("scale");
+          dropReason = "png-header-unreadable";
         }
       }
       bytes = Buffer.from(await pipeline.png({ compressionLevel: 6 }).toBuffer());
@@ -117,10 +135,18 @@ export async function captureScreenshot(
   const safeDeviceId = ctx.deviceId.replace(/[^A-Za-z0-9_-]/g, "_");
   const filePath = path.join(mediaDir(), `argent-screenshot-${safeDeviceId}-${stem}.png`);
   fs.writeFileSync(filePath, bytes);
-  return { url: `file://${filePath}`, path: filePath };
+  return {
+    url: `file://${filePath}`,
+    path: filePath,
+    ...(dropped.length > 0 ? { droppedFeatures: dropped, dropReason } : {}),
+  };
 }
 
-/** Width / height from the PNG IHDR chunk; null if `buf` is not a valid PNG. */
+/**
+ * Read width / height from a PNG IHDR chunk without spinning up a decoder.
+ * Returns null on a malformed or non-PNG buffer. The caller skips the resize in
+ * that case and reports `scale` as dropped — there is no metadata fallback.
+ */
 function readPngSize(buf: Buffer): { width: number; height: number } | null {
   const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   if (buf.length < 24) return null;

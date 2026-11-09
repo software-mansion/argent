@@ -32,7 +32,7 @@ import {
 
 // Above the helper's 5000 default: flows keep far more of the dump than the
 // trimmed describe, so a dense screen would truncate mid-walk.
-const FLOW_MAX_NODES = 12_000;
+export const FLOW_MAX_NODES = 12_000;
 
 interface PixelRect {
   x: number;

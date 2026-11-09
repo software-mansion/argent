@@ -1,4 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+
+// HarmonyOS is behind the `harmonyos` flag; these cases drive it with the flag on.
+vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-flag")>()),
+  isHarmonyEnabled: () => true,
+}));
 
 // Keep the real module (blueprints import from it too) but neutralise the
 // fire-and-forget WebSocket send so no real socket is opened during the test.
@@ -12,6 +18,12 @@ vi.mock("../src/utils/simulator-client", async (importOriginal) => ({
 vi.mock("../src/utils/android-input", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/android-input")>()),
   injectAndroidKeycode: vi.fn(),
+}));
+
+// Only the hdc transport is faked; `harmonyDisplay` parses the served dump for real.
+vi.mock("../src/utils/harmony-hdc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-hdc")>()),
+  runHdcShell: vi.fn(),
 }));
 
 // The Android branch preflights adb via `ensureDep("adb")` before injecting.
@@ -29,13 +41,47 @@ import { UnsupportedOperationError } from "../src/utils/capability";
 import { RunnerCommandError } from "../src/utils/ios-device/runner-client";
 import { ANDROID_BUTTON_KEYCODES, injectAndroidKeycode } from "../src/utils/android-input";
 import { DependencyMissingError, ensureDep } from "../src/utils/check-deps";
+import { runHdcShell as realRunHdcShell } from "../src/utils/harmony-hdc";
+import { HARMONY_INTERACTION_TIMEOUT_MS } from "../src/utils/harmony-uitest";
 import { sendCommand } from "../src/utils/simulator-client";
+
+const runHdcShell = vi.mocked(realRunHdcShell);
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidUdid = "emulator-5554";
+const harmonyConnectKey = "025DEK236V035771";
+const harmonyUdid = `harmony-${harmonyConnectKey}`;
 // Physical-iOS UDID shape (8 hex, dash, 16 hex) routes to the runner branch.
 const deviceUdid = "00008110-000978540290401E";
 const services = { simulatorServer: {} } as never;
+
+/** Spelled out, not derived, so a swapped pair fails. */
+const HARMONY_KEY_NAMES: Record<string, string> = {
+  home: "Home",
+  back: "Back",
+  power: "Power",
+};
+
+/** One `screen[N]:` line carrying both power state and size, as a guest prints it. */
+function screenDump(power = "POWER_STATUS_ON", size = "1216x2688"): string {
+  return (
+    `-- ScreenInfo\nscreen[0]: id=0, powerStatus=${power}, backlight=1, ` +
+    `screenType=EXTERNAL_TYPE, render resolution=${size}, physical resolution=${size}, ` +
+    `isVirtual=false`
+  );
+}
+
+const uiInputs = () =>
+  runHdcShell.mock.calls.filter(([, command]) => command.startsWith("uitest uiInput"));
+
+beforeEach(() => {
+  runHdcShell.mockReset();
+  runHdcShell.mockImplementation(async (_connectKey, command) =>
+    command.startsWith("hidumper")
+      ? { stdout: screenDump(), exitCode: 0 }
+      : { stdout: "", exitCode: 0 }
+  );
+});
 
 describe("button tool — per-platform validation", () => {
   it("rejects `back` on iOS (no hardware back button) instead of a silent no-op", async () => {
@@ -134,6 +180,143 @@ describe("button tool — per-platform validation", () => {
       expect(injectAndroidKeycode).not.toHaveBeenCalled();
     }
   });
+
+  it("rejects `volumeUp` on HarmonyOS — `uitest` names only Home/Back/Power", async () => {
+    // `keyEvent` answers `No Error` to any keyID, so an unnamed button must be refused here.
+    await expect(
+      buttonTool.execute(services, { udid: harmonyUdid, button: "volumeUp" })
+    ).rejects.toBeInstanceOf(UnsupportedOperationError);
+    await expect(
+      buttonTool.execute(services, { udid: harmonyUdid, button: "volumeUp" })
+    ).rejects.toThrow(/Supported: home, back, power/);
+    expect(uiInputs()).toHaveLength(0);
+  });
+
+  it("injects the matching key name for EVERY HarmonyOS button, over hdc only", async () => {
+    for (const button of BUTTONS_BY_PLATFORM.harmony) {
+      runHdcShell.mockClear();
+      vi.mocked(sendCommand).mockClear();
+      vi.mocked(injectAndroidKeycode).mockClear();
+      vi.mocked(ensureDep).mockClear();
+      await expect(buttonTool.execute(services, { udid: harmonyUdid, button })).resolves.toEqual({
+        pressed: button,
+      });
+      const expectedKey = HARMONY_KEY_NAMES[button];
+      expect(expectedKey, `no uitest key name for "${button}"`).toBeTypeOf("string");
+      // `keyEvent` exits 0 for a wrong name, so the whole line is asserted.
+      const [connectKey, command] = uiInputs().at(-1) ?? [];
+      expect(connectKey).toBe(harmonyConnectKey);
+      expect(command).toBe(`uitest uiInput keyEvent ${expectedKey}`);
+      expect(ensureDep).toHaveBeenCalledWith("hdc");
+      expect(sendCommand).not.toHaveBeenCalled();
+      expect(injectAndroidKeycode).not.toHaveBeenCalled();
+    }
+  });
+
+  it("preflights hdc before injecting so a missing connector surfaces as 424, not 500", async () => {
+    runHdcShell.mockClear();
+    vi.mocked(ensureDep).mockRejectedValueOnce(
+      new DependencyMissingError(["hdc"], "install the HarmonyOS command line tools")
+    );
+    await expect(
+      buttonTool.execute(services, { udid: harmonyUdid, button: "home" })
+    ).rejects.toBeInstanceOf(DependencyMissingError);
+    expect(uiInputs()).toHaveLength(0);
+  });
+
+  it("surfaces an hdc transport failure as a throw, not a silent `{ pressed }`", async () => {
+    runHdcShell.mockImplementation(async (_connectKey, command) => {
+      if (command.startsWith("hidumper")) return { stdout: screenDump(), exitCode: 0 };
+      throw new Error("[Fail]Not match target found");
+    });
+    await expect(
+      buttonTool.execute(services, { udid: harmonyUdid, button: "home" })
+    ).rejects.toThrow(/Not match target found/);
+  });
+});
+
+describe("button tool — a suspended HarmonyOS panel", () => {
+  // `keyEvent` answers `No Error` against a suspended panel.
+  beforeEach(() => {
+    vi.mocked(ensureDep).mockClear();
+  });
+
+  for (const button of ["home", "back"] as const) {
+    it(`refuses \`${button}\` while the display is suspended, injecting nothing`, async () => {
+      runHdcShell.mockImplementation(async (_connectKey, command) =>
+        command.startsWith("hidumper")
+          ? { stdout: screenDump("POWER_STATUS_SUSPEND"), exitCode: 0 }
+          : { stdout: "", exitCode: 0 }
+      );
+      const err = await buttonTool.execute(services, { udid: harmonyUdid, button }).then(
+        () => {
+          throw new Error("expected the press to reject, but it resolved");
+        },
+        (e: unknown) => e
+      );
+      expect(getFailureSignal(err)?.failure_stage).toBe("harmony_screen_off");
+      expect((err as Error).message).toMatch(/display is off/);
+      expect((err as Error).message).toContain(`press ${button}`);
+      expect(uiInputs()).toHaveLength(0);
+    });
+  }
+
+  it("still presses `power` while the display is suspended — it is the way back", async () => {
+    // The screen-off refusal tells the caller to press power.
+    runHdcShell.mockImplementation(async () => ({ stdout: "", exitCode: 0 }));
+    await expect(
+      buttonTool.execute(services, { udid: harmonyUdid, button: "power" })
+    ).resolves.toEqual({ pressed: "power" });
+    const [connectKey, command] = uiInputs().at(-1) ?? [];
+    expect([connectKey, command]).toEqual([harmonyConnectKey, "uitest uiInput keyEvent Power"]);
+    expect(runHdcShell.mock.calls.filter(([, c]) => c.startsWith("hidumper"))).toHaveLength(0);
+  });
+
+  it("presses `home` as usual once the display is awake", async () => {
+    await expect(
+      buttonTool.execute(services, { udid: harmonyUdid, button: "home" })
+    ).resolves.toEqual({ pressed: "home" });
+    const [, command] = uiInputs().at(-1) ?? [];
+    expect(command).toBe("uitest uiInput keyEvent Home");
+  });
+
+  it("refuses `home` when the render service reports a 0x0 display", async () => {
+    runHdcShell.mockImplementation(async (_connectKey, command) =>
+      command.startsWith("hidumper")
+        ? { stdout: screenDump("POWER_STATUS_ON", "0x0"), exitCode: 0 }
+        : { stdout: "", exitCode: 0 }
+    );
+
+    const err = await buttonTool.execute(services, { udid: harmonyUdid, button: "home" }).then(
+      () => {
+        throw new Error("expected the press to reject, but it resolved");
+      },
+      (e: unknown) => e
+    );
+
+    expect(getFailureSignal(err)?.failure_stage).toBe("harmony_display_zero");
+    expect((err as Error).message).toContain("press home");
+    expect((err as Error).message).toContain("0x0 display");
+    expect(uiInputs()).toHaveLength(0);
+  });
+
+  it("gives the press what is left of ONE budget shared with both display reads", async () => {
+    // Both reads and the press share one deadline, under the MCP client's 30s replay cap.
+    const READ_MS = 60;
+    runHdcShell.mockImplementation(async (_connectKey, command, timeoutMs) => {
+      if (!command.startsWith("hidumper")) return { stdout: "", exitCode: 0 };
+      await new Promise((r) => setTimeout(r, READ_MS));
+      void timeoutMs;
+      return { stdout: screenDump(), exitCode: 0 };
+    });
+
+    await buttonTool.execute(services, { udid: harmonyUdid, button: "home" });
+
+    // Half a read of tolerance: `setTimeout` can fire early.
+    const budget = uiInputs()[0]?.[2];
+    expect(budget).toBeLessThan(HARMONY_INTERACTION_TIMEOUT_MS - READ_MS);
+    expect(budget).toBeGreaterThan(0);
+  });
 });
 
 describe("button tool: physical iOS", () => {
@@ -227,6 +410,10 @@ describe("button tool — service declaration", () => {
     // Android presses go over adb; declaring sim-server would needlessly resolve +
     // spawn it (up to a 30s ready-wait) and could throw before the adb path runs.
     expect(buttonTool.services({ udid: androidUdid, button: "back" })).toEqual({});
+  });
+
+  it("does not declare the simulator-server service for a HarmonyOS target", () => {
+    expect(buttonTool.services({ udid: harmonyUdid, button: "home" })).toEqual({});
   });
 
   it("still declares the simulator-server service eagerly for an iOS target", () => {

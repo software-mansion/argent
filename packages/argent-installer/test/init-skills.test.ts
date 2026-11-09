@@ -1,180 +1,224 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
-/**
- * Issue #614: skills are installed from a GitHub ref pinned to the running
- * version. Publishing and tagging are decoupled, so a published version whose
- * tag was never pushed can never resolve — the clone fails, nothing is
- * installed, and the run still reported "Skills installed" and exited 0.
- *
- * The package already ships every skill, so the bytes were on disk the whole
- * time; only the decision to use them was missing.
- */
+// `runSkillsStep` spawns `npx skills add ...`. Mock `spawn` with a child that
+// exits 0 so the test can inspect the spawn options without running npx.
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
-const runNpxSkills = vi.hoisted(() => vi.fn(async (_args: string[]) => {}));
-vi.mock("../src/npx-skills.js", () => ({ runNpxSkills }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    default: { ...actual, spawn: spawnMock },
+    spawn: spawnMock,
+  };
+});
 
-const isOnline = vi.hoisted(() => vi.fn(async () => true));
-const isSkillsCliAvailable = vi.hoisted(() => vi.fn(() => true));
-const listBundledSkills = vi.hoisted(() => vi.fn(() => ["argent-device-interact"]));
+vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
 
 vi.mock("../src/utils.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/utils.js")>();
-  // buildArgentSkillsSource and SKILLS_DIR stay REAL so the argument
-  // assertions below mean something.
-  return { ...original, isOnline, isSkillsCliAvailable, listBundledSkills };
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return { ...actual, isOnline: vi.fn(async () => true) };
 });
-
-const track = vi.hoisted(() => vi.fn());
-vi.mock("@argent/telemetry", () => ({ track }));
-
-const log = vi.hoisted(() => ({
-  step: vi.fn(),
-  message: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-  success: vi.fn(),
-}));
-const note = vi.hoisted(() => vi.fn());
-vi.mock("@clack/prompts", () => ({
-  log,
-  note,
-  spinner: () => ({ start: vi.fn(), stop: vi.fn(), message: vi.fn() }),
-  select: vi.fn(async () => "default"),
-  confirm: vi.fn(async () => true),
-  isCancel: () => false,
-}));
 
 import { runSkillsStep } from "../src/init-skills.js";
-import { SKILLS_DIR, buildArgentSkillsSource } from "../src/utils.js";
 
-const PINNED = buildArgentSkillsSource("0.18.1");
-
-function step(overrides: Record<string, unknown> = {}) {
-  return runSkillsStep({
-    scope: "local",
-    version: "0.18.1",
-    fromTar: null,
-    nonInteractive: true,
-    ...overrides,
-  } as Parameters<typeof runSkillsStep>[0]);
-}
-
-/** The source argument of the Nth `npx skills add` attempt. */
-function sourceOfAttempt(n: number): string {
-  const args = runNpxSkills.mock.calls[n]![0];
-  return args[args.indexOf("add") + 1]!;
-}
-
-const REPORTED_FAILURE = `npm WARN using --force Recommended protections disabled.
-■  Failed to clone repository
-│  fatal: Remote branch v0.18.1 not found in upstream origin`;
+const originalPackage = process.env.npm_config_package;
+const originalHome = process.env.HOME;
+const originalXdg = process.env.XDG_STATE_HOME;
+let tmpDir: string;
+let exitCode: number;
 
 beforeEach(() => {
-  vi.clearAllMocks();
-  runNpxSkills.mockResolvedValue(undefined);
-  isOnline.mockResolvedValue(true);
-  isSkillsCliAvailable.mockReturnValue(true);
-  listBundledSkills.mockReturnValue(["argent-device-interact"]);
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-init-skills-test-"));
+  // Never touch the real ~/.agents or ~/.claude skill dirs.
+  process.env.HOME = path.join(tmpDir, "home");
+  process.env.XDG_STATE_HOME = path.join(tmpDir, "home", "xdg");
+  exitCode = 0;
+  spawnMock.mockReset();
+  spawnMock.mockImplementation(() => {
+    const child = Object.assign(new EventEmitter(), {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+    });
+    setImmediate(() => child.emit("close", exitCode));
+    return child;
+  });
 });
 
-describe("skills install falls back to the copy that ships with the package", () => {
-  it("uses the pinned source when it works, and does not touch the bundled copy", async () => {
-    const result = await step();
+afterEach(() => {
+  vi.restoreAllMocks();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+  if (originalPackage === undefined) delete process.env.npm_config_package;
+  else process.env.npm_config_package = originalPackage;
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalXdg === undefined) delete process.env.XDG_STATE_HOME;
+  else process.env.XDG_STATE_HOME = originalXdg;
+});
 
-    expect(runNpxSkills).toHaveBeenCalledTimes(1);
-    expect(sourceOfAttempt(0)).toBe(PINNED);
-    expect(result).toMatchObject({ outcome: "success", source: "pinned", usedFallback: false });
+function mkdirs(...dirs: string[]): void {
+  for (const dir of dirs) fs.mkdirSync(dir, { recursive: true });
+}
+
+function writeLock(lockPath: string, names: string[]): void {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const skills = Object.fromEntries(names.map((name) => [name, { source: "x" }]));
+  fs.writeFileSync(lockPath, JSON.stringify({ version: 1, skills }));
+}
+
+function lockNames(lockPath: string): string[] {
+  return Object.keys(JSON.parse(fs.readFileSync(lockPath, "utf8")).skills).sort();
+}
+
+describe("runSkillsStep", () => {
+  it("runs `npx skills add` without an inherited npm_config_package (#1335)", async () => {
+    // Set by `npx --package @swmansion/argent -- argent init`.
+    process.env.npm_config_package = "@swmansion/argent@latest";
+
+    const method = await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+    });
+
+    expect(method).toBe("default");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [, args, opts] = spawnMock.mock.calls[0]! as [
+      string,
+      string[],
+      { env?: NodeJS.ProcessEnv },
+    ];
+    expect(args).toContain("skills");
+    expect(args).toContain("add");
+    expect(opts.env).toBeDefined();
+    expect(opts.env).not.toHaveProperty("npm_config_package");
   });
 
-  it("installs the bundled copy when the pinned ref does not exist (issue #614)", async () => {
-    runNpxSkills.mockRejectedValueOnce(new Error(REPORTED_FAILURE));
+  it("removes legacy skills from the global scope after a successful install", async () => {
+    const home = process.env.HOME!;
+    const store = path.join(home, ".agents", "skills");
+    const editor = path.join(home, ".claude", "skills");
+    mkdirs(path.join(store, "argent-create-flow"), path.join(store, "argent-create-e2e"), editor);
+    fs.symlinkSync(path.join(store, "argent-qa-flows"), path.join(editor, "argent-qa-flows"));
+    const lockPath = path.join(home, "xdg", "skills", ".skill-lock.json");
+    writeLock(lockPath, ["argent-create-flow", "argent-create-e2e"]);
 
-    const result = await step();
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+    });
 
-    expect(runNpxSkills).toHaveBeenCalledTimes(2);
-    expect(sourceOfAttempt(0)).toBe(PINNED);
-    expect(sourceOfAttempt(1)).toBe(SKILLS_DIR);
-    expect(result).toMatchObject({ outcome: "success", source: "bundled", usedFallback: true });
-    // The user is told, because their lock entry is now machine-local.
-    expect(log.warn).toHaveBeenCalled();
-    expect(track).toHaveBeenCalledWith(
-      "installation:skill_install",
-      expect.objectContaining({ used_fallback: true, fallback_reason: "ref_missing" })
+    expect(fs.existsSync(path.join(store, "argent-create-flow"))).toBe(false);
+    expect(fs.lstatSync(path.join(editor, "argent-qa-flows"), { throwIfNoEntry: false })).toBe(
+      undefined
     );
+    expect(fs.existsSync(path.join(store, "argent-create-e2e"))).toBe(true);
+    expect(lockNames(lockPath)).toEqual(["argent-create-e2e"]);
   });
 
-  it("falls back on any failure, not only one whose text it recognises", async () => {
-    // The decision is structural: the interactive path captures no output to
-    // match on, and git's wording is translated, so a text rule would silently
-    // stop working outside an English toolchain.
-    runNpxSkills.mockRejectedValueOnce(new Error("npx skills exited with code 1"));
+  it("runs `skills remove` on tracked legacy names so every agent dir drops them", async () => {
+    const home = process.env.HOME!;
+    mkdirs(path.join(home, ".agents", "skills", "argent-create-flow"));
+    writeLock(path.join(home, "xdg", "skills", ".skill-lock.json"), [
+      "argent-create-flow",
+      "argent-create-e2e",
+    ]);
 
-    const result = await step();
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+    });
 
-    expect(result).toMatchObject({ outcome: "success", usedFallback: true });
-    expect(track).toHaveBeenCalledWith(
-      "installation:skill_install",
-      expect.objectContaining({ fallback_reason: "unclassified" })
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    const [, args] = spawnMock.mock.calls[1]! as [string, string[]];
+    expect(args).toEqual(expect.arrayContaining(["skills", "remove", "-y", "-g"]));
+    expect(args).toContain("argent-create-flow");
+    expect(args).not.toContain("argent-create-e2e");
+  });
+
+  it("keeps legacy skills installed from another version's tag", async () => {
+    // A project pinned to an older local install gets that version's skills,
+    // which may still be the legacy names.
+    const project = path.join(tmpDir, "project");
+    vi.spyOn(process, "cwd").mockReturnValue(project);
+    const legacy = path.join(project, ".agents", "skills", "argent-create-flow");
+    mkdirs(legacy);
+    const lockPath = path.join(project, "skills-lock.json");
+    writeLock(lockPath, ["argent-create-flow"]);
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "0.0.1-older",
+      scope: "local",
+    });
+
+    const [, args] = spawnMock.mock.calls[0]! as [string, string[]];
+    expect(args.some((arg) => arg.endsWith("#v0.0.1-older"))).toBe(true);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(legacy)).toBe(true);
+    expect(lockNames(lockPath)).toEqual(["argent-create-flow"]);
+  });
+
+  it("removes legacy skills from the project only, leaving the global scope alone", async () => {
+    const project = path.join(tmpDir, "project");
+    vi.spyOn(process, "cwd").mockReturnValue(project);
+    mkdirs(path.join(project, ".claude", "skills", "argent-create-flow"));
+    writeLock(path.join(project, "skills-lock.json"), ["argent-create-flow", "argent-create-e2e"]);
+    const globalLegacy = path.join(process.env.HOME!, ".claude", "skills", "argent-create-flow");
+    mkdirs(globalLegacy);
+
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "local",
+    });
+
+    expect(fs.existsSync(path.join(project, ".claude", "skills", "argent-create-flow"))).toBe(
+      false
     );
+    expect(lockNames(path.join(project, "skills-lock.json"))).toEqual(["argent-create-e2e"]);
+    expect(fs.existsSync(globalLegacy)).toBe(true);
   });
 
-  it("does not retry a source that is already the bundled copy", async () => {
-    // Offline, `--from <tgz>` and an unknown version all resolve to the bundled
-    // copy up front — retrying it against itself would just fail twice.
-    runNpxSkills.mockRejectedValue(new Error("boom"));
+  it("prunes the custom root a custom-scope install wrote to", async () => {
+    const custom = path.join(tmpDir, "custom");
+    const legacy = path.join(custom, ".agents", "skills", "argent-qa-flows");
+    mkdirs(legacy);
 
-    const result = await step({ fromTar: "/tmp/argent.tgz" });
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "custom",
+      customRoot: custom,
+    });
 
-    expect(runNpxSkills).toHaveBeenCalledTimes(1);
-    expect(sourceOfAttempt(0)).toBe(SKILLS_DIR);
-    expect(result).toMatchObject({ outcome: "failure", usedFallback: false });
+    expect(fs.existsSync(legacy)).toBe(false);
   });
 
-  it("does not retry when the bundled copy is unreadable", async () => {
-    // Retrying against an empty directory installs nothing and buries the real
-    // problem behind a second, identical failure.
-    listBundledSkills.mockReturnValue([]);
-    runNpxSkills.mockRejectedValue(new Error(REPORTED_FAILURE));
+  it("keeps legacy skills when `npx skills add` fails", async () => {
+    exitCode = 1;
+    const legacy = path.join(process.env.HOME!, ".agents", "skills", "argent-create-flow");
+    mkdirs(legacy);
 
-    const result = await step();
+    await runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version: "unknown",
+      scope: "global",
+    });
 
-    expect(runNpxSkills).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ outcome: "failure" });
-  });
-
-  it("reports failure — and a command that could work — when both attempts fail", async () => {
-    runNpxSkills.mockRejectedValue(new Error(REPORTED_FAILURE));
-
-    const result = await step();
-
-    expect(runNpxSkills).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({ outcome: "failure", usedFallback: false });
-    // Printing the failing command back as the remedy is what made the original
-    // report so confusing.
-    const hint = log.info.mock.calls
-      .map((c) => String(c[0]))
-      .find((line) => line.includes("manually"))!;
-    expect(hint).toContain(SKILLS_DIR);
-    expect(hint).not.toContain(PINNED);
-  });
-
-  it("keeps the scope flag when it retries", async () => {
-    runNpxSkills.mockRejectedValueOnce(new Error(REPORTED_FAILURE));
-
-    await step({ scope: "global" });
-
-    expect(runNpxSkills.mock.calls[1]![0]).toContain("-g");
-  });
-
-  it("keeps the scope in the manual command when both attempts fail", async () => {
-    runNpxSkills.mockRejectedValue(new Error(REPORTED_FAILURE));
-
-    await step({ scope: "global" });
-
-    const hint = log.info.mock.calls
-      .map((c) => String(c[0]))
-      .find((line) => line.includes("manually"))!;
-    expect(hint).toContain(`${SKILLS_DIR} -g`);
+    expect(fs.existsSync(legacy)).toBe(true);
   });
 });

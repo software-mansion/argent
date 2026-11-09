@@ -18,6 +18,8 @@ import {
   type DescribeFrame,
   type DescribeNode,
   type DescribeTreeData,
+  type UiOrientation,
+  asUiOrientation,
   parseDescribeResult,
 } from "../describe/contract";
 
@@ -30,6 +32,14 @@ import {
  * `accessible` container into a single leaf (VoiceOver semantics), while every
  * view here carries its `accessibilityIdentifier` (React Native `testID`), so
  * a flow can address a container and its children independently.
+ *
+ * Frames come out in the screen's fixed (portrait-native) space, the space the
+ * simulator takes touches in: each view's `screenFrame`, normalized by the
+ * payload's `screen` size. With a portrait UI that is the window's space too;
+ * with a landscape UI — a rotated device, or a foldable unfolded, whose UI is
+ * landscape on a portrait-native panel — a window-space frame would be the
+ * transposed one, and a tap at it would miss. An injected framework that
+ * predates `screenFrame` still serves `windowFrame`, which is used in its place.
  *
  * Physical devices (`queryIosDeviceFlowTree`): the XCUITest runner accessibility
  * snapshot, the same tree `describe` serves, reshaped into the flow contract.
@@ -55,6 +65,8 @@ interface RawViewNode {
   label?: string;
   frame?: RawRect;
   windowFrame?: RawRect;
+  /** The view in the screen's fixed (portrait-native) point space. */
+  screenFrame?: RawRect;
   hidden?: boolean;
   alpha?: number;
   firstResponder?: boolean;
@@ -102,6 +114,7 @@ function asViewNode(v: unknown): RawViewNode | null {
     label: nonEmptyString(r.label),
     frame: asRect(r.frame),
     windowFrame: asRect(r.windowFrame),
+    screenFrame: asRect(r.screenFrame),
     hidden: typeof r.hidden === "boolean" ? r.hidden : undefined,
     alpha: finiteNumber(r.alpha),
     firstResponder: r.firstResponder === true ? true : undefined,
@@ -155,17 +168,17 @@ function projectIosNode(
   const skip = node.hidden === true || (node.alpha !== undefined && node.alpha < 0.01);
   const role = roleFromClassName(node.className);
 
-  // Scroll-clip inputs (see `flattenHoisting`). Window space only: `frame` is
-  // parent-local, so falling back to it (as the leaf frame does) would compare
-  // rects across coordinate spaces and mis-prune; without a `windowFrame` the
-  // node is never scroll-pruned and, if a scroller, imposes no clip.
-  const win = node.windowFrame;
+  // Scroll-clip inputs (see `flattenHoisting`). Screen (or window) space only:
+  // `frame` is parent-local, so falling back to it (as the leaf frame does)
+  // would compare rects across coordinate spaces and mis-prune; without either
+  // the node is never scroll-pruned and, if a scroller, imposes no clip.
+  const win = node.screenFrame ?? node.windowFrame;
   const rect = win ? { x: win.x, y: win.y, w: win.width, h: win.height } : null;
 
   let leaf: DescribeNode | null = null;
   let frame: DescribeFrame | null = null;
   if (!skip && (node.identifier || node.label || role !== "AXGroup" || node.firstResponder)) {
-    const leafRect = node.windowFrame ?? node.frame;
+    const leafRect = node.screenFrame ?? node.windowFrame ?? node.frame;
     frame = leafRect ? normalizeFrame(leafRect, screenW, screenH) : null;
     if (frame) {
       leaf = {
@@ -208,28 +221,48 @@ export function adaptFullHierarchyToDescribeResult(raw: unknown): DescribeNode {
 /**
  * Like {@link adaptFullHierarchyToDescribeResult}, but also reports the screen
  * size (points) the frames were normalized against — the rotate directive needs
- * the aspect ratio for its physical-circle geometry.
+ * the aspect ratio for its physical-circle geometry — and how the UI lies on
+ * that space, for the directives that turn a UI-space direction into it.
+ *
+ * The orientation is the one the framework reports next to the screen size
+ * (`screen.interfaceOrientation`, as UIKit names interface orientations), not
+ * one told from the frames: a UI made only of full-screen or centred views (a
+ * game, a canvas) frames the same way in both landscape orientations. A
+ * framework that predates `screenFrame` reports neither, and its frames are in
+ * the window's space, where a direction needs no turning.
  */
 function adaptFullHierarchy(raw: unknown): {
   tree: DescribeNode;
   screen?: { width: number; height: number };
+  uiOrientation?: UiOrientation;
 } {
-  const windows =
-    typeof raw === "object" && raw !== null && Array.isArray((raw as { windows?: unknown }).windows)
-      ? (raw as { windows: unknown[] }).windows
-          .map(asViewNode)
-          .filter((n): n is RawViewNode => n !== null)
-      : [];
+  const payload =
+    typeof raw === "object" && raw !== null ? (raw as { windows?: unknown; screen?: unknown }) : {};
+  const reportedScreen =
+    typeof payload.screen === "object" && payload.screen !== null
+      ? (payload.screen as Record<string, unknown>)
+      : undefined;
+  const windows = Array.isArray(payload.windows)
+    ? payload.windows.map(asViewNode).filter((n): n is RawViewNode => n !== null)
+    : [];
 
-  // Screen size is the largest window frame: the key window spans the screen,
-  // so its width/height are the normalization denominators.
+  // The normalization denominators: the screen's fixed (portrait-native) size
+  // when the framework reports it, next to the `screenFrame`s it is for. An
+  // older framework reports neither, and there the largest window frame stands
+  // in: the key window spans the screen.
   let screenW = 0;
   let screenH = 0;
-  for (const win of windows) {
-    const rect = win.frame ?? win.windowFrame;
-    if (rect) {
-      screenW = Math.max(screenW, rect.width);
-      screenH = Math.max(screenH, rect.height);
+  const reported = reportedScreen ? asRect({ ...reportedScreen, x: 0, y: 0 }) : undefined;
+  if (reported && reported.width > 0 && reported.height > 0) {
+    screenW = reported.width;
+    screenH = reported.height;
+  } else {
+    for (const win of windows) {
+      const rect = win.screenFrame ?? win.frame ?? win.windowFrame;
+      if (rect) {
+        screenW = Math.max(screenW, rect.width);
+        screenH = Math.max(screenH, rect.height);
+      }
     }
   }
 
@@ -245,9 +278,13 @@ function adaptFullHierarchy(raw: unknown): {
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children,
   });
-  return screenW > 0 && screenH > 0
-    ? { tree, screen: { width: screenW, height: screenH } }
-    : { tree };
+  if (!(screenW > 0 && screenH > 0)) return { tree };
+  const uiOrientation = asUiOrientation(reportedScreen?.interfaceOrientation);
+  return {
+    tree,
+    screen: { width: screenW, height: screenH },
+    ...(uiOrientation ? { uiOrientation } : {}),
+  };
 }
 
 /**
@@ -266,6 +303,7 @@ const FULL_HIERARCHY_FIELDS = [
   "label",
   "frame",
   "windowFrame",
+  "screenFrame",
   "hidden",
   "alpha",
   // Read by the type directive's focus wait; an injected framework that omits
@@ -293,7 +331,7 @@ async function unreadableHierarchyReason(
   if (!isInjectableBundleId(bundleId)) {
     return (
       `${bundleId} is an Apple system app: it is never the app under test, so ` +
-      `argent's native devtools refuse to read one, and without them a flow has ` +
+      `argent's native devtools refuse to read one, and without them an e2e test has ` +
       `no view hierarchy to resolve selectors against. Replace the selector steps with coordinate ` +
       `ones — \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree — or target an app ` +
       `argent installs.`
@@ -306,18 +344,18 @@ async function unreadableHierarchyReason(
     // list that sent us here: the connection arrived mid-read.
     return (
       `native devtools reported no connected app while this tree was being read, but ${bundleId} is ` +
-      `connected now — the connection arrived mid-read. Retry: flows resolve selectors against the ` +
+      `connected now — the connection arrived mid-read. Retry: e2e tests resolve selectors against the ` +
       `full view hierarchy native devtools serve.`
     );
   }
   // `buildAppStateMessage` already names the corrective action; the trailing
   // sentence says why a tree read needed one at all.
-  return `${buildAppStateMessage(bundleId, state)} Flows resolve selectors against the full view hierarchy native devtools serve.`;
+  return `${buildAppStateMessage(bundleId, state)} E2E tests resolve selectors against the full view hierarchy native devtools serve.`;
 }
 
 /** Shared verbatim by the pinned gate and the unpinned arbiter. */
 function systemAppFlowTargetRefusal(bundleId: string): string {
-  return `${bundleId} is an Apple system app (com.apple.*) - never a valid flow target: it is not the app under test, and argent's native devtools refuse to read one (a system process either never services the read, or describes offscreen UI as if it were the launched app), so this flow has no view hierarchy to resolve selectors against and no relaunch or retry changes this verdict. Replace the selector steps with coordinate ones - \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree - or point this flow's \`launch\` step at the app under test.`;
+  return `${bundleId} is an Apple system app (com.apple.*) - never a valid e2e test target: it is not the app under test, and argent's native devtools refuse to read one (a system process either never services the read, or describes offscreen UI as if it were the launched app), so this e2e test has no view hierarchy to resolve selectors against and no relaunch or retry changes this verdict. Replace the selector steps with coordinate ones - \`tap: { x: 0.5, y: 0.35 }\` takes a point directly and reads no tree - or point this e2e test's \`launch\` step at the app under test.`;
 }
 
 /**
@@ -349,7 +387,7 @@ export async function queryFullHierarchyTree(
     nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   } catch (err) {
     throw wrapPreservingFailure(
-      `native devtools is unavailable (${errMsg(err)}) — flows resolve selectors against the full view hierarchy it serves`,
+      `native devtools is unavailable (${errMsg(err)}) — e2e tests resolve selectors against the full view hierarchy it serves`,
       err
     );
   }
@@ -378,7 +416,7 @@ export async function queryFullHierarchyTree(
     // loaded, so a missing connection means the process is gone.
     if (!nativeApi.isConnected(bundleId)) {
       throw new FailureError(
-        `${bundleId} lost its devtools connection after launch (the app crashed, was terminated, or its socket closed) - restart it (restart-app, or a flow \`launch\` step) so the full view hierarchy is readable; launch-app recovers only the causes that killed the process, since on iOS it just foregrounds one that is still alive`,
+        `${bundleId} lost its devtools connection after launch (the app crashed, was terminated, or its socket closed) - restart it (restart-app, or an e2e test \`launch\` step) so the full view hierarchy is readable; launch-app recovers only the causes that killed the process, since on iOS it just foregrounds one that is still alive`,
         {
           error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
           failure_stage: "flow_tree_pinned_target",
@@ -408,7 +446,7 @@ export async function queryFullHierarchyTree(
       }
       if (target.probeAnswered) {
         throw new FailureError(
-          `${bundleId} (the launched app) stopped answering Application.getState - the probe timed out although an earlier one in this run answered, so the app's main queue is no longer being serviced. For a pinned app that is usually the suspension iOS applies once a flow leaves it (e.g. a tap that opened another app), and a suspended app's hierarchy is not what is on screen; in-app work blocking the main thread past the probe timeout looks the same from here. Reading anyway parks on that same unserviced queue: certain to time out if the app is suspended, and paying the longer hierarchy timeout to find that out if it is not. If this flow's subject IS the other app, give the flow a \`launch:\` step for that app - it re-pins reads to it, and a pinned read probes only the app it names, so the silent ${bundleId} is never touched; \`tool: launch-app\` or \`tool: restart-app\` naming that app works too - each re-targets reads at the app it starts, and is how a recorded flow switches apps. A foreground-NEUTRAL raw \`tool:\` step does not work here, because demoting the pin sends reads back to auto-resolve, which probes every connection at once and is sunk by this same silent one. If the flow left ${bundleId} but is still about it, make it return before reading the UI. If it never left, the main thread is busy: raise the step's \`timeout:\` so the poll re-reads past the work, or \`launch\` ${bundleId} again.`,
+          `${bundleId} (the launched app) stopped answering Application.getState - the probe timed out although an earlier one in this run answered, so the app's main queue is no longer being serviced. For a pinned app that is usually the suspension iOS applies once an e2e test leaves it (e.g. a tap that opened another app), and a suspended app's hierarchy is not what is on screen; in-app work blocking the main thread past the probe timeout looks the same from here. Reading anyway parks on that same unserviced queue: certain to time out if the app is suspended, and paying the longer hierarchy timeout to find that out if it is not. If this e2e test's subject IS the other app, give the e2e test a \`launch:\` step for that app - it re-pins reads to it, and a pinned read probes only the app it names, so the silent ${bundleId} is never touched; \`tool: launch-app\` or \`tool: restart-app\` naming that app works too - each re-targets reads at the app it starts, and is how a recorded e2e test switches apps. A foreground-NEUTRAL raw \`tool:\` step does not work here, because demoting the pin sends reads back to auto-resolve, which probes every connection at once and is sunk by this same silent one. If the e2e test left ${bundleId} but is still about it, make it return before reading the UI. If it never left, the main thread is busy: raise the step's \`timeout:\` so the poll re-reads past the work, or \`launch\` ${bundleId} again.`,
           {
             // The timeout's own code, NOT
             // NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND: nothing answered, so no
@@ -429,7 +467,7 @@ export async function queryFullHierarchyTree(
     // that assert on such an alert.
     if (pinnedState && !chooseFrontmostConnectedApp([pinnedState])) {
       throw new FailureError(
-        `${bundleId} (the launched app) has no foreground presence at all (applicationState=${pinnedState.applicationState}, foregroundActiveScenes=${pinnedState.foregroundActiveSceneCount}, foregroundInactiveScenes=${pinnedState.foregroundInactiveSceneCount}) - a step in this flow left the app (e.g. a tap that opened another app), so a read of its hierarchy would describe a screen that is not on screen. Transitional states are NOT refused here: an \`inactive\` app, or one still holding a foreground scene, is read as usual - under a system alert or mid-transition it is still the app on screen. If this flow's subject IS another app, give the flow a \`launch:\` step for that app - it re-pins reads to it, and no wedged sibling connection can sink a pinned read; a raw \`tool:\` step demotes the pin and returns reads to frontmost auto-resolve, which works when the app on screen answers but is sunk by a single wedged connection. Otherwise make the flow return to ${bundleId} before reading the UI, or \`launch\` it again.`,
+        `${bundleId} (the launched app) has no foreground presence at all (applicationState=${pinnedState.applicationState}, foregroundActiveScenes=${pinnedState.foregroundActiveSceneCount}, foregroundInactiveScenes=${pinnedState.foregroundInactiveSceneCount}) - a step in this e2e test left the app (e.g. a tap that opened another app), so a read of its hierarchy would describe a screen that is not on screen. Transitional states are NOT refused here: an \`inactive\` app, or one still holding a foreground scene, is read as usual - under a system alert or mid-transition it is still the app on screen. If this e2e test's subject IS another app, give the e2e test a \`launch:\` step for that app - it re-pins reads to it, and no wedged sibling connection can sink a pinned read; a raw \`tool:\` step demotes the pin and returns reads to frontmost auto-resolve, which works when the app on screen answers but is sunk by a single wedged connection. Otherwise make the e2e test return to ${bundleId} before reading the UI, or \`launch\` it again.`,
         {
           error_code: FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND,
           failure_stage: "flow_tree_pinned_target",
@@ -503,7 +541,7 @@ export async function queryFullHierarchyTree(
       // still read; only no foreground presence at all is refused.
       if (!chooseFrontmostConnectedApp([hintState])) {
         throw new FailureError(
-          `${target.bundleId} (the launched app) has no foreground presence at all (applicationState=${hintState.applicationState}, foregroundActiveScenes=${hintState.foregroundActiveSceneCount}, foregroundInactiveScenes=${hintState.foregroundInactiveSceneCount}) - auto-resolve's probe of every connection timed out and the read fell back to the launched app, but a step in this flow left it (e.g. a tap that opened another app), so reading its hierarchy would describe a screen that is not on screen. Transitional states are NOT refused here: an \`inactive\` app, or one still holding a foreground scene, is read as usual. If this flow's subject IS another app, give the flow a \`launch:\` step for that app; otherwise make the flow return to ${target.bundleId} before reading the UI, or \`launch\` it again.`,
+          `${target.bundleId} (the launched app) has no foreground presence at all (applicationState=${hintState.applicationState}, foregroundActiveScenes=${hintState.foregroundActiveSceneCount}, foregroundInactiveScenes=${hintState.foregroundInactiveSceneCount}) - auto-resolve's probe of every connection timed out and the read fell back to the launched app, but a step in this e2e test left it (e.g. a tap that opened another app), so reading its hierarchy would describe a screen that is not on screen. Transitional states are NOT refused here: an \`inactive\` app, or one still holding a foreground scene, is read as usual. If this e2e test's subject IS another app, give the e2e test a \`launch:\` step for that app; otherwise make the e2e test return to ${target.bundleId} before reading the UI, or \`launch\` it again.`,
           {
             error_code: FAILURE_CODES.NATIVE_TARGET_SINGLE_APP_NOT_FOREGROUND,
             failure_stage: "flow_tree_unpinned_hint",
@@ -526,7 +564,7 @@ export async function queryFullHierarchyTree(
         `${bundleId} answered the target probe and then dropped its native-devtools ` +
           `connection before the view hierarchy could be read. It was instrumented, so a retry may ` +
           `ride this out; if the connection does not come back, relaunch with restart-app (or a ` +
-          `flow \`launch\` step) — launch-app would only foreground the process that just lost it.`
+          `e2e test \`launch\` step) — launch-app would only foreground the process that just lost it.`
       );
     }
   }
@@ -552,15 +590,20 @@ export async function queryFullHierarchyTree(
   if (!Array.isArray(rawResult.windows) || rawResult.windows.length === 0) {
     throw new Error(
       `getFullHierarchy returned no windows for ${bundleId} - it has no window attached to read ` +
-        `(backgrounded, or its first window not attached yet), so flows cannot resolve selectors ` +
+        `(backgrounded, or its first window not attached yet), so e2e tests cannot resolve selectors ` +
         `against its view hierarchy; foreground or relaunch it, and if that bundle id is a ` +
         `com.apple.* system process the read resolved to a background system app rather than the ` +
-        `app under test, so give this flow a \`launch\` step to pin reads to the right app`
+        `app under test, so give this e2e test a \`launch\` step to pin reads to the right app`
     );
   }
 
-  const { tree, screen } = adaptFullHierarchy(rawResult);
-  return { tree, source: "native-devtools", ...(screen ? { screen } : {}) };
+  const { tree, screen, uiOrientation } = adaptFullHierarchy(rawResult);
+  return {
+    tree,
+    source: "native-devtools",
+    ...(screen ? { screen } : {}),
+    ...(uiOrientation ? { uiOrientation } : {}),
+  };
 }
 
 function errMsg(err: unknown): string {
@@ -609,7 +652,7 @@ async function explainTargetingFailure(
       // ambiguous, and the per-app entries need those 90 characters.
       `could not target an app to read the view hierarchy from:\n` +
         `${cappedAppDiagnostic(withoutExplicitBundleIdAdvice(errMsg(err)))}\n` +
-        `Flow selectors auto-target and cannot name a bundleId. Foreground the intended app with ` +
+        `E2E test selectors auto-target and cannot name a bundleId. Foreground the intended app with ` +
         `launch-app (it does not terminate), then retry${clearOthers}`,
       err
     );
@@ -625,7 +668,7 @@ async function explainTargetingFailure(
     return wrapPreservingFailure(
       `the only native-devtools-connected app is not foreground, so it cannot be auto-targeted:\n` +
         `${withoutExplicitBundleIdAdvice(errMsg(err))}\n` +
-        `Flow selector steps auto-target and cannot provide a bundleId. Bring that app to the ` +
+        `E2E test selector steps auto-target and cannot provide a bundleId. Bring that app to the ` +
         `foreground with launch-app (it does not terminate — the app is already instrumented, ` +
         `just not frontmost), then retry.`,
       err
@@ -662,11 +705,11 @@ async function explainTargetingFailure(
       `could not read the state of the native-devtools-connected apps, so none could be ` +
         `auto-targeted (${firstClause(err)}). Connected: ${cappedList(stillConnected)}. ` +
         (launchedGone
-          ? `${launched.bundleId} — the app this flow launched — is NOT among them, so relaunch ` +
-            `it with restart-app (or a flow \`launch\` step); launch-app does not terminate, so ` +
+          ? `${launched.bundleId} — the app this e2e test launched — is NOT among them, so relaunch ` +
+            `it with restart-app (or an e2e test \`launch\` step); launch-app does not terminate, so ` +
             `it would only foreground the same uninstrumented process.`
           : `They are instrumented — do not relaunch. A suspended app stops answering: foreground ` +
-            `the app the flow drives with launch-app (it does not terminate), then retry.`) +
+            `the app the e2e test drives with launch-app (it does not terminate), then retry.`) +
         clearOthers,
       err
     );
@@ -674,8 +717,8 @@ async function explainTargetingFailure(
   // Kept short: every failed selector read repeats this reason verbatim, and the
   // recorder repeats it once per captured tap.
   return wrapPreservingFailure(
-    `no app is connected to native devtools, so flow selectors have no instrumented process to ` +
-      `read the view hierarchy from (${firstClause(err)}). Relaunch with restart-app (or a flow ` +
+    `no app is connected to native devtools, so e2e test selectors have no instrumented process to ` +
+      `read the view hierarchy from (${firstClause(err)}). Relaunch with restart-app (or an e2e test ` +
       `\`launch\` step): launch-app does not terminate, so on an app already running from ` +
       `Metro/Expo, Xcode, or its icon it only foregrounds that uninstrumented process. ` +
       // "feature tools", not "the native-* tools": only the six that run the
@@ -876,7 +919,7 @@ export async function queryIosDeviceFlowTree(
   // hint on a non-empty tree still has nodes.
   if (data.tree.children.length === 0 && data.hint) {
     throw new Error(
-      `${data.hint} Flows resolve selectors against this runner tree, so the step fails ` +
+      `${data.hint} E2E tests resolve selectors against this runner tree, so the step fails ` +
         `rather than treating the unreadable screen as empty.`
     );
   }

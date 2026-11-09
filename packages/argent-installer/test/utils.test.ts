@@ -35,6 +35,10 @@ import {
   readJson,
   writeJson,
   copyDir,
+  findRetiredFiles,
+  hashBundledContent,
+  removeRetiredFiles,
+  RETIRED_BUNDLED_PATHS,
   dirExists,
   detectPackageManager,
   globalInstallCommand,
@@ -46,6 +50,7 @@ import {
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
+  npxChildEnv,
   listBundledSkills,
   resolveProjectRoot,
   SKILLS_DIR,
@@ -160,6 +165,17 @@ describe("copyDir", () => {
 
   it("returns null when source does not exist", () => {
     expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBeNull();
+  });
+
+  // A release that dropped every agent: the copy must not leave an empty
+  // .claude/agents behind, nor report one as written.
+  it("returns null and creates nothing when the source holds no files", () => {
+    const src = path.join(tmpDir, "src");
+    fs.mkdirSync(path.join(src, "sub"), { recursive: true });
+    const dest = path.join(tmpDir, "dest");
+
+    expect(copyDir(src, dest)).toBeNull();
+    expect(fs.existsSync(dest)).toBe(false);
   });
 
   it("copies directory recursively and reports where it wrote", () => {
@@ -353,6 +369,170 @@ describe("copyDir", () => {
   });
 });
 
+// ── Retired bundled files ─────────────────────────────────────────────────────
+
+describe("RETIRED_BUNDLED_PATHS", () => {
+  // A retired file the bundle still ships has to be listed as it ships now, or
+  // copies of this version would stay once the bundle drops it.
+  it("lists the hash of every retired file the bundle still ships", () => {
+    for (const [kind, dir] of [
+      ["agents", AGENTS_DIR],
+      ["rules", RULES_DIR],
+    ] as const) {
+      for (const { path: relativePath, shipped } of RETIRED_BUNDLED_PATHS[kind]) {
+        const file = path.join(dir, ...relativePath.split("/"));
+        if (!fs.existsSync(file)) continue;
+        const content = fs.readFileSync(file, "utf8");
+        expect(shipped, relativePath).toContain(hashBundledContent(content));
+      }
+    }
+  });
+});
+
+describe("findRetiredFiles / removeRetiredFiles", () => {
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n\nInspects.\n";
+  const CHECKLIST = "## Quality control checklist\n\nFields.\n";
+  const retired = [
+    {
+      path: "argent-environment-inspector.md",
+      shipped: [hashBundledContent(INSPECTOR)],
+    },
+    {
+      path: "references/quality-control-checklist.md",
+      shipped: [hashBundledContent(CHECKLIST)],
+    },
+  ];
+  let bundle: string;
+  let target: string;
+
+  function put(filePath: string, contents: string): void {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, contents);
+  }
+
+  function stageRetired(targetDir: string): void {
+    put(path.join(targetDir, "argent-environment-inspector.md"), INSPECTOR);
+    put(path.join(targetDir, "references", "quality-control-checklist.md"), CHECKLIST);
+  }
+
+  function removeAllFound(targetDir: string) {
+    return removeRetiredFiles(targetDir, findRetiredFiles(retired, bundle, targetDir));
+  }
+
+  beforeEach(() => {
+    // A release that no longer ships either retired file.
+    bundle = path.join(tmpDir, "bundle");
+    put(path.join(bundle, "argent-other.md"), "other");
+    target = path.join(tmpDir, ".claude", "agents");
+  });
+
+  it("finds copies of retired files the bundle no longer ships", () => {
+    stageRetired(target);
+
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([
+      { relativePath: "argent-environment-inspector.md", sha256: hashBundledContent(INSPECTOR) },
+      {
+        relativePath: "references/quality-control-checklist.md",
+        sha256: hashBundledContent(CHECKLIST),
+      },
+    ]);
+  });
+
+  it("reads a copy with CRLF line endings as the version shipped", () => {
+    put(path.join(target, "argent-environment-inspector.md"), INSPECTOR.replace(/\n/g, "\r\n"));
+
+    expect(findRetiredFiles(retired, bundle, target)).toMatchObject([
+      { relativePath: "argent-environment-inspector.md" },
+    ]);
+  });
+
+  // An edited copy and the user's own file look alike: both may hold their work.
+  it("does not list a file at a retired path that matches no shipped version", () => {
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}My own step.\n`);
+    put(path.join(target, "references", "quality-control-checklist.md"), "# My own checklist\n");
+
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([]);
+  });
+
+  it("does not list a retired file while the bundle still ships it", () => {
+    put(path.join(bundle, "argent-environment-inspector.md"), INSPECTOR);
+    stageRetired(target);
+
+    expect(findRetiredFiles(retired, bundle, target).map((f) => f.relativePath)).toEqual([
+      "references/quality-control-checklist.md",
+    ]);
+  });
+
+  it("finds nothing when the target dir is missing", () => {
+    expect(findRetiredFiles(retired, bundle, target)).toEqual([]);
+    expect(fs.existsSync(path.join(tmpDir, ".claude"))).toBe(false);
+  });
+
+  it("removes the files, then the dirs that leaves empty, up to the target itself", () => {
+    stageRetired(target);
+
+    expect(removeAllFound(target)).toEqual({
+      removedPaths: ["argent-environment-inspector.md", "references/quality-control-checklist.md"],
+      removedRoot: true,
+    });
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, ".claude"))).toBe(true);
+  });
+
+  it("keeps the user's own files and every dir that still holds one", () => {
+    stageRetired(target);
+    put(path.join(target, "my-agent.md"), "mine");
+    put(path.join(target, "references", "my-notes.md"), "mine");
+
+    expect(removeAllFound(target)).toMatchObject({ removedRoot: false });
+    expect(fs.readdirSync(target).sort()).toEqual(["my-agent.md", "references"]);
+    expect(fs.readdirSync(path.join(target, "references"))).toEqual(["my-notes.md"]);
+  });
+
+  it("keeps a file that changed after it was found", () => {
+    stageRetired(target);
+    const found = findRetiredFiles(retired, bundle, target);
+    put(path.join(target, "argent-environment-inspector.md"), `${INSPECTOR}Changed meanwhile.\n`);
+
+    expect(removeRetiredFiles(target, found).removedPaths).toEqual([
+      "references/quality-control-checklist.md",
+    ]);
+    expect(fs.existsSync(path.join(target, "argent-environment-inspector.md"))).toBe(true);
+  });
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  describe.skipIf(process.platform === "win32")("symlinked targets", () => {
+    it("works through a linked target and keeps the link and the dir it leads to", () => {
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      stageRetired(canonical);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.symlinkSync(path.join("..", ".agents", "agents"), target);
+
+      expect(removeAllFound(target)).toEqual({
+        removedPaths: [
+          "argent-environment-inspector.md",
+          "references/quality-control-checklist.md",
+        ],
+        removedRoot: false,
+      });
+      expect(fs.readdirSync(canonical)).toEqual([]);
+      expect(fs.lstatSync(target).isSymbolicLink()).toBe(true);
+    });
+
+    it("removes the copy a linked file leads to, and the link left dangling", () => {
+      const shared = path.join(tmpDir, "shared", "argent-environment-inspector.md");
+      const link = path.join(target, "argent-environment-inspector.md");
+      put(shared, INSPECTOR);
+      put(path.join(target, "my-agent.md"), "mine");
+      fs.symlinkSync(path.join("..", "..", "shared", "argent-environment-inspector.md"), link);
+
+      expect(removeAllFound(target).removedPaths).toEqual(["argent-environment-inspector.md"]);
+      expect(fs.existsSync(shared)).toBe(false);
+      expect(fs.lstatSync(link, { throwIfNoEntry: false })).toBeUndefined();
+    });
+  });
+});
+
 // ── dirExists ─────────────────────────────────────────────────────────────────
 
 describe("dirExists", () => {
@@ -408,6 +588,35 @@ describe("resolveProjectRoot", () => {
     fs.mkdirSync(nestedDir, { recursive: true });
 
     expect(resolveProjectRoot(nestedDir)).toBe(nestedDir);
+  });
+
+  it("does not treat the home directory's global editor config as a project root", () => {
+    const home = path.join(tmpDir, "home");
+    const projectRoot = path.join(home, "Dev", "argent-test");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".git"), { recursive: true });
+    fs.mkdirSync(projectRoot, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "package.json"), "{}");
+
+    expect(resolveProjectRoot(projectRoot, home)).toBe(projectRoot);
+  });
+
+  it("still finds a project root between the start directory and home", () => {
+    const home = path.join(tmpDir, "home");
+    const projectRoot = path.join(home, "Dev", "app");
+    const nestedDir = path.join(projectRoot, "src");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+    fs.mkdirSync(path.join(projectRoot, ".git"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir, home)).toBe(projectRoot);
+  });
+
+  it("returns the home directory when started there", () => {
+    const home = path.join(tmpDir, "home");
+    fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
+
+    expect(resolveProjectRoot(home, home)).toBe(home);
   });
 
   it("recognizes opencode.jsonc as a project root marker", () => {
@@ -651,7 +860,7 @@ describe("listArgentSkillsInLock", () => {
       JSON.stringify({
         version: 1,
         skills: {
-          "argent-create-flow": {},
+          "argent-create-e2e": {},
           "argent-old-workflow": {}, // still in lock even if no longer bundled
           "some-other-skill": {},
           "vercel-labs/agent-skills": {},
@@ -659,7 +868,7 @@ describe("listArgentSkillsInLock", () => {
       })
     );
     // Result is sorted so callers can rely on a stable order.
-    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-flow", "argent-old-workflow"]);
+    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-e2e", "argent-old-workflow"]);
   });
 
   it("returns an empty list when the lock has no skills object", () => {
@@ -746,6 +955,33 @@ describe("isOnline", () => {
 
 // ── isSkillsCliAvailable ─────────────────────────────────────────────────────
 
+describe("npxChildEnv", () => {
+  it("drops npm_config_package so a nested npx installs the package it is asked for", () => {
+    // `npx --package @swmansion/argent -- argent init` exports this to argent (#1335).
+    const env = npxChildEnv({
+      PATH: "/usr/bin",
+      npm_config_package: "@swmansion/argent@latest",
+      npm_config_yes: "true",
+    });
+
+    expect(env).toEqual({ PATH: "/usr/bin", npm_config_yes: "true" });
+  });
+
+  it("matches the variable name case-insensitively", () => {
+    const env = npxChildEnv({ NPM_CONFIG_PACKAGE: "@swmansion/argent", HOME: "/home/u" });
+
+    expect(env).toEqual({ HOME: "/home/u" });
+  });
+
+  it("does not modify the environment it was given", () => {
+    const source = { npm_config_package: "@swmansion/argent" };
+
+    npxChildEnv(source);
+
+    expect(source).toEqual({ npm_config_package: "@swmansion/argent" });
+  });
+});
+
 describe("isSkillsCliAvailable", () => {
   beforeEach(() => {
     execSyncMock.mockReset();
@@ -762,6 +998,22 @@ describe("isSkillsCliAvailable", () => {
     expect(cmd).toBe("npx --force --no-install skills --version");
   });
 
+  it("runs the probe without an inherited npm_config_package", () => {
+    execSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
+    const original = process.env.npm_config_package;
+    process.env.npm_config_package = "@swmansion/argent@latest";
+    try {
+      isSkillsCliAvailable();
+    } finally {
+      if (original === undefined) delete process.env.npm_config_package;
+      else process.env.npm_config_package = original;
+    }
+
+    const opts = execSyncMock.mock.calls[0]![1] as { env?: NodeJS.ProcessEnv };
+    expect(opts.env).toBeDefined();
+    expect(opts.env).not.toHaveProperty("npm_config_package");
+  });
+
   it("returns false when the probe throws (skills CLI not in npx cache)", () => {
     execSyncMock.mockImplementation(() => {
       throw new Error("command failed");
@@ -776,8 +1028,7 @@ describe("isSkillsCliAvailable", () => {
     isSkillsCliAvailable();
 
     const opts = execSyncMock.mock.calls[0]![1] as
-      | { stdio?: [unknown, unknown, unknown] }
-      | undefined;
+      { stdio?: [unknown, unknown, unknown] } | undefined;
     expect(opts?.stdio).toEqual(["ignore", "ignore", "ignore"]);
   });
 

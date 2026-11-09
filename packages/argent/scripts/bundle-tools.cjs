@@ -39,6 +39,10 @@ const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
+// Bundled over tsc's emit of src/client.ts, which imports private workspace
+// packages; tsc's client.d.ts is kept as the public types.
+const CLIENT_ENTRY = path.resolve(__dirname, "../src/client.ts");
+const CLIENT_OUT_FILE = path.resolve(__dirname, "../dist/client.js");
 const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/main.cjs");
 
 // Resolve workspace deps from source rather than each package's compiled dist/,
@@ -397,7 +401,7 @@ const ASSETS = [
         required: true,
         copiedLabel: name,
         missLabel: name,
-        hint: "This file is required for flow `script` steps.",
+        hint: "This file is required for e2e test `script` steps.",
       })
   ),
 ];
@@ -510,6 +514,23 @@ export const PERFETTO_VERSION = "${version}";
   console.log(`✓ Generated bundled-meta.ts (perfetto=${version})`);
 }
 
+/** The bundles dist/cli.js lazy-imports for its subcommands. */
+const DISPATCHER_ESM_BUNDLES = [
+  { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
+  { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
+  // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
+  // proxy); esbuild can't inline a .node. Absent install → loadNodePty() returns
+  // null → lens falls back to a new terminal window.
+  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
+];
+
+if (process.argv.includes("--esm-only")) {
+  for (const b of DISPATCHER_ESM_BUNDLES) {
+    buildBundle({ ...b, format: "esm" });
+  }
+  process.exit(0);
+}
+
 // Must run before esbuild, so PERFETTO_VERSION is inlined into the bundles.
 generateBundledMeta();
 
@@ -558,6 +579,13 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // back to a literal and then chokes on dtrace-provider's own dynamic native
 // binding require. External restores bunyan's intent: the published package
 // never declares it, so the require misses and bunyan nulls it out.
+//
+// `sharp` is the optional Chromium screenshot post-processor: the tool-server
+// `require("sharp")`s it inside a try/catch and skips scale / rotation when it
+// is absent. It is never declared here, so in CI esbuild leaves the require
+// alone — but a developer with sharp in node_modules (e.g. installed to test
+// that path) would have the bundle inline its native addon and fail. External
+// keeps the runtime require resolving against whatever the user installed.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -570,6 +598,7 @@ buildBundle({
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
     "dtrace-provider",
+    "sharp",
   ],
 });
 
@@ -578,15 +607,18 @@ buildBundle({
 //     lazy-imports it, so its workspace dep needn't resolve in the published pkg);
 //   - MCP server: the @modelcontextprotocol/sdk ESM export paths resolve.
 const ESM_BUNDLES = [
-  { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
-  { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
-  // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
-  // proxy); esbuild can't inline a .node. Absent install → loadNodePty() returns
-  // null → lens falls back to a new terminal window.
-  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
+  ...DISPATCHER_ESM_BUNDLES,
+  // `@swmansion/argent/client`, the programmatic tool-server client.
+  { entry: CLIENT_ENTRY, out: CLIENT_OUT_FILE, label: "client" },
 ];
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });
+}
+// tsc's map describes its own client.js, which the bundle above replaced. The
+// generated tool args are types only, so only their .d.ts ships.
+fs.rmSync(`${CLIENT_OUT_FILE}.map`, { force: true });
+for (const ext of [".js", ".js.map"]) {
+  fs.rmSync(path.join(path.dirname(CLIENT_OUT_FILE), `tool-args.generated${ext}`), { force: true });
 }
 
 for (const a of ASSETS) {
@@ -644,10 +676,10 @@ if (fs.existsSync(RESOURCES_SRC)) {
   console.warn(`⚠ screen-sharing agent resources not found at ${RESOURCES_SRC} — skipping`);
 }
 
-// The Android helper APK is the only Android native artifact left (the trace
-// processor ships as WASM under assets/trace-processor/). Its filename is
-// version-stamped from manifest.json's versionName (see bundledHelperApkPath());
-// it is required at runtime, so a missing one throws.
+// The Android helper APK's filename is version-stamped from manifest.json's
+// versionName (see bundledHelperApkPath()); it is required at runtime, so a
+// missing one throws. (The trace processor ships as WASM under
+// assets/trace-processor/.)
 const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
 const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
 const apkSrc = path.join(ANDROID_APK_SRC_DIR, apkName);
@@ -660,4 +692,18 @@ if (fs.existsSync(apkSrc)) {
       `Run: bash scripts/download-native-binaries.sh (fetches from argent-private-releases)\n` +
       `or: bash packages/native-devtools-android/scripts/build.sh`
   );
+}
+
+// The network inspector agent is optional at runtime: without it,
+// native-network-logs reports the Android app as not attachable and points to
+// the JS layer. So a local build without it only warns; publish-npm.yml fails a
+// release that lacks it.
+const NETWORK_INSPECTOR_SRC = path.join(ANDROID_APK_SRC_DIR, "network-inspector");
+if (fs.existsSync(NETWORK_INSPECTOR_SRC)) {
+  fs.cpSync(NETWORK_INSPECTOR_SRC, path.join(BIN_DIR, "network-inspector"), { recursive: true });
+  console.log(
+    `✓ Copied network inspector agent → ${path.relative(process.cwd(), BIN_DIR)}/network-inspector`
+  );
+} else {
+  console.warn(`⚠ network inspector agent not found at ${NETWORK_INSPECTOR_SRC} — skipping`);
 }

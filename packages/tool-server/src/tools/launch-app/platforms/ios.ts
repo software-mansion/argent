@@ -14,6 +14,7 @@ import {
 import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -47,12 +48,31 @@ export function makeIosImpl(
         const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
         if (blocked) return blocked;
       }
+      // A plain launch only foregrounds an app that is already running, so the
+      // arguments would be dropped. Terminate first to apply them.
+      if (params.launchArgs?.length) {
+        try {
+          await execFileAsync(
+            "xcrun",
+            await simctlArgsForUdid(params.udid, ["terminate", params.udid, params.bundleId])
+          );
+        } catch {
+          // App may not be running
+        }
+      }
       try {
         await execFileAsync(
           "xcrun",
-          await simctlArgsForUdid(params.udid, ["launch", params.udid, params.bundleId])
+          await simctlArgsForUdid(params.udid, [
+            "launch",
+            params.udid,
+            params.bundleId,
+            ...(params.launchArgs ?? []),
+          ])
         );
       } catch (err) {
+        // Its message says what to do, and a flow step reports only the thrown message.
+        if (err instanceof XcodeFirstLaunchPendingError) throw err;
         throw new FailureError(
           `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,
           {

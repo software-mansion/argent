@@ -36,7 +36,8 @@ export function mapNativeTraitsToDescribeRole(traits: string[]): string {
   const set = new Set(traits);
   if (set.has("header")) return "AXHeading";
   if (set.has("button") || set.has("toggleButton")) return "AXButton";
-  if (set.has("searchField")) return "AXTextField";
+  // `textEntry` is on every text input (ax-service reads it from a private trait bit).
+  if (set.has("searchField") || set.has("textEntry")) return "AXTextField";
   if (set.has("link")) return "AXLink";
   if (set.has("image")) return "AXImage";
   if (set.has("staticText")) return "AXStaticText";
