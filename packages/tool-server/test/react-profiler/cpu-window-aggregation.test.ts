@@ -347,6 +347,26 @@ describe("renderComponentCpu — frames without self samples", () => {
     expect(md).not.toContain("`sliver`");
   });
 
+  it("rounds a row's times to the nearest 0.01 ms", () => {
+    // work: 1.004 ms self, 1.006 ms inclusive with leaf's 0.002 ms.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, mk(1, "(root)", [2]));
+    nodeMap.set(2, mk(2, "work", [3]));
+    nodeMap.set(3, mk(3, "leaf", []));
+    const index: CpuSampleIndex = {
+      timestampsMs: Float64Array.from([1.004, 1.006]),
+      intervalStartsMs: Float64Array.from([0, 1.004]),
+      sampleNodeIds: [2, 3],
+      nodeMap,
+      durationMs: 1.006,
+    };
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 1.006, componentName: "Login" }],
+    };
+    const md = renderComponentCpu(index, commit, "Login", 10);
+    expect(readRow(md, "work")).toEqual({ self: 1, total: 1.01 });
+  });
+
   it("lists the callers of the sampled frames only when asked to", () => {
     // root → wrap (0 samples) → leaf (2 samples).
     const nodeMap = new Map<number, HermesProfileNode>();
