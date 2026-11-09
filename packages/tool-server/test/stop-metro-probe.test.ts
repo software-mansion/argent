@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+  type PathLike,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
@@ -9,6 +17,27 @@ const execFileSyncMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return { ...actual, execFileSync: (...args: unknown[]) => execFileSyncMock(...args) };
+});
+
+// While set, the probe's reads of /proc land in this fixture dir instead.
+let procRedirect: string | undefined;
+
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const at = (path: PathLike) =>
+    procRedirect && typeof path === "string" && /^\/proc(\/|$)/.test(path)
+      ? procRedirect + path.slice("/proc".length)
+      : path;
+  const redirected =
+    <F extends (path: PathLike, ...rest: never[]) => unknown>(fn: F) =>
+    (path: PathLike, ...rest: never[]) =>
+      fn(at(path), ...rest);
+  return {
+    ...actual,
+    readFileSync: redirected(actual.readFileSync),
+    readdirSync: redirected(actual.readdirSync),
+    readlinkSync: redirected(actual.readlinkSync),
+  };
 });
 
 import {
@@ -27,6 +56,24 @@ const probeThrows = (fields: Record<string, unknown>) =>
   execFileSyncMock.mockImplementation(() => {
     throw Object.assign(new Error(String(fields.message)), fields);
   });
+
+// Real row layout from /proc/net/tcp{,6}; port 8081 is 1F91, 18081 is 46A1.
+const HEADER =
+  "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+const row = (local: string, remote: string, state: string, inode: number) =>
+  `   0: ${local} ${remote} ${state} 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0`;
+
+const writeTableAt = (proc: string, name: string, rows: string[]) =>
+  writeFileSync(join(proc, "net", name), [HEADER, ...rows, ""].join("\n"));
+const addProcessAt = (proc: string, pid: string, fds: Record<string, string>) => {
+  mkdirSync(join(proc, pid, "fd"), { recursive: true });
+  for (const [fd, target] of Object.entries(fds)) symlinkSync(target, join(proc, pid, "fd", fd));
+};
+const makeProc = () => {
+  const proc = mkdtempSync(join(tmpdir(), "stop-metro-proc-"));
+  mkdirSync(join(proc, "net"));
+  return proc;
+};
 
 describe("stop-metro port probe", () => {
   let kill: ReturnType<typeof vi.spyOn>;
@@ -212,15 +259,43 @@ describe("stop-metro port probe", () => {
     });
   });
 
-  it("reads procfs instead of running lsof on Linux", async () => {
-    setPlatform("linux");
-    execFileSyncMock.mockReturnValue("1\n");
+  describe("on Linux", () => {
+    beforeEach(() => {
+      setPlatform("linux");
+      procRedirect = makeProc();
+    });
+    afterEach(() => {
+      rmSync(procRedirect!, { recursive: true, force: true });
+      procRedirect = undefined;
+    });
 
-    // Resolves or rejects depending on the host's real /proc; lsof must not run either way.
-    await runStopMetro(8081).catch(() => {});
+    it("kills the procfs listeners without running lsof", async () => {
+      writeTableAt(procRedirect!, "tcp", [row("00000000:1F91", "00000000:0000", "0A", 111)]);
+      writeTableAt(procRedirect!, "tcp6", []);
+      addProcessAt(procRedirect!, "4242", { "3": "socket:[111]" });
 
-    expect(execFileSyncMock).not.toHaveBeenCalled();
-    expect(kill).not.toHaveBeenCalledWith(1, "SIGTERM");
+      await expect(runStopMetro(8081)).resolves.toEqual({
+        stopped: true,
+        port: 8081,
+        pids: [4242],
+      });
+      expect(kill.mock.calls).toEqual([[4242, "SIGTERM"]]);
+      expect(execFileSyncMock).not.toHaveBeenCalled();
+    });
+
+    it("fails when procfs cannot be read", async () => {
+      const error = await runStopMetro(8081).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(
+        /^Could not determine what is listening on port 8081: ENOENT.*net\/tcp/
+      );
+      expect(getFailureSignal(error)).toMatchObject({
+        error_code: FAILURE_CODES.STOP_METRO_PORT_PROBE_FAILED,
+        error_kind: "unknown",
+      });
+      expect(kill).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -246,25 +321,14 @@ describe("parseDarwinNetstatHasListener", () => {
   });
 });
 
-// Real row layout from /proc/net/tcp{,6}; port 8081 is 1F91, 18081 is 46A1.
-const HEADER =
-  "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
-const row = (local: string, remote: string, state: string, inode: number) =>
-  `   0: ${local} ${remote} ${state} 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0`;
-
 describe("procListeningPids", () => {
   let proc: string;
 
-  const writeTable = (name: string, rows: string[]) =>
-    writeFileSync(join(proc, "net", name), [HEADER, ...rows, ""].join("\n"));
-  const addProcess = (pid: string, fds: Record<string, string>) => {
-    mkdirSync(join(proc, pid, "fd"), { recursive: true });
-    for (const [fd, target] of Object.entries(fds)) symlinkSync(target, join(proc, pid, "fd", fd));
-  };
+  const writeTable = (name: string, rows: string[]) => writeTableAt(proc, name, rows);
+  const addProcess = (pid: string, fds: Record<string, string>) => addProcessAt(proc, pid, fds);
 
   beforeEach(() => {
-    proc = mkdtempSync(join(tmpdir(), "stop-metro-proc-"));
-    mkdirSync(join(proc, "net"));
+    proc = makeProc();
   });
   afterEach(() => {
     rmSync(proc, { recursive: true, force: true });
@@ -293,6 +357,32 @@ describe("procListeningPids", () => {
     mkdirSync(join(proc, "600")); // fd dir unreadable: another user's process
 
     expect(procListeningPids(8081, proc).sort()).toEqual([100, 400]);
+  });
+
+  it("matches an IPv4-mapped tcp6 listener", () => {
+    writeTable("tcp", []);
+    // [::ffff:127.0.0.1]:8081
+    writeTable("tcp6", [
+      row(
+        "0000000000000000FFFF00000100007F:1F91",
+        "00000000000000000000000000000000:0000",
+        "0A",
+        111
+      ),
+    ]);
+    addProcess("100", { "3": "socket:[111]" });
+
+    expect(procListeningPids(8081, proc)).toEqual([100]);
+  });
+
+  it("returns every process sharing a listening socket", () => {
+    writeTable("tcp", [row("00000000:1F91", "00000000:0000", "0A", 111)]);
+    writeTable("tcp6", []);
+    // A forked worker inherits its parent's listening fd.
+    addProcess("100", { "3": "socket:[111]" });
+    addProcess("101", { "3": "socket:[111]" });
+
+    expect(procListeningPids(8081, proc).sort()).toEqual([100, 101]);
   });
 
   it("returns nothing when no socket listens on the port", () => {
