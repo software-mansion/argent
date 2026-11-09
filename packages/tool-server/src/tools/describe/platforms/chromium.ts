@@ -61,6 +61,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getChildNodes = protoGetter(Node.prototype, "childNodes");
   const getNodeType = protoGetter(Node.prototype, "nodeType");
   const getNodeValue = protoGetter(Node.prototype, "nodeValue");
+  const getTextContent = protoGetter(Node.prototype, "textContent");
   const getTagName = protoGetter(Element.prototype, "tagName");
   const getLocalName = protoGetter(Element.prototype, "localName");
   const getNamespaceURI = protoGetter(Element.prototype, "namespaceURI");
@@ -174,15 +175,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   // An aria-labelledby target's text (text and CDATA), read by a subset of Chrome's
-  // accessible-name rules: an aria-label, or an <img>'s alt, stands in for an element's
-  // content, a <select> or <textarea> reads as it shows, a non-inline element, an <svg>
-  // with content or a <br> parts the words around it, and script, style and noscript text
-  // never counts. A shown target leaves out its display:none, visibility:hidden and
-  // aria-hidden subtrees, and SVG content SVG never renders (an element it does not know,
-  // <metadata>, <script>); a hidden one reads them all, and there a script-like element
-  // parts words, as does every element under display:none, which has no layout to run
-  // inline in. An <input>'s value is not read. Iterative: the target's depth has no
-  // MAX_DEPTH bound.
+  // accessible-name rules: an aria-label, an <img>'s alt, or an SVG element's <title>
+  // stands in for an element's content, a <select> or <textarea> reads as it shows, a
+  // non-inline element, an <svg> with content or a <br> parts the words around it, and
+  // script, style and noscript text never counts. A shown target leaves out its
+  // display:none, visibility:hidden and aria-hidden subtrees, and SVG elements SVG never
+  // renders (one it does not know, <metadata>, <script>); a hidden one reads them all, and
+  // there a script-like element or any <svg> parts words, as does every element under
+  // display:none, which has no layout to run inline in. An <input>'s value is not read.
+  // Iterative: the target's depth has no MAX_DEPTH bound.
   function labelText(root) {
     const own = controlText(root) ?? altText(root);
     if (own !== null) return own;
@@ -249,12 +250,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         s += " " + content + " ";
         continue;
       }
+      // A shown <svg> holding at most whitespace reads as nothing: SVG drops that text.
+      const emptySvg = svg && tag === "svg" && shown && !hasContent(node);
       const rawText =
         (ns === "http://www.w3.org/1999/xhtml" && /^(script|style|noscript)$/.test(tag)) ||
         (svg && tag === "style");
       if (
         style.display !== "inline" ||
-        (svg && tag === "svg" && hasContent(node)) ||
+        (svg && tag === "svg" && !emptySvg) ||
         (rawText && !shown) ||
         unrendered
       ) {
@@ -265,16 +268,19 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         unrendered++;
         stack.push(RENDERED);
       }
-      if (!rawText) pushChildren(node);
+      if (!rawText && !emptySvg) pushChildren(node);
     }
     return s.replace(WHITESPACE, " ");
   }
 
-  // Whether a node has an element, text or CDATA child.
+  // Whether a node has an element child, or a text or CDATA child that is not all whitespace.
   function hasContent(node) {
     for (const child of getChildNodes.call(node)) {
       const type = getNodeType.call(child);
-      if (type === 1 || type === 3 || type === 4) return true;
+      if (type === 1) return true;
+      if ((type === 3 || type === 4) && getNodeValue.call(child).replace(WHITESPACE, "")) {
+        return true;
+      }
     }
     return false;
   }
@@ -290,13 +296,24 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return chosen;
   }
 
-  // An element's aria-label, or an <img>'s alt, when it has one that is not blank.
+  // An element's aria-label, or an <img>'s alt, when it has one that is not blank; else an
+  // SVG element's first <title> child's text, which Chrome takes even when blank.
   function altText(el) {
-    const img =
-      getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml" &&
-      getLocalName.call(el) === "img";
+    const ns = getNamespaceURI.call(el);
+    const img = ns === "http://www.w3.org/1999/xhtml" && getLocalName.call(el) === "img";
     const t = getAttr.call(el, "aria-label") || (img && getAttr.call(el, "alt"));
-    return t && t.trim() ? t : null;
+    if (t && t.trim()) return t;
+    if (ns !== "http://www.w3.org/2000/svg") return null;
+    for (const child of getChildNodes.call(el)) {
+      if (
+        getNodeType.call(child) === 1 &&
+        getLocalName.call(child) === "title" &&
+        getNamespaceURI.call(child) === "http://www.w3.org/2000/svg"
+      ) {
+        return getTextContent.call(child) || null;
+      }
+    }
+    return null;
   }
 
   function isInteractive(el) {

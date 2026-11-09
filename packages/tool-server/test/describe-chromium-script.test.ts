@@ -939,6 +939,20 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(pick([unknown([text("selraw")])], none)).toBe("Pick selraw end");
     expect(pick([svg("script", [text("var a")], "SVGScriptElement")], none)).toBe("Pick var a end");
     expect(pick([svg("style", [text(".x{}")], "SVGStyleElement")], none)).toBe("Pick end");
+    // A shown <svg> drops whitespace-only text; CDATA counts as text. Hidden, any <svg> parts.
+    expect(pick([text(" ")])).toBe("Pickend");
+    expect(pick([{ nodeType: 4, nodeValue: " " }])).toBe("Pickend");
+    expect(pick([{ nodeType: 4, nodeValue: "cd" }])).toBe("Pick cd end");
+    expect(pick([], { display: "inline", visibility: "hidden" })).toBe("Pick end");
+    // An SVG element's first <title> stands in for its content, even when blank.
+    const title = (t: string) =>
+      Object.assign(svg("title", [text(t)], "SVGTitleElement"), { textContent: t });
+    const x = svg("text", [text("X")]);
+    expect(pick([x, title("T"), title("U")])).toBe("Pick T end");
+    expect(pick([title(" "), x])).toBe("Pick end");
+    expect(pick([title(""), x])).toBe("Pick X end");
+    expect(pick([svg("g", [title("G"), x])])).toBe("Pick G end");
+    expect(pick([title("T"), x], none)).toBe("Pick T end");
   });
 
   it("parts words at every element under display:none, which has no inline layout", () => {
