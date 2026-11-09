@@ -652,6 +652,24 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
     });
   });
 
+  /**
+   * A process that started before this service's listener dialed one that is
+   * gone, as after a tool-server restart, and never dials again.
+   */
+  it("says at once, without waiting, that a running process older than the listener cannot be armed", async () => {
+    await withService(async (api) => {
+      await api.activateNetworkInspection(APP);
+      sim.psOutput = psLine("10:00");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      const note = await api.networkCaptureAfterLaunch(APP);
+
+      expect(note).toBe(
+        `native network capture is on for ${APP}, but its running process (pid ${PID}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed`
+      );
+    });
+  });
+
   it("answers nothing, at once, when the service is disposed while it waits for the app", async () => {
     await withService(async (api, dispose) => {
       await api.activateNetworkInspection(APP);
