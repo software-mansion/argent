@@ -19,6 +19,7 @@ import {
   canonicalToolId,
   describeParamIssues,
   flowYamlSource,
+  toolParamAliases,
 } from "@argent/registry";
 import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
@@ -458,13 +459,20 @@ const PROJECT_PATH_ADVICE: Record<string, string> = {
   e2e_test_path: "Pass the absolute path to the e2e test file.",
 };
 
-/** Throws when `args` sets a relative project path that a file input of `meta` resolves. */
+/**
+ * Throws when `args` sets a relative project path that a file input of `meta`
+ * resolves, under its name or a former one (an older tool-server's).
+ */
 function assertAbsoluteProjectPaths(meta: ToolMeta | null, args: unknown): void {
-  if (!isRecord(args)) return;
+  if (!meta || !isRecord(args)) return;
+  const aliases = Object.entries(toolParamAliases(meta.name));
   for (const [param, advice] of Object.entries(PROJECT_PATH_ADVICE)) {
     const value = args[param];
     if (typeof value !== "string" || callerPath(value) === value) continue;
-    if (!meta?.fileInputs?.some((spec) => spec.path.includes(`\${${param}}`))) continue;
+    const names = [param, ...aliases.filter(([, current]) => current === param).map(([f]) => f)];
+    if (!meta.fileInputs?.some((spec) => names.some((n) => spec.path.includes(`\${${n}}`)))) {
+      continue;
+    }
     throw new Error(`${param} must be an absolute path (got "${value}"). ${advice}`);
   }
 }

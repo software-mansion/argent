@@ -81,6 +81,13 @@ beforeEach(async () => {
               { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
             ],
           },
+          {
+            // A tool-server older than the e2e_test_path rename.
+            name: "flow-execute",
+            description: "",
+            inputSchema: {},
+            fileInputs: [{ target: "flow_path", path: "${flow_path}", kind: "file" }],
+          },
         ],
       });
     }
@@ -141,7 +148,13 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: false }),
     });
     const tools = await withOverride.fetchTools();
-    expect(tools.map((t) => t.name)).toEqual(["slow", "reinstall-app", "record", "run-flow"]);
+    expect(tools.map((t) => t.name)).toEqual([
+      "slow",
+      "reinstall-app",
+      "record",
+      "run-flow",
+      "flow-execute",
+    ]);
 
     const withoutOverride = createToolsClient();
     await expect(withoutOverride.fetchTools()).rejects.toThrow(
@@ -491,6 +504,21 @@ describe("refuseRelativeProjectPaths", () => {
     );
     expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
   });
+
+  it.each(["e2e_test_path", "flow_path"])(
+    "refuses a relative %s for a tool-server that names it flow_path",
+    async (param) => {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
+
+      await expect(callTool("e2e-execute", { [param]: ".argent/flows/t.yaml" })).rejects.toThrow(
+        'e2e_test_path must be an absolute path (got ".argent/flows/t.yaml")'
+      );
+      expect(requests.map((r) => r.url)).not.toContain("/tools/flow-execute");
+    }
+  );
 
   it("sends an absolute project_root", async () => {
     const { callTool } = createToolsClient({
