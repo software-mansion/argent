@@ -124,10 +124,14 @@ describe("await-screen-idle on an Apple TV", () => {
   });
 
   it("does not settle while the cursor is still moving", async () => {
+    // Only the cursor differs between the two reads.
     const moved: TvDescribeResponse = {
       ...SCREEN,
-      focused: row("Appearance", 0.249, { isFocused: true }),
-      focusable: [row("About", 0.175), row("Appearance", 0.249, { isFocused: true })],
+      focused: row("Appearance", 0.249, { value: "Dark", isFocused: true }),
+      focusable: [
+        row("About", 0.175),
+        row("Appearance", 0.249, { value: "Dark", isFocused: true }),
+      ],
     };
     // Alternate so the fingerprint never repeats.
     const api = makeTvApi([SCREEN, moved, SCREEN, moved, SCREEN, moved, SCREEN, moved]);
@@ -158,6 +162,27 @@ describe("await-screen-idle on an Apple TV", () => {
     expect(res.note).not.toMatch(/accessibility service does not support/i);
   });
 
+  it("does not charge the daemon spawn to the timeout", async () => {
+    // The first resolution starts the tvOS daemons and takes seconds on a cold
+    // simulator; a static screen must not come back unsettled because of it.
+    const api = makeTvApi([SCREEN]);
+    resolveTvApiMock.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve(api), 300))
+    );
+
+    const tool = createAwaitScreenIdleTool(registry);
+    const res = await tool.execute({}, { udid: TV_UDID, timeoutMs: 100, minStableMs: 0 } as never);
+
+    expect(res.settled).toBe(true);
+  });
+
+  it("throws when the tvOS daemons cannot start", async () => {
+    resolveTvApiMock.mockRejectedValue(new Error("tv daemon exited"));
+
+    const tool = createAwaitScreenIdleTool(registry);
+    await expect(tool.execute({}, { udid: TV_UDID } as never)).rejects.toThrow("tv daemon exited");
+  });
+
   it("never repairs the read path from inside the poll loop", async () => {
     // describeTv retries and can respawn the tvOS ax daemon. Doing that mid-wait
     // would drop the very state being watched, so the wait path takes one bare
@@ -184,10 +209,7 @@ describe("await-ui-element on an Apple TV", () => {
     expect(describeIosMock).not.toHaveBeenCalled();
   });
 
-  it("treats every enumerated element as visible", async () => {
-    // A focus view has no "present but invisible" state — what it reports is
-    // exactly the on-screen, D-pad-reachable set. So `visible` matches an
-    // element the cursor is not on.
+  it("treats an on-screen element as visible without the cursor on it", async () => {
     const res = await runElement(makeTvApi([SCREEN]), {
       condition: "visible",
       selector: { text: "Appearance" },
@@ -217,9 +239,11 @@ describe("await-ui-element on an Apple TV", () => {
     const res = await runElement(api, {
       condition: "exists",
       selector: { text: "Appearance", role: "focused" },
+      pollIntervalMs: 50,
     });
 
     expect(res.success).toBe(true);
+    expect(api.calls()).toBe(3);
   });
 
   it("does not report `hidden` satisfied on an empty focus view", async () => {
@@ -249,6 +273,39 @@ describe("await-ui-element on an Apple TV", () => {
     const res = await runElement(api, { condition: "hidden", selector: { text: "About" } });
 
     expect(res.success).toBe(true);
+  });
+
+  it("reports a scrolled-away element as hidden", async () => {
+    const res = await runElement(
+      makeTvApi([{ ...SCREEN, focusable: [...SCREEN.focusable, row("Below", 1.069)] }]),
+      { condition: "hidden", selector: { text: "Below" } }
+    );
+
+    expect(res.success).toBe(true);
+  });
+
+  it("reports a selector that matches nothing as `unmet`", async () => {
+    const res = await runElement(makeTvApi([SCREEN]), {
+      condition: "exists",
+      selector: { text: "Nonexistent" },
+      timeoutMs: 300,
+      pollIntervalMs: 50,
+    });
+
+    expect(res.success).toBe(false);
+    expect(res.cause).toBe("unmet");
+  });
+
+  it("reports a view that stays empty as `unreadable`", async () => {
+    const res = await runElement(makeTvApi([{ focused: null, focusable: [] }]), {
+      condition: "exists",
+      selector: { text: "About" },
+      timeoutMs: 300,
+      pollIntervalMs: 50,
+    });
+
+    expect(res.success).toBe(false);
+    expect(res.cause).toBe("unreadable");
   });
 });
 

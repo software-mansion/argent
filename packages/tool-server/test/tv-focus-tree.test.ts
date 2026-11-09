@@ -5,7 +5,7 @@ import {
   TV_FOCUS_WAIT_EMPTY_HINT,
 } from "../src/tools/describe/platforms/tv-focus";
 import type { TvDescribeResponse } from "../src/blueprints/tv-control-types";
-import { findAll, isVisible, firstInReadingOrder } from "../src/utils/ui-tree-match";
+import { findAll, isVisible } from "../src/utils/ui-tree-match";
 
 /**
  * The adapter behind issue #620: `describeIos` short-circuits every tvOS read to
@@ -47,6 +47,10 @@ const SETTINGS: TvDescribeResponse = {
   ],
 };
 
+function row(label: string) {
+  return { label, frame: { x: 0.5, y: 0.5, width: 0.4, height: 0.06 }, traits: ["button"] };
+}
+
 describe("tvFocusTree — the focus view as a describe tree", () => {
   it("keeps the real frames the daemon reports", () => {
     // The frames were always in the payload; only the TS type and describe's
@@ -58,29 +62,39 @@ describe("tvFocusTree — the focus view as a describe tree", () => {
     expect(isVisible(first)).toBe(true);
   });
 
-  it("falls back to an ordered, non-degenerate frame when a backend reports none", () => {
-    // Android TV's focus view genuinely has no bounds, and the tvOS daemon omits
-    // the frame for a zero-size element. Neither may end up invisible or
-    // unordered.
-    const noFrames: TvDescribeResponse = {
+  it("keeps a frameless element zero-area, so `visible` and `hidden` read it as gone", () => {
+    // The daemon omits the frame only for a zero-size element, and the tool
+    // description promises `hidden` accepts a zero-area match.
+    const { tree } = tvFocusTree({
       focused: null,
-      focusable: [{ label: "One" }, { label: "Two" }, { label: "Three" }],
-    };
+      focusable: [{ label: "Collapsed" }, row("Shown")],
+    });
 
-    const nodes = tvFocusTree(noFrames).tree.children;
-
-    expect(nodes.every((n) => n.frame.width > 0 && n.frame.height > 0)).toBe(true);
-    expect(nodes.every(isVisible)).toBe(true);
-    expect(nodes.map((n) => n.frame.y)).toEqual([0, 1 / 3, 2 / 3]);
-    expect(firstInReadingOrder(nodes)?.label).toBe("One");
+    const [collapsed, shown] = tree.children;
+    expect(collapsed!.frame).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+    expect(isVisible(collapsed!)).toBe(false);
+    expect(isVisible(shown!)).toBe(true);
   });
 
-  it("carries the app id on the root so a whole-app swap is noticed", () => {
-    const { tree } = tvFocusTree(SETTINGS);
+  it("keeps a scrolled-away row matchable but not visible", () => {
+    // Captured from General in com.apple.TVSettings: the daemon keeps listing a
+    // row below the fold. A row the fold cuts through is still on screen.
+    const { tree } = tvFocusTree({
+      focused: null,
+      focusable: [
+        { label: "Below", frame: { x: 0.552, y: 1.069, width: 0.406, height: 0.061 } },
+        { label: "Cut", frame: { x: 0.552, y: 0.994, width: 0.406, height: 0.061 } },
+      ],
+    });
 
-    expect(tree.label).toBe("com.apple.TVSettings");
-    // …but the root itself must not be matchable, or every selector would hit it.
-    expect(findAll(tree, { text: "com.apple.TVSettings" })).toHaveLength(0);
+    const [below, cut] = tree.children;
+    expect(findAll(tree, { text: "Below" })).toHaveLength(1);
+    expect(isVisible(below!)).toBe(false);
+    expect(isVisible(cut!)).toBe(true);
+  });
+
+  it("does not make the app id matchable", () => {
+    expect(findAll(tvFocusTree(SETTINGS).tree, { text: "com.apple.TVSettings" })).toHaveLength(0);
   });
 
   it("exposes labels, values and traits to the selector matcher", () => {
@@ -125,6 +139,15 @@ describe("tvFocusTree — the focus view as a describe tree", () => {
     const { tree } = tvFocusTree(orphan);
 
     expect(tree.children).toHaveLength(2);
+    expect(findAll(tree, { text: "Orphan", role: "focused" })).toHaveLength(1);
+  });
+
+  it("marks a cursor missing from the list even when the read did not", () => {
+    const { tree } = tvFocusTree({
+      focused: { label: "Orphan", traits: ["button"] },
+      focusable: [{ label: "Other", traits: ["button"] }],
+    });
+
     expect(findAll(tree, { text: "Orphan", role: "focused" })).toHaveLength(1);
   });
 });

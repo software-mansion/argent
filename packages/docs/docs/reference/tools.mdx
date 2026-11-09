@@ -74,6 +74,8 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
 | `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
 
+On an Apple TV simulator, `await-screen-idle` and `await-ui-element` read the focus view that `describe` shows. To wait until the cursor lands on an element, give `await-ui-element` a selector with `role: "focused"`.
+
 ## Interacting
 
 | Tool                     | Description                                                     |

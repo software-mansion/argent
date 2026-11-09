@@ -1,9 +1,9 @@
-import { isEmptyFocus } from "./tv-focus";
 import type { DeviceInfo, Registry } from "@argent/registry";
 import type { DescribeResult } from "../contract";
 import { formatDescribeTree } from "../format-tree";
 import { resolveTvApi } from "../../tv/tv-service";
 import { describeAndroid } from "./android";
+import { isEmptyFocus as isEmpty } from "./tv-focus";
 import type {
   TvControlApi,
   TvDescribeResponse,
@@ -37,9 +37,6 @@ const ANDROID_FOCUS_EMPTY_HINT =
   "Falling back to the full UI tree below. `tv-remote` (direction/select) still moves focus on " +
   "these screens even though the labels aren't enumerable, so you can drive blind + screenshot " +
   "to confirm.";
-
-// Shared with the wait tools' focus adapter so both agree on what "empty" means.
-const isEmpty = isEmptyFocus;
 
 /**
  * tvOS AX labels are often compound multi-line strings, e.g.

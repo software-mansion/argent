@@ -36,23 +36,16 @@ export function isEmptyFocus(res: TvDescribeResponse): boolean {
 }
 
 /**
- * The tvOS daemon reports a normalized frame per element, but `TvElement` has
- * historically not declared it (the JSON is passed through by reference, so the
- * data is there at runtime). Read it defensively: Android TV's focus backend
- * genuinely omits bounds, and the tvOS daemon drops `frame` for a zero-size
- * element.
+ * What the wait tools read as a non-zero on-screen frame. The daemon omits `frame`
+ * for a zero-size element and keeps reporting a scrolled-away row, which `describe`
+ * would have pruned, so both come out zero-area: `isVisible` then reports what the
+ * tool description promises, and `hidden` can resolve on them.
  */
-function frameOf(element: TvElement, index: number, total: number): DescribeNode["frame"] {
-  const raw = element.frame;
-  if (raw && raw.width > 0 && raw.height > 0) {
-    return { x: raw.x, y: raw.y, width: raw.width, height: raw.height };
-  }
-  // Fallback: a non-degenerate band per element, ordered by enumeration index.
-  // `isVisible` requires a non-zero area, and both backends enumerate in
-  // traversal order, so index order IS reading order (android-tv-control.ts
-  // reverses its child push specifically to guarantee that).
-  const slots = Math.max(total, 1);
-  return { x: 0, y: index / slots, width: 1, height: 1 / slots };
+function frameOf(element: TvElement): DescribeNode["frame"] {
+  const f = element.frame;
+  if (!f) return { x: 0, y: 0, width: 0, height: 0 };
+  const onScreen = f.x < 1 && f.y < 1 && f.x + f.width > 0 && f.y + f.height > 0;
+  return onScreen ? f : { x: f.x, y: f.y, width: 0, height: 0 };
 }
 
 /**
@@ -72,13 +65,13 @@ function frameOf(element: TvElement, index: number, total: number): DescribeNode
  */
 const FOCUSED_TRAIT = "focused";
 
-function toNode(element: TvElement, index: number, total: number): DescribeNode {
+function toNode(element: TvElement): DescribeNode {
   const traits = [...(element.traits ?? [])];
   if (element.isFocused) traits.push(FOCUSED_TRAIT);
   return {
     // Traits are what a selector's `role` matches, exactly as on a phone.
     role: traits.length > 0 ? traits.join(",") : "element",
-    frame: frameOf(element, index, total),
+    frame: frameOf(element),
     children: [],
     ...(element.label ? { label: element.label } : {}),
     ...(element.value ? { value: element.value } : {}),
@@ -88,13 +81,7 @@ function toNode(element: TvElement, index: number, total: number): DescribeNode 
   };
 }
 
-/**
- * Adapt a focus read into a describe tree.
- *
- * The root carries the foreground bundle id, so a wait notices the app itself
- * changing underneath it — a TV transition often swaps the whole app, not just
- * the focusable set.
- */
+/** Adapt a focus read into a describe tree. */
 export function tvFocusTree(res: TvDescribeResponse): DescribeTreeData {
   if (isEmptyFocus(res)) {
     // The hint is load-bearing, not decoration: `await-ui-element` treats an
@@ -112,12 +99,14 @@ export function tvFocusTree(res: TvDescribeResponse): DescribeTreeData {
   // Detect that by looking for a focusable already MARKED focused, not by object
   // identity: the two arrive as separate objects from the same JSON payload, so
   // an identity check would append a duplicate of an element that is already
-  // there — and the cursor would then match twice.
-  if (res.focused && !res.focusable.some((e) => e.isFocused)) elements.push(res.focused);
+  // there — and the cursor would then match twice. It is the cursor whatever the
+  // read marked on it, so mark it here or `role: "focused"` cannot match it.
+  if (res.focused && !res.focusable.some((e) => e.isFocused)) {
+    elements.push({ ...res.focused, isFocused: true });
+  }
 
   const root = focusRoot();
-  root.children = elements.map((el, i) => toNode(el, i, elements.length));
-  if (res.bundleId) root.label = res.bundleId;
+  root.children = elements.map(toNode);
   return { tree: root, source: "tv-focus" };
 }
 
