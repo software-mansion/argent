@@ -12,10 +12,10 @@ const CORE_SIMULATOR_INFO_PLIST =
   "/Library/Developer/PrivateFrameworks/CoreSimulator.framework/Versions/A/Resources/Info.plist";
 
 // A Simulator.app built against an older CoreSimulator than the installed one
-// (e.g. Xcode 16.4 selected after an Xcode 27 install) aborts up to ~1.7 s after
-// launch while a simulator is booted, popping a "Simulator quit unexpectedly"
-// dialog each time.
-const LAUNCH_WATCH_MS = 5_000;
+// (e.g. Xcode 16.4 selected after an Xcode 27 install) aborts after launch while
+// a simulator is booted, popping a "Simulator quit unexpectedly" dialog each
+// time. Crash reports show it mostly within 1.5 s, at worst ~9 s.
+const LAUNCH_WATCH_MS = 10_000;
 const LAUNCH_POLL_MS = 250;
 
 type Verdict = "runs" | "crashes";

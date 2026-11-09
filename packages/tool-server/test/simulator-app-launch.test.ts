@@ -44,7 +44,7 @@ const verdicts = () =>
 // Runs a launch to completion, stepping past the post-launch watch.
 async function run(app = APP): Promise<boolean> {
   const result = launchSimulatorApp(app, launch);
-  await vi.advanceTimersByTimeAsync(10_000);
+  await vi.advanceTimersByTimeAsync(20_000);
   return result;
 }
 
@@ -140,7 +140,7 @@ describe("launchSimulatorApp", () => {
   it("records a crash at the end of the watch window", async () => {
     launchedAppStays = true;
     const result = launchSimulatorApp(APP, launch);
-    await vi.advanceTimersByTimeAsync(4_900);
+    await vi.advanceTimersByTimeAsync(9_900);
     appRunning = false;
     await vi.advanceTimersByTimeAsync(10_000);
 
@@ -172,7 +172,7 @@ describe("launchSimulatorApp", () => {
   it("stops watching once the watch window has passed", async () => {
     launchedAppStays = true;
     const result = launchSimulatorApp(APP, launch);
-    await vi.advanceTimersByTimeAsync(5_100);
+    await vi.advanceTimersByTimeAsync(10_100);
     appRunning = false;
 
     await expect(result).resolves.toBe(true);
@@ -181,7 +181,7 @@ describe("launchSimulatorApp", () => {
 
   it("launches a crashing app once for parallel callers", async () => {
     const results = Promise.all([launchSimulatorApp(APP, launch), launchSimulatorApp(APP, launch)]);
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(20_000);
 
     await expect(results).resolves.toEqual([false, false]);
     expect(launch).toHaveBeenCalledTimes(1);
