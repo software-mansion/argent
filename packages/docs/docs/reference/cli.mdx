@@ -31,3 +31,17 @@ sidebar_custom_props:
 | `argent telemetry` | Manage telemetry: `status` / `enable` / `disable`. Add `--scope project` to write the committed project file. `false` in either scope turns telemetry off                                                                                                         |
 
 Run `argent --help` for the full set of options, and `argent --version` to print the installed version.
+
+## Skills step of `argent init`
+
+`argent init` installs the skills from the Git tag of the Argent version. If this install fails, `argent init` installs the skills from the copy in the package. The interactive mode asks before it does this.
+
+The summary shows the number of Argent skills on disk in the scope of the install. `argent init` writes the MCP configuration and the rules in all outcomes.
+
+| Result of the skills step                                 | Exit code |
+| --------------------------------------------------------- | --------- |
+| Skills are on disk, from the Git tag or the package copy  | `0`       |
+| The install failed, and skills from an earlier run remain | `0`       |
+| The user selected **Manual**, or no skills in the prompt  | `0`       |
+| The install failed, and no skills are on disk             | `1`       |
+| The machine is offline, and no skills are on disk         | `1`       |

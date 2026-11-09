@@ -94,7 +94,7 @@ interface InstallationSkillInstallProps {
   has_offline_cache: boolean;
   outcome: "success" | "failure" | "skipped";
   /** Which source the skills came from: the pinned ref or the bundled copy. */
-  source?: "pinned" | "bundled" | null;
+  source?: "pinned" | "bundled";
   /** True when the pinned source failed and the bundled copy rescued the install. */
   used_fallback?: boolean;
   /** Why the pinned source lost, when it did. */

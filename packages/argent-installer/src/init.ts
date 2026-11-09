@@ -34,6 +34,7 @@ import { parseInitArgs, InitCancelled } from "./init-args.js";
 import {
   InitTelemetry,
   INSTALL_MODE_FLAG_CONFLICT,
+  INSTALL_SKILLS_FAILED,
   INSTALL_UNCLASSIFIED_FAILED,
 } from "./init-telemetry.js";
 import { promptInstallMode } from "./init-mode-prompt.js";
@@ -43,7 +44,12 @@ import { chooseScope, type Scope } from "./init-scope.js";
 import { writeMcpConfigs } from "./init-mcp-write.js";
 import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
 import { configureAllowlist } from "./init-allowlist.js";
-import { runSkillsStep, type SkillsMethod } from "./init-skills.js";
+import {
+  formatSkillsSummaryLine,
+  runSkillsStep,
+  skillsAreMissing,
+  type SkillsStepResult,
+} from "./init-skills.js";
 
 // `argent init` orchestrator. Step modules signal a cancelled prompt by throwing
 // InitCancelled(step); the catch below turns that into cli_init_cancel + a clean exit.
@@ -263,7 +269,7 @@ export async function init(args: string[]): Promise<void> {
 
     // Step 2 — the module prints its own step header.
 
-    const skillsMethod = await runSkillsStep({
+    const skills = await runSkillsStep({
       nonInteractive: parsed.nonInteractive,
       fromTar: parsed.fromTar,
       version,
@@ -302,30 +308,43 @@ export async function init(args: string[]): Promise<void> {
       selectedAdapters: writtenAdapters,
       scope,
       allowlistEnabled: allowlist.enabled,
-      skillsMethod,
+      skills,
       copiedRules: copyResults.length > 0,
       wroteProjectTelemetryOptOut,
     });
 
-    p.note(
-      [
-        pc.bold(pc.green("Argent is ready!")),
-        "",
-        `${pc.bold("Get started")} by asking your assistant:`,
-        "",
-        `   ${pc.bold(pc.cyan(`"What can Argent do?"`))}`,
-        "",
-        pc.dim("It will walk you through all capabilities available."),
-      ].join("\n"),
-      pc.bgGreen(pc.black(" Get Started "))
-    );
-    p.outro("Done.");
+    const skillsMissing = skillsAreMissing(skills);
+    if (skills.installedCount > 0 || (skills.method === "manual" && !skills.forcedManual)) {
+      p.note(
+        [
+          pc.bold(pc.green("Argent is ready!")),
+          "",
+          `${pc.bold("Get started")} by asking your assistant:`,
+          "",
+          `   ${pc.bold(pc.cyan(`"What can Argent do?"`))}`,
+          "",
+          pc.dim("It will walk you through all capabilities available."),
+        ].join("\n"),
+        pc.bgGreen(pc.black(" Get Started "))
+      );
+    } else {
+      p.log.warn(
+        `${pc.bold("Argent is not ready:")} the MCP server and rules are in place, but no skills are ` +
+          `installed. Run ${pc.cyan("argent init")} again to install them.`
+      );
+    }
+    p.outro(skillsMissing ? "Done, without skills." : "Done.");
 
-    tel.initSucceeded = true;
+    tel.initSucceeded = !skillsMissing;
     // Persist an interactive first-run telemetry choice only now that init has
     // completed: until here it is an in-process override, so an aborted setup
     // leaves nothing behind and the next run re-prompts.
     if ("commit" in consent) consent.commit();
+    if (skillsMissing) {
+      await tel.finalize(INSTALL_SKILLS_FAILED);
+      // Everything else is written, but the step itself calls skills required.
+      process.exit(1);
+    }
     await tel.finalize();
   } catch (err) {
     if (err instanceof InitCancelled) {
@@ -356,7 +375,7 @@ interface SummaryArgs {
   selectedAdapters: McpConfigAdapter[];
   scope: Scope;
   allowlistEnabled: boolean;
-  skillsMethod: SkillsMethod;
+  skills: SkillsStepResult;
   copiedRules: boolean;
   /** `--no-telemetry` in local mode also wrote `.argent/config.json`. */
   wroteProjectTelemetryOptOut: boolean;
@@ -367,7 +386,7 @@ function printSummary({
   selectedAdapters,
   scope,
   allowlistEnabled,
-  skillsMethod,
+  skills,
   copiedRules,
   wroteProjectTelemetryOptOut,
 }: SummaryArgs): void {
@@ -377,7 +396,7 @@ function printSummary({
       ? `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`
       : `${pc.yellow("MCP server")} NOT configured — no editor config was written`,
     `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
-    `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
+    formatSkillsSummaryLine(skills),
     `${pc.green("Rules")} ${copiedRules ? "copied" : "n/a"}`,
   ];
 

@@ -6,7 +6,12 @@ import * as path from "node:path";
 
 // `runSkillsStep` spawns `npx skills add ...`. Mock `spawn` with a child that
 // exits 0 so the test can inspect the spawn options without running npx.
-const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
+const { spawnMock, confirmMock, trackMock, state } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  confirmMock: vi.fn(),
+  trackMock: vi.fn(),
+  state: { bundledUnreadable: false },
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -17,20 +22,40 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
+vi.mock("@argent/telemetry", () => ({ track: trackMock }));
 
 vi.mock("../src/utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/utils.js")>();
-  return { ...actual, isOnline: vi.fn(async () => true) };
+  return {
+    ...actual,
+    isOnline: vi.fn(async () => true),
+    listBundledSkills: (dir?: string) =>
+      state.bundledUnreadable ? [] : actual.listBundledSkills(dir),
+  };
 });
 
-import { runSkillsStep } from "../src/init-skills.js";
+vi.mock("@clack/prompts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@clack/prompts")>();
+  return { ...actual, confirm: confirmMock, select: vi.fn(async () => "interactive") };
+});
+
+import {
+  formatSkillsSummaryLine,
+  runSkillsStep,
+  skillsAreMissing,
+  type SkillsStepResult,
+} from "../src/init-skills.js";
+import { SKILLS_DIR, buildArgentSkillsSource, getInstalledVersion } from "../src/utils.js";
 
 const originalPackage = process.env.npm_config_package;
 const originalHome = process.env.HOME;
 const originalXdg = process.env.XDG_STATE_HOME;
 let tmpDir: string;
 let exitCode: number;
+// Exit code per `skills add` attempt, then `exitCode`. Null means killed by a signal.
+let addExitCodes: (number | null)[];
+// Whether a clean `skills add` writes a skill, as the real CLI does.
+let addWritesSkills: boolean;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-init-skills-test-"));
@@ -38,13 +63,26 @@ beforeEach(() => {
   process.env.HOME = path.join(tmpDir, "home");
   process.env.XDG_STATE_HOME = path.join(tmpDir, "home", "xdg");
   exitCode = 0;
+  addExitCodes = [];
+  addWritesSkills = true;
+  state.bundledUnreadable = false;
+  confirmMock.mockReset();
+  trackMock.mockClear();
   spawnMock.mockReset();
-  spawnMock.mockImplementation(() => {
+  spawnMock.mockImplementation((_cmd: string, args: string[], opts: { cwd?: string }) => {
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
       stderr: new EventEmitter(),
     });
-    setImmediate(() => child.emit("close", exitCode));
+    const isAdd = args.includes("add");
+    const code = isAdd && addExitCodes.length > 0 ? addExitCodes.shift()! : exitCode;
+    if (isAdd && code === 0 && addWritesSkills) {
+      const root = args.includes("-g") ? process.env.HOME! : (opts.cwd ?? process.cwd());
+      const skill = path.join(root, ".agents", "skills", "argent-device-interact");
+      fs.mkdirSync(skill, { recursive: true });
+      fs.writeFileSync(path.join(skill, "SKILL.md"), "");
+    }
+    setImmediate(() => child.emit("close", code, code === null ? "SIGTERM" : null));
     return child;
   });
 });
@@ -79,7 +117,7 @@ describe("runSkillsStep", () => {
     // Set by `npx --package @swmansion/argent -- argent init`.
     process.env.npm_config_package = "@swmansion/argent@latest";
 
-    const method = await runSkillsStep({
+    const { method } = await runSkillsStep({
       nonInteractive: true,
       fromTar: null,
       version: "unknown",
@@ -220,5 +258,251 @@ describe("runSkillsStep", () => {
     });
 
     expect(fs.existsSync(legacy)).toBe(true);
+  });
+});
+
+describe("runSkillsStep when the install fails (#614)", () => {
+  const version = "0.0.1-untagged";
+  const pinned = buildArgentSkillsSource(version);
+  const project = () => path.join(tmpDir, "project");
+
+  const step = (overrides: Partial<Parameters<typeof runSkillsStep>[0]> = {}) =>
+    runSkillsStep({
+      nonInteractive: true,
+      fromTar: null,
+      version,
+      scope: "local",
+      ...overrides,
+    });
+  const interactiveStep = () => step({ nonInteractive: false });
+
+  const addSources = (): string[] =>
+    spawnMock.mock.calls
+      .map((call) => call[1] as string[])
+      .filter((args) => args.includes("add"))
+      .map((args) => args[args.indexOf("add") + 1]!);
+
+  beforeEach(() => {
+    mkdirs(project());
+    vi.spyOn(process, "cwd").mockReturnValue(project());
+  });
+
+  it("uses only the pinned source when it works", async () => {
+    const result = await step();
+
+    expect(addSources()).toEqual([pinned]);
+    expect(result).toMatchObject({
+      outcome: "success",
+      source: "pinned",
+      usedFallback: false,
+      installedCount: 1,
+    });
+  });
+
+  it("falls back to the bundled copy on any failure and says so in telemetry", async () => {
+    addExitCodes = [1];
+
+    const result = await step();
+
+    expect(addSources()).toEqual([pinned, SKILLS_DIR]);
+    expect(result).toMatchObject({
+      outcome: "success",
+      source: "bundled",
+      usedFallback: true,
+      installedCount: 1,
+    });
+    expect(trackMock).toHaveBeenCalledWith(
+      "installation:skill_install",
+      expect.objectContaining({ used_fallback: true, fallback_reason: "unclassified" })
+    );
+  });
+
+  it("reports failure when the fallback fails too, with nothing on disk", async () => {
+    exitCode = 1;
+
+    const result = await step();
+
+    expect(addSources()).toEqual([pinned, SKILLS_DIR]);
+    expect(result).toMatchObject({
+      outcome: "failure",
+      source: null,
+      usedFallback: false,
+      installedCount: 0,
+    });
+  });
+
+  it("counts skills an earlier install left behind when this one fails", async () => {
+    exitCode = 1;
+    const existing = path.join(project(), ".agents", "skills", "argent-device-interact");
+    mkdirs(existing);
+    fs.writeFileSync(path.join(existing, "SKILL.md"), "");
+
+    const result = await step();
+
+    expect(result).toMatchObject({ outcome: "failure", installedCount: 1 });
+  });
+
+  it("does not trust a clean exit that left nothing on disk (#1335)", async () => {
+    addWritesSkills = false;
+
+    const result = await step();
+
+    expect(addSources()).toEqual([pinned, SKILLS_DIR]);
+    expect(result).toMatchObject({ outcome: "failure", installedCount: 0 });
+  });
+
+  it("does not retry a source that is already the bundled copy", async () => {
+    exitCode = 1;
+
+    const result = await step({ fromTar: "/tmp/argent.tgz" });
+
+    expect(addSources()).toEqual([SKILLS_DIR]);
+    expect(result).toMatchObject({ outcome: "failure" });
+  });
+
+  it("does not retry when the bundled copy is unreadable", async () => {
+    addExitCodes = [1];
+    state.bundledUnreadable = true;
+
+    const result = await step();
+
+    expect(addSources()).toEqual([pinned]);
+    expect(result).toMatchObject({ outcome: "failure" });
+  });
+
+  it("does not retry when npx itself is missing (#1206)", async () => {
+    spawnMock.mockImplementationOnce(() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      setImmediate(() =>
+        child.emit("error", Object.assign(new Error("spawn npx ENOENT"), { code: "ENOENT" }))
+      );
+      return child;
+    });
+
+    const result = await step();
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ outcome: "failure", installedCount: 0 });
+  });
+
+  it("does not retry an attempt killed by a signal", async () => {
+    addExitCodes = [null];
+
+    const result = await step();
+
+    expect(addSources()).toEqual([pinned]);
+    expect(result).toMatchObject({ outcome: "failure" });
+  });
+
+  it("keeps the scope flag when it retries", async () => {
+    addExitCodes = [1];
+
+    await step({ scope: "global" });
+
+    const retryArgs = spawnMock.mock.calls[1]![1] as string[];
+    expect(retryArgs).toEqual(
+      expect.arrayContaining(["--fetch-retries=0", "add", SKILLS_DIR, "-g"])
+    );
+  });
+
+  it("retries a custom-scope install from the custom root", async () => {
+    addExitCodes = [1];
+    const custom = path.join(tmpDir, "custom");
+    mkdirs(custom);
+
+    const result = await step({ scope: "custom", customRoot: custom });
+
+    expect(spawnMock.mock.calls[1]![2]).toMatchObject({ cwd: custom });
+    expect(result).toMatchObject({ outcome: "success", installedCount: 1 });
+  });
+
+  it("prunes legacy skills after a rescued install from this package's copy", async () => {
+    addExitCodes = [1];
+    const legacy = path.join(project(), ".agents", "skills", "argent-create-flow");
+    mkdirs(legacy);
+
+    await step({ version: getInstalledVersion()! });
+
+    expect(fs.existsSync(legacy)).toBe(false);
+  });
+
+  it("asks before reopening the TUI, and stops if declined", async () => {
+    addExitCodes = [1];
+    confirmMock.mockResolvedValue(false);
+
+    const result = await interactiveStep();
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(addSources()).toEqual([pinned]);
+    expect(result).toMatchObject({ method: "interactive", outcome: "failure" });
+  });
+
+  it("retries in the TUI when confirmed", async () => {
+    addExitCodes = [1];
+    confirmMock.mockResolvedValue(true);
+
+    const result = await interactiveStep();
+
+    expect(addSources()).toEqual([pinned, SKILLS_DIR]);
+    expect(result).toMatchObject({ outcome: "success", usedFallback: true });
+  });
+
+  it("treats a TUI that exits 0 and installs nothing as skipped, without retrying", async () => {
+    addWritesSkills = false;
+
+    const result = await interactiveStep();
+
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(addSources()).toEqual([pinned]);
+    expect(result).toMatchObject({ outcome: "skipped", source: null, installedCount: 0 });
+  });
+});
+
+describe("skills summary line (#614)", () => {
+  const result = (overrides: Partial<SkillsStepResult>): SkillsStepResult => ({
+    method: "default",
+    outcome: "success",
+    source: "pinned",
+    usedFallback: false,
+    installedCount: 18,
+    forcedManual: false,
+    ...overrides,
+  });
+
+  it.each<[string, Partial<SkillsStepResult>, RegExp, boolean]>([
+    ["a healthy install", {}, /18 installed$/, false],
+    ["a rescued install", { usedFallback: true }, /18 installed from the bundled copy/, false],
+    ["total failure", { outcome: "failure", installedCount: 0 }, /NOT installed/, true],
+    [
+      "failure over earlier skills",
+      { outcome: "failure" },
+      /not updated.*18 already on disk/,
+      false,
+    ],
+    [
+      "offline with nothing on disk",
+      { method: "manual", outcome: "skipped", installedCount: 0, forcedManual: true },
+      /NOT installed \(offline/,
+      true,
+    ],
+    [
+      "Manual, chosen by the user",
+      { method: "manual", outcome: "skipped", installedCount: 0 },
+      /instructions printed$/,
+      false,
+    ],
+    [
+      "a TUI that installed nothing",
+      { method: "interactive", outcome: "skipped", installedCount: 0 },
+      /NOT installed \(none selected\)/,
+      false,
+    ],
+  ])("%s", (_name, overrides, line, missing) => {
+    const skills = result(overrides);
+    expect(formatSkillsSummaryLine(skills)).toMatch(line);
+    expect(skillsAreMissing(skills)).toBe(missing);
   });
 });

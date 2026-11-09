@@ -6,6 +6,7 @@ import pc from "picocolors";
 import { track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
+  ARGENT_SKILL_PREFIX,
   buildArgentSkillsSource,
   getGlobalSkillLockPath,
   getInstalledVersion,
@@ -140,6 +141,23 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   }
 
   return results;
+}
+
+// Argent skills actually on disk in a scope, whatever the skills CLI reported:
+// the installer's summary states this number, so it has to come from the disk.
+export function countInstalledArgentSkills(projectRoot: string, scope: SkillScope): number {
+  const { skillTargets } = getManagedContentTargets(
+    ALL_ADAPTERS,
+    projectRoot,
+    scope === "global" ? "global" : "local"
+  );
+  const names = new Set<string>();
+  for (const { targetPath } of skillTargets) {
+    for (const name of listBundledSkills(targetPath)) {
+      if (name.startsWith(ARGENT_SKILL_PREFIX)) names.add(name);
+    }
+  }
+  return names.size;
 }
 
 // A renamed skill's old dir can outlive its lock entry (or never have had one),
