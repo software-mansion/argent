@@ -14,7 +14,7 @@ import {
   selectorToFrame,
   findAll,
   evaluateCondition,
-  firstInReadingOrder,
+  textCheckTarget,
   frameContains,
   isVisible,
   assertText,
@@ -2480,9 +2480,7 @@ function assertReason(
     case "text": {
       // The same pick evaluateCondition made, so the reason quotes the element
       // the check read.
-      const first =
-        firstInReadingOrder(matches.filter(isVisible), orientation) ??
-        firstInReadingOrder(matches, orientation);
+      const first = textCheckTarget(matches, orientation, macos);
       if (!first) return `no element matched selector ${sel}`;
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted

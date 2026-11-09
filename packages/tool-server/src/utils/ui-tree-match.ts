@@ -573,6 +573,31 @@ export function macFieldText(node: DescribeNode, macos: boolean): string | undef
     : undefined;
 }
 
+// The match a `text` check reads: the first visible one in reading order (the
+// first overall if none is visible). On a Mac app, not a text field around a
+// match that is not one: a web editor's value is the text of the paragraphs
+// inside it, so a selector for a paragraph's text reads that paragraph.
+export function textCheckTarget(
+  matches: DescribeNode[],
+  orientation: UiOrientation | undefined,
+  macos: boolean
+): DescribeNode | undefined {
+  const read = macos
+    ? matches.filter(
+        (n) =>
+          macFieldText(n, true) === undefined ||
+          !matches.some(
+            (m) =>
+              isVisible(m) && macFieldText(m, true) === undefined && frameWithin(m.frame, n.frame)
+          )
+      )
+    : matches;
+  return (
+    firstInReadingOrder(read.filter(isVisible), orientation) ??
+    firstInReadingOrder(read, orientation)
+  );
+}
+
 // Evaluated over ALL elements matching a selector. `visible` holds if ANY match
 // is on-screen; `hidden` only if NONE is; `text` reads the first VISIBLE match
 // in reading order (the first overall if none is visible), so a stale zero-area
@@ -595,9 +620,7 @@ export function evaluateCondition(
     case "hidden":
       return !matches.some(isVisible);
     case "text": {
-      const first =
-        firstInReadingOrder(matches.filter(isVisible), orientation) ??
-        firstInReadingOrder(matches, orientation);
+      const first = textCheckTarget(matches, orientation, textFieldsShowText);
       if (first === undefined || expectedText === undefined) return false;
       const field = macFieldText(first, textFieldsShowText);
       if (field !== undefined) {

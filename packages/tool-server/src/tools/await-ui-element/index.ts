@@ -29,8 +29,8 @@ import {
   macFieldText,
   findAll,
   isVisible,
-  firstInReadingOrder,
   evaluateCondition,
+  textCheckTarget,
 } from "../../utils/ui-tree-match";
 
 // Exported so run-sequence can allowlist this tool without repeating the string.
@@ -245,7 +245,7 @@ function timeoutNote(
       // Visible-first, mirroring evaluateCondition, so the note quotes the
       // element the check read, and the text it read (a Mac app's container
       // is checked against its subtree text).
-      const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      const first = textCheckTarget(matches, undefined, isMacos(params));
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       base = first
         ? `element matched but its text was "${macFieldText(first, isMacos(params)) ?? assertText(first)}" (wanted to ${wanted} "${params.expectedText}")`

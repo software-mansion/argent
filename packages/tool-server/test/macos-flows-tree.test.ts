@@ -169,6 +169,35 @@ describe("macOS flow tree projection", () => {
     ).toBe(true);
   });
 
+  it("reads a paragraph of a web editor, not the editor, for a selector of the paragraph's text", async () => {
+    const alpha = "Alpha paragraph ends on a third line";
+    const beta = "Beta paragraph is short";
+    const para = (text: string, y: number) => ({
+      tag: "p",
+      text,
+      ownText: text,
+      normalizedFrame: rect(0.12, y, 0.4, 0.04),
+    });
+    const web = webTree([
+      {
+        role: "textbox",
+        multiline: true,
+        id: "ed",
+        text: `${alpha} ${beta}`,
+        normalizedFrame: rect(0.1, 0.6, 0.5, 0.12),
+      },
+      para(alpha, 0.61),
+      para(beta, 0.66),
+    ]);
+    const tree = await flowTree({ web });
+    const check = (selector: Selector, expected: string, mode: "equals" | "contains") =>
+      evaluateCondition("text", expected, findAll(tree, selector), mode, undefined, true);
+    expect(check({ text: "Beta paragraph" }, beta, "equals")).toBe(true);
+    expect(check({ text: "Beta paragraph" }, "third line", "contains")).toBe(false);
+    expect(check({ identifier: "ed" }, `${alpha} ${beta}`, "equals")).toBe(true);
+    expect(check({ role: "AXTextArea", text: "Beta" }, "third line", "contains")).toBe(true);
+  });
+
   it("reads collected text with whitespace runs as single spaces", async () => {
     const tree = await flowTree();
     const address = findAll(tree, { identifier: "web-address" });

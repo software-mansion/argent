@@ -312,6 +312,8 @@ A `text` check on a container reads the text of the container and of the element
 - The check skips an element that has its own identifier, together with the elements under that element.
 - A web element, and a view that has an identifier but is not an accessibility element, have no elements under them in the tree. The check reads all the text that the element shows.
 
+A `text` check does not read a text field that holds a different match. For example, a selector for the text of a paragraph in a web editor matches the paragraph and the editor, and the check reads the paragraph.
+
 Over a web view, the page gets the scroll first. When the page is at its end or cannot move on that axis, the nearest scroll view around the web view that can move on that axis gets the scroll.
 
 `gesture-scroll` returns `scrolled: true` also when the content does not move:
