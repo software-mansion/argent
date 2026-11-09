@@ -308,8 +308,8 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   if (bootingPorts.has(port)) {
     options.onProcessGone?.();
     throw portInUseError(
-      `${label} boot: another boot on port ${port} is still starting. Retry once it ` +
-        `finishes, or omit \`electronPort\` to get a free port.`
+      `${label} boot: another boot on port ${port} is still starting; if it succeeds, it ` +
+        `is chromium-cdp-${port}. Omit \`electronPort\` to get a free port.`
     );
   }
   bootingPorts.add(port);

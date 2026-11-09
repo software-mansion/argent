@@ -92,13 +92,14 @@ function holderAlive(pid: number): boolean {
 /** Whether `pid` is a browser on `dir`; a dead browser's pid can pass to an unrelated process. */
 function browserOnProfile(pid: number, dir: string): boolean {
   if (!holderAlive(pid)) return false;
-  // Windows has no POSIX ps; one from Git Bash would reject these flags.
+  // Windows has no ps of its own; Git Bash's numbers its own pids.
   if (process.platform === "win32") return true;
   const ps = spawnSync(PS_BIN, ["-ww", "-o", "command=", "-p", String(pid)], {
     encoding: "utf8",
     timeout: 2000,
   });
-  return ps.error !== undefined || ps.stdout.includes(path.basename(dir));
+  // A ps that cannot answer (none, or busybox rejecting these flags) proves nothing.
+  return ps.error !== undefined || ps.stderr !== "" || ps.stdout.includes(path.basename(dir));
 }
 
 /**
@@ -209,10 +210,7 @@ const IDENTITY_CHECK_TIMEOUT_MS = 20_000;
 async function answersOnProfile(port: number, profileDir: string): Promise<boolean> {
   const deadline = new AbortController();
   let browser: CDPClient | undefined;
-  // Closing the socket fails a pending connect or send.
-  deadline.signal.addEventListener("abort", () => void browser?.disconnect());
-  const timer = setTimeout(() => deadline.abort(), IDENTITY_CHECK_TIMEOUT_MS);
-  try {
+  const check = (async () => {
     browser = new CDPClient(await browserWebSocketUrl(port, deadline.signal), {
       sendOrigin: false,
     });
@@ -224,23 +222,33 @@ async function answersOnProfile(port: number, profileDir: string): Promise<boole
     )) as { commandLine?: string };
     // The random dir name is matched rather than the path, which Windows may quote.
     return commandLine?.includes(path.basename(profileDir)) ?? false;
-  } catch (err) {
-    if (!deadline.signal.aborted) throw err;
-    throw new FailureError(
-      `Browser boot: the browser on port ${port} stopped answering CDP for ` +
-        `${IDENTITY_CHECK_TIMEOUT_MS} ms right after it started.`,
-      {
-        error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
-        failure_stage: "browser_identity_check",
-        failure_area: "tool_server",
-        error_kind: "network",
-        failure_command: "cdp",
-        network_failure: "timeout",
-      },
-      { cause: err instanceof Error ? err : new Error(String(err)) }
-    );
+  })();
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      deadline.abort();
+      reject(
+        new FailureError(
+          `Browser boot: the browser on port ${port} stopped answering CDP for ` +
+            `${IDENTITY_CHECK_TIMEOUT_MS} ms right after it started.`,
+          {
+            error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
+            failure_stage: "browser_identity_check",
+            failure_area: "tool_server",
+            error_kind: "network",
+            failure_command: "cdp",
+            network_failure: "timeout",
+          }
+        )
+      );
+    }, IDENTITY_CHECK_TIMEOUT_MS);
+  });
+  try {
+    // Raced rather than awaited: a wedged peer can hold a closing socket for 30 s.
+    return await Promise.race([check, timedOut]);
   } finally {
     clearTimeout(timer);
+    check.catch(() => {});
     await browser?.disconnect().catch(() => {});
   }
 }
@@ -289,7 +297,13 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
   fs.mkdirSync(root, { recursive: true });
   removeStaleProfiles();
   const profileDir = fs.mkdtempSync(path.join(root, PROFILE_PREFIX));
-  fs.writeFileSync(path.join(profileDir, PID_FILE), String(process.pid));
+  try {
+    fs.writeFileSync(path.join(profileDir, PID_FILE), String(process.pid));
+  } catch (err) {
+    // The sweep skips a profile with no pid file.
+    fs.rmSync(profileDir, { recursive: true, force: true });
+    throw err;
+  }
   const result = await bootElectronApp({
     appPath: executable,
     port: options.port,

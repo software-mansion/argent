@@ -2169,7 +2169,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server. The `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) forces this host-wide."
+      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server. The `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) forces this host-wide. Ignored for a browser: pass `--headless=new` in `electronArgs`."
     ),
   electronAppPath: z
     .string()

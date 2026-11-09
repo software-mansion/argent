@@ -23,11 +23,26 @@ vi.mock("../src/utils/debugger/cdp-client", () => ({
   CDPClient: class {
     connect = () => cdpConnect();
     disconnect = () => cdpDisconnect();
-    send = (method: string) => cdpSend(method);
+    send = (method: string, params?: unknown, timeout?: number) => cdpSend(method, params, timeout);
   },
 }));
 
+// The ps the sweep asks, when a test swaps in a broken one.
+const psBin = vi.hoisted(() => ({ path: "" }));
+vi.mock("../src/utils/vega-process", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/vega-process")>(
+    "../src/utils/vega-process"
+  );
+  return {
+    ...actual,
+    get PS_BIN() {
+      return psBin.path || actual.PS_BIN;
+    },
+  };
+});
+
 const fakeHome = vi.hoisted(() => ({ dir: "" }));
+const failPidWrite = vi.hoisted(() => ({ on: false, made: [] as string[] }));
 vi.mock("node:os", async () => {
   const actual = await vi.importActual<typeof import("node:os")>("node:os");
   return { ...actual, homedir: () => fakeHome.dir || actual.homedir() };
@@ -45,6 +60,17 @@ vi.mock("node:fs", async () => {
   };
   return {
     ...actual,
+    mkdtempSync: ((prefix: string, opts?: fs.EncodingOption) => {
+      const dir = actual.mkdtempSync(prefix, opts);
+      failPidWrite.made.push(String(dir));
+      return dir;
+    }) as typeof fs.mkdtempSync,
+    writeFileSync: ((file: fs.PathOrFileDescriptor, ...rest: unknown[]) => {
+      if (failPidWrite.on && String(file).endsWith("argent-browser.pid")) {
+        throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      }
+      return (actual.writeFileSync as (...a: unknown[]) => void)(file, ...rest);
+    }) as typeof fs.writeFileSync,
     statSync: ((p: fs.PathLike, opts?: fs.StatSyncOptions) => {
       const kind = installed.get(String(p));
       if (kind) return { isFile: () => kind !== "dir", isDirectory: () => kind === "dir" };
@@ -379,6 +405,7 @@ describe("bootBrowser", () => {
       const locked = make("argent-browser-winlocked", DEAD_PID);
       fs.writeFileSync(path.join(locked, "lockfile"), "");
       const dead = make("argent-browser-windead", DEAD_PID);
+      const deadBrowser = make("argent-browser-windeadbrowser", `browser ${DEAD_PID}`);
       settle();
       Object.defineProperty(process, "platform", { value: "win32" });
       process.env["LOCALAPPDATA"] = "C:\\L";
@@ -388,9 +415,71 @@ describe("bootBrowser", () => {
       } finally {
         delete process.env["LOCALAPPDATA"];
       }
-      await vi.waitFor(() => expect(fs.existsSync(dead)).toBe(false));
+      await vi.waitFor(() =>
+        expect([dead, deadBrowser].filter((d) => fs.existsSync(d))).toEqual([])
+      );
       expect(fs.existsSync(locked)).toBe(true);
     });
+
+    describe("when ps cannot answer", () => {
+      afterEach(() => {
+        psBin.path = "";
+      });
+      const brokenPs = () => {
+        // busybox ps rejects -ww and -p: usage on stderr, exit 1, nothing on stdout.
+        const script = path.join(fakeHome.dir, "busybox-ps");
+        fs.writeFileSync(
+          script,
+          "#!/bin/sh\necho 'BusyBox v1.36 usage: ps [-o COL]' >&2\nexit 1\n"
+        );
+        fs.chmodSync(script, 0o755);
+        return script;
+      };
+      for (const [name, ps] of [
+        ["rejects the flags", brokenPs],
+        ["is missing", () => path.join(fakeHome.dir, "no-such-ps")],
+        [
+          "hangs",
+          () => {
+            const script = path.join(fakeHome.dir, "hung-ps");
+            fs.writeFileSync(script, "#!/bin/sh\nexec sleep 10\n");
+            fs.chmodSync(script, 0o755);
+            return script;
+          },
+        ],
+      ] as const) {
+        it(`keeps a live browser's profile when ps ${name}`, async () => {
+          const browser = make("argent-browser-psbrowser");
+          fs.writeFileSync(
+            path.join(browser, "argent-browser.pid"),
+            `browser ${browserOn(browser)}`
+          );
+          const locked = make("argent-browser-pslocked", DEAD_PID);
+          lockFor(locked, browserOn(locked));
+          const dead = make("argent-browser-psdead", `browser ${DEAD_PID}`);
+          settle();
+          psBin.path = ps();
+          installed.set(chrome!, "exec");
+          await bootBrowser({ browser: "chrome" });
+          await vi.waitFor(() => expect(fs.existsSync(dead)).toBe(false));
+          expect([browser, locked].filter((d) => fs.existsSync(d))).toEqual([browser, locked]);
+        });
+      }
+    });
+  });
+
+  it("deletes its fresh profile when the pid file cannot be written", async () => {
+    installed.set(chrome!, "exec");
+    failPidWrite.made.length = 0;
+    failPidWrite.on = true;
+    try {
+      await expect(bootBrowser({ browser: "chrome" })).rejects.toThrow("ENOSPC");
+    } finally {
+      failPidWrite.on = false;
+    }
+    expect(failPidWrite.made).toHaveLength(1);
+    expect(fs.existsSync(failPidWrite.made[0]!)).toBe(false);
+    expect(bootElectronAppMock).not.toHaveBeenCalled();
   });
 
   it("closes its identity-check connection whether or not the browser is ours", async () => {
@@ -452,15 +541,43 @@ describe("bootBrowser", () => {
     }
   });
 
+  it("gives the browser the whole identity deadline to answer SystemInfo.getInfo", async () => {
+    installed.set(chrome!, "exec");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // Like CDPClient.send, which gives up after its timeout (10 s by default).
+      cdpSend.mockImplementation(
+        (_method: string, _params: unknown, timeout = 10_000) =>
+          new Promise((resolve, reject) => {
+            setTimeout(() => reject(new Error(`timed out after ${timeout} ms`)), timeout);
+            setTimeout(
+              () =>
+                resolve({
+                  commandLine: `chrome ${bootElectronAppMock.mock.lastCall![0].extraArgs.join(" ")}`,
+                }),
+              15_000
+            );
+          })
+      );
+      const boot = bootBrowser({ browser: "chrome" });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(boot).resolves.toMatchObject({ port: 9333 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails and kills its browser when it stays silent for the whole identity deadline", async () => {
     installed.set(chrome!, "exec");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      let drop: (() => void) | undefined;
-      cdpConnect.mockImplementation(
-        () => new Promise((_, reject) => (drop = () => reject(new Error("closed before open"))))
-      );
-      cdpDisconnect.mockImplementation(async () => drop?.());
+      // A wedged peer: the connect settles neither on its own nor on disconnect.
+      cdpConnect.mockImplementation(() => new Promise(() => {}));
+      let signal: AbortSignal | undefined;
+      wsUrlMock.mockImplementation(async (_port: number, s?: AbortSignal) => {
+        signal = s;
+        return WS_URL;
+      });
       const boot = bootBrowser({ browser: "chrome" }).catch((e: unknown) => e);
       await vi.advanceTimersByTimeAsync(19_999);
       expect(killMock).not.toHaveBeenCalled();
@@ -474,6 +591,7 @@ describe("bootBrowser", () => {
         "Browser boot: the browser on port 9333 stopped answering CDP for 20000 ms right after it started."
       );
       expect(killMock).toHaveBeenCalledWith(9333);
+      expect(signal!.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
     }
