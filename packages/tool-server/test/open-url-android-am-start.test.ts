@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const execFileMock = vi.fn();
 // The `timeout` execFile was given for each call.
 const execFileTimeouts: unknown[] = [];
+// The environment adb ran with for each call.
+const execFileEnvs: (NodeJS.ProcessEnv | undefined)[] = [];
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -20,6 +22,7 @@ vi.mock("node:child_process", async () => {
       // As adb does: with ADB_TRACE in its environment it traces the command to stderr.
       const env = (typeof opts === "object" && opts && "env" in opts ? opts.env : process.env) as
         NodeJS.ProcessEnv | undefined;
+      execFileEnvs.push(env);
       const trace = env?.ADB_TRACE
         ? `D adb : adb_client.cpp:355 adb_connect: service: shell,v2,raw:${args.at(-1)}\n`
         : "";
@@ -60,6 +63,7 @@ function openUrl(url: string) {
 beforeEach(() => {
   execFileMock.mockReset();
   execFileTimeouts.length = 0;
+  execFileEnvs.length = 0;
 });
 
 describe("open-url on Android judges am start by both of adb's streams", () => {
@@ -91,6 +95,26 @@ describe("open-url on Android judges am start by both of adb's streams", () => {
       await expect(openUrl("https://denied.example.com/x")).resolves.toMatchObject({
         opened: true,
       });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps the rest of the environment adb needs to reach a non-default adb server", async () => {
+    vi.stubEnv("ADB_TRACE", "all");
+    vi.stubEnv("ANDROID_ADB_SERVER_PORT", "5038");
+    vi.stubEnv("ANDROID_ADB_SERVER_ADDRESS", "10.0.2.2");
+    try {
+      execFileMock.mockReturnValue(OPENED_DENIED_HOST);
+
+      await openUrl("https://denied.example.com/x");
+
+      expect(execFileEnvs).toHaveLength(1);
+      expect(execFileEnvs[0]).toMatchObject({
+        ANDROID_ADB_SERVER_PORT: "5038",
+        ANDROID_ADB_SERVER_ADDRESS: "10.0.2.2",
+      });
+      expect(execFileEnvs[0]).not.toHaveProperty("ADB_TRACE");
     } finally {
       vi.unstubAllEnvs();
     }
