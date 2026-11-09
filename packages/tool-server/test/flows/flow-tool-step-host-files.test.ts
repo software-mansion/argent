@@ -111,6 +111,18 @@ describe("a tool: step with e2e_test_path, without a link", () => {
     );
   });
 
+  it("says that nothing expands a ~ path that names no file", async () => {
+    const result = await runOuter(
+      `  - tool: e2e-execute\n    args: { e2e_test_path: ~/frag.yaml, project_root: ${root}, prerequisiteAcknowledged: true }\n`
+    );
+
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toBe(
+      `there is no file at "~/frag.yaml" (argument e2e_test_path of e2e-execute); nothing expands ` +
+        `"~" or variables in a file argument, so pass the file's absolute path`
+    );
+  });
+
   it("leaves a e2e_test_path set beside name to the tool's one-source check", async () => {
     const missing = path.join(flowsDir, "elsewhere", "missing.yaml");
     const result = await runOuter(

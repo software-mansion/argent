@@ -242,7 +242,9 @@ async function prepareHostFileArguments(
     if (!st?.isFile()) {
       const relative = path.isAbsolute(file.path)
         ? ""
-        : `; a relative path is resolved against the tool server's working directory, not the e2e test's`;
+        : /^~|\$/.test(file.path)
+          ? `; nothing expands "~" or variables in a file argument, so pass the file's absolute path`
+          : `; a relative path is resolved against the tool server's working directory, not the e2e test's`;
       throw new FileInputError(
         `there is no file at "${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})${relative}`
       );
