@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Stubbed below the real runAdb, so the tests see which of adb's streams the handler reads.
 const execFileMock = vi.fn();
+// The `timeout` execFile was given for each call.
+const execFileTimeouts: unknown[] = [];
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -13,6 +15,7 @@ vi.mock("node:child_process", async () => {
       cb?: (err: Error | null, out: { stdout: string; stderr: string }) => void
     ) => {
       const callback = typeof opts === "function" ? opts : cb!;
+      execFileTimeouts.push((opts as { timeout?: number }).timeout);
       const out = execFileMock(cmd, args) as { stdout: string; stderr: string };
       // As adb does: with ADB_TRACE in its environment it traces the command to stderr.
       const env = (typeof opts === "object" && opts && "env" in opts ? opts.env : process.env) as
@@ -56,6 +59,7 @@ function openUrl(url: string) {
 
 beforeEach(() => {
   execFileMock.mockReset();
+  execFileTimeouts.length = 0;
 });
 
 describe("open-url on Android judges am start by both of adb's streams", () => {
@@ -109,6 +113,17 @@ describe("open-url on Android judges am start by both of adb's streams", () => {
     });
 
     await expect(openUrl("myapp://home")).resolves.toMatchObject({ opened: true });
+  });
+
+  it("kills am start after 15 s", async () => {
+    execFileMock.mockReturnValue({
+      stdout: "Starting: Intent { act=android.intent.action.VIEW dat=myapp://home/... }\n",
+      stderr: "",
+    });
+
+    await openUrl("myapp://home");
+
+    expect(execFileTimeouts).toEqual([15_000]);
   });
 
   it("passes the URL single-quoted for the device shell", async () => {

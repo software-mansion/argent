@@ -19,6 +19,10 @@ const device = {
   legacy: false,
   // `pm list packages` fails, e.g. the package manager is restarting.
   pmFails: false,
+  // `pm list packages` never returns, so runAdb kills it at its deadline.
+  pmHangs: false,
+  // The deadline the hung `pm list packages` was killed at.
+  pmKilledAfter: undefined as number | undefined,
   // adb cannot be resolved, so no adb command runs.
   noAdb: false,
   apkPackage: "",
@@ -35,7 +39,7 @@ function failure(command: string, stdout: string): Error & AdbResult {
   });
 }
 
-function fakeAdb(args: readonly string[]): AdbResult | Error {
+function fakeAdb(args: readonly string[], timeout: number | undefined): AdbResult | Error {
   if (args[0] !== "-s" || args[1] !== SERIAL) throw new Error(`no -s ${SERIAL}: ${args.join(" ")}`);
   const argv = args.slice(2);
   device.calls.push(argv);
@@ -46,6 +50,17 @@ function fakeAdb(args: readonly string[]): AdbResult | Error {
     if (!match) throw new Error(`unexpected shell command: ${rest[0]}`);
     const [, all, filter] = match;
     if (device.pmFails) return failure(`shell ${rest[0]}`, "cmd: Can't find service: package\n");
+    if (device.pmHangs) {
+      device.pmKilledAfter = timeout;
+      // As execFile reports a child it killed at its `timeout`.
+      return Object.assign(new Error(`Command failed: adb shell ${rest[0]}\n`), {
+        killed: true,
+        signal: "SIGKILL",
+        code: null,
+        stdout: "",
+        stderr: "",
+      });
+    }
     const lines = [...device.installed].filter(
       (pkg) => pkg.includes(filter!) && (all !== undefined || !device.hidden.has(pkg))
     );
@@ -82,7 +97,7 @@ vi.mock("node:child_process", async () => {
       cb?: (err: Error | null, out: AdbResult) => void
     ) => {
       const callback = typeof opts === "function" ? opts : cb!;
-      const result = fakeAdb(args);
+      const result = fakeAdb(args, (opts as { timeout?: number }).timeout);
       if (result instanceof Error) {
         const e = result as Error & AdbResult;
         callback(e, { stdout: e.stdout, stderr: e.stderr });
@@ -146,6 +161,8 @@ beforeEach(() => {
   device.hidden = new Set();
   device.legacy = false;
   device.pmFails = false;
+  device.pmHangs = false;
+  device.pmKilledAfter = undefined;
   device.noAdb = false;
   device.calls = [];
 });
@@ -227,6 +244,23 @@ describe("reinstall-app on Android", () => {
       error_kind: "subprocess",
       failure_command: "adb",
       failure_exit_code: 1,
+    });
+    expect((err as Error).message).toContain("the app may be gone");
+    expect(ran("install")).toEqual([]);
+  });
+
+  it("fails with a timeout, without installing, when the check after the uninstall hangs for 15 s", async () => {
+    device.installed.add("com.example.app");
+    device.pmHangs = true;
+
+    const err = await rejection(reinstall("com.example.app"));
+
+    expect(device.pmKilledAfter).toBe(15_000);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: "ANDROID_REINSTALL_UNINSTALL_FAILED",
+      failure_stage: "android_reinstall_check_uninstall",
+      error_kind: "timeout",
+      failure_signal: "SIGKILL",
     });
     expect((err as Error).message).toContain("the app may be gone");
     expect(ran("install")).toEqual([]);
