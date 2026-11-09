@@ -74,6 +74,13 @@ const SCREEN: TvDescribeResponse = {
   ],
 };
 
+/** The screen a push leaves: the new list is there, and the cursor lands later. */
+const NO_CURSOR: TvDescribeResponse = {
+  bundleId: "com.apple.TVSettings",
+  focused: null,
+  focusable: [row("About", 0.175), row("Appearance", 0.249, { value: "Dark" })],
+};
+
 /** A TvControlApi that walks `frames`, repeating the last. */
 function makeTvApi(frames: TvDescribeResponse[]): TvControlApi & { calls: () => number } {
   let i = 0;
@@ -157,9 +164,105 @@ describe("await-screen-idle on an Apple TV", () => {
     const res = await runIdle(api, { timeoutMs: 600 });
 
     expect(res.settled).toBe(false);
-    expect(res.note).toMatch(/no focusable elements|launching|transition/i);
+    expect(res.note).toMatch(/nothing on screen/);
     // …and not the old advice to go and use describe instead of this tool.
     expect(res.note).not.toMatch(/accessibility service does not support/i);
+  });
+
+  it("does not settle on a list whose cursor has not landed", async () => {
+    // A remote press sent before the cursor lands is lost. Reads every 100ms.
+    const landed = { ...NO_CURSOR, focused: row("About", 0.175, { isFocused: true }) };
+    landed.focusable = [row("About", 0.175, { isFocused: true }), NO_CURSOR.focusable[1]!];
+    const api = makeTvApi([...Array(7).fill(NO_CURSOR), landed]);
+
+    const res = await runIdle(api, { pollIntervalMs: 100 });
+
+    expect(res.settled).toBe(true);
+    expect(res.note).toBeUndefined();
+    expect(api.calls()).toBeGreaterThanOrEqual(8);
+  });
+
+  it("settles on a screen that never gets a cursor, and says so", async () => {
+    const res = await runIdle(makeTvApi([NO_CURSOR]), { timeoutMs: 3000, pollIntervalMs: 100 });
+
+    expect(res.settled).toBe(true);
+    expect(res.waitedMs).toBeGreaterThanOrEqual(1200);
+    expect(res.note).toMatch(/no element holds focus/);
+  });
+
+  it("does not settle before the bound when the timeout is shorter, and says why", async () => {
+    const res = await runIdle(makeTvApi([NO_CURSOR]), { timeoutMs: 600, pollIntervalMs: 100 });
+
+    expect(res.settled).toBe(false);
+    expect(res.note).toMatch(/no element holds focus/);
+  });
+
+  it("keeps an explicit minStableMs 0 immediate, with no cursor", async () => {
+    const res = await runIdle(makeTvApi([NO_CURSOR]), { minStableMs: 0 });
+
+    expect(res.settled).toBe(true);
+    expect(res.polls).toBe(1);
+  });
+
+  it("settles a screen with text and nothing focusable", async () => {
+    const api = makeTvApi([{ focused: null, focusable: [] }]);
+    api.hierarchy = async () => ({
+      screenFrame: { width: 1920, height: 1080 },
+      tree: {
+        children: [{ label: "Nothing to focus", frame: { x: 0, y: 0, width: 400, height: 80 } }],
+      },
+    });
+
+    const res = await runIdle(api, { timeoutMs: 3000, pollIntervalMs: 100 });
+
+    expect(res.settled).toBe(true);
+  });
+
+  it("does not settle while non-focusable text keeps changing", async () => {
+    const api = makeTvApi([SCREEN]);
+    let n = 0;
+    api.hierarchy = async () => ({
+      screenFrame: { width: 1920, height: 1080 },
+      tree: {
+        children: [{ label: `Loading ${n++}`, frame: { x: 0, y: 0, width: 400, height: 80 } }],
+      },
+    });
+
+    expect((await runIdle(api, { timeoutMs: 700, pollIntervalMs: 100 })).settled).toBe(false);
+  });
+
+  it("falls back to the focus view when the hierarchy read fails", async () => {
+    const api = makeTvApi([SCREEN]);
+    api.hierarchy = async () => {
+      throw new Error("no hierarchy");
+    };
+
+    expect((await runIdle(api)).settled).toBe(true);
+  });
+
+  it("names a reader that stopped answering", async () => {
+    // Without this a hung read looks exactly like a screen that kept moving.
+    const api = makeTvApi([SCREEN]);
+    let reads = 0;
+    api.describe = async () => {
+      if (++reads > 1) return new Promise<TvDescribeResponse>(() => {});
+      return SCREEN;
+    };
+
+    const res = await runIdle(api, { timeoutMs: 1000, minStableMs: 900, pollIntervalMs: 100 });
+
+    expect(res.settled).toBe(false);
+    expect(res.note).toMatch(/stopped answering/);
+  });
+
+  it("stays quiet on a moving screen whose last read merely straddled the deadline", async () => {
+    const other = { ...SCREEN, focusable: [...SCREEN.focusable, row("Region", 0.323)] };
+    const api = makeTvApi([SCREEN, other, SCREEN, other, SCREEN, other, SCREEN, other]);
+
+    const res = await runIdle(api, { timeoutMs: 700, pollIntervalMs: 100 });
+
+    expect(res.settled).toBe(false);
+    expect(res.note).toBeUndefined();
   });
 
   it("does not charge the daemon spawn to the timeout", async () => {
@@ -171,7 +274,11 @@ describe("await-screen-idle on an Apple TV", () => {
     );
 
     const tool = createAwaitScreenIdleTool(registry);
-    const res = await tool.execute({}, { udid: TV_UDID, timeoutMs: 100, minStableMs: 0 } as never);
+    const res = await tool.execute({}, {
+      udid: TV_UDID,
+      timeoutMs: 100,
+      minStableMs: 0,
+    } as never);
 
     expect(res.settled).toBe(true);
   });
@@ -259,7 +366,42 @@ describe("await-ui-element on an Apple TV", () => {
     });
 
     expect(res.success).toBe(false);
-    expect(res.note).toMatch(/focus|launching|empty/i);
+    expect(res.note).toMatch(/nothing on screen/);
+  });
+
+  it("reports `hidden` satisfied when the last focusable leaves text behind", async () => {
+    const text = {
+      screenFrame: { width: 1920, height: 1080 },
+      tree: { children: [{ label: "Done", frame: { x: 0, y: 0, width: 400, height: 80 } }] },
+    };
+    const api = makeTvApi([SCREEN, { focused: null, focusable: [] }]);
+    api.hierarchy = async () => text;
+
+    const res = await runElement(api, { condition: "hidden", selector: { text: "About" } });
+
+    expect(res.success).toBe(true);
+    expect(res.note).toBeUndefined();
+  });
+
+  it("matches non-focusable text, and waits for it to go", async () => {
+    const loading = {
+      screenFrame: { width: 1920, height: 1080 },
+      tree: { children: [{ label: "Loading 3", frame: { x: 0, y: 0, width: 400, height: 80 } }] },
+    };
+    const api = makeTvApi([SCREEN]);
+    api.hierarchy = async () => loading;
+
+    expect(
+      (await runElement(api, { condition: "exists", selector: { text: "Loading" } })).success
+    ).toBe(true);
+    const hidden = await runElement(api, {
+      condition: "hidden",
+      selector: { text: "Loading" },
+      timeoutMs: 300,
+      pollIntervalMs: 50,
+    });
+    expect(hidden.success).toBe(false);
+    expect(hidden.cause).toBe("unmet");
   });
 
   it("reports `hidden` satisfied when the element leaves a populated view", async () => {

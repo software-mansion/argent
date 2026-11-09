@@ -13,7 +13,12 @@ import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
 import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
 import { UnsupportedOperationError } from "../utils/capability";
-import type { TvControlApi, TvDescribeResponse, TvDirection } from "./tv-control-types";
+import type {
+  TvControlApi,
+  TvDescribeResponse,
+  TvDirection,
+  TvHierarchyResponse,
+} from "./tv-control-types";
 
 // Re-exported so existing importers of `tv-control` keep working.
 export type { TvControlApi, TvDescribeResponse };
@@ -437,6 +442,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
           focused: r.focused ?? null,
           focusable: r.focusable ?? [],
         };
+      },
+
+      async hierarchy(): Promise<TvHierarchyResponse> {
+        return (await sendAx("hierarchy", 10_000)) as TvHierarchyResponse;
       },
 
       async navigate(direction: TvDirection): Promise<void> {

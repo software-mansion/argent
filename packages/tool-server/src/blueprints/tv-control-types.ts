@@ -26,6 +26,20 @@ export interface TvDescribeResponse {
   focusable: TvElement[];
 }
 
+/** A node of the tvOS accessibility hierarchy. Its frame is in points, not normalized. */
+export interface TvHierarchyNode {
+  label?: string;
+  value?: string;
+  traits?: string[];
+  frame?: { x: number; y: number; width: number; height: number };
+  children?: TvHierarchyNode[];
+}
+
+export interface TvHierarchyResponse {
+  tree?: TvHierarchyNode | null;
+  screenFrame?: { width: number; height: number };
+}
+
 // Member names match `RemoteButton` (utils/vega-input) exactly, so `tv-remote`
 // passes a button straight to `navigate` with no mapping. A backend that can't
 // honor a key (tvOS simulator: media-transport / volume) rejects it up front.
@@ -49,6 +63,8 @@ export type TvDirection =
 
 export interface TvControlApi {
   describe(): Promise<TvDescribeResponse>;
+  /** tvOS: everything on screen, focusable or not. The daemon caps it at 800 nodes. */
+  hierarchy?(): Promise<TvHierarchyResponse>;
   /** Press a remote button (D-pad on Android TV, Siri remote on tvOS). */
   navigate(direction: TvDirection): Promise<void>;
   /** Type a string into the focused field. */

@@ -3,7 +3,7 @@ import type { DescribeResult } from "../contract";
 import { formatDescribeTree } from "../format-tree";
 import { resolveTvApi } from "../../tv/tv-service";
 import { describeAndroid } from "./android";
-import { isEmptyFocus as isEmpty } from "./tv-focus";
+import { isEmptyFocus as isEmpty, splitTvLabel } from "./tv-focus";
 import type {
   TvControlApi,
   TvDescribeResponse,
@@ -38,27 +38,12 @@ const ANDROID_FOCUS_EMPTY_HINT =
   "these screens even though the labels aren't enumerable, so you can drive blind + screenshot " +
   "to confirm.";
 
-/**
- * tvOS AX labels are often compound multi-line strings, e.g.
- * "Home\nLander\nSide bar content item\n1 of 5\nselected".
- */
-function primaryLabel(label: string | undefined): string {
-  if (!label) return "(no label)";
-  const firstLine = label.split("\n")[0]?.trim();
-  return firstLine && firstLine.length ? firstLine : "(no label)";
-}
-
 function fmtElement(e: TvElement): string {
   const traits = e.traits?.length ? ` [${e.traits.join(",")}]` : "";
   const value = e.value ? ` = "${e.value}"` : "";
-  const label = primaryLabel(e.label);
-  const extraLines = (e.label ?? "")
-    .split("\n")
-    .slice(1)
-    .map((l) => l.trim())
-    .filter(Boolean);
-  const context = extraLines.length ? ` (${extraLines.join(" · ")})` : "";
-  return `${label}${value}${traits}${context}`;
+  const { name, context } = splitTvLabel(e.label);
+  const extra = context.length ? ` (${context.join(" · ")})` : "";
+  return `${name ?? "(no label)"}${value}${traits}${extra}`;
 }
 
 function renderFocusView(res: TvDescribeResponse): string {

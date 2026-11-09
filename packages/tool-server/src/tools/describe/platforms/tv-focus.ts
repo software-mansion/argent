@@ -2,37 +2,54 @@ import type {
   TvControlApi,
   TvDescribeResponse,
   TvElement,
+  TvHierarchyNode,
+  TvHierarchyResponse,
 } from "../../../blueprints/tv-control-types";
 import type { DescribeNode, DescribeTreeData } from "../contract";
 
 /**
- * The TV focus view, adapted into the ordinary `DescribeNode` tree so the wait
- * tools can poll it.
+ * What the wait tools read on an Apple TV: the focus view `describe` renders
+ * (see `./tv.ts`), plus the text of the rest of the screen, adapted into the
+ * ordinary `DescribeNode` tree they fingerprint and match against.
  *
- * `describe` renders this same source for humans (see `./tv.ts`); this module
- * exists because `await-screen-idle` / `await-ui-element` need a *tree* to
- * fingerprint and match against, and because they must NOT inherit describe's
- * retry-and-recycle behaviour — see {@link describeTvFocus}.
- *
- * Why they need it at all: `describeIos` short-circuits every tvOS read to an
- * empty tree (the iOS accessibility service cannot drive an Apple TV), so both
- * wait tools saw a permanently empty screen and could never settle or match —
- * issue #620.
+ * `describeIos` short-circuits every tvOS read to an empty tree, so both wait
+ * tools used to see a permanently empty screen (#620). The focus view alone is
+ * not enough either: a "Loading" label is not focusable, and a screen may have
+ * nothing focusable at all.
  */
 
-/** Synthetic root the focusables hang off, mirroring the other platforms' shape. */
+/** Synthetic root the elements hang off, mirroring the other platforms' shape. */
 function focusRoot(): DescribeNode {
   return { role: "AXGroup", frame: { x: 0, y: 0, width: 1, height: 1 }, children: [] };
 }
 
-/** What a wait tool says on an empty focus read; `describe` is the tool that repairs. */
+/**
+ * Said only when neither the focus view nor the hierarchy has anything. The hint
+ * is load-bearing: `await-ui-element` treats a childless tree as untrustworthy
+ * ONLY when a hint (or a prior match) says so, so without it `hidden` would pass
+ * on the first poll of a still-launching app.
+ */
 export const TV_FOCUS_WAIT_EMPTY_HINT =
-  "The TV focus engine reported no focusable elements (the app is likely still launching); " +
-  "call `describe` once, then wait again.";
+  "The Apple TV reports nothing on screen: the app may be launching, or the screen has no " +
+  "text or focusable elements, which a screenshot can tell apart.";
 
 /** A focus read is "empty" when nothing actionable was reported. */
 export function isEmptyFocus(res: TvDescribeResponse): boolean {
   return res.focusable.length === 0 && !res.focused;
+}
+
+/**
+ * tvOS AX labels are often compound multi-line strings, e.g.
+ * "Home\nLander\nSide bar content item\n1 of 5\nselected": the first line is the
+ * element's name and the rest is context. `describe` and the wait tools share
+ * this split, so what one displays is what the other compares.
+ */
+export function splitTvLabel(label: string | undefined): { name?: string; context: string[] } {
+  const lines = (label ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return { name: lines[0], context: lines.slice(1) };
 }
 
 /**
@@ -68,12 +85,17 @@ const FOCUSED_TRAIT = "focused";
 function toNode(element: TvElement): DescribeNode {
   const traits = [...(element.traits ?? [])];
   if (element.isFocused) traits.push(FOCUSED_TRAIT);
+  const frame = frameOf(element);
+  const { name, context } = splitTvLabel(element.label);
   return {
     // Traits are what a selector's `role` matches, exactly as on a phone.
     role: traits.length > 0 ? traits.join(",") : "element",
-    frame: frameOf(element),
-    children: [],
-    ...(element.label ? { label: element.label } : {}),
+    frame,
+    // The context stays selectable (a tab's "selected"), and a `text` condition
+    // that contains it still holds, but `equals` compares the name `describe` shows.
+    children: context.map((label) => ({ role: "context", frame, children: [], label })),
+    ...(name ? { label: name } : {}),
+    ...(context.length > 0 && element.label ? { subtreeText: element.label } : {}),
     ...(element.value ? { value: element.value } : {}),
     // The cursor. `format-tree` already renders this as [focused], and it is
     // what makes "wait until focus lands on X" expressible.
@@ -81,17 +103,50 @@ function toNode(element: TvElement): DescribeNode {
   };
 }
 
-/** Adapt a focus read into a describe tree. */
-export function tvFocusTree(res: TvDescribeResponse): DescribeTreeData {
-  if (isEmptyFocus(res)) {
-    // The hint is load-bearing, not decoration: `await-ui-element` treats an
-    // empty tree as an untrustworthy read ONLY when a hint (or a prior match)
-    // says so. Without it, `condition: "hidden"` would report success on the
-    // very first poll of a still-launching app — a false pass that would
-    // release a gated interaction.
-    return { tree: focusRoot(), source: "tv-focus", hint: TV_FOCUS_WAIT_EMPTY_HINT };
-  }
+/**
+ * The labelled non-focusable elements of a hierarchy read, as `TvElement`s. The
+ * root is the app itself. Frames arrive in points, unlike the focus view's. The
+ * cursor stays the focus view's call, so `isFocused` is dropped here.
+ */
+function contentElements(
+  hierarchy: TvHierarchyResponse | null,
+  focusText: Set<string>
+): TvElement[] {
+  const out: TvElement[] = [];
+  const screen = hierarchy?.screenFrame;
+  const walk = (node: TvHierarchyNode): void => {
+    for (const child of node.children ?? []) {
+      const text = child.label || child.value;
+      if (text && !focusText.has(text)) {
+        const f = child.frame;
+        out.push({
+          label: child.label,
+          value: child.value,
+          traits: child.traits,
+          ...(f && screen?.width && screen.height
+            ? {
+                frame: {
+                  x: f.x / screen.width,
+                  y: f.y / screen.height,
+                  width: f.width / screen.width,
+                  height: f.height / screen.height,
+                },
+              }
+            : {}),
+        });
+      }
+      walk(child);
+    }
+  };
+  if (hierarchy?.tree) walk(hierarchy.tree);
+  return out;
+}
 
+/** Adapt a focus read, and the hierarchy read beside it, into a describe tree. */
+export function tvFocusTree(
+  res: TvDescribeResponse,
+  hierarchy: TvHierarchyResponse | null = null
+): DescribeTreeData {
   const elements = [...res.focusable];
   // Some reads report a focused element that is absent from the focusable list;
   // it still has to be matchable, and it is the single most useful node here.
@@ -105,20 +160,37 @@ export function tvFocusTree(res: TvDescribeResponse): DescribeTreeData {
     elements.push({ ...res.focused, isFocused: true });
   }
 
+  // A focusable's label and value also appear as its own children in the hierarchy.
+  const focusText = new Set<string>();
+  for (const e of elements) {
+    if (e.label) focusText.add(e.label);
+    if (e.value) focusText.add(e.value);
+  }
   const root = focusRoot();
-  root.children = elements.map(toNode);
-  return { tree: root, source: "tv-focus" };
+  root.children = [...elements, ...contentElements(hierarchy, focusText)].map(toNode);
+  return root.children.length > 0
+    ? { tree: root, source: "tv-focus" }
+    : { tree: root, source: "tv-focus", hint: TV_FOCUS_WAIT_EMPTY_HINT };
+}
+
+/** Whether the focus engine has placed its cursor, on a tree from {@link tvFocusTree}. */
+export function hasTvCursor(tree: DescribeNode): boolean {
+  return tree.children.some((n) => n.focused);
 }
 
 /**
- * One bare focus read, for the wait tools.
+ * One bare read per poll, for the wait tools.
  *
  * Deliberately NOT `describeTv`: that sleeps between empty probes and can
  * respawn the tvOS ax daemon (`recycleAx`). Inside a 200ms poll loop the sleeps
  * are redundant and the respawn is destructive — it would drop the very state
- * the caller is waiting on. Repair stays in the one-shot tool; a wait only
- * observes and reports.
+ * the caller is waiting on. A wait only observes and reports.
+ *
+ * The hierarchy is an addition to the focus view, so losing it degrades to the
+ * focus view rather than failing the read.
  */
 export async function describeTvFocus(api: TvControlApi): Promise<DescribeTreeData> {
-  return tvFocusTree(await api.describe());
+  const res = await api.describe();
+  const hierarchy = (await api.hierarchy?.().catch(() => null)) ?? null;
+  return tvFocusTree(res, hierarchy);
 }

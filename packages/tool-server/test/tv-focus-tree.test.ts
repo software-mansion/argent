@@ -1,11 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   tvFocusTree,
+  hasTvCursor,
   isEmptyFocus,
   TV_FOCUS_WAIT_EMPTY_HINT,
 } from "../src/tools/describe/platforms/tv-focus";
-import type { TvDescribeResponse } from "../src/blueprints/tv-control-types";
-import { findAll, isVisible } from "../src/utils/ui-tree-match";
+import type {
+  TvDescribeResponse,
+  TvHierarchyNode,
+  TvHierarchyResponse,
+} from "../src/blueprints/tv-control-types";
+import { evaluateCondition, findAll, isVisible } from "../src/utils/ui-tree-match";
 
 /**
  * The adapter behind issue #620: `describeIos` short-circuits every tvOS read to
@@ -152,6 +157,93 @@ describe("tvFocusTree — the focus view as a describe tree", () => {
   });
 });
 
+describe("tvFocusTree — compound labels", () => {
+  const compound = (): TvDescribeResponse => ({
+    focused: null,
+    focusable: [{ ...row("x"), label: "Home\nLander\nSide bar content item\n1 of 5\nselected" }],
+  });
+
+  it("compares `equals` against the name describe shows", () => {
+    const matches = findAll(tvFocusTree(compound()).tree, { text: "Home" });
+
+    expect(matches).toHaveLength(1);
+    expect(evaluateCondition("text", "Home", matches, "equals")).toBe(true);
+  });
+
+  it("still finds the context, by selector and by `contains`", () => {
+    const { tree } = tvFocusTree(compound());
+
+    expect(findAll(tree, { text: "selected" })).toHaveLength(1);
+    expect(evaluateCondition("text", "Lander", findAll(tree, { text: "Home" }), "contains")).toBe(
+      true
+    );
+  });
+});
+
+describe("tvFocusTree — the rest of the screen", () => {
+  const screenFrame = { width: 1920, height: 1080 };
+  const FOCUS: TvDescribeResponse = {
+    focused: null,
+    focusable: [{ ...row("Only"), isFocused: true }],
+  };
+  const hierarchy = (children: TvHierarchyNode[]): TvHierarchyResponse => ({
+    screenFrame,
+    tree: { label: "AppName", frame: { x: 0, y: 0, ...screenFrame }, children },
+  });
+  const LOADING: TvHierarchyNode = {
+    label: "Loading 7",
+    traits: ["staticText"],
+    frame: { x: 192, y: 108, width: 960, height: 54 },
+  };
+
+  it("adds non-focusable text, with a normalized frame", () => {
+    const { tree } = tvFocusTree(FOCUS, hierarchy([LOADING]));
+
+    const [node] = findAll(tree, { text: "Loading" });
+    expect(node!.frame).toEqual({ x: 0.1, y: 0.1, width: 0.5, height: 0.05 });
+    expect(isVisible(node!)).toBe(true);
+  });
+
+  it("does not make the app itself matchable, or duplicate a focusable", () => {
+    const { tree } = tvFocusTree(
+      FOCUS,
+      hierarchy([
+        { label: "Only", isFocused: true, children: [{ label: "Only" }] } as TvHierarchyNode,
+      ])
+    );
+
+    expect(findAll(tree, { text: "AppName" })).toHaveLength(0);
+    expect(findAll(tree, { text: "Only" })).toHaveLength(1);
+  });
+
+  it("leaves the cursor to the focus view", () => {
+    const { tree } = tvFocusTree(
+      { focused: null, focusable: [] },
+      hierarchy([{ label: "Stale", isFocused: true } as TvHierarchyNode])
+    );
+
+    expect(hasTvCursor(tree)).toBe(false);
+    expect(findAll(tree, { role: "focused" })).toHaveLength(0);
+  });
+
+  it("judges a screen with text and nothing focusable, with no hint", () => {
+    const res = tvFocusTree({ focused: null, focusable: [] }, hierarchy([LOADING]));
+
+    expect(res.tree.children).toHaveLength(1);
+    expect(res.hint).toBeUndefined();
+  });
+
+  it("stays blind when the hierarchy has only unlabelled views", () => {
+    const res = tvFocusTree(
+      { focused: null, focusable: [] },
+      hierarchy([{ frame: { x: 0, y: 0, ...screenFrame } }])
+    );
+
+    expect(res.tree.children).toHaveLength(0);
+    expect(res.hint).toBe(TV_FOCUS_WAIT_EMPTY_HINT);
+  });
+});
+
 describe("tvFocusTree — the empty read", () => {
   it("is empty only when nothing actionable was reported", () => {
     expect(isEmptyFocus({ focused: null, focusable: [] })).toBe(true);
@@ -168,7 +260,6 @@ describe("tvFocusTree — the empty read", () => {
 
     expect(empty.tree.children).toHaveLength(0);
     expect(empty.hint).toBe(TV_FOCUS_WAIT_EMPTY_HINT);
-    expect(empty.hint).toMatch(/launching|transition/i);
   });
 
   it("does not tell the agent to use describe instead — the wait tool works now", () => {
@@ -178,6 +269,15 @@ describe("tvFocusTree — the empty read", () => {
     const empty = tvFocusTree({ focused: null, focusable: [] });
 
     expect(empty.hint).not.toMatch(/accessibility service does not support/i);
+  });
+
+  it("says neither that the app must be launching nor to call describe", () => {
+    // A static screen with nothing on it stays this way, and describe's respawn
+    // changes nothing there.
+    const { hint } = tvFocusTree({ focused: null, focusable: [] });
+
+    expect(hint).not.toMatch(/call `describe`/);
+    expect(hint).toMatch(/may be launching/);
   });
 
   it("never attaches a hint to a populated read", () => {
