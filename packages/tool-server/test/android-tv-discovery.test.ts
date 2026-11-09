@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type ExecResult = { stdout: string; stderr: string } | Error | undefined;
-const execFileMock = vi.fn<(cmd: string, args: string[]) => ExecResult | Promise<ExecResult>>();
+const execFileMock =
+  vi.fn<(cmd: string, args: string[], options?: unknown) => ExecResult | Promise<ExecResult>>();
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -18,7 +19,8 @@ vi.mock("node:child_process", async () => {
         if (result instanceof Error) callback(result, { stdout: "", stderr: "" });
         else callback(null, result ?? { stdout: "", stderr: "" });
       };
-      const result = execFileMock(cmd, [...args]);
+      const options = typeof opts === "function" ? undefined : opts;
+      const result = execFileMock(cmd, [...args], options);
       if (result instanceof Promise) void result.then(deliver);
       else deliver(result);
     },
