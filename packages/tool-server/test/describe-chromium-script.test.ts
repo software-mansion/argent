@@ -2331,6 +2331,45 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     });
   });
 
+  it("keeps a strip's probe point where elementsFromPoint and a pixel-snapped wheel agree", () => {
+    const thin = (LIST: Rect, COVER: Rect, row: Rect) => {
+      const list = scroller([el({ attrs: { id: "cut" }, rect: row })], {
+        rect: LIST,
+        client: { left: 0, top: 0, width: LIST.w, height: LIST.h },
+        offset: { width: LIST.w, height: LIST.h },
+        scrollSize: { width: LIST.w, height: 3 * LIST.h },
+        painted: LIST,
+      });
+      const cover = el({ rect: COVER, painted: COVER, style: { position: "fixed" } });
+      return (
+        findById(run([list, cover]).tree, "cut")!.clipAnchors as { y: { x: number; y: number } }
+      ).y;
+    };
+    // A cover leaves 1.6px of the list above it: half a pixel past the strip's start.
+    const near = thin(
+      { x: 0, y: 50.7, w: 300, h: 949.3 },
+      { x: 0, y: 52.3, w: 300, h: 947.7 },
+      { x: 0, y: 950, w: 300, h: 100 }
+    );
+    expect(near.x).toBe(0.15);
+    expect(near.y * H).toBeCloseTo(51.2, 9);
+    // Below it: a pixel short of the strip's end.
+    const far = thin(
+      { x: 0, y: 0, w: 300, h: 949.3 },
+      { x: 0, y: 0, w: 300, h: 947.7 },
+      { x: 0, y: 900, w: 300, h: 100 }
+    );
+    expect(far.y * H).toBeCloseTo(948.3, 9);
+    // A strip under a pixel is not probed: the cut window's centre across the row.
+    const sliver = thin(
+      { x: 0, y: 0, w: 300, h: 949.3 },
+      { x: 0, y: 0, w: 300, h: 948.5 },
+      { x: 0, y: 900, w: 300, h: 100 }
+    );
+    expect(sliver.x).toBe(0.15);
+    expect(sliver.y * H).toBeCloseTo(949.3 / 2, 9);
+  });
+
   it("anchors a horizontal cut farthest from the element along x", () => {
     const strip = { x: 0, y: 400, w: W, h: 200 };
     const { tree } = run([

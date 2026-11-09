@@ -799,7 +799,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       axis === "sx" ? Math.max(r.left - x, x - r.right) : Math.max(r.top - y, y - r.bottom);
     const holders = [];
     for (const m of movers) for (let n = m.el; n; n = flatParent(n)) holders.push(n);
-    const at = (q, f, g) => [q.left + (q.right - q.left) * f, q.top + (q.bottom - q.top) * g];
+    // elementsFromPoint hits what meets the 1px box right of and below a point, a wheel
+    // the box that holds it once edges snap to pixels: a point keeps that 1px box in q
+    // where it can, and half a pixel past q's start.
+    const span = (lo, hi, f) => Math.max(Math.min(lo + (hi - lo) * f, hi - 1), lo + 0.5);
+    const at = (q, f, g) => [span(q.left, q.right, f), span(q.top, q.bottom, g)];
     // Probes past the grids, each an elementsFromPoint and a walk up its path.
     let spare = 24;
     for (let i = cutters.length - 1; i >= 0; i--) {
