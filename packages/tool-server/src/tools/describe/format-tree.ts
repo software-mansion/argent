@@ -142,7 +142,8 @@ function isZeroArea(f: DescribeFrame): boolean {
  * clamps an element outside the window to a zero-area frame at its edge, so on a
  * long page most rows are of that kind. They cannot be tapped: an agent has to
  * scroll to them first. A row stays if anything inside it has an area: a
- * `position: fixed` child can be on screen inside an off-screen parent.
+ * `position: fixed` child can be on screen inside an off-screen parent. A focused
+ * row stays too: `keyboard` types into it wherever it is.
  */
 function offscreenNodes(root: DescribeNode): Set<DescribeNode> {
   const order: DescribeNode[] = [];
@@ -156,7 +157,7 @@ function offscreenNodes(root: DescribeNode): Set<DescribeNode> {
   // A parent comes before its children in `order`, so walking back sees the children first.
   for (let i = order.length - 1; i >= 0; i--) {
     const node = order[i]!;
-    if (isZeroArea(node.frame) && node.children.every((c) => offscreen.has(c))) {
+    if (isZeroArea(node.frame) && !node.focused && node.children.every((c) => offscreen.has(c))) {
       offscreen.add(node);
     }
   }
@@ -170,9 +171,10 @@ function printsLine(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
 /** The sides of the window a folded row lies on, from the edges `normRect` clamped it to. */
 function foldedSides(node: DescribeNode): WindowSide[] {
   const { x, y, width, height } = node.frame;
-  if (x === 0 && y === 0 && width === 0 && height === 0) {
+  if (x === 0 && y === 0 && width === 0 && height === 0 && node.children.length > 0) {
     // What `unionFrame` gives a box-less wrapper, so it says nothing about where the
-    // row is: its children do. A leaf like this (a skip link) has no known side.
+    // row is: its children do. A leaf cannot be such a wrapper, because the walker
+    // drops those. It is a box above and left of the window, read below as a corner.
     return node.children.flatMap(foldedSides);
   }
   if (height <= 0 && y >= 1) return ["below"];

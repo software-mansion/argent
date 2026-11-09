@@ -636,6 +636,33 @@ describe("formatDescribeTree", () => {
       expect(out).toContain('"Help"');
     });
 
+    it("keeps a focused row outside the window, and only folds its neighbours", () => {
+      const focused = leaf({
+        role: "input",
+        label: "FarInput",
+        clickable: true,
+        focused: true,
+        frame: offFrame,
+      });
+      const section: DescribeNode = {
+        role: "section",
+        frame: offFrame,
+        children: [focused, row(1)],
+      };
+      const out = formatDescribeTree(page([section, row(2)]), { source: "cdp-dom" });
+      expect(out).toMatch(/input "FarInput" \[clickable,focused\]/);
+      expect(out).toMatch(/ul \[scrollHidden=1\(below\)\]/);
+      expect(out).toMatch(/section \[scrollHidden=1\(below\)\]/);
+      expect(out).not.toContain("item-1");
+    });
+
+    it("folds a checked row outside the window with the others", () => {
+      const checked = leaf({ role: "input", label: "Far", checked: true, frame: offFrame });
+      const out = formatDescribeTree(page([checked]), { source: "cdp-dom" });
+      expect(out).toContain("[scrollHidden=1(below)]");
+      expect(out).not.toContain("Far");
+    });
+
     it("keeps a row with a sliver inside the window, at every edge", () => {
       const sliver = 0.001;
       const frames = [
@@ -737,15 +764,27 @@ describe("formatDescribeTree", () => {
         }
       });
 
-      it("prints only the count for a (0,0,0,0) leaf, which gives no side", () => {
-        const skip = leaf({
-          role: "a",
-          value: "Skip to content",
-          clickable: true,
-          frame: { x: 0, y: 0, width: 0, height: 0 },
-        });
-        const out = formatDescribeTree(page([skip]), { source: "cdp-dom" });
-        expect(out).toContain("[scrollHidden=1]");
+      it("reads a (0,0,0,0) leaf as the corner above and left of the window", () => {
+        const noBox = { x: 0, y: 0, width: 0, height: 0 };
+        const link = leaf({ role: "a", value: "Home", clickable: true, frame: noBox });
+        const out = formatDescribeTree(page([link]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(above)]");
+
+        // A boxed parent up there frames like a box-less wrapper; its links give the side.
+        const nav: DescribeNode = { role: "nav", frame: noBox, children: [link, row(1)] };
+        const withNav = formatDescribeTree(page([nav]), { source: "cdp-dom" });
+        expect(withNav).toContain("[scrollHidden=1(above,below)]");
+      });
+
+      it("reads a zero-width slide that has height at the top edge as left or right", () => {
+        const slides = [
+          { frame: { x: 1, y: 0, width: 0, height: 0.1 }, side: "right" },
+          { frame: { x: 0, y: 0, width: 0, height: 0.1 }, side: "left" },
+        ];
+        for (const { frame, side } of slides) {
+          const out = formatDescribeTree(page([at("slide", frame)]), { source: "cdp-dom" });
+          expect(out).toContain(`[scrollHidden=1(${side})]`);
+        }
       });
     });
 
