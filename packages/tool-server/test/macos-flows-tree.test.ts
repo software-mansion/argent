@@ -198,6 +198,27 @@ describe("macOS flow tree projection", () => {
     expect(check({ role: "AXTextArea", text: "Beta" }, "third line", "contains")).toBe(true);
   });
 
+  it("reads a search field, not the button inside it, for a selector of the field's label", () => {
+    const field: DescribeNode = {
+      role: "AXTextField",
+      label: "Search",
+      value: "query1",
+      clickable: true,
+      frame: { x: 0.03, y: 0.08, width: 0.41, height: 0.04 },
+      children: [],
+    };
+    const button: DescribeNode = {
+      role: "AXButton",
+      label: "Search",
+      clickable: true,
+      frame: { x: 0.036, y: 0.082, width: 0.033, height: 0.036 },
+      children: [],
+    };
+    expect(evaluateCondition("text", "query1", [field, button], "contains", undefined, true)).toBe(
+      true
+    );
+  });
+
   it("reads collected text with whitespace runs as single spaces", async () => {
     const tree = await flowTree();
     const address = findAll(tree, { identifier: "web-address" });

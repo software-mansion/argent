@@ -573,10 +573,12 @@ export function macFieldText(node: DescribeNode, macos: boolean): string | undef
     : undefined;
 }
 
+const MAC_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading", "AXLink"]);
+
 // The match a `text` check reads: the first visible one in reading order (the
-// first overall if none is visible). On a Mac app, not a text field around a
-// match that is not one: a web editor's value is the text of the paragraphs
-// inside it, so a selector for a paragraph's text reads that paragraph.
+// first overall if none is visible). On a Mac app, not a text area around a
+// matching text: a web editor's value is the text of the paragraphs inside it,
+// so a selector for a paragraph's text reads that paragraph.
 export function textCheckTarget(
   matches: DescribeNode[],
   orientation: UiOrientation | undefined,
@@ -585,10 +587,9 @@ export function textCheckTarget(
   const read = macos
     ? matches.filter(
         (n) =>
-          macFieldText(n, true) === undefined ||
+          n.role !== "AXTextArea" ||
           !matches.some(
-            (m) =>
-              isVisible(m) && macFieldText(m, true) === undefined && frameWithin(m.frame, n.frame)
+            (m) => isVisible(m) && MAC_TEXT_ROLES.has(m.role) && frameWithin(m.frame, n.frame)
           )
       )
     : matches;
