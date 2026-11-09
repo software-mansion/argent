@@ -121,6 +121,7 @@ vi.mock("../src/utils/android-binary", () => ({
 import type { DeviceInfo } from "@argent/registry";
 import { getFailureSignal } from "@argent/registry";
 import { androidImpl } from "../src/tools/reinstall-app/platforms/android";
+import { __resetExternalDeviceCacheForTesting } from "../src/utils/external-devices";
 
 const androidDevice = { id: SERIAL, platform: "android", kind: "emulator" } as DeviceInfo;
 
@@ -278,6 +279,45 @@ describe("reinstall-app on Android", () => {
     expect(getFailureSignal(err)).toMatchObject({ error_code: "ANDROID_ADB_NOT_FOUND" });
     expect((err as Error).message).not.toContain("the app may be gone");
     expect(device.calls).toEqual([]);
+  });
+
+  it("passes the error through when the device's provider did not grant adb", async () => {
+    device.installed.add("com.example.app");
+    const descriptor = join(dir, "provider.json");
+    writeFileSync(
+      descriptor,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: "acme-3f2a9c",
+        name: "Acme IDE",
+        devices: [
+          {
+            nativeId: SERIAL,
+            platform: "android",
+            kind: "emulator",
+            name: "Pixel 9",
+            state: "device",
+            capabilities: [],
+          },
+        ],
+      })
+    );
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptor;
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+    __resetExternalDeviceCacheForTesting();
+    try {
+      const err = await rejection(reinstall("com.example.app"));
+
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: "EXTERNAL_DEVICE_CAPABILITY_DENIED",
+      });
+      expect((err as Error).message).not.toContain("the app may be gone");
+      expect(device.calls).toEqual([]);
+    } finally {
+      delete process.env.ARGENT_DEVICE_PROVIDERS;
+      process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+      __resetExternalDeviceCacheForTesting();
+    }
   });
 
   it("does not mistake a package whose name contains bundleId for bundleId", async () => {
