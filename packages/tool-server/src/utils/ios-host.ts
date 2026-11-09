@@ -584,7 +584,7 @@ export const localIosHost: IosHost = {
 /**
  * Accessibility `defaults` keys (all `-bool true`) written on cloud sims.
  * `AutomationEnabled` makes UIKit label a text field with its placeholder;
- * local sims leave it out to keep Full Keyboard Access working
+ * local iPhone and iPad sims leave it out to keep Full Keyboard Access working
  * ({@linkcode clearAutomationEnabled}).
  */
 const ACCESSIBILITY_DEFAULT_FLAGS = [

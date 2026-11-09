@@ -639,7 +639,7 @@ async function bootIos(
       process.stderr.write(
         `[boot-device ${udid.slice(0, 8)}] pre-boot AX pref write failed (${
           err instanceof Error ? err.message : String(err)
-        }); describe may miss SpringBoard-hosted dialogs until a later boot writes them.\n`
+        }); describe may return an empty tree until a later boot writes them.\n`
       );
     });
   }

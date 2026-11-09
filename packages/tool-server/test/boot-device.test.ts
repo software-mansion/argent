@@ -162,6 +162,7 @@ describe("boot-device — iOS path", () => {
     expect(clearAutomationEnabledOrWarnMock.mock.invocationCallOrder[0]).toBeGreaterThan(
       bootstatusCallOrder
     );
+    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
 
     expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
       ["xcrun", ["simctl", "boot", "11111111-1111-1111-1111-111111111111"]],
@@ -730,6 +731,21 @@ describe("boot-device — iOS path", () => {
 
     expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(TV_UDID);
     expect(clearAutomationEnabledOrWarnMock).not.toHaveBeenCalled();
+  });
+
+  it("still reports a tvOS sim booted when the post-boot AutomationEnabled write fails", async () => {
+    listIosSimulatorsMock.mockResolvedValueOnce([
+      { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
+    ]);
+    ensureAutomationEnabledMock.mockRejectedValueOnce(new Error("simctl spawn failed"));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await expect(tool.execute!({}, { udid: TV_UDID })).resolves.toMatchObject({ booted: true });
   });
 
   it("disposes the cached TvControl service on a tvOS force reboot", async () => {

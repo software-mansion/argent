@@ -40,11 +40,11 @@ function isMissingDefault(err: unknown): boolean {
 
 /**
  * `AutomationEnabled` persists on the sim's disk and leaves Full Keyboard Access
- * unable to move focus, even across reboots. Local sims trade it away: the
- * ax-service connects without it, though UIKit then reports a text field's
- * placeholder only as its value, with no label. Removes it from sims an older
- * argent wrote it to as well. A missing key or domain is the wanted state, so
- * that failure is ignored.
+ * unable to move focus, even across reboots. Local iPhone and iPad sims trade it
+ * away (Apple TV sims still need it): the ax-service connects without it, though
+ * UIKit then reports a text field's placeholder only as its value, with no
+ * label. Removes it from sims an older argent wrote it to as well. A missing key
+ * or domain is the wanted state, so that failure is ignored.
  */
 export async function clearAutomationEnabled(udid: string): Promise<void> {
   await accessibilityDefaults(udid, "delete", "AutomationEnabled").catch((err) => {
