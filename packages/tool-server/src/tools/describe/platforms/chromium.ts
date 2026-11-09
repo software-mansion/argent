@@ -275,17 +275,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     if (shown && inert) return "";
     let s = "";
     // Nodes, SPACE where a non-inline element's content ends, RENDERED where a
-    // display:none element's does, and Marks.
+    // display:none element's does, and functions that finish an element's text.
     const SPACE = {};
     const RENDERED = {};
-    // A ::after's text, or (with a start) a title that replaces the text from start on
-    // if that is blank.
-    class Mark {
-      constructor(text, start) {
-        this.text = text;
-        this.start = start;
-      }
-    }
     const stack = [];
     // A listbox's chosen options, each read only when it is laid out and shown.
     const pushOptions = (options, rendered) => {
@@ -296,14 +288,19 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         }
       }
     };
-    // An element's title Mark, ::before, shown children and ::after; only the title when
-    // empty.
+    // An element's ::before, shown children and ::after, or its title if those are blank;
+    // only the title when empty.
     const pushContent = (el, style, rendered, empty) => {
       const html = getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml";
       const tag = getLocalName.call(el);
       const title = getAttr.call(el, "title");
+      const start = s.length;
       if (title && !(html && tag === "img" && hasAttr.call(el, "alt"))) {
-        stack.push(new Mark(title, s.length));
+        stack.push(() => {
+          if (!s.slice(start).replace(WHITESPACE, "")) {
+            s = s.slice(0, start) + " " + title + " ";
+          }
+        });
       }
       if (
         empty ||
@@ -317,8 +314,18 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const replaced =
         /^(img|input|video|audio|canvas|iframe|object|embed|progress|meter)$/.test(tag);
       if (rendered && !ariaHidden && html && !replaced) {
-        s += pseudoText(el, "::before");
-        stack.push(new Mark(pseudoText(el, "::after")));
+        const before = pseudoText(el, "::before");
+        if (before) s += before.text;
+        const from = s.length;
+        // A spaced pseudo-element is parted only from the element's other text, and a
+        // block-level one also from what follows the element.
+        stack.push(() => {
+          const after = pseudoText(el, "::after");
+          const filled = !!s.slice(from).replace(WHITESPACE, "");
+          if (before?.spaced && (filled || after)) s = s.slice(0, from) + " " + s.slice(from);
+          if (after) s += (after.spaced && (filled || before) ? " " : "") + after.text;
+          if (before?.block || after?.block) s += " ";
+        });
       }
       if (rendered && html && tag === "details" && closedDetails(el)) {
         for (const child of getChildNodes.call(el)) {
@@ -348,11 +355,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         unrendered--;
         continue;
       }
-      if (node instanceof Mark) {
-        if (node.start === undefined) s += node.text;
-        else if (!s.slice(node.start).replace(WHITESPACE, "")) {
-          s = s.slice(0, node.start) + " " + node.text + " ";
-        }
+      if (typeof node === "function") {
+        node();
         continue;
       }
       const type = getNodeType.call(node);
@@ -503,7 +507,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     else if (role === "progressbar") return null;
     else v = role === "meter" ? min : spin ? 0 : (min + max) / 2;
     const p = v.toPrecision(6);
-    return /^[^e]*\\./.test(p) ? p.replace(/\\.?0+$/, "") : p;
+    return /^[^e]*\\.[^e]*$/.test(p) ? p.replace(/\\.?0+$/, "") : p;
   }
 
   // A listbox's option children with aria-selected="true", or null when it is not a
@@ -532,12 +536,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     );
   }
 
-  // What a ::before or ::after shows: the strings of its content outside functions
-  // (counters, url()), or its alt text after a "/", which is spaced off like a
-  // non-inline box's text.
+  // What a ::before or ::after shows, or null: the strings of its content outside
+  // functions (counters, url()), or its alt text after a "/". Alt text and a non-inline
+  // box's text are spaced (a display:contents or math one is inline); block marks a
+  // block-level box.
   function pseudoText(el, which) {
     const style = window.getComputedStyle(el, which);
-    if (style.display === "none" || style.visibility !== "visible") return "";
+    if (style.display === "none" || style.visibility !== "visible") return null;
     const v = style.content;
     let text = "";
     let alt = null;
@@ -569,8 +574,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     }
     const shown = alt ?? text;
-    if (!shown) return "";
-    return alt === null && isInlineBox(style) ? shown : " " + shown + " ";
+    if (!shown) return null;
+    const d = style.display;
+    return {
+      text: shown,
+      spaced: alt !== null || !(isInlineBox(style) || /^(contents|math)$/.test(d)),
+      block: /^(block|flex|grid|table|flow-root|list-item|-webkit-box)( |$)/.test(d),
+    };
   }
 
   function isInteractive(el) {

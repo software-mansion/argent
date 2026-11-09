@@ -1005,6 +1005,12 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(vol({ "role": "slider", "aria-valuenow": "1234567", "aria-valuemax": "1e9" })).toBe(
       "Vol 1.23457e+6 end"
     );
+    expect(vol({ "role": "spinbutton", "aria-valuenow": "12345678901" })).toBe(
+      "Vol 1.23457e+10 end"
+    );
+    expect(vol({ "role": "slider", "aria-valuenow": "1.5e-10" })).toBe("Vol 1.50000e-10 end");
+    expect(vol({ "role": "slider bogus", "aria-valuenow": "7" })).toBe("Vol 7 end");
+    expect(vol({ "role": " slider", "aria-valuenow": "7" })).toBe("Vol 7 end");
     expect(vol({ role: "progressbar" })).toBe("Vol s end");
     expect(vol({ "role": "slider", "aria-valuetext": "", "aria-valuenow": "7" })).toBe("Vol end");
 
@@ -1034,6 +1040,16 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     ).toBe("A B");
     expect(hiddenListbox({}, option("O1", chosen), option("O2", {}))).toBe("A O1 B");
     expect(hiddenListbox({}, option("O1", { ...chosen, "aria-hidden": "true" }))).toBe("A B");
+    expect(
+      labelledBy([text("A"), widget({ role: "listbox" }, [option("O1", chosen)]), text("B")], {
+        display: "none",
+      })
+    ).toBe("A B");
+    // A target that is a listbox reads its chosen options, else its aria-label.
+    const rootListbox = (...kids: unknown[]) =>
+      labelledBy(kids, { display: "inline" }, { "role": "listbox", "aria-label": "Root" });
+    expect(rootListbox(text("Text"), option("Opt", chosen), option("No", {}))).toBe("Opt");
+    expect(rootListbox(text("Text"), option("Opt", {}))).toBe("Root");
   });
 
   it("leaves out a closed <details>' content, inert content and content-visibility:hidden content", () => {
@@ -1070,6 +1086,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       "Keep T going"
     );
     expect(labelledBy([text("Keep "), collapsed("inline"), text(" going")])).toBe("Keep x going");
+    expect(labelledBy([text("Keep"), collapsed("contents"), text("going")])).toBe("Keep x going");
   });
 
   it("reads an element's ::before and ::after, or its title when its content is blank", () => {
@@ -1100,6 +1117,39 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     );
     const after = { "::after": { display: "inline", visibility: "visible", content: '" More"' } };
     expect(labelledBy([styled([text("Read")], after)])).toBe("Read More");
+    expect(
+      labelledBy([text("a"), styled([text("m")], shows('"H"', { display: "none" })), text("c")])
+    ).toBe("amc");
+    // Alt text and a box that is not inline part a pseudo-element from the element's other
+    // text only; a block-level box also ends the inline element's run.
+    const around = (kids: unknown[], pseudo: Record<string, Record<string, string>>) =>
+      labelledBy([text("pre"), styled(kids, pseudo), text("post")]);
+    const save = [text("Save")];
+    expect(around(save, shows('"★" / "Starred"'))).toBe("preStarred Savepost");
+    expect(around(save, shows('"Star"', { display: "inline-block" }))).toBe("preStar Savepost");
+    expect(around(save, shows('"Star"', { display: "table-cell" }))).toBe("preStar Savepost");
+    expect(around(save, shows('"Star"', { display: "block" }))).toBe("preStar Save post");
+    expect(around(save, shows('"Star"', { display: "contents" }))).toBe("preStarSavepost");
+    expect(around(save, shows('"Star"', { display: "math" }))).toBe("preStarSavepost");
+    expect(around([], shows('"Star"', { display: "inline-block" }))).toBe("preStarpost");
+    expect(around([], shows('"★" / "Starred"'))).toBe("preStarredpost");
+    expect(around([], shows('"Star"', { display: "block" }))).toBe("preStar post");
+    const afterBox = (display: string) => ({
+      "::after": { display, visibility: "visible", content: '"Star"' },
+    });
+    expect(around(save, afterBox("inline-block"))).toBe("preSave Starpost");
+    expect(around(save, afterBox("block"))).toBe("preSave Star post");
+    expect(around([], afterBox("inline-block"))).toBe("preStarpost");
+    expect(around([], { ...shows('"B"'), ...afterBox("inline-block") })).toBe("preB Starpost");
+    expect(
+      around([], {
+        ...shows('"B"', { display: "inline-block" }),
+        "::after": { display: "inline", visibility: "visible", content: '"A"' },
+      })
+    ).toBe("preB Apost");
+    const input = elementNode("input", []);
+    input.__pseudo = shows('"PX"');
+    expect(labelledBy([text("a"), input, text("c")])).toBe("a c");
     // An aria-hidden target reads its content, not its pseudo-elements.
     expect(
       labelledBy([styled([text("Read")], after)], { display: "inline" }, { "aria-hidden": "true" })
@@ -1109,6 +1159,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([styled([text("Yo")], {}, { title: "Hi" }), text(" there")])).toBe(
       "Yo there"
     );
+    expect(labelledBy([styled([text("   ")], {}, { title: "Tip" }), text("z")])).toBe("Tip z");
     const img = (attrs: Record<string, string>) => {
       const node = elementNode("img", []);
       (node.__style as Record<string, string>).display = "inline";
@@ -1118,6 +1169,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([text("x"), img({ title: "Pic" }), text("y")])).toBe("x Pic y");
     expect(labelledBy([text("x"), img({}), text("y")])).toBe("x y");
     expect(labelledBy([text("x"), img({ alt: "" }), text("y")])).toBe("xy");
+    expect(labelledBy([text("x"), img({ alt: "", title: "T" }), text("y")])).toBe("x y");
     expect(labelledBy([text("x"), img({ alt: " ", title: "Pic" }), text("y")])).toBe("x y");
   });
 
@@ -1284,6 +1336,14 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelOf(host([second, first], [slot([first]), slot([second])], { id: "lbl" }))).toBe(
       "first second"
     );
+    // A listbox host's options are its shadow children, not its slotted light ones.
+    const option = elementNode("span", [text("SL")], {
+      __attrs: { "role": "option", "aria-selected": "true" },
+    });
+    const listbox = host([option], [slot([option])], { "role": "listbox", "aria-label": "LB" });
+    expect(
+      labelOf(elementNode("span", [text("A"), listbox, text("B")], { __attrs: { id: "lbl" } }))
+    ).toBe("A LB B");
   });
 
   it("keeps inline elements joined in a target hidden without losing its layout", () => {
