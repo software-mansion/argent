@@ -198,6 +198,45 @@ describe("Registry -- lastUsedAt", () => {
     await Promise.all(calls);
   });
 
+  it("reports a service as in use while the call disposes it to retry", async () => {
+    const registry = new Registry();
+    const deadHandle = new Error("dead handle");
+    let releaseDispose!: () => void;
+    const disposeGate = new Promise<void>((resolve) => (releaseDispose = resolve));
+    let disposing = false;
+    registry.registerBlueprint({
+      namespace: "Sim",
+      getURN: (ctx: string) => `Sim:${ctx}`,
+      recoverable: (error) => error === deadHandle,
+      factory: async () => ({
+        api: {},
+        dispose: async () => {
+          disposing = true;
+          await disposeGate;
+        },
+        events: new TypedEventEmitter(),
+      }),
+    });
+    let attempts = 0;
+    registry.registerTool({
+      id: "tap",
+      services: () => ({ sim: "Sim:dev-1" }),
+      execute: async () => {
+        if (++attempts === 1) throw deadHandle;
+      },
+    });
+
+    const call = registry.invokeTool("tap");
+    await vi.waitFor(() => expect(disposing).toBe(true));
+    vi.setSystemTime(1_010_000);
+
+    expect(registry.getSnapshot().services.get("Sim:dev-1")?.state).toBe(ServiceState.TERMINATING);
+    expect(lastUsedAt(registry, "Sim:dev-1")).toBe(1_010_000);
+    releaseDispose();
+    await call;
+    expect(attempts).toBe(2);
+  });
+
   it("reports a service as in use while the call is still starting it", async () => {
     const registry = new Registry();
     let release!: () => void;

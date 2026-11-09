@@ -30,11 +30,9 @@ describe("lastDeviceUse", () => {
     expect(lastDeviceUse(services, [UDID])).toEqual(new Map([[UDID, 100]]));
   });
 
-  it("ignores services no tool used, services no longer live, and non-device namespaces", () => {
+  it("ignores services no tool used and non-device namespaces", () => {
     const services = snapshot({
       [`NativeDevtools:${UDID}`]: {},
-      [`SimulatorServer:${UDID}`]: { lastUsedAt: 100, state: ServiceState.IDLE },
-      [`ScreenRecordingSession:${UDID}`]: { lastUsedAt: 200, state: ServiceState.ERROR },
       [`MetroProbe:${UDID}`]: { lastUsedAt: 300 },
     });
 
@@ -57,13 +55,15 @@ describe("lastDeviceUse", () => {
     expect(lastDeviceUse(services, [UDID])).toEqual(new Map([[UDID, 100]]));
   });
 
-  it("counts a service that is still starting", () => {
-    const services = snapshot({
-      [`SimulatorServer:${UDID}`]: { lastUsedAt: 100, state: ServiceState.STARTING },
-    });
+  /** A stamp on a service that is not live means a call is using it now. */
+  it.each([ServiceState.STARTING, ServiceState.TERMINATING])(
+    "counts a stamped service that is %s",
+    (state) => {
+      const services = snapshot({ [`SimulatorServer:${UDID}`]: { lastUsedAt: 100, state } });
 
-    expect(lastDeviceUse(services, [UDID])).toEqual(new Map([[UDID, 100]]));
-  });
+      expect(lastDeviceUse(services, [UDID])).toEqual(new Map([[UDID, 100]]));
+    }
+  );
 
   /** Their nodes stay RUNNING after the device shuts down, and serials are reused. */
   it("ignores session services that outlive their device", () => {

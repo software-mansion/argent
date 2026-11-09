@@ -979,6 +979,51 @@ describe("list-devices", () => {
     expect(appleTv).not.toHaveProperty("inUse");
   });
 
+  it("keeps a device in use while a call disposes its dead service to retry", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };
+      return { stderr: "", stdout: "" };
+    });
+    const deadHandle = new Error("dead handle");
+    let releaseDispose!: () => void;
+    const disposeGate = new Promise<void>((resolve) => (releaseDispose = resolve));
+    let disposing = false;
+    const registry = new Registry();
+    registry.registerBlueprint({
+      namespace: "SimulatorServer",
+      getURN: (id: string) => `SimulatorServer:${id}`,
+      recoverable: (error) => error === deadHandle,
+      factory: async () => ({
+        api: {},
+        dispose: async () => {
+          disposing = true;
+          await disposeGate;
+        },
+        events: new TypedEventEmitter(),
+      }),
+    });
+    let attempts = 0;
+    registry.registerTool({
+      id: "tap",
+      services: () => ({ sim: "SimulatorServer:AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" }),
+      execute: async () => {
+        if (++attempts === 1) throw deadHandle;
+        return {};
+      },
+    });
+
+    const call = registry.invokeTool("tap");
+    await vi.waitFor(() => expect(disposing).toBe(true));
+    const result = await createListDevicesTool(registry).execute!({}, {});
+    releaseDispose();
+    await call;
+
+    expect(
+      result.devices.find((d) => "udid" in d && d.udid === "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")
+    ).toMatchObject({ inUse: true, idleSeconds: 0 });
+    expect(attempts).toBe(2);
+  });
+
   it("reports idleSeconds 0, not a negative value, after the wall clock steps back", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };

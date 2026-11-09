@@ -13,7 +13,7 @@ import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debug
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
-import { isLiveServiceState, type ServiceSnapshot } from "@argent/registry";
+import type { ServiceSnapshot } from "@argent/registry";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
 import { externalNativeId } from "../../utils/external-devices";
 
@@ -234,16 +234,17 @@ const DEVICE_USE_NAMESPACES = DEVICE_OWNED_NAMESPACES.filter(
 );
 
 /**
- * When a tool last used each of `deviceIds` through a still-live service, keyed
- * in the caller's spelling. The simulator watcher's own attach is not use.
+ * When a tool last used each of `deviceIds` through a service that is still live
+ * or that a call is using now, keyed in the caller's spelling. The simulator
+ * watcher's own attach is not use.
  */
 export function lastDeviceUse(
   services: ReadonlyMap<string, ServiceSnapshot>,
   deviceIds: readonly string[]
 ): Map<string, number> {
   const lastUse = new Map<string, number>();
-  for (const [urn, { state, lastUsedAt }] of services) {
-    if (lastUsedAt === undefined || !isLiveServiceState(state)) continue;
+  for (const [urn, { lastUsedAt }] of services) {
+    if (lastUsedAt === undefined) continue;
     const owner = deviceIdOwningUrn(urn, DEVICE_USE_NAMESPACES, deviceIds);
     if (owner === undefined) continue;
     lastUse.set(owner, Math.max(lastUse.get(owner) ?? 0, lastUsedAt));

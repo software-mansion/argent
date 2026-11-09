@@ -205,45 +205,46 @@ export class Registry {
       const ctx: ToolContext = { ...options, toolInvocationId, artifacts: this.artifacts };
 
       let lazilyResolved = new Set<URN>();
+      // Shared by the retry, so a service stays in use while it is disposed for it.
+      const used = new Set<URN>();
 
       const runOnce = async (): Promise<TResult> => {
         const resolved = new Set<URN>();
         lazilyResolved = resolved;
-        const used = new Set<URN>();
-        this.inFlightCalls.add(used);
 
-        try {
-          return await usedByCallChain.run([used, ...(usedByCallChain.getStore() ?? [])], () =>
-            resolvedDuringInvocation.run(resolved, async () => {
-              const resolvedServices: Record<string, unknown> = {};
-              for (const { alias, urn, options: resolveOptions } of refs) {
-                resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
-              }
-              return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
-            })
-          );
-        } finally {
-          this.inFlightCalls.delete(used);
-          const now = Date.now();
-          for (const urn of used) {
-            const node = this.services.get(urn);
-            if (node && isLiveServiceState(node.state)) this.lastUsedAt.set(urn, now);
-          }
-        }
+        return usedByCallChain.run([used, ...(usedByCallChain.getStore() ?? [])], () =>
+          resolvedDuringInvocation.run(resolved, async () => {
+            const resolvedServices: Record<string, unknown> = {};
+            for (const { alias, urn, options: resolveOptions } of refs) {
+              resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+            }
+            return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+          })
+        );
       };
 
       let result: TResult;
+      this.inFlightCalls.add(used);
       try {
-        result = await runOnce();
-      } catch (execError) {
-        // Self-heal a cached-but-dead service: dispose the services that call
-        // this error recoverable — the ones the tool declared and the ones it
-        // resolved itself — and retry against fresh ones. Bounded to a single
-        // retry so a genuinely broken service can't spin.
-        const candidates = [...refs, ...[...lazilyResolved].map((urn) => ({ urn }))];
-        const recovered = await this._recoverFailedServices(candidates, execError);
-        if (!recovered) throw execError;
-        result = await runOnce();
+        try {
+          result = await runOnce();
+        } catch (execError) {
+          // Self-heal a cached-but-dead service: dispose the services that call
+          // this error recoverable — the ones the tool declared and the ones it
+          // resolved itself — and retry against fresh ones. Bounded to a single
+          // retry so a genuinely broken service can't spin.
+          const candidates = [...refs, ...[...lazilyResolved].map((urn) => ({ urn }))];
+          const recovered = await this._recoverFailedServices(candidates, execError);
+          if (!recovered) throw execError;
+          result = await runOnce();
+        }
+      } finally {
+        this.inFlightCalls.delete(used);
+        const now = Date.now();
+        for (const urn of used) {
+          const node = this.services.get(urn);
+          if (node && isLiveServiceState(node.state)) this.lastUsedAt.set(urn, now);
+        }
       }
 
       const duration = performance.now() - startTime;

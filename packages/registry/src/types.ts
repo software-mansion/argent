@@ -93,8 +93,9 @@ export interface ServiceSnapshot {
   state: ServiceState;
   dependents: string[];
   /**
-   * Epoch ms a tool call last used this service, or now while one is using it;
-   * absent if none has since the service last started.
+   * Epoch ms a tool call last used this service, or now while one is using it,
+   * whatever the state; otherwise absent unless the service is live and a call
+   * used it since it last started.
    */
   lastUsedAt?: number;
 }
