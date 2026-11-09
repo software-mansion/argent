@@ -119,7 +119,7 @@ interface WireWebItem {
   testid: string;
   label: string;
   role: string;
-  /** A contenteditable editor without a role or a multi-line `textbox`: WebKit's text area. */
+  /** A contenteditable editor without a role or with the role `textbox`, or a multi-line `textbox`. */
   multiline: boolean;
   type: string;
   /** The element's visible text (80 characters). */
