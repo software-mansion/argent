@@ -8,9 +8,12 @@ import type { DeviceInfo, Registry } from "@argent/registry";
 // dylib. Every input to a local iOS / Apple TV simulator goes through the
 // simulator-server or tv-control service, so neither may start its backend
 // before that poll. The real watcher runs here with its first poll held open.
+// Devices the watcher never arms (Android, remote, provider-claimed) and
+// targets a factory rejects must not wait on it.
 
 const IOS_UDID = "11111111-1111-1111-1111-111111111111";
 const TV_UDID = "22222222-2222-2222-2222-222222222222";
+const CLAIMED_UDID = "33333333-3333-3333-3333-333333333333";
 
 const spawnMock = vi.fn();
 const execFileMock = vi.fn();
@@ -75,6 +78,13 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   cacheSimulatorRuntimeKind: () => {},
   listIosSimulators: async () => [
     {
+      udid: IOS_UDID,
+      name: "iPhone",
+      runtime: "iOS 18.5",
+      runtimeKind: "mobile",
+      state: "Booted",
+    },
+    {
       udid: TV_UDID,
       name: "Apple TV",
       runtime: "tvOS 18.5",
@@ -99,12 +109,34 @@ vi.mock("@argent/native-devtools-ios", async (importOriginal) => ({
   tvosHidDaemonBinaryPath: () => "/fake/tvos-hid-daemon",
 }));
 
+vi.mock("../src/utils/external-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/external-devices")>()),
+  assertExternalCapability: async () => {},
+  externalClaimForAnyId: (id: string) =>
+    id === CLAIMED_UDID ? { provider: { name: "Provider" } } : undefined,
+}));
+
+vi.mock("../src/utils/moq-client", () => ({
+  openMoqClient: async () => {
+    throw new Error("moq dialed");
+  },
+}));
+
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { startSimulatorWatcher } from "../src/utils/simulator-watcher";
 import { simulatorServerBlueprint } from "../src/blueprints/simulator-server";
 import { tvControlBlueprint } from "../src/blueprints/tv-control";
 
 const ios: DeviceInfo = { id: IOS_UDID, platform: "ios", kind: "simulator" };
 const tv: DeviceInfo = { id: TV_UDID, platform: "ios", kind: "simulator" };
+
+/** Rejects with "waited on the first poll" if `started` is still pending after 1s. */
+async function settledWithPollHeld(started: Promise<unknown>): Promise<unknown> {
+  const held = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("waited on the first poll")), 1_000)
+  );
+  return Promise.race([started, held]);
+}
 
 let stop: (() => void) | undefined;
 /** Finishes the first poll's injection attempt for every booted simulator. */
@@ -115,6 +147,8 @@ async function flush(): Promise<void> {
 }
 
 beforeEach(() => {
+  __resetDepCacheForTests();
+  __primeDepCacheForTests(["adb"]);
   spawnMock.mockReset();
   execFileMock.mockReset();
   const held: Array<() => void> = [];
@@ -151,5 +185,31 @@ describe("simulator input waits for the watcher's first poll", () => {
     arm();
     await expect(started).rejects.toThrow(/exited with code 1/);
     expect(execFileMock).toHaveBeenCalled();
+  });
+
+  it.each<[string, DeviceInfo, RegExp]>([
+    [
+      "an Android emulator",
+      { id: "emulator-5554", platform: "android", kind: "emulator" },
+      /before becoming ready/,
+    ],
+    [
+      "a remote iOS simulator",
+      { id: `remote:${IOS_UDID}`, platform: "ios-remote", kind: "simulator" },
+      /moq dialed/,
+    ],
+    [
+      "a provider-claimed iOS simulator",
+      { id: CLAIMED_UDID, platform: "ios", kind: "simulator" },
+      /did not publish a simulator-server endpoint/,
+    ],
+  ])("simulator-server for %s does not wait on the poll", async (_name, device, reached) => {
+    const started = simulatorServerBlueprint.factory({}, device, { device });
+    await expect(settledWithPollHeld(started)).rejects.toThrow(reached);
+  });
+
+  it("tv-control rejects an iPhone simulator without waiting on the poll", async () => {
+    const started = tvControlBlueprint.factory({}, ios, { device: ios });
+    await expect(settledWithPollHeld(started)).rejects.toThrow(/is not a tvOS simulator/);
   });
 });
