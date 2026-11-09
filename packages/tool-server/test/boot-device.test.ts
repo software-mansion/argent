@@ -497,44 +497,64 @@ describe("boot-device — iOS path", () => {
     expect(calls).not.toContain("open");
   });
 
-  it("still primes native-devtools when simctl reports the simulator is already booted", async () => {
-    mockExecFile
-      .mockImplementationOnce((...args: unknown[]) => {
-        getCallback(args)(new Error("Unable to boot device in current state: Booted"));
-        return {} as never;
-      })
-      .mockImplementation((...args: unknown[]) => {
-        getCallback(args)(null, "", "");
-        return {} as never;
+  it.each(["Booted", "Booting"])(
+    "still primes native-devtools when simctl reports the simulator as %s",
+    async (state) => {
+      mockExecFile
+        .mockImplementationOnce((...args: unknown[]) => {
+          getCallback(args)(new Error(`Unable to boot device in current state: ${state}`));
+          return {} as never;
+        })
+        .mockImplementation((...args: unknown[]) => {
+          getCallback(args)(null, "", "");
+          return {} as never;
+        });
+
+      const resolveService = vi.fn(async () => ({
+        getInitFailure: () => null,
+        reverifyEnv: async () => {},
+      }));
+      const registry = { resolveService } as unknown as Registry;
+
+      const tool = createBootDeviceTool(registry);
+
+      await expect(
+        tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" })
+      ).resolves.toEqual({
+        platform: "ios",
+        udid: "22222222-2222-2222-2222-222222222222",
+        booted: true,
       });
 
-    const resolveService = vi.fn(async () => ({
-      getInitFailure: () => null,
-      reverifyEnv: async () => {},
-    }));
-    const registry = { resolveService } as unknown as Registry;
+      expect(mockExecFile.mock.calls[1]?.slice(0, 2)).toEqual([
+        "xcrun",
+        ["simctl", "bootstatus", "22222222-2222-2222-2222-222222222222", "-b"],
+      ]);
+      expect(resolveService).toHaveBeenCalledWith(
+        "NativeDevtools:22222222-2222-2222-2222-222222222222",
+        {
+          device: {
+            id: "22222222-2222-2222-2222-222222222222",
+            platform: "ios",
+            kind: "simulator",
+          },
+          transport: "unix",
+        }
+      );
+    }
+  );
 
-    const tool = createBootDeviceTool(registry);
+  it("fails when simctl cannot boot the simulator in a state other than Booted or Booting", async () => {
+    mockExecFile.mockImplementationOnce((...args: unknown[]) => {
+      getCallback(args)(new Error("Unable to boot device in current state: Shutting Down"));
+      return {} as never;
+    });
+    const tool = createBootDeviceTool({ resolveService: vi.fn() } as unknown as Registry);
 
     await expect(
       tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" })
-    ).resolves.toEqual({
-      platform: "ios",
-      udid: "22222222-2222-2222-2222-222222222222",
-      booted: true,
-    });
-
-    expect(mockExecFile.mock.calls[1]?.slice(0, 2)).toEqual([
-      "xcrun",
-      ["simctl", "bootstatus", "22222222-2222-2222-2222-222222222222", "-b"],
-    ]);
-    expect(resolveService).toHaveBeenCalledWith(
-      "NativeDevtools:22222222-2222-2222-2222-222222222222",
-      {
-        device: { id: "22222222-2222-2222-2222-222222222222", platform: "ios", kind: "simulator" },
-        transport: "unix",
-      }
-    );
+    ).rejects.toThrow("Unable to boot device in current state: Shutting Down");
+    expect(mockExecFile).toHaveBeenCalledTimes(1);
   });
 
   it("SIGKILL-bounds every simctl call, since longRunning lifts the client timeout", async () => {
@@ -1001,7 +1021,10 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
   });
 
   it.each([
-    ["chromium-cdp-9222", /`electronAppPath`/],
+    [
+      "chromium-cdp-9222",
+      /already running and needs no boot; to start an Electron app, pass `electronAppPath`/,
+    ],
     ["amazon-4a27df03c9777152", /`vvdImage`/],
     ["emulator-5554", /Boot an Android emulator by passing `avdName`/],
   ])("refuses %s and names the parameter that boots it", async (udid, hint) => {

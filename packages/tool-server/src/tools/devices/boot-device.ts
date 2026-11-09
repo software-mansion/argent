@@ -633,7 +633,8 @@ async function bootIos(
 
   await bootSimctl(prefix, ["boot", udid], 120_000).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
-    if (!message.includes("Unable to boot device in current state: Booted")) {
+    // Booting: CoreSimulator still finishes a boot whose `simctl boot` timed out; bootstatus waits for it.
+    if (!/Unable to boot device in current state: Boot(ed|ing)\b/.test(message)) {
       throw err;
     }
   });
@@ -2163,7 +2164,8 @@ function bootHarmony(params: {
 /** The capability gate admits these ids for the other parameters, so they can arrive as a `udid`. */
 const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
   android: "Boot an Android emulator by passing `avdName` (an AVD name from `list-devices`).",
-  chromium: "Boot an Electron app by passing `electronAppPath`.",
+  chromium:
+    "A Chromium app listed by `list-devices` is already running and needs no boot; to start an Electron app, pass `electronAppPath`.",
   vega: "Boot a Vega (Fire TV) Virtual Device by passing `vvdImage`.",
 };
 
