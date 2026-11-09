@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
 const execFileSyncMock = vi.fn();
 
@@ -169,6 +170,37 @@ describe("stop-metro port probe", () => {
     await expect(runStopMetro(8081)).rejects.toThrow(
       "Could not determine what is listening on port 8081: Command failed: netstat -ano"
     );
+  });
+
+  it.each([
+    [
+      "times out",
+      { message: "spawnSync lsof ETIMEDOUT", code: "ETIMEDOUT", status: null },
+      "timeout",
+    ],
+    ["exits 2", { message: "Command failed: lsof", status: 2 }, "subprocess"],
+    ["is absent", { message: "spawnSync lsof ENOENT", code: "ENOENT", status: null }, "subprocess"],
+  ])("tags the failure when lsof %s", async (_case, fields, kind) => {
+    lsofThrows(fields);
+
+    const error = await runStopMetro(8081).catch((e: unknown) => e);
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: FAILURE_CODES.STOP_METRO_PORT_PROBE_FAILED,
+      failure_stage: "stop_metro_port_probe",
+      error_kind: kind,
+    });
+  });
+
+  it("tags a listener no visible process owns as unknown", async () => {
+    lsofFindsNothing(
+      NETSTAT_HEADER + "tcp46      0      0  *.8081                 *.*                    LISTEN\n"
+    );
+
+    const error = await runStopMetro(8081).catch((e: unknown) => e);
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: FAILURE_CODES.STOP_METRO_PORT_PROBE_FAILED,
+      error_kind: "unknown",
+    });
   });
 
   it("reads procfs instead of running lsof on Linux", async () => {

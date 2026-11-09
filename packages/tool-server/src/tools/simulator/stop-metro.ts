@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, readlinkSync } from "node:fs";
-import type { ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  type ToolDefinition,
+} from "@argent/registry";
 
 /**
  * Deduped PIDs *listening* on `port`, parsed out of `netstat -ano` (Windows).
@@ -192,9 +197,19 @@ export const stopMetroTool: ToolDefinition<
     try {
       pids = listeningPids(port);
     } catch (error) {
-      throw new Error(
+      const { code } = error as { code?: unknown };
+      // Only a child process error carries `status`; procfs and parse failures do not.
+      const subprocess = typeof error === "object" && error !== null && "status" in error;
+      throw new FailureError(
         `Could not determine what is listening on port ${port}: ${(error as Error).message}`,
-        { cause: error }
+        {
+          error_code: FAILURE_CODES.STOP_METRO_PORT_PROBE_FAILED,
+          failure_stage: "stop_metro_port_probe",
+          failure_area: "tool_server",
+          error_kind: code === "ETIMEDOUT" ? "timeout" : subprocess ? "subprocess" : "unknown",
+          ...(subprocess ? subprocessFailureMetadata(error, "unknown") : {}),
+        },
+        { cause: error as Error }
       );
     }
 
