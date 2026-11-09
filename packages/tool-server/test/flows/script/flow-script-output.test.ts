@@ -141,6 +141,8 @@ describe("flow script executor — output validation", () => {
   });
 
   it.each([
+    ["5", "a number"],
+    ["0", "a number"],
     ["new Error('e')", "an Error"],
     ["new ArrayBuffer(1)", "an ArrayBuffer"],
     ["Object.create({})", "an object with an unusual prototype"],
