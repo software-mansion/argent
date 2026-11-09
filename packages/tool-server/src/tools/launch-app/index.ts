@@ -72,7 +72,7 @@ type Params = z.infer<typeof zodSchema>;
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
-    // ~40s worst case on Android, past the 30s MCP fetch timeout.
+    // Android's device probes plus `am start -W` can outlast the 30s MCP fetch timeout.
     longRunning: true,
     description: `Open an installed app, or confirm the running renderer (Chromium).
 Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (iOS and Apple TV).

@@ -42,7 +42,7 @@ type Params = z.infer<typeof zodSchema>;
 
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
-  // 225s worst case on Android, past the 30s MCP fetch timeout.
+  // An uninstall plus install can take minutes, past the 30s MCP fetch timeout.
   longRunning: true,
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
