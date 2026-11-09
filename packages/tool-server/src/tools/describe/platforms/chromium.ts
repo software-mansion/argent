@@ -829,7 +829,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
             blocked.push(q);
           }
         }
-        if (spare <= 0) break;
         // Bounded: each box can split every part in four.
         regions = regions
           .filter((q) => blocked.includes(q))

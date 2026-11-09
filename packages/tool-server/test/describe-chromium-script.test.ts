@@ -2370,6 +2370,147 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(sliver.y * H).toBeCloseTo(949.3 / 2, 9);
   });
 
+  describe("refining a cutter's window past the grid", () => {
+    const LIST = { x: 0, y: 0, w: 300, h: 200 };
+    // A list whose row is hidden under the boxes, so only a strip's probe can anchor it.
+    const list = (kids: MockElement[] = [], painted: Rect | null = LIST) =>
+      scroller([el({ attrs: { id: "cut" }, rect: { x: 0, y: 150, w: 300, h: 100 } }), ...kids], {
+        rect: LIST,
+        client: { left: 0, top: 0, width: 300, height: 200 },
+        offset: { width: 300, height: 200 },
+        scrollSize: { width: 300, height: 600 },
+        painted: painted ?? undefined,
+      });
+    const fixed = (x: number, y: number, w: number, h: number, opts: Opts = {}) =>
+      el({ rect: { x, y, w, h }, painted: { x, y, w, h }, ...opts, style: { position: "fixed" } });
+    const anchorOf = (nodes: MockElement[]) => findById(run(nodes).tree, "cut")!.clipAnchors;
+    // The cut window's centre across the row.
+    const FALLBACK = { y: { x: 0.15, y: 0.1 } };
+
+    it("refines for three rounds past the grid, and no more", () => {
+      // Each round's strip is covered but for a strip beside it.
+      const rings = [fixed(0, 10, 300, 190), fixed(0, 0, 280, 10), fixed(285, 0, 15, 10)];
+      expect(anchorOf([list(), ...rings])).toEqual({ y: { x: 0.2825, y: 0.001 } });
+      expect(anchorOf([list(), ...rings, fixed(280, 0, 3, 10)])).toEqual(FALLBACK);
+    });
+
+    it("spends at most 24 probes past the grid, and refines every part a box leaves", () => {
+      // The grid lands on three boxes, leaving three strips; each round covers every
+      // strip but for a part beside it, and the last part open is the 24th probe's.
+      const boxes = [
+        fixed(0, 10, 300, 85),
+        fixed(0, 95, 280, 10),
+        fixed(0, 105, 300, 85),
+        fixed(0, 0, 280, 10),
+        fixed(285, 95, 15, 10),
+        fixed(0, 190, 280, 10),
+        fixed(285, 0, 15, 10),
+        fixed(280, 95, 5, 10),
+        fixed(285, 190, 15, 10),
+        fixed(280, 0, 5, 10),
+        fixed(280, 193, 5, 7),
+      ];
+      expect(anchorOf([list(), ...boxes])).toEqual({ y: { x: 0.2825, y: 0.191 } });
+      expect(anchorOf([list(), ...boxes, fixed(280, 190, 5, 3)])).toEqual(FALLBACK);
+    });
+
+    it("probes each point once across the cuts under one cutter", () => {
+      const probes: string[] = [];
+      const hitTest = MockDocument.prototype.elementsFromPoint;
+      MockDocument.prototype.elementsFromPoint = function (x, y) {
+        probes.push(x + "," + y);
+        return hitTest.call(this, x, y);
+      };
+      try {
+        const second = el({ attrs: { id: "cut2" }, rect: { x: 0, y: 160, w: 300, h: 100 } });
+        run([list([second]), fixed(0, 0, 300, 200)]);
+      } finally {
+        MockDocument.prototype.elementsFromPoint = hitTest;
+      }
+      expect(probes.length).toBeGreaterThan(9);
+      expect(new Set(probes).size).toBe(probes.length);
+    });
+
+    it("refines only the parts where a probe landed on a box", () => {
+      // The grid lands on a cover leaving a strip either side. The left strip's probes
+      // land on nothing; the right one's on a box spanning both strips' tops, which
+      // would leave a part of the left strip whose probe reaches the list.
+      const span = el({
+        rect: { x: 0, y: 0, w: 300, h: 100 },
+        painted: { x: 280, y: 0, w: 20, h: 100 },
+        style: { position: "fixed" },
+      });
+      const bit = el({
+        rect: { x: 5, y: 105, w: 10, h: 10 },
+        painted: { x: 5, y: 105, w: 10, h: 10 },
+      });
+      expect(anchorOf([list([bit], null), fixed(20, 0, 260, 200), span])).toEqual(FALLBACK);
+    });
+
+    it("probes each axis apart at a point", () => {
+      // A list scrolling both ways cuts the card on both axes. Over its top, a carousel
+      // keeps a vertical wheel (overscroll-behavior-y) but passes a horizontal one on.
+      const carousel = el({
+        rect: { x: 0, y: 0, w: 300, h: 170 },
+        client: { left: 0, top: 0, width: 300, height: 170 },
+        offset: { width: 300, height: 170 },
+        scrollSize: { width: 900, height: 170 },
+        style: { overflowX: "hidden", overflowY: "auto", overscrollBehaviorY: "contain" },
+        painted: { x: 0, y: 0, w: 300, h: 170 },
+      });
+      const card = el({
+        attrs: { id: "cut" },
+        rect: { x: 250, y: 180, w: 100, h: 100 },
+        painted: { x: 250, y: 180, w: 50, h: 20 },
+      });
+      const both = scroller(
+        [el({ rect: { x: 0, y: 0, w: 700, h: 700 }, painted: LIST, children: [carousel, card] })],
+        {
+          rect: LIST,
+          client: { left: 0, top: 0, width: 300, height: 200 },
+          offset: { width: 300, height: 200 },
+          scrollSize: { width: 700, height: 700 },
+          painted: LIST,
+        }
+      );
+      expect(anchorOf([both])).toEqual({ x: { x: 0.03, y: 0.02 }, y: { x: 0.03, y: 0.18 } });
+    });
+
+    it("carves each side of a box the grid lands on", () => {
+      expect(anchorOf([list(), fixed(10, 0, 290, 200)])).toEqual({ y: { x: 0.005, y: 0.02 } });
+      expect(anchorOf([list(), fixed(0, 0, 300, 190)])).toEqual({ y: { x: 0.15, y: 0.199 } });
+    });
+
+    it("carves the box of what the wheel lands on, short of what it scrolls elsewhere", () => {
+      const STRIP = { y: { x: 0.295, y: 0.02 } };
+      // A frame keeps the wheel.
+      const FRAME = { x: 0, y: 0, w: 290, h: 200 };
+      const frame = el({ tag: "iframe", rect: FRAME, painted: FRAME });
+      expect(anchorOf([list(), frame])).toEqual(STRIP);
+      // A panel scrolling on its own, in a wrapper that hit-tests through (pointer-events:
+      // none) over the whole list: the box stops at the panel.
+      const panel = el({
+        rect: { x: 0, y: 0, w: 290, h: 200 },
+        client: { left: 0, top: 0, width: 290, height: 200 },
+        offset: { width: 290, height: 200 },
+        scrollSize: { width: 290, height: 600 },
+        style: { overflow: "auto" },
+        painted: { x: 0, y: 0, w: 290, h: 200 },
+      });
+      const wrapper = el({ rect: LIST, style: { position: "fixed" }, children: [panel] });
+      expect(anchorOf([list(), wrapper])).toEqual(STRIP);
+      // A box overflowing its small parent: the parent's box does not hold the point.
+      const spill = el({
+        rect: { x: 0, y: 0, w: 290, h: 200 },
+        painted: { x: 0, y: 0, w: 290, h: 200 },
+        style: { position: "absolute" },
+      });
+      expect(
+        anchorOf([list(), fixed(0, 0, 10, 10, { painted: undefined, children: [spill] })])
+      ).toEqual(STRIP);
+    });
+  });
+
   it("anchors a horizontal cut farthest from the element along x", () => {
     const strip = { x: 0, y: 400, w: W, h: 200 };
     const { tree } = run([
