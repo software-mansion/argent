@@ -12,8 +12,10 @@ vi.mock("node:child_process", () => ({
   execFile: (
     cmd: string,
     args: string[],
-    cb: (err: Error | null, out?: { stdout: string; stderr: string }) => void
+    opts: unknown,
+    callback?: (err: Error | null, out?: { stdout: string; stderr: string }) => void
   ) => {
+    const cb = (typeof opts === "function" ? opts : callback) as NonNullable<typeof callback>;
     execFileCalls.push({ cmd, args });
     if (cmd === "plutil") {
       if (plistBundleId) cb(null, { stdout: `${plistBundleId}\n`, stderr: "" });
@@ -27,7 +29,11 @@ vi.mock("../src/utils/ios-device-sets", () => ({
   simctlTargetForUdid: async (udid: string) => ({ nativeId: udid, prefix: ["simctl"] }),
 }));
 const runAdb = vi.fn();
-vi.mock("../src/utils/adb", () => ({ runAdb: (...a: unknown[]) => runAdb(...a) }));
+vi.mock("../src/utils/adb", () => ({
+  runAdb: (...a: unknown[]) => runAdb(...a),
+  adbShell: async () => "",
+  shellQuote: (value: string) => value,
+}));
 
 import { getFailureSignal, FAILURE_CODES, type DeviceInfo } from "@argent/registry";
 import { parseManifestPackage, readApkPackageName } from "../src/utils/apk-package";
