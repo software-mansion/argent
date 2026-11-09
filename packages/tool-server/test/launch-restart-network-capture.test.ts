@@ -204,9 +204,15 @@ function runningRow(pid: number, bundleId = APP): string {
   return `${pid}\t0\tUIKitApplication:${bundleId}[a1b2][rb-legacy]\n`;
 }
 
-/** `ps eww -p <pid> -o etime=,command=` output: age, then argv and environment. */
-function psLine(etime = "00:02"): string {
-  return `${etime} /Devices/${IOS_UDID}/NetworkTest.app/NetworkTest HOME=/tmp\n`;
+/**
+ * `ps eww -p <pid> -o etime=,command=` output: age, then argv and environment.
+ * A process launched while the service runs carries its injection.
+ */
+function psLine(etime = "00:02", { injected = true }: { injected?: boolean } = {}): string {
+  const injection = injected
+    ? ` DYLD_INSERT_LIBRARIES=/fake/dylibs/libArgentInjectionBootstrap.dylib NATIVE_DEVTOOLS_IOS_CDP_SOCKET=/tmp/argent-nd-${IOS_UDID.slice(0, 8)}.sock`
+    : "";
+  return `${etime} /Devices/${IOS_UDID}/NetworkTest.app/NetworkTest HOME=/tmp${injection}\n`;
 }
 
 /** What the host answers before each iOS case: the app runs as PID. */
@@ -267,16 +273,36 @@ async function dial(api: NativeDevtoolsApi, options?: { acknowledge?: boolean })
 const askedToEnable = (app: FakeApp): boolean =>
   app.received.some((frame) => frame.type === "CDP" && frame.payload?.method === "Network.enable");
 
-/** Runs `run` against the real native-devtools service for IOS_UDID, then disposes it. */
-async function withService(run: (api: NativeDevtoolsApi) => Promise<void>): Promise<void> {
+/**
+ * Runs `run` against the real native-devtools service for IOS_UDID, then
+ * disposes it unless `run` already did through the `dispose` it was given.
+ */
+async function withService(
+  run: (api: NativeDevtoolsApi, dispose: () => Promise<void>) => Promise<void>
+): Promise<void> {
   const device = resolveDevice(IOS_UDID);
   const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+  let disposing: Promise<void> | undefined;
+  const dispose = () => (disposing ??= instance.dispose());
   try {
-    await run(instance.api as NativeDevtoolsApi);
+    await run(instance.api as NativeDevtoolsApi, dispose);
   } finally {
     vi.useRealTimers();
-    await instance.dispose();
+    await dispose();
   }
+}
+
+/**
+ * Resolves once `networkCaptureAfterLaunch` has started its wait on the fake
+ * clock, which it does once the host has read the launched process.
+ */
+async function launchWaitStarted(): Promise<void> {
+  // Only the timers are fake, so the real clock bounds this.
+  const deadline = performance.now() + 2_000;
+  while (vi.getTimerCount() === 0 && performance.now() < deadline) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
 }
 
 /**
@@ -293,13 +319,7 @@ async function afterTheLaunchWait(call: () => Promise<string | undefined>) {
       () => (settled = true),
       () => (settled = true)
     );
-    // The wait starts once the host has read the launched process. Only the
-    // timers are fake, so the real clock bounds this.
-    const deadline = performance.now() + 2_000;
-    while (vi.getTimerCount() === 0 && performance.now() < deadline) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    await launchWaitStarted();
     await vi.advanceTimersByTimeAsync(LAUNCH_ARM_WAIT_MS - 1);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -611,6 +631,43 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
       const note = await afterTheLaunchWait(() => api.networkCaptureAfterLaunch(APP));
 
       expect(note).toBe(NOT_CONNECTED_NOTE);
+    });
+  });
+
+  /**
+   * launch-app only brings a running app to the front, so a process started
+   * without the injection stays the app's process and never connects.
+   */
+  it("says at once, without waiting, that a running process without the injection cannot be armed", async () => {
+    await withService(async (api) => {
+      await api.activateNetworkInspection(APP);
+      sim.psOutput = psLine("10:00", { injected: false });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      const note = await api.networkCaptureAfterLaunch(APP);
+
+      expect(note).toBe(
+        `native network capture is on for ${APP}, but its running process (pid ${PID}) was launched without argent's injection for this simulator, so capture cannot be armed in it; call restart-app to start a process that is armed`
+      );
+    });
+  });
+
+  it("answers nothing, at once, when the service is disposed while it waits for the app", async () => {
+    await withService(async (api, dispose) => {
+      await api.activateNetworkInspection(APP);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const note = api.networkCaptureAfterLaunch(APP);
+      await launchWaitStarted();
+
+      // As stop-all-simulator-servers does when it lands mid-launch.
+      await dispose();
+
+      // The fake clock never reaches the 5 s, so only the dispose can end the wait.
+      const settled = await Promise.race([
+        note.then((value) => ({ note: value })),
+        new Promise((resolve) => setImmediate(() => resolve("still waiting"))),
+      ]);
+      expect(settled).toEqual({ note: undefined });
     });
   });
 

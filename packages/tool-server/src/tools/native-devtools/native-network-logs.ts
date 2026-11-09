@@ -8,7 +8,6 @@ import {
   type ToolDefinition,
 } from "@argent/registry";
 import {
-  buildAppStateMessage,
   nativeDevtoolsRef,
   precheckNativeDevtools,
   type NativeDevtoolsApi,
@@ -190,7 +189,11 @@ function notConnected(api: NativeDevtoolsApi, bundleId: string): FailureError {
   const remedy = api.armsEnv
     ? `Network capture for it is armed and starts once it connects, so call again in a few seconds. ` +
       `Requests made before then are not recorded.`
-    : buildAppStateMessage(bundleId, "provider_attached");
+    : `Native devtools here are an external provider's agent, which serves only the app that provider ` +
+      `chose to lend. ${bundleId} is either not that app or its connection has not landed yet, so no ` +
+      `native network log is being captured for it. argent did not launch this process and cannot ` +
+      `re-point it, so restarting anything is the provider's call rather than argent's. Retry if the ` +
+      `app has just started; otherwise, for a React Native app, read its JavaScript requests with view-network-logs.`;
   return new FailureError(`Native devtools not connected for bundleId: ${bundleId}. ${remedy}`, {
     error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
     error_kind: "not_found",
@@ -201,12 +204,9 @@ function notConnected(api: NativeDevtoolsApi, bundleId: string): FailureError {
 
 /** Said once, by the first answer after capture started for an app that was already running. */
 function captureGapNote(armsEnv: boolean): string {
-  return (
-    "capture started while the app was already running, so the requests before that, its launch among them, were not recorded; " +
-    (armsEnv
-      ? "to capture the launch, restart-app and call again"
-      : "on this device a relaunch ends capture, so the launch cannot be recorded here: do not restart the app for it")
-  );
+  return armsEnv
+    ? "capture started while the app was already running, so the requests before that, its launch among them, were not recorded; to capture the launch, restart-app and call again"
+    : "argent connected to the app's agent while the app was running, so the requests before that, its launch among them, were not recorded; on this device a relaunch ends capture, so the launch cannot be recorded here: do not restart the app for it";
 }
 
 /**

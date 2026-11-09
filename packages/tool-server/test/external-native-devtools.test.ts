@@ -3,7 +3,40 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * While a test sets `runningApp`, the host's `launchctl list` and `ps` report
+ * that app running and every such probe is recorded. Unset, every command runs
+ * for real.
+ */
+const hostProbe = vi.hoisted(() => ({
+  probes: [] as string[],
+  runningApp: undefined as { bundleId: string; pid: number } | undefined,
+}));
+
+vi.mock("node:child_process", async () => {
+  const { promisify } = await vi.importActual<typeof import("node:util")>("node:util");
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const execFileForReal = promisify(actual.execFile);
+
+  /** What `promisify(execFile)` returns, which is how ios-host runs its probes. */
+  const execFileAsync = (file: string, args: readonly string[] = [], options = {}) => {
+    const app = hostProbe.runningApp;
+    const argv = args.join(" ");
+    const listsJobs = argv.includes("launchctl list");
+    if (!app || !(listsJobs || /\bps$/.test(file))) return execFileForReal(file, args, options);
+
+    hostProbe.probes.push(`${file} ${argv}`);
+    const stdout = listsJobs
+      ? `${app.pid}\t0\tUIKitApplication:${app.bundleId}[dffa][rb-legacy]\n`
+      : "00:05 /Example.app/Example\n";
+    return Promise.resolve({ stdout, stderr: "" });
+  };
+
+  const execFile = (...args: Parameters<typeof actual.execFile>) => actual.execFile(...args);
+  return { ...actual, execFile: Object.assign(execFile, { [promisify.custom]: execFileAsync }) };
+});
 
 import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
@@ -41,11 +74,15 @@ type LentAgent = {
   hangUp: () => void;
   /** Sends the deferred `Control` frame of a `deferHandshake` agent. */
   handshake: () => void;
+  /** Sends a CDP event, as the provider does with the app's network events. */
+  sendEvent: (method: string, params: Record<string, unknown>) => void;
   received: Array<{ type: string; payload: Record<string, unknown> }>;
   socketPath: string;
 };
 
-async function startLentAgent(options: { deferHandshake?: boolean } = {}): Promise<LentAgent> {
+async function startLentAgent(
+  options: { deferHandshake?: boolean; captureOn?: boolean } = {}
+): Promise<LentAgent> {
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
@@ -61,10 +98,17 @@ async function startLentAgent(options: { deferHandshake?: boolean } = {}): Promi
       const message = JSON.parse(raw);
       received.push(message);
 
-      /** Answer CDP requests and `ViewInspector` RPCs the way the agent in the app would. */
+      /**
+       * Answer CDP requests and `ViewInspector` RPCs the way the agent in the
+       * app would. Its provider keeps capture on unless `captureOn` is false.
+       */
       if (message.type === "CDP") {
+        const result =
+          message.payload.method === "NativeDevtoolsIos.getConditions"
+            ? { enabled: options.captureOn ?? true, offline: false, latency: 2000 }
+            : {};
         socket.write(
-          JSON.stringify({ payload: { id: message.payload.id, result: {} }, type: "CDP" }) + "\n"
+          JSON.stringify({ payload: { id: message.payload.id, result }, type: "CDP" }) + "\n"
         );
       }
       if (message.type === "ViewInspector") {
@@ -88,6 +132,11 @@ async function startLentAgent(options: { deferHandshake?: boolean } = {}): Promi
     },
     handshake: () => {
       for (const socket of sockets) sendHandshake(socket);
+    },
+    sendEvent: (method, params) => {
+      for (const socket of sockets) {
+        socket.write(JSON.stringify({ payload: { method, params }, type: "CDP" }) + "\n");
+      }
     },
     received,
     socketPath,
@@ -153,6 +202,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  hostProbe.probes = [];
+  hostProbe.runningApp = undefined;
   delete process.env.ARGENT_DEVICE_PROVIDERS;
   __resetDepCacheForTests();
   fs.rmSync(temporaryDirectory, { force: true, recursive: true });
@@ -217,6 +268,29 @@ describe("a provider that lends its native-devtools agent", () => {
     await agent.close();
   });
 
+  /**
+   * The process behind a lent agent is the provider's. Probing its simulator
+   * for a pid would put one argent never launched in the network-logs header.
+   */
+  it("never probes the host for the pid of the app it attached to", async () => {
+    hostProbe.runningApp = { bundleId: BUNDLE_ID, pid: 4242 };
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+    /** The probe would start at the handshake and land a few ticks later. */
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(hostProbe.probes).toEqual([]);
+    const records = instance.api.networkRecords(BUNDLE_ID);
+    expect(records).toBeDefined();
+    expect(records!.state().pid).toBeUndefined();
+
+    await instance.dispose();
+    await agent.close();
+  });
+
   /** Hanging up must not disturb what the provider is running. */
   it("leaves the provider's socket in place when disposed", async () => {
     const agent = await startLentAgent();
@@ -254,7 +328,9 @@ describe("a provider that lends its native-devtools agent", () => {
       )
       .catch((e: Error) => e);
     expect((err as Error).message).toMatch(/not connected/);
-    expect((err as Error).message).toMatch(/describe or screenshot/);
+    expect((err as Error).message).toMatch(/no native network log is being captured for it/);
+    expect((err as Error).message).toMatch(/view-network-logs/);
+    expect((err as Error).message).not.toMatch(/describe or screenshot/);
     expect((err as Error).message).not.toMatch(/call again in a few seconds/);
 
     await instance.dispose();
@@ -300,10 +376,49 @@ describe("a provider that lends its native-devtools agent", () => {
   });
 
   /**
-   * The stand-in agent answers any CDP request, so only the methods it
-   * received show that capture was really asked for over the lent connection.
+   * A lent agent's events reach argent from the handshake on, before any call
+   * asks for capture. The note must not say a request it lists was missed.
    */
-  it("arms capture by sending Network.enable over the lent connection", async () => {
+  it("says the requests before argent connected were missed, and lists the ones after", async () => {
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+    agent.sendEvent("Network.requestWillBeSent", {
+      requestId: "r1",
+      request: { url: "https://example.com/before-the-first-call", method: "GET", headers: {} },
+    });
+    agent.sendEvent("Network.loadingFinished", { requestId: "r1" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+    const listing = (await nativeNetworkLogsTool.execute(
+      { nativeDevtools: instance.api },
+      { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+    )) as { header: string; requests: Array<{ url: string }> };
+
+    expect(listing.requests.map((request) => request.url)).toEqual([
+      "https://example.com/before-the-first-call",
+    ]);
+    expect(listing.header).toMatch(
+      /argent connected to the app's agent while the app was running, so the requests before that, its launch among them, were not recorded/
+    );
+    expect(listing.header).not.toMatch(/capture started/);
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  /**
+   * The provider owns the agent's network config, and Network.enable replaces
+   * all of it, the provider's throttling with it. So argent only reads whether
+   * capture is on, and the methods the agent received show that it did.
+   */
+  it("reads whether capture is on over the lent connection and never sends Network.enable", async () => {
     const agent = await startLentAgent();
     publishDescriptor({ socketPath: agent.socketPath });
 
@@ -318,18 +433,50 @@ describe("a provider that lends its native-devtools agent", () => {
       agent.received
         .filter((message) => message.type === "CDP")
         .map((message) => message.payload.method);
+    const call = () =>
+      nativeNetworkLogsTool.execute(
+        { nativeDevtools: instance.api },
+        { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+      ) as Promise<{ armed: boolean; header: string; status: string }>;
 
-    expect(cdpMethods()).not.toContain("Network.enable");
+    const listing = await call();
+    await call();
+
+    expect(listing.status).toBe("ok");
+    expect(listing.armed).toBe(true);
+    expect(listing.header).toMatch(/^ios-native: armed, 0 requests/);
+    // Read again on the second call: the provider can turn capture off at any time.
+    expect(cdpMethods()).toEqual([
+      "NativeDevtoolsIos.getConditions",
+      "NativeDevtoolsIos.getConditions",
+    ]);
+
+    await instance.dispose();
+    await agent.close();
+  });
+
+  it("says the provider has capture off rather than turning it on", async () => {
+    const agent = await startLentAgent({ captureOn: false });
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
     const listing = (await nativeNetworkLogsTool.execute(
       { nativeDevtools: instance.api },
       { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
-    )) as { armed: boolean; header: string; status: string };
+    )) as { armed: boolean; header: string };
 
-    expect(cdpMethods()).toContain("Network.enable");
-    expect(listing.status).toBe("ok");
-    expect(listing.armed).toBe(true);
-    expect(listing.header).toMatch(/^ios-native: armed, 0 requests/);
+    expect(listing.armed).toBe(false);
+    expect(listing.header).toMatch(
+      /^ios-native: not armed, 0 requests \(the device provider has capture off for the app; argent does not turn it on/
+    );
+    expect(agent.received.map((message) => message.payload.method)).not.toContain("Network.enable");
 
     await instance.dispose();
     await agent.close();

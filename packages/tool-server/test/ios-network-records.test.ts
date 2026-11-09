@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   IOS_NATIVE_REQUEST_ID,
@@ -500,6 +502,25 @@ describe("iOS native network records: eviction", () => {
     expect(store.records(8081).some((r) => r.layerId === "r0")).toBe(false);
   });
 
+  it("releases an evicted record to the garbage collector", async () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const store = newStore();
+    const agent = agentOn(store);
+
+    agent.requestWillBeSent("r0", "https://e.com/0");
+    const evicted = new WeakRef(store.record(idOf(store, "r0"))!);
+    for (let i = 1; i <= MAX_RECORDS; i++) agent.requestWillBeSent(`r${i}`, `https://e.com/${i}`);
+    expect(store.records(8081)[0]!.layerId).toBe("r1");
+
+    // A WeakRef keeps its target alive until the current job ends.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    gc();
+    expect(evicted.deref()).toBeUndefined();
+    // The store outlives the collection, so only the eviction can have freed the record.
+    expect(store.records(8081)).toHaveLength(MAX_RECORDS);
+  });
+
   it("evicts the oldest records first once their strings pass the size budget", () => {
     const store = newStore();
     const agent = agentOn(store);
@@ -874,11 +895,12 @@ describe("iOS native network capture lookups", () => {
   /** Sorts before UDID. */
   const OTHER_UDID = "0F1E2D3C-0000-4000-8000-00000000BBBB";
 
-  function captureOn(udid: string, bundleIds: string[]): () => void {
+  /** Capture is on for each app, and each app connected, so it has records. */
+  function captureOn(udid: string, bundleIds: string[], connected = bundleIds): () => void {
     const unregister = registerIosNetworkCaptures({
       udid,
       bundleIds: new Set(bundleIds),
-      stores: new Map(),
+      stores: new Map(connected.map((bundleId) => [bundleId, newStore()])),
     });
     unregisters.push(unregister);
     return unregister;
@@ -904,6 +926,15 @@ describe("iOS native network capture lookups", () => {
     expect(liveIosNetworkCaptures(LOGICAL)).toEqual([BUNDLE]);
     expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([EXT]);
     expect(liveIosNetworkCaptureDevices("com.example.other")).toEqual([]);
+  });
+
+  /** A mistyped bundle id is turned on too, and must not be named by every later profile. */
+  it("leaves out an app that capture is on for but that never connected", () => {
+    captureOn(UDID, [BUNDLE, "com.example.typo"], [BUNDLE]);
+
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    expect(liveIosNetworkCaptureDevices("com.example.typo")).toEqual([]);
+    expect(liveIosNetworkCaptureDevices(BUNDLE)).toEqual([UDID]);
   });
 
   it("sorts and de-duplicates across services, and drops a service from both lookups once it is unregistered", () => {

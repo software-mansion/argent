@@ -260,11 +260,13 @@ describe("native-devtools network capture", () => {
   it("enables capture at the handshake of an app it is on for, also one that never connected before", async () => {
     const api = await startService();
     await expect(api.activateNetworkInspection(BUNDLE)).resolves.toBe(false);
-    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    // No process of the app carries capture yet, so no profile is warned about it.
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
 
     const app = await connectApp(api.socketPath);
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
     await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
   });
 
   it("sends nothing at the handshake of an app capture is not on for", async () => {
@@ -443,6 +445,27 @@ describe("native-devtools network capture", () => {
     );
   });
 
+  it("fails open requests as ended when another process of the app runs after its connection closed", async () => {
+    appRunsAs(4711);
+    const api = await startService();
+    await api.activateNetworkInspection(BUNDLE);
+    const app = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
+    for (const frame of requestEvents("open", "https://example.com/slow")) app.send(frame);
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)!.records(8081)).toHaveLength(1));
+
+    // A relaunch whose new process has not connected yet: only the pids tell it apart.
+    appRunsAs(4712);
+    app.close();
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)!.records(8081)[0]).toMatchObject({
+        state: "failed",
+        errorText: "the app process ended before the request finished",
+      })
+    );
+    expect(api.isConnected(BUNDLE)).toBe(false);
+  });
+
   it("drops the app's captures and records from the lookups on dispose", async () => {
     const api = await startService();
     await api.activateNetworkInspection(BUNDLE);
@@ -454,6 +477,24 @@ describe("native-devtools network capture", () => {
     instance = null;
     expect(liveIosNetworkCaptures(UDID)).toEqual([]);
     expect(api.networkRecords(BUNDLE)).toBeUndefined();
+  });
+
+  it("settles an enable still waiting for its reply as not armed at once on dispose", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    const arming = api.activateNetworkInspection(BUNDLE);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    await instance!.dispose();
+    instance = null;
+
+    // Well inside the 5 s the agent has to answer, so the reply timeout cannot settle it.
+    const outcome = await Promise.race([
+      arming,
+      new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
+    ]);
+    expect(outcome).toBe(false);
   });
 });
 
