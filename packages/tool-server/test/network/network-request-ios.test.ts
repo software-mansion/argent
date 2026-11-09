@@ -335,6 +335,13 @@ describe("view-network-request-details: an iOS request body that came with the r
     expect((await details()).request.postData).toBe(json);
   });
 
+  it("shows a body of exactly 1000 chars whole, with no cut line", async () => {
+    serve(post({ "Content-Type": "text/plain" }));
+    requestPostData.mockResolvedValue(inlineBody("q".repeat(1000)));
+
+    expect((await details()).request.postData).toBe("q".repeat(1000));
+  });
+
   it("gives the whole length of a body longer than the start the host kept", async () => {
     const sent = "東京-".repeat(23_334).slice(0, 70_000);
     serve(post({ "Content-Type": "text/plain; charset=utf-8" }));
@@ -360,6 +367,15 @@ describe("view-network-request-details: an iOS request body that came with the r
 
     expect((await details()).request.postData).toBe(
       "[body omitted: binary application/octet-stream, 5 bytes as the app sent them]"
+    );
+  });
+
+  it("reads a binary Content-Type in any letter case", async () => {
+    serve(post({ "Content-Type": "Application/OCTET-STREAM", "Content-Length": "3" }));
+    requestPostData.mockResolvedValue(inlineBody(Buffer.from([0, 1, 2]).toString("base64")));
+
+    expect((await details()).request.postData).toBe(
+      "[body omitted: binary Application/OCTET-STREAM, 3 bytes as the app sent them]"
     );
   });
 
