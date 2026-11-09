@@ -64,7 +64,7 @@ The native `NSURLProtocol` layer captures the `URLSession` requests of an app on
 
 On a simulator without a device provider, the app can run before the capture starts. Then the header line of the first result tells that Argent did not record the launch. To capture the launch, ask the agent to restart the app.
 
-The capture follows the app. Argent starts the capture in each new process of the app when the process connects. On a local simulator, the result of a launch or a restart tells the agent if the capture is ready in the new process. The launch steps of an e2e test do the same.
+On a simulator without a device provider, the capture follows the app. Argent starts the capture in each new process of the app when the process connects. If the simulator is local, the result of a launch or a restart tells the agent if the capture is ready in the new process. The launch steps of an e2e test do the same.
 
 On a simulator where Argent uses the socket of a device provider, the provider controls the capture. Argent does not start or stop the capture there. If the provider has the capture off, the header line says so. Then turn on the capture in the provider. Argent records the requests from the time that Argent connects to the in-app agent of the provider. This time can be before the first read. Thus the network log can show requests from before the first read.
 
