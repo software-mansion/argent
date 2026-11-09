@@ -115,6 +115,11 @@ describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => 
       () => createRestartAppTool(fakeRegistry).execute!({}, { udid: UDID, bundleId: "com.x" }),
       { terminate: 15_000, launch: 30_000 },
     ],
+    [
+      "open-url",
+      () => openUrlTool.execute!({}, { udid: UDID, url: "myapp://x" }),
+      { openurl: 30_000 },
+    ],
   ])("%s", async (_id, run, limits) => {
     await run();
     const simctl = calls.filter((c) => c.cmd === "xcrun" && c.args.includes("simctl"));
@@ -201,7 +206,7 @@ describe("iOS app tools fail when the step before launch or install times out", 
   );
 });
 
-describe("iOS app tools report a timed-out launch or install as a timeout", () => {
+describe("iOS app tools report a timed-out launch, install or openurl as a timeout", () => {
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
   const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
 
@@ -234,6 +239,14 @@ describe("iOS app tools report a timed-out launch or install as a timeout", () =
       message: `Relaunching iOS app com.x on ${UDID} did not finish within 30s.`,
       code: "IOS_RESTART_LAUNCH_FAILED",
       stage: "ios_restart_app_simctl_launch",
+    },
+    {
+      id: "open-url",
+      run: () => openUrlTool.execute!({}, { udid: UDID, url: "myapp://x" }),
+      sub: "openurl",
+      message: `Opening the URL on iOS simulator ${UDID} did not finish within 30s.`,
+      code: "IOS_OPEN_URL_FAILED",
+      stage: "ios_open_url_simctl_openurl",
     },
   ])("$id: a timed-out $sub", async ({ run, sub, message, code, stage }) => {
     failing = { sub, killed: true };
