@@ -8,8 +8,12 @@ import { buildChromiumFillScript } from "../src/tools/fill/chromium";
  * `execCommand`, which stores line breaks as LF outside an input and fires
  * `input` through the window's capture listeners, `createElementNS` for a
  * detached input that applies the HTML value sanitization of number and email
- * inputs, and the window's native value setters and Event.
+ * inputs and for a detached link that parses its href, and the window's native
+ * value setters and Event.
  */
+
+// Captured before a test shadows the page's URL global.
+const NativeURL = URL;
 
 interface Page {
   doc: any;
@@ -80,7 +84,28 @@ function makePage(options: PageOptions = {}): Page {
       addRange: (range: { node: unknown }) => (doc.selected = range.node),
     }),
     // Any other namespace makes a plain element, which has no sanitization.
-    createElementNS: (ns: string) => {
+    createElementNS: (ns: string, name: string) => {
+      if (name === "a") {
+        let href = "";
+        const parse = () => {
+          try {
+            return new NativeURL(href);
+          } catch {
+            return null;
+          }
+        };
+        return {
+          get href() {
+            return parse()?.href ?? href;
+          },
+          set href(v: string) {
+            href = v;
+          },
+          get hostname() {
+            return parse()?.hostname ?? "";
+          },
+        };
+      }
       const probe = { type: "text", multiple: false, sanitized: "" };
       if (ns !== "http://www.w3.org/1999/xhtml") return probe;
       return Object.defineProperty(probe, "value", {
@@ -151,12 +176,16 @@ function editable(page: Page, props: Record<string, unknown> = {}) {
   };
 }
 
-async function runScript(page: Page, text: string): Promise<any> {
+async function runScript(
+  page: Page,
+  text: string,
+  pageGlobals: Record<string, unknown> = {}
+): Promise<any> {
   // The script reads the page's globals, as Runtime.evaluate runs it.
   const g = globalThis as Record<string, unknown>;
-  const saved = { document: g.document, window: g.window };
-  g.document = page.doc;
-  g.window = page.win;
+  const names = ["document", "window", ...Object.keys(pageGlobals)];
+  const saved = Object.fromEntries(names.map((k) => [k, g[k]]));
+  Object.assign(g, { document: page.doc, window: page.win }, pageGlobals);
   try {
     return await (0, eval)(buildChromiumFillScript(text));
   } finally {
@@ -271,6 +300,18 @@ describe("fill page script", () => {
       expect(page.events).toEqual([]);
     }
   );
+
+  it("verifies an IDN address on a page whose own URL global replaces the builtin", async () => {
+    const page = makePage({ rewrite: () => "a@xn--bcher-kva.de" });
+    const input = control(page, "INPUT", EMAIL);
+    page.doc.activeElement = input;
+    await expect(
+      runScript(page, "a@bücher.de", { URL: "http://localhost:3000/api" })
+    ).resolves.toEqual({
+      status: "ok",
+      verified: true,
+    });
+  });
 
   it.each([
     ["a text input holding an IDN domain in ASCII", { type: "text" }, "a@ü.de", "a@xn--tda.de"],

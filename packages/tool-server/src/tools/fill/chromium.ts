@@ -117,15 +117,14 @@ export function buildChromiumFillScript(text: string): string {
       const at = a.indexOf("@");
       if (at < 0 || !/[^\\x00-\\x7f]/.test(a)) return a;
       const host = a.slice(at + 1).replace(/[\\u00df\\u1e9e]/g, "ss").replace(/\\u03c2/g, "\\u03c3").replace(/[\\u200c\\u200d]/g, "");
-      try {
-        // The ".a" label keeps a numeric last label from parsing as IPv4.
-        const url = new URL("http://" + host + ".a");
-        // Not a bare host: it has a user, a port or a path.
-        if (url.href !== "http://" + url.hostname + "/") return a;
-        return a.slice(0, at + 1) + url.hostname.slice(0, -2);
-      } catch (e) {
-        return a;
-      }
+      // A link parses its href with the URL parser even where a page's own URL
+      // global shadows the builtin. The ".a" label keeps a numeric last label
+      // from parsing as IPv4.
+      const link = doc.createElementNS("http://www.w3.org/1999/xhtml", "a");
+      link.href = "http://" + host + ".a";
+      // Unparsable, or not a bare host: it has a user, a port or a path.
+      if (link.href !== "http://" + link.hostname + "/") return a;
+      return a.slice(0, at + 1) + link.hostname.slice(0, -2);
     };
     const sameText = (got) => {
       if (type !== "email") return got === want;
