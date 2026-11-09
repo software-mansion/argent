@@ -318,6 +318,30 @@ describe("a tap recorded in a web editor of a Mac app", () => {
 
     expect(await recordedSteps("para")).toEqual([{ kind: "tap", x: 0.55, y: 0.65 }]);
   });
+
+  it("keeps the selector of a button over a text area", async () => {
+    serve(
+      [
+        n({
+          role: "AXTextArea",
+          identifier: "notes",
+          frame: { x: 0.05, y: 0.5, width: 0.93, height: 0.4 },
+        }),
+        n({
+          role: "AXButton",
+          label: "Send",
+          clickable: true,
+          frame: { x: 0.861, y: 0.804, width: 0.086, height: 0.041 },
+        }),
+      ],
+      "macos-devtools"
+    );
+    await start("send");
+
+    await record("send", "gesture-tap", { x: 0.9, y: 0.82 });
+
+    expect(await recordedSteps("send")).toEqual([{ kind: "tap", selector: { text: "Send" } }]);
+  });
 });
 
 describe("a right tap recorded on a Mac app", () => {
