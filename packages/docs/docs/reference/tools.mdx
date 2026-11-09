@@ -276,7 +276,7 @@ The `e2e-*` tools refuse an `e2e_test_path` or a `project_root` with a `..` segm
 
 The client does not expand `~`, a `$` or `%` variable, a `$(...)` or backtick command, or a `file:` URL. It sends such a path as written, and the tool-server refuses it. The exception is `outputDir` of `screenshot-diff`: the tool-server creates it in its own working directory when its parent exists there, and uses a temporary directory otherwise.
 
-The working directory of `argent run` is the directory of the shell. The working directory of the [Argent SDK](/docs/reference/node-client) is `process.cwd()` of the program. The working directory of the MCP server is the directory where the editor starts `argent mcp`, which is often not the project, so the MCP server refuses a relative `project_root`.
+The working directory of `argent run` is the directory of the shell. The working directory of the [Argent SDK](/docs/reference/node-client) is `process.cwd()` of the program. The working directory of the MCP server is the directory where the editor starts `argent mcp`, which need not be the project, so the MCP server refuses a relative `project_root` or `e2e_test_path` in the tools above.
 
 Other arguments get to the tool-server as written. The working directory of the tool-server is the directory of the client that started it. Give an absolute path in other arguments that name a file or a directory.
 
