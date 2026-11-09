@@ -39,7 +39,10 @@ function failure(command: string, stdout: string): Error & AdbResult {
   });
 }
 
-function fakeAdb(args: readonly string[], timeout: number | undefined): AdbResult | Error {
+function fakeAdb(
+  args: readonly string[],
+  { timeout, killSignal }: { timeout?: number; killSignal?: string }
+): AdbResult | Error {
   if (args[0] !== "-s" || args[1] !== SERIAL) throw new Error(`no -s ${SERIAL}: ${args.join(" ")}`);
   const argv = args.slice(2);
   device.calls.push(argv);
@@ -55,7 +58,7 @@ function fakeAdb(args: readonly string[], timeout: number | undefined): AdbResul
       // As execFile reports a child it killed at its `timeout`.
       return Object.assign(new Error(`Command failed: adb shell ${rest[0]}\n`), {
         killed: true,
-        signal: "SIGKILL",
+        signal: killSignal ?? "SIGTERM",
         code: null,
         stdout: "",
         stderr: "",
@@ -97,7 +100,7 @@ vi.mock("node:child_process", async () => {
       cb?: (err: Error | null, out: AdbResult) => void
     ) => {
       const callback = typeof opts === "function" ? opts : cb!;
-      const result = fakeAdb(args, (opts as { timeout?: number }).timeout);
+      const result = fakeAdb(args, opts as { timeout?: number; killSignal?: string });
       if (result instanceof Error) {
         const e = result as Error & AdbResult;
         callback(e, { stdout: e.stdout, stderr: e.stderr });
