@@ -359,7 +359,7 @@ Use `gesture-drag` to drag and `gesture-scroll` to scroll.
 - The tree does not show the menu bar of the app. Use [`menu-bar`](#menu-bar).
 - A password field has the `password` flag and no value.
 - The `checked` flag gives the state of a web checkbox or radio button. Its value is its `value` attribute, and it has no value when that is the default `on`.
-- A web element with the role `textbox`, `searchbox` or `combobox` is a text field, and the text that it shows is its value.
+- A web element with the role `textbox`, `searchbox` or `combobox` is a text field, and so is a `contenteditable` editor without a role. The text that it shows is its value.
 - The value of a token field is its tokens, separated by commas.
 - A text field without a label has its placeholder as its label.
 - An element that has no label of its own and that a separate text names has that text as its label. Examples are a field and a switch in a SwiftUI `Form`. The tree then does not show that text as a separate element.
