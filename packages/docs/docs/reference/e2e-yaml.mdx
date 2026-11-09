@@ -159,11 +159,11 @@ The runner resolves a selector against a different tree than the `describe` tool
 | iOS simulator   | Native UIView hierarchy                       | Accessibility tree         |
 | Physical iPhone | Accessibility snapshot of `describe`          | Same snapshot              |
 | Android         | Full accessibility hierarchy                  | Trimmed interactable nodes |
-| Chromium        | DOM nodes with an id, label, value or handler | Full DOM                   |
+| Chromium        | DOM nodes with an id, label, value or handler | DOM inside the window      |
 | Vega            | Toolkit page source                           | Same source                |
 | HarmonyOS       | None                                          | `uitest` layout dump       |
 
-On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, an element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
+On an iOS simulator and Android, an id absent from `describe` can still resolve in an e2e test. On Chromium, `describe` and the runner both leave out an element outside the window. A `scroll-to` step brings that element in. Any other element absent from `describe` cannot resolve. On an iOS simulator, do not copy a `role` from `describe` into a selector: the runner derives the role from the view class, `describe` from the accessibility traits. On a physical iPhone, the runner and `describe` read one tree: copy ids and roles from `describe`.
 
 ## Directives
 
