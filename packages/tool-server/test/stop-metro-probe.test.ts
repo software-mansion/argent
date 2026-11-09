@@ -175,19 +175,28 @@ describe("stop-metro port probe", () => {
   it.each([
     [
       "times out",
-      { message: "spawnSync lsof ETIMEDOUT", code: "ETIMEDOUT", status: null },
-      "timeout",
+      { message: "spawnSync lsof ETIMEDOUT", code: "ETIMEDOUT", status: null, signal: "SIGTERM" },
+      { error_kind: "timeout", failure_spawn_code: "ETIMEDOUT", failure_signal: "SIGTERM" },
     ],
-    ["exits 2", { message: "Command failed: lsof", status: 2 }, "subprocess"],
-    ["is absent", { message: "spawnSync lsof ENOENT", code: "ENOENT", status: null }, "subprocess"],
-  ])("tags the failure when lsof %s", async (_case, fields, kind) => {
+    [
+      "exits 2",
+      { message: "Command failed: lsof", status: 2, signal: null },
+      { error_kind: "subprocess", failure_exit_code: 2 },
+    ],
+    [
+      "is absent",
+      { message: "spawnSync lsof ENOENT", code: "ENOENT", status: null, signal: null },
+      { error_kind: "subprocess", failure_spawn_code: "ENOENT" },
+    ],
+  ])("tags the failure when lsof %s", async (_case, fields, signal) => {
     lsofThrows(fields);
 
     const error = await runStopMetro(8081).catch((e: unknown) => e);
     expect(getFailureSignal(error)).toMatchObject({
       error_code: FAILURE_CODES.STOP_METRO_PORT_PROBE_FAILED,
       failure_stage: "stop_metro_port_probe",
-      error_kind: kind,
+      failure_command: "unknown",
+      ...signal,
     });
   });
 
