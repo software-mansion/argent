@@ -2155,6 +2155,27 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       w: 1000,
       h: 98,
     });
+    // Cut by the inner list alone: only the part of its window above the outer's edge.
+    expect(pxFrame(nested({ x: 1, y: 30, w: 200, h: 40 }), "r", "clipBounds")).toEqual({
+      x: 0,
+      y: 50,
+      w: 1000,
+      h: 49,
+    });
+    // Across: a carousel whose window runs 150-350 in a list clipping at 286.
+    const carousel = run([
+      scroller([
+        el({
+          rect: { x: 150, y: 5, w: 200, h: 90 },
+          client: { left: 0, top: 0, width: 200, height: 90 },
+          offset: { width: 200, height: 90 },
+          scrollSize: { width: 800, height: 90 },
+          style: { overflow: "auto" },
+          children: [row("r", { x: 130, y: 10, w: 50, h: 40 })],
+        }),
+      ]),
+    ]).tree;
+    expect(pxFrame(carousel, "r", "clipBounds")).toEqual({ x: 150, y: 0, w: 136, h: 1000 });
   });
 
   it("reports the scroll container's window, not a fixed clip's inside it", () => {

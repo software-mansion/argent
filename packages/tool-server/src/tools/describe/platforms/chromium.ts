@@ -1109,11 +1109,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           (s) => s.sy && (s.win.top > r.top + 1 || s.win.bottom < r.bottom - 1)
         );
         if (cutsX.length || cutsY.length) {
+          // The part of each cutter's window that the clips above it leave showing.
           const win = {
-            left: Math.max(0, ...cutsX.map((s) => s.win.left)),
-            top: Math.max(0, ...cutsY.map((s) => s.win.top)),
-            right: Math.min(w, ...cutsX.map((s) => s.win.right)),
-            bottom: Math.min(h, ...cutsY.map((s) => s.win.bottom)),
+            left: Math.max(0, ...cutsX.map((s) => s.shown.left)),
+            top: Math.max(0, ...cutsY.map((s) => s.shown.top)),
+            right: Math.min(w, ...cutsX.map((s) => s.shown.right)),
+            bottom: Math.min(h, ...cutsY.map((s) => s.shown.bottom)),
           };
           clipBounds = normRect(win);
           if (getOwnerDocument.call(el) === document) {
