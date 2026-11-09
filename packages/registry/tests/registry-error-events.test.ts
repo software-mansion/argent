@@ -236,6 +236,32 @@ describe("Registry — failure signals", () => {
     });
   });
 
+  it("classifies an unclassified failure after its caller's abort as cancelled", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "adb-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        throw new Error("adb exited with SIGTERM");
+      },
+    } as never);
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(
+      registry.invokeTool("adb-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("adb exited with SIGTERM");
+
+    expect(getFailureSignal(emittedError)?.error_code).toBe(
+      FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED
+    );
+  });
+
   it("keeps the tool's own classification when it fails after the caller aborted", async () => {
     const registry = new Registry();
     const controller = new AbortController();
