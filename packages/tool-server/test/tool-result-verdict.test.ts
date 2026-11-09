@@ -88,11 +88,63 @@ describe("toolResultVerdict", () => {
     });
   });
 
+  it("scores an e2e-add-script that recorded nothing by its script's status, under its former id too", () => {
+    const failed = {
+      status: "fail",
+      reason: "boom",
+      message: 'Script "s.mjs" failed; no step was recorded.',
+      stepCount: 0,
+    };
+    const expected = {
+      status: "fail",
+      reason: 'Script "s.mjs" failed; no step was recorded. (boom)',
+    };
+    expect(toolResultVerdict("e2e-add-script", failed)).toEqual(expected);
+    expect(toolResultVerdict("flow-add-script", failed)).toEqual(expected);
+    expect(
+      toolResultVerdict("e2e-add-script", { ...failed, status: "error", reason: undefined })
+    ).toEqual({ status: "error", reason: 'Script "s.mjs" failed; no step was recorded.' });
+    expect(
+      toolResultVerdict("e2e-add-script", { status: "pass", message: "Step added", stepCount: 1 })
+    ).toBeUndefined();
+  });
+
+  it("errors an e2e-add-step that answered with guidance instead of recording", () => {
+    expect(
+      toolResultVerdict("e2e-add-step", {
+        message: "Call it directly. Nothing was executed and no step was recorded.",
+        toolResult: undefined,
+        stepCount: 2,
+        savedTo: "/p/.argent/e2e/t.yaml",
+      })
+    ).toEqual({
+      status: "error",
+      reason: "Call it directly. Nothing was executed and no step was recorded.",
+    });
+    expect(
+      toolResultVerdict("e2e-add-step", {
+        message: 'Step added to "t" e2e test',
+        stepCount: 3,
+        recorded: "3: tool gesture-tap",
+      })
+    ).toBeUndefined();
+  });
+
+  it("fails a debugger-inspect-element that returned an error", () => {
+    expect(toolResultVerdict("debugger-inspect-element", { error: "no host fiber" })).toEqual({
+      status: "fail",
+      reason: "debugger-inspect-element failed: no host fiber",
+    });
+    expect(toolResultVerdict("debugger-inspect-element", { items: [] })).toBeUndefined();
+  });
+
   it("returns undefined for a passing result and for a tool with no verdict", () => {
     expect(toolResultVerdict("await-ui-element", { success: true })).toBeUndefined();
     expect(toolResultVerdict("e2e-execute", { ok: true, steps: [] })).toBeUndefined();
     expect(toolResultVerdict("debugger-status", { status: "connected" })).toBeUndefined();
     expect(toolResultVerdict("gesture-tap", { ok: false, success: false })).toBeUndefined();
+    expect(toolResultVerdict("gesture-tap", { error: "x", message: "x" })).toBeUndefined();
+    expect(toolResultVerdict("e2e-add-script", { message: "no status" })).toBeUndefined();
     expect(
       toolResultVerdict("describe", { status: "restart_required", message: "x" })
     ).toBeUndefined();

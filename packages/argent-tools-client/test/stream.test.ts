@@ -338,6 +338,17 @@ describe("callTool failure reported in the result", () => {
     expect(result.failure).toBe("e2e test failed");
   });
 
+  it("leaves failure unset when the result line's failure is not a string", async () => {
+    await startServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+      res.end(`${JSON.stringify({ event: "result", data: { ok: false }, failure: true })}\n`);
+    });
+
+    const { callTool } = createToolsClient();
+    const result = await callTool("streamy", {}, { onProgress: () => {} });
+    expect(result).not.toHaveProperty("failure");
+  });
+
   it("carries the body's failure on the buffered JSON path", async () => {
     await startServer((_req, res) => {
       res.setHeader("Content-Type", "application/json");

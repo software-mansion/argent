@@ -336,19 +336,18 @@ describe("createToolsClient options", () => {
     expect(existsSync(outside)).toBe(false);
   });
 
-  it("reports a refused baseline as the failure of a buffered answer too", async () => {
+  it("reports every refused baseline as the failure of a buffered answer too", async () => {
     runFlowStreams = false;
     const outside = join(realpathSync(TEST_HOME), "stray.png");
+    const outside2 = join(realpathSync(TEST_HOME), "stray2.png");
     runFlowData = {
       ok: true,
-      baselineWrites: [
-        {
-          __argentClientFile: true,
-          path: outside,
-          content: Buffer.from("png").toString("base64"),
-          encoding: "base64",
-        },
-      ],
+      baselineWrites: [outside, outside2].map((path) => ({
+        __argentClientFile: true,
+        path,
+        content: Buffer.from("png").toString("base64"),
+        encoding: "base64",
+      })),
     };
     const flowPath = join(TEST_HOME, "buffered.yaml");
     writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
@@ -362,7 +361,7 @@ describe("createToolsClient options", () => {
       updateBaselines: true,
     });
 
-    expect(failure).toBe(`Baselines not written on this client: ${outside}`);
+    expect(failure).toBe(`Baselines not written on this client: ${outside}, ${outside2}`);
   });
 
   it("keeps the tool-server's failure over a refused baseline", async () => {
