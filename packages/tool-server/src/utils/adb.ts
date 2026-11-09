@@ -483,7 +483,7 @@ async function resolveRuntimeKindCached(
  * cached emulator that doesn't answer the avd read gets undefined instead of a
  * re-probe: it may be a new occupant of a reused slot, and a fresh probe would
  * cost a second window on a device that isn't answering. A new occupant that
- * does answer re-probes, with or without avd props.
+ * does answer re-probes when its avd name differs from the cached one.
  */
 async function resolveRuntimeKindAlongside(
   serial: string,
@@ -492,7 +492,7 @@ async function resolveRuntimeKindAlongside(
   const cached = androidRuntimeKindCache.get(serial);
   const probe = cached ? undefined : readRuntimeKind(serial);
   const avd = await avdPromise;
-  if (cached && !avd.answered && serial.startsWith("emulator-")) return undefined;
+  if (cached && !avd.answered && consolePortFromAdbSerial(serial) !== null) return undefined;
   if (cached && cached.avdName === avd.name) return cached.kind;
   const kind = await (probe ?? readRuntimeKind(serial));
   if (kind === undefined) return undefined;

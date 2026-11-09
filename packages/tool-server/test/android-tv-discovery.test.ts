@@ -319,25 +319,27 @@ function mockEmulator(
 const out = (stdout: string) => ({ stdout: `${stdout}\n`, stderr: "" });
 
 describe("listAndroidDevices on a device that stops answering", () => {
-  it("does not reuse the cached form factor when the avd read fails", async () => {
-    const serial = "emulator-5570";
-    let wedged = false;
-    mockEmulator(serial, (shell) => {
-      if (wedged) return new Error("timeout");
-      if (shell.includes("avd_name")) return out("Pixel_API_34");
-      if (shell === "pm list features") return out(PHONE_FEATURES);
-      return out("1");
-    });
+  it.each(["emulator-5570", "127.0.0.1:5571"])(
+    "does not reuse the cached form factor of %s when the avd read fails",
+    async (serial) => {
+      let wedged = false;
+      mockEmulator(serial, (shell) => {
+        if (wedged) return new Error("timeout");
+        if (shell.includes("avd_name")) return out("Pixel_API_34");
+        if (shell === "pm list features") return out(PHONE_FEATURES);
+        return out("1");
+      });
 
-    const first = await listAndroidDevices({ runtimeKind: true });
-    expect(first[0]?.runtimeKind).toBe("mobile");
+      const first = await listAndroidDevices({ runtimeKind: true });
+      expect(first[0]?.runtimeKind).toBe("mobile");
 
-    wedged = true;
-    execFileMock.mockClear();
-    const second = await listAndroidDevices({ runtimeKind: true });
-    expect(second[0]?.runtimeKind).toBeUndefined();
-    expect(shellCalls("pm list features")).toHaveLength(0);
-  });
+      wedged = true;
+      execFileMock.mockClear();
+      const second = await listAndroidDevices({ runtimeKind: true });
+      expect(second[0]?.runtimeKind).toBeUndefined();
+      expect(shellCalls("pm list features")).toHaveLength(0);
+    }
+  );
 
   it("a phone on a slot a TV used to hold is not reported as a TV while it isn't answering", async () => {
     const serial = "emulator-5554";
