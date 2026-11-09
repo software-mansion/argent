@@ -1615,6 +1615,29 @@ describe("iOS native network records: bodies of a closed connection", () => {
     expect(app.request).not.toHaveBeenCalled();
   });
 
+  it("keeps the process-gone reason once a newer connection was live, after it closed too", async () => {
+    const { app, store, read } = closed();
+    // The host could not tell whether the process ended.
+    store.connectionClosed(CONN, { superseded: false });
+    expect(await read()).toEqual([refused(CONNECTION_CLOSED), refused(CONNECTION_CLOSED)]);
+
+    app.setLive(OTHER_CONN);
+    expect(await read()).toEqual([refused(PROCESS_GONE), refused(PROCESS_GONE)]);
+    app.setLive(undefined);
+    store.connectionClosed(OTHER_CONN, { superseded: false });
+    expect(await read()).toEqual([refused(PROCESS_GONE), refused(PROCESS_GONE)]);
+    expect(app.request).not.toHaveBeenCalled();
+  });
+
+  it("answers process gone for a newer connection known only by its events, which closed before any read", async () => {
+    const { app, store, read } = closed();
+    store.connectionClosed(CONN, { superseded: false });
+
+    agentOn(store, OTHER_CONN).complete("later", "https://api.example.com/later");
+    expect(await read()).toEqual([refused(PROCESS_GONE), refused(PROCESS_GONE)]);
+    expect(app.request).not.toHaveBeenCalled();
+  });
+
   it("still serves the bodies read before the connection closed, and an inline request body", async () => {
     const { app, store, agent } = bodyStore();
     agent.complete("read", "https://api.example.com/read");

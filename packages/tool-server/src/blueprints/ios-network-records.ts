@@ -150,6 +150,11 @@ export function createIosNetworkRecords(
   const bodyReads = new Map<string, Promise<unknown>>();
   /** Closed connections whose process the host found ended. */
   const endedConnections = new Set<number>();
+  /** The newest connection of the app seen, live or closed since. */
+  let newestConnection = -1;
+  const sawConnection = (connection: number): void => {
+    if (connection > newestConnection) newestConnection = connection;
+  };
 
   const keyOf = (connection: number, layerId: string): string => `${connection}:${layerId}`;
 
@@ -226,9 +231,11 @@ export function createIosNetworkRecords(
 
   /** Why a body of a connection that is no longer live cannot be read. */
   function closedReason(connection: number): string {
-    // A connection does not come back for the same process, so a newer one is a new process.
+    // A connection does not come back for the same process, so a newer one,
+    // even one that closed since, is a new process.
     const live = link.liveConnection();
-    return endedConnections.has(connection) || (live !== undefined && live > connection)
+    if (live !== undefined) sawConnection(live);
+    return endedConnections.has(connection) || newestConnection > connection
       ? PROCESS_GONE
       : CONNECTION_CLOSED;
   }
@@ -366,6 +373,7 @@ export function createIosNetworkRecords(
     state,
 
     fold(connection, method, params) {
+      sawConnection(connection);
       if (typeof params !== "object" || params === null) return;
       const p = params as Record<string, unknown>;
       const layerId = typeof p.requestId === "string" ? p.requestId : null;
@@ -420,6 +428,7 @@ export function createIosNetworkRecords(
     holdsRecordsOf: (connection) => records.some((record) => record.connection === connection),
 
     connectionClosed(connection, check) {
+      sawConnection(connection);
       const ended =
         check.superseded ||
         check.running === false ||
