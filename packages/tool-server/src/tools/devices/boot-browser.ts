@@ -7,7 +7,12 @@ import { browserWebSocketUrl } from "../../chromium-server/cdp-session";
 import { CDPClient } from "../../utils/debugger/cdp-client";
 import { pidIsAlive } from "../../utils/process-kill";
 import { PS_BIN } from "../../utils/vega-process";
-import { bootElectronApp, killChromiumByPort, type ElectronBootResult } from "./boot-electron";
+import {
+  abortedBootError,
+  bootElectronApp,
+  killChromiumByPort,
+  type ElectronBootResult,
+} from "./boot-electron";
 
 export const BROWSER_NAMES = ["chrome", "chromium", "edge", "brave"] as const;
 export type BrowserName = (typeof BROWSER_NAMES)[number];
@@ -207,7 +212,11 @@ const IDENTITY_CHECK_TIMEOUT_MS = 20_000;
  * browser that loses 127.0.0.1 to one booting at the same moment in another
  * process binds [::1] instead, and our readiness probe reaches the other one.
  */
-async function answersOnProfile(port: number, profileDir: string): Promise<boolean> {
+async function answersOnProfile(
+  port: number,
+  profileDir: string,
+  signal?: AbortSignal
+): Promise<boolean> {
   const deadline = new AbortController();
   let browser: CDPClient | undefined;
   const check = (async () => {
@@ -224,7 +233,14 @@ async function answersOnProfile(port: number, profileDir: string): Promise<boole
     return commandLine?.includes(path.basename(profileDir)) ?? false;
   })();
   let timer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
   const timedOut = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      deadline.abort();
+      reject(abortedBootError("Browser"));
+    };
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
     timer = setTimeout(() => {
       deadline.abort();
       reject(
@@ -248,6 +264,7 @@ async function answersOnProfile(port: number, profileDir: string): Promise<boole
     return await Promise.race([check, timedOut]);
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort!);
     check.catch(() => {});
     await browser?.disconnect().catch(() => {});
   }
@@ -257,6 +274,7 @@ interface BootBrowserOptions {
   browser: BrowserName;
   port?: number;
   extraArgs?: string[];
+  signal?: AbortSignal;
 }
 
 /**
@@ -266,6 +284,22 @@ interface BootBrowserOptions {
  * instance, which never opens our port.
  */
 export async function bootBrowser(options: BootBrowserOptions): Promise<ElectronBootResult> {
+  // Chromium takes the last --user-data-dir, so one here would replace the throwaway profile.
+  const userDataDir = options.extraArgs?.find(
+    (a) => a === "--user-data-dir" || a.startsWith("--user-data-dir=")
+  );
+  if (userDataDir) {
+    throw new FailureError(
+      `Browser boot: \`electronArgs\` cannot set ${userDataDir}: a browser boot always runs ` +
+        `on its own fresh profile. Drop the flag.`,
+      {
+        error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+        failure_stage: "browser_user_data_dir",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
   const executable = findBrowserExecutable(options.browser);
   if (!executable) {
     const installed = BROWSER_NAMES.filter((b) => findBrowserExecutable(b));
@@ -307,7 +341,8 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
   const result = await bootElectronApp({
     appPath: executable,
     port: options.port,
-    label: "Browser",
+    kind: "browser",
+    signal: options.signal,
     extraArgs: [
       `--user-data-dir=${profileDir}`,
       "--no-first-run",
@@ -329,10 +364,12 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     // The tool-server's pid it already holds keeps the profile until that exits.
   }
 
-  const ours = await answersOnProfile(result.port, profileDir).catch((err: unknown) => {
-    killChromiumByPort(result.port);
-    throw err;
-  });
+  const ours = await answersOnProfile(result.port, profileDir, options.signal).catch(
+    (err: unknown) => {
+      killChromiumByPort(result.port);
+      throw err;
+    }
+  );
   if (!ours) {
     // The port stays tracked: the browser holding it is still a device.
     killChromiumByPort(result.port);

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Registry } from "@argent/registry";
+import type { Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
 const bootBrowserMock = vi.fn();
@@ -15,14 +15,17 @@ describe("boot-device browser", () => {
 
   it("boots the browser with the shared Chromium port and args", async () => {
     bootBrowserMock.mockResolvedValue({ platform: "chromium", id: "chromium-cdp-9333" });
+    const { signal } = new AbortController();
     const res = await tool.execute!(
       {},
-      { browser: "edge", electronPort: 9333, electronArgs: ["--headless=new"] }
+      { browser: "edge", electronPort: 9333, electronArgs: ["--headless=new"] },
+      { signal } as ToolContext
     );
     expect(bootBrowserMock).toHaveBeenCalledWith({
       browser: "edge",
       port: 9333,
       extraArgs: ["--headless=new"],
+      signal,
     });
     expect(res).toEqual({ platform: "chromium", id: "chromium-cdp-9333" });
   });

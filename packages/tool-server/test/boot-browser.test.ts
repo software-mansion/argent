@@ -5,7 +5,9 @@ import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 
 const bootElectronAppMock = vi.fn();
 const killMock = vi.fn();
-vi.mock("../src/tools/devices/boot-electron", () => ({
+vi.mock("../src/tools/devices/boot-electron", async (importOriginal) => ({
+  abortedBootError: (await importOriginal<typeof import("../src/tools/devices/boot-electron")>())
+    .abortedBootError,
   bootElectronApp: (opts: unknown) => bootElectronAppMock(opts),
   killChromiumByPort: (port: number) => killMock(port),
 }));
@@ -216,7 +218,7 @@ describe("bootBrowser", () => {
     const opts = bootElectronAppMock.mock.calls[0]![0];
     expect(opts.appPath).toBe(chrome);
     expect(opts.port).toBe(9333);
-    expect(opts.label).toBe("Browser");
+    expect(opts.kind).toBe("browser");
     const dir = profileDirOf(opts.extraArgs)!;
     expect(fs.statSync(dir).isDirectory()).toBe(true);
     expect(opts.extraArgs).toEqual([
@@ -621,6 +623,47 @@ describe("bootBrowser", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("refuses a --user-data-dir in electronArgs before creating a profile", async () => {
+    installed.set(chrome!, "exec");
+    for (const flag of ["--user-data-dir=/p", "--user-data-dir"]) {
+      const made = failPidWrite.made.length;
+      const err = await bootBrowser({
+        browser: "chrome",
+        extraArgs: ["--headless=new", flag],
+      }).catch((e: unknown) => e);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.CHROMIUM_PARAM_INVALID,
+        failure_stage: "browser_user_data_dir",
+      });
+      expect((err as Error).message).toContain(`cannot set ${flag}:`);
+      expect(failPidWrite.made.length).toBe(made);
+    }
+    expect(bootElectronAppMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the call's signal to the launcher, and kills its browser when it aborts during the identity check", async () => {
+    installed.set(chrome!, "exec");
+    const controller = new AbortController();
+    cdpConnect.mockImplementation(() => new Promise(() => {}));
+    let signal: AbortSignal | undefined;
+    wsUrlMock.mockImplementation(async (_port: number, s?: AbortSignal) => {
+      signal = s;
+      return WS_URL;
+    });
+    const boot = bootBrowser({ browser: "chrome", signal: controller.signal }).catch(
+      (e: unknown) => e
+    );
+    await vi.waitFor(() => expect(cdpConnect).toHaveBeenCalled());
+    expect(bootElectronAppMock.mock.calls[0]![0].signal).toBe(controller.signal);
+    expect(killMock).not.toHaveBeenCalled();
+    controller.abort();
+    const err = await boot;
+    expect((err as Error).name).toBe("AbortError");
+    expect((err as Error).message).toBe("Browser boot was cancelled.");
+    expect(killMock).toHaveBeenCalledWith(9333);
+    expect(signal!.aborted).toBe(true);
   });
 
   it("kills its browser when the identity check itself fails", async () => {

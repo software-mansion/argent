@@ -68,7 +68,7 @@ describe("bootElectronApp onProcessGone / label", () => {
       appPath: appBinary,
       port: UNREACHABLE_CDP_PORT,
       readyTimeoutMs: 50,
-      label: "Browser",
+      kind: "browser",
       onProcessGone: gone,
     }).catch((e: unknown) => e);
 
@@ -86,7 +86,7 @@ describe("bootElectronApp onProcessGone / label", () => {
       const settled = bootElectronApp({
         appPath: appBinary,
         port: UNREACHABLE_CDP_PORT,
-        label: "Browser",
+        kind: "browser",
         onProcessGone: gone,
       }).catch((e: unknown) => e);
       await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
@@ -108,7 +108,7 @@ describe("bootElectronApp onProcessGone / label", () => {
     const err = await bootElectronApp({
       appPath: appBinary,
       port: UNREACHABLE_CDP_PORT,
-      label: "Browser",
+      kind: "browser",
       onProcessGone: gone,
     }).catch((e: unknown) => e);
     expect(gone).toHaveBeenCalledTimes(1);
@@ -151,7 +151,7 @@ describe("bootElectronApp onProcessGone / label", () => {
     const spawnErr = bootElectronApp({
       appPath: appBinary,
       port: UNREACHABLE_CDP_PORT,
-      label: "Browser",
+      kind: "browser",
     }).catch((e: unknown) => e);
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
     failed.emit("error", Object.assign(new Error("spawn EACCES"), { code: "EACCES" }));
@@ -164,7 +164,7 @@ describe("bootElectronApp onProcessGone / label", () => {
     const exitErr = bootElectronApp({
       appPath: appBinary,
       port: UNREACHABLE_CDP_PORT,
-      label: "Browser",
+      kind: "browser",
     }).catch((e: unknown) => e);
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2));
     exited.emit("exit", 13, null);
@@ -185,7 +185,7 @@ describe("bootElectronApp onProcessGone / label", () => {
     const second = await bootElectronApp({
       appPath: appBinary,
       port: UNREACHABLE_CDP_PORT,
-      label: "Browser",
+      kind: "browser",
       onProcessGone: gone,
     }).catch((e: unknown) => e);
 
@@ -219,7 +219,7 @@ describe("bootElectronApp onProcessGone / label", () => {
       const err = await bootElectronApp({
         appPath: appBinary,
         port,
-        label: "Browser",
+        kind: "browser",
         onProcessGone: gone,
       }).catch((e: unknown) => e);
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
@@ -232,5 +232,101 @@ describe("bootElectronApp onProcessGone / label", () => {
     } finally {
       holder.close();
     }
+  });
+
+  it("reports a browser's early exit as a browser, with the tail of its stderr, on a port it picked", async () => {
+    const child = makeFakeChild(12345);
+    spawnMock.mockReturnValue(child);
+    const boot = bootElectronApp({ appPath: appBinary, kind: "browser" }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    child.stderr.emit("data", Buffer.from("line 1\nline 2\n\nline 3\n"));
+    child.emit("exit", 13, null);
+    // Lands after 'exit', as stdio may.
+    await new Promise((r) => setTimeout(r, 20));
+    child.stderr.emit(
+      "data",
+      Buffer.from("Multiple targets are not supported in headless mode.\n")
+    );
+    child.stderr.emit("end");
+
+    const err = await boot;
+    expect((err as Error).message).toBe(
+      "Browser boot: child process exited with code 13 before CDP was ready. Its stderr ended " +
+        "with:\nline 2\nline 3\nMultiple targets are not supported in headless mode."
+    );
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_EXITED_BEFORE_READY,
+      failure_stage: "browser_early_exit",
+      failure_command: "browser",
+      failure_exit_code: 13,
+    });
+  });
+
+  it("reports an Electron app's early exit as Electron, without a tail when stderr was silent", async () => {
+    const child = makeFakeChild(12345);
+    spawnMock.mockReturnValue(child);
+    const boot = bootElectronApp({ appPath: appBinary }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    child.emit("exit", null, "SIGABRT");
+    child.stderr.emit("end");
+
+    const err = await boot;
+    expect((err as Error).message).toBe(
+      "Electron boot: child process exited with signal SIGABRT before CDP was ready."
+    );
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "electron_early_exit",
+      failure_command: "electron",
+    });
+  });
+
+  it("names a browser's spawn failure as a browser in telemetry", async () => {
+    spawnMock.mockImplementation(() => {
+      throw new Error("EAGAIN");
+    });
+    const err = await bootElectronApp({ appPath: appBinary, kind: "browser" }).catch(
+      (e: unknown) => e
+    );
+    expect((err as Error).message).toMatch(/^Browser boot: failed to spawn/);
+    expect(getFailureSignal(err)).toMatchObject({
+      failure_stage: "browser_spawn",
+      failure_command: "browser",
+    });
+  });
+
+  it("kills the child and fails when the call is aborted before CDP is ready", async () => {
+    const child = makeFakeChild(12345);
+    const kill = vi.fn(() => true);
+    child.kill = kill;
+    spawnMock.mockReturnValue(child);
+    const controller = new AbortController();
+    const boot = bootElectronApp({
+      appPath: appBinary,
+      kind: "browser",
+      signal: controller.signal,
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    expect(kill).not.toHaveBeenCalled();
+    controller.abort();
+
+    const err = await boot;
+    expect((err as Error).name).toBe("AbortError");
+    expect((err as Error).message).toBe("Browser boot was cancelled.");
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("spawns nothing for a call aborted before it starts", async () => {
+    const gone = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+    const err = await bootElectronApp({
+      appPath: appBinary,
+      port: UNREACHABLE_CDP_PORT,
+      signal: controller.signal,
+      onProcessGone: gone,
+    }).catch((e: unknown) => e);
+    expect((err as Error).name).toBe("AbortError");
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(gone).toHaveBeenCalledTimes(1);
   });
 });

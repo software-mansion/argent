@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 class FakeSocket extends EventEmitter {
   destroy = vi.fn();
   onTimeout: (() => void) | undefined;
-  setTimeout(_ms: number, cb: () => void) {
+  timeoutMs: number | undefined;
+  setTimeout(ms: number, cb: () => void) {
+    this.timeoutMs = ms;
     this.onTimeout = cb;
     return this;
   }
@@ -27,5 +29,11 @@ describe("isLoopbackPortAnswering", () => {
     settle(socket);
     expect(await verdict).toBe(answering);
     expect(socket.destroy).toHaveBeenCalled();
+  });
+
+  it("gives the connect 500 ms by default", () => {
+    void isLoopbackPortAnswering(9333);
+    expect(socket.timeoutMs).toBe(500);
+    socket.emit("connect");
   });
 });

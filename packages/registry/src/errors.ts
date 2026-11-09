@@ -37,6 +37,8 @@ export const FAILURE_COMMANDS = [
   "ffmpeg",
   "cdp",
   "electron",
+  // A Chromium-family browser booted by `boot-device` with `browser`.
+  "browser",
   "npm",
   "npx",
   "unknown",

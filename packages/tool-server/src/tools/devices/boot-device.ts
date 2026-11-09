@@ -2320,7 +2320,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
     },
     capability,
     services: () => ({}),
-    async execute(_services, params) {
+    async execute(_services, params, ctx) {
       const hasUdid = Boolean(params.udid);
       const hasAvd = Boolean(params.avdName);
       const hasVega = Boolean(params.vvdImage);
@@ -2437,11 +2437,13 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
           browser: params.browser!,
           port: params.electronPort,
           extraArgs: params.electronArgs,
+          signal: ctx?.signal,
         });
       }
       return bootElectronApp({
         appPath: params.electronAppPath!,
         port: params.electronPort,
+        signal: ctx?.signal,
         extraArgs: params.electronArgs,
       });
     },
