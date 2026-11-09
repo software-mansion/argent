@@ -16,7 +16,7 @@ export type RestartAppResult =
   | {
       restarted: boolean;
       bundleId: string;
-      /** While native network capture is on for the app: whether it followed the app into the new process. */
+      /** Once network-capture-start started native network capture for the app: whether it followed the app into the new process, or that it is stopped. */
       networkCapture?: string;
     }
   | NativeDevtoolsInitFailedResult;

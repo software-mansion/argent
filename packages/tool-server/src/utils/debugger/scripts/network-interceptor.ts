@@ -12,6 +12,10 @@
  *   development build: requests an XHR does not send there are recorded.
  * - Records stay in `__argent_network_log` / `__argent_network_by_id`, which the read scripts
  *   below serve.
+ * - While `__argent_network_paused` is set, a new request gets no record; one sent before keeps
+ *   its record and completes it. The patches stay in place, since nothing can take them out.
+ * - `__argent_network_mark()` says where the log stands: the install's token, which a new JS
+ *   context changes, and the last id it gave.
  *
  * The script never modifies a request. Idempotent per JS context.
  */
@@ -22,11 +26,16 @@ export const BINARY_BODY_TYPES =
 
 export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   var g = globalThis;
-  if (g.__argent_network_v2) return JSON.stringify({ installed: false, reason: 'already installed' });
+  if (g.__argent_network_v3) return JSON.stringify({ installed: false, reason: 'already installed' });
+  // A runtime can be reached before its bundle runs, and the bundle sets up XMLHttpRequest. An
+  // install then would patch nothing yet keep its guard, so this context would never record.
+  if (typeof g.XMLHttpRequest !== 'function') return JSON.stringify({ installed: false, reason: 'no XMLHttpRequest yet' });
+  g.__argent_network_v3 = true;
+  // An older tool-server installs only where this flag is unset, so it never replaces this script.
   g.__argent_network_v2 = true;
-  // The previous fetch-only script, injected by an older tool-server before an upgrade, stays
-  // installed until the app reloads. Its fetch wrapper keeps the buffers below in a closure, so
-  // empty them and stop them from growing: it then still reads each response, but keeps nothing.
+  // An older script, injected by an older tool-server before an upgrade, stays installed until
+  // the app reloads. Its wrappers keep the buffers below in a closure, so empty them and stop
+  // them from growing: they then still read each response, but keep nothing.
   if (g.__argent_network_installed && Array.isArray(g.__argent_network_log)) {
     var oldLog = g.__argent_network_log;
     oldLog.length = 0;
@@ -51,6 +60,15 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   g.__argent_network_log = log;
   g.__argent_network_by_id = byId;
   var nextId = 1;
+  // Only an identity: a new JS context gets another one, and its ids start at 1 again.
+  var installToken = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  g.__argent_network_install = installToken;
+  g.__argent_network_mark = function() {
+    return JSON.stringify({ install: installToken, lastId: nextId - 1 });
+  };
+  function paused() {
+    return g.__argent_network_paused === true;
+  }
   var bufferedChars = 0;
   // Above zero while an XHR is sent: the request React Native's network module gets then is the
   // XHR's, which has its record.
@@ -564,6 +582,10 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         xhrSending--;
       }
       if (!slot || !slot.headers) return result;
+      if (paused()) {
+        slot.headers = null;
+        return result;
+      }
       var rec = createRecord(isFetchXhr(this, slot) ? 'Fetch' : 'XHR', slot.method, slot.url, slot.headers, body, startedAt);
       slot.headers = null;
       listen(this, rec);
@@ -788,7 +810,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
         var startedAt = Date.now();
         var promise = origStart.apply(this, arguments);
         var response = responses.get(this);
-        if (!response || !promise || typeof promise.then !== 'function') return promise;
+        if (!response || !promise || typeof promise.then !== 'function' || paused()) return promise;
         try {
           var rec = createRecord('Fetch', String((init && init.method) || 'GET').toUpperCase(), String(url),
             lowerCaseHeaders(init && init.headers), body, startedAt);
@@ -1029,7 +1051,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
     var origSendRequest = networking.sendRequest;
     var origAbortRequest = networking.abortRequest;
     networking.sendRequest = function(method, trackingName, url, headers, data, responseType, incrementalUpdates, timeout, callback) {
-      if (xhrSending || typeof callback !== 'function') return origSendRequest.apply(this, arguments);
+      if (xhrSending || typeof callback !== 'function' || paused()) return origSendRequest.apply(this, arguments);
       var watcher = null;
       try { watcher = watchRequest(networking, method, url, headers, data, responseType); } catch (e) {}
       if (!watcher) return origSendRequest.apply(this, arguments);
@@ -1056,6 +1078,27 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
 
   return JSON.stringify({ installed: true });
 })()`;
+
+/**
+ * The mark of the interceptor installed in the app's JS context: `{ install, lastId }`, or
+ * `{ install: null }` where this script has not installed.
+ */
+export const NETWORK_CAPTURE_MARK_SCRIPT = `(function() {
+  var g = globalThis;
+  return typeof g.__argent_network_mark === 'function' ? g.__argent_network_mark() : JSON.stringify({ install: null });
+})()`;
+
+/**
+ * Pauses or resumes recording in the app's JS context. Says whether this script is installed
+ * there: the flag stays in the context either way, and a later install reads it.
+ */
+export function makeNetworkCaptureControlScript(paused: boolean): string {
+  return `(function() {
+  var g = globalThis;
+  g.__argent_network_paused = ${paused ? "true" : "false"};
+  return JSON.stringify({ installed: typeof g.__argent_network_mark === 'function' });
+})()`;
+}
 
 /** Reads a page of captured network logs, minus Metro's own traffic on `metroPort`. */
 export function makeNetworkLogReadScript(start: number, limit: number, metroPort: number): string {
@@ -1108,7 +1151,7 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
 export function makeNetworkDetailReadScript(requestId: string): string {
   return `(function() {
   var byId = globalThis.__argent_network_by_id;
-  if (!byId) return JSON.stringify({ error: 'Network interceptor not installed' });
+  if (!byId) return JSON.stringify({ error: 'Network interceptor not installed', installed: false });
   var entry = byId[${JSON.stringify(requestId)}];
   if (!entry) return JSON.stringify({ error: 'Request not found' });
   if (typeof globalThis.__argent_network_decode === 'function') globalThis.__argent_network_decode(entry);

@@ -29,7 +29,7 @@ run_phase() {
   # Blanket-skipped with one reason whenever the tier is gated.
   local RN_TOOLS="debugger-connect debugger-status debugger-evaluate debugger-log-registry \
     debugger-component-tree debugger-inspect-element debugger-reload-metro \
-    view-network-logs view-network-request-details \
+    network-capture-start network-capture-stop view-network-logs view-network-request-details \
     react-profiler-start react-profiler-stop react-profiler-status react-profiler-analyze \
     react-profiler-renders react-profiler-fiber-tree react-profiler-cpu-summary react-profiler-component-source \
     profiler-load profiler-cpu-query profiler-commit-query profiler-stack-query profiler-combined-report \
@@ -111,6 +111,9 @@ run_phase() {
   assert_ok    "$P" debugger-reload-metro reload "{$D}"
   sleep 4  # reload drops the runtime; let it re-register
 
+  # The network reads only read: capture starts here, before the request they list.
+  local CAP="\"udid\":\"$DEV\",\"bundleId\":\"$PKG\",\"port\":$MPORT"
+  assert_field "$P" network-capture-start capture-start "{$CAP}" '.status' 'ok'
   run_tool debugger-evaluate "{$D,\"expression\":\"fetch('https://example.com').then(()=>0)\"}" >/dev/null 2>&1
   sleep 2
   assert_ok "$P" view-network-logs netlogs "{$D,\"pageIndex\":\"latest\"}"
@@ -120,6 +123,7 @@ run_phase() {
   else
     skip "$P" view-network-request-details netdetails "no captured request id"
   fi
+  assert_field "$P" network-capture-stop capture-stop "{$CAP}" '.status' 'ok'
 
   run_tool react-profiler-start "{$D}"
   if [ "$RT_RC" -eq 0 ]; then

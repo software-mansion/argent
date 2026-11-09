@@ -9,6 +9,13 @@ import { Registry, ServiceState, zodObjectToJsonSchema } from "@argent/registry"
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../src/tools/simulator/stop-metro";
+import {
+  forgetJsCapturesOf,
+  jsCapturesOn,
+  setJsCapture,
+  type JsCapture,
+} from "../src/blueprints/network-inspector";
+import { makeNetworkCaptureControlScript } from "../src/utils/debugger/scripts/network-interceptor";
 
 function createMockRegistry(services: Map<string, { state: ServiceState; dependents: string[] }>) {
   return {
@@ -1600,6 +1607,187 @@ describe("stop-all-simulator-servers interaction messages", () => {
     ).toBe(
       "Stopped 0 simulator servers (1 supplied id matched no service; 1 debugger session left running)"
     );
+  });
+});
+
+describe("stop-all-simulator-servers and JS network capture", () => {
+  const APP = "com.example.shop";
+  const OTHER_APP = "com.example.other";
+  const PAUSE = makeNetworkCaptureControlScript(true);
+
+  function started(bundleId: string): JsCapture {
+    return { bundleId, intent: "started", mark: { install: null }, installed: true };
+  }
+
+  afterEach(() => {
+    forgetJsCapturesOf();
+  });
+
+  /**
+   * A registry whose JS runtime debuggers answer each evaluate with `answer`.
+   * `events` lists each evaluate and each disposal, in order.
+   */
+  function registryWithRuntimes(
+    services: Map<string, { state: ServiceState; dependents: string[] }>,
+    answer: (urn: string) => Promise<unknown> = async () => JSON.stringify({ installed: true })
+  ) {
+    const events: string[] = [];
+    const registry = createMockRegistry(services);
+    const dispose = vi.mocked(registry.disposeService).getMockImplementation()!;
+    vi.mocked(registry.disposeService).mockImplementation(async (urn: string) => {
+      events.push(`dispose ${urn}`);
+      await dispose(urn);
+    });
+    // Every runtime's evaluates, as (urn, expression, options).
+    const evaluate = vi.fn(async (urn: string, expr: string, _options?: unknown) => {
+      events.push(`${expr === PAUSE ? "pause" : "evaluate"} ${urn}`);
+      return answer(urn);
+    });
+    const resolveService = vi.fn(async (urn: string) => ({
+      cdp: { evaluate: (expr: string, options?: unknown) => evaluate(urn, expr, options) },
+    }));
+    Object.assign(registry, { resolveService });
+    return { registry, events, evaluate, resolveService };
+  }
+
+  const running = { state: ServiceState.RUNNING, dependents: [] as string[] };
+
+  it("forgets the JS capture entries of the scoped device only", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8190:${MINE}`, started(OTHER_APP));
+    setJsCapture(`8081:${THEIRS}`, started(APP));
+    const { registry } = registryWithRuntimes(
+      new Map([[`SimulatorServer:${MINE}`, { ...running }]])
+    );
+
+    // Matched case-insensitively, as every other id here is.
+    await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE.toLowerCase()] }
+    );
+
+    expect(jsCapturesOn(MINE)).toEqual([]);
+    expect(jsCapturesOn(THEIRS)).toEqual([{ ...started(APP), port: 8081 }]);
+  });
+
+  it("forgets every JS capture entry on an unscoped call", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8081:${THEIRS}`, started(APP));
+    const { registry } = registryWithRuntimes(new Map());
+
+    await createStopAllSimulatorServersTool(registry).execute!({}, {});
+
+    expect(jsCapturesOn(MINE)).toEqual([]);
+    expect(jsCapturesOn(THEIRS)).toEqual([]);
+  });
+
+  it("forgets no JS capture entry on an aborted call", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    const { registry } = registryWithRuntimes(
+      new Map([[`SimulatorServer:${MINE}`, { ...running }]])
+    );
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE] },
+      { signal: controller.signal } as never
+    );
+
+    expect(result).toEqual({ stopped: [], aborted: true });
+    expect(jsCapturesOn(MINE)).toEqual([{ ...started(APP), port: 8081 }]);
+  });
+
+  it("pauses capture in the scoped device's JS runtime before its debugger is disposed, and not in another device's", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8081:${THEIRS}`, started(APP));
+    const { registry, events, evaluate } = registryWithRuntimes(
+      new Map([
+        [`JsRuntimeDebugger:8081:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8081:${THEIRS}`, { ...running }],
+      ])
+    );
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE] }
+    );
+
+    expect(result).toEqual({ stopped: [`JsRuntimeDebugger:8081:${MINE}`] });
+    expect(events).toEqual([
+      `pause JsRuntimeDebugger:8081:${MINE}`,
+      `dispose JsRuntimeDebugger:8081:${MINE}`,
+    ]);
+    // A runtime that does not answer cannot hold the stop for long.
+    expect(evaluate).toHaveBeenCalledWith(`JsRuntimeDebugger:8081:${MINE}`, PAUSE, {
+      timeout: 1_000,
+    });
+  });
+
+  it("pauses capture in every live JS runtime on an unscoped call", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8190:${THEIRS}`, started(OTHER_APP));
+    const { registry, events } = registryWithRuntimes(
+      new Map([
+        [`JsRuntimeDebugger:8081:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8190:${THEIRS}`, { ...running }],
+      ])
+    );
+
+    await createStopAllSimulatorServersTool(registry).execute!({}, {});
+
+    expect(events.filter((event) => event.startsWith("pause")).sort()).toEqual([
+      `pause JsRuntimeDebugger:8081:${MINE}`,
+      `pause JsRuntimeDebugger:8190:${THEIRS}`,
+    ]);
+    expect(events.indexOf(`dispose JsRuntimeDebugger:8081:${MINE}`)).toBeGreaterThan(
+      events.indexOf(`pause JsRuntimeDebugger:8081:${MINE}`)
+    );
+  });
+
+  it("still stops the device when its JS runtime rejects the pause", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    const { registry, events } = registryWithRuntimes(
+      new Map([[`JsRuntimeDebugger:8081:${MINE}`, { ...running }]]),
+      async () => {
+        throw new Error("CDP request timed out");
+      }
+    );
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE] }
+    );
+
+    expect(result).toEqual({ stopped: [`JsRuntimeDebugger:8081:${MINE}`] });
+    expect(events).toEqual([
+      `pause JsRuntimeDebugger:8081:${MINE}`,
+      `dispose JsRuntimeDebugger:8081:${MINE}`,
+    ]);
+    expect(jsCapturesOn(MINE)).toEqual([]);
+  });
+
+  it("reaches no JS runtime for an entry whose debugger is not live", async () => {
+    setJsCapture(`8081:${MINE}`, started(APP));
+    setJsCapture(`8190:${MINE}`, started(OTHER_APP));
+    setJsCapture(`8191:${MINE}`, started("com.example.third"));
+    const { registry, resolveService } = registryWithRuntimes(
+      new Map([
+        [`JsRuntimeDebugger:8081:${MINE}`, { state: ServiceState.IDLE, dependents: [] }],
+        [`JsRuntimeDebugger:8190:${MINE}`, { state: ServiceState.ERROR, dependents: [] }],
+        [`SimulatorServer:${MINE}`, { ...running }],
+      ])
+    );
+
+    const result = await createStopAllSimulatorServersTool(registry).execute!(
+      {},
+      { devices: [MINE] }
+    );
+
+    expect(result).toEqual({ stopped: [`SimulatorServer:${MINE}`] });
+    expect(resolveService).not.toHaveBeenCalled();
+    expect(jsCapturesOn(MINE)).toEqual([]);
   });
 });
 

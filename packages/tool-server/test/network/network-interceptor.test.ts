@@ -6,8 +6,11 @@ import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
   makeNetworkDetailReadScript,
+  NETWORK_CAPTURE_MARK_SCRIPT,
+  makeNetworkCaptureControlScript,
 } from "../../src/utils/debugger/scripts/network-interceptor";
 import { PREVIOUS_NETWORK_INTERCEPTOR_SCRIPT } from "./previous-network-interceptor";
+import { V2_NETWORK_INTERCEPTOR_SCRIPT } from "./v2-network-interceptor";
 
 // React Native's global fetch is this build: react-native/Libraries/Network/fetch.js requires it.
 const WHATWG_FETCH = readFileSync(require.resolve("whatwg-fetch/dist/fetch.umd.js"), "utf8");
@@ -1476,6 +1479,80 @@ async function rejectionName(promise: Promise<unknown>): Promise<string> {
   return reason.name;
 }
 
+/** XHR, React Native's fetch, Expo's fetch and React Native's network module, in one runtime. */
+const ALL_KINDS: RuntimeOptions = { polyfillFetch: true, expo: { sdk: 57 } };
+
+/** The app sends `url` one way, the native side answers with `body`, and this resolves with what the app read. */
+type RoundTrip = (rt: Runtime, url: string, body: string) => Promise<unknown>;
+
+const xhrRoundTrip: RoundTrip = async (rt, url, body) => {
+  rt.run(
+    `var seen; var x = new XMLHttpRequest(); x.open('GET', '${url}'); x.onloadend = function() { seen = x.responseText; }; x.send();`
+  );
+  rt.last().respond(200, { "Content-Type": "text/plain" }, body);
+  await settle();
+  return rt.run("seen");
+};
+
+const fetchRoundTrip: RoundTrip = async (rt, url, body) => {
+  const pending = rt.run(
+    `rnFetch('${url}').then(function(r) { return r.text(); })`
+  ) as Promise<unknown>;
+  rt.last().respond(200, { "Content-Type": "text/plain" }, body);
+  const value = await pending;
+  await settle();
+  return value;
+};
+
+const expoRoundTrip: RoundTrip = async (rt, url, body) => {
+  const count = rt.native.length;
+  const pending = rt.run(
+    `expoFetch('${url}').then(function(r) { return r.text(); })`
+  ) as Promise<unknown>;
+  for (let i = 0; i < 20 && rt.native.length === count; i++) await settle();
+  rt.native[count]!.respond(200, { "Content-Type": "text/plain" }, body);
+  const value = await pending;
+  await settle();
+  return value;
+};
+
+// A fetch library that calls React Native's network module itself, as react-native-fetch-api does.
+const moduleRoundTrip: RoundTrip = async (rt, url, body) => {
+  rt.run(`var moduleBody;
+    var moduleData = __networking.addListener('didReceiveNetworkData', function(args) { moduleBody = args[1]; moduleData.remove(); });
+    __networking.sendRequest('GET', undefined, '${url}', {}, null, 'text', false, 0, function() {}, false);`);
+  const request = rt.network.library().at(-1)!;
+  // The id comes back a native hop later on iOS.
+  await settle();
+  rt.network.respond(request, 200, { "Content-Type": "text/plain" }, body);
+  await settle();
+  return rt.run("moduleBody");
+};
+
+const ROUND_TRIPS: Array<{ kind: string; roundTrip: RoundTrip; resourceType: string }> = [
+  { kind: "an XHR", roundTrip: xhrRoundTrip, resourceType: "XHR" },
+  { kind: "React Native's fetch", roundTrip: fetchRoundTrip, resourceType: "Fetch" },
+  { kind: "Expo's fetch", roundTrip: expoRoundTrip, resourceType: "Fetch" },
+  { kind: "a network-module request", roundTrip: moduleRoundTrip, resourceType: "Fetch" },
+];
+
+/** What `__argent_network_mark()` answers in the runtime. */
+function markOf(rt: Runtime): { install: string; lastId: number } {
+  return JSON.parse(rt.run("__argent_network_mark()") as string) as {
+    install: string;
+    lastId: number;
+  };
+}
+
+/** The interceptor's globals in the runtime. */
+function argentGlobals(rt: Runtime): string[] {
+  return JSON.parse(
+    rt.run(
+      "JSON.stringify(Object.getOwnPropertyNames(globalThis).filter(function(name) { return name.indexOf('__argent_network') === 0; }))"
+    ) as string
+  ) as string[];
+}
+
 describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
   describe("XMLHttpRequest", () => {
     it("records an axios-style XHR and leaves its response to the app", async () => {
@@ -2319,6 +2396,224 @@ describe("NETWORK_INTERCEPTOR_SCRIPT", () => {
       expect(Object.keys(oldById)).toHaveLength(0);
       expect(rt.records()).toHaveLength(1);
       expect(rt.records()[0]).toMatchObject({ state: "finished", responseBody: "hello" });
+    });
+  });
+
+  describe("over main's previous interceptor (v2)", () => {
+    // A tool-server upgrade without a reload of the app: main's script, without pause or mark, ran first.
+    function overV2(options: RuntimeOptions = ALL_KINDS) {
+      const rt = createRuntime(options);
+      expect(JSON.parse(rt.run(V2_NETWORK_INTERCEPTOR_SCRIPT) as string)).toEqual({
+        installed: true,
+      });
+      const oldLog = rt.run("__argent_network_log") as unknown[];
+      const oldById = rt.run("__argent_network_by_id") as Record<string, unknown>;
+      return { rt, oldLog, oldById };
+    }
+
+    it("empties the v2 script's buffers and keeps them empty", async () => {
+      const { rt, oldLog, oldById } = overV2();
+      await xhrRoundTrip(rt, "https://api.test/before-1", "a");
+      await fetchRoundTrip(rt, "https://api.test/before-2", "b");
+      expect(oldLog).toHaveLength(2);
+      expect(Object.keys(oldById)).toHaveLength(2);
+
+      expect(rt.install()).toEqual({ installed: true });
+      expect(oldLog).toHaveLength(0);
+      expect(Object.keys(oldById)).toHaveLength(0);
+
+      for (const { roundTrip } of ROUND_TRIPS) await roundTrip(rt, "https://api.test/after", "c");
+      expect(oldLog).toHaveLength(0);
+      expect(Object.keys(oldById)).toHaveLength(0);
+      expect(rt.records()).toHaveLength(ROUND_TRIPS.length);
+    });
+
+    it.each(ROUND_TRIPS)(
+      "records $kind once in its own log and none in the v2 script's",
+      async ({ roundTrip, resourceType }) => {
+        const { rt, oldLog, oldById } = overV2();
+        rt.install();
+        const sentBefore = rt.sent();
+
+        expect(await roundTrip(rt, "https://api.test/kind", "body")).toBe("body");
+        expect(rt.sent()).toBe(sentBefore + 1);
+        expect(rt.records()).toHaveLength(1);
+        expect(rt.records()[0]).toMatchObject({
+          requestId: "rn-net-1",
+          resourceType,
+          state: "finished",
+          request: { url: "https://api.test/kind" },
+          responseBody: "body",
+        });
+        expect(oldLog).toHaveLength(0);
+        expect(Object.keys(oldById)).toHaveLength(0);
+      }
+    );
+
+    it("pauses and marks over the v2 script", async () => {
+      const { rt, oldLog } = overV2();
+      rt.install();
+      const { install } = markOf(rt);
+      expect(markOf(rt)).toEqual({ install: expect.any(String), lastId: 0 });
+
+      rt.run("__argent_network_paused = true");
+      expect(await xhrRoundTrip(rt, "https://api.test/paused", "p")).toBe("p");
+      expect(rt.records()).toHaveLength(0);
+      expect(markOf(rt)).toEqual({ install, lastId: 0 });
+
+      rt.run("__argent_network_paused = false");
+      await xhrRoundTrip(rt, "https://api.test/resumed", "r");
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({ request: { url: "https://api.test/resumed" } });
+      expect(markOf(rt)).toEqual({ install, lastId: 1 });
+      expect(oldLog).toHaveLength(0);
+    });
+
+    it("keeps a v2 install that comes after it from replacing its log", async () => {
+      const rt = createRuntime(ALL_KINDS);
+      rt.install();
+      const log = rt.run("__argent_network_log");
+
+      expect(JSON.parse(rt.run(V2_NETWORK_INTERCEPTOR_SCRIPT) as string)).toEqual({
+        installed: false,
+        reason: "already installed",
+      });
+      expect(rt.run("__argent_network_log")).toBe(log);
+      await xhrRoundTrip(rt, "https://api.test/x", "x");
+      expectRecordPerRequest(rt, 1);
+    });
+
+    it("installs where a v2 script ran before the app's bundle set up XMLHttpRequest", async () => {
+      // Before the bundle runs, neither XMLHttpRequest nor Metro's modules exist.
+      const rt = createRuntime({ metro: false });
+      const xhr = rt.context.XMLHttpRequest;
+      rt.run("delete globalThis.XMLHttpRequest");
+      rt.run(V2_NETWORK_INTERCEPTOR_SCRIPT);
+      expect(rt.run("__argent_network_v2")).toBe(true);
+      rt.context.XMLHttpRequest = xhr;
+
+      expect(rt.install()).toEqual({ installed: true });
+      await xhrRoundTrip(rt, "https://api.test/x", "x");
+      expectRecordPerRequest(rt, 1);
+    });
+  });
+
+  describe("pause", () => {
+    it.each(ROUND_TRIPS)("sends $kind while paused and records none", async ({ roundTrip }) => {
+      const rt = createRuntime(ALL_KINDS);
+      rt.install();
+      rt.run("__argent_network_paused = true");
+
+      expect(await roundTrip(rt, "https://api.test/paused", "body")).toBe("body");
+      expect(rt.sent()).toBe(1);
+      expect(rt.records()).toHaveLength(0);
+      expect(markOf(rt).lastId).toBe(0);
+    });
+
+    it("completes the record of an XHR sent before the pause", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run(
+        `var seen; var x = new XMLHttpRequest(); x.open('GET', 'https://api.test/early'); x.onloadend = function() { seen = x.responseText; }; x.send();`
+      );
+      rt.run("__argent_network_paused = true");
+      rt.last().respond(200, { "Content-Type": "text/plain" }, "early body");
+      await settle();
+
+      expect(rt.run("seen")).toBe("early body");
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        request: { url: "https://api.test/early" },
+        responseBody: "early body",
+      });
+    });
+
+    it("records again once the flag is cleared, with the next id", async () => {
+      const rt = createRuntime();
+      rt.install();
+      rt.run("__argent_network_paused = true");
+      await xhrRoundTrip(rt, "https://api.test/paused", "p");
+      rt.run("__argent_network_paused = false");
+      await xhrRoundTrip(rt, "https://api.test/resumed", "r");
+
+      expect(rt.records()).toHaveLength(1);
+      expect(rt.records()[0]).toMatchObject({
+        requestId: "rn-net-1",
+        request: { url: "https://api.test/resumed" },
+      });
+    });
+
+    it("reads a flag set before the install", async () => {
+      const rt = createRuntime();
+      rt.run("__argent_network_paused = true");
+      expect(rt.install()).toEqual({ installed: true });
+
+      expect(await xhrRoundTrip(rt, "https://api.test/first", "f")).toBe("f");
+      expect(rt.records()).toHaveLength(0);
+    });
+  });
+
+  describe("mark", () => {
+    it("gives the install's token and the last id it gave", async () => {
+      const rt = createRuntime();
+      rt.install();
+      const { install } = markOf(rt);
+      expect(markOf(rt)).toEqual({ install: expect.any(String), lastId: 0 });
+      expect(rt.run("__argent_network_install")).toBe(install);
+
+      await xhrRoundTrip(rt, "https://api.test/1", "1");
+      await xhrRoundTrip(rt, "https://api.test/2", "2");
+      expect(markOf(rt)).toEqual({ install, lastId: 2 });
+      expect(rt.records().map((record) => record.requestId)).toEqual(["rn-net-1", "rn-net-2"]);
+
+      // A second install in the same context keeps the token.
+      expect(rt.install()).toEqual({ installed: false, reason: "already installed" });
+      expect(markOf(rt)).toEqual({ install, lastId: 2 });
+    });
+
+    it("gives a new JS context another token, and ids from 1 again", async () => {
+      const first = createRuntime();
+      first.install();
+      await xhrRoundTrip(first, "https://api.test/1", "1");
+      await xhrRoundTrip(first, "https://api.test/2", "2");
+
+      const second = createRuntime();
+      second.install();
+      await xhrRoundTrip(second, "https://api.test/3", "3");
+
+      expect(markOf(second).install).not.toBe(markOf(first).install);
+      expect(markOf(second).lastId).toBe(1);
+      expect(second.records()[0]).toMatchObject({
+        requestId: "rn-net-1",
+        request: { url: "https://api.test/3" },
+      });
+    });
+  });
+
+  describe("an install before the app's bundle set up XMLHttpRequest", () => {
+    it("installs nothing and sets no global", () => {
+      const rt = createRuntime();
+      rt.run("delete globalThis.XMLHttpRequest");
+
+      expect(rt.install()).toEqual({ installed: false, reason: "no XMLHttpRequest yet" });
+      expect(argentGlobals(rt)).toEqual([]);
+    });
+
+    it("patches and records at the next install in the same context", async () => {
+      const rt = createRuntime();
+      const xhr = rt.context.XMLHttpRequest;
+      rt.run("delete globalThis.XMLHttpRequest");
+      expect(rt.install()).toEqual({ installed: false, reason: "no XMLHttpRequest yet" });
+      rt.context.XMLHttpRequest = xhr;
+
+      expect(rt.install()).toEqual({ installed: true });
+      expect(await xhrRoundTrip(rt, "https://api.test/later", "l")).toBe("l");
+      expectRecordPerRequest(rt, 1);
+      expect(rt.records()[0]).toMatchObject({
+        state: "finished",
+        request: { url: "https://api.test/later" },
+      });
     });
   });
 
@@ -4951,5 +5246,60 @@ describe("makeNetworkDetailReadScript", () => {
     const script = makeNetworkDetailReadScript("rn-net-1");
     expect(script.trim()).toMatch(/^\(function\(\)/);
     expect(script.trim()).toMatch(/\)\(\)$/);
+  });
+});
+
+describe("NETWORK_CAPTURE_MARK_SCRIPT", () => {
+  const read = (rt: Runtime): unknown => JSON.parse(rt.run(NETWORK_CAPTURE_MARK_SCRIPT) as string);
+
+  it("answers install null where this interceptor is not installed", () => {
+    const rt = createRuntime();
+    expect(read(rt)).toEqual({ install: null });
+    rt.run(V2_NETWORK_INTERCEPTOR_SCRIPT);
+    expect(read(rt)).toEqual({ install: null });
+  });
+
+  it("answers the installed interceptor's mark", async () => {
+    const rt = createRuntime();
+    rt.install();
+    await xhrRoundTrip(rt, "https://api.test/1", "1");
+
+    expect(read(rt)).toEqual(markOf(rt));
+    expect(read(rt)).toEqual({ install: expect.any(String), lastId: 1 });
+  });
+});
+
+describe("makeNetworkCaptureControlScript", () => {
+  const control = (rt: Runtime, paused: boolean): unknown =>
+    JSON.parse(rt.run(makeNetworkCaptureControlScript(paused)) as string);
+
+  it("pauses and resumes recording, and says the interceptor is installed", async () => {
+    const rt = createRuntime();
+    rt.install();
+
+    expect(control(rt, true)).toEqual({ installed: true });
+    expect(rt.run("__argent_network_paused")).toBe(true);
+    await xhrRoundTrip(rt, "https://api.test/paused", "p");
+    expect(rt.records()).toHaveLength(0);
+
+    expect(control(rt, false)).toEqual({ installed: true });
+    expect(rt.run("__argent_network_paused")).toBe(false);
+    await xhrRoundTrip(rt, "https://api.test/resumed", "r");
+    expect(rt.records()).toHaveLength(1);
+  });
+
+  it("says the interceptor is not installed, and leaves its flag for the install after it", async () => {
+    const rt = createRuntime();
+    expect(control(rt, true)).toEqual({ installed: false });
+    rt.run(V2_NETWORK_INTERCEPTOR_SCRIPT);
+    expect(control(rt, true)).toEqual({ installed: false });
+
+    rt.install();
+    await xhrRoundTrip(rt, "https://api.test/paused", "p");
+    expect(rt.records()).toHaveLength(0);
+
+    control(rt, false);
+    await xhrRoundTrip(rt, "https://api.test/resumed", "r");
+    expect(rt.records()).toHaveLength(1);
   });
 });

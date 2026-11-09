@@ -615,13 +615,14 @@ async function treeSourceGate(
 }
 
 /**
- * The `networkCapture` note a launch-app or restart-app result carries
- * while native network capture, started earlier by `native-network-logs`, is on
- * for the app: whether the capture followed the app into the new process.
- * Reported as a step warning: the step passed, but the app may run
- * instrumented. A flow that relaunches the same app repeats a note only when it
- * differs from the last one reported for that app, so a later launch that
- * attached is not hidden behind an earlier one that did not. Numbers are
+ * The `networkCapture` note a launch-app or restart-app result carries once
+ * `network-capture-start` started native network capture for the app: whether
+ * the capture followed the app into the new process, or, after
+ * `network-capture-stop`, that it is stopped. Reported as a step warning: the
+ * step passed, but the app may run instrumented. A flow that relaunches the
+ * same app repeats a note only when it differs from the last one reported for
+ * that app, so a later launch that attached is not hidden behind an earlier one
+ * that did not, and the first launch after a stop says so once. Numbers are
  * ignored in that comparison, so a new pid alone does not make a note differ.
  */
 function networkCaptureWarning(

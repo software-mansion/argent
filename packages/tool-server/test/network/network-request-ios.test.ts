@@ -1,11 +1,17 @@
 import * as zlib from "node:zlib";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Registry, type ToolCapability } from "@argent/registry";
 import { findAndroidNativeRecord } from "../../src/blueprints/android-network-inspector";
 import {
   findIosNativeRecord,
+  registerIosNetworkCaptures,
   type IosNetworkRecords,
 } from "../../src/blueprints/ios-network-records";
+import {
+  forgetJsCapture,
+  jsCapturePayload,
+  setJsCapture,
+} from "../../src/blueprints/network-inspector";
 import {
   MAX_VALUE_CHARS,
   unavailable,
@@ -45,6 +51,8 @@ const NOT_FOUND_NATIVE = (id: string) =>
   `Request ${id} not found. Use native-network-logs to list the requests the iOS native layer recorded.`;
 const NOT_FOUND_ELSEWHERE = (id: string) =>
   `Request ${id} not found. An ios- ID comes from an iOS simulator. Use view-network-logs to list this device's requests.`;
+const NOT_STARTED_NATIVE = (id: string) =>
+  `Request ${id} not found. Native network capture is not started, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with native-network-logs.`;
 
 const responseBody = vi.fn<(id: string) => Promise<NativeNetworkBody>>();
 const requestPostData = vi.fn<(id: string) => Promise<NativeNetworkBody>>();
@@ -161,11 +169,30 @@ async function details(
   return out as Details;
 }
 
+const unregisters: Array<() => void> = [];
+
+/** A native-devtools service of some simulator has an app's iOS capture started, or stopped. */
+function iosCapture(state: "started" | "stopped" = "started"): () => void {
+  const app = new Set(["com.example.app"]);
+  const unregister = registerIosNetworkCaptures({
+    udid: UDID,
+    bundleIds: state === "started" ? app : new Set(),
+    stoppedBundleIds: state === "stopped" ? app : new Set(),
+    stores: new Map(),
+  });
+  unregisters.push(unregister);
+  return unregister;
+}
+
 beforeEach(() => {
   vi.mocked(findIosNativeRecord).mockReset();
   vi.mocked(findAndroidNativeRecord).mockClear();
   responseBody.mockReset().mockResolvedValue(textBody('{"ok":true}'));
   requestPostData.mockReset();
+});
+
+afterEach(() => {
+  for (const unregister of unregisters.splice(0)) unregister();
 });
 
 describe("view-network-request-details: an iOS native record", () => {
@@ -420,6 +447,11 @@ describe("view-network-request-details: iOS bodies that cannot be read", () => {
 });
 
 describe("view-network-request-details: routing an ios- ID", () => {
+  // Capture was started, so an unknown ID is one the app's listing does not hold.
+  beforeEach(() => {
+    iosCapture();
+  });
+
   it.each([
     ["an iOS simulator UDID", UDID],
     ["a Metro logicalDeviceId from a shared Metro", "b1946ac92492d2347c6235b4d2611184"],
@@ -528,9 +560,19 @@ describe("view-network-request-details: routing an ios- ID", () => {
   it.each(["Ios-1a2b-7", "ios", "rn-net-4"])(
     "keeps %s on the JS layer: it does not start with ios-",
     (requestId) => {
-      expect(
-        networkRequestTool.services!({ device_id: UDID, requestId, includeBody: true })
-      ).toEqual({ inspector: `NetworkInspector:8081:${UDID}` });
+      // The JS layer names its debugger only for an app whose JS capture was started.
+      setJsCapture(jsCapturePayload(8081, UDID), {
+        bundleId: "com.example.app",
+        intent: "started",
+        installed: true,
+      });
+      try {
+        expect(
+          networkRequestTool.services!({ device_id: UDID, requestId, includeBody: true })
+        ).toEqual({ debugger: `JsRuntimeDebugger:8081:${UDID}` });
+      } finally {
+        forgetJsCapture(UDID, "com.example.app");
+      }
     }
   );
 
@@ -540,10 +582,78 @@ describe("view-network-request-details: routing an ios- ID", () => {
     const params = { device_id: UDID, requestId: androidId, includeBody: true };
 
     expect(networkRequestTool.services!(params)).toEqual({});
+    // Only iOS capture was started, so the Android layer says its own is not.
     expect(await networkRequestTool.execute!(noServices, params)).toBe(
-      `Request ${androidId} not found. Use native-network-logs to list the requests the Android native layer recorded.`
+      NOT_STARTED_NATIVE(androidId)
     );
     expect(findAndroidNativeRecord).toHaveBeenCalledWith(androidId);
     expect(findIosNativeRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe("view-network-request-details: an ios- ID before any iOS capture", () => {
+  it.each([
+    ["an iOS simulator UDID", UDID],
+    ["a Metro logicalDeviceId", "b1946ac92492d2347c6235b4d2611184"],
+    ["a remote iOS simulator", `remote:${UDID}`],
+  ])(
+    "says under %s that native capture is not started, naming network-capture-start",
+    async (_, deviceId) => {
+      expect(
+        await networkRequestTool.execute!(noServices, {
+          device_id: deviceId,
+          requestId: UNKNOWN_ID,
+          includeBody: true,
+        })
+      ).toBe(NOT_STARTED_NATIVE(UNKNOWN_ID));
+    }
+  );
+
+  it("says so for a malformed ios- ID too", async () => {
+    expect(
+      await networkRequestTool.execute!(noServices, {
+        device_id: UDID,
+        requestId: "ios-xyz",
+        includeBody: true,
+      })
+    ).toBe(NOT_STARTED_NATIVE("ios-xyz"));
+  });
+
+  it.each([
+    ["a Chromium target", "chromium-cdp-9222"],
+    ["a Vega device", "amazon-4a27df03c9777152"],
+  ])("keeps saying under %s that an ios- ID comes from an iOS simulator", async (_, deviceId) => {
+    expect(
+      await networkRequestTool.execute!(noServices, {
+        device_id: deviceId,
+        requestId: UNKNOWN_ID,
+        includeBody: true,
+      })
+    ).toBe(NOT_FOUND_ELSEWHERE(UNKNOWN_ID));
+  });
+
+  it("names only native-network-logs once an app's capture was stopped: its IDs are still listed", async () => {
+    iosCapture("stopped");
+
+    expect(
+      await networkRequestTool.execute!(noServices, {
+        device_id: UDID,
+        requestId: UNKNOWN_ID,
+        includeBody: true,
+      })
+    ).toBe(NOT_FOUND_NATIVE(UNKNOWN_ID));
+  });
+
+  it("says capture is not started again once the service that had it started is gone", async () => {
+    const unregister = iosCapture();
+    unregister();
+
+    expect(
+      await networkRequestTool.execute!(noServices, {
+        device_id: UDID,
+        requestId: UNKNOWN_ID,
+        includeBody: true,
+      })
+    ).toBe(NOT_STARTED_NATIVE(UNKNOWN_ID));
   });
 });
