@@ -185,7 +185,7 @@ export const stopMetroTool: ToolDefinition<
   { stopped: boolean; port: number; pids: number[] }
 > = {
   id: "stop-metro",
-  description: `Stop the Metro bundler process listening on \`port\`. Use when the user asks to stop Metro or when Metro must be restarted - do not offer it when a task wraps up, since the next task would wait on a cold Metro start. Returns { stopped, port, pids }: stopped=true when it sent SIGTERM to the listening pids it found, stopped=false when it found none. Fails if the port lookup cannot run or times out, or if it finds a listener but not the process that owns it. On macOS another user's listener is detected only when no other listener on the port is visible, so it can survive stopped=true. This is DESTRUCTIVE: always ask the user for confirmation before calling this tool.`,
+  description: `Stop the Metro bundler process listening on \`port\`. Use when the user asks to stop Metro or when Metro must be restarted - do not offer it when a task wraps up, since the next task would wait on a cold Metro start. Returns { stopped, port, pids }: stopped=true when it sent SIGTERM to every listening pid it found (or the pid had already exited), stopped=false when it found none. Fails if the port lookup cannot run or times out, if it finds a listener but not the process that owns it, or if it cannot signal a listener it found (e.g. EPERM). On macOS another user's listener is detected only when no other listener on the port is visible, so it can survive stopped=true. This is DESTRUCTIVE: always ask the user for confirmation before calling this tool.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Stopping Metro on port ${params.port}`,
@@ -220,14 +220,32 @@ export const stopMetroTool: ToolDefinition<
       return { stopped: false, port, pids: [] };
     }
 
+    const failed: { pid: number; error: Error }[] = [];
     for (const pid of pids) {
       try {
         // Windows ignores the signal and terminates outright; on POSIX
         // SIGTERM lets Metro shut down cleanly.
         process.kill(pid, "SIGTERM");
-      } catch {
-        // Process may have already exited
+      } catch (error) {
+        // ESRCH: it exited since the probe. EPERM: e.g. an elevated Metro on Windows.
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          failed.push({ pid, error: error as Error });
+        }
       }
+    }
+    if (failed.length > 0) {
+      throw new FailureError(
+        `Could not send SIGTERM to a process listening on port ${port}: ${failed
+          .map(({ pid, error }) => `pid ${pid}: ${error.message}`)
+          .join("; ")}`,
+        {
+          error_code: FAILURE_CODES.STOP_METRO_SIGNAL_FAILED,
+          failure_stage: "stop_metro_signal",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        },
+        { cause: failed[0].error }
+      );
     }
 
     return { stopped: true, port, pids };

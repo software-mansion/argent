@@ -227,6 +227,41 @@ describe("stop-metro port probe", () => {
     ]);
   });
 
+  it("still reports stopped:true when a listener exits before its SIGTERM", async () => {
+    execFileSyncMock.mockReturnValue("4242\n");
+    kill.mockImplementation(() => {
+      throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+    });
+
+    await expect(runStopMetro(8081)).resolves.toEqual({ stopped: true, port: 8081, pids: [4242] });
+  });
+
+  it("fails when a listener cannot be signalled, e.g. an elevated Metro on Windows", async () => {
+    setPlatform("win32");
+    execFileSyncMock.mockReturnValue(
+      "  TCP    0.0.0.0:8081           0.0.0.0:0              LISTENING       4242\r\n" +
+        "  TCP    [::]:8081              [::]:0                 LISTENING       4343\r\n"
+    );
+    kill.mockImplementation((pid: number) => {
+      if (pid === 4242) throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      return true;
+    });
+
+    const error = await runStopMetro(8081).catch((e: unknown) => e);
+    expect((error as Error).message).toBe(
+      "Could not send SIGTERM to a process listening on port 8081: pid 4242: kill EPERM"
+    );
+    expect(getFailureSignal(error)).toMatchObject({
+      error_code: "STOP_METRO_SIGNAL_FAILED",
+      failure_stage: "stop_metro_signal",
+    });
+    // The other listener is still signalled.
+    expect(kill.mock.calls).toEqual([
+      [4242, "SIGTERM"],
+      [4343, "SIGTERM"],
+    ]);
+  });
+
   it.each([
     ["lsof", "darwin", () => execFileSyncMock.mockReturnValue("4242\n"), 0],
     ["macOS netstat", "darwin", () => lsofFindsNothing(NETSTAT_HEADER), 1],
