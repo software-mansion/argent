@@ -2341,6 +2341,46 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(escaping, "abs")!.clipBounds).toBeUndefined();
   });
 
+  it.each([
+    { edge: "top", cutter: { x: 10, y: -19, w: 100, h: 40 }, axis: "y" },
+    { edge: "bottom", cutter: { x: 10, y: 80, w: 100, h: 40 }, axis: "y" },
+    { edge: "left", cutter: { x: -40, y: 30, w: 100, h: 20 }, axis: "x" },
+    { edge: "right", cutter: { x: 250, y: 30, w: 100, h: 20 }, axis: "x" },
+  ])("cuts a box-less element whose first or second child crosses the $edge edge", (c) => {
+    const inside = { x: 10, y: 30, w: 100, h: 20 };
+    const item = (rects: Rect[]) =>
+      findById(
+        run([
+          scroller(
+            [
+              el({
+                tag: "li",
+                attrs: { id: "item" },
+                rect: ZERO,
+                style: { display: "contents" },
+                children: rects.map((rect, i) => row(`r${i}`, rect)),
+              }),
+            ],
+            { scrollSize: { width: 600, height: 400 } }
+          ),
+        ]).tree,
+        "item"
+      )!;
+    const window =
+      c.axis === "y"
+        ? { x: 0, y: 0.001, width: 1, height: 0.098 }
+        : { x: 0.001, y: 0, width: 0.285, height: 1 };
+    for (const rects of [
+      [c.cutter, inside],
+      [inside, c.cutter],
+    ]) {
+      const cut = item(rects);
+      expect(cut.clipBounds).toEqual(window);
+      expect(Object.keys(cut.clipAnchors as object)).toEqual([c.axis]);
+    }
+    expect(item([inside, inside]).clipBounds).toBeUndefined();
+  });
+
   it("reports clipBounds only where a scroll container cuts by more than a pixel", () => {
     const tree = (
       style: Record<string, string>,
