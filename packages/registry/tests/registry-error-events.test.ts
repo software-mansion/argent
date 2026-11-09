@@ -242,6 +242,16 @@ describe("Registry — failure signals", () => {
     });
   });
 
+  it("reports an execFileSync timeout as ETIMEDOUT even when the child exited with a status", () => {
+    // A child that traps SIGTERM and exits 0 after the timeout.
+    expect(
+      subprocessFailureMetadata({ code: "ETIMEDOUT", status: 0, signal: null }, "unknown")
+    ).toEqual({
+      failure_command: "unknown",
+      failure_spawn_code: "ETIMEDOUT",
+    });
+  });
+
   it("finds a signal attached to a wrapped cause", () => {
     const inner = withFailureSignal(new Error("inner"), {
       error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
