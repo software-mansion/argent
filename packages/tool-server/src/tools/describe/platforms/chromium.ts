@@ -389,10 +389,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     };
   }
 
-  function frame(el, clip) {
-    return normRect(intersect(getBCR.call(el), clip));
-  }
-
   // Overflow clips a descendant only when the clipper is on its containing-block chain,
   // so an absolute or fixed box takes the clip in force at its containing block. Each
   // entry is the clip a child with that position gets.
@@ -433,6 +429,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // scroller cuts are anchored once the whole tree has been walked.
   const chains = nodeMap();
   const cuts = [];
+  // Each emitted node's unclipped extent and the scrollers measured against it.
+  const extents = nodeMap();
 
   // The scroller a wheel at (x, y) scrolls along an axis: the innermost on the
   // painted element's chain, the one Chrome latches to. Null where that is unknown:
@@ -839,9 +837,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // text-node children — NOT selectNodeContents(el) over the whole subtree, which also
   // spans the still-laid-out boxes of visibility:hidden / opacity:0 element descendants
   // (they keep a layout box but paint nothing), oversizing the frame and mis-placing the
-  // tap point. Returns 0x0 when an ancestor transform (e.g. scale(0)) or display:none
+  // tap point. Null when an ancestor transform (e.g. scale(0)) or display:none
   // collapses the paint. walk() consults this only when the element has its own text.
-  function contentFrame(el, clip) {
+  function contentBox(el) {
     try {
       let box = null;
       for (const child of getChildNodes.call(el)) {
@@ -861,7 +859,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         }
       }
       if (!box || box.right <= box.left || box.bottom <= box.top) return null;
-      return normRect(intersect(box, clip));
+      return box;
     } catch (e) {
       return null;
     }
@@ -1107,11 +1105,29 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     let selfFrame;
     let clipBounds;
     let cut;
+    const scs = clip && clip.scrollers;
+    // Unclipped extent: a box-less element's spans its children under the same scrollers.
+    let r = null;
     if (bl) {
       selfFrame = unionFrame(childResults);
+      for (const c of scs ? childResults : []) {
+        const e = extents.get(c);
+        if (!e || e.scs !== scs) continue;
+        r = !r
+          ? e.r
+          : {
+              left: Math.min(r.left, e.r.left),
+              top: Math.min(r.top, e.r.top),
+              right: Math.max(r.right, e.r.right),
+              bottom: Math.max(r.bottom, e.r.bottom),
+            };
+      }
       if (text && selfFrame.width <= 0 && selfFrame.height <= 0) {
-        const cf = contentFrame(el, clip);
-        if (cf) selfFrame = cf;
+        const box = contentBox(el);
+        if (box) {
+          selfFrame = normRect(intersect(box, clip));
+          r = box;
+        }
       }
       if (childResults.length === 0 && selfFrame.width <= 0 && selfFrame.height <= 0) {
         return null;
@@ -1133,30 +1149,29 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         return childResults[0];
       }
     } else {
-      selfFrame = frame(el, clip);
-      const scs = clip && clip.scrollers;
-      if (scs && selfFrame.width > 0 && selfFrame.height > 0) {
-        const r = getBCR.call(el);
-        // Integer client sizes put a clip edge up to a pixel inside the true one.
-        const cutsX = scs.filter(
-          (s) => s.sx && (s.win.left > r.left + 1 || s.win.right < r.right - 1)
-        );
-        const cutsY = scs.filter(
-          (s) => s.sy && (s.win.top > r.top + 1 || s.win.bottom < r.bottom - 1)
-        );
-        if (cutsX.length || cutsY.length) {
-          // The part of each cutter's window that the clips above it leave showing.
-          const win = {
-            left: Math.max(0, ...cutsX.map((s) => s.shown.left)),
-            top: Math.max(0, ...cutsY.map((s) => s.shown.top)),
-            right: Math.min(w, ...cutsX.map((s) => s.shown.right)),
-            bottom: Math.min(h, ...cutsY.map((s) => s.shown.bottom)),
-          };
-          clipBounds = normRect(win);
-          if (getOwnerDocument.call(el) === document) {
-            const vis = intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h });
-            cut = { r: vis, scs, win, cutsX, cutsY };
-          }
+      r = getBCR.call(el);
+      selfFrame = normRect(intersect(r, clip));
+    }
+    if (scs && r && selfFrame.width > 0 && selfFrame.height > 0) {
+      // Integer client sizes put a clip edge up to a pixel inside the true one.
+      const cutsX = scs.filter(
+        (s) => s.sx && (s.win.left > r.left + 1 || s.win.right < r.right - 1)
+      );
+      const cutsY = scs.filter(
+        (s) => s.sy && (s.win.top > r.top + 1 || s.win.bottom < r.bottom - 1)
+      );
+      if (cutsX.length || cutsY.length) {
+        // The part of each cutter's window that the clips above it leave showing.
+        const win = {
+          left: Math.max(0, ...cutsX.map((s) => s.shown.left)),
+          top: Math.max(0, ...cutsY.map((s) => s.shown.top)),
+          right: Math.min(w, ...cutsX.map((s) => s.shown.right)),
+          bottom: Math.min(h, ...cutsY.map((s) => s.shown.bottom)),
+        };
+        clipBounds = normRect(win);
+        if (getOwnerDocument.call(el) === document) {
+          const vis = intersect(intersect(r, clip), { left: 0, top: 0, right: w, bottom: h });
+          cut = { r: vis, scs, win, cutsX, cutsY };
         }
       }
     }
@@ -1184,6 +1199,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       frame: selfFrame,
       children: childResults,
     };
+    if (scs && r) extents.set(node, { r, scs });
     if (clipBounds) {
       node.clipBounds = clipBounds;
       if (cut) cuts.push({ ...cut, node });

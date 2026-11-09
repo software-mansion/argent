@@ -2090,6 +2090,58 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(findById(tree, "cut")!.clipAnchors).toBeUndefined();
   });
 
+  it("reports clipBounds for a box-less element by what it spans under its scrollers", () => {
+    const contents = (id: string, children: MockElement[], text?: string) =>
+      el({
+        tag: "a",
+        attrs: { id, href: "#" },
+        rect: ZERO,
+        style: { display: "contents" },
+        text,
+        content: text ? { x: 1, y: 85, w: 200, h: 20 } : undefined,
+        children,
+      });
+    const { tree } = run([
+      scroller([
+        contents("kid", [el({ rect: { x: 1, y: -19, w: 285, h: 40 } })]),
+        contents("text", [], "text"),
+      ]),
+    ]);
+    const window = { x: 0, y: 1, w: 1000, h: 98 };
+    expect(pxFrame(tree, "kid")).toEqual({ x: 1, y: 1, w: 285, h: 20 });
+    expect(pxFrame(tree, "kid", "clipBounds")).toEqual(window);
+    expect(findById(tree, "kid")!.clipAnchors!).toHaveProperty("y");
+    expect(pxFrame(tree, "text", "clipBounds")).toEqual(window);
+    // An absolute child takes the outer scroller's clips, so the inner one does not cut it.
+    const escaping = run([
+      scroller(
+        [
+          scroller(
+            [
+              contents("abs", [
+                el({ rect: { x: 1, y: 10, w: 200, h: 20 } }),
+                el({ rect: { x: 1, y: 60, w: 200, h: 20 }, style: { position: "absolute" } }),
+              ]),
+            ],
+            {
+              attrs: { id: "inner" },
+              rect: { x: 0, y: 0, w: 300, h: 50 },
+              client: { left: 1, top: 1, width: 285, height: 48 },
+              offset: { width: 300, height: 50 },
+            }
+          ),
+        ],
+        {
+          rect: { x: 0, y: 0, w: 300, h: 200 },
+          client: { left: 1, top: 1, width: 285, height: 198 },
+          offset: { width: 300, height: 200 },
+          style: { position: "relative" },
+        }
+      ),
+    ]).tree;
+    expect(findById(escaping, "abs")!.clipBounds).toBeUndefined();
+  });
+
   it("reports clipBounds only where a scroll container cuts by more than a pixel", () => {
     const tree = (
       style: Record<string, string>,
