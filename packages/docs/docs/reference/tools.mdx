@@ -351,7 +351,7 @@ Use `gesture-drag` to drag and `gesture-scroll` to scroll.
 - The tree leaves out each element outside the app window and its sheets, popovers, alerts and menus, and the hint gives the count.
 - The tree leaves out each element that does not show:
   - An element that another window of the app covers.
-  - A native element of a window that has its centre under a sheet of the window or under a popover, because a click there goes to the sheet or the popover. An element that holds elements beside them stays in the tree. Web content under a sheet or a popover stays in the tree.
+  - A native element of a window that has its centre under a sheet of the window, under a popover or under a child window of the window, for example an open combo box list, because a click there goes to that window. An element that holds elements beside them stays in the tree. Web content under them stays in the tree.
   - The content of a window tab that is not the selected tab.
   - A view with an opacity of 0, or a view that a transform moves out of the window.
   - A hidden web view, or a web view behind a different web view that shows at the same place.
