@@ -330,6 +330,17 @@ describe("list-devices", () => {
     expect(result.hint).toContain(`ask the user to ${xcodeInstallInstruction()};`);
   });
 
+  it("kills simctl list with SIGKILL after 10s", async () => {
+    execFileMock.mockImplementation(() => ({ stderr: "", stdout: "" }));
+
+    await listDevicesTool.execute!({}, {});
+
+    const list = execFileMock.mock.calls.find(
+      ([cmd, args]) => cmd === "xcrun" && args.includes("list") && args.includes("devices")
+    );
+    expect(list?.[2]).toMatchObject({ timeout: 10_000, killSignal: "SIGKILL" });
+  });
+
   it("counts an iOS branch cut off by the deadline as timed out", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
