@@ -119,6 +119,8 @@ interface WireWebItem {
   testid: string;
   label: string;
   role: string;
+  /** A contenteditable editor without a role, which WebKit reports as a text area. */
+  multiline: boolean;
   type: string;
   /** The element's visible text (80 characters). */
   text: string;
@@ -235,6 +237,7 @@ function asWebItem(v: unknown): WireWebItem | null {
     testid: s("testid"),
     label: s("label"),
     role: s("role").toLowerCase(),
+    multiline: v.multiline === true,
     type: s("type").toLowerCase(),
     text: s("text"),
     fullText: s("fullText"),
@@ -315,6 +318,7 @@ const STRUCTURAL_ARIA_ROLES: Record<string, string> = {
 };
 
 function webRole(item: WireWebItem): string {
+  if (item.multiline) return "AXTextArea";
   const aria = INTERACTIVE_ARIA_ROLES[item.role];
   if (aria) return aria;
   switch (item.tag) {

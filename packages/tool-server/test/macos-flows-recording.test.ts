@@ -22,8 +22,11 @@ import {
   MACOS_FALLBACK_HINT,
   MACOS_JUDGING_LIMITS,
   MACOS_LOCKED_HINT,
+  readMacosTree,
 } from "../src/tools/describe/platforms/macos";
+import { adaptMacosTreeForFlows } from "../src/tools/flows/flow-macos-tree";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
+import { fakeMacosLibrary, rect, webTree } from "./helpers/macos-tree-fixture";
 
 useMacosAppsFlag();
 
@@ -264,6 +267,32 @@ describe("a tap recorded at a point of a Mac app element", () => {
     await record("seek", "gesture-tap", { x, y: 0.25 });
 
     expect(await recordedSteps("seek")).toEqual([{ kind: "tap", ...step }]);
+  });
+});
+
+describe("a tap recorded in a web editor of a Mac app", () => {
+  it.each([
+    [
+      "keeps the coordinates in a contenteditable editor, where the click places the caret",
+      true,
+      { x: 0.55, y: 0.67 },
+    ],
+    [
+      "keeps the selector of an element with the role textbox",
+      false,
+      { selector: { identifier: "blk" } },
+    ],
+  ])("%s", async (_label, multiline, step) => {
+    const web = webTree([
+      { role: "textbox", multiline, testid: "blk", normalizedFrame: rect(0.1, 0.6, 0.5, 0.08) },
+    ]);
+    const read = await readMacosTree(fakeMacosLibrary({ web }).api);
+    currentTreeData = () => ({ tree: adaptMacosTreeForFlows(read), source: "macos-devtools" });
+    await start("editor");
+
+    await record("editor", "gesture-tap", { x: 0.55, y: 0.67 });
+
+    expect(await recordedSteps("editor")).toEqual([{ kind: "tap", ...step }]);
   });
 });
 
