@@ -417,7 +417,9 @@ export function renderComponentCpu(
     }
     const { url, lineNumber } = top!;
     const loc = url ? `${shortenUrl(url)}${lineNumber != null ? `:${lineNumber}` : ""}` : "—";
-    lines.push(`| \`${name}\` | ${roundMs(selfMs)} | ${roundMs(totalMs)} | ${loc} |`);
+    // Total contains Self but sums in another order, so float error can leave it just below.
+    const total = roundMs(Math.max(totalMs, selfMs));
+    lines.push(`| \`${name}\` | ${roundMs(selfMs)} | ${total} | ${loc} |`);
   }
 
   return lines.join("\n");

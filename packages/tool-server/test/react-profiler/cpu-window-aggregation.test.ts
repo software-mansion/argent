@@ -135,6 +135,29 @@ describe("renderComponentCpu — one function as several call-tree nodes", () =>
     const md = renderComponentCpu(index, { commits }, "Login", 10);
     expect(readRow(md, "map")).toEqual({ self: 100.6, total: 100.6 });
   });
+
+  it("never prints Self above Total when the two sums round a float apart", () => {
+    // root → map → map → map. Self adds 4.324 + 0.717 + 0.364 to 5.405000000000001;
+    // Total adds the same 5.405 ms in sample order to 5.404999999999999.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, { id: 1, hitCount: 0, callFrame: frame("(root)"), children: [2] });
+    nodeMap.set(2, { id: 2, hitCount: 0, callFrame: frame("map"), children: [3] });
+    nodeMap.set(3, { id: 3, hitCount: 0, callFrame: frame("map"), children: [4] });
+    nodeMap.set(4, { id: 4, hitCount: 0, callFrame: frame("map"), children: [] });
+    const bounds = [0, 1.804, 2.528, 2.807, 2.892, 3.609, 5.405];
+    const index: CpuSampleIndex = {
+      timestampsMs: Float64Array.from(bounds.slice(1)),
+      intervalStartsMs: Float64Array.from(bounds.slice(0, -1)),
+      sampleNodeIds: [3, 3, 2, 2, 4, 3],
+      nodeMap,
+      durationMs: 5.405,
+    };
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 5.405, componentName: "Login" }],
+    };
+    const md = renderComponentCpu(index, commit, "Login", 10);
+    expect(readRow(md, "map")).toEqual({ self: 5.41, total: 5.41 });
+  });
 });
 
 describe("renderComponentCpu — which same-name frames count as outermost", () => {
