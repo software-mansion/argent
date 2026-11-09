@@ -697,6 +697,33 @@ describe("native-devtools body reads", () => {
     expect(responseBodyReads(next)).toHaveLength(0);
   });
 
+  it("never sends a body read queued on a connection that a relaunch replaced to the new process", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    for (const frame of [
+      ...requestEvents("a", "https://example.com/a"),
+      ...finishEvents("a"),
+      ...requestEvents("b", "https://example.com/b"),
+      ...finishEvents("b"),
+    ]) {
+      app.send(frame);
+    }
+    const a = await recordOf(api, "https://example.com/a");
+    const b = await recordOf(api, "https://example.com/b");
+    const records = api.networkRecords(BUNDLE)!;
+
+    // b waits its turn behind a, and the relaunched app connects before a is answered.
+    const reads = Promise.all([records.responseBody(a), records.responseBody(b)]);
+    await vi.waitFor(() => expect(responseBodyReads(app)).toHaveLength(1));
+    const relaunched = await connectApp(api.socketPath, { acknowledge: false });
+    await app.closed;
+
+    await expect(reads).resolves.toEqual([noBody(PROCESS_GONE), noBody(PROCESS_GONE)]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(responseBodyReads(relaunched)).toHaveLength(0);
+    expect(responseBodyReads(app)).toHaveLength(1);
+  });
+
   it("sends one body read at a time per app connection, the next once the app answered the first", async () => {
     const api = await startService();
     const app = await connectArmedApp(api);
