@@ -2414,6 +2414,20 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(card(), "popped").h).toBe(0);
   });
 
+  it("reads a clipper's style once however many light children of a custom element it holds", () => {
+    const rows = Array.from({ length: 20 }, (_, i) =>
+      row(`r${i}`, { x: 1, y: 1 + i * 4, w: 285, h: 4 })
+    );
+    const list = el({ tag: "app-list", rect: { x: 1, y: 1, w: 285, h: 80 }, children: rows });
+    const sc = scroller([list]) as MockElement & Record<string, unknown>;
+    const style = sc.__style;
+    let reads = 0;
+    Object.defineProperty(sc, "__style", { get: () => (reads++, style) });
+    run([sc]);
+    // Once for its own walk, once for the clips its descendants' hit tests cross.
+    expect(reads).toBe(2);
+  });
+
   it("clips a custom element's light child that hit-tests only across its clipper's border", () => {
     // A 12px-bordered clipper: the row overflows its padding box (y 12..112) to 127,
     // and Chrome hit-tests the overflow up to the border box's bottom (124).

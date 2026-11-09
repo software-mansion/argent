@@ -910,15 +910,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // outside.
   function paintsOutside(el, clip) {
     const v = intersect(getBCR.call(el), { left: 0, top: 0, right: w, bottom: h });
-    let borders = null;
-    for (let n = getParentNode.call(el); n && getNodeType.call(n) === 1; ) {
-      const st = window.getComputedStyle(n);
-      if (overflowApplies(n, st) && (overflowClips(st) || paintContained(st))) {
-        borders = intersect(borders, getBCR.call(n));
-      }
-      n = getParentNode.call(n);
-    }
-    const b = borders || clip;
+    const b = clipperBorders(getParentNode.call(el)) || clip;
     const e = {
       left: Math.min(clip.left, b.left) - 1,
       top: Math.min(clip.top, b.top) - 1,
@@ -944,6 +936,20 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         (x < e.left || x >= e.right || y < e.top || y >= e.bottom) &&
         elementsAt(root, x, y).some((hit) => containsNode.call(el, hit) && carried(el, hit))
     );
+  }
+
+  // The border boxes of n and its element ancestors that clip their content, intersected;
+  // null when none does. Memoized: siblings share every ancestor.
+  const clipperBoxes = nodeMap();
+  function clipperBorders(n) {
+    if (!n || getNodeType.call(n) !== 1) return null;
+    if (clipperBoxes.has(n)) return clipperBoxes.get(n);
+    const st = window.getComputedStyle(n);
+    const own =
+      overflowApplies(n, st) && (overflowClips(st) || paintContained(st)) ? getBCR.call(n) : null;
+    const borders = intersect(clipperBorders(getParentNode.call(n)), own);
+    clipperBoxes.set(n, borders);
+    return borders;
   }
 
   // Whether el's own painting puts hit where it is: no box between them is fixed or
