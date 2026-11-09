@@ -410,12 +410,13 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         const captured = logWriter.getStats().totalEntries;
         const connectionLost = !cdp.isConnected();
         // Past a file-size limit or on a full disk the file can exist yet hold nothing.
-        const stored = logWriter.hasFile() && logWriter.getStats().fileSizeBytes > 0;
+        const inFile = logWriter.getFileEntryCount();
+        const stored = logWriter.hasFile() && inFile > 0;
         const keepFile = captured > 0 && connectionLost && stored;
         if (captured > 0) {
           const entries = `${captured} captured console ${captured === 1 ? "entry" : "entries"}`;
           const salvage = keepFile
-            ? `The log file with its ${entries} is kept at ${logWriter.getFilePath()}.`
+            ? `The log file with ${inFile < captured ? `${inFile} of its` : "its"} ${entries} is kept at ${logWriter.getFilePath()}.`
             : stored
               ? `The ${entries} went with it — the log file is deleted on teardown, so this ` +
                 `registry starts empty rather than the app having logged nothing.`

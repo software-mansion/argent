@@ -507,6 +507,54 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       );
     });
 
+    /** The disk fills partway: entries before `captured <from>` reach the file, the rest throw. */
+    async function failWritesFrom(from: number) {
+      const real = await vi.importActual<typeof import("node:fs")>("node:fs");
+      vi.mocked(fs.writeSync).mockImplementation(((fd: number, buf: Buffer) => {
+        if (Number(/captured (\d+)/.exec(String(buf))?.[1]) >= from) {
+          throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+            code: "ENOSPC",
+          });
+        }
+        return real.writeSync(fd, buf);
+      }) as typeof fs.writeSync);
+    }
+
+    it("says a live session's log file holds only the entries written before writes failed", async () => {
+      await failWritesFrom(2);
+      try {
+        await connectAndCapture(LOGICAL_ID, 3);
+      } finally {
+        vi.mocked(fs.writeSync).mockReset();
+      }
+
+      const result = await readRegistry();
+
+      expect(result.status).toBe("connected");
+      expect(result.totalEntries).toBe(3);
+      expect(fs.readFileSync(result.file, "utf-8").trim().split("\n")).toHaveLength(2);
+      expect(result.note).toContain(
+        `The log file at ${result.file} holds only 2 of the 3 captured entries`
+      );
+    });
+
+    it("says a crashed session's kept log file holds only the entries written to it", async () => {
+      await failWritesFrom(2);
+      const urn = await connectAndCapture(LOGICAL_ID, 3);
+      appRunning = false;
+      for (const ws of wss.clients) ws.terminate();
+      await vi.waitFor(() =>
+        expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR)
+      );
+      vi.mocked(fs.writeSync).mockReset();
+
+      const result = await readRegistry();
+
+      expect(result.note).toMatch(
+        /The log file with 2 of its 3 captured console entries is kept at/
+      );
+    });
+
     it("adds no file note once some entries reached the log file", async () => {
       await connectAndCapture(LOGICAL_ID, 3);
 

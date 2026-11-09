@@ -32,6 +32,15 @@ describe("LogFileWriter past a file-size limit or on a full disk", () => {
     expect(w.getStats().fileSizeBytes).toBe(7);
   });
 
+  it("counts an entry as in the file only when its whole line was written", () => {
+    w = new LogFileWriter(59243);
+    w.write(entry(0));
+    vi.mocked(fs.writeSync).mockReturnValueOnce(7);
+    w.write(entry(1));
+    expect(w.getStats().totalEntries).toBe(2);
+    expect(w.getFileEntryCount()).toBe(1);
+  });
+
   it("keeps counting and clustering the entries it can no longer store", () => {
     w = new LogFileWriter(59242);
     vi.mocked(fs.writeSync).mockImplementation(() => {

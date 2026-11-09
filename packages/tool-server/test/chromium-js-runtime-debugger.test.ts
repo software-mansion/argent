@@ -250,6 +250,38 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
     expect(reaped!.salvage).not.toContain("kept at");
   });
 
+  it("dispose after the CDP socket dropped says how many entries the kept file holds", async () => {
+    __resetReapedSessionsForTesting();
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
+    );
+    for (let id = 0; id < 3; id++) {
+      if (id > 0) {
+        vi.mocked(fs.writeSync).mockImplementationOnce(() => {
+          throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+            code: "ENOSPC",
+          });
+        });
+      }
+      instance.api.logWriter.write({
+        id,
+        timestamp: new Date(1710000000000).toISOString(),
+        level: "error",
+        message: `entry ${id}`,
+      });
+    }
+    (fake.api.cdp as { isConnected: () => boolean }).isConnected = () => false;
+    await instance.dispose();
+
+    const reaped = takeReapedSession("js-runtime-debugger", "chromium-cdp-19222");
+    expect(reaped!.salvage).toContain(
+      `The log file with 1 of its 3 captured console entries is kept at ${instance.api.logWriter.getFilePath()}`
+    );
+  });
+
   it("dispose leaves NO breadcrumb when there was no history to lose", async () => {
     // A dispose of a session that captured nothing destroyed nothing, and
     // claiming otherwise would make every empty registry look like a lost one.
