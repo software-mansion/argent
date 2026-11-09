@@ -1,11 +1,22 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  type ToolCapability,
+  type ToolDefinition,
+} from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { BUNDLE_ID_MESSAGE, BUNDLE_ID_PATTERN } from "../../utils/bundle-id";
 import { simctlArgsForUdid } from "../../utils/ios-device-sets";
-import { remoteSimctl } from "../../utils/simctl-backend";
+import { SIMCTL_KILL_SIGNAL } from "../../utils/simctl-config";
+import {
+  remoteSimctl,
+  SIMCTL_NOTHING_TO_TERMINATE,
+  tolerateNothingToTerminate,
+} from "../../utils/simctl-backend";
 import { adbShell, shellQuote } from "../../utils/adb";
 import { vegaDevice } from "../../utils/vega-cli";
 
@@ -23,18 +34,8 @@ const capability: ToolCapability = {
   vega: { vvd: true },
 };
 
-// simctl answers the same for an app that is not running and one that is not
-// installed; both resolve to false (nothing was stopped).
-async function tolerateNotRunning(terminate: Promise<unknown>): Promise<boolean> {
-  try {
-    await terminate;
-    return true;
-  } catch (err) {
-    const e = err as { stderr?: string; message?: string };
-    if (/found nothing to terminate/i.test(`${e.stderr ?? ""} ${e.message ?? ""}`)) return false;
-    throw err;
-  }
-}
+// The vega CLI's error for an app that is not installed.
+const VEGA_NOT_INSTALLED = /App could not be determined/i;
 
 const zodSchema = z.object({
   udid: z.string().min(1).describe("Target device id from `list-devices`."),
@@ -71,14 +72,34 @@ Succeeds when the app is not running or not installed.`,
       handler: async (_services, { udid, bundleId }) => {
         // Built outside the tolerance so a provider's entitlement denial still throws.
         const args = await simctlArgsForUdid(udid, ["terminate", udid, bundleId]);
-        const terminated = await tolerateNotRunning(execFileAsync("xcrun", args));
+        const terminate = execFileAsync("xcrun", args, {
+          timeout: 15_000,
+          killSignal: SIMCTL_KILL_SIGNAL,
+        }).catch((err: unknown) => {
+          if (!(err as { killed?: boolean }).killed) throw err;
+          throw new FailureError(
+            `Terminating iOS app ${bundleId} on ${udid} did not finish within 15s.`,
+            {
+              error_code: FAILURE_CODES.IOS_TERMINATE_APP_FAILED,
+              failure_stage: "ios_terminate_app_simctl_terminate",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              ...subprocessFailureMetadata(err, "xcrun_simctl"),
+            },
+            { cause: err as Error }
+          );
+        });
+        const terminated = await tolerateNothingToTerminate(terminate, SIMCTL_NOTHING_TO_TERMINATE);
         return { terminated, bundleId };
       },
     },
     iosRemote: {
       requires: ["sim-remote"],
       handler: async (_services, { udid, bundleId }) => {
-        const terminated = await tolerateNotRunning(remoteSimctl.terminate(udid, bundleId));
+        const terminated = await tolerateNothingToTerminate(
+          remoteSimctl.terminate(udid, bundleId),
+          SIMCTL_NOTHING_TO_TERMINATE
+        );
         return { terminated, bundleId };
       },
     },
@@ -93,7 +114,12 @@ Succeeds when the app is not running or not installed.`,
     vega: {
       requires: ["vega"],
       handler: async (_services, { udid, bundleId }) => {
-        await vegaDevice(udid, ["terminate-app", "-a", bundleId], { timeoutMs: 40_000 });
+        // Always true, as on Android: the CLI exits 0 for a running or stopped app and
+        // errors on one that is not installed.
+        await tolerateNothingToTerminate(
+          vegaDevice(udid, ["terminate-app", "-a", bundleId], { timeoutMs: 40_000 }),
+          VEGA_NOT_INSTALLED
+        );
         return { terminated: true, bundleId };
       },
     },

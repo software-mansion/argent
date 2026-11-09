@@ -56,6 +56,8 @@ export const nativeProfilerStartTool: ToolDefinition<
   { status: "recording"; pid: number; traceFile: string; warning?: string }
 > = {
   id: "native-profiler-start",
+  // iOS can outlast the 30s MCP fetch timeout, whose replay would start a second xctrace.
+  longRunning: true,
   description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory leaks). Android: Perfetto (CPU, jank, RSS-growth weak signal).
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
