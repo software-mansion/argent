@@ -23,6 +23,8 @@ interface PollDescribeTreeArgs<R> {
   signal?: AbortSignal;
   /** End the wait on the first failed fetch instead of retrying until the timeout. */
   stopOnError?: boolean;
+  /** Start no fetch once the deadline has passed: one with no budget is abandoned at once but keeps running. */
+  skipFetchAtDeadline?: boolean;
   /**
    * `nowMs` is `Date.now()` at the sample, so predicates can track stability
    * windows without their own timer. Return `{ done: true, result }` to stop early.
@@ -51,7 +53,15 @@ interface PollDescribeTreeResult<R> {
 export async function pollDescribeTree<R>(
   args: PollDescribeTreeArgs<R>
 ): Promise<PollDescribeTreeResult<R>> {
-  const { fetchTree, timeoutMs, pollIntervalMs, signal, stopOnError, onSample } = args;
+  const {
+    fetchTree,
+    timeoutMs,
+    pollIntervalMs,
+    signal,
+    stopOnError,
+    skipFetchAtDeadline,
+    onSample,
+  } = args;
   const start = Date.now();
   const deadline = start + timeoutMs;
 
@@ -74,6 +84,7 @@ export async function pollDescribeTree<R>(
     if (signal?.aborted) return outcome(undefined, true);
 
     const remaining = Math.max(0, deadline - Date.now());
+    if (remaining === 0 && skipFetchAtDeadline) break;
     const settled = await settleWithin(fetchTree(remaining), remaining, signal);
     polls += 1;
 

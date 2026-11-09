@@ -211,6 +211,8 @@ export interface ScreenIdleWait {
 
 export interface ScreenIdleOutcome extends IdleResult {
   aborted: boolean;
+  /** Some read returned a different tree from the read before it. */
+  changed: boolean;
   /** Set when the last read failed, or no read ever returned a tree. */
   readError?: string;
 }
@@ -244,6 +246,7 @@ export async function waitForScreenIdle(
   let stableSignature: string | undefined;
   let stableSince = 0;
   let lastReadAt = 0;
+  let changed = false;
 
   const poll = await pollDescribeTree<true>({
     fetchTree: (budgetMs) =>
@@ -260,6 +263,7 @@ export async function waitForScreenIdle(
     pollIntervalMs,
     signal: wait.signal,
     stopOnError: wait.stopOnReadError,
+    skipFetchAtDeadline: true,
     onSample: (data, nowMs) => {
       lastReadAt = nowMs;
       // An empty tree (blank/loading, or a degraded AX read) is not settled.
@@ -276,6 +280,7 @@ export async function waitForScreenIdle(
             : minStableMs;
         if (nowMs - stableSince >= requiredMs) return { done: true, result: true };
       } else {
+        if (stableSignature !== undefined) changed = true;
         stableSignature = signature;
         stableSince = nowMs;
         if (minStableMs === 0) return { done: true, result: true };
@@ -308,6 +313,7 @@ export async function waitForScreenIdle(
     polls: poll.polls,
     ...(note || cursorNote ? { note: note ?? cursorNote } : {}),
     aborted: poll.aborted,
+    changed,
     ...(poll.lastError !== undefined ? { readError: poll.lastError } : {}),
   };
 }

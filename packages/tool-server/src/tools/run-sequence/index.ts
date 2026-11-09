@@ -122,9 +122,7 @@ async function settleScreen(
     if (idle.settled) return { kind: "settled" };
     if (idle.aborted) return { kind: "aborted" };
     if (idle.readError !== undefined) return { kind: "unreadable", error: idle.readError };
-    // Two polls fit only one complete read, so no two reads could have matched.
-    if (idle.polls <= 2) return { kind: "unreadable" };
-    return { kind: "capped" };
+    return idle.changed ? { kind: "capped" } : { kind: "unreadable" };
   } catch (err) {
     return { kind: "unreadable", error: errorMessage(err) };
   }
@@ -133,7 +131,7 @@ async function settleScreen(
 function settleStoppedReason(verdict: SettleVerdict): string {
   if (verdict.kind === "unreadable") {
     return verdict.error === undefined
-      ? `the element tree could not be read twice within ${SETTLE_TIMEOUT_MS}ms`
+      ? `the element tree could not be read fast enough to confirm it was still within ${SETTLE_TIMEOUT_MS}ms`
       : `the element tree could not be read (${verdict.error})`;
   }
   return `the screen was still changing at the ${SETTLE_TIMEOUT_MS}ms cap`;
@@ -203,7 +201,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Applies to the whole sequence; a step's own settle:false skips it after that step only. Default true: after a step that can start a transition (tap, swipe, button, rotate, enter/escape, a met await-ui-element) wait until two reads of the element tree match (max 1s) before the next step. This catches sheets and screens whose elements are already moving, but not motion that starts more than ~100ms after the step (a sheet opened after a fetch) or animations that leave the tree unchanged (a native iOS push), so keep await-ui-element gates for those. There is no wait between two consecutive swipe, scroll or drag steps. A wait can hit the 1s cap after a push or on a spinner, or when the tree cannot be read within it (a slow page, an alert, the first reads after the tool server starts). A read that outlasts the cap keeps running and can delay the next step. The rest of the sequence skips the wait once two waits in a row end that way (two navigations in a row on Android often do), and the result's note says so; a wait after a swipe, scroll or drag is not counted, since momentum often outlasts the cap. No wait on a physical iPhone, where a read would hold up the next step's command.<flag:harmonyos> No wait on HarmonyOS, where one tree read takes longer than the cap.</flag:harmonyos> Set false for timing-critical input (games, double-taps split across steps)."
+      "Applies to the whole sequence; a step's own settle:false skips it after that step only. Default true: after a step that can start a transition (tap, swipe, button, rotate, enter/escape, a met await-ui-element) wait until two reads of the element tree match (max 1s) before the next step. This catches sheets and screens whose elements are already moving, but not motion that starts more than ~100ms after the step (a sheet opened after a fetch) or animations that leave the tree unchanged (a native iOS push or modal sheet), so keep await-ui-element gates for those. There is no wait between two consecutive swipe, scroll or drag steps. A wait can hit the 1s cap after a push or on a spinner, or when the tree cannot be read within it (a slow page, an alert, the first reads after the tool server starts). A read that outlasts the cap keeps running and can delay the next step, including the reads of a following await-ui-element, so give that step a timeout well above one tree read. The rest of the sequence skips the wait once two waits in a row end that way (two navigations in a row on Android often do), and the result's note says so; a wait after a swipe, scroll or drag is not counted, since momentum often outlasts the cap. No wait on a physical iPhone, where a read would hold up the next step's command.<flag:harmonyos> No wait on HarmonyOS, where one tree read takes longer than the cap.</flag:harmonyos> Set false for timing-critical input (games, double-taps split across steps)."
     ),
 });
 
@@ -261,6 +259,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
       const settle = params.settle !== false;
       let failedInARow = 0;
       let stoppedNote: string | undefined;
+      let waitSkipped = false;
       let note: string | undefined;
       // The HTTP layer aborts `signal` on client disconnect, and `longRunning`
       // drops the MCP adapter's own fetch timeout — so honour the signal between
@@ -297,6 +296,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
         }
 
         const toolArgs = { ...step.args, udid };
+        if (waitSkipped) note = stoppedNote;
 
         try {
           const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
@@ -322,7 +322,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
 
         if (settle && settlesBetween(step, steps[results.length]) && canSettle(registry, device)) {
           if (stoppedNote !== undefined) {
-            note = stoppedNote;
+            waitSkipped = true;
           } else {
             const verdict = await settleScreen(registry, device, signal);
             if (verdict.kind === "settled") failedInARow = 0;

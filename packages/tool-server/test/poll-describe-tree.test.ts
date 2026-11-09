@@ -76,4 +76,21 @@ describe("pollDescribeTree", () => {
     expect(result.lastError).toBe("no page target");
     expect(result.elapsedMs).toBeLessThan(2000);
   });
+
+  it("starts no read once the deadline has passed with skipFetchAtDeadline", async () => {
+    const fetchTree = vi.fn((_budgetMs: number) =>
+      Promise.resolve({ tree: { children: [] } } as never)
+    );
+
+    const result = await pollDescribeTree({
+      fetchTree,
+      timeoutMs: 100,
+      pollIntervalMs: 30,
+      skipFetchAtDeadline: true,
+      onSample: () => ({ done: false }),
+    });
+
+    expect(fetchTree.mock.calls.every(([budgetMs]) => budgetMs > 0)).toBe(true);
+    expect(result.polls).toBe(fetchTree.mock.calls.length);
+  });
 });

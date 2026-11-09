@@ -19,8 +19,8 @@ import { waitForScreenIdle } from "../src/tools/await-screen-idle";
 vi.mock("../src/tools/await-screen-idle", () => ({ waitForScreenIdle: vi.fn() }));
 
 const idle = vi.mocked(waitForScreenIdle);
-const SETTLED = { settled: true, waitedMs: 150, polls: 4, aborted: false };
-const CAPPED = { settled: false, waitedMs: 1000, polls: 12, aborted: false };
+const SETTLED = { settled: true, waitedMs: 150, polls: 4, aborted: false, changed: false };
+const CAPPED = { settled: false, waitedMs: 1000, polls: 12, aborted: false, changed: true };
 
 beforeEach(() => {
   idle.mockReset().mockResolvedValue(SETTLED);
@@ -410,8 +410,13 @@ describe("run-sequence", () => {
     ],
     [
       "one read takes the whole cap",
-      () => Promise.resolve({ ...CAPPED, polls: 2 }),
-      "the element tree could not be read twice within 1000ms",
+      () => Promise.resolve({ ...CAPPED, polls: 1, changed: false }),
+      "the element tree could not be read fast enough to confirm it was still within 1000ms",
+    ],
+    [
+      "a slow first read leaves no time for matching reads to hold",
+      () => Promise.resolve({ ...CAPPED, polls: 3, changed: false }),
+      "the element tree could not be read fast enough to confirm it was still within 1000ms",
     ],
     [
       "two reads differ",
@@ -470,13 +475,15 @@ describe("run-sequence", () => {
     }
   );
 
-  it("adds no note when the waits stop but no later step would have had one", async () => {
+  it("adds no note when the waits stop but no later step runs without one", async () => {
     idle.mockResolvedValue(CAPPED);
     const shake = { tool: "shake", args: {}, delayMs: 0 };
+    const unknown = { tool: "not-a-tool", args: {}, delayMs: 0 };
 
     for (const steps of [
       [tap, tap, tap],
       [tap, tap, tap, shake],
+      [tap, tap, tap, unknown],
     ]) {
       idle.mockClear();
       const result = await createRunSequenceTool(mockRegistry()).execute({}, { udid: IOS, steps });

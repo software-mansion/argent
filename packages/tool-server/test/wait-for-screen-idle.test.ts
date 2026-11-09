@@ -106,6 +106,20 @@ describe("waitForScreenIdle", () => {
     expect(lenient.settled).toBe(true);
   });
 
+  it("reports a change only when a read differs from the one before it", async () => {
+    const short = { ...WAIT, timeoutMs: 100, minStableMs: 1000 };
+
+    const still = await waitForScreenIdle(registry(), CHROMIUM, short);
+    let reads = 0;
+    chromiumRead.mockImplementation(async () =>
+      ++reads % 2 ? content : treeOf(node([node(), node()]))
+    );
+    const moving = await waitForScreenIdle(registry(), CHROMIUM, short);
+
+    expect(still).toMatchObject({ settled: false, changed: false });
+    expect(moving).toMatchObject({ settled: false, changed: true });
+  });
+
   it("reads Android through the helper alone with androidHelperOnly", async () => {
     await waitForScreenIdle(registry(), ANDROID, { ...WAIT, androidHelperOnly: true });
 
