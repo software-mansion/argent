@@ -205,7 +205,7 @@ The tool-server sends the stream with `Cache-Control: no-cache, no-transform` an
 
 The client sends a call with a `members` field only one time. When the connection closes before the result arrives, the client does not send the call again. The MCP server sets no timeout for this call. The error says that the tool possibly ran, for example `The connection to the tool-server closed before e2e-execute finished (fetch failed: other side closed). The tool may have run; check its effect before you run it again.`
 
-When the tool returns a result that reports a failure, the result also has a `failure` field with the reason, both in the JSON response and in the `result` line of the stream. An example is an e2e test that does not pass. `argent run` prints the reason and exits with code 1. A tool-server that sends no `failure` gives exit code 0 for such a result. A baseline that the client did not write still gives exit code 1, because the client finds it.
+When the tool returns a result that reports a failure, the response has a `failure` field with the reason beside `data`, both in the JSON response and in the `result` line of the stream. An example is an e2e test that does not pass. `argent run` prints the reason and exits with code 1. A tool-server that sends no `failure` gives exit code 0 for such a result. A baseline that the client did not write still gives exit code 1, because the client finds it.
 
 ## What the tool-server does with the members
 

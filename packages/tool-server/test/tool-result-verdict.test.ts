@@ -101,9 +101,11 @@ describe("toolResultVerdict", () => {
     };
     expect(toolResultVerdict("e2e-add-script", failed)).toEqual(expected);
     expect(toolResultVerdict("flow-add-script", failed)).toEqual(expected);
-    expect(
-      toolResultVerdict("e2e-add-script", { ...failed, status: "error", reason: undefined })
-    ).toEqual({ status: "error", reason: 'Script "s.mjs" failed; no step was recorded.' });
+    const { reason: _reason, ...noReason } = failed;
+    expect(toolResultVerdict("e2e-add-script", { ...noReason, status: "error" })).toEqual({
+      status: "error",
+      reason: 'Script "s.mjs" failed; no step was recorded.',
+    });
     expect(
       toolResultVerdict("e2e-add-script", { status: "pass", message: "Step added", stepCount: 1 })
     ).toBeUndefined();
@@ -128,14 +130,6 @@ describe("toolResultVerdict", () => {
         recorded: "3: tool gesture-tap",
       })
     ).toBeUndefined();
-  });
-
-  it("fails a debugger-inspect-element that returned an error", () => {
-    expect(toolResultVerdict("debugger-inspect-element", { error: "no host fiber" })).toEqual({
-      status: "fail",
-      reason: "debugger-inspect-element failed: no host fiber",
-    });
-    expect(toolResultVerdict("debugger-inspect-element", { items: [] })).toBeUndefined();
   });
 
   it("returns undefined for a passing result and for a tool with no verdict", () => {
@@ -164,6 +158,17 @@ describe("directCallFailure", () => {
     expect(
       directCallFailure("native-devtools-status", { status: "init_failed", message: "env failed" })
     ).toBeUndefined();
+  });
+
+  it("fails a debugger-inspect-element error, which the runner leaves to the step", () => {
+    expect(directCallFailure("debugger-inspect-element", { error: "no host fiber" })).toBe(
+      "debugger-inspect-element failed: no host fiber"
+    );
+    expect(
+      toolResultVerdict("debugger-inspect-element", { error: "no host fiber" })
+    ).toBeUndefined();
+    expect(directCallFailure("debugger-inspect-element", { items: [] })).toBeUndefined();
+    expect(directCallFailure("gesture-tap", { error: "x" })).toBeUndefined();
   });
 
   it("sends the verdict's reason for any other tool", () => {

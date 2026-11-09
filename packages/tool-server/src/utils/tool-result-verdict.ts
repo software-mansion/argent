@@ -22,8 +22,8 @@ export interface ToolResultVerdict {
  * The failure a tool reports in a result it returns rather than throws: an
  * unmet `await-ui-element`, an `e2e-execute` or `run-sequence` that did not
  * pass, a debugger tool with no connection, a native-devtools precheck that
- * stopped the tool before its work, a recording tool that recorded nothing, a
- * `debugger-inspect-element` error. `undefined` for any other result.
+ * stopped the tool before its work, a recording tool that recorded nothing.
+ * `undefined` for any other result.
  *
  * The e2e runner scores a `tool:` step by it. A direct call is judged by
  * {@link directCallFailure}.
@@ -43,10 +43,11 @@ export function toolResultVerdict(tool: string, result: unknown): ToolResultVerd
   if (isNativeDevtoolsBlockResult(tool, result)) {
     return { status: "fail", reason: `${tool} did not run (${result.status}): ${result.message}` };
   }
-  return typeof result === "object" && result !== null
-    ? (unrecordedStepVerdict(canonicalToolId(tool), result as Record<string, unknown>) ??
-        inspectErrorVerdict(tool, result as Record<string, unknown>))
-    : undefined;
+  return isRecord(result) ? unrecordedStepVerdict(canonicalToolId(tool), result) : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 /**
@@ -58,27 +59,15 @@ function unrecordedStepVerdict(
   tool: string,
   result: Record<string, unknown>
 ): ToolResultVerdict | undefined {
-  if (typeof result.message !== "string") return undefined;
+  const message = String(result.message);
   if (tool === "e2e-add-script") {
     const { status, reason } = result;
-    if (status !== "fail" && status !== "error" && status !== "skip") return undefined;
-    return {
-      status,
-      reason: `${result.message}${typeof reason === "string" && reason ? ` (${reason})` : ""}`,
-    };
+    if (status !== "fail" && status !== "error") return undefined;
+    return { status, reason: `${message}${typeof reason === "string" ? ` (${reason})` : ""}` };
   }
-  if (tool === "e2e-add-step" && !("recorded" in result)) {
-    return { status: "error", reason: result.message };
-  }
+  if (tool === "e2e-add-step" && !("recorded" in result))
+    return { status: "error", reason: message };
   return undefined;
-}
-
-function inspectErrorVerdict(
-  tool: string,
-  result: Record<string, unknown>
-): ToolResultVerdict | undefined {
-  if (tool !== "debugger-inspect-element" || typeof result.error !== "string") return undefined;
-  return { status: "fail", reason: `debugger-inspect-element failed: ${result.error}` };
 }
 
 /**
@@ -88,7 +77,15 @@ function inspectErrorVerdict(
  */
 const STATUS_TOOLS: ReadonlySet<string> = new Set(["debugger-status", "native-devtools-status"]);
 
-/** The reason a direct call of `tool` failed though it returned, for the HTTP `failure` field. */
+/**
+ * The reason a direct call of `tool` failed though it returned, for the HTTP
+ * `failure` field. Also a `debugger-inspect-element` `{ error }`, which the e2e
+ * runner and recorder take as a step's result.
+ */
 export function directCallFailure(tool: string, result: unknown): string | undefined {
-  return STATUS_TOOLS.has(tool) ? undefined : toolResultVerdict(tool, result)?.reason;
+  if (STATUS_TOOLS.has(tool)) return undefined;
+  if (tool === "debugger-inspect-element" && isRecord(result) && typeof result.error === "string") {
+    return `debugger-inspect-element failed: ${result.error}`;
+  }
+  return toolResultVerdict(tool, result)?.reason;
 }
