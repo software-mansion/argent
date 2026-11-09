@@ -93,6 +93,33 @@ describe("Registry -- lastUsedAt", () => {
     expect(lastUsedAt(registry, "Sim:dev-1")).toBe(1_008_000);
   });
 
+  it("keeps a service in use until the outermost of several nested calls ends", async () => {
+    const registry = new Registry();
+    registry.registerBlueprint(createMockBlueprint("Sim"));
+    registry.registerTool(createMockToolDef("tap", () => ({ sim: "Sim:dev-1" })));
+    registry.registerTool({
+      id: "run-sequence",
+      services: () => ({}),
+      execute: async () => {
+        await registry.invokeTool("tap");
+      },
+    });
+    let afterSequence: number | undefined;
+    registry.registerTool({
+      id: "flow-execute",
+      services: () => ({}),
+      execute: async () => {
+        await registry.invokeTool("run-sequence");
+        vi.setSystemTime(1_005_000);
+        afterSequence = lastUsedAt(registry, "Sim:dev-1");
+      },
+    });
+
+    await registry.invokeTool("flow-execute");
+
+    expect(afterSequence).toBe(1_005_000);
+  });
+
   it("restamps a service when the call that used it finishes, even when the call fails", async () => {
     const registry = new Registry();
     registry.registerBlueprint(createMockBlueprint("Sim"));
@@ -168,6 +195,64 @@ describe("Registry -- lastUsedAt", () => {
 
     expect(registry.getSnapshot().services.get(staticUrn("sim"))?.state).toBe(ServiceState.RUNNING);
     expect(lastUsedAt(registry, staticUrn("sim"))).toBeUndefined();
+  });
+
+  it("forgets the stamp as soon as a service starts tearing down", async () => {
+    const registry = new Registry();
+    let releaseDispose!: () => void;
+    const disposeGate = new Promise<void>((resolve) => (releaseDispose = resolve));
+    registry.registerBlueprint({
+      namespace: "Sim",
+      getURN: (ctx: string) => `Sim:${ctx}`,
+      factory: async () => ({
+        api: {},
+        dispose: () => disposeGate,
+        events: new TypedEventEmitter(),
+      }),
+    });
+    registry.registerTool(createMockToolDef("tap", () => ({ sim: "Sim:dev-1" })));
+    await registry.invokeTool("tap");
+
+    const disposing = registry.disposeService("Sim:dev-1");
+
+    expect(registry.getSnapshot().services.get("Sim:dev-1")?.state).toBe(ServiceState.TERMINATING);
+    expect(lastUsedAt(registry, "Sim:dev-1")).toBeUndefined();
+    releaseDispose();
+    await disposing;
+  });
+
+  it("stamps a service still starting when the call ends, and forgets it if the start fails", async () => {
+    const registry = new Registry();
+    let failStart!: () => void;
+    const startGate = new Promise<void>(
+      (_, reject) => (failStart = () => reject(new Error("boom")))
+    );
+    registry.registerBlueprint({
+      namespace: "Sim",
+      getURN: (ctx: string) => `Sim:${ctx}`,
+      factory: async () => {
+        await startGate;
+        return { api: {}, dispose: async () => {}, events: new TypedEventEmitter() };
+      },
+    });
+    let starting!: Promise<unknown>;
+    registry.registerTool({
+      id: "screenshot",
+      services: () => ({}),
+      execute: async () => {
+        starting = registry.resolveService("Sim:dev-1").catch(() => {});
+        vi.setSystemTime(1_020_000);
+      },
+    });
+
+    await registry.invokeTool("screenshot");
+
+    expect(registry.getSnapshot().services.get("Sim:dev-1")?.state).toBe(ServiceState.STARTING);
+    expect(lastUsedAt(registry, "Sim:dev-1")).toBe(1_020_000);
+    failStart();
+    await starting;
+    expect(registry.getSnapshot().services.get("Sim:dev-1")?.state).toBe(ServiceState.ERROR);
+    expect(lastUsedAt(registry, "Sim:dev-1")).toBeUndefined();
   });
 
   it("reports the services of every call in flight at once as in use", async () => {
