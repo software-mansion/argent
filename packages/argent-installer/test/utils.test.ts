@@ -28,6 +28,11 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     default: { ...actual, execSync: execSyncMock },
     execSync: execSyncMock,
+    // A win32-stubbed PATH probe runs `where`, which macOS and Linux lack.
+    execFileSync: ((bin: string, args: string[], opts: object) =>
+      bin === "where"
+        ? actual.execFileSync("which", ["-a", ...args], opts)
+        : actual.execFileSync(bin, args, opts)) as typeof actual.execFileSync,
   };
 });
 
@@ -815,6 +820,67 @@ describe("detectGlobalPackageManager", () => {
       putShimFirst(0);
       putGlobalOnPath(".config/yarn/global/node_modules");
       expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    function putScriptOnPath(body: string): void {
+      fs.writeFileSync(path.join(dir, "bin", "argent"), `#!/bin/sh\nexit 0\n${body}\n`);
+      fs.chmodSync(path.join(dir, "bin", "argent"), 0o755);
+    }
+
+    it.each([
+      [
+        "pnpm 11+",
+        'exec node "$basedir_abs/../global/v11/3aa0b3/node_modules/@swmansion/argent/dist/cli.js" "$@"',
+      ],
+      ["pnpm 9", 'exec node "$basedir/global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"'],
+    ])("returns pnpm over a %s global's shim", (_shape, line) => {
+      putScriptOnPath(line);
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    });
+
+    it("returns yarn over a live shim that runs a package outside npm's layout", () => {
+      putScriptOnPath('exec node "$basedir/../Data/global/node_modules/.bin/argent" "$@"');
+      expect(detectGlobalPackageManager()).toBe("yarn");
+    });
+
+    it("returns npm over a live binary shim", () => {
+      putScriptOnPath(`# node_modules/@swmansion/argent\n${"#".repeat(70 * 1024)}`);
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+
+    describe("on Windows", () => {
+      function putWindowsShim(binDir: string, body: string): void {
+        fs.mkdirSync(path.join(dir, binDir), { recursive: true });
+        fs.writeFileSync(path.join(dir, binDir, "argent"), body);
+        fs.chmodSync(path.join(dir, binDir, "argent"), 0o755);
+        process.env.PATH = `${path.join(dir, binDir)}:/usr/bin:/bin`;
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      }
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it("returns npm over npm's shim beside its node_modules", () => {
+        const pkg = path.join(dir, "npm", "node_modules", "@swmansion", "argent");
+        fs.mkdirSync(pkg, { recursive: true });
+        fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+        putWindowsShim("npm", '@"%dp0%\\node_modules\\@swmansion\\argent\\dist\\cli.js" %*');
+        expect(detectGlobalPackageManager()).toBe("npm");
+      });
+
+      it("returns yarn over Yarn classic's shim", () => {
+        putWindowsShim("Yarn/bin", '@"%~dp0\\..\\Data\\global\\node_modules\\.bin\\argent.cmd" %*');
+        expect(detectGlobalPackageManager()).toBe("yarn");
+      });
+
+      it("returns pnpm over pnpm's shim", () => {
+        putWindowsShim(
+          "pnpm",
+          '@"%~dp0\\global\\5\\node_modules\\@swmansion\\argent\\dist\\cli.js" %*'
+        );
+        expect(detectGlobalPackageManager()).toBe("pnpm");
+      });
     });
   });
 

@@ -31,22 +31,53 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
+// pnpm keeps globals under <pnpm home>/global/<5 | v11/<hash>>/node_modules.
+const PNPM_GLOBAL_TARGET = new RegExp(
+  String.raw`[\\/]global[\\/]v?\d+[\\/][^"'\s]*node_modules[\\/]` +
+    PACKAGE_NAME.split("/").join(String.raw`[\\/]`) +
+    String.raw`[\\/]`
+);
+
+// A shim script's text, or null for a binary (a Volta or mise shim) or an
+// unreadable file. 64 KiB is far above any shim script.
+function readShimScript(binaryPath: string): string | null {
+  try {
+    if (fs.statSync(binaryPath).size > 64 * 1024) return null;
+    return fs.readFileSync(binaryPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 // Yarn 2+ has no `yarn global`, so npm installs for it - except over a global npm
 // does not own, where it would add a second argent to PATH and leave the first in
 // place. `yarn` then fails without installing anything. npm's layout puts
-// <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent. A live
-// bin that resolves to no package keeps npm, since that is mostly a version-manager
-// shim over an npm global; a pnpm shim or any Windows .cmd is one too, so npm can
-// still add a second copy over a pnpm global, or over a Yarn global on Windows.
+// <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent, or on
+// Windows <prefix>\argent.cmd beside <prefix>\node_modules\@swmansion\argent.
+// A bin that resolves to no package is a shim script: pnpm's names its global
+// folder, so pnpm owns it. A shim that names no node_modules path (nodenv's,
+// asdf's) or is a binary (Volta's) runs a version manager's npm global, so it
+// keeps npm. Any other names a package outside npm's layout (Yarn classic's on
+// Windows) and gets `yarn`.
 export function detectGlobalPackageManager(): PackageManager {
   const pm = detectPackageManager();
   const agent = process.env.npm_config_user_agent ?? "";
   if (pm !== "yarn" || agent.startsWith("yarn/1.")) return pm;
   const binaryPath = getRemainingGlobalBinaryPath();
-  const root = binaryPath && packageRootOf(binaryPath);
-  if (!binaryPath || !root) return "npm";
-  const npmCopy = path.join(path.dirname(path.dirname(binaryPath)), "lib", "node_modules");
-  return canonicalPath(path.join(npmCopy, PACKAGE_NAME)) === canonicalPath(root) ? "npm" : "yarn";
+  if (!binaryPath) return "npm";
+  const binDir = path.dirname(binaryPath);
+  const npmCopy =
+    process.platform === "win32"
+      ? path.join(binDir, "node_modules", PACKAGE_NAME)
+      : path.join(path.dirname(binDir), "lib", "node_modules", PACKAGE_NAME);
+  const root = packageRootOf(binaryPath);
+  if (root) return canonicalPath(npmCopy) === canonicalPath(root) ? "npm" : "yarn";
+  if (process.platform === "win32" && fs.existsSync(path.join(npmCopy, "package.json"))) {
+    return "npm";
+  }
+  const shim = readShimScript(binaryPath);
+  if (shim === null || !/node_modules[\\/]/.test(shim)) return "npm";
+  return PNPM_GLOBAL_TARGET.test(shim) ? "pnpm" : "yarn";
 }
 
 function asKnownPm(name: unknown): PackageManager | null {
