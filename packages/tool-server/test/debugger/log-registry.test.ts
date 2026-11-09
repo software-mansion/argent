@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { LogFileWriter } from "../../src/utils/debugger/log-file-writer";
+import { readLogFile } from "../helpers/read-log-file";
 import { scopeTempHome } from "../helpers/temp-home";
 
 scopeTempHome("argent-log-registry-home-");
@@ -121,43 +122,14 @@ describe("Log Registry (integration)", () => {
     expect(clusters[0].count).toBe(50);
   });
 
-  it("file is readable with standard fs after writes", () => {
-    writeLog(0);
-    writeLog(1);
-
-    const entries = writer.readAll();
-    expect(entries).toHaveLength(2);
-
-    // Flat format: each entry has the marker field for grep anchoring
-    expect(entries[0].marker).toBe("[L:0]");
-    expect(entries[1].marker).toBe("[L:1]");
-  });
-
-  it("profiler-style filtered reads work correctly", () => {
-    writeLog(0, { level: "log" });
-    writeLog(1, { level: "error" });
-    writeLog(2, { level: "warn" });
-    writeLog(3, { level: "error" });
-    writeLog(4, { level: "log" });
-
-    // Simulates profiler-console-logs behavior
-    const { entries, total } = writer.readFiltered({
-      level: "error",
-      limit: 10,
-    });
-    expect(total).toBe(2);
-    expect(entries).toHaveLength(2);
-    expect(entries[0].level).toBe("error");
-    expect(entries[1].level).toBe("error");
-  });
-
-  it("readAll returns every entry in write order", () => {
+  it("writes each entry as one [L:<id>]-anchored line, in write order", () => {
     writeLog(0, { message: "first" });
     writeLog(1, { message: "second" });
 
-    const all = writer.readAll();
-    expect(all).toHaveLength(2);
-    expect(all[0].message).toBe("first");
-    expect(all[1].message).toBe("second");
+    const lines = readLogFile(writer);
+    expect(lines.map((l) => [l.id, l.message])).toEqual([
+      [0, "first"],
+      [1, "second"],
+    ]);
   });
 });

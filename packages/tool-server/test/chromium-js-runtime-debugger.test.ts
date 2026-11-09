@@ -10,6 +10,7 @@ import { resolveDevice } from "../src/utils/device-info";
 import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import type { CDPClientEvents } from "../src/utils/debugger/cdp-client";
 import { takeReapedSession, __resetReapedSessionsForTesting } from "../src/utils/reaped-sessions";
+import { readLogFile } from "./helpers/read-log-file";
 import { scopeTempHome } from "./helpers/temp-home";
 
 // The JS-runtime-debugger / network blueprints build a real LogFileWriter,
@@ -107,7 +108,7 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
         args: [{ type: "string", value: "hello" }],
         timestamp: Date.now(),
       });
-      const logged = instance.api.logWriter.readAll();
+      const logged = readLogFile(instance.api.logWriter);
       expect(logged).toHaveLength(1);
       expect(logged[0].message).toBe("hello");
 
@@ -302,7 +303,7 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
         timestamp: Number.NaN,
       });
       const after = Date.now();
-      const logged = instance.api.logWriter.readAll();
+      const logged = readLogFile(instance.api.logWriter);
       expect(logged).toHaveLength(1);
       expect(logged[0].message).toBe("nan-test");
       // Coerced to Date.now(), so it lands within the call window.
