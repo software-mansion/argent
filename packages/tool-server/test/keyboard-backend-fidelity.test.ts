@@ -265,6 +265,7 @@ describe("keyboard backends — emit exactly the action they were given", () => 
     // branch that overwrites `named` with CHROMIUM_NAMED_KEYS.enter.
     it.each([
       ["enter", CDP_ENTER],
+      ["return", CDP_ENTER],
       ["escape", CDP_ESCAPE],
     ])("dispatches %s itself, not a hardcoded Enter", async (key, desc) => {
       const { events, api } = cdpRecorder();
@@ -277,10 +278,10 @@ describe("keyboard backends — emit exactly the action they were given", () => 
 
       // Whole stream again: a dropped keyDown is a no-op for any `keydown` or
       // submit-on-Enter listener, and a dropped keyUp for any `keyup` one,
-      // while both still answer a success shape. A named key emits no `char`
-      // (chromium.ts:72-87) — pinning the exact pair records that too.
+      // while both still answer a success shape. Enter needs carriage-return
+      // text on keyDown to trigger keypress and the default form submission.
       expect(events).toEqual([
-        { type: "keyDown", ...desc },
+        { type: "keyDown", ...desc, ...(key === "escape" ? {} : { text: "\r" }) },
         { type: "keyUp", ...desc },
       ]);
       expect(result).toEqual({ typed: key, keys: 1 });

@@ -50,12 +50,18 @@ steps:
   - await: { idle: true }
 ```
 
-The file has two top-level keys:
+The file has four top-level keys:
 
-| Key                     | Required | Description                                                             |
-| ----------------------- | -------- | ----------------------------------------------------------------------- |
-| `steps`                 | yes      | The list of steps. Argent runs the steps in order                       |
-| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it |
+| Key                     | Required | Description                                                                                        |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `steps`                 | yes      | The list of steps. Argent runs the steps in order                                                  |
+| `executionPrerequisite` | no       | One sentence that names the start state. Only a fragment can declare it                            |
+| `requires`              | no       | The targets that the e2e test supports. See [Requirements](#requirements)                          |
+| `version`               | no       | The file format version. The value is `1`. Argent writes it. A file without `version` is version 1 |
+
+Argent refuses a file with a `version` that is higher than the version it reads. Update Argent to run that file.
+
+Argent releases from before the `version` key refuse a file that has the key. To run the file on such a release, delete the `version` line.
 
 An e2e test has one of two shapes:
 
@@ -69,6 +75,37 @@ Argent skips leading `echo` and `script` steps when it classifies an e2e test. A
 A file does not store a device id. The runner selects the device. A `launch:` restarts the process but does not clear the app data, the account or the backend data.
 
 When a step fails, Argent stops the e2e test and reports the later steps as skipped.
+
+### Requirements
+
+The `requires` block names the targets that an e2e test supports. An e2e test without the block runs on all targets.
+
+```yaml
+requires:
+  platform: [ios, android]
+  runtimeKind: tv
+steps:
+  - launch: com.example.tvapp
+```
+
+| Key           | Value                                                                                           |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| `platform`    | `ios`, `android`, `chromium` or `vega`, or a list of them. `ios` also covers a remote simulator |
+| `runtimeKind` | `tv` for Apple TV, Android TV and Fire TV. `mobile` for all other targets                       |
+
+The block must have one key or both keys. A target must satisfy all keys in the block. Parsing rejects an unknown key and an unknown value.
+
+The requirements change how Argent selects the device:
+
+- Argent selects and checks the device before it asks for the execution prerequisite. When the block excludes the target, the run fails with `FLOW_REQUIREMENTS_UNMET`.
+- Without `--device`, Argent selects only from the booted devices that satisfy the requirements. An iOS-only e2e test selects the simulator when an Android emulator is also booted.
+- When devices are booted but none satisfies the requirements, the run fails with `FLOW_REQUIREMENTS_UNMET`. A directory run skips that e2e test. See [The `argent e2e` command](#the-argent-e2e-command).
+- When `runtimeKind` is set and Argent cannot read the runtime kind of a device that it must check, the run fails with `FLOW_DEVICE_RESOLUTION`. A directory run does not skip that e2e test.
+- An e2e test that has no step that acts on a device runs without a device. Argent checks its requirements only against `--platform` or `--device`.
+
+A `run:` fragment can also declare `requires`. When the run device does not satisfy the requirements of the fragment, the `run:` step fails.
+
+`e2e-start-recording` replaces the whole file, including the `requires` block. To keep the block when you record an e2e test again, pass it in the `requires` argument of the tool.
 
 ## Selectors
 
@@ -386,7 +423,7 @@ Parsing rejects a `timeout` below 100 milliseconds. The step starts a Node proce
 
 On iOS, Android and Vega, a `script` step above the `launch` step runs before Argent restarts the app.
 
-On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform`.
+On Chromium, Argent boots the app before step 1 only when the run has no `device` and the leading `launch` names a Chromium app alone, or the `requires` block allows only `chromium`. A `script` step above that `launch` then runs while the app is up. In every other case Argent boots nothing before step 1: the `script` step runs first, and the `launch` step attaches to a running instance. Two cases reach it — a run you pin with `--device`, and a `launch` that names more than one platform when you pass no `--platform` and the `requires` block does not allow only `chromium`.
 
 <a id="the-argent-flow-command" />
 
@@ -427,6 +464,8 @@ Each step line shows the time of the step before the reason, for example `(1.2s)
 
 A directory run prints a numbered header for each e2e test. Under the header Argent prints each step of that e2e test that failed or carries a warning, with its artifact paths. Argent then prints one outcome line. After the last e2e test, Argent prints a `Failed e2e tests` section when one or more e2e tests failed. Argent prints a summary of all e2e tests at the end.
 
+A directory run skips an e2e test when the target does not satisfy its `requires` block. The outcome line is `skipped (requires not met)`. The next line gives the reason. When the directory run skips all e2e tests, the summary starts with `NONE RAN` and the exit code is 2.
+
 An e2e test that fails its steps lets the directory run continue. So does an e2e test that the tool-server rejects up front, such as an invalid file or a device that Argent cannot resolve. So does an e2e test when the upload of one of its fragments fails. A transport failure ends the directory run. So does a rejection that the tool-server does not mark as a validation error, and a reply that is not a report. Argent counts the e2e tests after the failure as skipped.
 
 The outcome line of an e2e test that produced a report gives the result, the step counts and the time of that e2e test. The outcome line of an e2e test that produced no report states the reason. A single e2e test run prints the same reason under the name of the e2e test.
@@ -434,7 +473,10 @@ The outcome line of an e2e test that produced a report gives the result, the ste
 | Outcome line                        | Meaning                                                                                   |
 | ----------------------------------- | ----------------------------------------------------------------------------------------- |
 | `not run (invalid e2e test)`        | The tool-server rejected the e2e test file or one of its steps                            |
+| `not run (needs a newer Argent)`    | The e2e test file has a `version` that is higher than the version this Argent reads       |
 | `not run (no device resolved)`      | Argent did not resolve one device for the e2e test                                        |
+| `not run (requires not met)`        | The target does not satisfy the `requires` block. Single e2e test runs only               |
+| `skipped (requires not met)`        | The target does not satisfy the `requires` block. Directory runs only                     |
 | `not run (rejected)`                | The tool-server rejected the e2e test for another reason                                  |
 | `not run (upload failed)`           | The upload of a `run:` fragment failed, so the CLI did not send the e2e test              |
 | `did not finish (run error)`        | The run failed before it produced a report                                                |
@@ -471,7 +513,7 @@ When a single e2e test run fails its steps, Argent prints the first step that fa
 
 `--json` and `--json-stream` print no header, no outcome line, no `Failed e2e tests` section and no summary.
 
-A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and an `e2eTests` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each e2e test. Each entry holds the `path` and the `status`. An entry holds `report` when the e2e test produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report: a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. An entry with the status `skip` holds neither, because Argent made no call for that e2e test. `--json-stream` puts the same two fields on its `error` record.
+A directory run with `--json` writes one document. The document holds `ok`, `total`, `passed`, `failed`, `skipped`, `durationMs` and an `e2eTests` array. `durationMs` is the time of the directory run in milliseconds. The array holds one entry for each e2e test. Each entry holds the `path` and the `status`. An entry holds `report` when the e2e test produced one, whether it passed or failed its steps. An entry holds `error` instead when the tool call produced no report: a rejected run, a run error, or a reply that is not a report. Such an entry also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` puts the same two fields on its `error` record. An entry with the status `skip` holds neither. An entry that Argent skipped for its `requires` block holds `reason`. `ok` is `false` when the directory run skipped all e2e tests.
 
 A single e2e test run with `--json` writes the report of that e2e test. The report holds `e2eTest`, the name of the e2e test, and `startedAt`, the start of the run in epoch milliseconds, and `durationMs`, the time of the run in milliseconds. Each step holds `e2eTest`, the e2e test or fragment that the step belongs to. Each step that ran holds its own `durationMs`. Each `progress` record of `--json-stream` holds one step, with the same `durationMs`. When the run gets no report, Argent writes one JSON object on stderr instead. The object holds `event` and `error`. It also holds `error_code` and `error_kind` when the tool-server or the CLI sets them. `--json-stream` writes the same object on stdout.
 
@@ -566,7 +608,7 @@ Set `ARGENT_E2E_FILES_LOG=1` to see what the CLI does with each fragment, nested
 
 The tool-server runs the uploaded copy even when it has a file at the same path. This is also true over a link to `127.0.0.1`. Only the copy from the client is certain to be the latest. Without a link, the tool-server reads the file in place, and all step kinds run.
 
-A rejected e2e test gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected e2e test on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. A directory run continues with the next e2e test and keeps the rejected e2e test in its `e2eTests` array.
+A rejected e2e test gives exit code 1. With `--json`, the CLI writes one JSON object for each rejected e2e test on stderr: `{ "event": "error", "error": <message>, "error_code": "FLOW_FILE_INVALID", "error_kind": "validation" }`. With `--json-stream`, the same object is the last line on stdout. For a file with a `version` that is higher than the version this Argent reads, the object holds `"error_code": "FLOW_FILE_NEWER_VERSION"`. A directory run continues with the next e2e test and keeps the rejected e2e test in its `e2eTests` array.
 
 When the upload of a fragment to `POST /upload` fails, the e2e test does not run. The CLI prints the reason. The exit code is 1. The JSON object holds `"error_code": "FILE_INPUT_UPLOAD_FAILED"` and `"error_kind": "validation"`. A directory run continues with the next e2e test.
 
