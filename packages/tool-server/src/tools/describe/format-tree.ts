@@ -98,6 +98,14 @@ function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
   return hasContent(n) || contentRoles.has(n.role);
 }
 
+// What an iOS simulator element can report with no label, value or id, which
+// maps it to the AXGroup fallback. Only the flat renderer counts these: the tree
+// sources also set `disabled` and `selected`, and counting them there would
+// print leaves that are pruned today.
+function hasIosState(n: DescribeNode): boolean {
+  return Boolean(n.hint || n.disabled || n.selected);
+}
+
 function formatLine(n: DescribeNode, indent: number, source: DescribeSource): string {
   const pad = "  ".repeat(indent);
   // iOS reports a text input's placeholder as both label and value; printing
@@ -119,7 +127,7 @@ function renderFlat(
   source: DescribeSource
 ): string[] {
   return root.children
-    .filter((n) => shouldEmit(n, contentRoles))
+    .filter((n) => shouldEmit(n, contentRoles) || hasIosState(n))
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
     .map((n) => formatLine(n, 1, source));

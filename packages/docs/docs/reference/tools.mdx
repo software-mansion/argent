@@ -126,6 +126,7 @@ Call `screenshot` or `describe` to read the screen again.
 | Tool                                     | Description                                                                             |
 | ---------------------------------------- | --------------------------------------------------------------------------------------- |
 | `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared (iOS)             |
+| `native-describe-screen` (SDK only)      | Read the app's native accessibility screen description                                  |
 | `native-full-hierarchy`                  | Get the complete UIKit view tree                                                        |
 | `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`                      |
 | `native-view-at-point`                   | Inspect the deepest visible view at a native window point                               |
@@ -268,7 +269,7 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
 
-`terminate-app`, `ui-tree`, `foreground-app`, `fill` and `gather-workspace-data` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
+`terminate-app`, `ui-tree`, `foreground-app`, `fill`, `native-describe-screen` and `gather-workspace-data` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones are not supported yet.
 

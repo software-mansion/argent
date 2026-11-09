@@ -413,9 +413,6 @@ describe("formatDescribeTree", () => {
     expect(out).not.toContain("scrollHidden");
   });
 
-  // identifier is the Android resource-id (and the iOS native-devtools
-  // accessibility identifier). It's the most stable thing to match on, so it
-  // must round-trip through the formatter verbatim.
   it("prints the VoiceOver hint after the id and before the flags, escaped like the other attributes", () => {
     const root: DescribeNode = {
       role: "AXGroup",
@@ -451,6 +448,53 @@ describe("formatDescribeTree", () => {
     expect(formatDescribeTree(root, { source: "ax-service" })).not.toContain("hint=");
   });
 
+  it.each(["ax-service", "native-devtools"] as const)(
+    "lists an unlabelled %s element that reports only a hint, disabled or selected",
+    (source) => {
+      const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+      const root: DescribeNode = {
+        role: "AXGroup",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [
+          leaf({ role: "AXGroup", hint: "Opens the menu", frame }),
+          leaf({ role: "AXGroup", disabled: true, frame }),
+          leaf({ role: "AXGroup", selected: true, frame }),
+          leaf({ role: "AXGroup", hint: "Current tab", selected: true, frame }),
+          // Reports nothing, so it stays out as a decorative grouping.
+          leaf({ role: "AXGroup", hint: "", frame }),
+        ],
+      };
+      expect(elementLines(formatDescribeTree(root, { source }))).toEqual([
+        '  AXGroup hint="Opens the menu"  (0.100, 0.200, 0.300, 0.100)',
+        "  AXGroup [disabled]  (0.100, 0.200, 0.300, 0.100)",
+        "  AXGroup [selected]  (0.100, 0.200, 0.300, 0.100)",
+        '  AXGroup hint="Current tab" [selected]  (0.100, 0.200, 0.300, 0.100)',
+      ]);
+    }
+  );
+
+  it.each([
+    "uiautomator",
+    "cdp-dom",
+    "vega-automation",
+    "harmony-uitest",
+    "xcuitest-runner",
+  ] as const)("keeps pruning an empty %s leaf that is only disabled or selected", (source) => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({ role: "View", disabled: true, frame }),
+        leaf({ role: "View", selected: true, frame }),
+      ],
+    };
+    expect(elementLines(formatDescribeTree(root, { source }))).toEqual([]);
+  });
+
+  // identifier is the Android resource-id (and the iOS native-devtools
+  // accessibility identifier). It's the most stable thing to match on, so it
+  // must round-trip through the formatter verbatim.
   it("surfaces the identifier as an id= attribute", () => {
     const root: DescribeNode = {
       role: "AXGroup",
