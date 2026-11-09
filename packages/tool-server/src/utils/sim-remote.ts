@@ -262,8 +262,8 @@ export async function setSimulatorEnv(udid: string, key: string, value: string):
 // Pauses before the second and third `reverse start` attempt.
 const REVERSE_START_RETRY_DELAYS_MS = [500, 2_000];
 // No retry starts later than this after the first attempt, so a forwarder 504
-// (~9 s) is retried once and the start ends well inside the 30 s the MCP client
-// allows a tool call. It bounds when a retry starts, not how long that runs.
+// (~9 s) is retried once and the start ends well inside the MCP client's 30 s
+// tool-call cap.
 const REVERSE_START_RETRY_WINDOW_MS = 15_000;
 
 /**

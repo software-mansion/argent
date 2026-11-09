@@ -89,7 +89,7 @@ describe("reverseStart / reverseStop", () => {
     expect(calls).toHaveLength(2);
   });
 
-  // Verbatim from sim-orchestrator's ForwarderError and sim-remote-core's ClientError.
+  // Verbatim CLI messages.
   it.each([
     "error: the host's port forwarder has lost its proxy tunnel (HTTP 503); reverse tunnels cannot be set up on this machine until it reconnects",
     "error: the host's port forwarder is unreachable (no answer within 10s); reverse tunnels cannot be set up on this machine",
