@@ -46,7 +46,7 @@ export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   longRunning: true,
   description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared.
 Use for a full reinstall after rebuilding, or to start from a clean app state.
-Returns { reinstalled, bundleId }. Fails if \`appPath\` does not exist or is not the platform's package, or \`bundleId\` does not match it (not checked on Vega or a remote simulator); these checks run before anything is uninstalled. On Android it also fails, without installing, when bundleId is still on the device after the uninstall, and on a local iOS simulator when the uninstall does not finish within 30s.`,
+Returns { reinstalled, bundleId }. Fails if \`appPath\` does not exist or is not the platform's package, or \`bundleId\` does not match it (not checked on Vega or a remote simulator); these checks run before anything is uninstalled. On Android it also fails, without installing, when bundleId is still on the device after the uninstall or that check fails (the app may then be gone), and on a local iOS simulator when the uninstall does not finish within 30s.`,
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => `Reinstalling ${params.bundleId}`,

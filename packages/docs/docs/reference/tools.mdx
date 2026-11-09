@@ -44,6 +44,8 @@ On Android, Argent also checks the device after the uninstall. If the package is
 - An app that is an active device admin. The app data stays on the device.
 - An updated system app. The uninstall removes only the update. If the update has a newer version than the system app, Android also removes the app data.
 
+If Argent cannot check the device after the uninstall, the tool also fails and does not install the `.apk`. The app may already be uninstalled.
+
 On a local iOS simulator, the tool fails and does not install the `.app` if the uninstall does not finish within 30 seconds.
 
 On a local iOS simulator, `boot-device`, `launch-app`, `restart-app`, `reinstall-app` and `open-url` give `error_kind: "timeout"` when a `simctl` step does not finish within its time limit. The message names the step and the limit. On a remote simulator, `launch-app` and `restart-app` do the same for a `sim-remote` step that does not finish within 30 seconds.
