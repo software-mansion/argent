@@ -95,6 +95,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getClientTop = protoGetter(Element.prototype, "clientTop");
   const getOffsetWidth = protoGetter(HTMLElement.prototype, "offsetWidth");
   const getOffsetHeight = protoGetter(HTMLElement.prototype, "offsetHeight");
+  const getOffsetLeft = protoGetter(HTMLElement.prototype, "offsetLeft");
+  const getOffsetTop = protoGetter(HTMLElement.prototype, "offsetTop");
+  const getOffsetParent = protoGetter(HTMLElement.prototype, "offsetParent");
   const getAttr = Element.prototype.getAttribute;
   const hasAttr = Element.prototype.hasAttribute;
   const getBCR = Element.prototype.getBoundingClientRect;
@@ -215,7 +218,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return getChildNodes.call(node);
   }
 
-  // An element's element children in the flat tree.
+  // An element's element children in the flat tree, but a closed root's host gives its
+  // light children.
   function flatChildElements(el) {
     const shadow = getShadowRoot.call(el);
     if (shadow) return shadow.children;
@@ -1118,27 +1122,64 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // A fieldset's rendered legend, which its overflow never clips: the first <legend>
   // among its flat-tree children, seen through display:contents boxes (slots included),
-  // that generates a box and is neither floated nor out of flow.
-  function renderedLegend(el) {
-    return htmlTag(el) === "FIELDSET" ? firstLegend(flatChildElements(el)) : null;
+  // that generates a box and is neither floated nor out of flow. A display:contents
+  // fieldset has none; the fieldset around it takes the legend.
+  function renderedLegend(el, style) {
+    return htmlTag(el) === "FIELDSET" && style.display !== "contents"
+      ? firstLegend(el, style, flatChildElements(el), false)
+      : null;
   }
-  function firstLegend(kids) {
+  // unsure: kids sit under a box that may host a closed root, which can slot them
+  // anywhere in its shadow tree.
+  function firstLegend(el, style, kids, unsure) {
     for (const kid of kids) {
       const ks = window.getComputedStyle(kid);
       if (ks.display === "contents") {
-        const found = firstLegend(flatChildElements(kid));
+        const closed = !getShadowRoot.call(kid) && canHostShadow(kid);
+        const found = firstLegend(el, style, flatChildElements(kid), unsure || closed);
         if (found) return found;
       } else if (
         htmlTag(kid) === "LEGEND" &&
         ks.display !== "none" &&
         ks.cssFloat === "none" &&
         ks.position !== "absolute" &&
-        ks.position !== "fixed"
+        ks.position !== "fixed" &&
+        (!unsure || laidOutAsLegend(el, style, kid, ks))
       ) {
         return kid;
       }
     }
     return null;
+  }
+
+  // Whether layout put legend where a fieldset's rendered legend goes: over its
+  // block-start border, short of the padding its flow content starts past. Offsets,
+  // unlike rects, ignore transforms and scrolling.
+  function laidOutAsLegend(el, style, legend, ls) {
+    const px = (st, prop) => parseFloat(st[prop]) || 0;
+    const op = getOffsetParent.call(legend);
+    // The fieldset's padding edges in the legend's offset coordinates.
+    let left = 0;
+    let top = 0;
+    if (op !== el) {
+      if (!op || op !== getOffsetParent.call(el)) return false;
+      left = getOffsetLeft.call(el) + px(style, "borderLeftWidth");
+      top = getOffsetTop.call(el) + px(style, "borderTopWidth");
+    }
+    const right =
+      left + getOffsetWidth.call(el) - px(style, "borderLeftWidth") - px(style, "borderRightWidth");
+    const rel = ls.position === "relative";
+    const x = getOffsetLeft.call(legend) - (rel ? px(ls, "left") : 0);
+    const y = getOffsetTop.call(legend) - (rel ? px(ls, "top") : 0);
+    const wm = style.writingMode;
+    // How far past the block-start padding edge the legend's border box starts.
+    const [into, pad] =
+      wm === "horizontal-tb"
+        ? [y - top, px(style, "paddingTop")]
+        : wm.endsWith("rl")
+          ? [right - x - getOffsetWidth.call(legend), px(style, "paddingRight")]
+          : [x - left, px(style, "paddingLeft")];
+    return into < pad;
   }
 
   // A fieldset's overflow (but not its paint containment) clips its content no nearer
@@ -1389,7 +1430,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       clip = null;
     }
     const kids = getChildrenEls.call(el);
-    const legend = renderedLegend(el);
+    const legend = renderedLegend(el, style);
     if (legend) legendClips.set(legend, clipsWithin(el, style, clips, clip));
     const inner = childClips(el, style, clips, clip, legend);
     if (htmlTag(el) === "SLOT") slotClips.set(el, inner);

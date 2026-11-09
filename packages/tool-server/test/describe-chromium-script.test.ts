@@ -12,7 +12,8 @@ import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
  * The mock implements only the DOM surface the script reads: getBoundingClientRect,
  * getComputedStyle (display / visibility / opacity / overflow{,X,Y} / position, plus
  * whatever transform-like property a fixture sets, and a pseudo-element's own style),
- * client{Left,Top,Width,Height} and offset{Width,Height} (padding-box clipping), children,
+ * client{Left,Top,Width,Height} and offset{Width,Height} (padding-box clipping),
+ * offset{Left,Top,Parent} (legend layout), children,
  * childNodes (text, and <br> / comment nodes), localName/namespaceURI,
  * getAttribute/hasAttribute, open shadowRoot,
  * and a Range whose rect unions the element's own painted content with the still-laid-out
@@ -100,6 +101,9 @@ defineNative(MockElement.prototype, "clientLeft", "__clientLeft");
 defineNative(MockElement.prototype, "clientTop", "__clientTop");
 defineNative(MockHTMLElement.prototype, "offsetWidth", "__offsetWidth");
 defineNative(MockHTMLElement.prototype, "offsetHeight", "__offsetHeight");
+defineNative(MockHTMLElement.prototype, "offsetLeft", "__offsetLeft");
+defineNative(MockHTMLElement.prototype, "offsetTop", "__offsetTop");
+defineNative(MockHTMLElement.prototype, "offsetParent", "__offsetParent");
 // getAttribute / hasAttribute / getBoundingClientRect are methods on Element.prototype.
 // The script invokes them via the captured `Element.prototype.X` so a [LegacyOverrideBuiltins]
 // form can't shadow them to a control element (which would crash with "not a function").
@@ -188,7 +192,8 @@ type Opts = {
   rect?: Rect;
   // client{Left,Top,Width,Height}: border-left/top and the padding box minus scrollbars
   client?: { left: number; top: number; width: number; height: number };
-  offset?: { width: number; height: number }; // untransformed border-box size
+  // Untransformed border-box size, and position from the padding edge of offsetParent.
+  offset?: { width: number; height: number; left?: number; top?: number };
   scrollSize?: { width: number; height: number }; // scrollWidth / scrollHeight
   svg?: boolean; // an Element in the SVG namespace
   outerSvg?: boolean; // an outermost <svg> element
@@ -246,6 +251,8 @@ function el(opts: Opts = {}): MockElement {
   if (opts.offset) {
     node.__offsetWidth = opts.offset.width;
     node.__offsetHeight = opts.offset.height;
+    node.__offsetLeft = opts.offset.left;
+    node.__offsetTop = opts.offset.top;
   }
   if (opts.scrollSize) {
     node.__scrollWidth = opts.scrollSize.width;
@@ -3675,12 +3682,13 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
   });
 
   it("takes the first legend in a fieldset's flat tree, through display:contents boxes, as rendered", () => {
+    // Laid out over the fieldset's 2px border, as a rendered legend is.
     const legend = () =>
       el({
         tag: "legend",
         attrs: { id: "legend" },
         rect: { x: 20, y: 0, w: 60, h: 30 },
-        offset: { width: 60, height: 30 },
+        offset: { width: 60, height: 30, left: 18, top: -2 },
       });
     const fieldset = (children: MockElement[]) =>
       el({
@@ -3688,27 +3696,40 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
         rect: { x: 0, y: 0, w: 300, h: 100 },
         client: { left: 2, top: 2, width: 296, height: 96 },
         offset: { width: 300, height: 100 },
-        style: { overflow: "hidden" },
+        style: { overflow: "hidden", borderTopWidth: "2px" },
         children,
       });
     const contents = (opts: Opts) => el({ rect: ZERO, style: { display: "contents" }, ...opts });
+    const slotted = (before: unknown[]) => {
+      const light = [legend(), row("content", { x: 20, y: 20, w: 60, h: 40 })];
+      const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
+      Object.setPrototypeOf(slot, MockHTMLSlotElement.prototype);
+      (slot as Record<string, unknown>).__assigned = [...before, ...light];
+      for (const n of light) (n as Record<string, unknown>).assignedSlot = slot;
+      return el({ tag: "x-host", rect: ZERO, children: light, shadow: [fieldset([slot])] });
+    };
     const fixtures: [string, () => MockElement][] = [
-      [
-        "slotted",
-        () => {
-          const light = [legend(), row("content", { x: 20, y: 20, w: 60, h: 40 })];
-          const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
-          Object.setPrototypeOf(slot, MockHTMLSlotElement.prototype);
-          (slot as Record<string, unknown>).__assigned = light;
-          for (const n of light) (n as Record<string, unknown>).assignedSlot = slot;
-          return el({ tag: "x-host", rect: ZERO, children: light, shadow: [fieldset([slot])] });
-        },
-      ],
+      ["slotted", () => slotted([])],
+      // Chrome's getComputedStyle throws on the text node.
+      ["slotted after text", () => slotted([{ nodeType: 3, nodeValue: "Some slotted text" }])],
       [
         "wrapped",
+        () => {
+          const lg = legend();
+          const f = fieldset([
+            contents({ children: [lg] }),
+            row("content", { x: 20, y: 20, w: 60, h: 40 }),
+          ]);
+          (lg as Record<string, unknown>).__offsetParent = f;
+          return f;
+        },
+      ],
+      // A display:contents fieldset has no rendered legend of its own.
+      [
+        "in a display:contents fieldset",
         () =>
           fieldset([
-            contents({ children: [legend()] }),
+            contents({ tag: "fieldset", children: [legend()] }),
             row("content", { x: 20, y: 20, w: 60, h: 40 }),
           ]),
       ],
@@ -3726,6 +3747,173 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       expect(pxFrame(tree, "legend"), why).toEqual({ x: 20, y: 0, w: 60, h: 30 });
       expect(pxFrame(tree, "content"), why).toEqual({ x: 20, y: 30, w: 60, h: 30 });
     }
+  });
+
+  it("takes a legend a closed root may slot as rendered only where layout put it over the border", () => {
+    // A 300x100 fieldset with 2px borders, at offset (50, 100) in its offsetParent. A
+    // rendered legend clips "content" to start past it; a flow legend leaves it whole.
+    type Case = {
+      why: string;
+      wm?: string;
+      fs?: Record<string, string>;
+      at: { left: number; top: number };
+      ls?: Record<string, string>;
+      parent?: "fieldset" | "shared" | "other" | "none";
+      rendered: boolean;
+    };
+    const legendRect: Record<string, Rect> = {
+      "horizontal-tb": { x: 20, y: 0, w: 60, h: 30 },
+      "vertical-rl": { x: 270, y: 20, w: 30, h: 60 },
+      "vertical-lr": { x: 0, y: 20, w: 30, h: 60 },
+    };
+    const content: Record<string, [Rect, Rect]> = {
+      "horizontal-tb": [
+        { x: 20, y: 10, w: 60, h: 50 },
+        { x: 20, y: 30, w: 60, h: 30 },
+      ],
+      "vertical-rl": [
+        { x: 200, y: 20, w: 90, h: 40 },
+        { x: 200, y: 20, w: 70, h: 40 },
+      ],
+      "vertical-lr": [
+        { x: 10, y: 20, w: 90, h: 40 },
+        { x: 30, y: 20, w: 70, h: 40 },
+      ],
+    };
+    const rl = "vertical-rl";
+    const lr = "vertical-lr";
+    const cases: Case[] = [
+      { why: "over the border", at: { left: 18, top: -2 }, rendered: true },
+      { why: "at the padding edge", at: { left: 18, top: 0 }, rendered: false },
+      {
+        why: "in the padding",
+        fs: { paddingTop: "4px" },
+        at: { left: 18, top: 3 },
+        rendered: true,
+      },
+      {
+        why: "past the padding",
+        fs: { paddingTop: "4px" },
+        at: { left: 18, top: 4 },
+        rendered: false,
+      },
+      {
+        why: "moved down by a relative offset",
+        ls: { position: "relative", top: "10px", left: "0px" },
+        at: { left: 18, top: 8 },
+        rendered: true,
+      },
+      { why: "beside the fieldset", parent: "shared", at: { left: 68, top: 100 }, rendered: true },
+      { why: "inside it, beside", parent: "shared", at: { left: 68, top: 102 }, rendered: false },
+      { why: "in another box", parent: "other", at: { left: 18, top: -2 }, rendered: false },
+      // Neither the legend nor a fixed fieldset has an offsetParent.
+      { why: "in no box", parent: "none", at: { left: 18, top: -2 }, rendered: false },
+      { why: "rl over the border", wm: rl, at: { left: 268, top: 18 }, rendered: true },
+      { why: "rl at the padding edge", wm: rl, at: { left: 266, top: 18 }, rendered: false },
+      {
+        why: "rl in the padding",
+        wm: rl,
+        fs: { paddingRight: "4px" },
+        at: { left: 263, top: 18 },
+        rendered: true,
+      },
+      { why: "lr over the border", wm: lr, at: { left: -2, top: 18 }, rendered: true },
+      { why: "lr at the padding edge", wm: lr, at: { left: 0, top: 18 }, rendered: false },
+      {
+        why: "lr in the padding",
+        wm: lr,
+        fs: { paddingLeft: "4px" },
+        at: { left: 3, top: 18 },
+        rendered: true,
+      },
+      {
+        why: "lr moved by a relative offset",
+        wm: lr,
+        ls: { position: "relative", top: "0px", left: "10px" },
+        at: { left: 8, top: 18 },
+        rendered: true,
+      },
+      {
+        why: "lr beside the fieldset",
+        wm: lr,
+        parent: "shared",
+        at: { left: 50, top: 118 },
+        rendered: true,
+      },
+      {
+        why: "lr inside it, beside",
+        wm: lr,
+        parent: "shared",
+        at: { left: 52, top: 118 },
+        rendered: false,
+      },
+    ];
+    for (const c of cases) {
+      const wm = c.wm ?? "horizontal-tb";
+      const rect = legendRect[wm];
+      const legend = el({
+        tag: "legend",
+        attrs: { id: "legend" },
+        rect,
+        offset: { width: rect.w, height: rect.h, ...c.at },
+        style: c.ls,
+      });
+      const fieldset = el({
+        tag: "fieldset",
+        rect: { x: 0, y: 0, w: 300, h: 100 },
+        client: { left: 2, top: 2, width: 296, height: 96 },
+        offset: { width: 300, height: 100, left: 50, top: 100 },
+        style: {
+          overflow: "hidden",
+          writingMode: wm,
+          borderTopWidth: "2px",
+          borderRightWidth: "2px",
+          borderLeftWidth: "2px",
+          ...c.fs,
+        },
+        // The <div> may host a closed root, which the walker cannot see.
+        children: [
+          el({ rect: ZERO, style: { display: "contents" }, children: [legend] }),
+          row("content", content[wm][0]),
+        ],
+      });
+      const shared = el();
+      (fieldset as Record<string, unknown>).__offsetParent = c.parent === "none" ? null : shared;
+      (legend as Record<string, unknown>).__offsetParent = {
+        fieldset,
+        shared,
+        other: el(),
+        none: null,
+      }[c.parent ?? "fieldset"];
+      const { tree } = run([fieldset]);
+      expect(pxFrame(tree, "content"), c.why).toEqual(content[wm][c.rendered ? 1 : 0]);
+    }
+    // Still under a box that may host a closed root, past an open root.
+    const legend = el({
+      tag: "legend",
+      attrs: { id: "legend" },
+      rect: legendRect["horizontal-tb"],
+      offset: { width: 60, height: 30, left: 18, top: 0 },
+    });
+    const fieldset = el({
+      tag: "fieldset",
+      rect: { x: 0, y: 0, w: 300, h: 100 },
+      client: { left: 2, top: 2, width: 296, height: 96 },
+      offset: { width: 300, height: 100 },
+      style: { overflow: "hidden", borderTopWidth: "2px" },
+      children: [
+        el({
+          rect: ZERO,
+          style: { display: "contents" },
+          children: [
+            el({ tag: "x-host", rect: ZERO, style: { display: "contents" }, shadow: [legend] }),
+          ],
+        }),
+        row("content", content["horizontal-tb"][0]),
+      ],
+    });
+    (legend as Record<string, unknown>).__offsetParent = fieldset;
+    expect(pxFrame(run([fieldset]).tree, "content")).toEqual(content["horizontal-tb"][0]);
   });
 
   it("clips a fieldset's content by overflow where its rendered legend's margin box ends", () => {
