@@ -226,9 +226,10 @@ export async function stageLibraryFor(
   const files = [bootstrap, path.join(path.dirname(bootstrap), LIBRARY_NAME)];
   const teams = await Promise.all(files.map((file) => readTeam(file)));
   if (teams.every((team) => team === teamId)) return bootstrap;
+  const debug = info.entitlements.getTaskAllow;
   throw macosFailure(
-    `${info.bundleId} is a Debug build with the hardened runtime, signed by the team ` +
-      `${teamId}, so macOS loads the argent library into it only when the same team signed ` +
+    `${info.bundleId} is a ${debug ? "Debug" : "release"} build with the hardened runtime, ` +
+      `signed by the team ${teamId}, so macOS loads the argent library into it only when the same team signed ` +
       `the library. Either build it without the hardened runtime (ENABLE_HARDENED_RUNTIME = NO ` +
       `in the Debug configuration), add the entitlement ` +
       `com.apple.security.cs.disable-library-validation to the Debug build, or sign argent's ` +
@@ -236,7 +237,7 @@ export async function stageLibraryFor(
       `codesign --force --sign "<identity of team ${teamId}>" ` +
       `${files.map((file) => `"${file}"`).join(" ")}\n` +
       `then start the app again. Signing uses the keychain, so the user runs this command, ` +
-      `not the agent. A Release build with the hardened runtime cannot be driven.`,
+      `not the agent.${debug ? " A Release build with the hardened runtime cannot be driven." : ""}`,
     FAILURE_CODES.MACOS_APP_HARDENED_RUNTIME,
     "macos_app_launch",
     "unsupported"
@@ -797,6 +798,14 @@ export function hardenedRuntimeRefusal(info: MacosAppInfo): string | null {
     );
   }
   if (!info.hardenedRuntime || disableLibraryValidation || info.teamId) return null;
+  if (!getTaskAllow) {
+    return (
+      `${info.bundleId} is a release build with the hardened runtime and the entitlement ` +
+      `com.apple.security.cs.allow-dyld-environment-variables, signed ad hoc, so macOS loads ` +
+      `the argent library into it only with the entitlement ` +
+      `com.apple.security.cs.disable-library-validation. Start its Debug build instead.`
+    );
+  }
   return (
     `${info.bundleId} is a Debug build with the hardened runtime, so macOS does not load the ` +
     `argent library into it. Build it without the hardened runtime (ENABLE_HARDENED_RUNTIME = ` +

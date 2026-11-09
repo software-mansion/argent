@@ -1484,6 +1484,21 @@ describe("stageMacosLibraries", () => {
       expect(fs.readFileSync(libraryBeside(staged), "utf8")).toBe("signed by the user");
     });
 
+    it("names a team's release build with allow-dyld-environment-variables a release build", async () => {
+      const err = await stageLibraryFor(
+        appInfo(true, [DYLD], TEAM),
+        shippedPaths(),
+        async () => undefined
+      ).catch((e: unknown) => e);
+      expect(codeOf(err)).toBe(FAILURE_CODES.MACOS_APP_HARDENED_RUNTIME);
+      const message = (err as Error).message;
+      expect(message).toContain(
+        `is a release build with the hardened runtime, signed by the team ${TEAM}`
+      );
+      expect(message).toContain(`codesign --force --sign "<identity of team ${TEAM}>"`);
+      expect(message).not.toContain("cannot be driven");
+    });
+
     it.each([
       ["no hardened runtime", appInfo(false, [], TEAM)],
       ["disable-library-validation", appInfo(true, [GTA, DLV], TEAM)],
@@ -1547,7 +1562,7 @@ describe("code signature rules", () => {
     ["get-task-allow alone, ad hoc", true, [GTA], undefined, "debug"],
     ["get-task-allow alone, team-signed", true, [GTA], "ABCDE12345", null],
     ["disable-library-validation alone", true, [DLV], undefined, "release"],
-    ["allow-dyld-environment-variables alone, ad hoc", true, [DYLD], undefined, "debug"],
+    ["allow-dyld-environment-variables alone, ad hoc", true, [DYLD], undefined, "dyld"],
     ["get-task-allow + disable-library-validation", true, [GTA, DLV], undefined, null],
     [
       "allow-dyld-environment-variables + disable-library-validation",
@@ -1565,6 +1580,10 @@ describe("code signature rules", () => {
       expect(refusal).toMatch(/release build with the hardened runtime.*cannot drive it/);
       expect(refusal).toContain("apps from other developers");
       expect(refusal).not.toContain("ENABLE_HARDENED_RUNTIME");
+    } else if (kind === "dyld") {
+      expect(refusal).toMatch(/release build with the hardened runtime and the entitlement/);
+      expect(refusal).toContain("com.apple.security.cs.disable-library-validation");
+      expect(refusal).not.toContain("is a Debug build");
     } else {
       expect(refusal).toMatch(/Debug build with the hardened runtime/);
       expect(refusal).toContain("ENABLE_HARDENED_RUNTIME = NO in the Debug configuration");
