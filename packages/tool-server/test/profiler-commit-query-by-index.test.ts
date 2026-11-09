@@ -66,6 +66,18 @@ describe("profiler-commit-query by_index — top_n", () => {
     expect(rows).toEqual(["| `Leaf` | 10.0 | 10.0 | unknown | `—` |  |"]);
   });
 
+  it("labels the inclusive duration as the subtree's, next to the self time it ranks by", () => {
+    const out = renderByIndex(
+      [fiber("App", 40, { selfDuration: 1 }), fiber("List", 39, { selfDuration: 30 })],
+      1
+    );
+    expect(out).toContain("| Component | Self (ms) | Subtree (ms) | Reason | Parent | Compiler |");
+    expect(out.split("\n").filter((l) => l.startsWith("| `"))).toEqual([
+      "| `List` | 30.0 | 39.0 | unknown | `—` |  |",
+      "| `App` | 1.0 | 40.0 | unknown | `—` |  |",
+    ]);
+  });
+
   it("says how many distinct components the truncated view actually covers", () => {
     // The trap this guards: 8 fibers can be far fewer than 8 components, so a
     // caller cannot infer coverage from the row count.

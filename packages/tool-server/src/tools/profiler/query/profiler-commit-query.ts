@@ -210,7 +210,7 @@ export function renderByIndex(
     `**Time:** ${timestamp.toFixed(0)}ms  **Duration:** ${commitDuration.toFixed(1)}ms  ` +
       `**Fibers:** ${matching.length}${hidden > 0 ? ` (showing ${shown.length})` : ""}`,
     "",
-    "| Component | Duration (ms) | Self (ms) | Reason | Parent | Compiler |",
+    "| Component | Self (ms) | Subtree (ms) | Reason | Parent | Compiler |",
     "|---|---|---|---|---|---|",
   ];
 
@@ -219,7 +219,7 @@ export function renderByIndex(
     const parent = c.parentName ?? "—";
     const compiler = c.isCompilerOptimized ? "✓" : "";
     lines.push(
-      `| \`${c.componentName}\` | ${c.actualDuration.toFixed(1)} | ${c.selfDuration.toFixed(1)} | ${reason} | \`${parent}\` | ${compiler} |`
+      `| \`${c.componentName}\` | ${c.selfDuration.toFixed(1)} | ${c.actualDuration.toFixed(1)} | ${reason} | \`${parent}\` | ${compiler} |`
     );
   }
 
