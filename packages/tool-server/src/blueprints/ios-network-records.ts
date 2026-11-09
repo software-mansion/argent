@@ -263,7 +263,12 @@ export function createIosNetworkRecords(
 
     const cacheKey = `${kind}:${id}`;
     const cached = bodies.get(cacheKey);
-    if (cached) return shownOf(cached, kind);
+    if (cached) {
+      // A read moves its body to the newest end, so the bodies read last are kept.
+      bodies.delete(cacheKey);
+      bodies.set(cacheKey, cached);
+      return shownOf(cached, kind);
+    }
     if (link.liveConnection() !== record.connection) {
       return Promise.resolve(unavailable(closedReason(record.connection)));
     }

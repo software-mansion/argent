@@ -1454,6 +1454,31 @@ describe("iOS native network records: bodies kept", () => {
     );
   });
 
+  it("counts a read of a kept body as a read, so the body read longest ago goes first", async () => {
+    const { app, store, agent } = answering();
+    const ids: string[] = [];
+    for (let i = 0; i <= MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      ids.push(idOf(store, `r${i}`));
+    }
+    for (let i = 0; i < MAX_CACHED_BODIES; i++) await store.responseBody(ids[i]!);
+    // r0 is read again, so r1 is now the body read longest ago.
+    await store.responseBody(ids[0]!);
+    await store.responseBody(ids[MAX_CACHED_BODIES]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+
+    expect(await store.responseBody(ids[0]!)).toEqual(body("body of r0"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+    expect(await store.responseBody(ids[1]!)).toEqual(body("body of r1"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+    expect(app.request).toHaveBeenLastCalledWith(
+      CONN,
+      "Network.getResponseBody",
+      { requestId: "r1" },
+      10_000
+    );
+  });
+
   it("drops the body of an evicted record, which no longer takes one of the places kept", async () => {
     const { app, store, agent } = answering();
     const ids: string[] = [];
