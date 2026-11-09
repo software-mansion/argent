@@ -233,42 +233,108 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   // An aria-labelledby target's text (text and CDATA) in the flat tree, read by a subset
-  // of Chrome's accessible-name rules: an aria-label, an <img>'s alt, or an SVG element's
-  // <title> stands in for an element's content, a <select> or <textarea> reads as it
-  // shows, a non-inline element, an <svg> with content, an SVG <style> or a <br> parts
-  // the words around it, and an SVG <style>'s text never counts. Nor does the text of a
-  // <noscript>, or of a <script> or <style> with no box, which parts words only under
-  // display:none. A shown target leaves out its display:none, visibility:hidden and
-  // aria-hidden subtrees, and SVG elements SVG never renders (one it does not know,
-  // <metadata>, <script>); a hidden one reads them all, and there any <svg> parts words,
-  // as does every element under display:none, which has no layout to run inline in. An
+  // of Chrome's accessible-name rules. An element reads as what a <select> or <textarea>
+  // shows, a range widget's value or a listbox's aria-selected options; else as its
+  // aria-label, an <img>'s alt or an SVG element's <title>; else as its ::before, content
+  // and ::after, or as its title if those are blank (not an <img> with an alt). A
+  // non-inline element, an <img> (but a presentational alt=""), an <svg> with content, an
+  // SVG <style> or a <br> parts the words around it, and an SVG <style>'s text never
+  // counts. Nor does the text of a <noscript>, or of a <script> or <style> with no box,
+  // which parts words only under display:none. A shown target leaves out its
+  // display:none, visibility:hidden, aria-hidden and inert subtrees, and SVG elements SVG
+  // never renders (one it does not know, <metadata>, <script>); a hidden one reads them
+  // all, and there any <svg> parts words, as does every element under display:none, which
+  // has no layout to run inline in. Neither reads what layout skips: a closed <details>
+  // past its first <summary>, a content-visibility:hidden box's content, a hidden chosen
+  // option, or a hidden ::before or ::after (or any in an aria-hidden target). An
   // <input>'s value is not read.
   // Iterative: the target's depth has no MAX_DEPTH bound.
   function labelText(root) {
-    const own = controlText(root) ?? altText(root);
+    const rootOptions = chosenOptions(root);
+    const own = controlText(root) ?? rangeText(root) ?? (rootOptions ? null : altText(root));
     if (own !== null) return own;
-    let shown = window.getComputedStyle(root).visibility !== "hidden";
+    const rootStyle = window.getComputedStyle(root);
+    let shown = rootStyle.visibility !== "hidden";
+    let ariaHidden = false;
+    let inert = false;
     // How many display:none elements enclose the walk's position.
     let unrendered = 0;
     for (let n = root; !unrendered && n && getNodeType.call(n) === 1; n = getParentNode.call(n)) {
+      if (isInert(n)) inert = true;
       if (window.getComputedStyle(n).display === "none") {
         unrendered = 1;
         shown = false;
       } else if (isAriaHidden(n)) {
         shown = false;
+        ariaHidden = true;
       }
     }
+    if (shown && inert) return "";
     let s = "";
-    // Nodes, SPACE where a non-inline element's content ends, and RENDERED where a
-    // display:none element's does.
+    // Nodes, SPACE where a non-inline element's content ends, RENDERED where a
+    // display:none element's does, and Marks.
     const SPACE = {};
     const RENDERED = {};
+    // A ::after's text, or (with a start) a title that replaces the text from start on
+    // if that is blank.
+    class Mark {
+      constructor(text, start) {
+        this.text = text;
+        this.start = start;
+      }
+    }
     const stack = [];
-    const pushChildren = (node) => {
-      const kids = flatChildNodes(node);
-      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    // A listbox's chosen options, each read only when it is laid out and shown.
+    const pushOptions = (options, rendered) => {
+      for (let i = options.length - 1; i >= 0; i--) {
+        const style = window.getComputedStyle(options[i]);
+        if (rendered && style.display !== "none" && style.visibility === "visible") {
+          if (!isAriaHidden(options[i])) stack.push(SPACE, options[i]);
+        }
+      }
     };
-    pushChildren(root);
+    // An element's title Mark, ::before, shown children and ::after; only the title when
+    // empty.
+    const pushContent = (el, style, rendered, empty) => {
+      const html = getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml";
+      const tag = getLocalName.call(el);
+      const title = getAttr.call(el, "title");
+      if (title && !(html && tag === "img" && hasAttr.call(el, "alt"))) {
+        stack.push(new Mark(title, s.length));
+      }
+      if (
+        empty ||
+        (rendered &&
+          style.contentVisibility === "hidden" &&
+          !isInlineBox(style) &&
+          style.display !== "contents")
+      ) {
+        return;
+      }
+      const replaced =
+        /^(img|input|video|audio|canvas|iframe|object|embed|progress|meter)$/.test(tag);
+      if (rendered && !ariaHidden && html && !replaced) {
+        s += pseudoText(el, "::before");
+        stack.push(new Mark(pseudoText(el, "::after")));
+      }
+      if (rendered && html && tag === "details" && closedDetails(el)) {
+        for (const child of getChildNodes.call(el)) {
+          if (
+            getNodeType.call(child) === 1 &&
+            getLocalName.call(child) === "summary" &&
+            getNamespaceURI.call(child) === "http://www.w3.org/1999/xhtml"
+          ) {
+            stack.push(child);
+            break;
+          }
+        }
+      } else {
+        const kids = flatChildNodes(el);
+        for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+      }
+    };
+    if (rootOptions) pushOptions(rootOptions, !unrendered);
+    else pushContent(root, rootStyle, !unrendered, false);
     while (stack.length) {
       const node = stack.pop();
       if (node === SPACE) {
@@ -277,6 +343,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
       if (node === RENDERED) {
         unrendered--;
+        continue;
+      }
+      if (node instanceof Mark) {
+        if (node.start === undefined) s += node.text;
+        else if (!s.slice(node.start).replace(WHITESPACE, "")) {
+          s = s.slice(0, node.start) + " " + node.text + " ";
+        }
         continue;
       }
       const type = getNodeType.call(node);
@@ -298,6 +371,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         (style.display === "none" ||
           style.visibility === "hidden" ||
           isAriaHidden(node) ||
+          isInert(node) ||
           (svg &&
             (tag === "metadata" ||
               tag === "script" ||
@@ -305,9 +379,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       ) {
         continue;
       }
-      const content = controlText(node) ?? altText(node);
+      const rendered = !unrendered && style.display !== "none";
+      const options = chosenOptions(node);
+      const content = controlText(node) ?? rangeText(node) ?? (options ? null : altText(node));
       if (content !== null) {
         s += " " + content + " ";
+        continue;
+      }
+      if (options) {
+        s += " ";
+        stack.push(SPACE);
+        pushOptions(options, rendered);
         continue;
       }
       // A shown <svg> holding at most whitespace reads as nothing: SVG drops that text.
@@ -318,8 +400,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         (tag === "noscript" ||
           (/^(script|style)$/.test(tag) && (style.display === "none" || unrendered)));
       const svgStyle = svg && tag === "style";
+      const img =
+        ns === "http://www.w3.org/1999/xhtml" &&
+        tag === "img" &&
+        (getAttr.call(node, "alt") !== "" || !!getAttr.call(node, "title"));
       if (
         (!isInlineBox(style) && !noBox) ||
+        img ||
         (svg && tag === "svg" && !emptySvg) ||
         svgStyle ||
         unrendered
@@ -331,7 +418,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         unrendered++;
         stack.push(RENDERED);
       }
-      if (!noBox && !svgStyle && !emptySvg) pushChildren(node);
+      if (!noBox && !svgStyle) pushContent(node, style, rendered, emptySvg);
     }
     return s.replace(WHITESPACE, " ");
   }
@@ -377,6 +464,110 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
     }
     return null;
+  }
+
+  function isInert(el) {
+    return (
+      getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml" && hasAttr.call(el, "inert")
+    );
+  }
+
+  // The first token of an element's role, lowercased. Chrome takes the first one it knows.
+  function ariaRole(el) {
+    const role = getAttr.call(el, "role");
+    return role ? role.trim().split(/\\s+/)[0].toLowerCase() : "";
+  }
+
+  // A range widget's value as Chrome reads it: its aria-valuetext, else its aria-valuenow
+  // held to aria-valuemin and aria-valuemax, to 6 significant digits. A value that does
+  // not parse reads as 0, and a missing aria-valuenow as Chrome's default for the role.
+  // null for other roles, and for a progressbar without a value.
+  function rangeText(el) {
+    const role = ariaRole(el);
+    if (!/^(slider|scrollbar|spinbutton|meter|progressbar)$/.test(role)) return null;
+    const text = getAttr.call(el, "aria-valuetext");
+    if (text !== null) return text;
+    const num = (name, missing) => {
+      const v = getAttr.call(el, name);
+      if (v === null) return missing;
+      return /^[+-]?(\\d+\\.?\\d*|\\.\\d+)(e[+-]?\\d+)?$/i.test(v) ? Number(v) : 0;
+    };
+    const spin = role === "spinbutton";
+    const min = num("aria-valuemin", spin ? -Infinity : 0);
+    const max = num("aria-valuemax", spin ? Infinity : 100);
+    let v = num("aria-valuenow", null);
+    if (v !== null) v = Math.max(min, Math.min(max, v));
+    else if (role === "progressbar") return null;
+    else v = role === "meter" ? min : spin ? 0 : (min + max) / 2;
+    const p = v.toPrecision(6);
+    return /^[^e]*\\./.test(p) ? p.replace(/\\.?0+$/, "") : p;
+  }
+
+  // A listbox's option children with aria-selected="true", or null when it is not a
+  // listbox or has none.
+  function chosenOptions(el) {
+    if (ariaRole(el) !== "listbox") return null;
+    const chosen = [];
+    for (const child of flatChildNodes(el)) {
+      if (
+        getNodeType.call(child) === 1 &&
+        ariaRole(child) === "option" &&
+        /^true$/i.test(getAttr.call(child, "aria-selected") || "")
+      ) {
+        chosen.push(child);
+      }
+    }
+    return chosen.length ? chosen : null;
+  }
+
+  // Whether a <details> hides its content: closed, unless the page shows its
+  // ::details-content.
+  function closedDetails(el) {
+    return (
+      !hasAttr.call(el, "open") &&
+      window.getComputedStyle(el, "::details-content").contentVisibility !== "visible"
+    );
+  }
+
+  // What a ::before or ::after shows: the strings of its content outside functions
+  // (counters, url()), or its alt text after a "/", which is spaced off like a
+  // non-inline box's text.
+  function pseudoText(el, which) {
+    const style = window.getComputedStyle(el, which);
+    if (style.display === "none" || style.visibility !== "visible") return "";
+    const v = style.content;
+    let text = "";
+    let alt = null;
+    let depth = 0;
+    for (let i = 0; i < v.length; i++) {
+      const c = v[i];
+      if (c === "(") depth++;
+      else if (c === ")") depth--;
+      else if (c === "/" && !depth) alt = "";
+      else if (c === '"') {
+        let str = "";
+        // Computed strings escape only '"', the backslash (code 92) and, in hex, controls.
+        for (i++; i < v.length && v[i] !== '"'; i++) {
+          if (v.charCodeAt(i) !== 92) {
+            str += v[i];
+            continue;
+          }
+          let hex = "";
+          while (hex.length < 6 && /[0-9a-f]/i.test(v[i + 1] || "")) hex += v[++i];
+          if (!hex) str += v[++i];
+          else {
+            str += String.fromCodePoint(parseInt(hex, 16));
+            if (v[i + 1] === " ") i++;
+          }
+        }
+        if (depth) continue;
+        if (alt === null) text += str;
+        else alt += str;
+      }
+    }
+    const shown = alt ?? text;
+    if (!shown) return "";
+    return alt === null && isInlineBox(style) ? shown : " " + shown + " ";
   }
 
   function isInteractive(el) {

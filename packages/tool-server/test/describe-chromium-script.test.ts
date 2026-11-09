@@ -11,8 +11,8 @@ import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
  *
  * The mock implements only the DOM surface the script reads: getBoundingClientRect,
  * getComputedStyle (display / visibility / opacity / overflow{,X,Y} / position, plus
- * whatever transform-like property a fixture sets), client{Left,Top,Width,Height} and
- * offset{Width,Height} (padding-box clipping), children,
+ * whatever transform-like property a fixture sets, and a pseudo-element's own style),
+ * client{Left,Top,Width,Height} and offset{Width,Height} (padding-box clipping), children,
  * childNodes (text, and <br> / comment nodes), localName/namespaceURI,
  * getAttribute/hasAttribute, open shadowRoot,
  * and a Range whose rect unions the element's own painted content with the still-laid-out
@@ -381,9 +381,12 @@ function run(
     innerWidth: W,
     innerHeight: H,
     // Like Chrome's, it rejects a non-element (a document, text or comment node).
-    getComputedStyle: (e: Record<string, unknown>) => {
+    // A pseudo-element's style is the fixture's __pseudo entry, else one generating nothing.
+    getComputedStyle: (e: Record<string, unknown>, pseudo?: string) => {
       if (!(e instanceof MockElement)) throw new TypeError("parameter 1 is not of type 'Element'");
-      return e.__style;
+      if (!pseudo) return e.__style;
+      const styles = (e.__pseudo as Record<string, unknown>) ?? {};
+      return styles[pseudo] ?? { display: "inline", visibility: "visible", content: "none" };
     },
   };
   g.document = Object.assign(new MockDocument(), {
@@ -852,9 +855,17 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   });
 
   // A span target labelling a button, holding `kids`.
-  const labelledBy = (kids: unknown[], style: Record<string, string> = { display: "inline" }) => {
-    const label = el({ tag: "span", rect: BOX, attrs: { id: "lbl" }, style }) as MockElement &
-      Record<string, unknown>;
+  const labelledBy = (
+    kids: unknown[],
+    style: Record<string, string> = { display: "inline" },
+    attrs: Record<string, string> = {}
+  ) => {
+    const label = el({
+      tag: "span",
+      rect: BOX,
+      attrs: { id: "lbl", ...attrs },
+      style,
+    }) as MockElement & Record<string, unknown>;
     Object.assign(label, { nodeType: 1, parentNode: { nodeType: 9 } });
     label.childNodes = kids;
     const button = el({
@@ -957,6 +968,144 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     const area = elementNode("textarea", [], { value: "typed", placeholder: "" });
     area.__attrs = { "aria-label": "ignored" };
     expect(labelledBy([text("Qty"), area, text("items")])).toBe("Qty typed items");
+  });
+
+  it("reads an embedded range widget's value and a listbox's chosen options", () => {
+    const widget = (attrs: Record<string, string>, kids: unknown[] = [text("s")]) => {
+      const node = elementNode("div", kids);
+      node.__attrs = attrs;
+      return node;
+    };
+    const vol = (attrs: Record<string, string>) =>
+      labelledBy([text("Vol"), widget(attrs), text("end")]);
+    expect(vol({ "role": "slider", "aria-valuetext": "five", "aria-label": "L" })).toBe(
+      "Vol five end"
+    );
+    expect(vol({ "role": "Slider", "aria-valuenow": "33.3333333" })).toBe("Vol 33.3333 end");
+    expect(vol({ "role": "slider", "aria-valuenow": "150" })).toBe("Vol 100 end");
+    expect(vol({ "role": "slider", "aria-valuenow": "5px", "aria-valuemin": "10" })).toBe(
+      "Vol 10 end"
+    );
+    expect(vol({ "role": "slider", "aria-valuemin": "50" })).toBe("Vol 75 end");
+    expect(vol({ "role": "spinbutton", "aria-valuenow": "-500" })).toBe("Vol -500 end");
+    expect(vol({ "role": "meter", "aria-valuemin": "10" })).toBe("Vol 10 end");
+    expect(vol({ "role": "slider", "aria-valuenow": "1234567", "aria-valuemax": "1e9" })).toBe(
+      "Vol 1.23457e+6 end"
+    );
+    expect(vol({ role: "progressbar" })).toBe("Vol s end");
+    expect(vol({ "role": "slider", "aria-valuetext": "", "aria-valuenow": "7" })).toBe("Vol end");
+
+    const option = (name: string, attrs: Record<string, string>, style = {}) => {
+      const node = widget({ role: "option", ...attrs }, [text(name)]);
+      Object.assign(node.__style as Record<string, string>, style);
+      return node;
+    };
+    const listbox = (...options: unknown[]) =>
+      labelledBy([
+        text("A"),
+        widget({ "role": "listbox", "aria-label": "LB" }, options),
+        text("B"),
+      ]);
+    expect(listbox(option("O1", { "aria-selected": "TRUE" }), option("O2", {}))).toBe("A O1 B");
+    expect(listbox(option("O1", {}), option("O2", {}))).toBe("A LB B");
+    // A hidden target reads its hidden content, but not its hidden chosen options.
+    const hiddenListbox = (target: Record<string, string>, ...options: unknown[]) =>
+      labelledBy(
+        [text("A"), widget({ role: "listbox" }, options), text("B")],
+        { display: "inline", ...target },
+        target.visibility ? {} : { "aria-hidden": "true" }
+      );
+    const chosen = { "aria-selected": "true" };
+    expect(
+      hiddenListbox({ visibility: "hidden" }, option("O1", chosen, { visibility: "hidden" }))
+    ).toBe("A B");
+    expect(hiddenListbox({}, option("O1", chosen), option("O2", {}))).toBe("A O1 B");
+    expect(hiddenListbox({}, option("O1", { ...chosen, "aria-hidden": "true" }))).toBe("A B");
+  });
+
+  it("leaves out a closed <details>' content, inert content and content-visibility:hidden content", () => {
+    const summary = elementNode("summary", [text("Shipping")]);
+    const details = (open: boolean, shown?: string) => {
+      const node = elementNode("details", [summary, text("Ships in 3 days")]);
+      if (open) node.__attrs = { open: "" };
+      if (shown) node.__pseudo = { "::details-content": { contentVisibility: shown } };
+      return node;
+    };
+    expect(labelledBy([details(false)])).toBe("Shipping");
+    expect(labelledBy([details(true)])).toBe("Shipping Ships in 3 days");
+    expect(labelledBy([details(false, "visible")])).toBe("Shipping Ships in 3 days");
+    // Display:none content has no layout to skip.
+    expect(labelledBy([details(false)], { display: "none" })).toBe("Shipping Ships in 3 days");
+
+    const inert = elementNode("span", [text("(disabled)")]);
+    inert.__attrs = { inert: "" };
+    expect(labelledBy([text("Delete "), inert, text(" file")])).toBe("Delete file");
+    expect(labelledBy([text("Inert")], { display: "inline" }, { inert: "" })).toBeUndefined();
+    expect(labelledBy([text("Inert")], { display: "none" }, { inert: "" })).toBe("Inert");
+
+    const collapsed = (display: string, attrs = {}) => {
+      const node = elementNode("div", [text("x")]);
+      Object.assign(node.__style as Record<string, string>, {
+        display,
+        contentVisibility: "hidden",
+      });
+      node.__attrs = attrs;
+      return node;
+    };
+    expect(labelledBy([text("Keep"), collapsed("block"), text("going")])).toBe("Keep going");
+    expect(labelledBy([text("Keep"), collapsed("block", { title: "T" }), text("going")])).toBe(
+      "Keep T going"
+    );
+    expect(labelledBy([text("Keep "), collapsed("inline"), text(" going")])).toBe("Keep x going");
+  });
+
+  it("reads an element's ::before and ::after, or its title when its content is blank", () => {
+    const styled = (
+      kids: unknown[],
+      pseudo: Record<string, Record<string, string>>,
+      attrs: Record<string, string> = {}
+    ) => {
+      const node = elementNode("span", kids);
+      node.__pseudo = pseudo;
+      node.__attrs = attrs;
+      return node;
+    };
+    const shows = (content: string, rest: Record<string, string> = {}) => ({
+      "::before": { display: "inline", visibility: "visible", content, ...rest },
+    });
+    expect(labelledBy([styled([text("Save")], shows('"Star "'))])).toBe("Star Save");
+    // Chrome escapes '"', the backslash and controls (a line feed is \a) in computed strings.
+    expect(labelledBy([styled([text("Save")], shows('"\\"Q\\\\\\a x "'))])).toBe('"Q\\ x Save');
+    expect(labelledBy([styled([text("Save")], shows('"\\1 Z"'))])).toBe("\u0001ZSave");
+    expect(labelledBy([styled([text("Save")], shows('counters(c, "-") "K"'))])).toBe("KSave");
+    expect(labelledBy([styled([text("Save")], shows('"★" / "Starred"'))])).toBe("Starred Save");
+    expect(labelledBy([styled([text("Save")], shows('"Star"', { display: "block" }))])).toBe(
+      "Star Save"
+    );
+    expect(labelledBy([styled([text("Save")], shows('"Star"', { visibility: "hidden" }))])).toBe(
+      "Save"
+    );
+    const after = { "::after": { display: "inline", visibility: "visible", content: '" More"' } };
+    expect(labelledBy([styled([text("Read")], after)])).toBe("Read More");
+    // An aria-hidden target reads its content, not its pseudo-elements.
+    expect(
+      labelledBy([styled([text("Read")], after)], { display: "inline" }, { "aria-hidden": "true" })
+    ).toBe("Read");
+
+    expect(labelledBy([text("a"), styled([], {}, { title: "Hi" }), text("b")])).toBe("a Hi b");
+    expect(labelledBy([styled([text("Yo")], {}, { title: "Hi" }), text(" there")])).toBe(
+      "Yo there"
+    );
+    const img = (attrs: Record<string, string>) => {
+      const node = elementNode("img", []);
+      (node.__style as Record<string, string>).display = "inline";
+      node.__attrs = attrs;
+      return node;
+    };
+    expect(labelledBy([text("x"), img({ title: "Pic" }), text("y")])).toBe("x Pic y");
+    expect(labelledBy([text("x"), img({}), text("y")])).toBe("x y");
+    expect(labelledBy([text("x"), img({ alt: "" }), text("y")])).toBe("xy");
+    expect(labelledBy([text("x"), img({ alt: " ", title: "Pic" }), text("y")])).toBe("x y");
   });
 
   it("reads an <svg> in an aria-labelledby target as Chrome names it", () => {
