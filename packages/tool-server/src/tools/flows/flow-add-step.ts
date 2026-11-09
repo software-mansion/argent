@@ -76,6 +76,7 @@ import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
+  type DescribeNode,
   type DescribeSource,
   type DescribeTreeData,
 } from "../describe/contract";
@@ -84,6 +85,8 @@ import {
   deriveSelector,
   selectorToFrame,
   frameContains,
+  frameWithin,
+  isVisible,
   type Selector,
   type TextMatchMode,
   type WaitCondition,
@@ -704,6 +707,18 @@ const MACOS_PART_ROLES: ReadonlySet<string> = new Set(["AXDisclosureTriangle"]);
 /** Mac text, which takes a click the same anywhere in it. */
 const MACOS_TEXT_ROLES: ReadonlySet<string> = new Set(["AXStaticText", "AXHeading"]);
 
+/** Whether `node` lies in a text area of its own layer: a paragraph of a web editor. */
+function inTextArea(tree: DescribeNode, node: DescribeNode): boolean {
+  const walk = (n: DescribeNode): boolean =>
+    (n !== node &&
+      n.role === "AXTextArea" &&
+      isVisible(n) &&
+      (n.layer ?? 0) === (node.layer ?? 0) &&
+      frameWithin(node.frame, n.frame)) ||
+    n.children.some(walk);
+  return tree.children.some(walk);
+}
+
 /**
  * Whether a click is away from the centre of `frame` by more than `tolerance`:
  * the rounding of describe's 3-decimal frames (0.0015), or of a centre that an
@@ -789,20 +804,20 @@ async function captureTapSelector(
       };
     }
     // Replay clicks the centre. On a Mac app, a click anywhere else on a slider,
-    // a stepper, a text view, a disclosure group, a canvas, chart, map or seek
-    // bar, or a container's empty space does something else there. So does a
-    // click on any element that is not clickable, text included, when another
-    // element lies at its centre.
+    // a stepper, a text view or the text in it, a disclosure group, a canvas,
+    // chart, map or seek bar, or a container's empty space does something else
+    // there. So does a click on any element that is not clickable, text
+    // included, when another element lies at its centre.
+    const pointRole = MACOS_POINT_ROLES.has(node.role) || inTextArea(tree, node);
     const pointMatters =
-      MACOS_POINT_ROLES.has(node.role) ||
+      pointRole ||
       MACOS_PART_ROLES.has(node.role) ||
       (!node.clickable && !MACOS_TEXT_ROLES.has(node.role));
     if (
       device.platform === "macos" &&
       // Coordinates on a slider replay the same point, so it keeps them for any click
       // off its centre; elsewhere a tap at a rounded centre keeps the selector.
-      ((pointMatters &&
-        awayFromCentre(point, resolved, MACOS_POINT_ROLES.has(node.role) ? 0.0015 : 0.006)) ||
+      ((pointMatters && awayFromCentre(point, resolved, pointRole ? 0.0015 : 0.006)) ||
         (!node.clickable && nodeAtPoint(tree, getDescribeTapPoint(resolved)) !== node))
     ) {
       return {

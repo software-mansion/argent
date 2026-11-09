@@ -294,6 +294,30 @@ describe("a tap recorded in a web editor of a Mac app", () => {
 
     expect(await recordedSteps("editor")).toEqual([{ kind: "tap", ...step }]);
   });
+
+  it("keeps the coordinates of a click on the text of a paragraph in the editor", async () => {
+    const web = webTree([
+      {
+        role: "textbox",
+        multiline: true,
+        text: "Alpha paragraph Beta paragraph",
+        normalizedFrame: rect(0.1, 0.6, 0.5, 0.12),
+      },
+      {
+        tag: "p",
+        text: "Alpha paragraph",
+        ownText: "Alpha paragraph",
+        normalizedFrame: rect(0.11, 0.61, 0.48, 0.06),
+      },
+    ]);
+    const read = await readMacosTree(fakeMacosLibrary({ web }).api);
+    currentTreeData = () => ({ tree: adaptMacosTreeForFlows(read), source: "macos-devtools" });
+    await start("para");
+
+    await record("para", "gesture-tap", { x: 0.55, y: 0.65 });
+
+    expect(await recordedSteps("para")).toEqual([{ kind: "tap", x: 0.55, y: 0.65 }]);
+  });
 });
 
 describe("a right tap recorded on a Mac app", () => {
