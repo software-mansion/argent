@@ -41,6 +41,26 @@ describe("LogFileWriter past a file-size limit or on a full disk", () => {
     expect(w.getFileEntryCount()).toBe(1);
   });
 
+  it("starts the first entry written after a short write on its own line", async () => {
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    w = new LogFileWriter(59244);
+    w.write(entry(0));
+    vi.mocked(fs.writeSync)
+      .mockImplementationOnce(((fd: number, buf: Buffer) =>
+        actual.writeSync(fd, buf.subarray(0, 7))) as typeof fs.writeSync)
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error("ENOSPC: no space left on device, write"), {
+          code: "ENOSPC",
+        });
+      });
+    w.write(entry(1));
+    w.write(entry(2));
+    w.write(entry(3));
+    expect(w.readAll().map((e) => e.id)).toEqual([0, 3]);
+    expect(w.getFileEntryCount()).toBe(2);
+    expect(w.getStats().fileSizeBytes).toBe(fs.statSync(w.getFilePath()).size);
+  });
+
   it("keeps counting and clustering the entries it can no longer store", () => {
     w = new LogFileWriter(59242);
     vi.mocked(fs.writeSync).mockImplementation(() => {

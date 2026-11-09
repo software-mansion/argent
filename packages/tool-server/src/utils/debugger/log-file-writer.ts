@@ -64,6 +64,7 @@ export class LogFileWriter {
   private bytesWritten = 0;
   private entryCount = 0;
   private fileEntryCount = 0;
+  private midLine = false;
   private levelCounts: Record<string, number> = {};
   private clusters = new Map<string, ClusterState>();
   private ready = false;
@@ -120,10 +121,12 @@ export class LogFileWriter {
     // no file has no reader: the entry lives on only in the counts and clusters.
     if (this.ready && this.fd !== null) {
       try {
-        const bytes = Buffer.from(line);
+        // A short write leaves a torn line, which the next line must not continue.
+        const bytes = Buffer.from(this.midLine ? `\n${line}` : line);
         // Short of the whole line at a file-size limit or on a full disk.
         const written = fs.writeSync(this.fd, bytes);
         this.bytesWritten += written;
+        this.midLine = bytes[written - 1] !== 0x0a; // "\n"
         if (written === bytes.length) this.fileEntryCount++;
       } catch {
         // Past that limit it throws, and the entry is left to the counts and clusters.
