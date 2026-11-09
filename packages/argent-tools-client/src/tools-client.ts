@@ -128,12 +128,13 @@ export interface CreateToolsClientOptions {
    */
   headers?: () => Record<string, string>;
   /**
-   * Refuse a relative `project_root` instead of resolving it against
-   * `process.cwd()`. For a client whose working directory need not be the
-   * project, such as the MCP server, which runs where the editor started it:
-   * a recording would be saved there without any error.
+   * Refuse a relative `project_root` or `e2e_test_path` instead of resolving
+   * it against `process.cwd()`. For a client whose working directory need not
+   * be the project, such as the MCP server, which runs where the editor
+   * started it: a recording would be saved there, or a same-named test run
+   * from there, without any error.
    */
-  refuseRelativeProjectRoot?: boolean;
+  refuseRelativeProjectPaths?: boolean;
 }
 
 function authHeaders(token: string | undefined): Record<string, string> {
@@ -450,15 +451,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Throws when `args` sets a relative `project_root` that a file input of `meta` resolves. */
-function assertAbsoluteProjectRoot(meta: ToolMeta | null, args: unknown): void {
-  const root = isRecord(args) ? args.project_root : undefined;
-  if (typeof root !== "string" || callerPath(root) === root) return;
-  if (!meta?.fileInputs?.some((spec) => spec.path.includes("${project_root}"))) return;
-  throw new Error(
-    `project_root must be an absolute path (got "${root}"). Pass the absolute path to the ` +
-      `project root directory - the same cwd the calling agent is working in.`
-  );
+/** The advice each refused relative project path gets. */
+const PROJECT_PATH_ADVICE: Record<string, string> = {
+  project_root:
+    "Pass the absolute path to the project root directory - the same cwd the calling agent is working in.",
+  e2e_test_path: "Pass the absolute path to the e2e test file.",
+};
+
+/** Throws when `args` sets a relative project path that a file input of `meta` resolves. */
+function assertAbsoluteProjectPaths(meta: ToolMeta | null, args: unknown): void {
+  if (!isRecord(args)) return;
+  for (const [param, advice] of Object.entries(PROJECT_PATH_ADVICE)) {
+    const value = args[param];
+    if (typeof value !== "string" || callerPath(value) === value) continue;
+    if (!meta?.fileInputs?.some((spec) => spec.path.includes(`\${${param}}`))) continue;
+    throw new Error(`${param} must be an absolute path (got "${value}"). ${advice}`);
+  }
+}
+
+/**
+ * `result` with its run marked failed: a run report's `ok`, or that of the
+ * run `e2e-add-step` recorded (`toolResult`).
+ */
+function failedRun(result: unknown): unknown {
+  if (!isRecord(result)) return result;
+  if (result.ok === true) return { ...result, ok: false };
+  if (isRecord(result.toolResult) && result.toolResult.ok === true) {
+    return { ...result, toolResult: { ...result.toolResult, ok: false } };
+  }
+  return result;
 }
 
 export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
@@ -528,7 +549,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     let finalArgs = canonicalToolArgs(name, args);
     const tools = await fetchTools({ signal: opts?.signal });
     const meta = findTool(tools, name);
-    if (options.refuseRelativeProjectRoot) assertAbsoluteProjectRoot(meta, finalArgs);
+    if (options.refuseRelativeProjectPaths) assertAbsoluteProjectPaths(meta, finalArgs);
     // An older tool-server reads saved tests only from `.argent/flows/`, and
     // lists its tools by their `flow-*` ids only.
     const olderServer = meta !== null && !tools.some((t) => t.name === canonicalToolId(meta.name));
@@ -577,10 +598,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
           }
         }
       }
-      const result =
-        applied.failed.length > 0 && isRecord(applied.result) && applied.result.ok === true
-          ? { ...applied.result, ok: false }
-          : applied.result;
+      const result = applied.failed.length > 0 ? failedRun(applied.result) : applied.result;
       if (
         shadowWarning === undefined ||
         typeof result !== "object" ||

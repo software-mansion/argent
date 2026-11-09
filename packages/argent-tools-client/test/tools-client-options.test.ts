@@ -332,6 +332,36 @@ describe("createToolsClient options", () => {
     expect(existsSync(outside)).toBe(false);
   });
 
+  it("fails the recorded run of an e2e-add-step result whose baseline it did not write", async () => {
+    const flowPath = join(TEST_HOME, "step.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const outside = join(realpathSync(TEST_HOME), "step__ios-30x60.png");
+    runFlowData = {
+      message: "Step added",
+      toolResult: { ok: true },
+      baselineWrites: [
+        {
+          __argentClientFile: true,
+          path: outside,
+          content: Buffer.from("png").toString("base64"),
+          encoding: "base64",
+        },
+      ],
+    };
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    const { data } = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+      updateBaselines: true,
+    });
+
+    expect(data).toMatchObject({ message: "Step added", toolResult: { ok: false } });
+    expect(data).not.toHaveProperty("ok");
+  });
+
   it("keeps ok: true when it writes every baseline the run returns", async () => {
     const flowPath = join(TEST_HOME, "allwritten.yaml");
     writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
@@ -430,7 +460,7 @@ describe("createToolsClient options", () => {
   });
 });
 
-describe("refuseRelativeProjectRoot", () => {
+describe("refuseRelativeProjectPaths", () => {
   const recordBodies = () =>
     requests
       .filter((r) => r.url === "/tools/record")
@@ -439,7 +469,7 @@ describe("refuseRelativeProjectRoot", () => {
   it("refuses a relative project_root without calling the tool", async () => {
     const { callTool } = createToolsClient({
       baseUrl: async () => ({ url, token: "t", remote: false }),
-      refuseRelativeProjectRoot: true,
+      refuseRelativeProjectPaths: true,
     });
 
     await expect(callTool("record", { project_root: "." })).rejects.toThrow(
@@ -448,10 +478,24 @@ describe("refuseRelativeProjectRoot", () => {
     expect(recordBodies()).toEqual([]);
   });
 
+  it("refuses a relative e2e_test_path without calling the tool", async () => {
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: false }),
+      refuseRelativeProjectPaths: true,
+    });
+
+    await expect(
+      callTool("run-flow", { e2e_test_path: ".argent/e2e/t.yaml", project_root: TEST_HOME })
+    ).rejects.toThrow(
+      'e2e_test_path must be an absolute path (got ".argent/e2e/t.yaml"). Pass the absolute path to the e2e test file.'
+    );
+    expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
+  });
+
   it("sends an absolute project_root", async () => {
     const { callTool } = createToolsClient({
       baseUrl: async () => ({ url, token: "t", remote: false }),
-      refuseRelativeProjectRoot: true,
+      refuseRelativeProjectPaths: true,
     });
 
     await callTool("record", { project_root: TEST_HOME });
@@ -464,7 +508,7 @@ describe("refuseRelativeProjectRoot", () => {
   it("leaves project_root alone for a tool whose file inputs do not name it", async () => {
     const { callTool } = createToolsClient({
       baseUrl: async () => ({ url, token: "t", remote: false }),
-      refuseRelativeProjectRoot: true,
+      refuseRelativeProjectPaths: true,
     });
 
     await expect(callTool("slow", { project_root: "." })).resolves.toMatchObject({
