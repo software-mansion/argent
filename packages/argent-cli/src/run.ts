@@ -123,7 +123,7 @@ async function fetchImageToFile(
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, buf);
 }
 
@@ -395,8 +395,13 @@ Examples:
   const imageOut = outPath ?? (typeof payload.out === "string" ? payload.out.trim() : null);
   if (imageOut && meta.outputHint === "image") {
     try {
+      // The tool-server accepts Windows-absolute paths, which are cwd-relative on POSIX.
+      if (!outPath && !path.isAbsolute(imageOut)) {
+        throw new Error(`out is not an absolute path on this computer: ${imageOut}`);
+      }
       if (images.length > 0) {
-        fs.mkdirSync(path.dirname(path.resolve(imageOut)), { recursive: true });
+        // The raw path: resolve() folds "missing/.." away, which the kernel does not.
+        fs.mkdirSync(path.dirname(imageOut), { recursive: true });
         fs.writeFileSync(imageOut, images[0]!.data);
       } else {
         await fetchImageToFile(result as { url?: string; path?: string } | null, imageOut);

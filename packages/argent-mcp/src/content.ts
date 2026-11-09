@@ -1,7 +1,7 @@
 /** Convert raw tool results into MCP content blocks (text / image). */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -104,10 +104,15 @@ function requestedOut(args: unknown): string {
 async function savedText(scratchPath: string, data: Buffer, args: unknown): Promise<string> {
   const out = requestedOut(args);
   if (!out) return `Saved: ${scratchPath}`;
+  // The tool-server accepts Windows-absolute paths, which are cwd-relative on POSIX.
+  if (!isAbsolute(out)) {
+    return `Saved: ${scratchPath}\nCould not save to ${out}: not an absolute path on this computer`;
+  }
   const target = resolve(out);
   try {
-    await mkdir(dirname(target), { recursive: true });
-    // Not `target`: resolve() drops a trailing separator, so "shots/" would become a file.
+    // The raw `out`: resolve() drops a trailing separator ("shots/" would become a file)
+    // and folds "missing/.." away, which the kernel does not.
+    await mkdir(dirname(out), { recursive: true });
     await writeFile(out, data);
     return `Saved: ${target}`;
   } catch (err) {

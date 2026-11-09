@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as http from "node:http";
 import * as fs from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
 import { run, type RunCommandOptions } from "../src/run.js";
@@ -225,6 +225,44 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(fs.readFileSync(flag)).toEqual(PNG);
     expect(logs).toContain(`Wrote: ${flag}`);
   });
+
+  it("creates a missing directory that `..` steps back out of", async () => {
+    state.screenshotData = { image: await localScreenshotHandle() };
+    const own = `${outDir}/a/../own.png`;
+    await run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: own })], opts);
+    expect(fs.readFileSync(join(outDir, "own.png"))).toEqual(PNG);
+
+    state.screenshotData = { url: `${server.url}/artifacts/legacy`, path: "/host/legacy.png" };
+    await run(["screenshot", "--udid", "SIM-1", "--out", `${outDir}/b/../flag.png`], opts);
+    expect(fs.readFileSync(join(outDir, "flag.png"))).toEqual(PNG);
+  });
+
+  it("writes a relative --out against the cwd", async () => {
+    state.screenshotData = { image: await localScreenshotHandle() };
+    const rel = relative(process.cwd(), join(outDir, "rel.png"));
+
+    await run(["screenshot", "--udid", "SIM-1", "--out", rel], opts);
+
+    expect(fs.readFileSync(join(outDir, "rel.png"))).toEqual(PNG);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a Windows-absolute `out`, which is cwd-relative on POSIX",
+    async () => {
+      state.screenshotData = { image: await localScreenshotHandle() };
+      const own = `C:\\argent-test-${process.pid}.png`;
+      try {
+        await expect(
+          run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: own })], opts)
+        ).rejects.toThrow(
+          `process.exit(1) called: Failed to save image: out is not an absolute path on this computer: ${own}`
+        );
+        expect(fs.existsSync(own)).toBe(false);
+      } finally {
+        fs.rmSync(own, { force: true });
+      }
+    }
+  );
 
   it.each([
     ["null", null],

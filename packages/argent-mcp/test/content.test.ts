@@ -386,6 +386,49 @@ describe("toMcpContent with artifact ctx", () => {
     expect(text).toMatch(/^Saved: .*shot\.png\nCould not save to /);
   });
 
+  it("creates a missing directory that `..` steps back out of", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x47];
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img8", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) },
+      { udid: "DEV-1", out: `${root}/a/../base.png`, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(join(root, "base.png"))).toEqual(Buffer.from(pngBytes));
+    expect(result).toEqual([{ type: "text", text: `Saved: ${join(root, "base.png")}` }]);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a Windows-absolute `out`, which is cwd-relative on POSIX",
+    async () => {
+      const out = `C:\\argent-test-${process.pid}.png`;
+      try {
+        const result = await toMcpContent(
+          { image: artifactHandle("img9", "shot.png", "image/png") },
+          "image",
+          {
+            toolsUrl: "http://remote:3001",
+            deviceId: "DEV-1",
+            fetchImpl: fetchReturning([...PNG_SIGNATURE]),
+          },
+          { udid: "DEV-1", out, includeImageInContext: false }
+        );
+
+        await expect(fs.stat(out)).rejects.toMatchObject({ code: "ENOENT" });
+        const text = (result[0] as { text: string }).text;
+        expect(text).toMatch(
+          new RegExp(
+            `^Saved: .*shot\\.png\\nCould not save to C:\\\\argent-test-${process.pid}\\.png: not an absolute path on this computer$`
+          )
+        );
+      } finally {
+        await fs.rm(out, { force: true });
+      }
+    }
+  );
+
   it("says `out` was not written when the image download fails", async () => {
     const out = join(root, "stale.png");
     await fs.writeFile(out, "earlier capture");
