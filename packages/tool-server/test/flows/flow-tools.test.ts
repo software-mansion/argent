@@ -298,6 +298,15 @@ describe("flow-start-recording edge cases", () => {
     expect(result.restarted).toBeUndefined();
     expect(result.discardedSteps).toBeUndefined();
   });
+
+  it("keeps a booted browser's e2e test a fragment instead of a chromium launch", () => {
+    // boot-device with `browser` returns the browser binary as appPath, which
+    // a `launch: { chromium: … }` would boot as an Electron app.
+    const prereq = flowStartRecordingTool.zodSchema!.shape.executionPrerequisite.description;
+    expect(prereq).toMatch(/browser booted with `browser` has no launch form/);
+    expect(prereq).toMatch(/stays a fragment/);
+    expect(prereq).toMatch(/never point `chromium:` at a browser binary/);
+  });
 });
 
 // ── flow-add-echo ────────────────────────────────────────────────────

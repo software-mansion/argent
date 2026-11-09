@@ -54,7 +54,18 @@ vi.mock("../src/utils/chromium-discovery", () => ({
   untrackChromiumPort: vi.fn(),
 }));
 
-import { bootElectronApp } from "../src/tools/devices/boot-electron";
+import { bootElectronApp as bootElectronAppImpl } from "../src/tools/devices/boot-electron";
+
+// A boot a failed test leaves pending keeps port 1 claimed for every later
+// test, which then fails with PORT_IN_USE instead, so afterEach settles them.
+// One with no error listener to fire settles at readyTimeoutMs, hence 5 s
+// rather than anything near the 10 s hook timeout.
+const startedBoots: Promise<unknown>[] = [];
+function bootElectronApp(options: Parameters<typeof bootElectronAppImpl>[0]) {
+  const boot = bootElectronAppImpl(options);
+  startedBoots.push(boot.catch(() => {}));
+  return boot;
+}
 
 interface FakeChild extends EventEmitter {
   pid: number | undefined;
@@ -103,9 +114,20 @@ vi.spyOn(process, "kill").mockImplementation(() => true);
 beforeEach(() => {
   spawnMock.mockReset();
 });
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  for (const { value: child } of spawnMock.mock.results) {
+    if (child instanceof EventEmitter && child.listenerCount("error") > 0) {
+      child.emit("error", new Error("test teardown"));
+    }
+  }
+  await Promise.all(startedBoots.splice(0));
 });
+
+/** Spawn runs only after the fixed-port probe resolves, so wait for its listener. */
+async function untilErrorListener(child: FakeChild): Promise<void> {
+  await vi.waitFor(() => expect(child.listenerCount("error")).toBeGreaterThan(0));
+}
 
 describe("bootElectronApp — spawn error handling", () => {
   it("registers an `error` listener on the spawned electron child", async () => {
@@ -119,11 +141,9 @@ describe("bootElectronApp — spawn error handling", () => {
     });
     promise.catch(() => {}); // detach so the test doesn't hang after assertion
 
-    await new Promise((r) => setTimeout(r, 10));
-
     // Without an `error` listener, an emitted error escapes as an uncaught
     // exception and crashes the tool-server.
-    expect(child.listenerCount("error")).toBeGreaterThan(0);
+    await untilErrorListener(child);
     await promise.catch(() => {});
   });
 
@@ -196,11 +216,9 @@ describe("bootElectronApp — spawn error handling", () => {
     const promise = bootElectronApp({
       appPath: appDir,
       port: UNREACHABLE_CDP_PORT,
-      readyTimeoutMs: 30_000,
+      readyTimeoutMs: 5_000,
     });
-
-    // Let the impl subscribe.
-    await new Promise((r) => setTimeout(r, 10));
+    await untilErrorListener(child);
 
     const err = new Error("spawn ENOENT") as NodeJS.ErrnoException;
     err.code = "ENOENT";
@@ -218,9 +236,9 @@ describe("bootElectronApp — spawn error handling", () => {
     const promise = bootElectronApp({
       appPath: appDir,
       port: UNREACHABLE_CDP_PORT,
-      readyTimeoutMs: 30_000,
+      readyTimeoutMs: 5_000,
     });
-    await new Promise((r) => setTimeout(r, 10));
+    await untilErrorListener(child);
 
     const err = new Error("spawn EACCES") as NodeJS.ErrnoException;
     err.code = "EACCES";
@@ -237,9 +255,9 @@ describe("bootElectronApp — spawn error handling", () => {
     const promise = bootElectronApp({
       appPath: path.join(appDir, "main.js"),
       port: UNREACHABLE_CDP_PORT,
-      readyTimeoutMs: 30_000,
+      readyTimeoutMs: 5_000,
     });
-    await new Promise((r) => setTimeout(r, 10));
+    await untilErrorListener(child);
 
     const err = new Error("spawn ENOENT") as NodeJS.ErrnoException;
     err.code = "ENOENT";
