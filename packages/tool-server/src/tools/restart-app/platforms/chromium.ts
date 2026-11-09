@@ -1,5 +1,12 @@
 import * as net from "node:net";
-import { FAILURE_CODES, FailureError, isLiveServiceState, type Registry } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  getFailureSignal,
+  isLiveServiceState,
+  wrapFailure,
+  type Registry,
+} from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { parseChromiumCdpPort } from "../../../utils/device-info";
 import { CHROMIUM_CDP_NAMESPACE } from "../../../blueprints/chromium-cdp";
@@ -29,14 +36,22 @@ export function makeChromiumImpl(
   async function restart(port: number, params: RestartAppParams): Promise<RestartAppResult> {
     const spec = electronLaunchSpec(port);
     if (!spec) throw notBooted(params.udid);
-    assertElectronAppLaunchable(spec.appPath);
+    try {
+      assertElectronAppLaunchable(spec.appPath);
+    } catch (err) {
+      throw withPrefix(err, "restart-app did not stop the app, which keeps running: ");
+    }
     await killChromiumByPortAndWait(port, spec.pid);
     await assertPortReleased(port);
     // After the kill, so a frozen renderer cannot stall the dispose's CDP calls.
     const urn = `${CHROMIUM_CDP_NAMESPACE}:${params.udid}`;
     const entry = registry.getSnapshot().services.get(urn);
     if (entry && isLiveServiceState(entry.state)) await registry.disposeService(urn);
-    await bootElectronApp({ appPath: spec.appPath, port, extraArgs: spec.extraArgs });
+    try {
+      await bootElectronApp({ appPath: spec.appPath, port, extraArgs: spec.extraArgs });
+    } catch (err) {
+      throw withPrefix(err, "restart-app stopped the app but could not relaunch it: ");
+    }
     return { restarted: true, bundleId: params.bundleId };
   }
 
@@ -83,9 +98,10 @@ async function assertPortReleased(port: number): Promise<void> {
   });
   if (!bindError) return;
   throw new FailureError(
-    `restart-app did not relaunch the app, which is no longer running: port ${port} is ` +
-      `still held (${bindError.code ?? bindError.message}), so a new copy could not bind it. ` +
-      `Quit the process listening on port ${port}, then retry restart-app.`,
+    `restart-app stopped the app but did not relaunch it: port ${port} is still held ` +
+      `(${bindError.code ?? bindError.message}), so a new copy could not bind it. Quit the ` +
+      `process listening on port ${port} (it can be a leftover process of the app), then ` +
+      `retry restart-app.`,
     {
       error_code: FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE,
       failure_stage: "chromium_restart_port_check",
@@ -98,10 +114,11 @@ async function assertPortReleased(port: number): Promise<void> {
 function notBooted(udid: string): FailureError {
   return new FailureError(
     `restart-app can only relaunch an Electron app that boot-device started in this ` +
-      `tool-server session, and ${udid} is not one: boot-device did not start it, or the ` +
-      `tool-server restarted since the boot (an auto-started one exits after 30 idle ` +
-      `minutes) and no longer knows how the app was launched. Quit the app and relaunch it ` +
-      `with --remote-debugging-port (for an Electron app, boot-device with electronAppPath).`,
+      `tool-server session, and ${udid} is not one: boot-device did not start it, an e2e run ` +
+      `booted it and stopped it at its end, or the tool-server restarted since the boot (an ` +
+      `auto-started one exits after 30 idle minutes) and no longer knows how the app was ` +
+      `launched. Start the app again: for an Electron app, boot-device with electronAppPath; ` +
+      `otherwise quit it if it runs and relaunch it with --remote-debugging-port.`,
     {
       error_code: FAILURE_CODES.CHROMIUM_RESTART_NOT_BOOTED,
       failure_stage: "chromium_restart_spec_lookup",
@@ -109,4 +126,10 @@ function notBooted(udid: string): FailureError {
       error_kind: "validation",
     }
   );
+}
+
+/** `err` with `prefix` on its message and its failure signal kept. */
+function withPrefix(err: unknown, prefix: string): unknown {
+  const signal = getFailureSignal(err);
+  return signal && err instanceof Error ? wrapFailure(err, signal, prefix + err.message) : err;
 }

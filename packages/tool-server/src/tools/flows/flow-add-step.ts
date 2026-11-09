@@ -757,7 +757,8 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     rewritten: true,
     rewriteCondition:
       "when it carries only the bundle id, or `launchArgs` on iOS (any other extra arg, e.g. an " +
-      "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it)",
+      "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it); " +
+      "on Chromium, when it is the recording's first launch, as the app's path and boot args",
   },
   run: {
     tool: "e2e-execute",
@@ -1568,8 +1569,10 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // no args. On Chromium the bundleId is a tag and the other args are
       // ignored, so the step records the relaunched app's path and boot args
       // instead, and a pinned replay attaches rather than relaunching (see
-      // runChromiumLaunch). `launch-app` is NOT rewritten — it foregrounds
-      // without terminating.
+      // runChromiumLaunch). Only the recording's first launch maps there: a
+      // later Chromium launch boots another instance, so a later restart stays
+      // the raw step, which relaunches the run's instance in place.
+      // `launch-app` is NOT rewritten — it foregrounds without terminating.
       const strippedArgs = stripDeviceKeys(args);
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
       const noLaunchArgs =
@@ -1590,8 +1593,9 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         command === "restart-app" &&
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
-        (chromiumSpec !== undefined ||
-          (Object.keys(extraLaunchArgs).length === 0 && (noLaunchArgs || iosArgs !== undefined)));
+        (chromiumPort !== null
+          ? chromiumSpec !== undefined && !session.flow.steps.some((st) => st.kind === "launch")
+          : Object.keys(extraLaunchArgs).length === 0 && (noLaunchArgs || iosArgs !== undefined));
 
       // A recorded `fold` becomes the `fold:` directive, the same posture change
       // the tool made; args the directive does not take keep the raw tool step.

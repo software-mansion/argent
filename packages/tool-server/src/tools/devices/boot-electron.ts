@@ -215,7 +215,16 @@ export function forgetElectronLaunchSpec(port: number): void {
  */
 export function assertElectronAppLaunchable(appPath: string): void {
   const { command } = resolveLauncher(appPath);
-  if (command !== "electron" || isOnPath(command)) return;
+  if (command !== "electron") {
+    if (isExecutableFile(command)) return;
+    throw new FailureError(`Electron boot: ${command} is not an executable file.`, {
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID,
+      failure_stage: "electron_launcher_not_executable",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
+  if (isOnPath(command)) return;
   throw new FailureError(
     `Electron boot: ${path.resolve(appPath)} has no node_modules/.bin/electron and no ` +
       `'electron' is on PATH. Run npm install in the app directory, or install electron globally.`,
@@ -234,16 +243,16 @@ function isOnPath(command: string): boolean {
   return (process.env.PATH ?? "")
     .split(path.delimiter)
     .filter(Boolean)
-    .some((dir) =>
-      exts.some((ext) => {
-        try {
-          fs.accessSync(path.join(dir, command + ext), fs.constants.X_OK);
-          return fs.statSync(path.join(dir, command + ext)).isFile();
-        } catch {
-          return false;
-        }
-      })
-    );
+    .some((dir) => exts.some((ext) => isExecutableFile(path.join(dir, command + ext))));
+}
+
+function isExecutableFile(file: string): boolean {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -287,19 +296,29 @@ export async function killChromiumByPortAndWait(
   // Attached before the kill so an exit between the two can't be missed.
   const exited = alive ? new Promise<void>((resolve) => child.once("exit", () => resolve())) : null;
 
+  const deadline = Date.now() + timeoutMs;
   killChromiumByPort(port, pid);
 
-  if (exited) return Promise.race([exited, sleepUnref(timeoutMs)]);
-  if (!child && pid !== undefined) {
-    // No handle to await (the child exited and was evicted, or an earlier
-    // tool-server booted it), so poll. The probe targets the group, not the
-    // leader: the single-instance lock this wait guards is held by the browser
-    // process, which can outlive the leader.
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (!signalGroup(pid, 0)) return;
-      await sleepUnref(EXIT_POLL_MS);
-    }
+  if (exited) {
+    await Promise.race([exited, sleepUnref(timeoutMs)]);
+    // The leader can be a launcher (electron's cli.js, a wrapper script) that
+    // exits before the browser process holding the lock and the CDP port.
+    if (child?.pid !== undefined) await waitForGroupExit(child.pid, deadline);
+    return;
+  }
+  // No handle to await (the child exited and was evicted, or an earlier
+  // tool-server booted it), so poll.
+  if (!child && pid !== undefined) await waitForGroupExit(pid, deadline);
+}
+
+/**
+ * Poll the group, not the leader: the single-instance lock the kill wait
+ * guards is held by the browser process, which can outlive the leader.
+ */
+async function waitForGroupExit(pgid: number, deadline: number): Promise<void> {
+  while (Date.now() < deadline) {
+    if (!signalGroup(pgid, 0)) return;
+    await sleepUnref(EXIT_POLL_MS);
   }
 }
 

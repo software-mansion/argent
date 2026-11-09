@@ -67,7 +67,9 @@ describe("guidance platform-correctness", () => {
     expect(result.guidance).not.toMatch(/\(launch-app\)/);
     expect(result.guidance).toContain("--remote-debugging-port");
     expect(result.guidance).toContain("launch-app cannot start a Chromium app");
-    expect(result.guidance).toContain("restart-app relaunches it on the same device id");
+    expect(result.guidance).toContain(
+      "If boot-device started it in this tool-server session, restart-app relaunches it on the same device id"
+    );
   });
 
   it("Metro cdp_unreachable keeps the launch-app guidance (it IS actionable there)", () => {

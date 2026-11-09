@@ -43,6 +43,8 @@ import { __resetRecordingsForTesting, parseFlow } from "../src/tools/flows/flow-
 
 interface FakeChild extends EventEmitter {
   pid: number;
+  /** A process of the group that outlives the leader until a group SIGKILL, holding the port. */
+  survivor?: boolean;
   stderr: EventEmitter;
   unref: () => void;
   kill: ReturnType<typeof vi.fn>;
@@ -101,7 +103,13 @@ function makeFakeChild(): FakeChild {
   ee.exitCode = null;
   ee.signalCode = null;
   ee.kill = vi.fn((signal: NodeJS.Signals) => {
-    void exitChild(ee, null, signal);
+    if (ee.survivor) {
+      // The leader (a launcher) exits; the process holding the port does not.
+      ee.signalCode = signal;
+      ee.emit("exit", null, signal);
+    } else {
+      void exitChild(ee, null, signal);
+    }
     return true;
   });
   childServers.set(ee, holdPort(cdpServer()));
@@ -133,8 +141,15 @@ beforeEach(() => {
   });
   // Fake pids: group signals must never reach real processes. An exited
   // child's group answers ESRCH, as the OS would.
-  vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+  vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number) => {
     const child = children.find((c) => c.pid === Math.abs(pid));
+    if (child?.survivor && pid < 0) {
+      if (signal === "SIGKILL") {
+        child.survivor = false;
+        void childServers.get(child)!.then(releasePort);
+      }
+      return true;
+    }
     if (child && (child.exitCode !== null || child.signalCode !== null)) {
       throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
     }
@@ -232,6 +247,39 @@ describe("restart-app on Chromium", () => {
     expect(children[2]!.kill).not.toHaveBeenCalled();
   });
 
+  it("waits for a process that outlives the launcher before checking the port", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    children[0]!.survivor = true;
+    const registry = registryWithRestartApp();
+
+    const result = await registry.invokeTool("restart-app", {
+      udid: `chromium-cdp-${port}`,
+      bundleId: "tag",
+    });
+
+    expect(result).toEqual({ restarted: true, bundleId: "tag" });
+    expect(process.kill).toHaveBeenCalledWith(-children[0]!.pid, "SIGKILL");
+    expect(children).toHaveLength(2);
+  });
+
+  it("chains a restart issued while a queued one runs behind that one", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    const registry = registryWithRestartApp();
+    const udid = `chromium-cdp-${port}`;
+    let third: Promise<unknown> | undefined;
+
+    const first = registry.invokeTool("restart-app", { udid, bundleId: "tag" }).then(() => {
+      third = registry.invokeTool("restart-app", { udid, bundleId: "tag" });
+    });
+    const second = registry.invokeTool("restart-app", { udid, bundleId: "tag" });
+    await Promise.all([first, second]);
+    await third;
+
+    expect(children).toHaveLength(4);
+    for (const child of children.slice(0, 3)) expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(children[3]!.kill).not.toHaveBeenCalled();
+  });
+
   it("runs a restart queued behind a failed one", async () => {
     await bootElectronApp({ appPath: appDir, port });
     const registry = registryWithRestartApp();
@@ -246,9 +294,9 @@ describe("restart-app on Chromium", () => {
     ]);
 
     expect(first.status).toBe("rejected");
-    expect(getFailureSignal((first as PromiseRejectedResult).reason)?.error_code).toBe(
-      FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED
-    );
+    const reason = (first as PromiseRejectedResult).reason as Error;
+    expect(getFailureSignal(reason)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_SPAWN_FAILED);
+    expect(reason.message).toContain("stopped the app but could not relaunch it");
     expect(second).toEqual({ status: "fulfilled", value: { restarted: true, bundleId: "tag" } });
     expect(spawnMock).toHaveBeenCalledTimes(3);
     expect(children).toHaveLength(2);
@@ -274,14 +322,57 @@ describe("restart-app on Chromium", () => {
         FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID
       );
       expect((err as Error).message).toContain("no 'electron' is on PATH");
+      expect((err as Error).message).toContain("did not stop the app, which keeps running");
       expect(children[0]!.kill).not.toHaveBeenCalled();
 
-      fs.writeFileSync(path.join(emptyBin, "electron"), "", { mode: 0o755 });
+      // Neither a non-executable file nor a directory named electron is a launcher.
+      fs.writeFileSync(path.join(emptyBin, "electron"), "", { mode: 0o644 });
+      const otherBin = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-dir-"));
+      fs.mkdirSync(path.join(otherBin, "electron"), { mode: 0o755 });
+      vi.stubEnv("PATH", [emptyBin, otherBin].join(path.delimiter));
+      const again = await registry.invokeTool("restart-app", { udid, bundleId: "tag" }).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      fs.rmSync(otherBin, { recursive: true, force: true });
+      expect(getFailureSignal(again)?.error_code).toBe(
+        FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID
+      );
+      expect(children[0]!.kill).not.toHaveBeenCalled();
+
+      vi.stubEnv("PATH", emptyBin);
+      fs.chmodSync(path.join(emptyBin, "electron"), 0o755);
       await registry.invokeTool("restart-app", { udid, bundleId: "tag" });
       expect(children).toHaveLength(2);
     } finally {
       fs.rmSync(bare, { recursive: true, force: true });
       fs.rmSync(emptyBin, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the running app when its launcher file is no longer executable", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-exe-"));
+    const exe = path.join(dir, "MyApp");
+    try {
+      fs.writeFileSync(exe, "", { mode: 0o755 });
+      await bootElectronApp({ appPath: exe, port });
+      fs.chmodSync(exe, 0o644);
+      const registry = registryWithRestartApp();
+
+      const err = await registry
+        .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
+        .then(
+          () => undefined,
+          (e: unknown) => e
+        );
+
+      expect(getFailureSignal(err)?.error_code).toBe(
+        FAILURE_CODES.CHROMIUM_ELECTRON_APP_PATH_INVALID
+      );
+      expect((err as Error).message).toContain("is not an executable file");
+      expect(children[0]!.kill).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -356,6 +447,7 @@ describe("restart-app on Chromium", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_NOT_BOOTED);
     expect((err as Error).message).toContain("--remote-debugging-port");
     expect((err as Error).message).toContain("tool-server restarted since the boot");
+    expect((err as Error).message).toContain("an e2e run booted it and stopped it");
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
@@ -427,4 +519,35 @@ describe("restart-app on Chromium", () => {
       }
     }
   );
+
+  it("records only the first restart of a recording as the launch", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    const registry = registryWithRestartApp();
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-flow-"));
+    try {
+      await flowStartRecordingTool.execute({}, { name: "two-restarts", project_root: projectRoot });
+      for (let i = 0; i < 2; i++) {
+        await createFlowAddStepTool(registry).execute(
+          {},
+          {
+            name: "two-restarts",
+            project_root: projectRoot,
+            command: "restart-app",
+            args: JSON.stringify({ udid: `chromium-cdp-${port}`, bundleId: "tag" }),
+          }
+        );
+      }
+
+      const yaml = fs.readFileSync(
+        path.join(projectRoot, ".argent", "e2e", "two-restarts.yaml"),
+        "utf8"
+      );
+      expect(parseFlow(yaml).steps).toEqual([
+        { kind: "launch", app: { chromium: appDir } },
+        { kind: "tool", name: "restart-app", args: { bundleId: "tag" } },
+      ]);
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
