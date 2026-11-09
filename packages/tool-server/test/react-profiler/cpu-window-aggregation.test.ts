@@ -365,6 +365,21 @@ describe("renderComponentCpu — the Location of a row", () => {
     expect(locationOf(md, "render")).toBe("src/render.js:20");
   });
 
+  it("is the line with the most self time, not the most inclusive time", () => {
+    // render@10: 1 sample, calling leaf for 4; render@20: 3 samples.
+    const nodeMap = new Map<number, HermesProfileNode>();
+    nodeMap.set(1, { id: 1, hitCount: 0, callFrame: frame("(root)"), children: [2, 4] });
+    nodeMap.set(2, at(2, "render", 10, [3]));
+    nodeMap.set(3, at(3, "leaf", 5, []));
+    nodeMap.set(4, at(4, "render", 20, []));
+    const commit = {
+      commits: [{ commitIndex: 0, timestamp: 0, commitDuration: 8, componentName: "Login" }],
+    };
+    const md = renderComponentCpu(index(nodeMap, [2, 3, 3, 3, 3, 4, 4, 4]), commit, "Login", 10);
+    expect(readRow(md, "render")).toEqual({ self: 4, total: 8 });
+    expect(locationOf(md, "render")).toBe("src/render.js:20");
+  });
+
   it("is the line with the most self time summed over the commits", () => {
     // render@10: 2 samples in each commit; render@20: 3 samples in commit 1 only.
     const nodeMap = new Map<number, HermesProfileNode>();

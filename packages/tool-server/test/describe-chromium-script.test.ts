@@ -32,7 +32,9 @@ class MockHTMLTextAreaElement extends MockHTMLElement {}
 class MockHTMLImageElement extends MockHTMLElement {}
 class MockSVGSVGElement extends MockElement {}
 class MockHTMLSlotElement extends MockHTMLElement {
+  // Like Chrome's, it throws on any other element.
   assignedNodes(this: Record<string, unknown>) {
+    if (!(this instanceof MockHTMLSlotElement)) throw new TypeError("Illegal invocation");
     return this.__assigned ?? [];
   }
 }
@@ -1001,6 +1003,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(pick([title(""), x])).toBe("Pick X end");
     expect(pick([svg("g", [title("G"), x])])).toBe("Pick G end");
     expect(pick([title("T"), x], none)).toBe("Pick T end");
+    // An SVG-namespace <slot> is no slot: it reads as its own children.
+    expect(pick([svg("slot", [text("fb")], "SVGElement")], none)).toBe("Pick fb end");
   });
 
   it("parts words at every element under display:none, which has no inline layout", () => {
@@ -3245,6 +3249,7 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
             offset: { width: 300, height: 100 },
             style: { overflow: "hidden", position: "relative" },
             children: [
+              el({ tag: "input", attrs: { type: "hidden" }, style: { display: "none" } }),
               legend("floated", 2, { cssFloat: "left" }),
               legend("placed", 2, { position: "absolute" }),
               rendered,
