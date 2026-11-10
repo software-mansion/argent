@@ -43,7 +43,12 @@ import { chooseScope, type Scope } from "./init-scope.js";
 import { writeMcpConfigs } from "./init-mcp-write.js";
 import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
 import { configureAllowlist } from "./init-allowlist.js";
-import { runSkillsStep, type SkillsMethod } from "./init-skills.js";
+import {
+  readyHeadline,
+  runSkillsStep,
+  skillsSummaryLine,
+  type SkillOutcome,
+} from "./init-skills.js";
 
 // `argent init` orchestrator. Step modules signal a cancelled prompt by throwing
 // InitCancelled(step); the catch below turns that into cli_init_cancel + a clean exit.
@@ -263,7 +268,7 @@ export async function init(args: string[]): Promise<void> {
 
     // Step 2 — the module prints its own step header.
 
-    const skillsMethod = await runSkillsStep({
+    const { outcome: skillOutcome } = await runSkillsStep({
       nonInteractive: parsed.nonInteractive,
       fromTar: parsed.fromTar,
       version,
@@ -302,14 +307,14 @@ export async function init(args: string[]): Promise<void> {
       selectedAdapters: writtenAdapters,
       scope,
       allowlistEnabled: allowlist.enabled,
-      skillsMethod,
+      skillOutcome,
       copiedRules: copyResults.length > 0,
       wroteProjectTelemetryOptOut,
     });
 
     p.note(
       [
-        pc.bold(pc.green("Argent is ready!")),
+        pc.bold(readyHeadline(skillOutcome)),
         "",
         `${pc.bold("Get started")} by asking your assistant:`,
         "",
@@ -356,7 +361,7 @@ interface SummaryArgs {
   selectedAdapters: McpConfigAdapter[];
   scope: Scope;
   allowlistEnabled: boolean;
-  skillsMethod: SkillsMethod;
+  skillOutcome: SkillOutcome;
   copiedRules: boolean;
   /** `--no-telemetry` in local mode also wrote `.argent/config.json`. */
   wroteProjectTelemetryOptOut: boolean;
@@ -367,7 +372,7 @@ function printSummary({
   selectedAdapters,
   scope,
   allowlistEnabled,
-  skillsMethod,
+  skillOutcome,
   copiedRules,
   wroteProjectTelemetryOptOut,
 }: SummaryArgs): void {
@@ -377,7 +382,7 @@ function printSummary({
       ? `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`
       : `${pc.yellow("MCP server")} NOT configured — no editor config was written`,
     `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
-    `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
+    skillsSummaryLine(skillOutcome),
     `${pc.green("Rules")} ${copiedRules ? "copied" : "n/a"}`,
   ];
 
