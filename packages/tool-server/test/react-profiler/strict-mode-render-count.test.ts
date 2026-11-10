@@ -42,13 +42,15 @@ function render(commitIndex: number, durationMs: number): DevToolsFiberCommit {
   };
 }
 
-const SESSION: SessionContext = {
+// The cast keeps the flag the removed halving read, so a halving that returns on it fails here.
+const SESSION = {
   reactCompilerEnabled: false,
   buildMode: "dev",
   rnArchitecture: "bridgeless",
   projectRoot: "/tmp/none",
   platform: "ios",
-};
+  strictModeEnabled: true,
+} as SessionContext;
 
 function rankPanel(renders: number, durationMs: number, session = SESSION) {
   const commits = Array.from({ length: renders }, (_, i) => render(i, durationMs));

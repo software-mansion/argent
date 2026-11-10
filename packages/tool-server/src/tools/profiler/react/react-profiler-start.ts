@@ -189,7 +189,7 @@ export function createReactProfilerStartTool(
 Use when you need to profile a user interaction.
 On an iOS simulator or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data. mine: true means this tool-server started the run: if it is yours, call react-profiler-stop. With stale: true it may be another agent's: follow the note. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data, unless it is another tool-server's stale run, has no owner record, or is a lost run of this tool-server: start replaces those. mine: true means this tool-server started the run: if it is yours, call react-profiler-stop. With stale: true it may be another agent's: follow the note. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     interaction: {
@@ -427,10 +427,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         });
       }
 
-      if (api.profilingActive) {
-        await cdp.send("Profiler.stop").catch(ignore);
-        api.profilingActive = false;
-      }
+      // Hermes ignores `Profiler.start` while its sampler runs and clears
+      // samples only on `Profiler.stop`, so a sampler left on would start the
+      // new profile early. A replaced run leaves one on, and so does a run
+      // whose connection dropped before a JS reload: the app then reports no
+      // recording, so nothing here can tell. Always stop first; with no
+      // sampler on, Hermes only returns an empty profile.
+      await cdp.send("Profiler.stop").catch(ignore);
+      api.profilingActive = false;
 
       // A session keyed by Metro's logicalDeviceId (two or more devices on one
       // Metro) is not what the tools that drive the device name: they pass its
@@ -454,10 +458,15 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         .send("Profiler.start", { interval: params.sample_interval_us })
         .catch(rethrowWithTakeover);
 
+      // Every failure from here on rolls back the CPU sampler just started.
       const startJson = (await cdp
         .evaluate(buildStartScript(JSON.stringify(ownerPayload)))
-        .catch(rethrowWithTakeover)) as string | undefined;
+        .catch(async (err: unknown) => {
+          await cdp.send("Profiler.stop").catch(ignore);
+          return rethrowWithTakeover(err);
+        })) as string | undefined;
       if (!startJson) {
+        await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
           withTakeover("Failed to start React profiler (no value returned from runtime)."),
           {
@@ -478,7 +487,6 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       };
 
       if (!startResult.ok) {
-        // Roll back the CPU sampler.
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
           withTakeover(

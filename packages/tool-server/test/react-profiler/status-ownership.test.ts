@@ -182,6 +182,8 @@ describe("react-profiler-status: nothing recording", () => {
       cpu_profile_path: "/tmp/argent-debug/react-profiler-20261103-120000_cpu.json",
     });
     expect(res.note).toContain("react-profiler-analyze");
+    // profiler-load requires the device, so the hint must name it.
+    expect(res.note).toContain("device_id: <this run's device_id>");
     expect(res.note).toContain("20261103-120000");
     expect(res.note).not.toContain("not recoverable");
   });
@@ -216,6 +218,9 @@ describe("react-profiler-status: nothing recording", () => {
     const res = await runStatus(api);
     expect(res.session_status).toBe("lost");
     expect(res.lost_run).toEqual({ session_id: "uuid-mine", cause: "stop_failed" });
+    // Nothing is left in the app for a stop to collect.
+    expect(res.note).toContain("Call react-profiler-start to record again");
+    expect(res.note).not.toContain("Call react-profiler-stop");
   });
 
   it("says a failed stop's run is still recording, and that start can replace it", async () => {
@@ -240,7 +245,9 @@ describe("react-profiler-status: nothing recording", () => {
     const res = await runStatus(api);
     expect(res.session_status).toBe("lost");
     expect(res.lost_run).toEqual({ session_id: "uuid-mine", cause: "ended_in_app" });
-    expect(res.note).toContain("react-profiler-stop can still collect it");
+    expect(res.note).toContain("Call react-profiler-stop to collect it");
+    expect(res.note).toContain("A react-profiler-start would discard it");
+    expect(res.note).not.toContain("to record again");
   });
 
   it("returns 'taken_over' when another session replaced the run and has stopped since", async () => {

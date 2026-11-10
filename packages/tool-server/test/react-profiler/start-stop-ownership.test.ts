@@ -87,8 +87,12 @@ function fakeSession(opts: {
   profilingActive?: boolean;
   /** What the app's start script returns, when not a clean start. */
   startResult?: Record<string, unknown>;
+  /** Makes the app's start script fail: a timeout on a busy JS thread, or no value. */
+  startScript?: "rejects" | "returns nothing";
   /** Makes `Profiler.start` reject, as a dropped connection does. */
   profilerStartRejects?: boolean;
+  /** Makes `Profiler.stop` reject, as a slow serialization past its timeout does. */
+  profilerStopRejects?: boolean;
 }) {
   const evaluated: string[] = [];
   const sent: string[] = [];
@@ -118,6 +122,7 @@ function fakeSession(opts: {
           throw new Error("CDP connection closed");
         }
         if (method === "Profiler.stop") {
+          if (opts.profilerStopRejects) throw new Error("CDP request Profiler.stop timed out");
           return {
             profile: { nodes: [], samples: [], timeDeltas: [], startTime: 0, endTime: 1e6 },
           };
@@ -141,6 +146,10 @@ function fakeSession(opts: {
           });
         }
         if (expression.includes("__argent_doStart")) {
+          if (opts.startScript === "rejects") {
+            throw new Error("CDP request Runtime.evaluate timed out after 10000ms");
+          }
+          if (opts.startScript === "returns nothing") return undefined;
           return JSON.stringify(
             opts.startResult ?? {
               ok: true,
@@ -342,6 +351,143 @@ describe("react-profiler-start with a session already running", () => {
     expect(res.started_at).toBeDefined();
     expect(res).not.toHaveProperty("took_over");
   });
+});
+
+describe("react-profiler-start and the Hermes sampler", () => {
+  // Hermes ignores `Profiler.start` while its sampler runs and clears samples
+  // only on `Profiler.stop`, so a replaced run left sampling leaks into the new
+  // run's profile. None of these session nodes but the forced own run's started
+  // the sampler, so `profilingActive` cannot be what decides the stop.
+  const STALE_MS = DEFAULT_STALE_THRESHOLD_MS + 60_000;
+  const lostRun = () =>
+    recordLostProfilerRun(
+      { port: PORT, deviceId: DEVICE, sessionId: "uuid-lost", profileStartWallMs: NOW - 60_000 },
+      "cdp_disconnected"
+    );
+  const replacements: Array<{
+    run: string;
+    reason: string;
+    session: Parameters<typeof fakeSession>[0];
+    force?: boolean;
+    arrange?: () => void;
+  }> = [
+    {
+      run: "a lost run of this tool-server",
+      reason: "own_unsaved",
+      session: { app: { isRunning: true, owner: owner("uuid-lost") } },
+      arrange: lostRun,
+    },
+    {
+      run: "this session's own run",
+      reason: "forced",
+      session: {
+        app: { isRunning: true, owner: owner("uuid-mine") },
+        sessionId: "uuid-mine",
+        profilingActive: true,
+      },
+      force: true,
+    },
+    {
+      run: "another session's fresh run",
+      reason: "forced",
+      session: { app: { isRunning: true, owner: owner("uuid-other") } },
+      force: true,
+    },
+    {
+      run: "another session's stale run",
+      reason: "stale",
+      session: { app: { isRunning: true, owner: owner("uuid-other", STALE_MS) } },
+    },
+    {
+      run: "a run with no owner record",
+      reason: "unattributed",
+      session: { app: { isRunning: true, owner: null } },
+    },
+  ];
+
+  it.each(replacements)(
+    "stops the sampler before starting it again when replacing $run ($reason)",
+    async ({ reason, session, force, arrange }) => {
+      arrange?.();
+      const { registry, sent } = fakeSession(session);
+
+      const res = await start(registry, force);
+
+      expect(res.took_over).toMatchObject({ reason });
+      const stopAt = sent.indexOf("Profiler.stop");
+      expect(stopAt).toBeGreaterThanOrEqual(0);
+      expect(stopAt).toBeLessThan(sent.indexOf("Profiler.start"));
+    }
+  );
+
+  it("still starts when stopping the replaced run's sampler fails", async () => {
+    lostRun();
+    const { registry, sent } = fakeSession({
+      app: { isRunning: true, owner: owner("uuid-lost") },
+      profilerStopRejects: true,
+    });
+
+    const res = await start(registry);
+
+    expect(sent).toContain("Profiler.stop");
+    expect(sent).toContain("Profiler.start");
+    expect(res.started_at).toBeDefined();
+    expect(res.took_over).toMatchObject({ session_id: "uuid-lost", reason: "own_unsaved" });
+  });
+
+  // A run whose connection dropped keeps its sampler through a JS reload, while
+  // the reloaded app reports no recording: nothing tells the start it is on.
+  it.each([false, true])(
+    "stops the sampler first when the app reports no recording (force: %s)",
+    async (force) => {
+      const { registry, sent } = fakeSession({ app: { isRunning: false, owner: null } });
+
+      const res = await start(registry, force);
+
+      expect(res.started_at).toBeDefined();
+      expect(res).not.toHaveProperty("took_over");
+      const stopAt = sent.indexOf("Profiler.stop");
+      expect(stopAt).toBeGreaterThanOrEqual(0);
+      expect(stopAt).toBeLessThan(sent.indexOf("Profiler.start"));
+    }
+  );
+
+  it.each([
+    ["reports a failure", { ok: false, reason: "no-renderers" }],
+    ["fails verification", { ok: true, isProfilingFlagSet: false, ownerInstalled: true }],
+  ])(
+    "rolls the sampler back, and tracks no run, when the app's start script %s",
+    async (_what, startResult) => {
+      const { api, registry, sent } = fakeSession({
+        app: { isRunning: true, owner: owner("uuid-mine") },
+        sessionId: "uuid-mine",
+        profilingActive: true,
+        startResult,
+      });
+
+      await expect(start(registry, true)).rejects.toThrow("nothing is recording now");
+
+      expect(sent.lastIndexOf("Profiler.stop")).toBeGreaterThan(sent.indexOf("Profiler.start"));
+      // The replaced run's sampler is stopped: a stop must not try to collect it.
+      expect(api.profilingActive).toBe(false);
+    }
+  );
+
+  it.each(["rejects", "returns nothing"] as const)(
+    "rolls the sampler back when the app's start script %s",
+    async (startScript) => {
+      lostRun();
+      const { registry, sent } = fakeSession({
+        app: { isRunning: true, owner: owner("uuid-lost") },
+        startScript,
+      });
+
+      const err = await start(registry).catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain("nothing is recording now");
+      expect(sent.lastIndexOf("Profiler.stop")).toBeGreaterThan(sent.indexOf("Profiler.start"));
+    }
+  );
 });
 
 describe("profiler-load", () => {
@@ -903,6 +1049,7 @@ describe("the run lifecycle, on the real session and scripts", () => {
       const app = makeApp();
       const ts = toolServer(app, PORT);
       await ts.start();
+      const sentByStart = ts.rig.sent.length;
 
       const results = await Promise.allSettled([ts.stop(), ts.stop()]);
 
@@ -911,7 +1058,12 @@ describe("the run lifecycle, on the real session and scripts", () => {
       expect(getFailureSignal(rejected.reason)?.error_code).toBe(
         FAILURE_CODES.REACT_PROFILER_STOP_IN_PROGRESS
       );
-      expect(ts.sentMethods().filter((m) => m === "Profiler.stop")).toHaveLength(1);
+      expect(
+        ts
+          .sentMethods()
+          .slice(sentByStart)
+          .filter((m) => m === "Profiler.stop")
+      ).toHaveLength(1);
     });
 
     it("refuses a start that was reading the app when the stop began", async () => {
@@ -1035,16 +1187,41 @@ describe("the run lifecycle, on the real session and scripts", () => {
       const app = makeApp();
       const ts = toolServer(app, PORT);
       await ts.start();
+      const sentByStart = ts.rig.sent.length;
       app.commit("Screen");
 
       await ts.stop();
 
       const timeoutOf = (found: (c: Rig["sent"][number]) => boolean) =>
-        ts.rig.sent.find(found)?.timeout;
+        ts.rig.sent.slice(sentByStart).find(found)?.timeout;
       expect(timeoutOf((c) => c.method === "Profiler.stop")).toBe(60_000);
       expect(timeoutOf((c) => c.expression === STOP_AND_READ_SCRIPT)).toBe(60_000);
       expect(timeoutOf((c) => c.expression === RESOLVE_FIBER_META_SCRIPT)).toBe(15_000);
     });
+
+    it("is declared longRunning, so the MCP client cannot abort and resend a long collection", () => {
+      // Without it, argent-mcp aborts each attempt at 30 s and resends the call.
+      // The tool-server keeps collecting, so the resend fails on this very stop.
+      expect(createReactProfilerStopTool(new Registry()).longRunning).toBe(true);
+    });
+  });
+
+  it("stops the sampler of a run lost to a dropped connection, on the rebuilt session", async () => {
+    const app = makeApp();
+    const ts = toolServer(app, PORT);
+    await ts.start();
+    const run = app.owner()!.sessionId;
+    ts.drop();
+    await ts.settled();
+    expect(app.sampling).toBe(true);
+
+    ts.rig.sent.length = 0;
+    const res = await ts.start();
+
+    expect(res.took_over).toMatchObject({ session_id: run, reason: "own_unsaved" });
+    const sent = ts.sentMethods();
+    expect(sent.indexOf("Profiler.stop")).toBeGreaterThanOrEqual(0);
+    expect(sent.indexOf("Profiler.stop")).toBeLessThan(sent.indexOf("Profiler.start"));
   });
 
   describe("after a react-profiler-stop failed", () => {

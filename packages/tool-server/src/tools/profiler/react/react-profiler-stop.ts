@@ -198,6 +198,9 @@ Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits
 If some fibers' display names could not be resolved (typically modals, tooltips or animations that unmounted before stop), it also returns { unattributed_ms, unattributed_fiber_count, unattributed_commit_count }: the work missing from the per-component breakdown. Per-commit durations stay correct.
 Fails if no active profiling session exists, another stop is running, the CDP connection was lost during recording, or another session took the run over.`,
     zodSchema,
+    // Collection can outlast the MCP client's 30 s abort. The client would then
+    // resend the call, and the resend fails on the stop still collecting.
+    longRunning: true,
     interaction: {
       startedMsg: () => "Stopping React profiler",
       completedMsg: () => "Stopped React profiler",

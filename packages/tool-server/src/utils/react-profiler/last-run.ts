@@ -72,10 +72,7 @@ export function lostRunCauseText(
         "(see the error it returned)"
       );
     case "ended_in_app":
-      return (
-        "it stopped recording in the app without a react-profiler-stop, most likely from outside " +
-        "argent, and react-profiler-stop can still collect it"
-      );
+      return "it stopped recording in the app without a react-profiler-stop, most likely from outside argent";
   }
 }
 
@@ -89,7 +86,8 @@ export function savedSessionText(paths: ProfilerSessionPaths): string {
   return (
     `Your last run was stopped and saved as session ${paths.sessionId}: react-profiler-analyze ` +
     `and the profiler query tools read it. After a tool-server restart, load it again with ` +
-    `profiler-load { mode: "load_react", session_id: "${paths.sessionId}" }.`
+    `profiler-load { mode: "load_react", session_id: "${paths.sessionId}", device_id: <this run's device_id> }. ` +
+    `Pass port too if this run passed one.`
   );
 }
 

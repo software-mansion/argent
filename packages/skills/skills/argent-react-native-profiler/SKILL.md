@@ -13,7 +13,7 @@ Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Prof
 
 - `react-profiler-start` / `react-profiler-stop`: record CPU samples and React commits around an interaction.
 - `react-profiler-analyze`: turn the recording into a ranked report: hot commits with the JS functions that ran during each.
-- `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. A debugger drop also ends the recording; check status before stopping or restarting.
+- `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. After a debugger drop, react-profiler-stop can no longer collect the run; check status before stopping or restarting.
 - `react-profiler-component-source`: source, location and memoization status of a component the report flagged.
 - `react-profiler-fiber-tree`: live component hierarchy, no session needed, for tracing a component's ancestry.
 
