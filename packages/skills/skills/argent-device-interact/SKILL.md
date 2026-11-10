@@ -31,7 +31,7 @@ Each tool's own description carries its parameters, defaults, return shape and e
 | Two-finger rotation            | `gesture-rotate`    |                                                                |
 | Hardware key                   | `button`            | Home, back, power, volume, appSwitch, actionButton             |
 | Type text or press a named key | `keyboard`          | Every platform; text or one key per call (§6)                  |
-| Paste text                     | `paste`             | Only where a user would paste (§6). Sim/emu only               |
+| Paste text                     | `paste`             | Only where a user would paste (§6). Sim/emu, Mac app           |
 | Rotate device                  | `rotate`            | Orientation changes                                            |
 | Fold device                    | `fold`              | Foldables only: `references/foldables.md`                      |
 | Shake device                   | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |

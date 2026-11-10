@@ -16,62 +16,6 @@ const DEFAULT_PANEL_TIMEOUT_MS = 5000;
 const MAX_PANEL_TIMEOUT_MS = 30_000;
 const PANEL_POLL_MS = 100;
 
-const zodSchema = z.object({
-  udid: z.string().describe("Mac app id from `list-devices` (macos-app-<bundle id>)."),
-  action: z
-    .enum(["list", "choose", "cancel", "discard", "stub"])
-    .describe(
-      "list: the open file panels. choose: answer a panel with path or paths. cancel: cancel a panel. " +
-        "discard: answer a panel with its Delete or Don't Save button. " +
-        "stub: arm an answer or a cancel for the next panel the app presents (stubMode)."
-    ),
-  path: z
-    .string()
-    .min(1)
-    .optional()
-    .describe(
-      "For choose and stub: the absolute path to answer with (a leading ~/ is your home folder). " +
-        "An open panel takes an existing file or folder; a save panel takes the file to write, in an existing folder. " +
-        "A save panel answer replaces an existing file at that path without the replace prompt a user gets: check the path first."
-    ),
-  paths: z
-    .array(z.string().min(1))
-    .min(1)
-    .optional()
-    .describe(
-      "For choose and stub: several absolute paths, for an open panel that allows a multiple selection. Instead of path."
-    ),
-  panel: z
-    .number()
-    .int()
-    .optional()
-    .describe(
-      "For choose, cancel and discard: the panel's number from list. Needed only when more than one panel is open."
-    ),
-  stubMode: z
-    .enum(["answer", "cancel", "off"])
-    .optional()
-    .describe(
-      "For stub: answer the next panel with path or paths (default), cancel it, or off to disarm a stub that is still armed."
-    ),
-  panelKind: z
-    .enum(["open", "save"])
-    .optional()
-    .describe(
-      "For stub with stubMode answer: the kind of panel the answer is for, which also decides the path checks. " +
-        "Default: open when every path exists, save when the one path does not exist yet."
-    ),
-  timeoutMs: z
-    .number()
-    .int()
-    .min(0)
-    .max(MAX_PANEL_TIMEOUT_MS)
-    .optional()
-    .describe(
-      "For choose, cancel and discard: how long to wait for a panel to appear after the click that opens it (default 5000)."
-    ),
-});
-
 type Params = z.infer<typeof zodSchema>;
 
 /** A panel as the app lists it; `list` returns its other fields (title, folder, options) as they come. */
@@ -299,8 +243,73 @@ async function stub(app: MacosAppApi, params: Params): Promise<Result> {
   return { armed, mode, panelKind };
 }
 
+const zodSchema = z.object({
+  udid: z.string().describe("Mac app id from `list-devices` (macos-app-<bundle id>)."),
+  action: z
+    .enum(["list", "choose", "cancel", "discard", "stub"])
+    .describe(
+      "list: the open file panels. choose: answer a panel with path or paths. cancel: cancel a panel. " +
+        "discard: answer a panel with its Delete or Don't Save button. " +
+        "stub: arm an answer or a cancel for the next panel the app presents (stubMode)."
+    ),
+  path: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "For choose and stub: the absolute path to answer with (a leading ~/ is your home folder). " +
+        "An open panel takes an existing file or folder; a save panel takes the file to write, in an existing folder. " +
+        "A save panel answer replaces an existing file at that path without the replace prompt a user gets: check the path first."
+    ),
+  paths: z
+    .array(z.string().min(1))
+    .min(1)
+    .optional()
+    .describe(
+      "For choose and stub: several absolute paths, for an open panel that allows a multiple selection. Instead of path."
+    ),
+  panel: z
+    .number()
+    .int()
+    .optional()
+    .describe(
+      "For choose, cancel and discard: the panel's number from list. Needed only when more than one panel is open."
+    ),
+  stubMode: z
+    .enum(["answer", "cancel", "off"])
+    .optional()
+    .describe(
+      "For stub: answer the next panel with path or paths (default), cancel it, or off to disarm a stub that is still armed."
+    ),
+  panelKind: z
+    .enum(["open", "save"])
+    .optional()
+    .describe(
+      "For stub with stubMode answer: the kind of panel the answer is for, which also decides the path checks. " +
+        "Default: open when every path exists, save when the one path does not exist yet."
+    ),
+  timeoutMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_PANEL_TIMEOUT_MS)
+    .optional()
+    .describe(
+      "For choose, cancel and discard: how long to wait for a panel to appear after the click that opens it (default 5000)."
+    ),
+});
+
 export const filePanelTool: ToolDefinition<Params, Result> = {
   id: "file-panel",
+  description: `Complete or cancel the open and save panels (file dialogs) of a Mac app. describe cannot read a panel's file list and gesture-tap cannot pick a file in it; this tool completes the panel the way the user's choice would. Controls the app adds to a panel (a format popup, options) are in describe: set them with gesture-tap before choose.
+Use when a click in a Mac app opens an open or save panel (list shows whether one is open), or before such a click, to answer the next panel without it ever appearing.
+Actions: list returns the open panels with their number, kind (open or save), title, folder and options. choose answers a panel with path, or paths for a multiple selection: an existing file or folder for an open panel, the file to write for a save panel; it waits up to timeoutMs for the panel to appear after the click. cancel cancels a panel. discard answers a panel with its Delete or Don't Save button (shown when an edited new document closes or the app quits): the document closes without saving. stub arms a one-shot answer (stubMode answer, with path) or a cancel (stubMode cancel) for the next panel the app presents; stubMode off disarms it.
+For stub, panelKind names the kind of panel the answer is for; without it, paths that exist mean an open panel and one path that does not exist yet means a save panel. A panel of the other kind opens as usual, and the answer waits for the next panel of its kind. A panel of its kind that could not take the answer (several paths for a single selection, a folder for a panel of files or for a save panel, an extension that a save panel refuses) opens as usual, and list gives the reason as the panel's stubRefused.
+A sandboxed app that argent started is given access to the chosen paths only. A save panel that lists file formats refuses a path whose extension matches none of them, also a path with no extension, unless it saves any file (public.data, public.item) or allows other file types. On macOS 15 and later, the extension picks the format. argent does not check a path for an open panel against the panel's allowed file types.
+Returns { panels } for list, { chosen, panel, kind, paths } for choose, { cancelled, panel } for cancel, { discarded, panel } for discard, { armed, mode, panelKind? } for stub.
+Fails if no panel appears within timeoutMs, if more than one panel is open and panel is not given, if a path is relative or does not exist (a save panel needs an existing folder), if a path for a save panel is an existing folder other than a document package the panel saves, if the path does not fit the panel choose finds (a folder for a panel of files, a file for a panel of folders, a refused extension), if discard finds no Delete or Don't Save button, or if the Mac app is not running.`,
+  zodSchema,
+  searchHint: "file panel dialog open save choose pick file folder nsopenpanel nssavepanel mac app",
   featureFlag: "macos-apps",
   interaction: {
     startedMsg: ({ params }) =>
@@ -310,17 +319,8 @@ export const filePanelTool: ToolDefinition<Params, Result> = {
     failedMsg: ({ params, failureSignal }) =>
       `Failed to ${params.action} a file panel: ${failureSignal.error_code}`,
   },
-  description: `Complete or cancel the open and save panels (file dialogs) of a Mac app. describe cannot read a panel's file list and gesture-tap cannot pick a file in it; this tool completes the panel the way the user's choice would. Controls the app adds to a panel (a format popup, options) are in describe: set them with gesture-tap before choose.
-Use when a click in a Mac app opens an open or save panel (list shows whether one is open), or before such a click, to answer the next panel without it ever appearing.
-Actions: list returns the open panels with their number, kind (open or save), title, folder and options. choose answers a panel with path, or paths for a multiple selection: an existing file or folder for an open panel, the file to write for a save panel; it waits up to timeoutMs for the panel to appear after the click. cancel cancels a panel. discard answers a panel with its Delete or Don't Save button (shown when an edited new document closes or the app quits): the document closes without saving. stub arms a one-shot answer (stubMode answer, with path) or a cancel (stubMode cancel) for the next panel the app presents; stubMode off disarms it.
-For stub, panelKind names the kind of panel the answer is for; without it, paths that exist mean an open panel and one path that does not exist yet means a save panel. A panel of the other kind opens as usual, and the answer waits for the next panel of its kind. A panel of its kind that could not take the answer (several paths for a single selection, a folder for a panel of files or for a save panel, an extension that a save panel refuses) opens as usual, and list gives the reason as the panel's stubRefused.
-A sandboxed app that argent started is given access to the chosen paths only. A save panel that lists file formats refuses a path whose extension matches none of them, also a path with no extension, unless it saves any file (public.data, public.item) or allows other file types. On macOS 15 and later, the extension picks the format. argent does not check a path for an open panel against the panel's allowed file types.
-Returns { panels } for list, { chosen, panel, kind, paths } for choose, { cancelled, panel } for cancel, { discarded, panel } for discard, { armed, mode, panelKind? } for stub.
-Fails if no panel appears within timeoutMs, if more than one panel is open and panel is not given, if a path is relative or does not exist (a save panel needs an existing folder), if a path for a save panel is an existing folder other than a document package the panel saves, if choose finds a panel that cannot take the path (a folder for a panel of files, a file for a panel of folders, an extension that a save panel refuses), if discard finds no Delete or Don't Save button, or if the Mac app is not running.`,
-  searchHint: "file panel dialog open save choose pick file folder nsopenpanel nssavepanel mac app",
   // timeoutMs can reach the MCP fetch timeout, whose abort replays the call.
   longRunning: true,
-  zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);

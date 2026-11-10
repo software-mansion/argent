@@ -5,7 +5,7 @@ description: Step-by-step workflows for developing or debugging React Native app
 
 Physical iPhone (`kind: "device"`): Metro debugging and profiling tools reject it. Use a simulator.
 
-react-native-macos app: start Metro (§1.2), then follow `argent-macos-app-interact` instead of `run-macos`. `debugger-*` tools reject a Mac app id.
+react-native-macos app: start Metro (§1.2), then follow `argent-macos-app-interact` instead of `run-macos`.
 
 ## 1. Starting the React Native App
 
