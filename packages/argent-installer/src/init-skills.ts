@@ -19,11 +19,7 @@ import {
   withNpmForce,
 } from "./utils.js";
 import { InitCancelled } from "./init-args.js";
-import {
-  countInstalledArgentSkills,
-  listTrackedLegacySkills,
-  pruneLegacySkillDirs,
-} from "./skills.js";
+import { snapshotArgentSkills, listTrackedLegacySkills, pruneLegacySkillDirs } from "./skills.js";
 import type { Scope } from "./init-scope.js";
 import { ShellCommandError } from "./shell.js";
 
@@ -39,8 +35,10 @@ export interface SkillsStepResult {
   source: SkillsSource | null;
   /** True only when the pinned source failed and the bundled copy rescued it. */
   usedFallback: boolean;
-  /** Argent skills on disk in the scope this step wrote to, once it finished. */
+  /** Skills this version ships that are on disk in the step's scope, once it finished. */
   installedCount: number;
+  /** Of those, the ones this run wrote. */
+  installedThisRun: number;
   /** Offline with no cached skills CLI: the manual path was not the user's choice. */
   forcedManual: boolean;
 }
@@ -67,10 +65,10 @@ function meaningfulLine(err: unknown): string {
   );
 }
 
-// The copy matching `version`. It differs from the running package when this run
-// configures another install, such as a project pinned to an older release.
+// The copy matching `version`, from the install this run configured before the
+// running package: the lock records its path, and under `npx` the running package
+// sits in the npx cache, which only this machine has and npm may clear.
 function bundledCopyFor(version: string): string {
-  if (version === getInstalledVersion()) return SKILLS_DIR;
   const local = probeLocalInstall(resolveProjectRoot(process.cwd()));
   if (local.packageDir && local.version === version) return path.join(local.packageDir, "skills");
   const globalRoot = getGloballyInstalledPackageRoot();
@@ -111,13 +109,14 @@ function printManualInstructions(
   );
 }
 
-// A required step that left nothing behind, and not because the user said so.
-// Picking Manual, or installing nothing from the TUI, was their decision.
+// An install that ran, failed, and left none of this version's skills on disk.
+// Offline is not here: the probe resolves the public registry host only, so a
+// proxy or mirror user can look offline while npm works, and nothing was tried.
 export function skillsAreMissing(skills: SkillsStepResult): boolean {
-  return skills.installedCount === 0 && (skills.outcome === "failure" || skills.forcedManual);
+  return skills.outcome === "failure" && skills.installedCount === 0;
 }
 
-// Keyed on what happened and on the count from the disk, not on the chosen
+// Keyed on what this run wrote and on the count from the disk, not on the chosen
 // method: reporting "installed" after a failure is #614. Only a pinned attempt
 // that failed first is called out: a bundled source chosen deliberately (offline,
 // `--from <tgz>`, unknown version) is an ordinary success.
@@ -127,18 +126,22 @@ export function formatSkillsSummaryLine(skills: SkillsStepResult): string {
   if (skills.outcome === "failure" || skills.forcedManual) {
     const why = skills.forcedManual ? "offline, see the instructions above" : "see the error above";
     return count > 0
-      ? `${label} not updated (${why}), ${count} already on disk`
+      ? `${label} not updated (${why}), ${count} from an earlier install on disk`
       : `${label} NOT installed (${why})`;
   }
   if (skills.method === "manual") {
-    const existing = count > 0 ? `, ${count} already on disk` : "";
+    const existing = count > 0 ? `, ${count} from an earlier install on disk` : "";
     return `${pc.green("Skills")} instructions printed${existing}`;
   }
-  if (count === 0) return `${label} NOT installed (none selected)`;
-  if (skills.usedFallback) {
-    return `${label} ${count} installed from the bundled copy (the pinned source failed)`;
+  if (skills.outcome === "skipped") {
+    const existing = count > 0 ? `, ${count} from an earlier install on disk` : "";
+    return `${label} none installed (none selected)${existing}`;
   }
-  return `${pc.green("Skills")} ${count} installed`;
+  const written = skills.installedThisRun;
+  if (skills.usedFallback) {
+    return `${label} ${written} installed from the bundled copy (the pinned source failed)`;
+  }
+  return `${pc.green("Skills")} ${written} installed`;
 }
 
 // Step 2. Emits the skill_install telemetry event itself (it owns all the
@@ -208,7 +211,13 @@ export async function runSkillsStep(args: {
   const skillsCwd = scope === "custom" ? customRoot : undefined;
   const skillsRoot = scope === "global" ? os.homedir() : (skillsCwd ?? process.cwd());
   const skillsScope = scope === "global" ? "global" : "project";
-  const installedCount = (): number => countInstalledArgentSkills(skillsRoot, skillsScope);
+  // Only the names this version ships count: retired names and stray dirs say
+  // nothing about whether Argent's current skills are there.
+  const expected = listBundledSkills(bundledCopy);
+  const snapshot = () => snapshotArgentSkills(skillsRoot, skillsScope, expected);
+  const writtenSince = (before: Map<string, string>): number =>
+    [...snapshot()].filter(([name, stamp]) => before.get(name) !== stamp).length;
+  const initial = snapshot();
 
   let skillOutcome: SkillsOutcome;
   let installedFrom = skillsSource;
@@ -235,15 +244,16 @@ export async function runSkillsStep(args: {
     const spinner = p.spinner();
     if (!interactive) spinner.start("Installing skills...");
 
-    // Resolves to the outcome of one attempt. npx can exit 0 without having run
-    // the CLI at all (#1335), so a clean exit proves nothing on its own. The TUI
-    // exits 0 when cancelled, which is the user's call and not a failure.
+    // Resolves to the outcome of one attempt: success means this attempt wrote a
+    // skill. npx can exit 0 without having run the CLI at all (#1335), and the
+    // TUI exits 0 when cancelled, which is the user's call and not a failure.
     const attempt = async (source: string, npmFlags: string[] = []): Promise<SkillsOutcome> => {
+      const before = snapshot();
       const npxArgs = withNpmForce([...npmFlags, ...buildSkillsArgs(source)]);
       await runNpxSkills(npxArgs, interactive, skillsCwd);
-      if (installedCount() > 0) return "success";
+      if (writtenSince(before) > 0) return "success";
       if (interactive) return "skipped";
-      throw new Error("The skills CLI exited cleanly, but no skills are on disk.");
+      throw new Error("The skills CLI exited cleanly, but it installed no skills.");
     };
 
     const fail = (err: unknown, attempted: string, npxMissing = false): SkillsOutcome => {
@@ -362,7 +372,8 @@ export async function runSkillsStep(args: {
     outcome: skillOutcome,
     source,
     usedFallback,
-    installedCount: installedCount(),
+    installedCount: snapshot().size,
+    installedThisRun: writtenSince(initial),
     forcedManual: !skillsCliReady,
   };
 }

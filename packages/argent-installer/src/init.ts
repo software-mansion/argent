@@ -314,7 +314,7 @@ export async function init(args: string[]): Promise<void> {
     });
 
     const skillsMissing = skillsAreMissing(skills);
-    if (skills.installedCount > 0 || (skills.method === "manual" && !skills.forcedManual)) {
+    if (skills.outcome === "success" || (skills.method === "manual" && !skills.forcedManual)) {
       p.note(
         [
           pc.bold(pc.green("Argent is ready!")),
@@ -326,6 +326,11 @@ export async function init(args: string[]): Promise<void> {
           pc.dim("It will walk you through all capabilities available."),
         ].join("\n"),
         pc.bgGreen(pc.black(" Get Started "))
+      );
+    } else if (skills.installedCount > 0) {
+      p.log.warn(
+        `${pc.bold("Skills were not updated:")} ${skills.installedCount} skills from an earlier ` +
+          `install stay in use. Run ${pc.cyan("argent init")} again to update them.`
       );
     } else {
       p.log.warn(

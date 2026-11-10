@@ -34,14 +34,16 @@ Run `argent --help` for the full set of options, and `argent --version` to print
 
 ## Skills step of `argent init`
 
-`argent init` installs the skills from the Git tag of the Argent version. If this install fails, `argent init` installs the skills from the copy in the package. The interactive mode asks before it does this.
+`argent init` installs the skills from the Git tag of the Argent version. If this install fails, `argent init` installs the skills from the copy in the installed package. The interactive mode asks before it does this.
 
-The summary shows the number of Argent skills on disk in the scope of the install. `argent init` writes the MCP configuration and the rules in all outcomes.
+The summary shows the number of skills that the run installed. If the run installed no skills, the summary shows the number of skills of this Argent version that an earlier run installed. `argent init` writes the MCP configuration and the rules in all outcomes.
 
-| Result of the skills step                                 | Exit code |
-| --------------------------------------------------------- | --------- |
-| Skills are on disk, from the Git tag or the package copy  | `0`       |
-| The install failed, and skills from an earlier run remain | `0`       |
-| The user selected **Manual**, or no skills in the prompt  | `0`       |
-| The install failed, and no skills are on disk             | `1`       |
-| The machine is offline, and no skills are on disk         | `1`       |
+`argent init` finds that the machine is offline when it cannot resolve `registry.npmjs.org`. It then does not try the install, and it shows the manual instructions.
+
+| Result of the skills step                                    | Exit code |
+| ------------------------------------------------------------ | --------- |
+| The run installed skills, from the Git tag or the package    | `0`       |
+| The install failed, and skills from an earlier run are there | `0`       |
+| The machine is offline, with or without skills on disk       | `0`       |
+| The user selected **Manual**, or no skills in the prompt     | `0`       |
+| The install failed, and no skills are on disk                | `1`       |

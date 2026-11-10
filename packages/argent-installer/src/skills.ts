@@ -143,21 +143,38 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   return results;
 }
 
-// Argent skills actually on disk in a scope, whatever the skills CLI reported:
-// the installer's summary states this number, so it has to come from the disk.
-export function countInstalledArgentSkills(projectRoot: string, scope: SkillScope): number {
+// The skills in `names` found on disk in a scope, each with a stamp of its
+// SKILL.md in every skill dir (inode and mtime). The skills CLI rewrites a skill
+// it installs, so two snapshots tell whether a run installed anything. stat
+// follows links, so an editor's link to the shared copy counts like the copy.
+// With no names (an unreadable bundled set), any argent-prefixed skill counts.
+export function snapshotArgentSkills(
+  projectRoot: string,
+  scope: SkillScope,
+  names: readonly string[]
+): Map<string, string> {
   const { skillTargets } = getManagedContentTargets(
     ALL_ADAPTERS,
     projectRoot,
     scope === "global" ? "global" : "local"
   );
-  const names = new Set<string>();
+  const found = new Map<string, string>();
   for (const { targetPath } of skillTargets) {
-    for (const name of listBundledSkills(targetPath)) {
-      if (name.startsWith(ARGENT_SKILL_PREFIX)) names.add(name);
+    let candidates: readonly string[] = names;
+    if (names.length === 0) {
+      try {
+        candidates = fs.readdirSync(targetPath).filter((n) => n.startsWith(ARGENT_SKILL_PREFIX));
+      } catch {
+        continue;
+      }
+    }
+    for (const name of candidates) {
+      const stat = fs.statSync(path.join(targetPath, name, "SKILL.md"), { throwIfNoEntry: false });
+      if (!stat?.isFile()) continue;
+      found.set(name, `${found.get(name) ?? ""}${stat.ino}:${stat.mtimeMs};`);
     }
   }
-  return names.size;
+  return found;
 }
 
 // A renamed skill's old dir can outlive its lock entry (or never have had one),

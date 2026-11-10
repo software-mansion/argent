@@ -10,7 +10,7 @@ const { spawnMock, confirmMock, trackMock, state } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   confirmMock: vi.fn(),
   trackMock: vi.fn(),
-  state: { bundledUnreadable: false },
+  state: { bundledUnreadable: false, globalRoot: null as string | null },
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -29,6 +29,8 @@ vi.mock("../src/utils.js", async (importOriginal) => {
   return {
     ...actual,
     isOnline: vi.fn(async () => true),
+    getGloballyInstalledPackageRoot: () => state.globalRoot,
+    getGloballyInstalledVersion: () => (state.globalRoot ? actual.getInstalledVersion() : null),
     listBundledSkills: (dir?: string) =>
       state.bundledUnreadable ? [] : actual.listBundledSkills(dir),
   };
@@ -66,6 +68,7 @@ beforeEach(() => {
   addExitCodes = [];
   addWritesSkills = true;
   state.bundledUnreadable = false;
+  state.globalRoot = null;
   confirmMock.mockReset();
   trackMock.mockClear();
   spawnMock.mockReset();
@@ -450,6 +453,60 @@ describe("runSkillsStep when the install fails (#614)", () => {
     expect(result).toMatchObject({ outcome: "success", usedFallback: true });
   });
 
+  it("falls back to the global install's copy, not the running package's", async () => {
+    // Under `npx` the running package sits in the npx cache, and the lock would
+    // record that machine-local, clearable path.
+    addExitCodes = [1];
+    state.globalRoot = path.join(tmpDir, "global", "argent");
+    const globalSkill = path.join(state.globalRoot, "skills", "argent-device-interact");
+    mkdirs(globalSkill);
+    fs.writeFileSync(path.join(globalSkill, "SKILL.md"), "");
+    const installed = getInstalledVersion()!;
+
+    const result = await step({ version: installed });
+
+    expect(addSources()).toEqual([
+      buildArgentSkillsSource(installed),
+      path.join(state.globalRoot, "skills"),
+    ]);
+    expect(result).toMatchObject({ outcome: "success", usedFallback: true });
+  });
+
+  it("does not count retired or stray argent dirs as installed skills", async () => {
+    exitCode = 1;
+    for (const name of ["argent-create-flow", "argent-qa-flows", "argent-not-a-skill"]) {
+      mkdirs(path.join(project(), ".agents", "skills", name));
+      fs.writeFileSync(path.join(project(), ".agents", "skills", name, "SKILL.md"), "");
+    }
+
+    const result = await step();
+
+    expect(result).toMatchObject({ outcome: "failure", installedCount: 0 });
+  });
+
+  it("counts a skill reached through an editor's symlink", async () => {
+    exitCode = 1;
+    const shared = path.join(tmpDir, "elsewhere", "argent-device-interact");
+    mkdirs(shared, path.join(project(), ".claude", "skills"));
+    fs.writeFileSync(path.join(shared, "SKILL.md"), "");
+    fs.symlinkSync(shared, path.join(project(), ".claude", "skills", "argent-device-interact"));
+
+    const result = await step();
+
+    expect(result).toMatchObject({ outcome: "failure", installedCount: 1 });
+  });
+
+  it("does not call a cancelled TUI over earlier skills a success", async () => {
+    addWritesSkills = false;
+    const existing = path.join(project(), ".agents", "skills", "argent-device-interact");
+    mkdirs(existing);
+    fs.writeFileSync(path.join(existing, "SKILL.md"), "");
+
+    const result = await interactiveStep();
+
+    expect(result).toMatchObject({ outcome: "skipped", installedCount: 1, installedThisRun: 0 });
+  });
+
   it("treats a TUI that exits 0 and installs nothing as skipped, without retrying", async () => {
     addWritesSkills = false;
 
@@ -468,6 +525,7 @@ describe("skills summary line (#614)", () => {
     source: "pinned",
     usedFallback: false,
     installedCount: 18,
+    installedThisRun: 18,
     forcedManual: false,
     ...overrides,
   });
@@ -475,18 +533,25 @@ describe("skills summary line (#614)", () => {
   it.each<[string, Partial<SkillsStepResult>, RegExp, boolean]>([
     ["a healthy install", {}, /18 installed$/, false],
     ["a rescued install", { usedFallback: true }, /18 installed from the bundled copy/, false],
+    ["a partial run", { installedCount: 18, installedThisRun: 5 }, /5 installed$/, false],
+    [
+      "offline with earlier skills on disk",
+      { method: "manual", outcome: "skipped", installedThisRun: 0, forcedManual: true },
+      /not updated \(offline.*18 from an earlier install/,
+      false,
+    ],
     ["total failure", { outcome: "failure", installedCount: 0 }, /NOT installed/, true],
     [
       "failure over earlier skills",
-      { outcome: "failure" },
-      /not updated.*18 already on disk/,
+      { outcome: "failure", installedThisRun: 0 },
+      /not updated.*18 from an earlier install on disk/,
       false,
     ],
     [
       "offline with nothing on disk",
       { method: "manual", outcome: "skipped", installedCount: 0, forcedManual: true },
       /NOT installed \(offline/,
-      true,
+      false,
     ],
     [
       "Manual, chosen by the user",
@@ -497,7 +562,7 @@ describe("skills summary line (#614)", () => {
     [
       "a TUI that installed nothing",
       { method: "interactive", outcome: "skipped", installedCount: 0 },
-      /NOT installed \(none selected\)/,
+      /none installed \(none selected\)$/,
       false,
     ],
   ])("%s", (_name, overrides, line, missing) => {
