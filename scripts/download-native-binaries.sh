@@ -51,7 +51,7 @@ echo "Downloading native binaries from ${REPO} (tag: ${TAG})..."
 
 mkdir -p "${DYLIBS_DIR}" "${BIN_DIR}" "${IOS_BIN_DIR}" "${ANDROID_BIN_DIR}"
 
-for DYLIB in libNativeDevtoolsIos.dylib libKeyboardPatch.dylib libArgentInjectionBootstrap.dylib libArgentAudio.dylib; do
+for DYLIB in libNativeDevtoolsIos.dylib libKeyboardPatch.dylib libArgentInjectionBootstrap.dylib; do
   echo "  Downloading ${DYLIB}..."
   gh release download "${TAG}" \
     --repo "${REPO}" \
@@ -59,6 +59,17 @@ for DYLIB in libNativeDevtoolsIos.dylib libKeyboardPatch.dylib libArgentInjectio
     --dir "${DYLIBS_DIR}" \
     --clobber
 done
+
+# The audio hook ships from releases that have it; an older tag only costs the audio tools, which then
+# say the dylib is missing, so a miss is skipped like the tvOS assets below.
+echo "  Downloading libArgentAudio.dylib..."
+if ! gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "libArgentAudio.dylib" \
+  --dir "${DYLIBS_DIR}" \
+  --clobber; then
+  echo "  Skipping libArgentAudio.dylib: not present on '${TAG}' (pre-audio-mock release)." >&2
+fi
 
 echo "  Downloading ax-service..."
 gh release download "${TAG}" \
@@ -308,6 +319,8 @@ if command -v vtool &>/dev/null; then
     # dylibs/tcp/ is the same dyld-silent-skip failure.
     assert_dylib_platform "${TCP_DYLIBS_DIR}/${d}.dylib" IOSSIMULATOR
   done
+  # The audio hook has no tvOS or TCP build.
+  assert_dylib_platform "${DYLIBS_DIR}/libArgentAudio.dylib" IOSSIMULATOR
   if [ "${dylib_verify_failed}" -ne 0 ]; then
     echo "Dylib platform verification failed for release '${TAG}'. The release" >&2
     echo "shipped a mis-platformed dylib (see above) — refusing to use it. Fix" >&2
