@@ -86,8 +86,9 @@ export function jsNotReached(
   switch (reason) {
     case "metro_not_running":
       return `Metro is not running on port ${port}; start it, or pass the port of the app's Metro`;
+    // The detail lists logicalDeviceIds to re-target with, which udid cannot take.
     case "device_mismatch":
-      return `no JS runtime on Metro port ${port} belongs to this device (${detail}); give each device its own Metro port`;
+      return `several devices are connected to Metro on port ${port}, so the JS layer cannot tell which runtime is this device's; give each device its own Metro port (udid takes the id from list-devices, not a logicalDeviceId)`;
     case "no_app_connected":
       return `no app is connected to Metro on port ${port} yet`;
     case undefined:

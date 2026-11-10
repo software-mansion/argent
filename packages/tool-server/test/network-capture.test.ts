@@ -736,7 +736,7 @@ describe("network-capture-start", () => {
         found: "a Metro with no runtime of this device",
         answer: (): FakeRuntime | FailureCode | undefined =>
           FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
-        reason: `no JS runtime on Metro port ${PORT} belongs to this device ([JsRuntimeDebugger:${PORT}:${IOS_UDID}] Metro on port ${PORT}: ${FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH}); give each device its own Metro port`,
+        reason: `several devices are connected to Metro on port ${PORT}, so the JS layer cannot tell which runtime is this device's; give each device its own Metro port (udid takes the id from list-devices, not a logicalDeviceId)`,
       },
       {
         found: "another app's runtime",
