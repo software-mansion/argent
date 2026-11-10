@@ -186,7 +186,15 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
   }
 
   const { rows, cut } = frequentRerenderRows(input);
-  lines.push(...renderFrequentRerenders(summary, rows, frequentOutsideSource(input), cut));
+  lines.push(
+    ...renderFrequentRerenders(
+      summary,
+      rows,
+      frequentOutsideSource(input),
+      input.sessionContext.projectRoot,
+      cut
+    )
+  );
 
   lines.push(``, `---`, `## Next Steps`, ``);
   if (rows.length > 0) {
@@ -240,6 +248,7 @@ function renderFrequentRerenders(
   summary: RenderSummary | null,
   rows: FrequentRerenderRow[],
   outsideSource: string[],
+  projectRoot: string,
   cut: FrequentRerenderRow[] = []
 ): string[] {
   if (!summary) return [];
@@ -258,7 +267,7 @@ function renderFrequentRerenders(
     ``,
     `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
     `|---|---|---|---|---|---|---|`,
-    ...rows.map(renderFrequentRow),
+    ...rows.map((row) => renderFrequentRow(row, projectRoot)),
     ...cutNote,
     ...outsideNote,
   ];
@@ -288,12 +297,12 @@ function renderOutsideSourceNote(names: string[]): string {
   return `Frequent re-renders left out because the source index has no definition for the name: ${shown}${more}. These are usually library components. Class components, components made by a wrapper such as \`observer()\`, and all of your components when \`project_root\` is wrong land here too. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
 }
 
-function renderFrequentRow(row: FrequentRerenderRow): string {
+function renderFrequentRow(row: FrequentRerenderRow, projectRoot: string): string {
   const c = row.component;
   const ann = annotateComponentName(c.name);
   const file =
     row.origin.file !== undefined
-      ? `\`${shortenPath(row.origin.file)}${row.origin.line !== undefined ? `:${row.origin.line}` : ""}\``
+      ? `\`${pathFromProject(row.origin.file, projectRoot)}${row.origin.line !== undefined ? `:${row.origin.line}` : ""}\``
       : "—";
   return (
     `| \`${ann.displayName}\`${ann.tag} | ${formatCount(c.rerenders)} | ${row.perSecond.toFixed(1)} | ` +
@@ -398,6 +407,7 @@ function buildFullMarkdown(
         input.renderSummary ?? null,
         tableAddsRow ? frequent : [],
         outsideSource,
+        sessionContext.projectRoot,
         cutNew
       )
     );
