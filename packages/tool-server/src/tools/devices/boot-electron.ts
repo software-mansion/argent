@@ -149,14 +149,16 @@ async function waitForCdpReady(
 /**
  * The switch name `arg` sets, or undefined for an argument. Chromium trims each
  * argument and takes `--` and `-` as switch prefixes, and on Windows `/` too,
- * case-insensitively.
+ * case-insensitively. A bare `-` (or `/`) is an argument.
  */
 export function chromiumSwitchName(
   arg: string,
   platform: NodeJS.Platform = process.platform
 ): string | undefined {
   const win = platform === "win32";
-  const key = (win ? /^(?:--|-|\/)([^=]*)/ : /^(?:--|-)([^=]*)/).exec(arg.trim())?.[1];
+  const trimmed = arg.trim();
+  if (trimmed === "-" || (win && trimmed === "/")) return undefined;
+  const key = (win ? /^(?:--|-|\/)([^=]*)/ : /^(?:--|-)([^=]*)/).exec(trimmed)?.[1];
   return win ? key?.toLowerCase() : key;
 }
 

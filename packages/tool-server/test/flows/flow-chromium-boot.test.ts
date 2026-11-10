@@ -12,7 +12,11 @@ import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flo
 // Each boot lands on its own port, as the real launcher does — and the device
 // id IS the port, so every boot is a new device id.
 let bootCount = 0;
-const defaultBoot = async (opts: { appPath: string; extraArgs?: string[] }) => {
+const defaultBoot = async (opts: {
+  appPath: string;
+  extraArgs?: string[];
+  signal?: AbortSignal;
+}) => {
   const n = bootCount++;
   return {
     platform: "chromium" as const,
@@ -780,6 +784,38 @@ describe("flow-execute chromium boot", () => {
       [12346, 4243],
       [12345, 4242],
     ]);
+  });
+
+  it("hands the run's signal to every boot, so a cancel stops one in flight", async () => {
+    const controller = new AbortController();
+    const parent = await writeFlow(
+      "steps:\n  - launch: { chromium: ./app-a }\n  - launch: { chromium: ./app-b }\n  - echo: after\n"
+    );
+    const registry = makeRegistry();
+    bootElectronApp.mockImplementationOnce(defaultBoot);
+    // The second boot never comes up on its own: only the signal ends it.
+    bootElectronApp.mockImplementationOnce(
+      (opts) =>
+        new Promise((_resolve, reject) => {
+          opts.signal?.addEventListener("abort", () =>
+            reject(new Error("Electron boot was cancelled."))
+          );
+          controller.abort();
+        })
+    );
+
+    const result = await runFlow(
+      registry,
+      { name: "cancel-in-flight", project_root: PROJECT_ROOT, e2e_test_file: parent },
+      controller.signal
+    );
+
+    expect(bootElectronApp.mock.calls.map((c) => c[0].signal)).toEqual([
+      controller.signal,
+      controller.signal,
+    ]);
+    expect(result.aborted).toBe(true);
+    expect(result.steps[1]).toMatchObject({ kind: "launch", status: "skip" });
   });
 
   it("boots for a fragment whose first step run:s a chromium standalone flow", async () => {

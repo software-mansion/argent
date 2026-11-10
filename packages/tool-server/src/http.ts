@@ -276,7 +276,7 @@ export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | nu
   // An `avdName`-only call (boot-device before the emulator exists) has no serial
   // to resolve a runtime kind from, so it stays coarse `android`; later `udid` /
   // `device_id` calls refine an Android TV AVD once the cache is warm.
-  // An empty field names no target: boot-device skips it too.
+  // An empty field names no target: boot-device skips it too (an empty `browser` fails its enum).
   const { avdName, harmonyInstance, electronAppPath, browser, vvdImage } = data as Record<
     string,
     unknown

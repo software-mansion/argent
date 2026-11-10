@@ -320,9 +320,9 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     );
   }
 
-  // Chromium reads every non-flag argument, an empty one too, as a start URL,
+  // Chromium reads every non-flag argument, a blank one too, as a start URL,
   // and headless mode exits on more than one, so about:blank is only the default.
-  const extraArgs = (options.extraArgs ?? []).filter((a) => a !== "");
+  const extraArgs = (options.extraArgs ?? []).filter((a) => a.trim() !== "");
   const hasStartUrl = extraArgs.some((a) => chromiumSwitchName(a) === undefined);
   const snap = snapName(executable);
   const root = snap ? path.join(os.homedir(), "snap", snap, "common") : os.tmpdir();

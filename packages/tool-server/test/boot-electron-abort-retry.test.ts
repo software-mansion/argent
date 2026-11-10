@@ -78,6 +78,10 @@ describe("chromiumSwitchName", () => {
     ["-user-data-dir=C:\\p", "win32", "user-data-dir"],
     ["about:blank", "win32", undefined],
     ["C:\\page.html", "win32", undefined],
+    ["-", "linux", undefined],
+    [" - ", "darwin", undefined],
+    ["/", "win32", undefined],
+    ["--", "linux", ""],
   ] as const)("%j on %s -> %s", (arg, platform, expected) => {
     expect(chromiumSwitchName(arg, platform)).toBe(expected);
   });

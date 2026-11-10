@@ -266,6 +266,22 @@ describe("bootElectronApp onProcessGone / label", () => {
     });
   });
 
+  it("keeps only the last 2000 characters of stderr", async () => {
+    const child = makeFakeChild(12345);
+    spawnMock.mockReturnValue(child);
+    const boot = bootElectronApp({ appPath: appBinary }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    child.stderr.emit("data", Buffer.from("a".repeat(3000)));
+    child.stderr.emit("data", Buffer.from("b".repeat(1500)));
+    child.emit("exit", 1, null);
+    child.stderr.emit("end");
+
+    const err = await boot;
+    expect((err as Error).message.split("Its stderr ended with:\n")[1]).toBe(
+      "a".repeat(500) + "b".repeat(1500)
+    );
+  });
+
   it("reports an Electron app's early exit as Electron, without a tail when stderr was silent", async () => {
     const child = makeFakeChild(12345);
     spawnMock.mockReturnValue(child);

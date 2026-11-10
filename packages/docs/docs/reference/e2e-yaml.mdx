@@ -524,7 +524,7 @@ With `--json`, Argent writes these objects on stderr, one on each line. Argent w
 
 A usage error prints no help text and gives exit code 2. The warnings of `--output` stay plain text.
 
-Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size.
+Pin `--platform` and `--device` on iOS, Android and Vega. On Chromium, pass `--platform chromium` and omit `--device`. Then the runner boots the declared app path with a reproducible window size. A browser booted with `browser` has no app path to boot; give it `--window-size=<w>,<h>` in `electronArgs` instead.
 
 <a id="flows-over-a-link" />
 

@@ -249,13 +249,21 @@ describe("bootBrowser", () => {
     expect(args).not.toContain("about:blank");
   });
 
-  it("drops an empty argument, which Chromium would open as a second start page", async () => {
+  it("drops a blank argument, which Chromium would open as a second start page", async () => {
     installed.set(chrome!, "exec");
-    await bootBrowser({ browser: "chrome", extraArgs: ["--headless=new", ""] });
+    await bootBrowser({ browser: "chrome", extraArgs: ["--headless=new", "", " \t"] });
     expect(bootElectronAppMock.mock.calls[0]![0].extraArgs.slice(-2)).toEqual([
       "--headless=new",
       "about:blank",
     ]);
+  });
+
+  it("reads a bare - as the start URL, as Chromium does", async () => {
+    installed.set(chrome!, "exec");
+    await bootBrowser({ browser: "chrome", extraArgs: ["--headless=new", "-"] });
+    const args: string[] = bootElectronAppMock.mock.calls[0]![0].extraArgs;
+    expect(args.slice(-2)).toEqual(["--headless=new", "-"]);
+    expect(args).not.toContain("about:blank");
   });
 
   it("falls back to a later install location", async () => {
