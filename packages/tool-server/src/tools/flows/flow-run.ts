@@ -74,17 +74,18 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
-import { isUnmetUiWaitResult } from "../await-ui-element";
-import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
   resolveFlowDevice,
+  assertDeviceMeetsRequires,
+  assertPlatformMeetsRequires,
   bindDeviceArgs,
   flowRequiresDevice,
   flowScopesDevice,
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
-import { isNestedOrchestratorTool, nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import { isNestedOrchestratorTool } from "./flow-nested-outcome";
+import { toolResultVerdict } from "../../utils/tool-result-verdict";
 import {
   runDirective,
   invokeOnDevice,
@@ -1494,13 +1495,13 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches; with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
+        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform` and the e2e test's `requires:` block); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
       ),
     platform: z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`."
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`."
       ),
     updateBaselines: z
       .boolean()
@@ -1689,12 +1690,27 @@ Without a link, every step kind runs.`,
         }
       }
 
+      // After the file checks, so an invalid test never reads as a skip, and before the
+      // prerequisite handshake asks the caller to set up a run that cannot happen.
+      if (params.device) {
+        await assertDeviceMeetsRequires(resolveDevice(params.device), flow.requires);
+      } else if (params.platform) {
+        assertPlatformMeetsRequires(
+          params.platform,
+          flow.requires,
+          `the ${params.platform} target this run was pointed at`
+        );
+      }
+
       // LLM-path prerequisite handshake (fragments only; a flow with a leading
       // launch step cannot declare one — validated at parse, and a leading
       // run: chain into a launch is rejected just above unless that launch
       // merely attaches). The chromium-pinned run exempted above lands here and
       // takes the ordinary notice/acknowledge path.
       if (flow.executionPrerequisite && !params.prerequisiteAcknowledged) {
+        // Fail now rather than ask the caller to set up a run that cannot happen. No boot is
+        // possible here: a leading launch was refused above unless the run is pinned to a device.
+        await resolveRunDevice(registry, ctx, flow, params, flowsDir, seed, viaUpload, project);
         return {
           e2eTest: flowName,
           flow: flowName,
@@ -1867,8 +1883,17 @@ async function resolveRunDevice(
     // The executor's own runStack seed, so a boot can never precede a chain it
     // then refuses.
     const leading = await leadingLaunch(flow, runStack, { registry, project });
-    const spec = leading && chromiumBootSpec(leading.app, params.platform);
+    // A block that allows only chromium picks the chromium entry of a multi-platform launch.
+    const chromiumOnly =
+      flow.requires?.platform?.length === 1 && flow.requires.platform[0] === "chromium";
+    const platform = params.platform ?? (chromiumOnly ? "chromium" : undefined);
+    const spec = leading && chromiumBootSpec(leading.app, platform);
     if (spec) {
+      assertPlatformMeetsRequires(
+        "chromium",
+        flow.requires,
+        "the chromium app its leading launch boots"
+      );
       let booted: BootedChromium;
       try {
         booted = await bootChromiumForFlow(spec, flowDir, viaUpload);
@@ -1894,16 +1919,29 @@ async function resolveRunDevice(
       // path exists to avoid.
       try {
         return {
-          device: await resolveFlowDevice(registry, ctx, resolveOpts(params)),
+          device: await resolveFlowDevice(registry, ctx, {
+            ...resolveOpts(params),
+            requires: flow.requires,
+          }),
           booted: null,
         };
       } catch (err) {
-        if (getFailureSignal(err)?.error_code !== FAILURE_CODES.FLOW_DEVICE_RESOLUTION) throw err;
+        const signal = getFailureSignal(err);
+        // An unreadable `requires.runtimeKind` shares the code but is a failed probe.
+        if (
+          signal?.error_code !== FAILURE_CODES.FLOW_DEVICE_RESOLUTION ||
+          signal.failure_stage === "flow_requirements"
+        ) {
+          throw err;
+        }
         return { device: null, booted: null };
       }
     }
   }
-  const device = await resolveFlowDevice(registry, ctx, resolveOpts(params));
+  const device = await resolveFlowDevice(registry, ctx, {
+    ...resolveOpts(params),
+    requires: flow.requires,
+  });
   return { device, booted: null };
 }
 
@@ -2714,6 +2752,15 @@ async function execRunStep(
   const refusal = fragmentLoadRefusal(state.registry, fragment, target);
   if (refusal !== undefined) return fail(refusal);
 
+  // A failure, not a skip: a fragment that silently did not run would leave a green report.
+  if (state.device) {
+    try {
+      await assertDeviceMeetsRequires(state.device, fragment.requires, `Fragment "${target}"`);
+    } catch (err) {
+      return fail(errMsg(err));
+    }
+  }
+
   // Marker for the composition point, then expand the fragment's steps inline,
   // one level deeper, attributed to the fragment. The fragment's own directory
   // becomes the anchor for `run:` paths inside it; baselines stay anchored to
@@ -3039,57 +3086,15 @@ async function execLeafStep(
             ? { flowStack: scope.runStack }
             : {}),
         });
-        if (isUnmetUiWaitResult(step.name, result)) {
-          const note = (result as { note?: string }).note;
+        // A tool that reports its failure in a result it returns instead of
+        // throwing would otherwise count as a passing step (#606).
+        const verdict = toolResultVerdict(step.name, result);
+        if (verdict) {
           return {
             ...base,
-            status: "fail",
+            status: verdict.status,
             tool: step.name,
-            reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
-          };
-        }
-        // `flow-execute` and `run-sequence` run other tools and report what
-        // happened in their result instead of throwing, so without this a
-        // composition that failed everything counted as a passing step (#606).
-        const nested = nestedOrchestratorOutcome(step.name, result);
-        if (nested) {
-          return {
-            ...base,
-            status: nested.status,
-            tool: step.name,
-            reason: nested.reason,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        if (isDebuggerNotConnectedResult(step.name, result)) {
-          // Keep `detail` in the report: it is the only place the underlying
-          // error text lives (device_mismatch's guidance points the agent at
-          // the logicalDeviceId "listed in the detail message", and the
-          // metro_not_running `got:` fragment names what actually answered the
-          // port).
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        // Same hazard as the two above, on the native-devtools precheck: it
-        // RESOLVES its block rather than throwing, so a step that never reached
-        // the tool's work read as green. `launch:` already guards its own
-        // `restart-app` (see runLaunch); this is the `tool:` spelling of the
-        // same sub-tools, plus the native-* tools it never covered.
-        if (isNativeDevtoolsBlockResult(step.name, result)) {
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `${step.name} did not run (${result.status}): ${result.message}`,
+            reason: verdict.reason,
             result,
             outputHint,
             args,

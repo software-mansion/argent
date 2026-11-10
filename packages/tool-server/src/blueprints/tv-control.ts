@@ -12,8 +12,14 @@ import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
 import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
+import { firstSimulatorPoll } from "../utils/simulator-watcher";
 import { UnsupportedOperationError } from "../utils/capability";
-import type { TvControlApi, TvDescribeResponse, TvDirection } from "./tv-control-types";
+import type {
+  TvControlApi,
+  TvDescribeResponse,
+  TvDirection,
+  TvHierarchyResponse,
+} from "./tv-control-types";
 
 // Re-exported so existing importers of `tv-control` keep working.
 export type { TvControlApi, TvDescribeResponse };
@@ -251,7 +257,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     const hidSock = hidSocketPath(udid);
     let disposed = false;
 
-    await ensureAutomationEnabled(udid);
+    // A select could open an app from the home screen, which must not launch
+    // before the watcher has armed native-devtools injection.
+    await Promise.all([ensureAutomationEnabled(udid), firstSimulatorPoll()]);
 
     // The device-list validation above already learned this UDID's device set,
     // so the synchronous cached lookup is warm. Spawning the AX reader is the
@@ -437,6 +445,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
           focused: r.focused ?? null,
           focusable: r.focusable ?? [],
         };
+      },
+
+      async hierarchy(): Promise<TvHierarchyResponse> {
+        return (await sendAx("hierarchy", 10_000)) as TvHierarchyResponse;
       },
 
       async navigate(direction: TvDirection): Promise<void> {
