@@ -288,7 +288,7 @@ describe("view-network-request-details: iOS response bodies", () => {
 });
 
 describe("view-network-request-details: iOS bodies and Content-Encoding", () => {
-  it("shows a response body as text under a gzip Content-Encoding, since it is read decoded", async () => {
+  it("shows a text response body under a gzip Content-Encoding as the agent sent it", async () => {
     serve(
       record({
         response: { headers: { "Content-Encoding": "gzip", "Content-Type": "application/json" } },
