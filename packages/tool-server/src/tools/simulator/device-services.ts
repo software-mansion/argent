@@ -63,8 +63,7 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
  * `<Namespace>:<deviceId>:<package>`. The LAST colon separates them: an
  * Android package name cannot contain one, while a wireless adb serial
  * (`AndroidNetworkInspector:192.168.1.5:5555:com.example`) can. Their device
- * id is the adb serial even when the service was asked for with an `ext:` id,
- * so either spelling of the device matches.
+ * id is the adb serial even when the service was asked for with an `ext:` id.
  */
 const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
 
@@ -147,7 +146,8 @@ function deviceIdPortion(urn: string, namespace: string): string | undefined {
  * Which entry of `deviceIds` owns `urn` within `namespaces`, if any, in the
  * caller's own spelling — so a tool can report which of the ids it was given
  * matched nothing. The device id is compared whole (never split on ":", see
- * {@link URN_SUFFIXES}).
+ * {@link URN_SUFFIXES}). An `ext:` id also owns the URNs keyed by its raw udid /
+ * serial: a caller handed that spelling opens services under it.
  *
  * Matching is case-insensitive: iOS UDIDs are conventionally upper-case but
  * agents pass through whatever they were given, and a case mismatch must not
@@ -166,10 +166,7 @@ export function deviceIdOwningUrn(
     if (portion === undefined) continue;
     const tail = portion.toLowerCase();
     const owner = deviceIds.find((id) => {
-      const spellings = APP_KEYED_NAMESPACES.includes(namespace)
-        ? [id, externalNativeId(id)]
-        : [id];
-      return spellings.some((spelling) => {
+      return [id, externalNativeId(id)].some((spelling) => {
         const lower = spelling.toLowerCase();
         return URN_SUFFIXES.some((suffix) => tail === `${lower}${suffix}`);
       });

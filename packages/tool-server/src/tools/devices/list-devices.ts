@@ -27,11 +27,7 @@ import {
   filterVvdShadowsFromAndroid,
   type VegaDevice,
 } from "../../utils/vega-devices";
-import {
-  externalNativeId,
-  listExternalDevices,
-  type ExternalDevice,
-} from "../../utils/external-devices";
+import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
 import { lastDeviceUse } from "../simulator/device-services";
 type IosDevice = IosSimulator & { platform: "ios" };
 
@@ -328,29 +324,25 @@ function externalShadowIds(external: readonly ExternalDevice[]): Set<string> {
   return new Set(external.map((device) => device.nativeId));
 }
 
-/**
- * The ids interaction tools accept for this entry; a stopped VVD has none. A
- * provider's device also answers to its raw udid / serial, which list-devices
- * hides but a caller may still have been handed.
- */
-function listedDeviceIds(d: ListedDevice): string[] {
-  if ("external" in d) return [d.id, externalNativeId(d.id)];
-  const id = "id" in d ? d.id : "udid" in d ? d.udid : d.serial;
-  return id === null ? [] : [id];
+/** The id interaction tools accept for this entry; null for a stopped VVD. */
+function listedDeviceId(d: ListedDevice): string | null {
+  return "id" in d ? d.id : "udid" in d ? d.udid : d.serial;
 }
 
 function withUsage(
   devices: readonly ListedDevice[],
   registry: Registry
 ): Array<ListedDevice & DeviceUsage> {
-  const lastUse = lastDeviceUse(registry.getSnapshot().services, devices.flatMap(listedDeviceIds));
+  const ids = devices.map(listedDeviceId).filter((id): id is string => id !== null);
+  const lastUse = lastDeviceUse(registry.getSnapshot().services, ids);
   const now = Date.now();
   return devices.map((d) => {
     // A shut-down device can still hold a session that outlived it, e.g. TvControl.
     if (readinessRank(d) !== 0) return d;
-    const used = listedDeviceIds(d).flatMap((id) => lastUse.get(id) ?? []);
-    if (used.length === 0) return d;
-    const idleSeconds = Math.max(0, Math.floor((now - Math.max(...used)) / 1000));
+    const id = listedDeviceId(d);
+    const used = id === null ? undefined : lastUse.get(id);
+    if (used === undefined) return d;
+    const idleSeconds = Math.max(0, Math.floor((now - used) / 1000));
     return { ...d, inUse: true, idleSeconds };
   });
 }

@@ -1168,6 +1168,22 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     });
   });
 
+  it("stops a provider device's services opened under its raw udid when named by its ext: id", async () => {
+    const raw = "AAAAAAAA-1111-2222-3333-444444444444";
+    const services = new Map([
+      [`SimulatorServer:${raw}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`JsRuntimeDebugger:8081:${raw}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`SimulatorServer:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    expect(await tool.execute!({}, { devices: [`ext:prov:${raw}`] })).toEqual({
+      stopped: [`SimulatorServer:${raw}`, `JsRuntimeDebugger:8081:${raw}`],
+    });
+    expect(registry.disposeService).not.toHaveBeenCalledWith(`SimulatorServer:${THEIRS}`);
+  });
+
   it("reaps AXService on an unscoped machine-wide sweep too", async () => {
     const services = new Map([
       [`AXService:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
