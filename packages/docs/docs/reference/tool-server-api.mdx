@@ -206,6 +206,27 @@ The tool-server sends the stream with `Cache-Control: no-cache, no-transform` an
 
 The client sends a call with a `members` field only one time. When the connection closes before the result arrives, the client does not send the call again. The MCP server sets no timeout for this call. The error says that the tool possibly ran, for example `The connection to the tool-server closed before e2e-execute finished (fetch failed: other side closed). The tool may have run; check its effect before you run it again.`
 
+## `failure` in the response
+
+The tool-server adds a `failure` field beside `data` when the result of a call reports a failure. The field holds the reason. The tool-server adds the field to the JSON response and to the `result` line of the stream. These results report a failure:
+
+| Tool                                                                                                              | Result                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `e2e-execute`                                                                                                     | The e2e test does not pass, or does not run because its prerequisite is not acknowledged |
+| `await-ui-element`                                                                                                | `success` is `false`                                                                     |
+| `run-sequence`                                                                                                    | A step stops the sequence                                                                |
+| `debugger-log-registry`                                                                                           | The debugger is not connected                                                            |
+| `debugger-inspect-element`                                                                                        | The result has an `error`                                                                |
+| `debugger-component-tree`                                                                                         | The result starts with `Error: `                                                         |
+| `launch-app`, `restart-app`, and the `native-*` tools other than `native-devtools-status` and `native-profiler-*` | The native-devtools precheck stops the tool                                              |
+| `native-profiler-analyze`                                                                                         | `status` is `analysis_failed`                                                            |
+| `e2e-add-script`                                                                                                  | The script does not pass                                                                 |
+| `e2e-add-step`                                                                                                    | The call records no step                                                                 |
+
+Other results have no `failure` field, also when they give a negative answer. Examples are `debugger-status` when the debugger is not connected and `await-screen-idle` with `settled: false`.
+
+The client also gives a failure when it does not write a baseline that the result returns. `argent run` prints the result, then it prints the reason on stderr and exits with code 1.
+
 ## What the tool-server does with the members
 
 The tool-server reads the members before it validates the arguments:
@@ -245,7 +266,7 @@ The result of a run over a link that wrote baselines has a `baselineWrites` list
 }
 ```
 
-The client writes a directive with `encoding: "base64"` only when `path` ends in `.png`, has no `..`, and is directly in the baseline directory of a call with `updateBaselines: true`. The client replaces the file in one rename. The client refuses a link to nothing, a link out of the directory, a `.png` name that links to a file that is not a PNG file, and a file that is not a regular file. The client replaces each directive with the path that it wrote, or with `{ "path": "<path>", "error": "<reason>" }`. The client prints the reason of each baseline that it did not write. `argent e2e run` then exits with code 1. The MCP server adds the line `✗ baseline not written: <path>: <reason>` to the report, and the report ends with `FAIL`.
+The client writes a directive with `encoding: "base64"` only when `path` ends in `.png`, has no `..`, and is directly in the baseline directory of a call with `updateBaselines: true`. The client replaces the file in one rename. The client refuses a link to nothing, a link out of the directory, a `.png` name that links to a file that is not a PNG file, and a file that is not a regular file. The client replaces each directive with the path that it wrote, or with `{ "path": "<path>", "error": "<reason>" }`. The client prints the reason of each baseline that it did not write. `argent e2e run` and `argent run` then exit with code 1. The MCP server adds the line `✗ baseline not written: <path>: <reason>` to the report, and the report ends with `FAIL`.
 
 The client writes the baselines only when the result arrives. When the connection closes before the result, the client writes no baseline of that call.
 
@@ -309,3 +330,5 @@ The tool-server resolves each placeholder of the call with these values first, t
 | Sends members         | Does not read members | The listing has no `collect`. The client sends only the e2e test file. The tool-server rejects the e2e test before the first step                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Does not send members | Reads members         | The tool-server rejects the e2e test before the first step and adds: "This tool-server runs run: steps for a client that sends their fragments with the call. Update the argent CLI or MCP adapter on the client." For a `snapshot:` step, it names "snapshot: steps for a client that sends their baselines with the call", for a nested e2e test "tool: e2e-execute steps that name an e2e test with name, for a client that sends those e2e tests with the call", for a file argument "tool: steps with file arguments for a client that sends them with the call" |
 | Does not send members | Does not read members | The tool-server rejects the e2e test before the first step                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+
+A tool-server that does not send `failure` gives exit code 0 from `argent run` for the results in [`failure` in the response](#failure-in-the-response). A baseline that the client does not write still gives exit code 1, because the client finds it.
