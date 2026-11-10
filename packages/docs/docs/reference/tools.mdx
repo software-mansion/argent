@@ -279,13 +279,14 @@ For an ID from `view-network-logs`, `view-network-request-details` gives `Reques
 
 The `header` line of `native-network-logs` gives one of these states after the name of the layer:
 
-| State          | Meaning                                                                                                                     |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `armed`        | The capture is ready in the current process of the app.                                                                     |
-| `not armed`    | The capture is started, but it is not ready. The `header` line gives the reason.                                            |
-| `not attached` | Android only. A process of the app with the in-app agent ended. The current process has no in-app agent, or the app exited. |
-| `stopped`      | `network-capture-stop` stopped the capture. The list contains the requests from before the stop.                            |
-| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. The list is empty.                             |
+| State          | Meaning                                                                                                                                                                      |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `armed`        | The capture is ready in the current process of the app.                                                                                                                      |
+| `not armed`    | The capture is started, but it is not ready. The `header` line gives the reason.                                                                                             |
+| `not attached` | Android only. A process of the app with the in-app agent ended. The current process has no in-app agent, or the app exited.                                                  |
+| `stopped`      | `network-capture-stop` stopped the capture. The list contains the requests from before the stop.                                                                             |
+| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. The list is empty.                                                                              |
+| `unavailable`  | Android only. The last start found that Argent cannot capture the app, for example in a build that is not debuggable. The `header` line gives the reason. The list is empty. |
 
 ## Native devtools
 
@@ -317,7 +318,7 @@ To capture a request:
 | `limit`    | The maximum number of requests in the list, an integer of 0 or more. Argent returns the most recent requests, oldest first. With 0, `requests` is empty, and the result still gives the `header` and the `total`. Argent refuses a negative number or a fraction. The default is 50. |
 | `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                                                                                                                                                                              |
 
-The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `total` and `requests`. After a stop, it also contains `stopped: true`. Before a start, it contains `started: false`. The `header` line starts with `android-native: `, then the header state, for example `armed` or `not attached`. See [Network capture on iOS and Android](#network-capture-on-ios-and-android) for the header states. The `capture` field and the `header` line also show what the in-app agent captures. The `capture` field is absent when `armed` is `false`. The `captureDetail` field contains the detail that the in-app agent sent with the state. The `header` line shows this detail too. These are the values of `capture`:
+The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `total` and `requests`. After a stop, it also contains `stopped: true`. Before a start, it contains `started: false`. After a start that found the layer unavailable, it contains `started: false`, `capture: "unavailable"` and the reason of the start in `captureDetail`. The `header` line starts with `android-native: `, then the header state, for example `armed` or `not attached`. See [Network capture on iOS and Android](#network-capture-on-ios-and-android) for the header states. The `capture` field and the `header` line also show what the in-app agent captures. The `capture` field is absent when `armed` is `false`, except after a start that found the layer unavailable. The `captureDetail` field contains the detail that the in-app agent sent with the state. The `header` line shows this detail too. These are the values of `capture`:
 
 | State       | Meaning                                                                                                                            |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |

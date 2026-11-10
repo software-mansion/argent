@@ -3663,7 +3663,7 @@ describe("the tools on the Android native layer", () => {
     expect(plain).not.toHaveProperty("captureDetail");
   });
 
-  it("native-network-logs says why an unarmed layer is empty, and reads not started after a start that found the app not attachable", async () => {
+  it("native-network-logs says why an unarmed layer is empty, and reads unavailable with the reason after a start that found the app not attachable", async () => {
     device.process = null;
     const api = await createInspector();
     const notRunning = `${PKG} was not running at network-capture-start; launch-app or restart-app attaches the agent to its next process, or call network-capture-start once it runs`;
@@ -3676,7 +3676,9 @@ describe("the tools on the Android native layer", () => {
 
     device.runAsError = "run-as: package not debuggable: com.example.release";
     const release = await createInspector(8081, "com.example.release");
-    expect(await release.startCapture(8081)).toMatchObject({ armed: false, unavailable: true });
+    const refused = await release.startCapture(8081);
+    expect(refused).toMatchObject({ armed: false, unavailable: true });
+    // A read that sent the caller back to network-capture-start would loop.
     expect(
       await nativeNetworkLogsTool.execute!(
         { androidNetwork: release },
@@ -3684,14 +3686,34 @@ describe("the tools on the Android native layer", () => {
       )
     ).toEqual({
       status: "ok",
-      header:
-        "android-native: not started, 0 requests (network capture is off for com.example.release; call network-capture-start for it, then repeat the action)",
+      header: `android-native: unavailable, 0 requests (${refused.reason})`,
       armed: false,
       started: false,
+      capture: "unavailable",
+      captureDetail: refused.reason,
       count: 0,
       total: 0,
       requests: [],
     });
+    expect(refused.reason).toContain("is not a debuggable build");
+  });
+
+  it("keeps the reason of the last start only while that start found the layer unavailable and no stop came after it", async () => {
+    device.runAsError = `run-as: package not debuggable: ${PKG}`;
+    const api = await createInspector();
+    const refused = await api.startCapture(8081);
+    expect(api.unavailableReason()).toBe(refused.reason);
+
+    device.runAsError = undefined;
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    expect(api.unavailableReason()).toBeUndefined();
+
+    device.runAsError = `run-as: package not debuggable: ${PKG}`;
+    device.process = { pid: 5100, startTime: 99_000 };
+    expect(await api.startCapture(8081)).toMatchObject({ unavailable: true });
+    expect(api.unavailableReason()).toContain("is not a debuggable build");
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(api.unavailableReason()).toBeUndefined();
   });
 
   it("native-network-logs with clear hides what it listed and what it did not return past limit, its ids still read, and a request in flight lists again once it finishes", async () => {

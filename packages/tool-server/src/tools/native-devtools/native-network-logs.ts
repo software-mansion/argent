@@ -68,13 +68,13 @@ interface NativeListing {
   status: "ok";
   header: string;
   armed: boolean;
-  /** Only on the answer before any network-capture-start for the app. */
+  /** Only on the answer before any network-capture-start for the app, or after one that found the layer unavailable. */
   started?: false;
   /** Only while network-capture-stop has capture stopped for the app. */
   stopped?: true;
-  /** Android: the capture state the in-app agent reports. */
+  /** Android: the capture state the in-app agent reports, or unavailable after a start that found the layer unavailable. */
   capture?: AndroidCaptureState;
-  /** Android: the detail the in-app agent sent with the capture state, for example why only some requests are captured. */
+  /** Android: the detail the in-app agent sent with the capture state, for example why only some requests are captured, or why the start found the layer unavailable. */
   captureDetail?: string;
   count: number;
   total: number;
@@ -133,7 +133,10 @@ Android results also carry capture and captureDetail. When capture is active, ca
       if (device.platform === "android") {
         const api = services.androidNetwork as AndroidNetworkInspectorApi | undefined;
         if (!api || (!api.isStarted() && !api.isStopped())) {
-          return notStarted("android-native", params.bundleId);
+          const reason = api?.unavailableReason();
+          return reason
+            ? unavailableAndroid(reason)
+            : notStarted("android-native", params.bundleId);
         }
         return listAndroidNative(api, params, port);
       }
@@ -196,6 +199,21 @@ function notStarted(layer: NativeNetworkRecord["layer"], bundleId: string): Nati
     header: `${layer}: not started, 0 requests (network capture is off for ${bundleId}; call network-capture-start for it, then repeat the action)`,
     armed: false,
     started: false,
+    count: 0,
+    total: 0,
+    requests: [],
+  };
+}
+
+/** The answer after a start that found the Android layer unavailable: another start finds the same. */
+function unavailableAndroid(reason: string): NativeListing {
+  return {
+    status: "ok",
+    header: `android-native: unavailable, 0 requests (${reason})`,
+    armed: false,
+    started: false,
+    capture: "unavailable",
+    captureDetail: reason,
     count: 0,
     total: 0,
     requests: [],

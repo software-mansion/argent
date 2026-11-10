@@ -214,6 +214,11 @@ export interface AndroidNetworkInspectorApi {
   /** Capture is started: from a start until a stop or a dispose. */
   isStarted(): boolean;
   isStopped(): boolean;
+  /**
+   * Why the last start found the layer unavailable. Undefined after a start
+   * that did not, and after a stop.
+   */
+  unavailableReason(): string | undefined;
   /** Where the last start began: records numbered higher came after it. */
   captureMark(): { lastRecord: number; metroPort: number } | undefined;
   state(): AndroidNetworkInspectorState;
@@ -437,6 +442,8 @@ function createInspector(
   /** The app's last agent process ended and none runs in its current one. */
   let notAttached = false;
   let mark: { lastRecord: number; metroPort: number } | undefined;
+  /** Kept so a read says why, and does not send the caller back to the start that refused. */
+  let unavailableReason: string | undefined;
   let ready = false;
   let gates: { abi: AgentAbi } | null = null;
   /**
@@ -1809,6 +1816,7 @@ function createInspector(
         const unavailableStart = (reason: string): { result: AndroidCaptureStart } => {
           if (found.stopped) stopped = true;
           mark = found.mark;
+          unavailableReason = reason;
           return { result: { armed: false, unavailable: true, reason } };
         };
         // Before the attach, so a request during the arming counts.
@@ -1819,6 +1827,7 @@ function createInspector(
           const outcome = await attachCurrent();
           if ("blocked" in outcome) return unavailableStart(outcome.blocked.reason);
           live = true;
+          unavailableReason = undefined;
           // A stop left its connection open and disabled, and the attach finds
           // its process known, so nothing else would enable it.
           for (const conn of connections) {
@@ -1834,6 +1843,7 @@ function createInspector(
           if (isUnavailableFailure(err)) return unavailableStart(errorMessage(err));
           // A launch attaches once the device answers again.
           live = true;
+          unavailableReason = undefined;
           const reason = isOwnFailure(err)
             ? errorMessage(err)
             : `adb did not answer (${firstLine(adbFailureDetail(err))}); the next launch or network-capture-start tries again`;
@@ -1883,6 +1893,7 @@ function createInspector(
     stopped = true;
     live = false;
     notAttached = false;
+    unavailableReason = undefined;
     for (const conn of connections) conn.armed = false;
     for (const wake of armWaiters) wake();
     return withKeyedLock(attachLock, "attach", async () => {
@@ -1997,6 +2008,7 @@ function createInspector(
     stopCapture,
     isStarted: () => live && !disposed,
     isStopped: () => stopped && !disposed,
+    unavailableReason: () => unavailableReason,
     captureMark: () => mark,
     state() {
       const conn = armedConnection();
