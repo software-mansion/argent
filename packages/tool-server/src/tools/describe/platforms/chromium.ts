@@ -1379,16 +1379,32 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return hits;
   }
 
+  // Memoized: every probe point can hit a page's whole ancestor stack.
+  const flatDepths = nodeMap();
+  function flatDepth(n) {
+    if (flatDepths.has(n)) return flatDepths.get(n);
+    const p = flatParent(n);
+    const d = p && getNodeType.call(p) === 1 ? flatDepth(p) + 1 : 0;
+    flatDepths.set(n, d);
+    return d;
+  }
+  const outOfFlow = nodeMap();
+  function escapesClips(n) {
+    if (outOfFlow.has(n)) return outOfFlow.get(n);
+    const position = window.getComputedStyle(n).position;
+    const out = position === "fixed" || position === "absolute";
+    outOfFlow.set(n, out);
+    return out;
+  }
+
   // Whether hit is in el's flat tree and el's own painting puts it where it is: no box
   // between them is fixed or absolute, which would paint by its own containing block,
   // escaping el's clips.
   function carried(el, hit) {
-    for (let n = hit; n && getNodeType.call(n) === 1; n = flatParent(n)) {
-      if (n === el) return true;
-      const position = window.getComputedStyle(n).position;
-      if (position === "fixed" || position === "absolute") return false;
-    }
-    return false;
+    const depth = flatDepth(el);
+    let n = hit;
+    for (; flatDepth(n) > depth; n = flatParent(n)) if (escapesClips(n)) return false;
+    return n === el;
   }
 
   // Smallest normalized box covering every surviving child frame — the frame we give

@@ -3193,6 +3193,33 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(reads(8, H)).toBe(1);
   });
 
+  it("reads each ancestor's style a bounded number of times however many hit tests list it", () => {
+    // Full-viewport wrappers, which every point probed past the scroller hits.
+    const reads = (rowCount: number) => {
+      const rows = Array.from({ length: rowCount }, (_, i) =>
+        row(`r${i}`, { x: 1, y: 101 + i * 8, w: 285, h: 8 })
+      );
+      let n = 0;
+      let inner: MockElement = scroller(rows);
+      for (let i = 0; i < 20; i++) {
+        inner = el({
+          rect: { x: 0, y: 0, w: W, h: H },
+          painted: { x: 0, y: 0, w: W, h: H },
+          children: [inner],
+        });
+        const counted = inner as MockElement & Record<string, unknown>;
+        const style = counted.__style;
+        Object.defineProperty(counted, "__style", { get: () => (n++, style) });
+      }
+      const { tree } = run([inner]);
+      for (let i = 0; i < rowCount; i++) expect(pxFrame(tree, `r${i}`).h).toBe(0);
+      return n;
+    };
+    // Twice per wrapper: its own walk, and the clips the rows' hit tests cross.
+    expect(reads(1)).toBe(40);
+    expect(reads(30)).toBe(40);
+  });
+
   it("clips a custom element's light child that hit-tests only across its clipper's border", () => {
     // A 12px-bordered clipper: the row overflows its padding box (y 12..112) to 127,
     // and Chrome hit-tests the overflow up to the border box's bottom (124).
@@ -3434,6 +3461,18 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       ),
     ]).tree;
     expect(pxFrame(wrapped, "inner")).toEqual(box);
+    // A <ul> cannot host a shadow root, so only its hit item shows where it paints.
+    const listed = run([
+      popup(
+        el({
+          tag: "ul",
+          attrs: { id: "list" },
+          rect: box,
+          children: [el({ tag: "li", rect: box, children: [el({ rect: box, painted: box })] })],
+        })
+      ),
+    ]).tree;
+    expect(pxFrame(listed, "list")).toEqual(box);
     // The popup's host inside another component's open shadow tree.
     const nested = run([
       el({
@@ -4672,6 +4711,14 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
         nested({ transform: "matrix(2, 0, 0, 2, 0, 0)", transformOrigin: "150px 130px" }, grown),
         "moved"
       )
+    ).toEqual(grown);
+    // A 3D transform computes to matrix3d: translate3d(150px, 50px, 1px), then
+    // translateZ(1px) scale(2).
+    const translated3d = "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 150, 50, 1, 1)";
+    expect(pxFrame(nested({ transform: translated3d }, shifted), "moved")).toEqual(shifted);
+    const scaled3d = "matrix3d(2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1)";
+    expect(
+      pxFrame(nested({ transform: scaled3d, transformOrigin: "150px 130px" }, grown), "moved")
     ).toEqual(grown);
     // The individual properties, which the computed transform leaves out.
     expect(pxFrame(nested({ translate: "150px 50px" }, shifted), "moved")).toEqual(shifted);
