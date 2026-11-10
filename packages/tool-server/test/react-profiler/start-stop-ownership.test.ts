@@ -1702,3 +1702,38 @@ function holdRead(ts: ToolServer) {
   };
   return { reached: reached.promise, release };
 }
+
+describe("two react-profiler-stop calls after another session took the run over", () => {
+  it("fails the second with no active run, without stopping the other session's recording", async () => {
+    const { api, registry, sent } = fakeSession({
+      app: { isRunning: true, owner: owner("uuid-other") },
+      sessionId: "uuid-mine",
+      profilingActive: true,
+    });
+
+    // Both stops pass the active-run check, but the second one's read of the app
+    // is answered only after the first has finished handling the takeover.
+    let reads = 0;
+    let firstDone: Promise<unknown> = Promise.resolve();
+    const answer = api.cdp.evaluate.bind(api.cdp);
+    api.cdp.evaluate = async (expression: string) => {
+      if (expression.includes("__argent_readState") && ++reads === 2) await firstDone;
+      return answer(expression);
+    };
+    const firstStop = stop(registry);
+    firstDone = firstStop.catch(() => undefined);
+    const [first, second] = await Promise.allSettled([firstStop, stop(registry)]);
+
+    expect(first.status).toBe("rejected");
+    expect(second.status).toBe("rejected");
+    expect(getFailureSignal((first as PromiseRejectedResult).reason)?.error_code).toBe(
+      FAILURE_CODES.REACT_PROFILER_SESSION_TAKEN_OVER
+    );
+    expect(getFailureSignal((second as PromiseRejectedResult).reason)?.error_code).toBe(
+      FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION
+    );
+    expect(sent).not.toContain("Profiler.stop");
+    expect(sent).not.toContain(`Runtime.evaluate:${STOP_AND_READ_SCRIPT}`);
+    expect(api.stopping).not.toBe(true);
+  });
+});
