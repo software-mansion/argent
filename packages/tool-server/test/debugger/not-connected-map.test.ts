@@ -70,6 +70,7 @@ describe("guidance platform-correctness", () => {
     expect(result.guidance).toContain(
       "If boot-device started it in this tool-server session, restart-app relaunches it on the same device id"
     );
+    expect(result.guidance).toContain("an Electron app with boot-device and electronAppPath");
   });
 
   it("Metro cdp_unreachable keeps the launch-app guidance (it IS actionable there)", () => {
@@ -99,6 +100,7 @@ describe("guidance platform-correctness", () => {
     }
     expect(metro.guidance).toContain("restart-app");
     expect(chromium.guidance).toContain("restart-app if boot-device started it");
+    expect(chromium.guidance).toContain("an Electron app with boot-device and electronAppPath");
     expect(chromium.guidance).toContain("--remote-debugging-port");
     // boot-device ignores `force` on the Electron path.
     expect(chromium.guidance).not.toContain("force");

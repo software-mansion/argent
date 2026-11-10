@@ -91,19 +91,23 @@ export function makeChromiumImpl(
  * The boot's readiness probe accepts whatever answers on the port, so a process
  * still holding it (another runtime on the freed port, or a kill that did not
  * land) would pass for the relaunch while the new copy fails to bind. Probing
- * by binding asks exactly what the relaunch needs, including of a holder that
- * accepts connections but never answers CDP.
+ * by binding asks what the relaunch needs, including of a holder that accepts
+ * connections but never answers CDP. The wildcard binds catch a holder on
+ * 0.0.0.0 or ::, beside which a loopback bind succeeds while connections to
+ * the loopback still reach that holder.
  */
 async function assertPortReleased(port: number, lead: string): Promise<void> {
-  const bindError = await new Promise<NodeJS.ErrnoException | null>((resolve) => {
-    const srv = net.createServer();
-    srv.once("error", (err: NodeJS.ErrnoException) => resolve(err));
-    srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(null)));
-  });
-  if (!bindError) return;
+  // One at a time: a dual-stack :: bind collides with a concurrent 0.0.0.0 one.
+  let held = await bindError(port, "127.0.0.1");
+  for (const host of ["0.0.0.0", "::"]) {
+    if (held) break;
+    const err = await bindError(port, host);
+    if (err?.code === "EADDRINUSE") held = err;
+  }
+  if (!held) return;
   throw new FailureError(
     `${lead}: port ${port} is still held ` +
-      `(${bindError.code ?? bindError.message}), so a new copy could not bind it. Quit the ` +
+      `(${held.code ?? held.message}), so a new copy could not bind it. Quit the ` +
       `process listening on port ${port} (it can be a leftover process of the app), then ` +
       `retry restart-app.`,
     {
@@ -136,4 +140,12 @@ function notBooted(udid: string): FailureError {
 function withPrefix(err: unknown, prefix: string): unknown {
   const signal = getFailureSignal(err);
   return signal && err instanceof Error ? wrapFailure(err, signal, prefix + err.message) : err;
+}
+
+function bindError(port: number, host: string): Promise<NodeJS.ErrnoException | null> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", (err: NodeJS.ErrnoException) => resolve(err));
+    srv.listen(port, host, () => srv.close(() => resolve(null)));
+  });
 }

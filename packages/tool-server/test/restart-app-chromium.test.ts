@@ -70,10 +70,10 @@ function cdpServer(): http.Server {
 
 const held = new Set<net.Server>();
 
-async function holdPort(server: net.Server): Promise<net.Server> {
+async function holdPort(server: net.Server, host = "127.0.0.1"): Promise<net.Server> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
+    server.listen(port, host, () => resolve());
   });
   held.add(server);
   return server;
@@ -205,30 +205,35 @@ describe("restart-app on Chromium", () => {
   });
 
   it.each([
-    ["answers CDP", () => cdpServer()],
+    ["answers CDP", () => cdpServer(), "127.0.0.1"],
     // Accepts the connection and never replies, so a CDP probe only times out.
-    ["accepts connections but never answers", () => net.createServer(() => {})],
-  ])("refuses to relaunch while another process that %s holds the freed port", async (_n, make) => {
-    await bootElectronApp({ appPath: appDir, port });
-    await exitChild(children[0]!, 1, null);
-    const foreign = await holdPort(make());
-    const registry = registryWithRestartApp();
-    const udid = `chromium-cdp-${port}`;
+    ["accepts connections but never answers", () => net.createServer(() => {}), "127.0.0.1"],
+    // A loopback bind succeeds beside it, but loopback connections still reach it.
+    ["listens on the wildcard address", () => cdpServer(), "0.0.0.0"],
+  ])(
+    "refuses to relaunch while another process that %s holds the freed port",
+    async (_n, make, host) => {
+      await bootElectronApp({ appPath: appDir, port });
+      await exitChild(children[0]!, 1, null);
+      const foreign = await holdPort(make(), host);
+      const registry = registryWithRestartApp();
+      const udid = `chromium-cdp-${port}`;
 
-    const started = Date.now();
-    const err = await registry.invokeTool("restart-app", { udid, bundleId: "tag" }).then(
-      () => undefined,
-      (e: unknown) => e
-    );
+      const started = Date.now();
+      const err = await registry.invokeTool("restart-app", { udid, bundleId: "tag" }).then(
+        () => undefined,
+        (e: unknown) => e
+      );
 
-    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE);
-    expect(Date.now() - started).toBeLessThan(2000);
-    expect(children).toHaveLength(1);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(children).toHaveLength(1);
 
-    await releasePort(foreign);
-    await registry.invokeTool("restart-app", { udid, bundleId: "tag" });
-    expect(children).toHaveLength(2);
-  });
+      await releasePort(foreign);
+      await registry.invokeTool("restart-app", { udid, bundleId: "tag" });
+      expect(children).toHaveLength(2);
+    }
+  );
 
   it("runs overlapping restarts of one port one after the other", async () => {
     await bootElectronApp({ appPath: appDir, port });
