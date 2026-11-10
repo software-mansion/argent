@@ -1254,6 +1254,29 @@ describe("network-capture-stop", () => {
     }
   );
 
+  it("says the JS layer is still armed when the pause in the app's runtime throws", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, SERIAL, rt);
+    await start(SERIAL, APP);
+    const evaluate = rt.evaluate.bind(rt);
+    rt.evaluate = (expr: string) => {
+      if (scriptName(expr) === "pause") throw new Error("Runtime.evaluate timed out");
+      return evaluate(expr);
+    };
+
+    const result = await stop(SERIAL, APP);
+
+    expect(layer(result, "js")).toEqual({
+      layer: "js",
+      armed: true,
+      total: 0,
+      reason: "the app's JS runtime did not pause capture: Runtime.evaluate timed out",
+    });
+    expect(rt.paused).toBe(false);
+    expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", installed: true });
+    expect(findJsCapture(SERIAL, APP)).not.toHaveProperty("paused");
+  });
+
   it("stores a stopped JS layer, with no interceptor to pause, after a start that installed none when the runtime cannot be reached", async () => {
     // The start found Metro with no app connected, so it installed nothing.
     serve(PORT, SERIAL, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
