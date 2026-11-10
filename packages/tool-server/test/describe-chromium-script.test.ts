@@ -1604,8 +1604,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     ]);
     expect(findById(tree, "b1")!.label).toBe("Close");
     expect(findById(tree, "b2")!.label).toBe("Close Now");
-    // Targets that all resolve to nothing leave no label, and no title fallback (#1564).
-    expect(findById(tree, "b3")!.label).toBeUndefined();
+    // Targets that all resolve to nothing fall through to the title, as in Chrome.
+    expect(findById(tree, "b3")!.label).toBe("T");
   });
 
   it("collapses whitespace in an aria-labelledby target, as in own text", () => {
@@ -1625,6 +1625,166 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     const node = findById(run([button]).tree, "btn")!;
     expect(node.label).toBe("Save as draft");
     expect(node.value).toBeUndefined();
+  });
+
+  it("falls through a blank aria-labelledby name or aria-label to the next name source, as Chrome does", () => {
+    const span = (id: string, opts: Opts = {}) =>
+      el({ tag: "span", rect: BOX, ...opts, attrs: { id, ...opts.attrs } });
+    const hiddenOnly = span("hidden-only", {
+      children: [el({ tag: "span", text: "x", rect: BOX, attrs: { "aria-hidden": "true" } })],
+    });
+    const logo = el({
+      tag: "img",
+      rect: BOX,
+      attrs: { "id": "logo", "aria-labelledby": "empty" },
+    }) as MockElement & Record<string, unknown>;
+    Object.setPrototypeOf(logo, MockHTMLImageElement.prototype);
+    logo.alt = "Logo";
+    const input = (id: string, attrs: Record<string, string>, more: Record<string, string> = {}) =>
+      inputEl({ type: "text", rect: BOX, attrs: { id, ...attrs }, ...more });
+    const { tree } = run([
+      // #1564: an icon-only target on a filled search field.
+      input("filled", { "aria-labelledby": "empty" }, { placeholder: "Search", value: "abc" }),
+      input("inert", { "aria-labelledby": "inert-label" }, { placeholder: "Search" }),
+      input("hidden", { "aria-labelledby": "hidden-only" }, { placeholder: "Search" }),
+      input("blank-aria", { "aria-label": "  " }, { placeholder: "Search" }),
+      input("blank-aria-typed", { "aria-label": "  " }, { value: "abc" }),
+      input("blank-aria-ids", { "aria-label": "  ", "aria-labelledby": "lab" }),
+      el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "blank-title", "aria-label": " ", "title": "T" },
+      }),
+      el({ tag: "button", text: "Go", rect: BOX, attrs: { "id": "go", "aria-label": "  " } }),
+      logo,
+      span("empty"),
+      span("inert-label", { text: "Find", attrs: { inert: "" } }),
+      hiddenOnly,
+      span("lab", { text: "Lab" }),
+    ]);
+    const read = (id: string) => {
+      const node = findById(tree, id)!;
+      return { label: node.label, value: node.value };
+    };
+    expect(read("filled")).toEqual({ label: "Search", value: undefined });
+    expect(read("inert")).toEqual({ label: "Search", value: undefined });
+    expect(read("hidden")).toEqual({ label: "Search", value: undefined });
+    expect(read("blank-aria")).toEqual({ label: "Search", value: undefined });
+    expect(read("blank-aria-typed")).toEqual({ label: "abc", value: undefined });
+    expect(read("blank-aria-ids")).toEqual({ label: "Lab", value: undefined });
+    expect(read("blank-title")).toEqual({ label: "T", value: undefined });
+    expect(read("go")).toEqual({ label: undefined, value: "Go" });
+    expect(read("logo")).toEqual({ label: "Logo", value: undefined });
+  });
+
+  it("cases aria-labelledby text and ::before/::after strings by text-transform, as Chrome does", () => {
+    const cased = (tag: string, kids: unknown[], style: Record<string, string>) => {
+      const node = elementNode(tag, kids);
+      Object.assign(node.__style as Record<string, string>, style);
+      return node;
+    };
+    const upper = { textTransform: "uppercase" };
+    const capital = { display: "inline", textTransform: "capitalize" };
+    expect(labelledBy([cased("span", [text("save")], upper), text(" it")])).toBe("SAVE it");
+    expect(labelledBy([text("SAVE It")], { display: "inline", textTransform: "lowercase" })).toBe(
+      "save it"
+    );
+    // A nested "none" reads as authored, and full case mapping can lengthen text.
+    expect(
+      labelledBy(
+        [text("ab "), cased("span", [text("cd")], { textTransform: "none" }), text(" straße")],
+        { display: "inline", ...upper }
+      )
+    ).toBe("AB cd STRASSE");
+    // ICU words, with the character before the text deciding its first.
+    expect(labelledBy([text("hello wORLD foo-bar o'neil x_y 3d ßa élan")], capital)).toBe(
+      "Hello WORLD Foo-Bar O'neil X_y 3d ßa Élan"
+    );
+    expect(labelledBy([text("he"), cased("b", [text("llo")], capital), text(" wo")], capital)).toBe(
+      "Hello Wo"
+    );
+    expect(labelledBy([text("ab"), cased("span", [text("cd ef")], capital)])).toBe("abcd Ef");
+    expect(labelledBy([text("a\u00a0b")], capital)).toBe("A B");
+    // The element's lang, as its -webkit-locale; one that is no locale tag cases as none.
+    const locale = (webkitLocale: string) =>
+      labelledBy([text("istanbul")], { display: "inline", ...upper, webkitLocale });
+    expect(locale('"tr"')).toBe("İSTANBUL");
+    expect(locale('"not a tag"')).toBe("ISTANBUL");
+    // Content under display:none has no layout to case it.
+    expect(labelledBy([text("ab")], { display: "none", ...upper })).toBe("ab");
+    const pseudo = (which: string, content: string) => {
+      const node = elementNode("span", [text("b")]);
+      node.__pseudo = { [which]: { display: "inline", visibility: "visible", content, ...upper } };
+      return node;
+    };
+    expect(labelledBy([pseudo("::before", '"pre "')])).toBe("PRE b");
+    expect(labelledBy([pseudo("::after", '" post"')])).toBe("b POST");
+    expect(labelledBy([pseudo("::before", '"x" / "alt "')])).toBe("alt b");
+  });
+
+  it("stops reading an aria-labelledby target once its name is past the cut, naming it the same", () => {
+    let reads = 0;
+    const words = Array.from({ length: 1000 }, (_, i) => `w${i}`);
+    const label = el({
+      tag: "span",
+      rect: BOX,
+      attrs: { id: "lbl" },
+      // Keeps the main walk off the target's own text, so only its name reads count.
+      style: { visibility: "hidden" },
+    }) as MockElement & Record<string, unknown>;
+    label.childNodes = words.map((w) => ({
+      nodeType: 3,
+      get nodeValue() {
+        reads++;
+        return w;
+      },
+    }));
+    // A spaced ::before is parted from the text only when the target's walk finishes.
+    label.__pseudo = {
+      "::before": { display: "inline-block", visibility: "visible", content: '"Head"' },
+    };
+    const button = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "btn", "aria-labelledby": "lbl" },
+    });
+    const { tree } = run([button, label]);
+    expect(findById(tree, "btn")!.label).toBe(`Head ${words.join("")}`.slice(0, 200));
+    // "Head" and w0..w68 make 201 non-whitespace characters.
+    expect(reads).toBe(69);
+
+    // Names read from aria-labels count too. A hidden target reads display:none children,
+    // which the main walk skips.
+    let labelReads = 0;
+    const named = Array.from({ length: 1000 }, () => {
+      const node = el({ tag: "span", rect: BOX, style: { display: "none" } });
+      Object.defineProperty(node as unknown as Record<string, unknown>, "__attrs", {
+        value: {
+          get "aria-label"() {
+            labelReads++;
+            return "abcde";
+          },
+        },
+      });
+      return node;
+    });
+    const names = el({
+      tag: "div",
+      rect: BOX,
+      attrs: { id: "names" },
+      style: { visibility: "hidden" },
+      children: named,
+    }) as MockElement & Record<string, unknown>;
+    names.childNodes = named;
+    const other = el({
+      tag: "button",
+      rect: BOX,
+      attrs: { "id": "b2", "aria-labelledby": "names" },
+    });
+    expect(findById(run([other, names]).tree, "b2")!.label).toBe(
+      Array(1000).fill("abcde").join(" ").slice(0, 200)
+    );
+    expect(labelReads).toBe(41);
   });
 
   it("leaves an ordinary visible element unchanged", () => {

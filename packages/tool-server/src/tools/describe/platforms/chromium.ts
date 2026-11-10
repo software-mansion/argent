@@ -128,10 +128,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // aria-labelledby id -> trimmed target text, or null for a missing id. Not a Map: a
   // page script's own global Map shadows the builtin here.
   const labelTexts = Object.create(null);
+  const NAME_MAX = 200;
 
+  // A blank aria-label or aria-labelledby name falls through to the next source, as in
+  // Chrome.
   function accessibleName(el) {
-    const aria = getAttr.call(el, "aria-label");
-    if (aria) return aria.trim().slice(0, 200);
+    const aria = getAttr.call(el, "aria-label")?.trim();
+    if (aria) return aria.slice(0, NAME_MAX);
     const labelledBy = getAttr.call(el, "aria-labelledby");
     if (labelledBy) {
       const ids = labelledBy.split(/\\s+/);
@@ -142,23 +145,24 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           const ref = document.getElementById(id);
           text = labelTexts[id] = ref ? labelText(ref).trim() : null;
         }
-        if (text !== null) parts.push(text);
+        if (text) parts.push(text);
       }
-      if (parts.length) return parts.filter(Boolean).join(" ").slice(0, 200);
+      const name = parts.join(" ");
+      if (name) return name.slice(0, NAME_MAX);
     }
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-      if (el.placeholder) return el.placeholder.slice(0, 200);
+      if (el.placeholder) return el.placeholder.slice(0, NAME_MAX);
       // Never fall through to a password input's value: with no aria label or
       // placeholder (a floating/uncontrolled-label pattern) the typed secret
       // would become the node's label and reach every describe consumer.
-      if (el.value && !isPassword(el)) return el.value.slice(0, 200);
+      if (el.value && !isPassword(el)) return el.value.slice(0, NAME_MAX);
     }
-    if (el instanceof HTMLImageElement && el.alt) return el.alt.slice(0, 200);
+    if (el instanceof HTMLImageElement && el.alt) return el.alt.slice(0, NAME_MAX);
     // getAttribute, not el.title: a <form> with a control named "title" clobbers the
     // .title property to return that element (not a string), and .slice() then throws,
     // aborting the whole describe. getAttribute always yields string | null.
     const t = getAttr.call(el, "title");
-    if (t) return t.slice(0, 200);
+    if (t) return t.slice(0, NAME_MAX);
     return null;
   }
 
@@ -250,8 +254,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // has no layout to run inline in. Neither reads what layout skips: a closed <details>
   // past its first <summary>, a content-visibility:hidden box's content, a hidden chosen
   // option, or a hidden ::before or ::after (or any in an aria-hidden target). An
-  // <input>'s value is not read.
-  // Iterative: the target's depth has no MAX_DEPTH bound.
+  // <input>'s value is not read. Laid-out text and ::before/::after strings take their
+  // text-transform case.
+  // Iterative: the target's depth has no MAX_DEPTH bound. The walk stops once more than
+  // NAME_MAX non-whitespace characters are in, which settles the name accessibleName cuts.
   function labelText(root) {
     const rootOptions = chosenOptions(root);
     const own = controlText(root) ?? rangeText(root) ?? (rootOptions ? null : altText(root));
@@ -274,6 +280,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
     if (shown && inert) return "";
     let s = "";
+    // Non-whitespace characters read into s; a lower bound, as s only gains them.
+    let seen = 0;
+    const read = (text) => {
+      s += text;
+      seen += text.replace(WHITESPACE, "").length;
+    };
+    const last = () => s[s.length - 1] || " ";
+    // The laid-out style whose text-transform cases the text nodes being read, or null.
+    let textCase = null;
     // Nodes, SPACE where a non-inline element's content ends, RENDERED where a
     // display:none element's does, and functions that finish an element's text.
     const SPACE = {};
@@ -315,7 +330,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         /^(img|input|video|audio|canvas|iframe|object|embed|progress|meter)$/.test(tag);
       if (rendered && !ariaHidden && html && !replaced) {
         const before = pseudoText(el, "::before");
-        if (before) s += before.text;
+        if (before) read(caseText(before.text, before.style, last()));
         const from = s.length;
         // A spaced pseudo-element is parted only from the element's other text, and a
         // block-level one also from what follows the element.
@@ -323,7 +338,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
           const after = pseudoText(el, "::after");
           const filled = !!s.slice(from).replace(WHITESPACE, "");
           if (before?.spaced && (filled || after)) s = s.slice(0, from) + " " + s.slice(from);
-          if (after) s += (after.spaced && (filled || before) ? " " : "") + after.text;
+          if (after) {
+            const gap = after.spaced && (filled || before) ? " " : "";
+            s += gap + caseText(after.text, after.style, gap || last());
+          }
           if (before?.block || after?.block) s += " ";
         });
       }
@@ -340,6 +358,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         }
       } else {
         const kids = flatChildNodes(el);
+        // Layout cases text; display:none content reads as authored.
+        const kidsCase = rendered && CASED.test(style.textTransform) ? style : null;
+        if (kidsCase !== textCase) {
+          const outer = textCase;
+          stack.push(() => {
+            textCase = outer;
+          });
+          textCase = kidsCase;
+        }
         for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
       }
     };
@@ -347,6 +374,13 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     else pushContent(root, rootStyle, !unrendered, false);
     while (stack.length) {
       const node = stack.pop();
+      if (typeof node === "function") {
+        node();
+        continue;
+      }
+      // Past the cap only the open elements' functions, which can insert a space, still
+      // change the cut name.
+      if (seen > NAME_MAX) continue;
       if (node === SPACE) {
         s += " ";
         continue;
@@ -355,13 +389,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         unrendered--;
         continue;
       }
-      if (typeof node === "function") {
-        node();
-        continue;
-      }
       const type = getNodeType.call(node);
       if (type === 3 || type === 4) {
-        s += getNodeValue.call(node);
+        read(caseText(getNodeValue.call(node), textCase, last()));
         continue;
       }
       if (type !== 1) continue;
@@ -390,7 +420,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const options = chosenOptions(node);
       const content = controlText(node) ?? rangeText(node) ?? (options ? null : altText(node));
       if (content !== null) {
-        s += " " + content + " ";
+        read(" " + content + " ");
         continue;
       }
       if (options) {
@@ -539,7 +569,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // What a ::before or ::after shows, or null: the strings of its content outside
   // functions (counters, url()), or its alt text after a "/". Alt text and a non-inline
   // box's text are spaced (a display:contents or math one is inline); block marks a
-  // block-level box.
+  // block-level box. style is the box's own, for casing its strings, and null for alt text.
   function pseudoText(el, which) {
     const style = window.getComputedStyle(el, which);
     if (style.display === "none" || style.visibility !== "visible") return null;
@@ -580,7 +610,48 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       text: shown,
       spaced: alt !== null || !(isInlineBox(style) || /^(contents|math)$/.test(d)),
       block: /^(block|flex|grid|table|flow-root|list-item|-webkit-box)( |$)/.test(d),
+      style: alt === null ? style : null,
     };
+  }
+
+  const CASED = /^(uppercase|lowercase|capitalize)/;
+  // Text as a style's text-transform cases it under its lang; prev is the character before
+  // it, which decides whether capitalize starts a word there.
+  function caseText(text, style, prev) {
+    const mode = style && CASED.exec(style.textTransform);
+    if (!mode) return text;
+    if (mode[1] === "capitalize") return capitalize(text, prev);
+    const lang = /^"(.*)"$/.exec(style.webkitLocale || "");
+    const upper = mode[1] === "uppercase";
+    try {
+      if (lang) return upper ? text.toLocaleUpperCase(lang[1]) : text.toLocaleLowerCase(lang[1]);
+    } catch {
+      // A lang that is no locale tag cases as no lang does.
+    }
+    return upper ? text.toUpperCase() : text.toLowerCase();
+  }
+
+  // Blink's capitalize: each ICU word of prev + text starts in its first code unit's
+  // single-character title case. Text is kept as is where Intl.Segmenter is missing.
+  let wordSegmenter = null;
+  function capitalize(text, prev) {
+    let segments;
+    try {
+      if (!wordSegmenter) wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+      segments = wordSegmenter.segment(prev + text);
+    } catch {
+      return text;
+    }
+    let out = "";
+    let at = 0;
+    for (const { index } of segments) {
+      if (!index) continue;
+      const c = text[index - 1];
+      const title = c.toUpperCase();
+      out += text.slice(at, index - 1) + (title.length === 1 ? title : c);
+      at = index;
+    }
+    return out + text.slice(at);
   }
 
   function isInteractive(el) {
