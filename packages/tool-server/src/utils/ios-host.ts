@@ -198,7 +198,7 @@ export function audioDir(udid: string): string {
   return `/tmp/argent-audio-${udid}`;
 }
 
-export const AUDIO_ALWAYS_INSERTED_FLAG = "ios-audio-always-inserted";
+const AUDIO_ALWAYS_INSERTED_FLAG = "ios-audio-always-inserted";
 
 /**
  * Whether arming a simulator also inserts the audio hook, so audio tools work on any app launched after arming
@@ -206,7 +206,7 @@ export const AUDIO_ALWAYS_INSERTED_FLAG = "ios-audio-always-inserted";
  * so `argent disable ios-audio-always-inserted` applies without a tool-server restart; disabled, the hook is
  * inserted by the first audio tool call instead.
  */
-export function audioAlwaysInserted(): boolean {
+function audioAlwaysInserted(): boolean {
   return isFeatureEnabled(AUDIO_ALWAYS_INSERTED_FLAG);
 }
 
