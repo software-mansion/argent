@@ -816,7 +816,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   });
 
   // Documented in reference/e2e-yaml.mdx.
-  it("reads a field's aria-label, aria-labelledby or placeholder in place of its value, skips an aria-labelledby that names no element, and reads an element's title", () => {
+  it("reads a field's aria-label, aria-labelledby or placeholder in place of its value, skips an aria-labelledby that names no element, reads an element's title, and reads a label once when its text is the same", () => {
     const labelEl = el({ text: "Email", attrs: { id: "lbl" }, rect: BOX }) as MockElement &
       Record<string, unknown>;
     labelEl.__textContent = "Email";
@@ -838,6 +838,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
         rect: BOX,
       }),
       el({ text: "Hello", attrs: { id: "tip", title: "Tip" }, rect: BOX }),
+      el({ text: "Close", attrs: { "id": "same", "aria-label": "Close" }, rect: BOX }),
     ]);
     expect(findById(tree, "aria")).toMatchObject({ label: "Name" });
     expect(findById(tree, "lb")).toMatchObject({ label: "Email" });
@@ -847,6 +848,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "titled")).toMatchObject({ label: "Hint" });
     expect(findById(tree, "editor")).toMatchObject({ label: "Compose" });
     expect(findById(tree, "tip")).toMatchObject({ label: "Tip", value: "Hello" });
+    expect(findById(tree, "same")).toMatchObject({ label: "Close" });
+    expect(findById(tree, "same")?.value).toBeUndefined();
     expect(JSON.stringify(tree)).not.toContain("abc");
   });
 
