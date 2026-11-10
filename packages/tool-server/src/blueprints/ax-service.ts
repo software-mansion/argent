@@ -419,7 +419,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       // Tunnel before spawn: the daemon dials 127.0.0.1:<port> inside the sim and
       // the tunnel forwards it back to the listener above. No-op on local;
       // `port` was populated by startListener.
-      await host.startProxy(udid, endpoint.port!);
+      try {
+        await host.startProxy(udid, endpoint.port!);
+      } catch (err) {
+        // dispose never runs: the registry sets `node.instance` only after
+        // factory() resolves.
+        server.close();
+        throw err;
+      }
     }
 
     const proc = host.spawnAxDaemon(udid, endpoint);
