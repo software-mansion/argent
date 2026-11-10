@@ -578,7 +578,7 @@ export function evaluateCondition(
       // check it. Selector matching still skips empty text, or `.*` would
       // select every unlabeled view. Not an iOS text field: the simulator's
       // view tree carries no typed text, so a filled field without a label
-      // reads "" there.
+      // or child text reads "" there.
       if (
         textMatch === "matches" &&
         first.role !== "AXTextField" &&
