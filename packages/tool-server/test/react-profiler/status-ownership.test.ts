@@ -182,6 +182,8 @@ describe("react-profiler-status: nothing recording", () => {
       cpu_profile_path: "/tmp/argent-debug/react-profiler-20261103-120000_cpu.json",
     });
     expect(res.note).toContain("react-profiler-analyze");
+    // profiler-load requires the device, so the hint must name it.
+    expect(res.note).toContain("device_id: <this run's device_id>");
     expect(res.note).toContain("20261103-120000");
     expect(res.note).not.toContain("not recoverable");
   });

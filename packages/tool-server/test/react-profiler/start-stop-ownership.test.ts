@@ -452,6 +452,27 @@ describe("react-profiler-start and the Hermes sampler", () => {
     }
   );
 
+  it.each([
+    ["reports a failure", { ok: false, reason: "no-renderers" }],
+    ["fails verification", { ok: true, isProfilingFlagSet: false, ownerInstalled: true }],
+  ])(
+    "rolls the sampler back, and tracks no run, when the app's start script %s",
+    async (_what, startResult) => {
+      const { api, registry, sent } = fakeSession({
+        app: { isRunning: true, owner: owner("uuid-mine") },
+        sessionId: "uuid-mine",
+        profilingActive: true,
+        startResult,
+      });
+
+      await expect(start(registry, true)).rejects.toThrow("nothing is recording now");
+
+      expect(sent.lastIndexOf("Profiler.stop")).toBeGreaterThan(sent.indexOf("Profiler.start"));
+      // The replaced run's sampler is stopped: a stop must not try to collect it.
+      expect(api.profilingActive).toBe(false);
+    }
+  );
+
   it.each(["rejects", "returns nothing"] as const)(
     "rolls the sampler back when the app's start script %s",
     async (startScript) => {
