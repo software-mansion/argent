@@ -16,7 +16,7 @@ Living document tracking the reasoning behind pipeline architecture decisions.
 
 ### Drop CPU from react-profiler-analyze
 
-CPU data is too noisy and hard to attribute to specific component issues without a full flamegraph. `react-profiler-cpu-summary` remains for raw CPU inspection, but `react-profiler-analyze` focuses entirely on React commit data from `__RN_DEVTOOLS_MCP_COMMITS__`.
+CPU data is too noisy and hard to attribute to specific component issues without a full flamegraph. `profiler-cpu-query` covers raw CPU inspection, but `react-profiler-analyze` focuses entirely on React commit data from `__RN_DEVTOOLS_MCP_COMMITS__`.
 
 ### cbrt normalization
 

@@ -51,6 +51,9 @@ Returns { value } for one key, { entries, count } for all keys, and { set } / { 
   zodSchema,
   searchHint:
     "storage localstorage sessionstorage local session get set remove clear key value chromium",
+  // Agents read and write Web Storage with debugger-evaluate, which runs the same
+  // Runtime.evaluate on the active page. The SDK and the e2e-full suite still call it.
+  hideFromMcp: true,
   interaction: {
     startedMsg: ({ params }) => `${storageAction[params.action].started} ${params.store} storage`,
     completedMsg: ({ params }) =>

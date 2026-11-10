@@ -101,8 +101,12 @@ describe("the former flow-* tool ids", () => {
     const mcpNames = tools.filter((t) => !t.hideFromMcp).map((t) => t.name);
     for (const [alias, id] of ALIASES) {
       expect(mcpNames).not.toContain(alias);
-      expect(mcpNames).toContain(id);
+      // A tool hidden from MCP itself (e2e-read-prerequisite) hides both names.
+      if (registry.getTool(id)!.hideFromMcp) expect(mcpNames).not.toContain(id);
+      else expect(mcpNames).toContain(id);
     }
+    expect(mcpNames).not.toContain("e2e-read-prerequisite");
+    expect(mcpNames).toContain("e2e-execute");
     // A tool behind a flag that is off is hidden, so count only the exposed ones.
     const exposed = registry.getSnapshot().tools.filter((id) => {
       const flag = registry.getTool(id)!.featureFlag;
@@ -146,6 +150,10 @@ describe("the former flow-* tool ids", () => {
     const byId = await registry.invokeTool("e2e-read-prerequisite", args);
 
     expect(byAlias).toEqual(byId);
+    // Hidden from MCP, where e2e-execute returns the same text, but both names
+    // stay callable for the SDK, `argent run` and e2e tool: steps.
+    expect(flowReadPrerequisiteTool.hideFromMcp).toBe(true);
+    expect(byId).toMatchObject({ executionPrerequisite: "on the form" });
   });
 
   it("log the HTTP failure of an alias call under the current id, with alias_used", async () => {

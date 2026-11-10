@@ -132,16 +132,33 @@ function explainEmptyWindow(res: CpuWindowResult, startMs: number, endMs: number
   );
 }
 
+/**
+ * The `react_only` filter: a PascalCase function name, the shape of a React
+ * function component. A heuristic: it also keeps PascalCase non-components
+ * (classes, constructors) and drops anonymous or lowercase components.
+ */
+function isReactComponentName(name: string): boolean {
+  return /^[A-Z][A-Za-z0-9]*$/.test(name);
+}
+
 /** States what the numbers below are a measurement of. */
-function coverageNote(res: CpuWindowResult, startMs: number, endMs: number): string {
+function coverageNote(
+  res: CpuWindowResult,
+  startMs: number,
+  endMs: number,
+  reactOnly: boolean
+): string {
   const widthMs = endMs - startMs;
   const lines = [
     `**Window:** ${startMs.toFixed(1)}ms → ${endMs.toFixed(1)}ms (${widthMs.toFixed(1)}ms)`,
     `**Samples:** ${res.samplesInWindow} covering ${res.coveredMs.toFixed(1)}ms` +
       (res.idleMs > 0 ? `, of which ${res.idleMs.toFixed(1)}ms idle` : "") +
       ` — sampling interval ~${res.medianIntervalMs.toFixed(1)}ms. Self-times sum to sampled` +
-      " coverage, not to the window width.",
+      " coverage, not to the window width. Self % is a share of that coverage.",
   ];
+  if (reactOnly) {
+    lines.push("**Filter:** React components only (PascalCase function names)");
+  }
   if (widthMs > 0 && widthMs < 3 * res.medianIntervalMs) {
     lines.push(
       `> This window is narrower than ~3 sampling intervals, so every figure carries ±1 sample` +
@@ -161,24 +178,37 @@ function renderTopFunctions(
   index: CpuSampleIndex,
   topN: number,
   startMs?: number,
-  endMs?: number
+  endMs?: number,
+  reactOnly = false
 ): string {
   const windowStart = startMs ?? index.intervalStartsMs[0] ?? 0;
   const windowEnd = endMs ?? index.timestampsMs[index.timestampsMs.length - 1] ?? 0;
-  const res = queryCpuWindow(index, windowStart, windowEnd, topN);
+  // Filter before the top-N cut, or components ranked below N would be lost.
+  const res = queryCpuWindow(index, windowStart, windowEnd, reactOnly ? Infinity : topN);
 
   if (res.hotspots.length === 0) return explainEmptyWindow(res, windowStart, windowEnd);
 
-  const header = "| Function | Self (ms) | Total (ms) | Location |";
-  const sep = "|---|---|---|---|";
-  const rows = res.hotspots.map((hs) => {
+  const hotspots = reactOnly
+    ? res.hotspots.filter((hs) => isReactComponentName(hs.name)).slice(0, topN)
+    : res.hotspots;
+  if (hotspots.length === 0) {
+    return (
+      `_No function sampled in ${windowStart.toFixed(1)}–${windowEnd.toFixed(1)}ms has a ` +
+      "PascalCase (React component) name. Query again without react_only to see the JS work._"
+    );
+  }
+
+  const header = "| Function | Self (ms) | Self % | Total (ms) | Location |";
+  const sep = "|---|---|---|---|---|";
+  const rows = hotspots.map((hs) => {
     const loc = hs.url
       ? `${shortenUrl(hs.url)}${hs.lineNumber != null ? `:${hs.lineNumber}` : ""}`
       : "—";
-    return `| \`${hs.name}\` | ${hs.selfMs} | ${hs.totalMs} | ${loc} |`;
+    const selfPct = res.coveredMs > 0 ? `${((hs.selfMs / res.coveredMs) * 100).toFixed(1)}%` : "—";
+    return `| \`${hs.name}\` | ${hs.selfMs} | ${selfPct} | ${hs.totalMs} | ${loc} |`;
   });
 
-  return `## CPU Hotspots\n\n${coverageNote(res, windowStart, windowEnd)}\n\n${header}\n${sep}\n${rows.join("\n")}`;
+  return `## CPU Hotspots\n\n${coverageNote(res, windowStart, windowEnd, reactOnly)}\n\n${header}\n${sep}\n${rows.join("\n")}`;
 }
 
 function renderCallTree(
@@ -433,6 +463,12 @@ const zodSchema = z.object({
   function_name: z.string().optional().describe("Function name"),
   top_n: z.coerce.number().int().positive().default(15).describe("Number of results to return"),
   include_callers: z.boolean().default(false).describe("Also show callers of the function"),
+  react_only: z
+    .boolean()
+    .default(false)
+    .describe(
+      "top_functions and time_window: list only React component functions (PascalCase names)"
+    ),
 });
 
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
@@ -446,6 +482,7 @@ Modes:
 In top_functions and time_window, self-times are the summed sampling intervals of the samples that
 landed in the window, so they measure sampled coverage rather than the window's width and do not
 change if you widen the query. Their tables state how many samples they cover and how much was idle.
+Each row is one call path, so a function can have several rows and top_n counts rows.
 Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
 Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
 Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-profiler-analyze) first.`,
@@ -480,7 +517,8 @@ Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-pr
           index,
           params.top_n,
           params.time_window_ms?.start,
-          params.time_window_ms?.end
+          params.time_window_ms?.end,
+          params.react_only
         );
 
       case "time_window": {
@@ -496,7 +534,8 @@ Fails if no CPU profile is stored; run react-profiler-stop (and ideally react-pr
           index,
           params.top_n,
           params.time_window_ms.start,
-          params.time_window_ms.end
+          params.time_window_ms.end,
+          params.react_only
         );
       }
 
