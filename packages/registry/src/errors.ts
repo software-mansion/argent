@@ -35,6 +35,7 @@ export const FAILURE_COMMANDS = [
   "ax_service",
   "simulator_server",
   "ffmpeg",
+  "afconvert",
   "cdp",
   "electron",
   "npm",

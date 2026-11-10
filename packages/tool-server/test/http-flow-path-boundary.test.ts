@@ -1004,7 +1004,7 @@ describe("flow-execute over a link, from the real argent client", () => {
       ["error", undefined],
     ]);
     expect(run.steps[3]!.reason).toContain(
-      `the client refused to send "${secret}": ${secret} links to a file that is not one of .png, .yaml`
+      `the client refused to send "${secret}": ${secret} links to a file that is not one of .png, .yaml, .wav, .mp3, .m4a, .aac, .caf, .aif, .aiff, .flac`
     );
   });
 
