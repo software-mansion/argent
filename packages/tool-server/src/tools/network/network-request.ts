@@ -582,7 +582,7 @@ function decodeOne(bytes: Buffer, coding: string, truncated: boolean): Buffer | 
         });
         break;
       case "zstd":
-        // Node 22.15 and 23.8 added zstd; the tool-server also runs on Node 20.
+        // Node 22.15 and 23.8 added zstd; npm installs past `engines` on older Node.
         if (typeof zlib.zstdDecompressSync !== "function") return undefined;
         out = zlib.zstdDecompressSync(bytes, {
           maxOutputLength,
