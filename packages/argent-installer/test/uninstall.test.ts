@@ -238,6 +238,29 @@ describe("uninstall — telemetry consent preservation", () => {
       );
     });
 
+    it("says a failed yarn global remove needs Yarn classic under Yarn 2+", async () => {
+      const clack = await import("@clack/prompts");
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+      childProcessMock.execFileSync.mockImplementation((bin: string) => {
+        if (bin === "yarn")
+          throw new Error("Usage Error: The 'yarn global' commands have been removed");
+        return undefined;
+      });
+
+      await uninstall(["--yes"]);
+
+      const esc = String.fromCharCode(27);
+      const info = vi.mocked(clack.log.info).mock.calls.map((c) =>
+        String(c[0])
+          .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+          .join("")
+      );
+      expect(info).toContain(
+        "Run yarn global remove @swmansion/argent (with Yarn classic, outside this Yarn 2+ project)."
+      );
+      expect(process.exitCode).toBe(1);
+    });
+
     it("keeps the CLI record of a global the uninstall left in place", async () => {
       childProcessMock.versionProbe.mockImplementation(() => {
         throw Object.assign(new Error("exit 1"), { status: 1 });
@@ -415,8 +438,14 @@ describe("uninstall — telemetry consent preservation", () => {
       const shim = path.join(tmpDir, manager, "shims", "argent");
       writeFile(shim, "#!/usr/bin/env bash\n");
       childProcessMock.which.mockImplementation(() => shim + "\n");
+      // The shim runs the global until npm removes it, then fails.
+      let removed = false;
+      childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+        if (bin === "npm" && args[0] === "uninstall" && args.includes("-g")) removed = true;
+        return undefined;
+      });
       childProcessMock.versionProbe.mockImplementation(() => {
-        throw Object.assign(new Error(`exit ${status}`), { status });
+        if (removed) throw Object.assign(new Error(`exit ${status}`), { status });
       });
       const projectDir = path.join(tmpDir, "project");
       writeFile(

@@ -35,6 +35,35 @@ function captureExit(): Promise<{ code?: number; printed: string[] }> {
 }
 
 describe("argent server logs --follow", () => {
+  it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
+    "passes %s on to tail, then exits with tail's status",
+    async (signal) => {
+      const { EventEmitter } = await import("node:events");
+      const child = Object.assign(new EventEmitter(), { kill: vi.fn() });
+      vi.doMock("node:child_process", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("node:child_process")>()),
+        spawn: () => child,
+      }));
+      const before = new Set(process.listeners(signal));
+      const exited = captureExit();
+      const { server } = await import("../src/server.js");
+
+      try {
+        await server(["logs", "-f"]);
+        const added = process.listeners(signal).filter((listener) => !before.has(listener));
+        expect(added).toHaveLength(1);
+        (added[0] as () => void)();
+        expect(child.kill).toHaveBeenCalledWith(signal);
+        child.emit("exit", null, signal);
+        expect((await exited).code).toBe(128 + os.constants.signals[signal]);
+      } finally {
+        for (const listener of process.listeners(signal)) {
+          if (!before.has(listener)) process.removeListener(signal, listener);
+        }
+      }
+    }
+  );
+
   it("reports a `tail` that cannot be spawned and exits 1", async () => {
     const exited = captureExit();
     const { server } = await import("../src/server.js");

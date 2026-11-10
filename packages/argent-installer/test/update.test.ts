@@ -5,6 +5,7 @@ import * as path from "node:path";
 import {
   getInstalledVersion,
   getGloballyInstalledVersion,
+  isGloballyInstalled,
   detectGlobalPackageManager,
   globalInstallCommand,
   formatShellCommand,
@@ -191,7 +192,8 @@ describe.skipIf(process.platform === "win32")(
         JSON.stringify({ name: PACKAGE_NAME, version: "9.9.9" })
       );
       fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
-      fs.writeFileSync(path.join(pnpmHome, "argent"), `#!/bin/sh\nexit 0\n${line(pkg)}\n`);
+      // Exits 1 when run: the version must come from the shim's target alone.
+      fs.writeFileSync(path.join(pnpmHome, "argent"), `#!/bin/sh\nexit 1\n${line(pkg)}\n`);
       fs.chmodSync(path.join(pnpmHome, "argent"), 0o755);
       process.env.PATH = `${pnpmHome}${path.delimiter}${SYSTEM_PATH}`;
 
@@ -207,6 +209,16 @@ describe.skipIf(process.platform === "win32")(
       process.env.PATH = [shims, binDir, SYSTEM_PATH].join(path.delimiter);
 
       expect(getGloballyInstalledVersion()).toBe("9.9.9");
+    });
+
+    it("does not count a stale version-manager shim alone as an install", () => {
+      const shims = path.join(tmpDir, "shims");
+      fs.mkdirSync(shims);
+      fs.writeFileSync(path.join(shims, "argent"), "#!/bin/sh\nexit 127\n");
+      fs.chmodSync(path.join(shims, "argent"), 0o755);
+      process.env.PATH = [shims, SYSTEM_PATH].join(path.delimiter);
+
+      expect(isGloballyInstalled()).toBe(false);
     });
 
     it("returns null when no permanent install is on PATH", () => {

@@ -6,14 +6,13 @@
 import * as path from "node:path";
 import pc from "picocolors";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+import { degenerateProjectScopeWarning } from "./project-scope.js";
 import {
   CONFIG_SCHEMA,
   configDir,
-  findProjectRoot,
   getConfigDefinition,
   getConfigValueByKey,
   getConfigValueAtScope,
-  isHomeDir,
   setConfigValue,
   unsetConfigValue,
   listConfig,
@@ -149,7 +148,7 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
   }
 
   const targetScope: FlagScope = scope ?? "global";
-  const warning = degenerateProjectScopeWarning(targetScope);
+  const warning = projectConfigWarning(targetScope);
   try {
     // Report the value as normalized on write (trimmed, blanks dropped), not the input.
     const stored = setConfigValue(key, coerceCliValue(rawValue), targetScope);
@@ -183,7 +182,7 @@ other scope / the default on the next read.`);
   }
 
   const targetScope: FlagScope = scope ?? "global";
-  const warning = degenerateProjectScopeWarning(targetScope);
+  const warning = projectConfigWarning(targetScope);
   try {
     const removed = unsetConfigValue(key, targetScope);
     if (removed && warning) console.error(pc.yellow(warning));
@@ -236,31 +235,8 @@ function scopeLabel(scope: FlagScope): string {
   return `project: ${path.dirname(configDir("project"))}`;
 }
 
-/**
- * Warns when "project" resolves somewhere surprising: to the home directory
- * (`~/.argent` is itself a project marker, and there the project file IS the
- * global one), or to the bare cwd because no marker was found. Must run BEFORE
- * the write — a project-scope `set` creates `.argent` in the resolved root,
- * hiding the no-marker case afterwards.
- */
-function degenerateProjectScopeWarning(scope: FlagScope): string | null {
-  if (scope !== "project") return null;
-  const projDir = configDir("project");
-  if (isHomeDir(path.dirname(projDir))) {
-    return (
-      `WARNING: no project found between ${process.cwd()} and your home directory — ` +
-      `"project" scope resolved to the home directory, so this writes the GLOBAL ` +
-      `config file (${path.join(projDir, "config.json")}).`
-    );
-  }
-  if (findProjectRoot(process.cwd()) === null) {
-    return (
-      `WARNING: no project markers (.argent, .git, package.json) found above ` +
-      `${process.cwd()} — treating it as the project root and creating ` +
-      `${path.join(projDir, "config.json")}.`
-    );
-  }
-  return null;
+function projectConfigWarning(scope: FlagScope): string | null {
+  return degenerateProjectScopeWarning(scope, path.join(configDir("project"), "config.json"));
 }
 
 /**

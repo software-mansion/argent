@@ -35,6 +35,7 @@ import {
   type ShellCommand,
 } from "./utils.js";
 import { execShellCommandSync } from "./shell.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { removeCliRecordFor } from "./cli-record.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -728,8 +729,8 @@ export async function uninstall(args: string[]): Promise<void> {
       p.log.info(`Running: ${pc.dim(formatShellCommand(removable.cmd))}`);
       try {
         execShellCommandSync(removable.cmd, removable.cwd ? { cwd: removable.cwd } : {});
-        // The command comes from the launcher, not the install's owner: npm
-        // exits 0 on a package Yarn classic or pnpm installed and leaves it.
+        // The owner is read from the layout, which can misjudge, and the wrong
+        // manager exits 0 and leaves the package.
         const leftover = removable.kind === "global" ? getRemainingGlobalBinaryPath() : null;
         // A second global can stay on PATH after this one is gone.
         const removed =
@@ -759,6 +760,8 @@ export async function uninstall(args: string[]): Promise<void> {
         }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);
+        const note = yarnClassicNote(removable.cmd);
+        if (note) p.log.info(`Run ${pc.cyan(formatShellCommand(removable.cmd))}${note}.`);
         packageFailed = true;
       }
     }

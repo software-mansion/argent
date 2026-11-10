@@ -2,13 +2,16 @@
 // Command layer only — argv parsing and console output; the registry and JSON
 // storage live in `@argent/configuration-core`.
 
+import * as path from "node:path";
 import pc from "picocolors";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 import { linkedSecretsNote } from "./secrets.js";
+import { degenerateProjectScopeWarning } from "./project-scope.js";
 import {
   FLAG_REGISTRY,
   getFlagDefinition,
   getFlagsPath,
+  isHomeDir,
   readFlags,
   setFlag,
   unsetFlag,
@@ -114,6 +117,7 @@ function runToggle(
   }
 
   const filePath = getFlagsPath(parsed.scope);
+  const warning = degenerateProjectScopeWarning(parsed.scope, filePath);
   try {
     if (command === "enable") {
       setFlag(parsed.name, true, parsed.scope);
@@ -130,6 +134,7 @@ function runToggle(
     process.exit(1);
   }
 
+  if (warning) console.error(pc.yellow(warning));
   if (command === "enable") {
     console.log(`Enabled flag "${parsed.name}" (${parsed.scope}). Stored at ${filePath}.`);
   } else {
@@ -184,7 +189,9 @@ Options:
     console.error(`Error: ${err.message}`);
     process.exit(2);
   }
-  const projectFlags = readFlags("project");
+  // A home-rooted project's flags file is the global one.
+  const projectIsHome = isHomeDir(path.dirname(path.dirname(getFlagsPath("project"))));
+  const projectFlags = projectIsHome ? {} : readFlags("project");
   const globalFlags = readFlags("global");
 
   const effective: Record<string, { value: boolean; scope: FlagScope }> = {};
@@ -254,5 +261,5 @@ Options:
   }
 
   console.log(`\n  Global:  ${getFlagsPath("global")}`);
-  console.log(`  Project: ${getFlagsPath("project")}`);
+  if (!projectIsHome) console.log(`  Project: ${getFlagsPath("project")}`);
 }

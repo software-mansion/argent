@@ -801,6 +801,63 @@ describe("detectGlobalPackageManager", () => {
     });
   });
 
+  describe.skipIf(process.platform === "win32")("npm's layout behind a link", () => {
+    // <dir>/prefix is an npm prefix: bin/argent links into lib/node_modules.
+    beforeEach(() => {
+      const pkg = path.join(dir, "prefix", "lib", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.mkdirSync(path.join(dir, "prefix", "bin"));
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+      fs.symlinkSync(
+        "../lib/node_modules/@swmansion/argent/dist/cli.js",
+        path.join(dir, "prefix", "bin", "argent")
+      );
+    });
+
+    it.each(LAUNCHERS)(
+      "returns npm through a linked PATH directory under %s launcher",
+      (_l, agent) => {
+        setAgent(agent);
+        fs.symlinkSync(path.join(dir, "prefix", "bin"), path.join(dir, "linked-bin"));
+        process.env.PATH = [path.join(dir, "linked-bin"), "/usr/bin", "/bin"].join(path.delimiter);
+        expect(detectGlobalPackageManager()).toBe("npm");
+      }
+    );
+
+    it.each(LAUNCHERS)("returns npm through a link to npm's bin under %s launcher", (_l, agent) => {
+      setAgent(agent);
+      fs.symlinkSync(path.join(dir, "prefix", "bin", "argent"), path.join(dir, "bin", "argent"));
+      expect(detectGlobalPackageManager()).toBe("npm");
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "returns pnpm over a pnpm shim that fails when run, from its target alone",
+    () => {
+      const pkg = path.join(
+        dir,
+        "pnpm",
+        "global",
+        "v11",
+        "h",
+        "node_modules",
+        "@swmansion",
+        "argent"
+      );
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.writeFileSync(
+        path.join(dir, "bin", "argent"),
+        `#!/bin/sh\nexit 1\n# cmd-shim-target=${path.join(pkg, "dist", "cli.js")}\n`
+      );
+      fs.chmodSync(path.join(dir, "bin", "argent"), 0o755);
+      expect(detectGlobalPackageManager()).toBe("pnpm");
+    }
+  );
+
   describe.skipIf(process.platform === "win32")("Yarn 2+ agent over a global on PATH", () => {
     beforeEach(() => {
       process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";

@@ -225,6 +225,38 @@ describe("update — interactive decline", () => {
     );
   });
 
+  it.skipIf(process.platform === "win32")(
+    "says a failed yarn global add needs Yarn classic under Yarn 2+",
+    async () => {
+      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+      const pkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.mkdirSync(path.join(tmpDir, "yarn-bin"));
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(tmpDir, "yarn-bin", "argent"));
+      childProcessMock.which.mockImplementation(
+        () => path.join(tmpDir, "yarn-bin", "argent") + "\n"
+      );
+      promptsMock.confirm.mockResolvedValueOnce(true);
+      childProcessMock.execFileSync.mockImplementation((() => {
+        throw new Error("Usage Error: The 'yarn global' commands have been removed");
+      }) as never);
+
+      await expect(update([])).rejects.toThrow(ExitSentinel);
+
+      const esc = String.fromCharCode(27);
+      const info = promptsMock.log.info.mock.calls.map((c: unknown[]) =>
+        String(c[0])
+          .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+          .join("")
+      );
+      expect(info).toContain(
+        "Run yarn global add @swmansion/argent@99.0.0 (with Yarn classic, outside this Yarn 2+ project)."
+      );
+    }
+  );
+
   it("fails a zero-exit install whose target version never landed on disk", async () => {
     promptsMock.confirm.mockResolvedValueOnce(true);
 

@@ -1,6 +1,8 @@
+import * as path from "node:path";
 import pc from "picocolors";
-import type { FlagScope } from "@argent/configuration-core";
+import { configDir, type FlagScope } from "@argent/configuration-core";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
+import { degenerateProjectScopeWarning } from "./project-scope.js";
 import {
   init as telemetryInit,
   isEnabled as telemetryIsEnabled,
@@ -115,9 +117,15 @@ function describeSource(source: ReturnType<typeof telemetryStatus>["source"]): s
   }
 }
 
+function projectConfigWarning(scope: FlagScope): string | null {
+  return degenerateProjectScopeWarning(scope, path.join(configDir("project"), "config.json"));
+}
+
 async function cmdEnable(scope: FlagScope): Promise<void> {
+  const warning = projectConfigWarning(scope);
   const wasEnabled = telemetryIsEnabled();
   markEnabled(scope);
+  if (warning) console.error(pc.yellow(warning));
   const nowEnabled = telemetryIsEnabled();
   if (!nowEnabled) {
     // The other scope (or an env override) still says no — restrictive merge.
@@ -136,10 +144,12 @@ async function cmdEnable(scope: FlagScope): Promise<void> {
 }
 
 async function cmdDisable(scope: FlagScope): Promise<void> {
+  const warning = projectConfigWarning(scope);
   const wasEnabled = telemetryIsEnabled();
   // Still write when already off: a global opt-out and a committed project
   // opt-out are different guarantees, and the user asked for this one.
   await markDisabled(scope);
+  if (warning) console.error(pc.yellow(warning));
   if (!wasEnabled) {
     console.log(pc.dim(`Telemetry was already disabled (written at ${scopeLabel(scope)}).`));
   } else {

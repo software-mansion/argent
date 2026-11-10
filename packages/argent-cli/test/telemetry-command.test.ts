@@ -79,6 +79,22 @@ const output = () => logSpy.mock.calls.map((c: unknown[]) => String(c[0])).join(
 const cleanEnv = { DO_NOT_TRACK: undefined, ARGENT_TELEMETRY: undefined };
 
 describe("argent telemetry — scopes", () => {
+  it.each(["enable", "disable"])(
+    "%s --scope project warns when the project is home",
+    async (command) => {
+      fs.mkdirSync(path.join(homeDir, ".argent"));
+      const nested = path.join(homeDir, "not-a-project");
+      fs.mkdirSync(nested);
+      process.chdir(nested);
+
+      await telemetry([command, "--scope", "project"]);
+
+      expect(errSpy.mock.calls.map((c: unknown[]) => String(c[0])).join("\n")).toContain(
+        `resolved to the home directory, so this writes the GLOBAL config file (${path.join(homeDir, ".argent", "config.json")}).`
+      );
+    }
+  );
+
   it("disable defaults to the global scope", async () => {
     await telemetry(["disable"]);
     expect(globalConfig()).toEqual({ telemetry: { enabled: false } });

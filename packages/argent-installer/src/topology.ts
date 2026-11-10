@@ -98,9 +98,12 @@ export function getRemainingGlobalBinaryPath(): string | null {
   return null;
 }
 
-/** True iff argent is permanently on PATH, not run from an npx / dlx cache. */
+/**
+ * True iff a live argent is permanently on PATH, not run from an npx / dlx
+ * cache and not a stale version-manager shim.
+ */
 export function isGloballyInstalled(): boolean {
-  return getGlobalBinaryPath() !== null;
+  return getRemainingGlobalBinaryPath() !== null;
 }
 
 /**

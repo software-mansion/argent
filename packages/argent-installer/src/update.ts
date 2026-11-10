@@ -41,6 +41,7 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { reportSkillRefresh } from "./skills.js";
 import { reportRetiredFiles } from "./retired-files.js";
 import { PACKAGE_NAME } from "./constants.js";
@@ -472,6 +473,8 @@ export async function update(args: string[]): Promise<void> {
             UPDATE_PACKAGE_ACTION_FAILED
           );
           p.log.error(`${installed ? "Update" : "Install"} failed: ${installError}`);
+          const note = yarnClassicNote(cmd);
+          if (note) p.log.info(`Run ${pc.cyan(cmdStr)}${note}.`);
           return { failed: UPDATE_PACKAGE_ACTION_FAILED };
         }
         p.log.warn(

@@ -119,6 +119,17 @@ function logsCmd(follow: boolean): void {
     // throws the rest (e.g. ENOEXEC, ELOOP) from spawn() itself.
     return cannotFollow(err as Error);
   }
+  // Only a terminal's Ctrl-C reaches tail too (it signals the whole process
+  // group); a supervisor's SIGTERM or a hangup would orphan it.
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    process.on(signal, () => {
+      try {
+        child.kill(signal);
+      } catch {
+        /* already gone */
+      }
+    });
+  }
   // Mirror tail's exit; signal deaths use the conventional 128+signo code, as
   // runForeground does.
   child.on("exit", (code, signal) =>
