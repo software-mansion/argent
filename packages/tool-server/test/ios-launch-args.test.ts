@@ -21,6 +21,7 @@ vi.mock("../src/utils/ios-devices", () => ({
   isTvOsSimulator: vi.fn(async () => false),
 }));
 
+import { getFailureSignal } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
@@ -207,6 +208,152 @@ describe("iOS launch arguments", () => {
 
       expect(result).toEqual({ launched: true, bundleId: BUNDLE_ID });
       expectLaunchCall(command);
+    }
+  );
+
+  // What `xcrun simctl terminate` prints, exit 3, for an app that is not running or not installed.
+  const NOT_RUNNING_STDERR = `An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=3):
+Simulator device failed to terminate ${BUNDLE_ID}.
+found nothing to terminate`;
+
+  function failRemote(sub: "terminate" | "launch", failure: Record<string, unknown>) {
+    execFileMock.mockImplementation((cmd, args, opts, cb) => {
+      if (cmd !== "sim-remote" || args[1] !== sub) return succeed(cmd, args, opts, cb);
+      const callback = typeof opts === "function" ? opts : cb!;
+      const stderr = typeof failure.stderr === "string" ? failure.stderr : "";
+      callback(Object.assign(new Error(`Command failed: sim-remote ${args.join(" ")}`), failure), {
+        stdout: "",
+        stderr,
+      });
+    });
+  }
+
+  const remoteTerminateCases = [
+    [
+      "launch-app",
+      () =>
+        createLaunchAppTool(makeRegistry()).execute!(
+          { nativeDevtools: makeNativeApi() },
+          { udid: REMOTE_UDID, bundleId: BUNDLE_ID, launchArgs: LAUNCH_ARGS }
+        ),
+      "IOS_LAUNCH_SIMCTL_FAILED",
+      "ios_launch_app_simctl_terminate",
+      { launched: true, bundleId: BUNDLE_ID },
+    ],
+    [
+      "restart-app",
+      () =>
+        createRestartAppTool(makeRegistry()).execute!(
+          { nativeDevtools: makeNativeApi() },
+          { udid: REMOTE_UDID, bundleId: BUNDLE_ID }
+        ),
+      "IOS_RESTART_TERMINATE_FAILED",
+      "ios_restart_app_simctl_terminate",
+      { restarted: true, bundleId: BUNDLE_ID },
+    ],
+  ] as const;
+
+  it.each(remoteTerminateCases)(
+    "%s on a remote simulator fails on a terminate error other than not running, and launches nothing",
+    async (_id, run, code, stage) => {
+      failRemote("terminate", {
+        code: 1,
+        stderr: "orchestrator: connection reset by peer",
+      });
+
+      const err = await run().then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect((err as Error).message).toMatch(/^Terminating iOS app dev\.example\.app .* failed/);
+      expect(getFailureSignal(err)).toEqual({
+        error_code: code,
+        failure_stage: stage,
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "sim_remote",
+        failure_exit_code: 1,
+      });
+      expect(simctlCalls("sim-remote", "launch")).toHaveLength(0);
+    }
+  );
+
+  it.each(remoteTerminateCases)(
+    "%s on a remote simulator fails as a timeout when terminate outlives sim-remote's limit",
+    async (_id, run, code, stage) => {
+      failRemote("terminate", { killed: true, signal: "SIGTERM" });
+
+      const err = await run().then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect((err as Error).message).toMatch(/did not finish within 30s/);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: code,
+        failure_stage: stage,
+        error_kind: "timeout",
+        failure_command: "sim_remote",
+        failure_signal: "SIGTERM",
+      });
+      expect(simctlCalls("sim-remote", "launch")).toHaveLength(0);
+    }
+  );
+
+  it.each(remoteTerminateCases)(
+    "%s on a remote simulator still launches when simctl found nothing to terminate",
+    async (_id, run, _code, _stage, ok) => {
+      failRemote("terminate", { code: 3, stderr: NOT_RUNNING_STDERR });
+
+      await expect(run()).resolves.toEqual(ok);
+      expect(simctlCalls("sim-remote", "launch")).toHaveLength(1);
+    }
+  );
+
+  it.each([
+    ["launch-app", remoteTerminateCases[0][1], "IOS_LAUNCH_SIMCTL_FAILED"],
+    ["restart-app", remoteTerminateCases[1][1], "IOS_RESTART_LAUNCH_FAILED"],
+  ] as const)(
+    "%s on a remote simulator tags a failed launch with sim-remote's exit code",
+    async (_id, run, code) => {
+      failRemote("launch", { code: 4, stderr: "launch refused" });
+
+      const err = await run().then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: code,
+        error_kind: "subprocess",
+        failure_command: "sim_remote",
+        failure_exit_code: 4,
+      });
+    }
+  );
+
+  it.each([
+    ["launch-app", remoteTerminateCases[0][1], "IOS_LAUNCH_SIMCTL_FAILED", /^Launching iOS app/],
+    [
+      "restart-app",
+      remoteTerminateCases[1][1],
+      "IOS_RESTART_LAUNCH_FAILED",
+      /^Relaunching iOS app/,
+    ],
+  ] as const)(
+    "%s on a remote simulator fails as a timeout when launch outlives sim-remote's limit",
+    async (_id, run, code, message) => {
+      failRemote("launch", { killed: true, signal: "SIGTERM" });
+
+      const err = await run().then(
+        () => null,
+        (e: unknown) => e
+      );
+
+      expect((err as Error).message).toMatch(message);
+      expect((err as Error).message).toMatch(/did not finish within 30s/);
+      expect(getFailureSignal(err)).toMatchObject({ error_code: code, error_kind: "timeout" });
     }
   );
 });
