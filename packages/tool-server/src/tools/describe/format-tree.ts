@@ -169,13 +169,16 @@ function printsLine(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
 }
 
 /** The sides of the window a folded row lies on, from the edges `normRect` clamped it to. */
-function foldedSides(node: DescribeNode): WindowSide[] {
+function foldedSides(node: DescribeNode, contentRoles: ReadonlySet<string>): WindowSide[] {
   const { x, y, width, height } = node.frame;
   if (x === 0 && y === 0 && width === 0 && height === 0 && node.children.length > 0) {
     // What `unionFrame` gives a box-less wrapper, so it says nothing about where the
-    // row is: its children do. A leaf cannot be such a wrapper, because the walker
-    // drops those. It is a box above and left of the window, read below as a corner.
-    return node.children.flatMap(foldedSides);
+    // row is: its children do, and only those that would print, as in the count. A
+    // leaf cannot be such a wrapper, because the walker drops those. It is a box
+    // above and left of the window, read below as a corner.
+    return node.children
+      .filter((c) => printsLine(c, contentRoles))
+      .flatMap((c) => foldedSides(c, contentRoles));
   }
   if (height <= 0 && y >= 1) return ["below"];
   if (height <= 0 && y <= 0) return ["above"];
@@ -196,7 +199,7 @@ function foldedChildren(
   contentRoles: ReadonlySet<string>
 ): FoldedChildren {
   const folded = node.children.filter((c) => offscreen.has(c) && printsLine(c, contentRoles));
-  const present = new Set(folded.flatMap(foldedSides));
+  const present = new Set(folded.flatMap((c) => foldedSides(c, contentRoles)));
   return { count: folded.length, sides: WINDOW_SIDES.filter((side) => present.has(side)) };
 }
 

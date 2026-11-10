@@ -776,6 +776,15 @@ describe("formatDescribeTree", () => {
         expect(withNav).toContain("[scrollHidden=1(above,below)]");
       });
 
+      it("takes a box-less wrapper's sides only from children that would print", () => {
+        const noBox = { x: 0, y: 0, width: 0, height: 0 };
+        const link = leaf({ role: "a", value: "Home", clickable: true, frame: noBox });
+        const empty = leaf({ role: "div", frame: right });
+        const nav: DescribeNode = { role: "nav", frame: noBox, children: [link, empty] };
+        const out = formatDescribeTree(page([nav]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(above)]");
+      });
+
       it("reads a zero-width slide that has height at the top edge as left or right", () => {
         const slides = [
           { frame: { x: 1, y: 0, width: 0, height: 0.1 }, side: "right" },
