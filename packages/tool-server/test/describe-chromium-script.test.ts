@@ -2660,6 +2660,21 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       expect(anchorOf([list(), ...boxes, fixed(280, 190, 5, 3)])).toEqual(FALLBACK);
     });
 
+    it("refuses a 25th probe past the grid", () => {
+      // The grid lands on three bands, leaving four strips. Each of two rounds covers
+      // every strip's three probes (12 a round) but for a part right of them, open to
+      // the list: the third round's first probe would reach it.
+      const bands = [fixed(0, 10, 300, 50), fixed(0, 70, 300, 60), fixed(0, 140, 300, 50)];
+      const strips = [0, 60, 130, 190].flatMap((y) => [
+        fixed(0, y, 280, 10),
+        fixed(280, y, 15, 10),
+      ]);
+      expect(anchorOf([list(), ...bands, ...strips])).toEqual(FALLBACK);
+      // A part the second round leaves open is found.
+      const opened = strips.filter((_, i) => i !== 7);
+      expect(anchorOf([list(), ...bands, ...opened])).toEqual({ y: { x: 0.29, y: 0.199 } });
+    });
+
     it("probes each point once across the cuts under one cutter", () => {
       const probes: string[] = [];
       const hitTest = MockDocument.prototype.elementsFromPoint;
