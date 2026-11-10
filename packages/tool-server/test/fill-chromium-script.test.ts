@@ -8,8 +8,8 @@ import { buildChromiumFillScript } from "../src/tools/fill/chromium";
  * `execCommand`, which stores line breaks as LF outside an input and fires
  * `input` through the window's capture listeners, `createElementNS` for a
  * detached input that applies the HTML value sanitization of number and email
- * inputs and for a detached link that parses its href, and the window's native
- * value setters and Event.
+ * inputs and for a detached link that parses its href, the window's native
+ * value setters and Event, and the computed overflow of an element.
  */
 
 // Captured before a test shadows the page's URL global.
@@ -67,6 +67,10 @@ function makePage(options: PageOptions = {}): Page {
     HTMLTextAreaElement,
     Event,
     listeners,
+    getComputedStyle: (el: { overflow?: string }) => ({
+      overflowX: el.overflow ?? "visible",
+      overflowY: el.overflow ?? "visible",
+    }),
     addEventListener: (type: string, fn: () => void, capture?: boolean) =>
       type === "input" && capture === true && listeners.add(fn),
     removeEventListener: (type: string, fn: () => void, capture?: boolean) =>
@@ -169,6 +173,7 @@ function editable(page: Page, props: Record<string, unknown> = {}) {
   return {
     tagName: "DIV",
     isContentEditable: true,
+    hasAttribute: () => false,
     innerText: "old text",
     parentElement: page.doc.body,
     ownerDocument: page.doc,
@@ -521,27 +526,76 @@ describe("fill page script", () => {
     clientWidth: 100,
     ...props,
   });
+  const CLOSED = {
+    status: "unsupported",
+    detail: "focus is in a closed shadow root, which fill cannot reach",
+  };
 
-  it.each(["MY-FIELD", "DIV"])(
-    "refuses focus in a closed shadow root of a %s, which it cannot read",
+  // Every element attachShadow takes, as a custom element or a listed built-in.
+  it.each([
+    "MY-FIELD",
+    ..."ARTICLE ASIDE BLOCKQUOTE DIV FOOTER H1 H2 H3 H4 H5 H6 HEADER MAIN NAV P SECTION SPAN".split(
+      " "
+    ),
+  ])("refuses focus in a closed shadow root of a %s, which it cannot read", async (tagName) => {
+    const page = makePage();
+    page.doc.activeElement = closedHost(tagName);
+    await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+  });
+
+  it.each(["A", "LI", "SUMMARY", "TABLE", "svg"])(
+    "answers no_focus for a focused %s, which attachShadow refuses",
     async (tagName) => {
       const page = makePage();
       page.doc.activeElement = closedHost(tagName);
-      await expect(runScript(page, "x")).resolves.toEqual({
-        status: "unsupported",
-        detail: "focus is in a closed shadow root, which fill cannot reach",
-      });
+      await expect(runScript(page, "x")).resolves.toEqual({ status: "no_focus" });
     }
   );
 
   it.each([
     ["a tabindex", { attributes: { tabindex: "0" } }],
-    ["scrolling down", { scrollHeight: 500 }],
-    ["scrolling sideways", { scrollWidth: 500 }],
+    ["scrolling down", { scrollHeight: 500, overflow: "auto" }],
+    ["scrolling sideways", { scrollWidth: 500, overflow: "scroll" }],
   ])("answers no_focus for a host that %s makes focusable itself", async (_n, props) => {
     const page = makePage();
     page.doc.activeElement = closedHost("MY-FIELD", props);
     await expect(runScript(page, "x")).resolves.toEqual({ status: "no_focus" });
+  });
+
+  it.each(["visible", "hidden", "clip"])(
+    "refuses focus in a closed shadow root of a host overflowing with overflow %s, which no user scrolls",
+    async (overflow) => {
+      const page = makePage();
+      page.doc.activeElement = closedHost("MY-FIELD", {
+        scrollHeight: 500,
+        scrollWidth: 500,
+        overflow,
+      });
+      await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+    }
+  );
+
+  it("refuses focus in a closed shadow root of a host inside an editor, leaving the editor as it was", async () => {
+    const page = makePage();
+    const editor = editable(page);
+    page.doc.activeElement = closedHost("X-CHIP", {
+      isContentEditable: true,
+      parentElement: editor,
+    });
+    await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+    expect(editor.innerText).toBe("old text");
+    expect(page.doc.selected).toBeNull();
+  });
+
+  it("fills a tab stop inside an editor, which can hold focus itself", async () => {
+    const page = makePage();
+    const child = editable(page, {
+      parentElement: editable(page),
+      hasAttribute: (name: string) => name === "tabindex",
+    });
+    page.doc.activeElement = child;
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "ok", verified: true });
+    expect(child.innerText).toBe("x");
   });
 
   it("refuses focus in an <embed>, whose document it cannot read", async () => {
@@ -650,7 +704,10 @@ describe("fill page script", () => {
   it("refuses a document that is editable as a whole", async () => {
     const page = makePage();
     page.doc.body.isContentEditable = true;
-    page.doc.activeElement = editable(page);
+    // A tab stop, which can hold focus itself.
+    page.doc.activeElement = editable(page, {
+      hasAttribute: (name: string) => name === "tabindex",
+    });
     await expect(runScript(page, "x")).resolves.toMatchObject({ status: "unsupported" });
   });
 
