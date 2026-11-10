@@ -52,7 +52,7 @@ export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema
 Maps native hangs to React commits using wall-clock time alignment.
 Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
-Fails if either react-profiler-analyze or native-profiler-analyze has not been called first, or if the session stored no React commits.`,
+Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -173,14 +173,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     const onDisk = await readCommitTree(sessionPaths.commitsPath);
     const commitTree = { commits: onDisk.commits, hookNames: new Map() };
     if (commitTree.commits.length === 0) {
-      // Analyzing again would change nothing. Name the storage rule, not a cause:
-      // the list is also empty after a slow commit with no named components, and
-      // when nothing rendered at all.
-      const message =
-        "No React commits are stored for this session: only commits of 16ms or more with named " +
-        "components, and their neighbours, are kept. There is nothing to correlate with the native " +
-        "profile. Use the native-profiler-analyze report on its own.";
-      throw new FailureError(message, {
+      throw new FailureError("No React commit data. Run react-profiler-analyze first.", {
         error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
         failure_stage: "profiler_combined_report_load_react_data",
         failure_area: "tool_server",

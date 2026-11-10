@@ -4,13 +4,25 @@ import type {
   EnrichedComponent,
   RootCauseVote,
 } from "../types/pipeline";
-import { dominantReason } from "./utils";
+import type { ReRenderReason } from "../types/output";
 
 function topN<K>(freq: Map<K, number>, n: number): K[] {
   return Array.from(freq.entries())
     .sort((a, b) => b[1] - a[1])
     .slice(0, n)
     .map(([k]) => k);
+}
+
+function dominantReason(histogram: Record<ReRenderReason, number>): ReRenderReason {
+  let best: ReRenderReason = "unknown";
+  let bestCount = -1;
+  for (const [reason, count] of Object.entries(histogram) as [ReRenderReason, number][]) {
+    if (count > bestCount) {
+      bestCount = count;
+      best = reason;
+    }
+  }
+  return best;
 }
 
 function topParent(parentFreq: Map<string, number>): string | undefined {

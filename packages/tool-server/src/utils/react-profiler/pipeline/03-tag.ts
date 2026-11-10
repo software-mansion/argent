@@ -12,8 +12,7 @@ import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline
 // Bare tokens still over-tag ordinary names (`MotionSensor`, `TransitionMatrix`):
 // accepted, because the match must stay unanchored to catch `FadeTransition`, and
 // the only cost is excluding a component from perf findings.
-export const ANIMATED_PATTERN =
-  /(?<![A-Z0-9])(Animated|Animation|Transition|Motion)(?=[A-Z0-9_(.]|$)/;
+const ANIMATED_PATTERN = /(?<![A-Z0-9])(Animated|Animation|Transition|Motion)(?=[A-Z0-9_(.]|$)/;
 const RECYCLER_CHILD_PATTERN = /(ListItem|CellItem|Cell|Row|Item)$/i;
 const RECYCLER_PARENT_PATTERN =
   /^(FlatList|SectionList|VirtualizedList|FlashList|RecyclerListView)/i;

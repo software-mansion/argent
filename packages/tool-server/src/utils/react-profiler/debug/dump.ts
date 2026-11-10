@@ -95,9 +95,6 @@ interface CommitTreeOnDisk {
     // [commitIndex, droppedFiberCount, droppedActualDurationMs] for fibers whose
     // display name could not be resolved at stop time (transient/unmounted).
     unattributedByCommit?: Array<[number, number, number]> | null;
-    // Per-component counts over all commits (render-summary.ts). Absent on
-    // sessions saved before it existed; read it through parseRenderSummary.
-    renderSummary?: unknown;
   };
 }
 

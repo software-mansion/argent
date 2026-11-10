@@ -22,23 +22,3 @@ export function deriveReason(
   if (cd.state === true) return "state";
   return "parent";
 }
-
-export function emptyReasonHistogram(): Record<ReRenderReason, number> {
-  return { parent: 0, props: 0, hooks: 0, context: 0, state: 0, force_update: 0, unknown: 0 };
-}
-
-/**
- * The reason with the most renders. A tie goes to the first in the histogram's
- * key order, so the report's table and `render_counts` name the same one.
- */
-export function dominantReason(histogram: Record<ReRenderReason, number>): ReRenderReason {
-  let best: ReRenderReason = "unknown";
-  let bestCount = -1;
-  for (const [reason, count] of Object.entries(histogram) as [ReRenderReason, number][]) {
-    if (count > bestCount) {
-      bestCount = count;
-      best = reason;
-    }
-  }
-  return best;
-}

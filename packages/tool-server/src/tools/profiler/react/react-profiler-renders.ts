@@ -116,11 +116,6 @@ Use when you want a quick look at what is mounted in a live connected app, witho
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   zodSchema,
   readOnly: true,
-  // It walks only the top 30 fiber levels, above the screens of a real app
-  // (Bluesky's first feed item sits at depth 446), and its totals double-count
-  // nested instances. Agents read render counts from a profiling session
-  // (profiler-commit-query mode=render_counts); HTTP and SDK callers keep it.
-  hideFromMcp: true,
   interaction: {
     startedMsg: () => "Reading React render activity",
     completedMsg: () => "Read React render activity",

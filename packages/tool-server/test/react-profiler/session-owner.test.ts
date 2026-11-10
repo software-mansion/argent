@@ -212,12 +212,6 @@ describe("flattenProfilingData", () => {
     expect(indices).toEqual([0, 1, 2]);
   });
 
-  it("gives one timing per flat commit across roots, for the busiest-second figure", () => {
-    const { commitTimings } = flattenProfilingData(pd(), displayNameById, fiberMeta);
-    expect(commitTimings.map((c) => c.timestamp)).toEqual([10, 30, 50]);
-    expect(commitTimings.map((c) => c.durationMs)).toEqual([20, 5, 10]);
-  });
-
   it("produces one entry per rendered fiber per commit", () => {
     const { commits } = flattenProfilingData(pd(), displayNameById, fiberMeta);
     expect(commits).toHaveLength(4); // 2 + 1 + 1
