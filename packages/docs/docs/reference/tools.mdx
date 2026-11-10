@@ -100,12 +100,6 @@ With the `macos-apps` flag on, `list-devices` shows each native Mac app that Arg
 | `await-screen-idle` | Block until the screen has rendered content and stopped changing                 |
 | `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
 
-On an iOS simulator, a line of `describe` can show:
-
-- `[disabled]` for a control that is not enabled.
-- `[selected]` for a selected control.
-- `hint="..."` for an element that has a VoiceOver hint. `describe` omits a hint that is identical to the label. A physical iPhone does not report the VoiceOver hint.
-
 ## Interacting
 
 | Tool                     | Description                                                                        |
@@ -158,6 +152,7 @@ The [Mac apps](#mac-apps) section contains the details.
 
 | Tool                                     | Description                                                                                       |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `native-describe-screen`                 | Read the app's native accessibility screen description                                            |
 | `native-full-hierarchy`                  | Get the complete UIKit view tree                                                                  |
 | `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`                                |
 | `native-view-at-point`                   | Inspect the deepest visible view at a native window point                                         |
@@ -629,7 +624,6 @@ Argent hides these tools from MCP, so the agent does not see them. Call them wit
 | `foreground-app`                  | Get the app in front, iOS simulator and Android                          | None                                             |
 | `fill`                            | Set the text of the focused text field                                   | `keyboard`                                       |
 | `native-devtools-status`          | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                        |
-| `native-describe-screen`          | Read the app's native accessibility screen description                   | `describe`                                       |
 | `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                              |
 | `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions`       |
 | `react-profiler-component-source` | Find a component's source file, line, and memoization status             | `react-profiler-analyze`                         |
@@ -643,7 +637,6 @@ Some agent tools do not always give the same result as the hidden tool:
 - `describe` returns pruned text with one line for each element, not the raw tree. On an iOS simulator, the text does not show which element contains which. `describe` does not give the `hidden`, `covered`, `alertVisible`, `keyboardVisible` or `foregroundApp` fields.
 - `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` does not.
 - `native-describe-screen`, `native-find-views`, `native-full-hierarchy`, `native-view-at-point`, `native-user-interactable-view-at-point` and, on iOS, `native-network-logs` return the same `message` as `native-devtools-status` when native devtools are not connected. Their `status` names the remedy, where `native-devtools-status` gives `state`. They fail instead for an Apple system app and for an app that a device provider did not lend. `native-profiler-*` do not use native devtools.
-- `describe` shows the disabled and selected states and the VoiceOver hint on an iOS simulator. `describe` does not show the frames in points, the view class or some traits, such as `toggleButton`. `native-describe-screen` returns them.
 - `chromium-storage` with no key returns every entry. Through `debugger-evaluate`, a bare `localStorage` returns `{}`, so use `Object.fromEntries(Object.entries(localStorage))`.
 - `profiler-cpu-query` measures each CPU sample with its own interval and does not list idle time as a function. Thus its times can be different from the times of `react-profiler-cpu-summary`. `react-profiler-cpu-summary` lists anonymous functions as `(anonymous)`. `profiler-cpu-query` counts them as idle.
 - `react-profiler-analyze` gives the file and the line of the components in its table that it finds in the project. A library component has no file, and a component that is only in a commit cascade has no file. The report shows the source of the five components with the highest total render time. It can show fewer than five, because it needs the file of each component. For other components, the agent searches the source files. When several files define a name, the report selects one file for the platform of the recording and names up to three other files. The report can select the wrong file for a name that many components share, for example `Content`. The report marks a component that React DevTools records as `Memo(...)` with `[React.memo]`. It does not give `hasUseCallback` or `hasUseMemo`.

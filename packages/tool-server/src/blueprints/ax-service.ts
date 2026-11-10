@@ -47,8 +47,6 @@ export function axServiceRef(
 
 export interface AXDescribeElement {
   label?: string;
-  /** The VoiceOver hint. Only `describe` sends it, and a daemon older than this field does not. */
-  hint?: string;
   frame?: { x: number; y: number; width: number; height: number };
   tapPoint?: { x: number; y: number };
   traits?: string[];
@@ -63,7 +61,7 @@ export interface AXDescribeResponse {
 }
 
 /** A `tree` node, in document order; `parentIndex` names its accessibility parent. */
-export interface AXTreeNode extends Omit<AXDescribeElement, "hint"> {
+export interface AXTreeNode extends AXDescribeElement {
   index: number;
   parentIndex?: number;
   roleDescription?: string;

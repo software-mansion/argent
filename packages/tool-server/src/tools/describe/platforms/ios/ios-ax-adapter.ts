@@ -31,13 +31,10 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
     },
     children: [],
     label: el.label,
-    hint: el.hint,
     value: el.value,
     identifier: el.identifier,
     // The text input that has the keyboard.
     ...(traits.includes("isEditing") ? { focused: true } : {}),
-    ...(traits.includes("notEnabled") ? { disabled: true } : {}),
-    ...(traits.includes("selected") ? { selected: true } : {}),
   };
 }
 

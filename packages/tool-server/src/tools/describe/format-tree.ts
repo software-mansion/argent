@@ -103,27 +103,16 @@ function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
   return hasContent(n) || contentRoles.has(n.role);
 }
 
-// What an iOS simulator element can report with no label, value or id, which
-// maps it to the AXGroup fallback. Only the flat renderer counts these: the tree
-// sources also set `disabled` and `selected`, and counting them there would
-// print leaves that are pruned today.
-function hasIosState(n: DescribeNode): boolean {
-  return Boolean(n.hint || n.disabled || n.selected);
-}
-
 function formatLine(n: DescribeNode, indent: number, source: DescribeSource): string {
   const pad = "  ".repeat(indent);
   // iOS reports a text input's placeholder as both label and value; printing
   // it twice costs bytes for no signal.
   const dedupedValue = n.value && n.value !== n.label ? n.value : undefined;
-  // Safari reports an HTML `title` as the hint, and it is often the link's own text.
-  const dedupedHint = n.hint && n.hint !== n.label ? n.hint : undefined;
   const labelPart = formatLabel(n.label);
   const valuePart = formatAttr("value", dedupedValue);
   const idPart = formatAttr("id", n.identifier);
-  const hintPart = formatAttr("hint", dedupedHint);
   const flagPart = formatFlags(n, source);
-  const annotations = `${labelPart}${valuePart}${idPart}${hintPart}${flagPart}`.trim();
+  const annotations = `${labelPart}${valuePart}${idPart}${flagPart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
@@ -134,7 +123,7 @@ function renderFlat(
   source: DescribeSource
 ): string[] {
   return root.children
-    .filter((n) => shouldEmit(n, contentRoles) || hasIosState(n))
+    .filter((n) => shouldEmit(n, contentRoles))
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
     .map((n) => formatLine(n, 1, source));
