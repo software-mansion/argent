@@ -5,6 +5,13 @@ interface SelectedTarget {
   target: CDPTarget;
   webSocketUrl: string;
   isNewDebugger: boolean;
+  /**
+   * Served by the legacy Hermes inspector, whose -32601 means the method does
+   * not exist, not that a modern host has no JS instance yet. Not
+   * `!isNewDebugger`: the experimental bridge page is a modern host on the old
+   * frontend.
+   */
+  legacyInspector: boolean;
   deviceName: string;
 }
 
@@ -96,22 +103,46 @@ export function selectTarget(
   const fusebox = candidates.find(
     (t) => t.reactNative?.capabilities?.prefersFuseboxFrontend === true
   );
-  if (fusebox) return makeResult(fusebox, port, true);
+  if (fusebox) return makeResult(fusebox, port, true, false);
 
   const cppConn = candidates.find((t) => t.description?.endsWith("[C++ connection]"));
-  if (cppConn) return makeResult(cppConn, port, true);
+  if (cppConn) return makeResult(cppConn, port, true, false);
 
   const bridge = candidates.find((t) => t.title?.startsWith("React Native Bridge"));
-  if (bridge) return makeResult(bridge, port, false);
+  if (bridge) return makeResult(bridge, port, false, false);
 
-  return makeResult(candidates[0]!, port, false);
+  // The legacy inspector also lists worklet runtimes (Reanimated's "Reanimated
+  // UI runtime", or one named by `createWorkletRuntime`), in any order. They are
+  // not the app's runtime, and an idle one leaves `Runtime.enable` unanswered,
+  // so the app's runtime is picked by the title React Native registers it under.
+  const hermes = candidates.find((t) =>
+    LEGACY_APP_RUNTIME_TITLES.has(t.title?.replace(CXX_CONNECTION_SUFFIX, ""))
+  );
+  if (hermes) return makeResult(hermes, port, false, true);
+
+  return makeResult(candidates[0]!, port, false, true);
 }
 
-function makeResult(target: CDPTarget, port: number, isNewDebugger: boolean): SelectedTarget {
+/** The bridge's (`HermesExecutorFactory`) and bridgeless (`HermesInstance`) names. */
+const LEGACY_APP_RUNTIME_TITLES = new Set([
+  "Hermes React Native",
+  "Hermes Bridgeless React Native",
+]);
+
+/** RN 0.74's opt-in C++ packager connection appends this to every page title. */
+const CXX_CONNECTION_SUFFIX = / \[C\+\+ connection\]$/;
+
+function makeResult(
+  target: CDPTarget,
+  port: number,
+  isNewDebugger: boolean,
+  legacyInspector: boolean
+): SelectedTarget {
   return {
     target,
     webSocketUrl: normalizeWsUrl(target.webSocketDebuggerUrl, port),
     isNewDebugger,
+    legacyInspector,
     deviceName: target.deviceName ?? target.title ?? "unknown",
   };
 }

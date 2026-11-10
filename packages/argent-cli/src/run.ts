@@ -28,6 +28,7 @@ import {
   missingFlagNames,
   type ValidationReport,
 } from "./run-validation.js";
+import { exitAfterFlush } from "./e2e.js";
 
 export interface RunCommandOptions {
   paths: ToolsServerPaths;
@@ -209,6 +210,15 @@ Examples:
   argent run screenshot --udid <UDID> --out ./screen.png
   argent run run-sequence --udid <UDID> --steps-json '[{"tool":"button","args":{"button":"home"}}]'
   argent run gesture-tap --args '{"udid":"<UDID>","x":0.5,"y":0.5}'
+
+Exits 1 when the tool fails. Also exits 1 when the result reports that the
+call did not do its job: an e2e test that does not pass, an await-ui-element
+wait with success=false, a run-sequence that a step stopped, a debugger tool
+with no connection or an error, a native-devtools precheck that stopped the
+tool, a native-profiler-analyze with status analysis_failed, an e2e recording
+call that recorded nothing, or a baseline that was not written on this client.
+Other results exit 0, also a negative answer such as await-screen-idle's
+settled=false or debugger-status's not_connected.
 `);
     return;
   }
@@ -382,6 +392,7 @@ Examples:
 
   let result: unknown;
   let note: string | undefined;
+  let failure: string | undefined;
   let images: MaterializedImage[] = [];
   try {
     const resp = await callTool(toolName, payload);
@@ -397,6 +408,7 @@ Examples:
     result = materialized.result;
     images = materialized.images;
     note = resp.note;
+    failure = resp.failure;
   } catch (err) {
     // The tool rejected the input rather than failing to run it — report it like any other bad
     // invocation.
@@ -441,5 +453,19 @@ Examples:
 
   if (imageOut && meta.outputHint === "image" && !json) {
     console.log(`Wrote: ${imageOut}`);
+  }
+
+  if (failure) {
+    // Drain stdout first, or a merged log splices the reason into a large report.
+    await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+    console.error(failure);
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_TOOL_RESULT_FAILED,
+      failure_stage: "cli_run_tool_result",
+      failure_area: "cli",
+      error_kind: "unknown",
+    });
+    // Not stdout: a write after EPIPE throws.
+    await exitAfterFlush(1, [process.stderr]);
   }
 }
