@@ -25,6 +25,15 @@ import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/
 import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
 import type { ArtifactKind, ArtifactStore } from "@argent/registry";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
+import {
+  parseRenderSummary,
+  selectFrequentRerenders,
+  type RenderSummary,
+} from "../../../utils/react-profiler/render-summary";
+import {
+  createComponentOriginClassifier,
+  type ComponentSourceIndex,
+} from "../../../utils/react-profiler/component-origin";
 
 /**
  * Register a path as a downloadable artifact so the client gets fetchable bytes
@@ -142,6 +151,10 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     let commitTree: DevToolsCommitTree;
     let unattributedByCommit: Array<[number, number, number]> | undefined;
     let metroRoot: string | undefined;
+    // Null for sessions saved before stop wrote it. With no hot commit the report
+    // then says commits under 16ms were not measured; with hot commits it only
+    // leaves out the lines that need the summary.
+    let renderSummary: RenderSummary | null = null;
     if (sessionPaths.commitsPath) {
       const onDisk = await readCommitTree(sessionPaths.commitsPath);
       commitTree = { commits: onDisk.commits, hookNames: new Map() };
@@ -149,6 +162,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
         unattributedByCommit = onDisk.meta.unattributedByCommit;
       }
       metroRoot = onDisk.meta?.projectRoot || undefined;
+      renderSummary = parseRenderSummary(onDisk.meta?.renderSummary);
     } else {
       commitTree = { commits: [], hookNames: new Map() };
     }
@@ -181,6 +195,9 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
           totalReactCommits,
         }),
         ...(unattributedByCommit && { unattributedByCommit }),
+        // [] means stop ran and no commit reached the floor; null means no commit data.
+        noHotCommits: hotCommitIndices !== null && hotCommitIndices.length === 0,
+        ...(renderSummary && { maxCommitMs: renderSummary.maxCommitMs }),
       },
     };
 
@@ -196,11 +213,22 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       sessionPaths.cpuSampleIndexPath = indexPath;
     }
 
+    // The index costs seconds on a large app, so build it only when the report
+    // uses it: for the File column of findings, or to tell app components from
+    // library ones in the frequent re-render rows. Names alone rule out most
+    // rows, which keeps quiet sessions fast.
+    const needsSourceIndex =
+      pipelineOutput.componentFindings.length > 0 ||
+      (renderSummary !== null &&
+        selectFrequentRerenders(renderSummary, createComponentOriginClassifier(null)).length > 0);
+    let sourceIndex: ComponentSourceIndex | null = null;
     let sourceWarning: string | undefined;
     let sourceRoot = params.project_root;
     try {
-      let astIndex = await buildAstIndexWithDiagnostics(sourceRoot, platform);
-      if (astIndex.index.size === 0 && metroRoot && metroRoot !== sourceRoot) {
+      let astIndex = needsSourceIndex
+        ? await buildAstIndexWithDiagnostics(sourceRoot, platform)
+        : null;
+      if (astIndex && astIndex.index.size === 0 && metroRoot && metroRoot !== sourceRoot) {
         // Over a link the caller's path is a client path, and Metro's is on this host.
         const fromMetro = await buildAstIndexWithDiagnostics(metroRoot, platform);
         if (fromMetro.index.size > 0) {
@@ -209,13 +237,14 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
           sourceWarning = `project_root "${params.project_root}" holds no components on the tool-server host, so the File column comes from Metro's project root "${metroRoot}".`;
         }
       }
+      if (astIndex?.treeSitterAvailable) sourceIndex = astIndex.index;
       for (const finding of pipelineOutput.componentFindings) {
         // `finding.component` is the raw DevTools name; the AST index is keyed
         // on bare source identifiers, so without the candidate fallback every
         // Memo/ForwardRef/Forget component loses its source location and the
         // report's File column renders "—".
         const entry = astLookupCandidates(finding.component)
-          .map((k) => astIndex.index.get(k))
+          .map((k) => astIndex?.index.get(k))
           .find(Boolean);
         if (entry) {
           finding.sourceLocation = {
@@ -230,7 +259,9 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
         }
       }
       const findings = pipelineOutput.componentFindings;
-      if (!astIndex.treeSitterAvailable) {
+      if (!astIndex) {
+        // No index was needed, so the report names no file and there is nothing to warn about.
+      } else if (!astIndex.treeSitterAvailable) {
         sourceWarning =
           "The tree-sitter parser could not be loaded, so the report gives no file for any component.";
       } else if (findings.length > 0 && !findings.some((f) => f.sourceLocation)) {
@@ -277,8 +308,11 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       reactCommits: pipelineOutput.reactCommits,
       annotations: params.annotations,
       debugDir,
-      allClear: pipelineOutput.allClear,
+      noHotCommits: pipelineOutput.noHotCommits,
+      noReactCommits: totalReactCommits === 0,
       maxCommitMs: pipelineOutput.maxCommitMs,
+      renderSummary,
+      componentOrigin: createComponentOriginClassifier(sourceIndex),
     });
 
     const artifacts = requireArtifacts(ctx);

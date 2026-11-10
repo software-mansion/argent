@@ -18,22 +18,47 @@ import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/de
 import {
   resolveComponentName,
   renderComponentNameMiss,
-  describeResolution,
 } from "../../../utils/react-profiler/component-names";
+import {
+  describeStoredResolution,
+  parseRenderSummary,
+  renderNameOutsideStoredCommits,
+  storedOnlyNote,
+  type RenderSummary,
+} from "../../../utils/react-profiler/render-summary";
+import { renderNoStoredCommits } from "./profiler-commit-query";
 import { promises as fs } from "fs";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
+interface StoredCommits {
+  commits: {
+    commitIndex: number;
+    timestamp: number;
+    commitDuration: number;
+    componentName: string;
+    didRender: boolean;
+  }[];
+  /** Null for sessions saved before react-profiler-stop wrote the summary. */
+  renderSummary: RenderSummary | null;
+  totalReactCommits: number | null;
+}
+
+async function readStoredCommits(
+  sessionPaths: ProfilerSessionPaths
+): Promise<StoredCommits | null> {
+  if (!sessionPaths.commitsPath) return null;
+  const onDisk = await readCommitTree(sessionPaths.commitsPath);
+  return {
+    commits: onDisk.commits,
+    renderSummary: parseRenderSummary(onDisk.meta?.renderSummary),
+    totalReactCommits: onDisk.meta?.totalReactCommits ?? sessionPaths.totalReactCommits ?? null,
+  };
+}
+
 async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
   index: CpuSampleIndex;
-  commitTree: {
-    commits: {
-      commitIndex: number;
-      timestamp: number;
-      commitDuration: number;
-      componentName: string;
-    }[];
-  } | null;
+  commitTree: StoredCommits | null;
 }> {
   if (!sessionPaths?.cpuProfilePath) {
     throw new FailureError(
@@ -52,25 +77,17 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
     try {
       const raw = JSON.parse(await fs.readFile(sessionPaths.cpuSampleIndexPath, "utf8"));
       const index = deserializeCpuSampleIndex(raw);
-      let commitTree = null;
-      if (sessionPaths.commitsPath) {
-        const onDisk = await readCommitTree(sessionPaths.commitsPath);
-        commitTree = { commits: onDisk.commits };
-      }
-      return { index, commitTree };
+      return { index, commitTree: await readStoredCommits(sessionPaths) };
     } catch {
       // Fall through to building from the raw profile.
     }
   }
 
   const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
-  let commitTree = null;
-  if (sessionPaths.commitsPath) {
-    const onDisk = await readCommitTree(sessionPaths.commitsPath);
-    commitTree = { commits: onDisk.commits };
-  }
-
-  return { index: buildCpuSampleIndex(cpuProfile), commitTree };
+  return {
+    index: buildCpuSampleIndex(cpuProfile),
+    commitTree: await readStoredCommits(sessionPaths),
+  };
 }
 
 /**
@@ -312,19 +329,15 @@ function renderCallTree(
 
 function renderComponentCpu(
   index: CpuSampleIndex,
-  commitTree: {
-    commits: {
-      commitIndex: number;
-      timestamp: number;
-      commitDuration: number;
-      componentName: string;
-    }[];
-  } | null,
+  commitTree: StoredCommits | null,
   componentName: string,
   topN: number
 ): string {
-  if (!commitTree || commitTree.commits.length === 0) {
+  if (!commitTree) {
     return "_No commit data available. Run react-profiler-analyze first._";
+  }
+  if (commitTree.commits.length === 0) {
+    return `${renderNoStoredCommits(commitTree)}\n\nUse mode=\`top_functions\` for JS CPU.`;
   }
 
   // The report prints display names (wrappers stripped), so accept those too —
@@ -333,6 +346,13 @@ function renderComponentCpu(
     componentName,
     commitTree.commits.map((c) => c.componentName)
   );
+  if (resolution.kind === "missing" && commitTree.renderSummary) {
+    return renderNameOutsideStoredCommits(
+      componentName,
+      commitTree.renderSummary,
+      " Use mode=`top_functions` for JS CPU over the whole session."
+    );
+  }
   if (resolution.kind === "ambiguous" || resolution.kind === "missing") {
     return renderComponentNameMiss(resolution, {
       fiberRenders: commitTree.commits.length,
@@ -340,7 +360,7 @@ function renderComponentCpu(
     });
   }
   const resolvedName = resolution.rawName;
-  const resolutionNote = describeResolution(resolution);
+  const resolutionNote = describeStoredResolution(resolution, commitTree.renderSummary);
 
   const componentCommits = commitTree.commits.filter((c) => c.componentName === resolvedName);
 
@@ -394,7 +414,13 @@ function renderComponentCpu(
     `## CPU During \`${resolvedName}\` Commits`,
     "",
     ...(resolutionNote ? [resolutionNote, ""] : []),
-    `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms`,
+    `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms` +
+      storedOnlyNote(
+        resolvedName,
+        componentCommits.filter((c) => c.didRender).length,
+        commitTree.renderSummary,
+        "`profiler-commit-query` mode=`render_counts`"
+      ),
     "",
     "| Function | Self (ms) | Total (ms) | Location |",
     "|---|---|---|---|",
@@ -452,7 +478,7 @@ Modes:
 - top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
 - time_window: CPU breakdown for time_window_ms (e.g. during a slow commit or hang).
 - call_tree: For a given function_name, show its callees, and its callers with include_callers.
-- component_cpu: For a given component_name, aggregate CPU activity across all its commits.
+- component_cpu: For a given component_name, aggregate CPU activity across its stored commits.
 In top_functions and time_window, self-times are the summed sampling intervals of the samples that
 landed in the window, so they measure sampled coverage rather than the window's width and do not
 change if you widen the query. Their tables state how many samples they cover and how much was idle.

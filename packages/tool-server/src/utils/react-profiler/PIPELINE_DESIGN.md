@@ -26,11 +26,11 @@ Matches React DevTools commit bar chart behavior. Better than linear for disting
 
 cbrt alone creates false positives: a 2ms commit can be "hot" relative to a 1ms baseline. The absolute 16ms floor (one dev-mode frame budget at 60fps) gates entry before any normalization is applied.
 
-| Category  | Absolute threshold |
-| --------- | ------------------ |
-| All clear | all commits < 16ms |
-| Warm 🟡   | 16–50ms            |
-| Hot 🔴    | > 50ms             |
+| Category | Absolute threshold |
+| -------- | ------------------ |
+| No hot   | all commits < 16ms |
+| Warm 🟡  | 16–50ms            |
+| Hot 🔴   | > 50ms             |
 
 ### React Compiler detection moved to react-profiler-stop
 
@@ -48,9 +48,11 @@ LLM context efficiency. Field names in JSON consume tokens without adding value.
 
 **No max-delta cutoff** — always show the most recent prior annotation regardless of elapsed time. The time delta is displayed so the developer/LLM can reason about causality. Example: a hot commit 2.0s after "sent message" suggests an async response handler.
 
-### All-clear path
+### No-hot-commit path
 
-Prevents the pipeline from always finding "something" even in perfectly smooth sessions. 16ms threshold means a genuinely smooth app explicitly says so rather than manufacturing noise.
+Prevents the pipeline from always finding "something" in a session with no slow commit. The report states what was measured and gives no verdict: "no commit reached 16ms" does not show that the app is fine.
+
+No share of the recording decides the outcome either. A floor on it was tried and dropped: the same 5 s burst read 18% in a 10 s recording and 9.8% in an 18.5 s one, and dev builds and Strict Mode inflate it by a varying amount. The Most Frequent Re-renders limits decide a listing only, and a row is not a finding.
 
 ### Cap + persist full report
 

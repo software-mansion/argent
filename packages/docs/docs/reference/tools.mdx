@@ -498,18 +498,29 @@ Each window in the Window menu has an identifier. Use it to choose one of two wi
 | `react-profiler-stop`       | Stop profiling and collect the CPU profile and commit tree                   |
 | `react-profiler-status`     | Check if a React profiler run records, was saved, was lost or taken over     |
 | `react-profiler-analyze`    | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-renders`    | Count mounted instances of each component in the live fiber tree             |
 | `react-profiler-fiber-tree` | Inspect the React fiber tree as JSON                                         |
 | `native-profiler-start`     | Start native profiling: Instruments on iOS, Perfetto on Android              |
 | `native-profiler-stop`      | Stop native profiling and export the trace                                   |
 | `native-profiler-analyze`   | Analyze an exported native trace into a markdown report                      |
 | `profiler-combined-report`  | Cross-correlate React Profiler and native profiler data                      |
 | `profiler-load`             | Restore a previously captured session from disk so query tools can use it    |
-| `profiler-commit-query`     | Query React commit data for iterative render investigation                   |
+| `profiler-commit-query`     | Query React commit data, or the render counts of each component              |
 | `profiler-cpu-query`        | Query Hermes CPU profile data with targeted modes                            |
 | `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
 
 In the `top_functions` and `time_window` modes, `profiler-cpu-query` gives the self time of each call-tree node as a share of the sampled time. A function that runs on several call paths has one row for each path, and `top_n` counts rows. With `react_only`, `profiler-cpu-query` lists only the functions with a PascalCase name, which is the name format of a React component.
+
+`react-profiler-stop` stores the data of each component only for the hot commits and the commits next to them. A commit is hot when it takes 16 ms or more. `react-profiler-stop` also stores the render count and the render time of each component over all commits. `profiler-commit-query` with `mode: "render_counts"` returns these counts. A session that an older version of Argent stored does not have them.
+
+The report of `react-profiler-analyze` contains these items:
+
+- The `React render time` line: total render time, session length, share of the session, largest share in one second, and number of commits. These values are approximate. React DevTools gives only the largest rendered subtree of each commit as the commit duration. Argent uses the sum of the component render times of a commit when that sum is larger. The values do not include effects or native work. A development build is slower than a production build.
+- "No commit reached 16ms" when no commit takes 16 ms or more. The report does not say that the session is good or bad.
+- A warning when no commit is hot but a commit takes 16 ms or more. Argent can name no component of this commit, so Argent does not store it.
+- A "Most Frequent Re-renders" table. A report with no hot commit contains the table only when a component meets the conditions below. A report with hot commits contains the table only when a component in it is not in the Top Components table. The table lists up to 5 app components, sorted by render time per second. Other components that meet the conditions are named in one line. In a report with hot commits, that line leaves out components already in the Top Components table. A component must re-render in 10 or more commits and use 1 ms or more of render time per second. A row shows what re-rendered. It does not show a problem. React Native components, list internals, animation wrappers, providers and development components are not in the table. When Argent cannot index the source in `project_root`, the table can also contain library components, and the text above the table says so.
+- In the Top Components table, `Renders` shows two counts: the re-renders in the stored commits and the re-renders in all commits. An example is `6 / 50`.
+
+When a session has no hot commits, the other modes of `profiler-commit-query` return a message that tells the agent to use `render_counts`.
 
 While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
 
@@ -607,6 +618,7 @@ Argent hides these tools from MCP, so the agent does not see them. Call them wit
 | `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                              |
 | `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions`       |
 | `react-profiler-component-source` | Find a component's source file, line, and memoization status             | `react-profiler-analyze`                         |
+| `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree         | `profiler-commit-query`, mode `render_counts`    |
 | `e2e-read-prerequisite`           | Read the execution prerequisite of an e2e test without running it        | `e2e-execute` without `prerequisiteAcknowledged` |
 | `gather-workspace-data`           | Fetch a structured snapshot of the app project's workspace               | None                                             |
 
@@ -620,6 +632,7 @@ Some agent tools do not always give the same result as the hidden tool:
 - `profiler-cpu-query` measures each CPU sample with its own interval and does not list idle time as a function. Thus its times can be different from the times of `react-profiler-cpu-summary`. `react-profiler-cpu-summary` lists anonymous functions as `(anonymous)`. `profiler-cpu-query` counts them as idle.
 - `react-profiler-analyze` gives the file and the line of the components in its table that it finds in the project. A library component has no file, and a component that is only in a commit cascade has no file. The report shows the source of the five components with the highest total render time. It can show fewer than five, because it needs the file of each component. For other components, the agent searches the source files. When several files define a name, the report selects one file for the platform of the recording and names up to three other files. The report can select the wrong file for a name that many components share, for example `Content`. The report marks a component that React DevTools records as `Memo(...)` with `[React.memo]`. It does not give `hasUseCallback` or `hasUseMemo`.
 - `react-profiler-component-source` fails when `project_root` is not on the computer of the tool-server. `react-profiler-analyze` returns the report with a `warning`. When no component in the report table is in `project_root`, the `warning` says so. This can mean that all components in the table are library components, or that `project_root` is wrong. When `project_root` holds no components, `react-profiler-analyze` uses the project root that Metro reports, and the `warning` says so.
+- `react-profiler-renders` reads only the top 30 levels of the React fiber tree and counts the mounted components, not the re-renders. For render counts, use `profiler-commit-query` with `mode: "render_counts"` after a profiling session.
 - `e2e-execute` without `prerequisiteAcknowledged` returns the execution prerequisite and runs no step only when the e2e test has a prerequisite. When the e2e test has no prerequisite, `e2e-execute` runs the e2e test.
 
 `terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones and Mac apps are not supported yet.

@@ -16,7 +16,11 @@ interface TreeSitterNode {
 
 interface ParserInstance {
   setLanguage(lang: unknown): void;
-  parse(src: string): { rootNode: TreeSitterNode };
+  parse(
+    src: string,
+    oldTree?: undefined,
+    options?: { bufferSize?: number }
+  ): { rootNode: TreeSitterNode };
 }
 
 type ParserCtor = new () => ParserInstance;
@@ -84,7 +88,20 @@ function loadTreeSitter(): {
   return { ParserClass: _ParserClass, ts: _tsLanguage, tsx: _tsxLanguage };
 }
 
-const EXCLUDE_DIRS = new Set(["node_modules", ".git", "android", "ios", "dist", "build", ".expo"]);
+const EXCLUDE_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "android",
+  "ios",
+  "dist",
+  "build",
+  ".expo",
+  "__tests__",
+  "__mocks__",
+]);
+
+/** A mock defined in a test is not the app's component, though it may share its name. */
+const TEST_FILE = /\.(test|spec)\.[jt]sx?$/;
 
 async function findSourceFiles(
   dir: string
@@ -112,10 +129,11 @@ async function findSourceFiles(
       } else if (entry.isFile()) {
         const name = entry.name;
         if (
-          name.endsWith(".ts") ||
-          name.endsWith(".tsx") ||
-          name.endsWith(".js") ||
-          name.endsWith(".jsx")
+          (name.endsWith(".ts") ||
+            name.endsWith(".tsx") ||
+            name.endsWith(".js") ||
+            name.endsWith(".jsx")) &&
+          !TEST_FILE.test(name)
         ) {
           result.push(join(current, name));
         }
@@ -277,6 +295,11 @@ function pickPrimary(
   };
 }
 
+/** What tree-sitter parses with its default 32 KB buffer. */
+const DEFAULT_PARSE_BUFFER_CHARS = 32 * 1024 - 1;
+/** Limit for .tsx and .jsx. Over this a file is generated or vendored, not a screen someone wrote. */
+const MAX_JSX_FILE_CHARS = 512 * 1024;
+
 /**
  * Index every React component in the project. Without tree-sitter, returns an
  * empty index and treeSitterAvailable=false rather than throwing.
@@ -311,19 +334,37 @@ export async function buildAstIndexWithDiagnostics(
       continue;
     }
 
-    const isTsxFile = file.endsWith(".tsx") || file.endsWith(".jsx");
-    const language = isTsxFile ? tsxLang : tsLang;
+    // JSX is common in plain .js files (an Expo App.js); the TypeScript grammar
+    // fails at the first tag and drops every component after it. TSX parses all
+    // of JavaScript, so only .ts, where `<T>value` casts conflict with JSX, keeps
+    // the TypeScript grammar.
+    const isJsxFile = file.endsWith(".tsx") || file.endsWith(".jsx");
+    const language = isJsxFile || file.endsWith(".js") ? tsxLang : tsLang;
+    // Walking a tree is the slow part, not parsing it. Large plain .ts files hold
+    // data, not components: Bluesky's 55 cost about 3 s of CPU and add no names,
+    // while its 13 large .tsx files are real screens. A large .js file can be a
+    // minified bundle, whose one-letter function names would be indexed as the
+    // app's components, so it keeps the small limit too.
+    if (source.length > (isJsxFile ? MAX_JSX_FILE_CHARS : DEFAULT_PARSE_BUFFER_CHARS)) continue;
 
     let tree: { rootNode: TreeSitterNode };
     try {
       const parser = new ParserClass();
       parser.setLanguage(language);
-      tree = parser.parse(source);
+      // The binding's default buffer rejects larger files with "Invalid argument".
+      // The size is in UTF-16 code units, plus one for the terminator.
+      tree = parser.parse(source, undefined, { bufferSize: source.length + 1 });
     } catch {
       continue;
     }
 
-    const memoizedNames = collectMemoizedNames(tree.rootNode);
+    let memoizedNames: ReturnType<typeof collectMemoizedNames>;
+    try {
+      memoizedNames = collectMemoizedNames(tree.rootNode);
+    } catch {
+      // A generated expression can nest past the stack limit; skip that file, not the index.
+      continue;
+    }
 
     function findComponents(node: TreeSitterNode): void {
       if (node.type === "function_declaration") {

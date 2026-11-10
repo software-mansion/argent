@@ -5,8 +5,9 @@ import * as path from "node:path";
 import { renderProfilingReport } from "../../src/utils/react-profiler/pipeline/05-render";
 
 /**
- * react-profiler-component-source is hidden from MCP. What the agent gets
- * instead: the analyze report's own source locations.
+ * react-profiler-component-source, react-profiler-cpu-summary and
+ * react-profiler-renders are hidden from MCP, so the report must not send the
+ * agent to them.
  */
 
 const dirs: string[] = [];
@@ -14,9 +15,9 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
 });
 
-describe("the all-clear report", () => {
-  it("advises a memoization check without naming component-source", async () => {
-    const debugDir = await fs.mkdtemp(path.join(os.tmpdir(), "all-clear-"));
+describe("the report with no hot commit", () => {
+  it("names no hidden profiler tool in its next steps", async () => {
+    const debugDir = await fs.mkdtemp(path.join(os.tmpdir(), "no-hot-commit-"));
     dirs.push(debugDir);
     const { report } = await renderProfilingReport({
       hotCommitSummaries: [],
@@ -32,12 +33,14 @@ describe("the all-clear report", () => {
       anyRuntimeCompilerDetected: false,
       reactCommits: 12,
       debugDir,
-      allClear: true,
+      noHotCommits: true,
       maxCommitMs: 9,
     });
 
-    expect(report).toContain("All clear");
-    expect(report).toContain("check that memoization is in place");
+    expect(report).toContain("No commit reached 16ms");
+    expect(report).toContain("## Next Steps");
     expect(report).not.toContain("react-profiler-component-source");
+    expect(report).not.toContain("react-profiler-cpu-summary");
+    expect(report).not.toContain("react-profiler-renders");
   });
 });
