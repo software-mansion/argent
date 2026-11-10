@@ -555,7 +555,7 @@ describe.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
       );
     });
 
-    it("adds no file note once some entries reached the log file", async () => {
+    it("adds no file note once every entry reached the log file", async () => {
       await connectAndCapture(LOGICAL_ID, 3);
 
       const result = await readRegistry();

@@ -121,13 +121,17 @@ export class LogFileWriter {
     // no file has no reader: the entry lives on only in the counts and clusters.
     if (this.ready && this.fd !== null) {
       try {
-        // A short write leaves a torn line, which the next line must not continue.
         const bytes = Buffer.from(this.midLine ? `\n${line}` : line);
+        // Positional, so a truncate below never leaves the fd offset past EOF.
         // Short of the whole line at a file-size limit or on a full disk.
-        const written = fs.writeSync(this.fd, bytes);
-        this.bytesWritten += written;
-        this.midLine = bytes[written - 1] !== 0x0a; // "\n"
-        if (written === bytes.length) this.fileEntryCount++;
+        const written = fs.writeSync(this.fd, bytes, 0, bytes.length, this.bytesWritten);
+        if (written === bytes.length) {
+          this.bytesWritten += written;
+          this.midLine = false;
+          this.fileEntryCount++;
+        } else {
+          this.dropTornLine(this.fd, bytes, written);
+        }
       } catch {
         // Past that limit it throws, and the entry is left to the counts and clusters.
       }
@@ -156,6 +160,17 @@ export class LogFileWriter {
     }
 
     return rich;
+  }
+
+  /** A torn line past " | " would parse as a whole entry with its message cut. */
+  private dropTornLine(fd: number, bytes: Buffer, written: number): void {
+    try {
+      fs.ftruncateSync(fd, this.bytesWritten);
+    } catch {
+      // The torn line stays, so the next line must not continue it.
+      this.bytesWritten += written;
+      if (written > 0) this.midLine = bytes[written - 1] !== 0x0a; // "\n"
+    }
   }
 
   getFilePath(): string {
