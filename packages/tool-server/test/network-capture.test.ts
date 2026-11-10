@@ -50,6 +50,18 @@ import { XcodeFirstLaunchPendingError } from "../src/utils/dependency-errors";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
+import { readAppProcesses } from "../src/blueprints/android-network-inspector-device";
+import { localIosHost } from "../src/utils/ios-host";
+
+// The device's process table, which a stop reads when it cannot reach the app's JS runtime.
+vi.mock("../src/blueprints/android-network-inspector-device", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/blueprints/android-network-inspector-device")>()),
+  readAppProcesses: vi.fn(),
+}));
+vi.mock("../src/utils/ios-host", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/ios-host")>();
+  return { ...actual, localIosHost: { ...actual.localIosHost, listRunningBundleIds: vi.fn() } };
+});
 
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
 const SERIAL = "emulator-5554";
@@ -370,7 +382,22 @@ const fakeAndroidInspectorBlueprint: ServiceBlueprint<unknown, string> = {
 
 let registry: Registry;
 
+/** The apps with a process on the device, or undefined while the device does not answer. */
+let running: Set<string> | undefined;
+
 beforeEach(() => {
+  running = new Set([APP, OTHER]);
+  vi.mocked(readAppProcesses).mockImplementation(async (_serial, packageName) => {
+    if (!running) throw new Error("adb: device offline");
+    return {
+      user: 0,
+      processes: running.has(packageName) ? [{ pid: 4242, startTime: 1, user: 0 }] : [],
+    };
+  });
+  vi.mocked(localIosHost.listRunningBundleIds).mockImplementation(async () => {
+    if (!running) throw new Error("simctl spawn timed out");
+    return new Set(running);
+  });
   registry = new Registry();
   registry.registerBlueprint(fakeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
@@ -1006,6 +1033,57 @@ describe("network-capture-stop", () => {
     expect(findJsCapture(SERIAL, APP)).toMatchObject({ intent: "stopped", port: PORT });
   });
 
+  it.each(PLATFORMS)(
+    "on $platform, says nothing records, and stores no interceptor, when the app is not running and its runtime cannot be reached",
+    async ({ udid }) => {
+      serve(PORT, udid, new FakeRuntime(APP));
+      await start(udid, APP);
+      // The app was killed: Metro has no app connected, and the device has no process of it.
+      await reconnect(PORT, udid, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      running = new Set([OTHER]);
+
+      const result = await stop(udid, APP);
+
+      expect(layer(result, "js")).toEqual({
+        layer: "js",
+        armed: false,
+        total: 0,
+        reason: `no app is connected to Metro on port ${PORT} yet; ${APP} is not running, so nothing records; while capture is stopped, its next JS runtime gets no interceptor`,
+      });
+      expect(findJsCapture(udid, APP)).toMatchObject({
+        intent: "stopped",
+        port: PORT,
+        installed: false,
+      });
+      expect(findJsCapture(udid, APP)).not.toHaveProperty("paused");
+    }
+  );
+
+  it.each(
+    PLATFORMS.flatMap((platform) => [
+      { ...platform, device: "lists a process of the app", answers: true },
+      { ...platform, device: "does not answer", answers: false },
+    ])
+  )(
+    "on $platform, still says the installed interceptor may record when the device $device and the app's runtime cannot be reached",
+    async ({ udid, answers }) => {
+      serve(PORT, udid, new FakeRuntime(APP));
+      await start(udid, APP);
+      await reconnect(PORT, udid, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      if (!answers) running = undefined;
+
+      const result = await stop(udid, APP);
+
+      expect(layer(result, "js")).toEqual({
+        layer: "js",
+        armed: true,
+        total: 0,
+        reason: `no app is connected to Metro on port ${PORT} yet; the interceptor already in the app's JS runtime may still record, so call network-capture-stop again once the app answers`,
+      });
+      expect(findJsCapture(udid, APP)).toMatchObject({ intent: "stopped", installed: true });
+    }
+  );
+
   it("stores a stopped JS layer, with no interceptor to pause, after a start that installed none when the runtime cannot be reached", async () => {
     // The start found Metro with no app connected, so it installed nothing.
     serve(PORT, SERIAL, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
@@ -1380,6 +1458,32 @@ describe("a JS runtime of another app on the port", () => {
     expect(layer(await stop(IOS_UDID, APP), "js")).toEqual({ layer: "js", armed: false, total: 1 });
     expect(rt.paused).toBe(true);
   });
+
+  it.each(PLATFORMS)(
+    "on $platform, stores the stop of this app's started capture there, and says nothing records, when the app is not running",
+    async ({ udid }) => {
+      serve(PORT, udid, new FakeRuntime(APP));
+      await start(udid, APP);
+      const otherRuntime = new FakeRuntime(OTHER);
+      await reconnect(PORT, udid, otherRuntime);
+      running = new Set([OTHER]);
+
+      const stopped = await stop(udid, APP);
+
+      expect(layer(stopped, "js")).toEqual({
+        layer: "js",
+        armed: false,
+        total: 0,
+        reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; ${APP} is not running, so nothing records; while capture is stopped, its next JS runtime gets no interceptor`,
+      });
+      expect(findJsCapture(udid, APP)).toMatchObject({
+        port: PORT,
+        intent: "stopped",
+        installed: false,
+      });
+      expect(otherRuntime.evaluated).toEqual([]);
+    }
+  );
 
   it("gets nothing from a stop and a start of this app, and a read then says capture is not started", async () => {
     const rt = new FakeRuntime(OTHER);

@@ -226,7 +226,8 @@ If a layer has no started capture, the stop does not start it. A layer that Arge
 
 A stop can fail to reach the JS runtime of the app, for example when the app does not run. Then the `js` entry depends on the earlier start:
 
-- An earlier start installed the capture through this Metro port, and no stop paused it since: `armed` is `true`. The capture can still record in the JS runtime of the app. The `reason` tells you to call `network-capture-stop` again when the app answers.
+- An earlier start installed the capture through this Metro port, no stop paused it since, and the app has a process on the device: `armed` is `true`. The capture can still record in the JS runtime of the app. The `reason` tells you to call `network-capture-stop` again when the app answers. When Argent cannot read the processes of the device, for example on a remote simulator, `armed` is also `true`.
+- An earlier start installed the capture through this Metro port, no stop paused it since, and the app has no process on the Android device or the local iOS simulator: `armed` is `false`. The capture ended with the process of the app.
 - A start stored the capture but installed none, or an earlier stop paused it: `armed` is `false`. Argent installs no capture in the JS runtime of the app while the capture is stopped.
 - No start stored a capture for the app: `armed` is `false`, and the `reason` ends with `capture was not started for this app`. Argent stores nothing, and a later read says that the capture is not started.
 

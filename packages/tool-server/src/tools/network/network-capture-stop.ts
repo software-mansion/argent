@@ -8,6 +8,7 @@ import {
   androidNetworkInspectorRef,
   type AndroidNetworkInspectorApi,
 } from "../../blueprints/android-network-inspector";
+import { readAppProcesses } from "../../blueprints/android-network-inspector-device";
 import {
   findJsCapture,
   jsCapture,
@@ -23,6 +24,7 @@ import {
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
 import { resolveDevice } from "../../utils/device-info";
+import { localIosHost } from "../../utils/ios-host";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
@@ -124,6 +126,14 @@ async function stopJsLayer(
     setJsCapture(payload, capture);
     return capture;
   };
+  // Metro answers the same for an app that exited as for an app that lost its
+  // Metro connection. Only the device tells that the interceptor ended with
+  // the app's process.
+  const endedWithApp = async (stored: JsCapture): Promise<string | undefined> => {
+    if ((await appRuns(device, bundleId)) !== false) return undefined;
+    stored.installed = false;
+    return `${bundleId} is not running, so nothing records; while capture is stopped, its next JS runtime gets no interceptor`;
+  };
 
   let dbg: JsRuntimeDebuggerApi;
   try {
@@ -142,9 +152,11 @@ async function stopJsLayer(
     if (!prior) {
       return { layer: "js", armed: false, total: 0, reason: `${notReached}; ${NOT_STARTED}` };
     }
-    storeStopped(kept?.paused === true);
+    const stored = storeStopped(kept?.paused === true);
     // An interceptor a start installed there records until a stop pauses it.
     const unconfirmed = kept?.installed === true && kept.paused !== true;
+    const ended = unconfirmed ? await endedWithApp(stored) : undefined;
+    if (ended) return { layer: "js", armed: false, total: 0, reason: `${notReached}; ${ended}` };
     return {
       layer: "js",
       armed: unconfirmed,
@@ -174,8 +186,10 @@ async function stopJsLayer(
         reason: `${notOurs}, so nothing changed there; pass the port of ${bundleId}'s Metro`,
       };
     }
-    storeStopped(kept.paused === true);
+    const stored = storeStopped(kept.paused === true);
     const unconfirmed = kept.installed && kept.paused !== true;
+    const ended = unconfirmed ? await endedWithApp(stored) : undefined;
+    if (ended) return { layer: "js", armed: false, total: 0, reason: `${notOurs}; ${ended}` };
     return {
       layer: "js",
       armed: unconfirmed,
@@ -206,6 +220,23 @@ async function stopJsLayer(
       reason: `the app's JS runtime did not pause capture: ${errorMessage(err)}`,
     };
   }
+}
+
+/**
+ * Whether the app has a process on the device, or undefined when the device
+ * does not answer or has no fast check (a remote simulator).
+ */
+async function appRuns(udid: string, bundleId: string): Promise<boolean | undefined> {
+  const { platform } = resolveDevice(udid);
+  try {
+    if (platform === "android") {
+      return (await readAppProcesses(udid, bundleId)).processes.length > 0;
+    }
+    if (platform === "ios") return (await localIosHost.listRunningBundleIds(udid)).has(bundleId);
+  } catch {
+    // A device that does not answer tells nothing about the app.
+  }
+  return undefined;
 }
 
 async function stopIosLayer(
