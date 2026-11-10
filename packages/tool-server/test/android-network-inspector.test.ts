@@ -2088,9 +2088,10 @@ describe("the gates before an attach", () => {
     expect(await api.startCapture(8081)).toEqual({ armed: true });
   });
 
-  it("reports the layer unavailable once a non-debuggable build replaced an attached app, and drops the mark", async () => {
+  it("reports the layer unavailable once a non-debuggable build replaced an attached app, and keeps the mark of the start before", async () => {
     const api = await armedInspector();
-    expect(api.captureMark()).toBeDefined();
+    const mark = api.captureMark();
+    expect(mark).toBeDefined();
     device.runAsError = `run-as: package not debuggable: ${PKG}`;
     device.process = { pid: 5100, startTime: 99_000 };
 
@@ -2100,7 +2101,7 @@ describe("the gates before an attach", () => {
       reason: expect.stringContaining("package not debuggable"),
     });
     expect(attachCommands()).toHaveLength(1);
-    expect(api.captureMark()).toBeUndefined();
+    expect(api.captureMark()).toEqual(mark);
   });
 
   it("reports the layer unavailable below Android 8.0", async () => {
@@ -4254,6 +4255,38 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     agent.request(agent.rid(1), "https://example.com/again");
     await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
   });
+
+  it.each([
+    ["not debuggable", `run-as: package not debuggable: ${PKG}`],
+    ["not installed", `run-as: unknown package: ${PKG}`],
+  ])(
+    "a start after a stop that finds the app %s keeps capture stopped and its mark, and the read still lists what the stop kept",
+    async (_case, runAsError) => {
+      const api = await armedInspector();
+      const agent = agents[0]!;
+      agent.request(agent.rid(1), "https://example.com/a");
+      await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+      const id = api.records(8081)[0]!.id;
+      expect(await api.stopCapture()).toEqual({ confirmed: true });
+      const mark = api.captureMark();
+      // Another build replaced the app after the stop.
+      device.runAsError = runAsError;
+      device.process = { pid: 5100, startTime: 99_000 };
+
+      expect(await api.startCapture(8081)).toMatchObject({ armed: false, unavailable: true });
+
+      expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
+      expect(api.captureMark()).toEqual(mark);
+      expect(await listNative(api)).toMatchObject({
+        header: `android-native: stopped, 1 request (${STOPPED_REASON})`,
+        armed: false,
+        stopped: true,
+        total: 1,
+        requests: [expect.objectContaining({ id, state: "complete" })],
+      });
+      expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+    }
+  );
 
   it("a stop during an attach, before attach-agent, ends the start, and the next start attaches the process", async () => {
     const hold = holdOnce();

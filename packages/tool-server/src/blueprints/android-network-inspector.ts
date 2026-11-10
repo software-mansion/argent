@@ -200,7 +200,8 @@ export interface AndroidNetworkInspectorApi {
    * Starts capture: ends a stop, marks where this start begins, sets the
    * device up and attaches the agent to the running app, then waits up to 5 s
    * for it to be armed. `metroPort` is the caller's. From then on launch-app
-   * and restart-app attach it to each new process.
+   * and restart-app attach it to each new process. A start that finds the
+   * layer unavailable keeps the stop and the mark it found.
    */
   startCapture(metroPort: number): Promise<AndroidCaptureStart>;
   /**
@@ -1802,22 +1803,21 @@ function createInspector(
       "attach",
       async (): Promise<{ result: AndroidCaptureStart } | { current: AppProcess | null }> => {
         if (disposed) return { result: { armed: false, reason: "capture was disposed" } };
+        // A start that finds the layer unavailable attaches nothing, so a stop
+        // before it stays, and so does the mark. A stop during it stays too.
+        const found = { stopped, mark };
+        const unavailableStart = (reason: string): { result: AndroidCaptureStart } => {
+          if (found.stopped) stopped = true;
+          mark = found.mark;
+          return { result: { armed: false, unavailable: true, reason } };
+        };
         // Before the attach, so a request during the arming counts.
         mark = { lastRecord: nextRecordNumber - 1, metroPort: port };
         stopped = false;
         notAttached = false;
         try {
           const outcome = await attachCurrent();
-          if ("blocked" in outcome) {
-            mark = undefined;
-            return {
-              result: {
-                armed: false,
-                unavailable: true,
-                reason: outcome.blocked.reason,
-              },
-            };
-          }
+          if ("blocked" in outcome) return unavailableStart(outcome.blocked.reason);
           live = true;
           // A stop left its connection open and disabled, and the attach finds
           // its process known, so nothing else would enable it.
@@ -1831,10 +1831,7 @@ function createInspector(
               result: { armed: false, reason: disposed ? "capture was disposed" : STOPPED_NOTE },
             };
           }
-          if (isUnavailableFailure(err)) {
-            mark = undefined;
-            return { result: { armed: false, unavailable: true, reason: errorMessage(err) } };
-          }
+          if (isUnavailableFailure(err)) return unavailableStart(errorMessage(err));
           // A launch attaches once the device answers again.
           live = true;
           const reason = isOwnFailure(err)

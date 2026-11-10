@@ -302,10 +302,12 @@ class FakeAndroid implements Pick<
 
   async startCapture(metroPort: number): Promise<AndroidCaptureStart> {
     this.calls.push(`start ${metroPort}`);
+    const found = { stopped: this.stopped, mark: this.mark };
     this.stopped = false;
     this.mark = { lastRecord, metroPort };
     const answer = await this.startAnswer();
-    if (answer.unavailable) this.mark = undefined;
+    // An unavailable start keeps the stop and the mark it found.
+    if (answer.unavailable) ({ stopped: this.stopped, mark: this.mark } = found);
     else this.started = true;
     return answer;
   }
