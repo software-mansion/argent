@@ -257,7 +257,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // content-visibility:hidden box's content, a hidden chosen option, or a hidden ::before
   // or ::after (or any in an aria-hidden target). An
   // <input>'s value is not read. Laid-out text and ::before/::after strings take their
-  // text-transform case.
+  // text-transform case, and a block container's first letter its ::first-letter's.
   // Iterative: the target's depth has no MAX_DEPTH bound. The walk stops once more than
   // NAME_MAX non-whitespace characters are in, which settles the name accessibleName cuts.
   function labelText(root) {
@@ -303,10 +303,51 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     const lay = (text) => {
       if (text) laid = lastChar(text);
     };
+    // The block containers, outermost first, whose ::first-letter is the next letter laid
+    // out, or null. OUTSIDE stands for those of the root's ancestors, found when needed.
+    const rootBox = unrendered ? 0 : letterBox(root, rootStyle);
+    let letters = unrendered
+      ? null
+      : isFlow(root, rootStyle)
+        ? [OUTSIDE]
+        : rootBox === 1
+          ? [OUTSIDE, root]
+          : rootBox
+            ? [root]
+            : null;
+    // Laid-out text in a style's case, its first letter in its ::first-letter's if it holds
+    // the pending one.
+    const caseLaid = (text, style) => {
+      if (!letters || !/\\S/.test(text)) return caseText(text, style, prevLaid);
+      const blocks = letters;
+      letters = null;
+      let letter = null;
+      for (let i = blocks.length - 1; !letter && i >= 0; i--) {
+        if (blocks[i] !== OUTSIDE) letter = firstLetterStyle(blocks[i]);
+        else for (const block of openLetters(root)) letter ??= firstLetterStyle(block);
+      }
+      const m = letter && FIRST_LETTER.exec(text);
+      if (!m) return caseText(text, style, prevLaid);
+      // Only whitespace is laid out before a first letter.
+      const head = caseText(m[0], letter, () => " ");
+      return head + caseText(text.slice(m[0].length), style, () => lastChar(head));
+    };
+    // Takes what an element lays out: its last character, and an end to a pending first
+    // letter.
+    const layOut = (el) => {
+      const end = lastLaid(el, inInline);
+      if (end !== null) {
+        laid = end;
+        letters = null;
+      }
+    };
     // A ::before or ::after: its name read, and its strings laid out in its case.
     const readPseudo = (pseudo, parentStyle) => {
-      if (!pseudo.inline) laid = " ";
-      const strings = caseText(pseudo.strings, pseudo.style, prevLaid);
+      if (!pseudo.inline) {
+        laid = " ";
+        letters = null;
+      }
+      const strings = caseLaid(pseudo.strings, pseudo.style);
       read(pseudo.alt ?? strings);
       lay(strings);
       if (pseudo.block && !isInlineBox(parentStyle)) laid = " ";
@@ -419,7 +460,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
       const type = getNodeType.call(node);
       if (type === 3 || type === 4) {
-        const text = caseText(getNodeValue.call(node), textCase, prevLaid);
+        const value = getNodeValue.call(node);
+        const text = unrendered ? value : caseLaid(value, textCase);
         read(text);
         lay(text);
         continue;
@@ -448,24 +490,30 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         ) {
           s += " ";
         }
-        laid = lastLaid(node, inInline) ?? laid;
+        layOut(node);
         continue;
       }
       if (isRenderedBr(node)) {
         s += " ";
         laid = " ";
+        if (!unrendered) letters = null;
         continue;
       }
       const rendered = !unrendered && style.display !== "none";
       const flow = isFlow(node, style);
       const blockEnd = isBlockLevel(style) && !inInline;
       if (!flow) laid = " ";
+      if (!flow && rendered) {
+        const box = letterBox(node, style);
+        if (box === 1 && letters) letters.push(node);
+        else letters = box ? [node] : null;
+      }
       const options = chosenOptions(node);
       const control = controlText(node);
       const content = control ?? rangeText(node, rendered) ?? (options ? null : altText(node));
       if (content !== null) {
         read(" " + content + " ");
-        if (rendered) laid = lastLaid(node, inInline) ?? laid;
+        if (rendered) layOut(node);
         continue;
       }
       if (options) {
@@ -758,6 +806,59 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     }
     return null;
   }
+
+  // 1 for a block-level block container, whose ::first-letter can be in a block-level
+  // child's, 2 for another block container, else 0.
+  function letterBox(el, style) {
+    const tag = getLocalName.call(el);
+    if (getNamespaceURI.call(el) !== "http://www.w3.org/1999/xhtml" || REPLACED.test(tag)) {
+      return 0;
+    }
+    if (/^(block|list-item|flow-root)$/.test(style.display)) return 1;
+    return /^(inline-block|table-cell|table-caption)$/.test(style.display) ? 2 : 0;
+  }
+
+  // Stands for the root's ancestors in a labelText walk's pending first letters.
+  const OUTSIDE = {};
+
+  // An element's ancestors, innermost first, whose first letter is still to come at its
+  // start: block containers it starts, up through block-level ones, past nothing laid out
+  // but whitespace text.
+  function openLetters(el) {
+    const blocks = [];
+    for (let node = el; ; ) {
+      const parent = flatParent(node);
+      if (!parent || getNodeType.call(parent) !== 1) return blocks;
+      const style = window.getComputedStyle(parent);
+      const inline = isInlineBox(style);
+      const laidOut = someBefore(parent, node, (kid) => {
+        const type = getNodeType.call(kid);
+        const blank = (type === 3 || type === 4) && !/\\S/.test(getNodeValue.call(kid));
+        return !blank && lastLaid(kid, inline) !== null;
+      });
+      if (laidOut) return blocks;
+      const before =
+        getNamespaceURI.call(parent) === "http://www.w3.org/1999/xhtml" &&
+        pseudoText(parent, "::before");
+      if (before && (/\\S/.test(before.strings) || !before.inline)) return blocks;
+      if (!isFlow(parent, style)) {
+        const box = letterBox(parent, style);
+        if (box) blocks.push(parent);
+        if (box !== 1) return blocks;
+      }
+      node = parent;
+    }
+  }
+
+  // A block's ::first-letter style when its text-transform differs from the block's, which
+  // takes a ::first-letter rule; else null.
+  function firstLetterStyle(el) {
+    const style = window.getComputedStyle(el, "::first-letter");
+    return style.textTransform !== window.getComputedStyle(el).textTransform ? style : null;
+  }
+
+  // A text's first letter, with the whitespace and punctuation before it.
+  const FIRST_LETTER = /^[\\s\\p{P}]*[^\\s\\p{P}]\\p{M}*/u;
 
   // The last character a ::before or ::after lays out, as lastLaid finds it, or null.
   function pseudoEnd(pseudo, parentInline) {

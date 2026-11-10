@@ -406,12 +406,21 @@ function run(
     innerWidth: W,
     innerHeight: H,
     // Like Chrome's, it rejects a non-element (a document, text or comment node).
-    // A pseudo-element's style is the fixture's __pseudo entry, else one generating nothing.
+    // A pseudo-element's style is the fixture's __pseudo entry, else one generating nothing
+    // that inherits the element's text-transform.
     getComputedStyle: (e: Record<string, unknown>, pseudo?: string) => {
       if (!(e instanceof MockElement)) throw new TypeError("parameter 1 is not of type 'Element'");
       if (!pseudo) return e.__style;
       const styles = (e.__pseudo as Record<string, unknown>) ?? {};
-      return styles[pseudo] ?? { display: "inline", visibility: "visible", content: "none" };
+      const { textTransform } = e.__style as Record<string, string>;
+      return (
+        styles[pseudo] ?? {
+          display: "inline",
+          visibility: "visible",
+          content: "none",
+          textTransform,
+        }
+      );
     },
   };
   g.document = Object.assign(new MockDocument(), {
@@ -1849,6 +1858,133 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([pseudo("::before", '"pre "')])).toBe("PRE b");
     expect(labelledBy([pseudo("::after", '" post"')])).toBe("b POST");
     expect(labelledBy([pseudo("::before", '"x" / "alt "')])).toBe("alt b");
+  });
+
+  it("cases a block container's first letter by its ::first-letter, as Chrome does", () => {
+    const styled = (tag: string, kids: unknown[], style: Record<string, string>, pseudo = {}) => {
+      const node = elementNode(tag, kids);
+      Object.assign(node.__style as Record<string, string>, style);
+      node.__pseudo = pseudo;
+      return node;
+    };
+    const letter = (textTransform: string) => ({ "::first-letter": { textTransform } });
+    const upper = letter("uppercase");
+    const block = { display: "block" };
+    // The target, of `style` and with an uppercase ::first-letter, holding `kids`.
+    const read = (kids: unknown[], style: Record<string, string> = block, pseudo = upper) => {
+      const target = styled("div", kids, style, pseudo);
+      Object.assign(target, { __attrs: { id: "lbl" }, parentNode: { nodeType: 9 } });
+      const button = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "btn", "aria-labelledby": "lbl" },
+      });
+      return findById(run([button, target]).tree, "btn")!.label;
+    };
+    expect(read([text("ab cd")])).toBe("Ab cd");
+    expect(read([text("AB CD")], block, letter("lowercase"))).toBe("aB CD");
+    expect(read([text("ab cd")], block, letter("capitalize"))).toBe("Ab cd");
+    expect(read([text("ab cd")], { display: "block", textTransform: "capitalize" })).toBe("Ab Cd");
+    expect(
+      read([text("ab")], { display: "block", textTransform: "uppercase" }, letter("none"))
+    ).toBe("aB");
+    // Past leading whitespace and punctuation, and with full case mapping.
+    for (const [from, to] of [
+      ['  "(ab cd', '"(Ab cd'],
+      ["ßa", "SSa"],
+      ["1ab", "1ab"],
+      ["e\u0301b", "E\u0301b"],
+    ]) {
+      expect(read([text(from)]), from).toBe(to);
+    }
+    // Only a block container has one, and only a laid-out one shows it.
+    expect(read([text("ab")], { display: "inline" })).toBe("ab");
+    expect(read([text("ab")], { display: "flex" })).toBe("ab");
+    expect(read([text("ab")], { display: "inline-block" })).toBe("Ab");
+    expect(read([text("ab")], { display: "list-item" })).toBe("Ab");
+    expect(read([text("ab")], { display: "none" })).toBe("ab");
+    expect(read([text("ab")], { display: "block", visibility: "hidden" })).toBe("Ab");
+    // The first letter is the first laid out, in inline or block-level content.
+    const inline = { display: "inline" };
+    expect(read([text(" "), styled("b", [text("ab")], inline)])).toBe("Ab");
+    expect(read([styled("p", [text("ab")], block), text("cd")])).toBe("Ab cd");
+    expect(read([styled("p", [text("AB")], block, letter("lowercase"))])).toBe("aB");
+    expect(read([styled("span", [text("q")], { display: "none" }), text("ab")])).toBe("Ab");
+    expect(read([styled("span", [text("q")], { visibility: "hidden" }), text("ab")])).toBe("ab");
+    expect(read([styled("span", [text("q")], inline), text("ab")])).toBe("Qab");
+    expect(read([styled("span", [text("q")], { display: "inline-block" }), text(" ab")])).toBe(
+      "q ab"
+    );
+    expect(read([el({ tag: "br", rect: ZERO, style: inline }), text("ab")])).toBe("ab");
+    expect(read([elementNode("img", [], { __attrs: { alt: "" } }), text("ab")])).toBe("ab");
+    const before = (content: string) => ({
+      ...upper,
+      "::before": { display: "inline", visibility: "visible", content },
+    });
+    expect(read([text("ab")], block, before('"xy "'))).toBe("Xy ab");
+    expect(read([text("ab")], block, before('" "'))).toBe("Ab");
+    const boxBefore = {
+      ...before('"xy"'),
+      "::before": { ...before('"xy"')["::before"], display: "inline-block" },
+    };
+    expect(read([text("ab")], block, boxBefore)).toBe("xy ab");
+    // A hidden target's undisplayed content is no first letter.
+    expect(
+      read([styled("span", [text("q")], { display: "none" }), text("ab")], {
+        display: "block",
+        visibility: "hidden",
+      })
+    ).toBe("q Ab");
+    // Without a ::first-letter rule, the letter keeps its own case.
+    const inlineUpper = { display: "inline", textTransform: "uppercase" };
+    expect(read([styled("b", [text("ab")], inlineUpper)], block, {})).toBe("AB");
+  });
+
+  it("cases an aria-labelledby target's first letter by an ancestor's ::first-letter, as Chrome does", () => {
+    // The target, an inline span, sits after `before` in a <p> with an uppercase
+    // ::first-letter (in a span of display `wrap` if given) and the ::before `content`,
+    // itself after `outer` in a <div>.
+    const read = (
+      before: unknown[],
+      target = { display: "inline" },
+      outer: unknown[] = [],
+      wrap = "",
+      content = "none"
+    ) => {
+      const span = elementNode("span", [text("ab")], { __attrs: { id: "lbl" } });
+      Object.assign(span.__style as Record<string, string>, target);
+      const inner = wrap ? elementNode("span", [span], { children: [span] }) : span;
+      if (wrap) (inner.__style as Record<string, string>).display = wrap;
+      const p = el({ tag: "p", rect: BOX, children: [inner] }) as MockElement &
+        Record<string, unknown>;
+      p.childNodes = [...before, inner];
+      p.__pseudo = {
+        "::first-letter": { textTransform: "uppercase" },
+        "::before": { display: "inline", visibility: "visible", content },
+      };
+      const div = el({ rect: BOX, children: [p] }) as MockElement & Record<string, unknown>;
+      div.childNodes = [...outer, p];
+      const button = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "btn", "aria-labelledby": "lbl" },
+      });
+      return findById(run([button, div]).tree, "btn")!.label;
+    };
+    expect(read([])).toBe("Ab");
+    expect(read([text("\n  ")])).toBe("Ab");
+    expect(read([], { display: "block" }, [text("xy")])).toBe("Ab");
+    expect(read([text("xy ")])).toBe("ab");
+    expect(read([elementNode("span", [text("q")])])).toBe("ab");
+    expect(read([], { display: "inline-block" })).toBe("ab");
+    expect(read([], undefined, [], "inline")).toBe("Ab");
+    expect(read([], undefined, [], "block")).toBe("Ab");
+    expect(read([], undefined, [], "inline-block")).toBe("ab");
+    expect(read([], undefined, [], "", '"q"')).toBe("ab");
+    expect(read([], undefined, [], "", '" "')).toBe("Ab");
+    const none = elementNode("span", [text("q")]);
+    (none.__style as Record<string, string>).display = "none";
+    expect(read([none])).toBe("Ab");
   });
 
   it("takes capitalize's previous character from laid-out text, as Chrome does", () => {
