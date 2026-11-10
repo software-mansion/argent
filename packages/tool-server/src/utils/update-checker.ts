@@ -31,7 +31,16 @@ function loadSuppressUntil(): number {
 function persistSuppressUntil(value: number): void {
   const filePath = getSuppressionFilePath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify({ suppressUntil: value }));
+  // Every tool call of every tool-server reads this file, so replace it whole:
+  // writing in place truncates first, and a read in between would find it empty.
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify({ suppressUntil: value }));
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
+  }
 }
 
 export interface UpdateState {

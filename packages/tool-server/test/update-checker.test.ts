@@ -364,6 +364,30 @@ describe("update-checker — suppression persistence", () => {
     expect(isUpdateNoteSuppressed()).toBe(false);
   });
 
+  it("replaces the file instead of rewriting it, and leaves no temp file", async () => {
+    const { suppressUpdateNote } = await import("../src/utils/update-checker");
+    suppressUpdateNote(1000);
+    const firstWrite = fs.statSync(suppressionFile()).ino;
+
+    expect(suppressUpdateNote(2000).persisted).toBe(true);
+
+    // A new inode means a concurrent reader sees the old file or the new one, never an empty one.
+    expect(fs.statSync(suppressionFile()).ino).not.toBe(firstWrite);
+    expect(fs.readdirSync(path.dirname(suppressionFile()))).toEqual(["update-suppression.json"]);
+  });
+
+  it("reports a failed replace and leaves no temp file", async () => {
+    // A directory at the target lets the temp file be written and fails the rename.
+    fs.mkdirSync(suppressionFile(), { recursive: true });
+    const { suppressUpdateNote, isUpdateNoteSuppressed } =
+      await import("../src/utils/update-checker");
+
+    expect(suppressUpdateNote(1000).persisted).toBe(false);
+
+    expect(isUpdateNoteSuppressed()).toBe(true);
+    expect(fs.readdirSync(path.dirname(suppressionFile()))).toEqual(["update-suppression.json"]);
+  });
+
   it("honours a dismissal that another tool-server wrote after this one started", async () => {
     const sibling = await import("../src/utils/update-checker");
     vi.resetModules();
