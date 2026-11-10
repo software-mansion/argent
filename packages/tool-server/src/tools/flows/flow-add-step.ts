@@ -204,9 +204,10 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
       settle +
       // Name both axes: the walker clips each edge on its own, so a
       // horizontally scrolled node comes back zero-WIDTH at a normal height.
-      "A zero-area frame in `describe` means off-viewport or clipped by an `overflow` " +
-      "ancestor — zero height for a node cut off above or below, zero width for one cut off " +
-      "left or right, since the walker clips each edge on its own. Where a scroll reveals it " +
+      "A zero-area frame in `describe` means off-viewport, inside a closed `<details>` " +
+      "(its `<summary>` opens it), or clipped by an `overflow` ancestor — zero height for a " +
+      "node cut off above or below, zero width for one cut off left or right, since the " +
+      "walker clips each edge on its own. Where a scroll reveals it " +
       "(off-viewport, or in a scroller), the fix there is a `scroll-to` before the check rather " +
       "than a different selector, with `within` naming a scroller away from the screen's " +
       "center; one an `overflow: hidden` box clips stays hidden unless that box's wheel " +

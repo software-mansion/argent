@@ -5088,6 +5088,79 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(pxFrame(hidden, "in").h).toBe(0);
     expect(pxFrame(hidden, "fixed").h).toBe(0);
     expect(pxFrame(run([panel("auto")]).tree, "in")).toEqual({ x: 1, y: 1, w: 100, h: 20 });
+    // Nor its own text.
+    const own = el({
+      attrs: { id: "own" },
+      text: "skipped",
+      style: { contentVisibility: "hidden" },
+    });
+    expect(findById(run([own]).tree, "own")!.value).toBeUndefined();
+  });
+
+  it("frames nothing in a closed <details> but its first <summary> child", () => {
+    const details = (attrs: Record<string, string>, pseudo?: Record<string, string>) => {
+      const node = el({
+        tag: "details",
+        attrs: { id: "details", ...attrs },
+        text: "Direct answer",
+        rect: { x: 0, y: 0, w: 300, h: 20 },
+        children: [
+          row("before", { x: 0, y: 20, w: 100, h: 20 }, { display: "inline" }),
+          el({ tag: "summary", attrs: { id: "summary" }, rect: { x: 0, y: 0, w: 300, h: 20 } }),
+          el({ tag: "summary", attrs: { id: "second" }, rect: { x: 0, y: 40, w: 300, h: 20 } }),
+          row("answer", { x: 0, y: 60, w: 100, h: 20 }),
+          row("fixed", { x: 0, y: 500, w: 100, h: 20 }, { position: "fixed" }),
+          row("abs", { x: 0, y: 600, w: 100, h: 20 }, { position: "absolute" }),
+          el({
+            rect: ZERO,
+            style: { display: "contents" },
+            children: [row("wrapped", { x: 0, y: 80, w: 100, h: 20 })],
+          }),
+          el({
+            tag: "details",
+            attrs: { open: "" },
+            rect: { x: 0, y: 100, w: 300, h: 40 },
+            children: [row("nested", { x: 0, y: 120, w: 100, h: 20 })],
+          }),
+        ],
+      }) as MockElement & Record<string, unknown>;
+      if (pseudo) node.__pseudo = { "::details-content": pseudo };
+      return run([node]).tree;
+    };
+    const content = ["before", "second", "answer", "fixed", "abs", "wrapped", "nested"];
+    const closed = details({});
+    expect(pxFrame(closed, "summary")).toEqual({ x: 0, y: 0, w: 300, h: 20 });
+    for (const id of content) expect(pxFrame(closed, id).h, id).toBe(0);
+    expect(findById(closed, "details")!.value).toBeUndefined();
+    const shown = [
+      details({ open: "" }),
+      details({}, { contentVisibility: "visible" }),
+      details({}, { display: "contents", contentVisibility: "hidden" }),
+    ];
+    for (const tree of shown) {
+      for (const id of content) expect(pxFrame(tree, id).h, id).toBe(20);
+      expect(findById(tree, "details")!.value).toBe("Direct answer");
+    }
+  });
+
+  it("frames nothing slotted into a closed <details> in a shadow tree", () => {
+    const slot = el({ tag: "slot", rect: ZERO, style: { display: "contents" } });
+    const slotted = row("slotted", { x: 0, y: 20, w: 100, h: 20 });
+    (slotted as Record<string, unknown>).assignedSlot = slot;
+    const shadowDetails = el({
+      tag: "details",
+      rect: { x: 0, y: 0, w: 300, h: 20 },
+      children: [el({ tag: "summary", rect: { x: 0, y: 0, w: 300, h: 20 } }), slot],
+    });
+    const { tree } = run([
+      el({
+        tag: "x-host",
+        rect: { x: 0, y: 0, w: 300, h: 20 },
+        children: [slotted],
+        shadow: [shadowDetails],
+      }),
+    ]);
+    expect(pxFrame(tree, "slotted").h).toBe(0);
   });
 
   it("keeps the content of a zero-area box whose overflow Chromium ignores", () => {

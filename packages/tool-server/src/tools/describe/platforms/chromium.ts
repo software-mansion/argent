@@ -593,12 +593,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   // Whether a <details> hides its content: closed, unless the page shows its
-  // ::details-content.
+  // ::details-content or makes it display:contents.
   function closedDetails(el) {
-    return (
-      !hasAttr.call(el, "open") &&
-      window.getComputedStyle(el, "::details-content").contentVisibility !== "visible"
-    );
+    if (hasAttr.call(el, "open")) return false;
+    const content = window.getComputedStyle(el, "::details-content");
+    return content.contentVisibility !== "visible" && content.display !== "contents";
   }
 
   // What a ::before or ::after shows, or null: the strings of its content outside
@@ -791,6 +790,9 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // so an absolute or fixed box takes the clip in force at its containing block. Each
   // entry is the clip a child with that position gets.
   const NO_CLIP = { flow: null, abs: null, fixed: null };
+  const NO_AREA = { left: 0, top: 0, right: 0, bottom: 0 };
+  // Content a box skips paints nowhere, whatever its position.
+  const SKIPPED = { flow: NO_AREA, abs: NO_AREA, fixed: NO_AREA };
 
   // An element-keyed map. A page's top-level \`class Map\` shadows only the bare name,
   // but \`var Map = ...\` replaces globalThis.Map (with Immutable.Map, say, whose set
@@ -1221,14 +1223,20 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return !isInlineBox(style) && !/^table-(row|column|header|footer)/.test(style.display);
   }
 
+  // Whether content-visibility: hidden skips an element's content.
+  function skipsContent(el, style) {
+    return (
+      style.display !== "contents" &&
+      style.contentVisibility === "hidden" &&
+      overflowApplies(el, style)
+    );
+  }
+
   function childClips(el, style, clips, clip, legend) {
     if (style.display === "contents") return clips;
+    if (skipsContent(el, style)) return clipsWithin(el, style, clips, NO_AREA);
     let inner = clip;
     if (overflowApplies(el, style)) {
-      // content-visibility: hidden paints none of the content.
-      if (style.contentVisibility === "hidden") {
-        return clipsWithin(el, style, clips, { left: 0, top: 0, right: 0, bottom: 0 });
-      }
       const paint = paintContained(style);
       const cx = paint || style.overflowX !== "visible";
       const cy = paint || style.overflowY !== "visible";
@@ -1483,6 +1491,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     );
   }
 
+  function isHtml(el, name) {
+    return (
+      getLocalName.call(el) === name && getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml"
+    );
+  }
+
   // The border boxes of n and its flat-tree ancestors that clip their content,
   // intersected; null when none does. Memoized: siblings share every ancestor.
   const clipperBoxes = nodeMap();
@@ -1625,17 +1639,23 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // An element with no open shadow root may have a closed one, whose slots the walker
     // cannot see.
     const closedHost = !shadow && canHostShadow(el);
+    // A closed <details> lays out only its first <summary> child.
+    const closed = isHtml(el, "details") && closedDetails(el);
+    const summary = closed ? Array.prototype.find.call(kids, (k) => isHtml(k, "summary")) : null;
     for (let i = 0; i < kids.length; i++) {
       const slot = getAssignedSlot.call(kids[i]);
       // A slot in a pruned subtree paints none of its assigned nodes.
       if (slot && !slotClips.has(slot) && inPruned(slot)) continue;
-      const kidClips = inPicker(el, kids[i], i)
-        ? NO_CLIP
-        : legendClips.has(kids[i])
-          ? legendClips.get(kids[i])
-          : slot && slotClips.has(slot)
-            ? slotClips.get(slot)
-            : inner;
+      const kidClips =
+        closed && kids[i] !== summary
+          ? SKIPPED
+          : inPicker(el, kids[i], i)
+            ? NO_CLIP
+            : legendClips.has(kids[i])
+              ? legendClips.get(kids[i])
+              : slot && slotClips.has(slot)
+                ? slotClips.get(slot)
+                : inner;
       const c = walk(kids[i], depth + 1, kidClips, closedHost && !slot);
       if (c) childResults.push(c);
     }
@@ -1647,7 +1667,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // and treat it as box-less so it contributes no box of its own: it survives only
     // through, and is framed by, whatever visible descendants it has.
     const invisibleSelf = style.visibility === "hidden";
-    const text = invisibleSelf ? "" : ownText(el);
+    const text = invisibleSelf || closed || skipsContent(el, style) ? "" : ownText(el);
     const name = invisibleSelf ? null : accessibleName(el);
     const clickable = invisibleSelf ? false : isInteractive(el);
     const role = nodeRole(el);
