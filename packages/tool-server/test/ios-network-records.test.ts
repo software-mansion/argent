@@ -1558,6 +1558,38 @@ describe("iOS native network records: bodies kept", () => {
     expect(await store.responseBody(ids[1]!)).toEqual(body("body of r1"));
     expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
   });
+
+  it("drops the request body of an evicted record, which no longer takes one of the places kept", async () => {
+    const { app, store, agent } = bodyStore();
+    app.request.mockImplementation(async (_connection, _method, params) => ({
+      postData: `post of ${String(params.requestId)}`,
+      base64Encoded: false,
+    }));
+    const ids: string[] = [];
+    for (let i = 0; i <= MAX_CACHED_BODIES; i++) {
+      agent.requestWillBeSent(`u${i}`, `https://e.com/${i}`, { method: "POST", hasPostData: true });
+      agent.responseReceived(`u${i}`, `https://e.com/${i}`);
+      agent.loadingFinished(`u${i}`, 2);
+      ids.push(idOf(store, `u${i}`));
+    }
+    // Every place taken, the oldest record's body read last.
+    for (let i = 1; i < MAX_CACHED_BODIES; i++) await store.requestPostData(ids[i]!);
+    await store.requestPostData(ids[0]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES);
+
+    // The oldest record goes, and its body with it.
+    for (let i = MAX_CACHED_BODIES + 1; i <= MAX_RECORDS; i++) {
+      agent.requestWillBeSent(`u${i}`, `https://e.com/${i}`);
+    }
+    expect(store.record(ids[0]!)).toBeUndefined();
+    expect(await store.requestPostData(ids[0]!)).toEqual(refused("no such request"));
+
+    // So 1 more body fits without pushing out the oldest one kept.
+    await store.requestPostData(ids[MAX_CACHED_BODIES]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+    expect(await store.requestPostData(ids[1]!)).toEqual(body("post of u1"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+  });
 });
 
 describe("iOS native network records: bodies of a closed connection", () => {
