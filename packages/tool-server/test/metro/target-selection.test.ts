@@ -37,6 +37,7 @@ describe("selectTarget", () => {
     const result = selectTarget([legacy, cpp], 8081);
     expect(result.target.id).toBe("cpp");
     expect(result.isNewDebugger).toBe(true);
+    expect(result.legacyInspector).toBe(false);
   });
 
   it("falls back to React Native Bridge", () => {

@@ -6,9 +6,10 @@ interface SelectedTarget {
   webSocketUrl: string;
   isNewDebugger: boolean;
   /**
-   * The legacy Hermes inspector, as opposed to a modern host (Fusebox, the C++
-   * connection, RN 0.74's experimental bridge page). Not `!isNewDebugger`: the
-   * bridge page is modern despite using the old frontend.
+   * Served by the legacy Hermes inspector, whose -32601 means the method does
+   * not exist, not that a modern host has no JS instance yet. Not
+   * `!isNewDebugger`: the experimental bridge page is a modern host on the old
+   * frontend.
    */
   legacyInspector: boolean;
   deviceName: string;
