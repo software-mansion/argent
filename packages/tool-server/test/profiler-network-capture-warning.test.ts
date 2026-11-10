@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
 import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 
 // Which apps have live native network capture, per device id asked about.
@@ -300,6 +303,18 @@ describe("native-profiler-start", () => {
       live.mockImplementation(actual.liveAndroidNetworkCaptures);
       liveDevices.mockImplementation(actual.liveAndroidNetworkCaptureDevices);
       const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      // The agent's binaries are gitignored build output, so stand in for them.
+      const binRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-profiler-network-"));
+      for (const file of [
+        "network-inspector.jar",
+        "x86_64/libjvmti_network_inspector.so",
+        "arm64-v8a/libjvmti_network_inspector.so",
+      ]) {
+        const at = path.join(binRoot, "network-inspector", file);
+        fs.mkdirSync(path.dirname(at), { recursive: true });
+        fs.writeFileSync(at, file);
+      }
+      vi.stubEnv("ARGENT_NATIVE_DEVTOOLS_ANDROID_BIN_DIR", binRoot);
       const ref = androidNetworkInspectorRef(resolveDevice(SERIAL), PKG, 8081);
       const inspector = await androidNetworkInspectorBlueprint.factory(
         {},
@@ -328,6 +343,8 @@ describe("native-profiler-start", () => {
       } finally {
         await inspector.dispose();
         stderr.mockRestore();
+        vi.unstubAllEnvs();
+        fs.rmSync(binRoot, { recursive: true, force: true });
       }
     });
 
