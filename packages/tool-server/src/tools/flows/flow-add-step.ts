@@ -209,9 +209,9 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
       "left or right, since the walker clips each edge on its own. Where a scroll reveals it " +
       "(off-viewport, or in a scroller), the fix there is a `scroll-to` before the check rather " +
       "than a different selector, with `within` naming a scroller away from the screen's " +
-      "center; one an `overflow: hidden` box clips stays hidden unless that box scrolls it " +
-      "by script, with `within` naming the box. A password field reaches the runner under " +
-      "the name `[password]`, so only an `id`/`role` selector can match it"
+      "center; one an `overflow: hidden` box clips stays hidden unless that box's wheel " +
+      "handler scrolls it, with `within` naming the box. A password field reaches the runner " +
+      "under the name `[password]`, so only an `id`/`role` selector can match it"
     );
   }
   if (platform === "vega") {
