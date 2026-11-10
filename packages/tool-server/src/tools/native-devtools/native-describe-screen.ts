@@ -1,13 +1,7 @@
 import { z } from "zod";
-import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
-import {
-  nativeDevtoolsRef,
-  precheckNativeDevtools,
-  type NativeDevtoolsApi,
-  type NativeDevtoolsPrecheckBlock,
-} from "../../blueprints/native-devtools";
-import { resolveDevice } from "../../utils/device-info";
-import { ensureDeps } from "../../utils/check-deps";
+import { FAILURE_CODES, type ToolDefinition } from "@argent/registry";
+import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
+import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 import {
   parseNativeDescribeScreenResult,
   type NativeDescribeScreenResult,
@@ -16,8 +10,7 @@ import {
 type Result = NativeDevtoolsPrecheckBlock | ({ status: "ok" } & NativeDescribeScreenResult);
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("Bundle ID of the app"),
+  ...nativeAppTarget,
   skipClasses: z
     .array(z.string())
     .optional()
@@ -52,7 +45,9 @@ Use when you are evaluating or debugging the lower-level native data behind the 
 describe tool, or when you need its raw point-space geometry rather than describe's
 normalized contract.
 
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+<flag:macos-apps>On a Mac app, frames are points from the top-left of the area describe reports (the app window plus any sheet, alert or menu past it), and normalized values are fractions of it, as gesture-tap takes them. skipClasses and skipClassPrefixes are refused there. The statuses below are iOS only.
+
+</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
@@ -62,40 +57,19 @@ An Apple system app is rejected outright (terminal: never retry it).`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read native screen for ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
-  services: (params) => ({
-    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params) {
-    const device = resolveDevice(params.udid);
-    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
-
-    const api = services.nativeDevtools as NativeDevtoolsApi;
-
-    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
-    if (blocked) return blocked;
-
-    const rpcParams: Record<string, unknown> = {};
-    if (params.skipClasses !== undefined) rpcParams.skipClasses = params.skipClasses;
-    if (params.skipClassPrefixes !== undefined)
-      rpcParams.skipClassPrefixes = params.skipClassPrefixes;
-
-    const result = (await api.queryViewHierarchy(
-      params.bundleId,
-      "ViewHierarchy.describeScreen",
-      rpcParams
-    )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
-
-    if (result.error) {
-      throw new FailureError(result.error, {
-        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_DESCRIBE_ERROR,
-        failure_stage: "native_devtools_describe_screen",
-        failure_area: "tool_server",
-        error_kind: "unknown",
-      });
-    }
-
-    const parsed = parseNativeDescribeScreenResult(result);
-    return { status: "ok", ...parsed };
+  capability: {
+    apple: { simulator: true },
+    appleRemote: { simulator: true },
+    macos: { app: true },
   },
+  services: nativeAppServices,
+  execute: (services, params) =>
+    queryViewHierarchyFor(
+      services,
+      params,
+      "native-describe-screen",
+      "ViewHierarchy.describeScreen",
+      FAILURE_CODES.NATIVE_DEVTOOLS_DESCRIBE_ERROR,
+      (result) => ({ status: "ok" as const, ...parseNativeDescribeScreenResult(result) })
+    ),
 };

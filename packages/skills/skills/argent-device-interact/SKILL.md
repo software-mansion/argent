@@ -9,6 +9,7 @@ Each tool's own description carries its parameters, defaults, return shape and e
 
 - Get a target id from `list-devices`; if none is ready, `boot-device` one. For a web app, `boot-device` with `browser` (`chrome`/`chromium`/`edge`/`brave`) launches that installed browser on a fresh profile as a `chromium` target; then `open-url` to the app. Full setup flow: `argent-ios-simulator-setup` / `argent-ios-device-setup` / `argent-android-emulator-setup`. The same tool names drive iOS, Android and Chromium; each takes the `udid` from `list-devices`.
 - Physical iPhone (`kind: "device"`): read `argent-ios-device-interact` first. Only the tools it lists exist there, and `describe` sees only the app `launch-app` registered.
+- Mac app (`platform: "macos"`): read `argent-macos-app-interact` first.
 - Read the matching reference before driving these targets: `references/chromium.md` for a `chromium` target, `references/harmonyos.md` for a `harmony` target, `references/foldables.md` for a device `list-devices` marks `foldable: true` (or before calling `fold`).
 - Load a deferred tool's schema with ToolSearch before its first call (e.g. `gesture-pinch`, `gesture-rotate`, `gesture-custom`); without it, numbers go out as strings and fail validation.
 - If you delegate device tasks to sub-agents, make sure they have MCP permissions.
@@ -30,7 +31,7 @@ Each tool's own description carries its parameters, defaults, return shape and e
 | Two-finger rotation            | `gesture-rotate`    |                                                                |
 | Hardware key                   | `button`            | Home, back, power, volume, appSwitch, actionButton             |
 | Type text or press a named key | `keyboard`          | Every platform; text or one key per call (§6)                  |
-| Paste text                     | `paste`             | Only where a user would paste (§6). Sim/emu only               |
+| Paste text                     | `paste`             | Only where a user would paste (§6). Sim/emu, Mac app           |
 | Rotate device                  | `rotate`            | Orientation changes                                            |
 | Fold device                    | `fold`              | Foldables only: `references/foldables.md`                      |
 | Shake device                   | `shake`             | Shake handlers (sim/emu only), Undo-typing prompt, RN dev menu |

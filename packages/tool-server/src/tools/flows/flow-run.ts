@@ -31,6 +31,7 @@ import type {
 } from "@argent/registry";
 import {
   appIdForPlatform,
+  appLaunchArgs,
   authoringPlatform,
   assertSafeFlowName,
   assertValidProjectRoot,
@@ -38,7 +39,6 @@ import {
   chromiumLaunchSpec,
   E2E_FILE_TEMPLATES,
   flowNameCasingError,
-  iosLaunchArgs,
   isBlockStep,
   parseFlow,
   precedesLeadingLaunch,
@@ -74,9 +74,8 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
-import { isUnmetUiWaitResult } from "../await-ui-element";
-import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
+  deviceResolutionError,
   resolveFlowDevice,
   assertDeviceMeetsRequires,
   assertPlatformMeetsRequires,
@@ -86,7 +85,8 @@ import {
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
-import { isNestedOrchestratorTool, nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import { isNestedOrchestratorTool } from "./flow-nested-outcome";
+import { toolResultVerdict } from "../../utils/tool-result-verdict";
 import {
   runDirective,
   invokeOnDevice,
@@ -113,7 +113,16 @@ import {
 } from "../../blueprints/chromium-cdp";
 import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
-import { isIosPhysicalDevice, parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import {
+  isIosPhysicalDevice,
+  isMacosBundleId,
+  macosAppIdFromBundleId,
+  parseChromiumCdpPort,
+  resolveDevice,
+} from "../../utils/device-info";
+import { assertSupported, MACOS_APPS_FLAG } from "../../utils/capability";
+import { FLAG_ENUM_META_KEY } from "../../utils/flag-gated-text";
+import { getTrackedMacosApp, otherWorktreeOfBuild } from "../../utils/macos-apps";
 import { runSnapshot, DEFAULT_MAX_MISMATCH, type SnapshotArtifacts } from "./flow-visual";
 import type { ArtifactHandle } from "../../artifacts";
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
@@ -613,6 +622,7 @@ async function treeSourceGate(
       );
     }
   }
+  // A Mac app needs no gate: restart-app returns once its library has connected.
   return null;
 }
 
@@ -676,8 +686,15 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // The previous app is terminating and the new one has not started, so a
   // failed or aborted launch must not leave the old target behind.
   state.treeTarget = undefined;
-  // An ios `{ app, args }` entry's args reach only an iOS device.
-  const launchArgs = authoringPlatform(device.platform) === "ios" ? iosLaunchArgs(app) : undefined;
+  // An `{ app, args }` entry's args reach only its own platform. A Mac app
+  // declared without args gets none, not the arguments of its last start.
+  const key = authoringPlatform(device.platform);
+  const launchArgs =
+    key === "ios"
+      ? appLaunchArgs(app, "ios")
+      : key === "macos"
+        ? (appLaunchArgs(app, "macos") ?? [])
+        : undefined;
   let restart: unknown;
   try {
     restart = await invokeOnDevice(env, "restart-app", {
@@ -706,8 +723,31 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
   // A FRESH object every time, never a mutation of the previous target: the
   // app just cold-started, so a re-pin has to re-arm `probeAnswered`.
   state.treeTarget = { bundleId, pinned: true, probeAnswered: false };
-  const warning = networkCaptureWarning(state, bundleId, restart);
-  return warning === undefined ? { ok: true } : { ok: true, warning };
+  // A Mac app's note: argent force-quit its own copy, or the new process
+  // showed no window in time. The launch worked either way.
+  const warnings = [
+    (restart as { note?: string } | null)?.note,
+    networkCaptureWarning(state, bundleId, restart),
+  ];
+  // Host mode only: in client mode `projectRoot` is a path on the client, which
+  // git on this host cannot compare with the build's worktree.
+  if (device.platform === "macos" && state.project.mode === "host") {
+    // restart-app starts the build argent recorded last for the bundle id,
+    // whoever booted it: in one worktree that can be another worktree's build.
+    const appPath = getTrackedMacosApp(bundleId)?.appPath;
+    const other = appPath ? await otherWorktreeOfBuild(appPath, state.projectRoot) : null;
+    if (other) {
+      warnings.push(
+        `launch started ${bundleId} from ${appPath}, a build of another worktree (${other}), ` +
+          `so this e2e test may run that worktree's code. argent does not replace a copy of ` +
+          `another build: quit that copy if it is yours (menu-bar can choose its Quit command), ` +
+          `then boot this worktree's build with boot-device. Give each worktree's build a ` +
+          `bundle id of its own when several run at once.`
+      );
+    }
+  }
+  const warning = warnings.filter(Boolean).join(" ");
+  return warning ? { ok: true, warning } : { ok: true };
 }
 
 /**
@@ -1497,14 +1537,15 @@ const zodSchema = z
       .string()
       .optional()
       .describe(
-        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform` and the e2e test's `requires:` block); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
+        "Device id to run against (iOS UDID, Android/Vega serial, Chromium id<flag:macos-apps>, Mac app id</flag:macos-apps>), as list-devices reports it. Auto-detected when omitted, but only when exactly one booted device matches (optionally narrowed by `platform` and the e2e test's `requires:` block); with several booted the run fails and lists them, so pass this explicitly whenever more than one device is up."
       ),
     platform: z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`."
-      ),
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`.<flag:macos-apps> `macos` with no `device` runs a standalone e2e test on the Mac app its `launch` names, which need not be running (a single-key `launch: { macos: … }` map does this on its own). Auto-detection never picks a Mac app otherwise.</flag:macos-apps>"
+      )
+      .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
     updateBaselines: z
       .boolean()
       .optional()
@@ -1861,7 +1902,9 @@ Without a link, every step kind runs.`,
  * `device` is given, this boots a fresh Electron instance from the launch's
  * app path and returns it for teardown — a fragment whose leading `run:` chain
  * reaches a chromium standalone flow boots just the same ({@link leadingLaunch}).
- * Otherwise it attaches to an already-booted device. An explicit `device`
+ * When that launch is unambiguously macOS, the run device is the Mac app it
+ * names ({@link macosLaunchDeviceId}), running or not: its launch step starts
+ * it. Otherwise it attaches to an already-booted device. An explicit `device`
  * never boots here — only a launch step beyond the first moves off it onto an
  * instance the runner owns ({@link bootChromiumForLaunch}). `flowDir` is the
  * root flow file's canonical directory — the base for a relative chromium app
@@ -1885,10 +1928,10 @@ async function resolveRunDevice(
     // The executor's own runStack seed, so a boot can never precede a chain it
     // then refuses.
     const leading = await leadingLaunch(flow, runStack, { registry, project });
-    // A block that allows only chromium picks the chromium entry of a multi-platform launch.
-    const chromiumOnly =
-      flow.requires?.platform?.length === 1 && flow.requires.platform[0] === "chromium";
-    const platform = params.platform ?? (chromiumOnly ? "chromium" : undefined);
+    // A block that allows only chromium (or only macos) picks that entry of a multi-platform launch.
+    const only = flow.requires?.platform?.length === 1 ? flow.requires.platform[0] : undefined;
+    const platform =
+      params.platform ?? (only === "chromium" || only === "macos" ? only : undefined);
     const spec = leading && chromiumBootSpec(leading.app, platform);
     if (spec) {
       assertPlatformMeetsRequires(
@@ -1903,6 +1946,15 @@ async function resolveRunDevice(
         throw hoistedBootFailure(err);
       }
       return { device: resolveDevice(booted.deviceId), booted };
+    }
+    // A Mac app is the device, and its id is built from the bundle id, so a
+    // flow led by a macOS launch needs nothing running: the launch starts the
+    // app. Resolved as an explicit id, so the flag refusal applies.
+    const macosDevice = leading && macosLaunchDeviceId(leading.app, platform);
+    if (macosDevice) {
+      const device = await resolveFlowDevice(registry, ctx, { device: macosDevice });
+      await assertDeviceMeetsRequires(device, flow.requires);
+      return { device, booted: null };
     }
     // Checked after the chromium boot path, which only applies to a flow led by
     // a `launch` step — and a launch needs a device, so the two never compete.
@@ -2128,6 +2180,26 @@ function chromiumBootSpec(
 ): { path: string; args?: string[] } | null {
   if (launchTargetPlatform(app, platform) !== "chromium") return null;
   return chromiumLaunchSpec(app);
+}
+
+/**
+ * The Mac app device id (`macos-app-<bundle id>`) for a run whose leading
+ * launch is unambiguously a macOS one - `--platform macos`, or a single-key
+ * `{ macos: ... }` map - or null. The bundle id is read as the launch step
+ * reads it ({@link appIdForPlatform}: the `macos` key, else `native`, else the
+ * bare string). A launch that declares no macOS app is left to the device
+ * list, and the launch step then reports the missing entry.
+ */
+function macosLaunchDeviceId(app: Launch, platform: string | undefined): string | null {
+  if (launchTargetPlatform(app, platform) !== "macos") return null;
+  const bundleId = appIdForPlatform(app, "macos");
+  if (bundleId === null) return null;
+  if (!isMacosBundleId(bundleId)) {
+    throw deviceResolutionError(
+      `launch names "${bundleId}" for macos, which is not a bundle id: use letters, digits, "." and "-", starting with a letter or digit.`
+    );
+  }
+  return macosAppIdFromBundleId(bundleId);
 }
 
 /**
@@ -2862,6 +2934,10 @@ async function runFold(
     ...(step.angle !== undefined ? { angle: step.angle } : {}),
   });
   try {
+    // The capability refusal a raw `tool: fold` step gets (see execLeafStep).
+    if (device.platform === "macos") {
+      assertSupported("fold", registry.getTool("fold")?.capability, device);
+    }
     const result = (await invokeSubTool(registry, ctx, "fold", args)) as {
       activeScreen?: number;
       screen?: { panel?: string; width?: number; height?: number };
@@ -3075,6 +3151,13 @@ async function execLeafStep(
       // sent with the call for its own steps.
       let prepared: PreparedToolStep | undefined;
       try {
+        // `Registry.invokeTool` does not assert capabilities (only the HTTP edge
+        // does), and most tools pick their backend by elimination: on a Mac app
+        // a raw `tool: gesture-pinch` would reach the simulator-server. Refuse it
+        // here with the tool's own capability message instead.
+        if (device?.platform === "macos") {
+          assertSupported(step.name, registry.getTool(step.name)?.capability, device);
+        }
         prepared = await prepareToolStepInputs(
           registry,
           state.project,
@@ -3089,57 +3172,15 @@ async function execLeafStep(
             ? { flowStack: scope.runStack }
             : {}),
         });
-        if (isUnmetUiWaitResult(step.name, result)) {
-          const note = (result as { note?: string }).note;
+        // A tool that reports its failure in a result it returns instead of
+        // throwing would otherwise count as a passing step (#606).
+        const verdict = toolResultVerdict(step.name, result);
+        if (verdict) {
           return {
             ...base,
-            status: "fail",
+            status: verdict.status,
             tool: step.name,
-            reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
-          };
-        }
-        // `flow-execute` and `run-sequence` run other tools and report what
-        // happened in their result instead of throwing, so without this a
-        // composition that failed everything counted as a passing step (#606).
-        const nested = nestedOrchestratorOutcome(step.name, result);
-        if (nested) {
-          return {
-            ...base,
-            status: nested.status,
-            tool: step.name,
-            reason: nested.reason,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        if (isDebuggerNotConnectedResult(step.name, result)) {
-          // Keep `detail` in the report: it is the only place the underlying
-          // error text lives (device_mismatch's guidance points the agent at
-          // the logicalDeviceId "listed in the detail message", and the
-          // metro_not_running `got:` fragment names what actually answered the
-          // port).
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        // Same hazard as the two above, on the native-devtools precheck: it
-        // RESOLVES its block rather than throwing, so a step that never reached
-        // the tool's work read as green. `launch:` already guards its own
-        // `restart-app` (see runLaunch); this is the `tool:` spelling of the
-        // same sub-tools, plus the native-* tools it never covered.
-        if (isNativeDevtoolsBlockResult(step.name, result)) {
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `${step.name} did not run (${result.status}): ${result.message}`,
+            reason: verdict.reason,
             result,
             outputHint,
             args,

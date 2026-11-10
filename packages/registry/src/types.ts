@@ -161,7 +161,7 @@ export interface ToolContext extends InvokeToolOptions {
   artifacts: ArtifactStore;
 }
 
-export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony";
+export type Platform = "ios" | "android" | "ios-remote" | "chromium" | "vega" | "harmony" | "macos";
 
 export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
 
@@ -202,6 +202,10 @@ export interface ToolCapability {
     unknown?: boolean;
   };
   chromium?: {
+    app?: boolean;
+  };
+  /** A native Mac app that argent drives from inside the app. Behind the macos-apps flag. */
+  macos?: {
     app?: boolean;
   };
   vega?: {
