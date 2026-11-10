@@ -415,9 +415,11 @@ describe("flow report rendering", () => {
     expect(renderBatchSummary({ total: 1, passed: 1, failed: 0, skipped: 0 })).toBe(
       "PASS — 1 e2e test: 1 passed, 0 failed, 0 skipped"
     );
-    // Skips only ever follow a failure, so they never turn the verdict alone.
     expect(renderBatchSummary({ total: 2, passed: 1, failed: 0, skipped: 1 })).toBe(
       "PASS — 2 e2e tests: 1 passed, 0 failed, 1 skipped"
+    );
+    expect(renderBatchSummary({ total: 2, passed: 0, failed: 0, skipped: 2 })).toBe(
+      "NONE RAN — 2 e2e tests: 0 passed, 0 failed, 2 skipped"
     );
     expect(renderBatchSummary({ total: 2, passed: 1, failed: 1, skipped: 0 }, 92_400)).toBe(
       "FAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped (1m 32s)"
