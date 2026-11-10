@@ -40,6 +40,14 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
     }
   }
 
+  let strictModeEnabled = false;
+  const indexJs = await readFileSafe(join(projectRoot, "index.js"));
+  const indexTs = await readFileSafe(join(projectRoot, "index.ts"));
+  const indexSource = (indexJs ?? "") + (indexTs ?? "");
+  if (indexSource.includes("<StrictMode>") || indexSource.includes("StrictMode")) {
+    strictModeEnabled = true;
+  }
+
   let buildMode: "dev" | "prod" = "dev";
   if (input.flamegraph) {
     for (const node of input.flamegraph.nodes) {
@@ -86,6 +94,7 @@ export async function detectSessionContext(input: RawProfilingInput): Promise<Se
 
   return {
     reactCompilerEnabled,
+    strictModeEnabled,
     buildMode,
     rnArchitecture,
     projectRoot,

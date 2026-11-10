@@ -2,6 +2,7 @@ import type { ReRenderReason, HotCommitSummary, ComponentFinding } from "./outpu
 
 export interface SessionContext {
   reactCompilerEnabled: boolean;
+  strictModeEnabled: boolean;
   buildMode: "dev" | "prod";
   rnArchitecture: "bridge" | "bridgeless";
   projectRoot: string;
@@ -52,7 +53,8 @@ export interface ReduceOutput {
 // Stage 2: Enrich
 export interface EnrichedComponent {
   name: string;
-  n: number; // re-render count, first mounts excluded
+  n: number;
+  normalizedRenderCount: number;
   mean: number;
   min: number;
   max: number;

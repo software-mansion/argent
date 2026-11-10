@@ -256,7 +256,6 @@ async function loadReactSession(
     anyCompilerOptimized,
     hotCommitIndices,
     totalReactCommits,
-    loadedFromDisk: true,
   };
 
   cacheProfilerPaths(port, sessionPaths, deviceId);

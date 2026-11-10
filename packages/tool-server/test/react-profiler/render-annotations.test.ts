@@ -40,6 +40,7 @@ const ANNOTATIONS = [
 
 const SESSION_CONTEXT: SessionContext = {
   reactCompilerEnabled: false,
+  strictModeEnabled: false,
   buildMode: "dev",
   rnArchitecture: "bridgeless",
   projectRoot: "/tmp/fake-project",

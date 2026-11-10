@@ -13,7 +13,7 @@ Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Prof
 
 - `react-profiler-start` / `react-profiler-stop`: record CPU samples and React commits around an interaction.
 - `react-profiler-analyze`: turn the recording into a ranked report: hot commits with the JS functions that ran during each.
-- `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. After a debugger drop, react-profiler-stop can no longer collect the run; check status before stopping or restarting.
+- `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. A debugger drop also ends the recording; check status before stopping or restarting.
 - `react-profiler-component-source`: source, location and memoization status of a component the report flagged.
 - `react-profiler-renders`: how many instances of each component are mounted in the top 30 levels of the tree, with their last render time; no session needed. It does not count re-renders: record a profile for that.
 - `react-profiler-fiber-tree`: live component hierarchy, no session needed, for tracing a component's ancestry.
@@ -98,7 +98,7 @@ If the user does not want changes, present the report and suggest the fix withou
 
 ## 4. Caveats
 
-- **Dev builds** render ~3x slower than production (the report notes it). Prioritize render counts over durations: counts carry over to production. Strict Mode can double durations, but not counts.
+- **Dev builds** render ~3x slower than production (the report notes it). Prioritize render counts over durations: counts carry over to production. They are already halved when Strict Mode double-invokes renders.
 - **Live API data** may differ between runs (payload sizes, item counts) and shift render counts and durations independently of your fix. Note when data-dependent components vary.
 - **Run-to-run noise:** variations under ~10-15% in commit duration may be noise; only treat consistent, directional changes as signal.
 - **Profiler overhead:** if the native profile shows `JSLexer`, `JSONEmitter` or Hermes internals dominating the JS thread, that is instrumentation cost, not app work. Discount those entries.
