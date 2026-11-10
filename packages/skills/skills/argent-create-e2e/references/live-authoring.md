@@ -51,7 +51,7 @@ On iOS, only `restart-app` guarantees an instrumented launch. `launch-app` can f
 
 ### Chromium standalone tests
 
-**An Electron app sets its window size; no boot argument overrides it.** Electron ignores `--window-size`: the size comes from the app's own `BrowserWindow` options, and Argent never resizes the window. A browser booted with `browser` honours `--window-size=<w>,<h>` in `electronArgs`, so pass one. Boot a fresh target with `boot-device` and `electronAppPath`, then take one `screenshot` and record its pixel dimensions: that capture size is the snapshot device class ([E2E YAML: Snapshots](e2e-yaml.md#snapshots-and-cli-runs)) and must match when CI replays. If the app sizes its window from host or session state, say so in the report.
+**An Electron app sets its window size; no boot argument overrides it.** Electron ignores `--window-size`: the size comes from the app's own `BrowserWindow` options, and Argent never resizes the window. Boot a fresh target with `boot-device` and `electronAppPath`, or with `browser` and a `--window-size=<w>,<h>` in `electronArgs`, which a browser honours. Then take one `screenshot` and record its pixel dimensions: that capture size is the snapshot device class ([E2E YAML: Snapshots](e2e-yaml.md#snapshots-and-cli-runs)) and must match when CI replays. If the app sizes its window from host or session state, say so in the report.
 
 After boot, start the recorder before the first in-app action. Record the first-screen wait. `restart-app` has no Chromium support, so a recorded Chromium test is a fragment until polish writes its launch in (and removes any `executionPrerequisite` the recording declared). During polish, add the matching launch:
 
