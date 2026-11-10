@@ -202,12 +202,9 @@ function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
     }
     return (
       settle +
-      // Name both axes: `normRect` clamps each edge on its own, so a
-      // horizontally scrolled node comes back zero-WIDTH at a normal height.
-      "A zero-area frame in `describe` means off-viewport — zero height for a node above or " +
-      "below the viewport, zero width for one left or right of it, since the walker clamps " +
-      "each edge on its own — and the fix there is a `scroll-to` before the check rather than " +
-      "a different selector; a password field reaches the runner under the name `[password]`, " +
+      "`describe` leaves out an off-viewport element and counts it as `[scrollHidden=N(side)]` " +
+      "on its parent, and the fix there is a `scroll-to` before the check rather than a " +
+      "different selector; a password field reaches the runner under the name `[password]`, " +
       "so only an `id`/`role` selector can match it"
     );
   }

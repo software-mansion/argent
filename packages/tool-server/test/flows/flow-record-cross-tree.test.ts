@@ -874,7 +874,7 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
   });
 
   // Chromium: `projectChromiumNode` drops a node with no on-screen frame, and the
-  // walker clamps an off-viewport frame to zero area. `describe` still lists it.
+  // walker clamps an off-viewport frame to zero area. The live wait still finds it.
   it("Chromium: warns when the runner's projection drops an off-viewport node", async () => {
     serveTree(
       chromiumRunnerTree([
@@ -902,8 +902,8 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("clamp");
     expect(warning).toContain("off-viewport");
     expect(warning).toContain("`scroll-to` before the check rather than a different selector");
-    // Both axes. `normRect` clamps each edge alone, so a sideways node is zero-WIDTH.
-    expect(warning).toContain("zero width for one left or right of it");
+    // `describe` no longer prints such a row, so the author must be told what it prints instead.
+    expect(warning).toContain("`[scrollHidden=N(side)]` on its parent");
     // Not the other direction: the live `exists` passed, so the recorder saw it.
     expect(warning).toContain("5000-node walk limit is not what went wrong");
     expect(warning).not.toContain("past the end of what it read");

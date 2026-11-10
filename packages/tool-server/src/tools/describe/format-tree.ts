@@ -2,7 +2,10 @@ import type { DescribeFrame, DescribeNode, DescribeSource } from "./contract";
 
 // Token-efficient text rendering of an already-pruned DescribeNode tree: the
 // per-platform adapters (and the Android v2 trimmer in uiautomator-parser) do
-// the pruning, this layer only formats.
+// the pruning, this layer only formats. The one exception is `offscreenNodes`,
+// which leaves Chromium rows outside the window out of this text. `describe`
+// returns only this text, so every caller of it (agent, SDK, `argent run`, HTTP)
+// gets the shorter view; await-ui-element and flows read the tree, not this text.
 //
 // Render mode comes from `source`, not the tree silhouette — a single
 // accidental grandchild used to flip an ax-service response into nested mode,
@@ -63,7 +66,20 @@ function formatAttr(name: string, value: string | undefined): string {
 /** Sources whose platform cannot long-press, so `long-clickable` would be a dead end. */
 const NO_LONG_PRESS_SOURCES: ReadonlySet<DescribeSource> = new Set(["harmony-uitest"]);
 
-function formatFlags(n: DescribeNode, source: DescribeSource): string {
+type WindowSide = "above" | "below" | "left" | "right";
+
+const WINDOW_SIDES: readonly WindowSide[] = ["above", "below", "left", "right"];
+
+/** `scrollHidden=N`, with the sides of the window the rows lie on when they are known. */
+function scrollHiddenFlag(count: number, sides: readonly WindowSide[] = []): string {
+  return `scrollHidden=${count}${sides.length > 0 ? `(${sides.join(",")})` : ""}`;
+}
+
+function formatFlags(
+  n: DescribeNode,
+  source: DescribeSource,
+  foldedSides?: readonly WindowSide[]
+): string {
   const flags: string[] = [];
   if (n.clickable) flags.push("clickable");
   if (n.longClickable && !NO_LONG_PRESS_SOURCES.has(source)) flags.push("long-clickable");
@@ -77,7 +93,7 @@ function formatFlags(n: DescribeNode, source: DescribeSource): string {
   if (n.disabled) flags.push("disabled");
   if (n.password) flags.push("password");
   if (typeof n.scrollHidden === "number" && n.scrollHidden > 0) {
-    flags.push(`scrollHidden=${n.scrollHidden}`);
+    flags.push(scrollHiddenFlag(n.scrollHidden, foldedSides));
   }
   return flags.length === 0 ? "" : ` [${flags.join(",")}]`;
 }
@@ -103,7 +119,12 @@ function shouldEmit(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean
   return hasContent(n) || contentRoles.has(n.role);
 }
 
-function formatLine(n: DescribeNode, indent: number, source: DescribeSource): string {
+function formatLine(
+  n: DescribeNode,
+  indent: number,
+  source: DescribeSource,
+  foldedSides?: readonly WindowSide[]
+): string {
   const pad = "  ".repeat(indent);
   // iOS reports a text input's placeholder as both label and value; printing
   // it twice costs bytes for no signal.
@@ -111,10 +132,80 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   const labelPart = formatLabel(n.label);
   const valuePart = formatAttr("value", dedupedValue);
   const idPart = formatAttr("id", n.identifier);
-  const flagPart = formatFlags(n, source);
+  const flagPart = formatFlags(n, source, foldedSides);
   const annotations = `${labelPart}${valuePart}${idPart}${flagPart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
   return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
+}
+
+function isZeroArea(f: DescribeFrame): boolean {
+  return clampFinite(f.width) <= 0 || clampFinite(f.height) <= 0;
+}
+
+/**
+ * The rows to leave out of a Chromium tree. The DOM walker lists a whole page and
+ * clamps an element outside the window to a zero-area frame at its edge, so on a
+ * long page most rows are of that kind. They cannot be tapped: an agent has to
+ * scroll to them first. A row stays if anything inside it has an area: a
+ * `position: fixed` child can be on screen inside an off-screen parent. A focused
+ * row stays too: `keyboard` types into it wherever it is.
+ */
+function offscreenNodes(root: DescribeNode): Set<DescribeNode> {
+  const order: DescribeNode[] = [];
+  const stack = [...root.children];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    order.push(node);
+    for (const child of node.children) stack.push(child);
+  }
+  const offscreen = new Set<DescribeNode>();
+  // A parent comes before its children in `order`, so walking back sees the children first.
+  for (let i = order.length - 1; i >= 0; i--) {
+    const node = order[i]!;
+    if (isZeroArea(node.frame) && !node.focused && node.children.every((c) => offscreen.has(c))) {
+      offscreen.add(node);
+    }
+  }
+  return offscreen;
+}
+
+function printsLine(n: DescribeNode, contentRoles: ReadonlySet<string>): boolean {
+  return shouldEmit(n, contentRoles) || n.children.length > 0;
+}
+
+/** The sides of the window a folded row lies on, from the edges `normRect` clamped it to. */
+function foldedSides(node: DescribeNode, contentRoles: ReadonlySet<string>): WindowSide[] {
+  const { x, y, width, height } = node.frame;
+  if (x === 0 && y === 0 && width === 0 && height === 0 && node.children.length > 0) {
+    // What `unionFrame` gives a box-less wrapper, so it says nothing about where the
+    // row is: its children do, and only those that would print, as in the count. A
+    // leaf cannot be such a wrapper, because the walker drops those. It is a box
+    // above and left of the window, read below as a corner.
+    return node.children
+      .filter((c) => printsLine(c, contentRoles))
+      .flatMap((c) => foldedSides(c, contentRoles));
+  }
+  if (height <= 0 && y >= 1) return ["below"];
+  if (height <= 0 && y <= 0) return ["above"];
+  if (width <= 0 && x >= 1) return ["right"];
+  if (width <= 0 && x <= 0) return ["left"];
+  return [];
+}
+
+interface FoldedChildren {
+  /** How many rows `offscreen` removes from directly under the node; a folded subtree counts once. */
+  count: number;
+  sides: readonly WindowSide[];
+}
+
+function foldedChildren(
+  node: DescribeNode,
+  offscreen: ReadonlySet<DescribeNode>,
+  contentRoles: ReadonlySet<string>
+): FoldedChildren {
+  const folded = node.children.filter((c) => offscreen.has(c) && printsLine(c, contentRoles));
+  const present = new Set(folded.flatMap((c) => foldedSides(c, contentRoles)));
+  return { count: folded.length, sides: WINDOW_SIDES.filter((side) => present.has(side)) };
 }
 
 function renderFlat(
@@ -132,24 +223,30 @@ function renderFlat(
 function renderNested(
   root: DescribeNode,
   contentRoles: ReadonlySet<string>,
-  source: DescribeSource
+  source: DescribeSource,
+  offscreen: ReadonlySet<DescribeNode>
 ): string[] {
   const lines: string[] = [];
   // Iterative DFS so very deep Compose / RN trees can't overflow the stack.
   // Start at depth 1: the header already prints the root as its ROOT line.
   type Frame = { node: DescribeNode; depth: number };
   const stack: Frame[] = [];
-  for (let i = root.children.length - 1; i >= 0; i--) {
-    stack.push({ node: root.children[i]!, depth: 1 });
-  }
+  const pushChildren = (node: DescribeNode, depth: number) => {
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = node.children[i]!;
+      if (!offscreen.has(child)) stack.push({ node: child, depth });
+    }
+  };
+  pushChildren(root, 1);
   while (stack.length > 0) {
     const { node, depth } = stack.pop()!;
-    if (shouldEmit(node, contentRoles) || node.children.length > 0) {
-      lines.push(formatLine(node, depth, source));
+    if (printsLine(node, contentRoles)) {
+      const { count, sides } = foldedChildren(node, offscreen, contentRoles);
+      lines.push(
+        formatLine(count > 0 ? { ...node, scrollHidden: count } : node, depth, source, sides)
+      );
     }
-    for (let i = node.children.length - 1; i >= 0; i--) {
-      stack.push({ node: node.children[i]!, depth: depth + 1 });
-    }
+    pushChildren(node, depth + 1);
   }
   return lines;
 }
@@ -173,6 +270,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";
+  // Vega's lowercase toolkit roles count as content only for its own source.
+  const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
+  const offscreen = opts.source === "cdp-dom" ? offscreenNodes(root) : new Set<DescribeNode>();
   const header: string[] = [];
   header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
@@ -196,14 +296,15 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     );
   }
   header.push("");
-  header.push(`ROOT  ${root.role} ${fmtFrame(root.frame)}`);
+  const foldedAtRoot = foldedChildren(root, offscreen, contentRoles);
+  const rootFlag =
+    foldedAtRoot.count > 0 ? ` [${scrollHiddenFlag(foldedAtRoot.count, foldedAtRoot.sides)}]` : "";
+  header.push(`ROOT  ${root.role}${rootFlag} ${fmtFrame(root.frame)}`);
   header.push("");
 
-  // Vega's lowercase toolkit roles count as content only for its own source.
-  const contentRoles = isVega ? VEGA_CONTENT_ROLES : CONTENT_ROLES;
   const body =
     mode === "flat"
       ? renderFlat(root, contentRoles, opts.source)
-      : renderNested(root, contentRoles, opts.source);
+      : renderNested(root, contentRoles, opts.source, offscreen);
   return [...header, ...body].join("\n").replace(/\n+$/, "\n");
 }

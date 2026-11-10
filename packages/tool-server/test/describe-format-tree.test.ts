@@ -597,6 +597,249 @@ describe("formatDescribeTree", () => {
     expect(lines[0]).toContain("[checked]");
   });
 
+  describe("off-screen rows on Chromium", () => {
+    const offFrame = { x: 0.02, y: 1, width: 0.9, height: 0 };
+    const row = (n: number): DescribeNode =>
+      leaf({ role: "li", identifier: `item-${n}`, frame: offFrame });
+    const page = (children: DescribeNode[]): DescribeNode => ({
+      role: "html",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [{ role: "ul", frame: { x: 0, y: 0, width: 1, height: 1 }, children }],
+    });
+
+    it("folds zero-area rows into a count on their parent", () => {
+      const visible = leaf({
+        role: "li",
+        identifier: "item-0",
+        frame: { x: 0.02, y: 0.9, width: 0.9, height: 0.05 },
+      });
+      const out = formatDescribeTree(page([visible, row(1), row(2), row(3)]), {
+        source: "cdp-dom",
+      });
+      expect(out).toMatch(/^ {2}ul \[scrollHidden=3\(below\)\] {2}\(/m);
+      expect(out).toContain("item-0");
+      expect(out).not.toContain("item-1");
+    });
+
+    it("leaves the tree data as it was", () => {
+      const tree = page([row(1)]);
+      formatDescribeTree(tree, { source: "cdp-dom" });
+      expect(tree.children[0]!.scrollHidden).toBeUndefined();
+      expect(tree.children[0]!.children).toHaveLength(1);
+    });
+
+    it("counts a folded subtree once", () => {
+      const nested: DescribeNode = {
+        role: "section",
+        frame: offFrame,
+        children: [row(1), row(2)],
+      };
+      const out = formatDescribeTree(page([nested]), { source: "cdp-dom" });
+      expect(out).toContain("[scrollHidden=1(below)]");
+      expect(out).not.toContain("section");
+    });
+
+    it("keeps an off-screen parent whose child is on screen", () => {
+      const fixed = leaf({
+        role: "button",
+        label: "Help",
+        frame: { x: 0.9, y: 0.9, width: 0.05, height: 0.05 },
+        clickable: true,
+      });
+      const parent: DescribeNode = { role: "section", frame: offFrame, children: [fixed, row(1)] };
+      const out = formatDescribeTree(page([parent]), { source: "cdp-dom" });
+      expect(out).toMatch(/section \[scrollHidden=1\(below\)\]/);
+      expect(out).toContain('"Help"');
+    });
+
+    it("keeps a focused row outside the window, and only folds its neighbours", () => {
+      const focused = leaf({
+        role: "input",
+        label: "FarInput",
+        clickable: true,
+        focused: true,
+        frame: offFrame,
+      });
+      const section: DescribeNode = {
+        role: "section",
+        frame: offFrame,
+        children: [focused, row(1)],
+      };
+      const out = formatDescribeTree(page([section, row(2)]), { source: "cdp-dom" });
+      expect(out).toMatch(/input "FarInput" \[clickable,focused\]/);
+      expect(out).toMatch(/ul \[scrollHidden=1\(below\)\]/);
+      expect(out).toMatch(/section \[scrollHidden=1\(below\)\]/);
+      expect(out).not.toContain("item-1");
+    });
+
+    it("folds a checked row outside the window with the others", () => {
+      const checked = leaf({ role: "input", label: "Far", checked: true, frame: offFrame });
+      const out = formatDescribeTree(page([checked]), { source: "cdp-dom" });
+      expect(out).toContain("[scrollHidden=1(below)]");
+      expect(out).not.toContain("Far");
+    });
+
+    it("keeps a row with a sliver inside the window, at every edge", () => {
+      const sliver = 0.001;
+      const frames = [
+        { x: 0.02, y: 1 - sliver, width: 0.9, height: sliver },
+        { x: 0.02, y: 0, width: 0.9, height: sliver },
+        { x: 1 - sliver, y: 0.2, width: sliver, height: 0.1 },
+        { x: 0, y: 0.2, width: sliver, height: 0.1 },
+      ];
+      for (const frame of frames) {
+        const out = formatDescribeTree(page([leaf({ role: "li", identifier: "edge", frame })]), {
+          source: "cdp-dom",
+        });
+        expect(out).toContain('id="edge"');
+        expect(out).not.toContain("scrollHidden");
+      }
+    });
+
+    it("does not count a row that would not have printed", () => {
+      const silent = leaf({ role: "div", frame: offFrame });
+      const out = formatDescribeTree(page([silent]), { source: "cdp-dom" });
+      expect(out).not.toContain("scrollHidden");
+    });
+
+    it("puts the count on the ROOT line for children of the root", () => {
+      const root: DescribeNode = {
+        role: "html",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [row(1)],
+      };
+      const out = formatDescribeTree(root, { source: "cdp-dom" });
+      expect(out).toContain("ROOT  html [scrollHidden=1(below)] (0.000, 0.000, 1.000, 1.000)");
+      expect(out).not.toContain("item-1");
+    });
+
+    describe("the side of the window", () => {
+      const at = (id: string, frame: DescribeNode["frame"]): DescribeNode =>
+        leaf({ role: "li", identifier: id, frame });
+      const above = { x: 0.02, y: 0, width: 0.9, height: 0 };
+      const right = { x: 1, y: 0.2, width: 0, height: 0.1 };
+      const left = { x: 0, y: 0.2, width: 0, height: 0.1 };
+
+      it("names one side when every folded row lies there", () => {
+        const out = formatDescribeTree(page([at("a", above), at("b", above)]), {
+          source: "cdp-dom",
+        });
+        expect(out).toContain("[scrollHidden=2(above)]");
+      });
+
+      it("names every side a mid-page parent has rows on, in a fixed order", () => {
+        const out = formatDescribeTree(page([row(1), at("a", above), at("b", above)]), {
+          source: "cdp-dom",
+        });
+        expect(out).toContain("[scrollHidden=3(above,below)]");
+      });
+
+      it("tells a carousel's rows to the right from a page's rows below", () => {
+        const out = formatDescribeTree(page([at("slide", right)]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(right)]");
+      });
+
+      it("reads left from a row clamped to the left edge", () => {
+        const out = formatDescribeTree(page([at("skip", left)]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(left)]");
+      });
+
+      it("reads a box-less wrapper's side from its children, not its (0,0,0,0) frame", () => {
+        const wrapper: DescribeNode = {
+          role: "section",
+          frame: { x: 0, y: 0, width: 0, height: 0 },
+          children: [row(1)],
+        };
+        const out = formatDescribeTree(page([wrapper]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(below)]");
+      });
+
+      it("reads a corner frame as one side, the vertical one", () => {
+        const corners = [
+          { frame: { x: 1, y: 1, width: 0, height: 0 }, side: "below" },
+          { frame: { x: 0, y: 1, width: 0, height: 0 }, side: "below" },
+          { frame: { x: 1, y: 0, width: 0, height: 0 }, side: "above" },
+        ];
+        for (const { frame, side } of corners) {
+          const out = formatDescribeTree(page([at("corner", frame)]), { source: "cdp-dom" });
+          expect(out).toContain(`[scrollHidden=1(${side})]`);
+        }
+      });
+
+      it("names every side of a box-less wrapper, in either child order", () => {
+        const noBox = { x: 0, y: 0, width: 0, height: 0 };
+        const sub: DescribeNode = { role: "div", frame: noBox, children: [row(1)] };
+        const link = at("a", above);
+        for (const children of [
+          [sub, link],
+          [link, sub],
+        ]) {
+          const wrapper: DescribeNode = { role: "section", frame: noBox, children };
+          const out = formatDescribeTree(page([wrapper]), { source: "cdp-dom" });
+          expect(out).toContain("[scrollHidden=1(above,below)]");
+        }
+      });
+
+      it("reads a (0,0,0,0) leaf as the corner above and left of the window", () => {
+        const noBox = { x: 0, y: 0, width: 0, height: 0 };
+        const link = leaf({ role: "a", value: "Home", clickable: true, frame: noBox });
+        const out = formatDescribeTree(page([link]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(above)]");
+
+        // A boxed parent up there frames like a box-less wrapper; its links give the side.
+        const nav: DescribeNode = { role: "nav", frame: noBox, children: [link, row(1)] };
+        const withNav = formatDescribeTree(page([nav]), { source: "cdp-dom" });
+        expect(withNav).toContain("[scrollHidden=1(above,below)]");
+      });
+
+      it("takes a box-less wrapper's sides only from children that would print", () => {
+        const noBox = { x: 0, y: 0, width: 0, height: 0 };
+        const link = leaf({ role: "a", value: "Home", clickable: true, frame: noBox });
+        const empty = leaf({ role: "div", frame: right });
+        const nav: DescribeNode = { role: "nav", frame: noBox, children: [link, empty] };
+        const out = formatDescribeTree(page([nav]), { source: "cdp-dom" });
+        expect(out).toContain("[scrollHidden=1(above)]");
+      });
+
+      it("reads a zero-width slide that has height at the top edge as left or right", () => {
+        const slides = [
+          { frame: { x: 1, y: 0, width: 0, height: 0.1 }, side: "right" },
+          { frame: { x: 0, y: 0, width: 0, height: 0.1 }, side: "left" },
+        ];
+        for (const { frame, side } of slides) {
+          const out = formatDescribeTree(page([at("slide", frame)]), { source: "cdp-dom" });
+          expect(out).toContain(`[scrollHidden=1(${side})]`);
+        }
+      });
+    });
+
+    it("leaves zero-area rows of other sources in the text", () => {
+      const nested = [
+        "uiautomator",
+        "android-devtools",
+        "vega-automation",
+        "harmony-uitest",
+        // The physical iPhone source clamps off-screen rows to zero area, as Chromium does.
+        "xcuitest-runner",
+      ] as const;
+      for (const source of nested) {
+        const out = formatDescribeTree(page([row(1)]), { source });
+        expect(out).toContain("item-1");
+        expect(out).not.toContain("scrollHidden");
+      }
+      const flat: DescribeNode = {
+        role: "AXGroup",
+        frame: { x: 0, y: 0, width: 1, height: 1 },
+        children: [leaf({ role: "AXButton", label: "add address", frame: offFrame })],
+      };
+      for (const source of ["ax-service", "native-devtools", "tv-focus"] as const) {
+        const out = formatDescribeTree(flat, { source });
+        expect(out).toContain('"add address"');
+        expect(out).not.toContain("scrollHidden");
+      }
+    });
+  });
+
   // Regression: nested mode previously keyed on "uiautomator" only, so
   // "android-devtools" responses rendered flat and lost all descendants.
   it("renders android-devtools source in nested mode", () => {
