@@ -28,7 +28,10 @@ let runningPid: number | null = process.pid;
 const defaultExec = (cmd: string, args: readonly string[]) => {
   if (cmd === "afconvert") wavFile(args[args.length - 1], 48_000); // 1 s
   if (args.includes("launchctl") && args.includes("list")) {
-    const row = runningPid === null ? "" : `${runningPid}\t0\tUIKitApplication:com.example.app[1a2b][rb-legacy]\n`;
+    const row =
+      runningPid === null
+        ? ""
+        : `${runningPid}\t0\tUIKitApplication:com.example.app[1a2b][rb-legacy]\n`;
     return { stdout: `PID\tStatus\tLabel\n${row}`, stderr: "" };
   }
   return { stdout: "", stderr: "" };
@@ -215,7 +218,9 @@ describe("hook protocol", () => {
   it("fails a recording at once, without writing a request, for an app on an older hook", async () => {
     fs.writeFileSync(path.join(dir, `st.${BUNDLE}`), statusText({}).replace(/^proto=1\n/, ""));
     const t0 = Date.now();
-    const err = await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), false).catch((e: unknown) => e);
+    const err = await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), false).catch(
+      (e: unknown) => e
+    );
     expect(Date.now() - t0).toBeLessThan(500);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
     expect((err as Error).message).toContain("older audio hook");
@@ -264,7 +269,9 @@ describe("hook state", () => {
     writeStatus({ state: "active" });
     runningPid = process.pid + 1;
     try {
-      const err = await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), false).catch((e: unknown) => e);
+      const err = await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), false).catch(
+        (e: unknown) => e
+      );
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
       expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
     } finally {
@@ -277,7 +284,9 @@ describe("hook state", () => {
     const t0 = Date.now();
     await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), true);
     expect(Date.now() - t0).toBeLessThan(500);
-    expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(/^id=\w+\nring=.*\nmute=1\n$/);
+    expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(
+      /^id=\w+\nring=.*\nmute=1\n$/
+    );
     const done = await stopRecording(UDID, BUNDLE); // never opened audio: an empty recording, at once
     expect(done.durationMs).toBe(0);
   });

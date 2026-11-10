@@ -77,7 +77,7 @@ export const audioInputTool: ToolDefinition<Params, AudioInputResult> = {
   fileInputs,
   description: `Choose what apps in an iOS Simulator hear as microphone input: an audio file, a generated tone, or the real host microphone.
 Use when testing recording, voice, speech recognition or call features without speaking into the host microphone. Replaces the samples the app reads, so the app needs no change and keeps using its normal audio APIs.
-Every call arms the simulator: apps launched from then on carry the hook. An app that was already running does not, so call restart-app for it and check with bundleId that the hook is live. The setting then applies to every armed app, can be changed while an app is recording, and survives app restarts. A reboot of the simulator clears the arming.
+Apps launched after Argent armed the simulator carry the hook; pass bundleId to check (appReady). An app launched before that does not: call restart-app for it. The setting then applies to every armed app, can be changed while an app is recording, and survives app restarts. A reboot of the simulator clears the arming.
 A file plays from its beginning at the moment you call this tool, and again each time an app opens a new audio input; after its end it plays silence unless loop is true. An app that keeps its audio session open between recordings does not open a new input, so the file does not restart when it records again: call this tool again right before the action that makes the app record. Set source=microphone to release the override.
 Returns { source, durationMs?, liveApps, appReady?, message? }. liveApps lists the apps that hear the source now; with bundleId, appReady and message say whether that app does.
 Fails if the file cannot be decoded, the simulator is not booted, or the target is a tvOS or remote simulator. Does not cover web content (WKWebView getUserMedia) or AVCaptureSession audio.`,
@@ -112,7 +112,11 @@ Fails if the file cannot be decoded, the simulator is not booted, or the target 
             frequencyHz: params.frequencyHz ?? 1000,
             amplitude: params.amplitude ?? 0.4,
           });
-    return withApps(params, { source: applied.source, durationMs: applied.durationMs }, hook?.state);
+    return withApps(
+      params,
+      { source: applied.source, durationMs: applied.durationMs },
+      hook?.state
+    );
   },
 };
 

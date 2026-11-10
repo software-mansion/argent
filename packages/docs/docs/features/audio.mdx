@@ -27,9 +27,11 @@ The agent can also mute the app on the speakers of your Mac during the recording
 
 ## How it starts
 
-Argent needs a small hook in the app process. Argent loads the hook only into simulators where the agent used an audio tool, and only into apps that start after the first audio request. A simulator without audio requests stays as it was. An app that already runs does not have the hook. The agent restarts that app once.
+Argent needs a small hook in the app process. Argent loads the hook into every app that starts after Argent connects to the simulator. The hook does nothing until the app opens audio: it starts no thread and costs no measurable launch time or memory. So the agent can use the audio tools on an app that it started with Argent, without a restart.
 
-A reboot of the simulator removes the hook. The agent repeats the first request and restarts the app.
+An app that started before Argent connected to the simulator does not have the hook. The agent restarts that app once.
+
+To load the hook only into simulators where the agent used an audio tool, run `argent disable ios-audio-always-inserted`. Then the first audio request loads the hook, and only apps that start after that request have it. See [feature flags](/docs/reference/configuration).
 
 ## Where the audio lands
 

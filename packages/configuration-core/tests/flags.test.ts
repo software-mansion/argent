@@ -348,4 +348,11 @@ describe("opt-out (default-on) flags", () => {
     expect(getFlagDefinition("video-watermark")?.defaultEnabled).toBe(true);
     expect(isFeatureEnabled("video-watermark")).toBe(true); // unset ⇒ on
   });
+
+  it("the shipped ios-audio-always-inserted flag is on by default and off once disabled", () => {
+    expect(getFlagDefinition("ios-audio-always-inserted")?.defaultEnabled).toBe(true);
+    expect(isFeatureEnabled("ios-audio-always-inserted")).toBe(true); // unset ⇒ on
+    setFlag("ios-audio-always-inserted", false, "global"); // what `argent disable` stores
+    expect(isFeatureEnabled("ios-audio-always-inserted")).toBe(false);
+  });
 });

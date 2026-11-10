@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import type { DeviceInfo } from "@argent/registry";
 import {
   audioDylibPath,
@@ -173,13 +174,16 @@ export function audioDir(udid: string): string {
   return `/tmp/argent-audio-${udid}`;
 }
 
+export const AUDIO_ALWAYS_INSERTED_FLAG = "ios-audio-always-inserted";
+
 /**
- * PROTOTYPE: insert the audio hook with the bootstrap whenever the simulator is armed, so audio tools work on any app
- * launched after arming without a restart. The hook stays dormant (no thread, no CoreAudio load) until the app opens
- * audio. ARGENT_AUDIO_ALWAYS_INSERTED=0 restores insert-on-first-audio-tool.
+ * Whether arming a simulator also inserts the audio hook, so audio tools work on any app launched after arming
+ * without a restart. The hook stays dormant (no thread, no CoreAudio load) until the app opens audio. Read per arming
+ * so `argent disable ios-audio-always-inserted` applies without a tool-server restart; disabled, the hook is
+ * inserted by the first audio tool call instead.
  */
 export function audioAlwaysInserted(): boolean {
-  return process.env.ARGENT_AUDIO_ALWAYS_INSERTED !== "0";
+  return isFeatureEnabled(AUDIO_ALWAYS_INSERTED_FLAG);
 }
 
 export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {

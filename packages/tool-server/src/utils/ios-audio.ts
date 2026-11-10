@@ -235,7 +235,8 @@ export function decideHookState(
   runningPid: number | null
 ): HookState {
   if (!status) return "none";
-  if (!(status.pid > 0) || !pidAlive || runningPid === null || runningPid !== status.pid) return "stale";
+  if (!(status.pid > 0) || !pidAlive || runningPid === null || runningPid !== status.pid)
+    return "stale";
   if (status.proto !== AUDIO_HOOK_PROTO) return "old-proto";
   return status.state;
 }
@@ -244,14 +245,18 @@ export async function readAppHook(
   udid: string,
   bundleId: string
 ): Promise<{ state: HookState; status: AppAudioStatus | null }> {
-  let status: AppAudioStatus | null = null;
+  let text: string;
   try {
-    status = parseAppStatus(fs.readFileSync(path.join(audioDir(udid), `st.${bundleId}`), "utf8"));
+    text = fs.readFileSync(path.join(audioDir(udid), `st.${bundleId}`), "utf8");
   } catch {
     return { state: "none", status: null };
   }
+  const status = parseAppStatus(text);
   const running = await runningAppPid(udid, bundleId).catch(() => null);
-  return { state: decideHookState(status, status.pid > 0 && processAlive(status.pid), running), status };
+  return {
+    state: decideHookState(status, status.pid > 0 && processAlive(status.pid), running),
+    status,
+  };
 }
 
 /** Bundle ids of the apps whose hook is live, for telling the caller which apps can be driven. */
@@ -504,7 +509,9 @@ export async function stopRecording(udid: string, bundleId: string): Promise<Fin
     const finished = recorder.finish();
     return {
       path: finished.path,
-      durationMs: finished.sampleRate ? Math.round((finished.frames * 1000) / finished.sampleRate) : 0,
+      durationMs: finished.sampleRate
+        ? Math.round((finished.frames * 1000) / finished.sampleRate)
+        : 0,
       sampleRate: finished.sampleRate,
       channels: finished.channels,
       droppedFrames: finished.droppedFrames,

@@ -41,7 +41,7 @@ export const audioRecordStartTool: ToolDefinition<Params, AudioRecordStartResult
   description: `Start recording the sound an app in an iOS Simulator plays (everything it sends to the speaker, mixed) into a WAV file.
 Use when checking what an app plays: a notification sound, text to speech, a call, a game, a player.
 The recording runs until \`audio-record-stop\` is called, which returns the file. Start it before the action that makes the app play, and stop it after.
-Records the output of the one app only, not the whole simulator and not web content in WKWebView. Needs the audio hook live in the app: call \`audio-input\` once for the simulator and restart-app for apps that were already running.
+Records the output of the one app only, not the whole simulator and not web content in WKWebView. Needs the audio hook in the app: apps launched after Argent armed the simulator have it; restart-app an app launched before that.
 Returns { status: "recording", bundleId, muteOutput } once the app confirms that it records.
 Fails if the audio hook is not live in the app, the app is already being recorded, or the simulator is not booted.`,
   searchHint: "audio record output speaker sound capture app playback wav start",

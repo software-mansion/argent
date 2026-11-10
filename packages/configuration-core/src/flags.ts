@@ -63,6 +63,15 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Amplify device actions with matching animations of the host window, so what happens on the guest is also visible on the desktop. Purely cosmetic, macOS only, and never affects whether the underlying action succeeds. Off by default.",
   },
   {
+    name: "ios-audio-always-inserted",
+    description:
+      "Insert the iOS audio hook (libArgentAudio.dylib) into every app an armed simulator launches, so " +
+      "audio-input and audio-record-start work without restart-app. Dormant until the app opens audio. " +
+      "On by default; `argent disable ios-audio-always-inserted` inserts it only on the first audio tool call, " +
+      "for apps launched after that call.",
+    defaultEnabled: true,
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",
