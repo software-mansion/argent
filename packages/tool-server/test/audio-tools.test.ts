@@ -13,13 +13,9 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
 
 function registryRig() {
   const registry = new Registry();
-  for (const create of [
-    createAudioInputTool,
-    createAudioRecordStartTool,
-    createAudioRecordStopTool,
-  ]) {
-    registry.registerTool(create(registry));
-  }
+  registry.registerTool(createAudioInputTool(registry));
+  registry.registerTool(createAudioRecordStartTool(registry));
+  registry.registerTool(createAudioRecordStopTool(registry));
   // A refused target must fail before any service (native devtools, the audio session) starts.
   const resolveService = vi
     .spyOn(registry, "resolveService")

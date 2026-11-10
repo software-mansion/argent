@@ -19,7 +19,6 @@ import {
   FAILURE_CODES,
   FailureError,
   ServiceNotFoundError,
-  ServiceState,
   getFailureSignal,
   subprocessFailureMetadata,
   type Registry,
@@ -27,8 +26,6 @@ import {
   type ToolDefinition,
 } from "@argent/registry";
 import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
-import { IOS_AUDIO_SESSION_NAMESPACE } from "../../blueprints/ios-audio-session";
-import type { AudioSession } from "../../utils/ios-audio";
 import {
   buildInitFailedResult,
   nativeDevtoolsRef,
@@ -694,12 +691,6 @@ async function bootIos(
   // skip re-applying and the next launch would be uninjected. Failures surface
   // via getInitFailure below.
   await ndApi.reverifyEnv().catch(() => {});
-  // The same boot wiped the audio hook's entries. With the always-inserted flag off only an audio tool call
-  // re-applies them, so it must not trust a check made before the boot.
-  const audioUrn = `${IOS_AUDIO_SESSION_NAMESPACE}:${udid}`;
-  if (registry.getSnapshot().services.get(audioUrn)?.state === ServiceState.RUNNING) {
-    (await registry.resolveService<AudioSession>(audioUrn)).envVerified = false;
-  }
   const initFailure = ndApi.getInitFailure();
   if (initFailure?.givenUp) {
     return buildInitFailedResult(udid, initFailure);
