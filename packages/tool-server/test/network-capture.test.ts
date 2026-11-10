@@ -640,6 +640,72 @@ describe("network-capture-start", () => {
       expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
     });
 
+    it.each([
+      {
+        start2: "does not reach the runtime",
+        prepare: async (rt: FakeRuntime) => {
+          await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+          return rt;
+        },
+      },
+      {
+        start2: "fails to install",
+        prepare: async (rt: FakeRuntime) => {
+          const evaluate = rt.evaluate.bind(rt);
+          rt.evaluate = (expr: string) => {
+            if (scriptName(expr) === "install") throw new Error("Runtime.evaluate timed out");
+            return evaluate(expr);
+          };
+          return rt;
+        },
+      },
+    ])(
+      "remembers the interceptor an earlier start installed when a second start $start2",
+      async ({ prepare }) => {
+        const rt = new FakeRuntime(APP);
+        serve(PORT, IOS_UDID, rt);
+        ios.connected.add(APP);
+        await start(IOS_UDID, APP);
+        await prepare(rt);
+
+        const second = await start(IOS_UDID, APP);
+
+        expect(layer(second, "js")).toMatchObject({ armed: false });
+        expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ intent: "started", installed: true });
+
+        // A stop that cannot reach the runtime must not take the interceptor for gone.
+        await reconnect(PORT, IOS_UDID, undefined);
+        expect(layer(await stop(IOS_UDID, APP), "js")).toEqual({
+          layer: "js",
+          armed: true,
+          total: 0,
+          reason: `${METRO_DOWN}; the interceptor already in the app's JS runtime may still record, so call network-capture-stop again once the app answers`,
+        });
+        expect(rt.paused).toBe(false);
+      }
+    );
+
+    it("keeps a stop's pause when a later start does not reach the runtime", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+      await stop(IOS_UDID, APP);
+      expect(rt.paused).toBe(true);
+
+      await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+      await start(IOS_UDID, APP);
+
+      expect(findJsCapture(IOS_UDID, APP)).toMatchObject({
+        intent: "started",
+        installed: true,
+        paused: true,
+      });
+      // The paused interceptor records nothing, so a stop that cannot reach it is confirmed.
+      await reconnect(PORT, IOS_UDID, undefined);
+      expect(layer(await stop(IOS_UDID, APP), "js")).toMatchObject({ armed: false });
+    });
+
     it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {
       serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
       ios.connected.add(APP);

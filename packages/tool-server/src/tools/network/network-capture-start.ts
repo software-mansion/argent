@@ -130,6 +130,9 @@ async function startJsLayer(
   const found = findJsCapture(device, bundleId);
   // The app's capture on another port moves here only once its runtime answers here.
   const other = found && found.port !== port ? found : undefined;
+  // An interceptor an earlier start installed here stays in the app's JS context
+  // until a reload, whatever becomes of this start.
+  const installedHere = found !== undefined && !other && found.installed;
   let dbg: JsRuntimeDebuggerApi;
   try {
     dbg = await resolveDebuggerService(registry, { port, device_id: udid });
@@ -147,11 +150,13 @@ async function startJsLayer(
       return unavailable("js", jsNotReached(reason, port, err));
     }
     // The app may connect, or answer, after this call; the next start arms it.
+    // This start did not reach the JS context, so a pause a stop left there stays.
     setJsCapture(payload, {
       bundleId,
       intent: "started",
       mark: { install: null },
-      installed: false,
+      installed: installedHere,
+      ...(installedHere && found?.paused ? { paused: true as const } : {}),
     });
     return {
       layer: "js",
@@ -173,7 +178,7 @@ async function startJsLayer(
     );
   }
 
-  const capture: JsCapture = { bundleId, intent: "started", installed: false };
+  const capture: JsCapture = { bundleId, intent: "started", installed: installedHere };
   setJsCapture(payload, capture);
   capture.mark = await readMark(dbg);
   try {
