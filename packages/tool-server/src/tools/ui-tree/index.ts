@@ -51,33 +51,33 @@ export interface UiTree {
   unsupportedFields: string[];
 }
 
-const zodSchema = z.object({
-  udid: z.string().min(1).describe("Target device id from `list-devices`."),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
+const zodSchema = z.object({
+  udid: z.string().min(1).describe("Target device id from `list-devices`."),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
 export function createUiTreeTool(registry: Registry): ToolDefinition<Params, UiTree> {
   return {
     id: "ui-tree",
+    description: `Read the raw accessibility tree of the screen as nested JSON, for SDK callers.
+Use when a program needs element ancestry, such as an e2e engine's scoped selectors; agents use describe.
+Returns { schemaVersion, roots, truncated, alertVisible, keyboardVisible, foregroundApp, unsupportedFields }.
+Fails if the iOS ax-service predates the tree command; update argent.`,
+    zodSchema,
+    readOnly: true,
+    hideFromMcp: true,
     interaction: {
       startedMsg: () => "Reading UI tree",
       completedMsg: () => "Read UI tree",
       failedMsg: ({ failureSignal }) => `Failed to read UI tree: ${failureSignal.error_code}`,
     },
-    description: `Read the raw accessibility tree of the screen as nested JSON, for SDK callers.
-Use when a program needs element ancestry, such as an e2e engine's scoped selectors; agents use describe.
-Returns { schemaVersion, roots, truncated, alertVisible, keyboardVisible, foregroundApp, unsupportedFields }.
-Fails if the iOS ax-service predates the tree command; update argent.`,
-    hideFromMcp: true,
-    readOnly: true,
-    zodSchema,
     capability,
     services: () => ({}),
     execute: dispatchByPlatform({

@@ -90,6 +90,9 @@ const RUN_REPORT = {
   durationMs: 1,
 };
 
+/** What the stub answers `e2e-execute` with: RUN_REPORT unless a test swaps it. */
+let runReport: Record<string, unknown> = RUN_REPORT;
+
 type Route = (res: http.ServerResponse) => void | Promise<void>;
 
 /**
@@ -128,7 +131,7 @@ async function startStub({
         req.method === "POST" &&
         (reqUrl === "/tools/e2e-execute" || reqUrl === "/tools/flow-execute")
       ) {
-        return json(200, { data: RUN_REPORT });
+        return json(200, { data: runReport });
       }
       if (req.method === "POST" && reqUrl === "/tools/noted") {
         return json(200, { data: { ok: true }, note: "a note" });
@@ -162,11 +165,11 @@ async function startStub({
 
 async function connect(
   paths: ToolsServerPaths,
-  options: { captureTimeoutMs?: number } = {}
+  { clientName = "probe", ...options }: { clientName?: string; captureTimeoutMs?: number } = {}
 ): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await startMcpServer({ paths, transport: serverTransport, ...options });
-  const client = new Client({ name: "probe", version: "1" });
+  const client = new Client({ name: clientName, version: "1" });
   await client.connect(clientTransport);
   return client;
 }
@@ -226,6 +229,12 @@ describe("startMcpServer tool calls", () => {
     ]);
   });
 
+  it("sends instructions that point to no file only Claude Code has", () => {
+    // Every client's model reads the instructions; only Claude Code loads .claude/rules.
+    expect(client.getInstructions()).toMatch(/^Argent/);
+    expect(client.getInstructions()).not.toContain(".claude/");
+  });
+
   it("renders a run report the same whether called as flow-execute or e2e-execute", async () => {
     const byAlias = await client.callTool({ name: "flow-execute", arguments: {} });
     const byId = await client.callTool({ name: "e2e-execute", arguments: {} });
@@ -234,6 +243,24 @@ describe("startMcpServer tool calls", () => {
     expect(textOf(byAlias)).toContain('Running e2e test "demo"');
     expect(textOf(byAlias)).not.toContain('"steps"');
     expect(byAlias.content).toEqual(byId.content);
+  });
+
+  it("renders a run report that names its e2e test in e2eTest only, or in flow only", async () => {
+    const unnamed: Record<string, unknown> = { ...RUN_REPORT };
+    delete unnamed.flow;
+    try {
+      runReport = { ...unnamed, e2eTest: "fresh" };
+      const fresh = await client.callTool({ name: "e2e-execute", arguments: {} });
+      expect(textOf(fresh)).toContain('Running e2e test "fresh"');
+      expect(textOf(fresh)).not.toContain('"steps"');
+
+      runReport = { ...unnamed, flow: "older" };
+      const older = await client.callTool({ name: "e2e-execute", arguments: {} });
+      expect(textOf(older)).toContain('Running e2e test "older"');
+      expect(textOf(older)).not.toContain('"steps"');
+    } finally {
+      runReport = RUN_REPORT;
+    }
   });
 
   it("skips the post-action capture while a profiler records, with a note except on describe", async () => {
@@ -322,6 +349,72 @@ describe("startMcpServer tool calls", () => {
     const content = result.content as Array<{ type: string; text?: string }>;
     expect(content[0]).toEqual({ type: "text", text: "a note" });
     expect(textOf(result)).toContain('"ok": true');
+  });
+});
+
+describe("startMcpServer tool listing per client", () => {
+  const listing = {
+    tools: [
+      {
+        name: "rows",
+        description: "Rows",
+        inputSchema: {
+          type: "object",
+          properties: { top_n: { type: "integer", default: 20, description: "Rows to show." } },
+        },
+      },
+    ],
+  };
+  let stub: Stub;
+  let client: Client;
+
+  beforeEach(async () => {
+    stub = await startStub({ listing });
+    vi.stubEnv("ARGENT_TOOLS_URL", stub.url);
+    vi.stubEnv("ARGENT_MCP_LOG", join(TEST_HOME, "mcp-calls.log"));
+  });
+
+  afterEach(async () => {
+    await client.close();
+    vi.unstubAllEnvs();
+    await stub.close();
+  });
+
+  const topN = async (clientName: string) => {
+    client = await connect(
+      {
+        bundlePath: join(TEST_HOME, "missing", "tool-server.cjs"),
+        simulatorServerDir: "",
+        nativeDevtoolsDir: "",
+      },
+      { clientName }
+    );
+    const { tools } = await client.listTools();
+    return (tools[0]!.inputSchema.properties as Record<string, unknown>).top_n;
+  };
+
+  it("states keyword-only facts for a client that drops the keywords", async () => {
+    expect(await topN("codex-mcp-client")).toEqual({
+      type: "integer",
+      default: 20,
+      description: "Rows to show. Default: 20.",
+    });
+  });
+
+  it("states keyword-only facts for an unknown client", async () => {
+    expect(await topN("some-new-client")).toEqual({
+      type: "integer",
+      default: 20,
+      description: "Rows to show. Default: 20.",
+    });
+  });
+
+  it("leaves the schema as it is for a client that shows the keywords", async () => {
+    expect(await topN("claude-code")).toEqual({
+      type: "integer",
+      default: 20,
+      description: "Rows to show.",
+    });
   });
 });
 

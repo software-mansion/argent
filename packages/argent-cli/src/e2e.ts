@@ -23,11 +23,12 @@ import {
 import { FlagParseException } from "./flag-parser.js";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 
-export interface FlowCommandOptions {
+export interface E2eCommandOptions {
   paths: ToolsServerPaths;
 }
 
-export type E2eCommandOptions = FlowCommandOptions;
+/** @deprecated Use {@link E2eCommandOptions}. */
+export type FlowCommandOptions = E2eCommandOptions;
 
 export interface StepReport {
   index: number;
@@ -39,6 +40,9 @@ export interface StepReport {
   tool?: string;
   /** Tool result for `tool` steps; a nested run's report for `e2e-execute`. */
   result?: unknown;
+  /** The e2e test the step belongs to; differs from the report's on a fragment's steps. */
+  e2eTest?: string;
+  /** The `e2eTest` of a tool-server that predates that field. */
   flow?: string;
   message?: string;
   /** Human-readable step target (selector / snapshot name). */
@@ -66,7 +70,9 @@ export interface StepReport {
 }
 
 export interface FlowReport {
-  flow: string;
+  e2eTest?: string;
+  /** The `e2eTest` of a tool-server that predates that field. */
+  flow?: string;
   device: string;
   executionPrerequisite?: string;
   ok: boolean;
@@ -131,8 +137,9 @@ contain only letters, numbers, "_", or "-" — the same charset a name must
 match. A test is standalone when its first non-\`echo\`/\`script\` step is \`launch\`.
 Other tests are fragments and use the device's current state. Exception: a fragment whose first step \`run:\`s a chromium standalone
 test boots that test's app before step 1 — when that launch is unambiguously
-chromium (a lone \`{ chromium: ... }\` target, or --platform chromium); a
-multi-platform launch auto-detects a device instead. Pass --device to attach to
+chromium (a lone \`{ chromium: ... }\` target, --platform chromium, or a
+\`requires:\` block that allows only chromium); a multi-platform launch
+auto-detects a device instead. Pass --device to attach to
 a running instance.
 
 A directory run prints only the steps that need attention (each failure, each
@@ -144,6 +151,12 @@ keeps the batch running, as does one the server rejects up front — an invalid
 file, or a device it cannot resolve. A transport failure, a rejection the server
 does not mark as validation, or a reply that is not a report stops the batch and
 counts the remaining tests skipped.
+
+A test can declare a \`requires:\` block (platform, runtimeKind) that names the
+targets it supports. A directory run skips each test whose requirements the
+target does not meet, so the same directory runs on each platform without a
+separate list of tests. A single-test run fails instead. A directory run where
+no test ran exits 2.
 
 The CLI sends a run to its tool-server: the local one that starts
 automatically, or the one that \`argent link\` or ARGENT_TOOLS_URL names. Over
@@ -284,13 +297,19 @@ export function renderEchoLine(s: StepReport): string | undefined {
   return `  ${indent}› ${s.message}`;
 }
 
-function stepLabel(s: StepReport, topFlow: string): string {
-  const where = s.flow && s.flow !== topFlow ? ` [${s.flow}]` : "";
+/** The e2e test a report or step names, from whichever field its tool-server sent. */
+function e2eTestOf(r: { e2eTest?: string; flow?: string }): string | undefined {
+  return r.e2eTest ?? r.flow;
+}
+
+function stepLabel(s: StepReport, topFlow: string | undefined): string {
+  const owner = e2eTestOf(s);
+  const where = owner && owner !== topFlow ? ` [${owner}]` : "";
   const what = s.tool ?? s.target;
   return `${what ? `${s.kind} ${what}` : s.kind}${where}`;
 }
 
-export function renderStepLine(s: StepReport, n: number, topFlow: string): string {
+export function renderStepLine(s: StepReport, n: number, topFlow: string | undefined): string {
   const reason = s.reason ? ` — ${s.reason}` : "";
   const glyph = s.status === "pass" && s.warning ? "⚠" : STATUS_GLYPH[s.status];
   return `  ${glyph} ${String(n).padStart(2)} ${stepIndent(s.depth)}${stepLabel(s, topFlow)}${durationSuffix(s.durationMs)}${reason}`;
@@ -393,7 +412,7 @@ export function renderFailedSteps(report: FlowReport): string[] {
     ) {
       continue;
     }
-    lines.push(renderStepLine(s, n, report.flow));
+    lines.push(renderStepLine(s, n, e2eTestOf(report)));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
     lines.push(...scriptLog);
     if (s.artifacts && typeof s.artifacts === "object") {
@@ -415,7 +434,8 @@ export function renderBatchSummary(
   },
   durationMs?: number
 ): string {
-  return `${counts.failed === 0 ? "PASS" : "FAIL"} — ${counts.total} e2e test${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped${durationSuffix(durationMs)}`;
+  const verdict = counts.failed > 0 ? "FAIL" : counts.passed === 0 ? "NONE RAN" : "PASS";
+  return `${verdict} — ${counts.total} e2e test${counts.total === 1 ? "" : "s"}: ${counts.passed} passed, ${counts.failed} failed, ${counts.skipped} skipped${durationSuffix(durationMs)}`;
 }
 
 interface FailedFlow {
@@ -438,7 +458,7 @@ export function summarizeFailure(report: FlowReport): Pick<FailedFlow, "headline
     n++;
     if (s.status === "fail" || s.status === "error") {
       const detail = s.reason ? String(s.reason) : undefined;
-      return { headline: `step ${n} ${stepLabel(s, report.flow)}`, detail };
+      return { headline: `step ${n} ${stepLabel(s, e2eTestOf(report))}`, detail };
     }
   }
   return { headline: "failed with no failing step" };
@@ -533,7 +553,14 @@ function rerunCommand(
  * different flow's evidence, keep out". Creating this file with O_EXCL is also
  * the act of claiming (see takeExportDir).
  */
-const EXPORT_SOURCE_MARKER = ".argent-flow-source";
+const EXPORT_SOURCE_MARKER = ".argent-e2e-source";
+
+/**
+ * The marker an older CLI writes instead. A directory holding only this one
+ * still belongs to the YAML path it names, so a re-run after upgrading lands
+ * back in its own directory rather than stepping past it.
+ */
+const LEGACY_EXPORT_SOURCE_MARKER = ".argent-flow-source";
 
 /**
  * An O_EXCL create publishes the marker's path one syscall before its contents,
@@ -547,12 +574,19 @@ const MARKER_READ_RETRIES = 4;
 const MARKER_READ_DELAY_MS = 5;
 
 /**
- * Read a directory's ownership marker: the resolved flow path that claimed it,
- * `undefined` when there is no readable marker file (an absent directory
- * included — the caller tells those apart), or null when the file names nobody.
+ * Read a directory's ownership marker, the legacy one when the current one is
+ * unreadable: the resolved flow path that claimed it, `undefined` when there is
+ * no readable marker file (an absent directory included — the caller tells
+ * those apart), or null when the file names nobody.
  */
 async function readExportMarker(dir: string): Promise<string | null | undefined> {
-  const marker = path.join(dir, EXPORT_SOURCE_MARKER);
+  const owner = await readMarkerFile(path.join(dir, EXPORT_SOURCE_MARKER));
+  return owner !== undefined
+    ? owner
+    : await readMarkerFile(path.join(dir, LEGACY_EXPORT_SOURCE_MARKER));
+}
+
+async function readMarkerFile(marker: string): Promise<string | null | undefined> {
   for (let attempt = 0; ; attempt++) {
     let owner: string;
     try {
@@ -880,7 +914,7 @@ export function exitAfterFlush(
 
 export function renderReport(report: FlowReport): string {
   const lines: string[] = [];
-  lines.push(`E2E test "${report.flow}"${report.device ? ` on ${report.device}` : ""}`);
+  lines.push(`E2E test "${e2eTestOf(report)}"${report.device ? ` on ${report.device}` : ""}`);
   if (report.executionPrerequisite) {
     lines.push(`  assumes: ${report.executionPrerequisite}`);
   }
@@ -893,7 +927,7 @@ export function renderReport(report: FlowReport): string {
       continue;
     }
     n++;
-    lines.push(renderStepLine(s, n, report.flow));
+    lines.push(renderStepLine(s, n, e2eTestOf(report)));
     if (s.warning) lines.push(renderUnderStepLine(s, n, `⚠ ${s.warning}`));
     lines.push(...renderScriptLogLines(s, n));
     if (s.artifacts && typeof s.artifacts === "object") {
@@ -1103,7 +1137,7 @@ function buildRunPayload(
   args: ReturnType<typeof parseRunArgs>
 ): Record<string, unknown> {
   const payload: Record<string, unknown> = {
-    flow_path: flowPath,
+    e2e_test_path: flowPath,
     project_root: projectRoot,
     // Headless runs never block on the LLM prerequisite handshake.
     prerequisiteAcknowledged: true,
@@ -1216,7 +1250,7 @@ function writeJsonStreamError(err: unknown): void {
  */
 function runToolsClient(
   args: ReturnType<typeof parseRunArgs>,
-  options: FlowCommandOptions
+  options: E2eCommandOptions
 ): ToolsClient {
   return createToolsClient({
     paths: options.paths,
@@ -1265,8 +1299,12 @@ function rejectionVerdict(code: string | undefined): string {
     case FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED:
     case FAILURE_CODES.FLOW_E2E_HAS_PREREQUISITE:
       return "not run (invalid e2e test)";
+    case FAILURE_CODES.FLOW_FILE_NEWER_VERSION:
+      return "not run (needs a newer Argent)";
     case FAILURE_CODES.FLOW_DEVICE_RESOLUTION:
       return "not run (no device resolved)";
+    case FAILURE_CODES.FLOW_REQUIREMENTS_UNMET:
+      return "not run (requires not met)";
     case FAILURE_CODES.FILE_INPUT_UPLOAD_FAILED:
       return "not run (upload failed)";
     default:
@@ -1339,6 +1377,8 @@ interface BatchFlowResult {
   error?: string;
   error_code?: string;
   error_kind?: string;
+  /** Why a skipped test did not run, when it was skipped for its `requires:`. */
+  reason?: string;
 }
 
 /**
@@ -1354,7 +1394,7 @@ async function runFlowDirectory(
   dir: string,
   args: ReturnType<typeof parseRunArgs>,
   projectRoot: string,
-  options: FlowCommandOptions
+  options: E2eCommandOptions
 ): Promise<void> {
   // Under --json stdout holds the aggregate alone, so each failure goes to
   // stderr as the record --json-stream would carry, never as prose.
@@ -1413,6 +1453,14 @@ async function runFlowDirectory(
       const err = unreachableErr ?? thrown;
       const message = err instanceof Error ? err.message : String(err);
       const toolErr = err instanceof ToolInvocationError ? err : undefined;
+      if (toolErr?.errorCode === FAILURE_CODES.FLOW_REQUIREMENTS_UNMET) {
+        // A skip is an outcome, not a tool error, so drop the tool-server's `[Tool:<id>] ` prefix.
+        const reason = message.replace(/^\[Tool:[^\]]+\] /, "");
+        results.push({ path: rel, status: "skip", reason });
+        if (!args.json)
+          console.log(`  ${STATUS_GLYPH.skip} skipped (requires not met)\n    ${reason}`);
+        continue;
+      }
       const rejectedThisFlowOnly = toolErr?.errorKind === "validation";
       const verdict = unreachableErr
         ? UNREACHABLE_VERDICT
@@ -1476,18 +1524,32 @@ async function runFlowDirectory(
     skipped: results.filter((r) => r.status === "skip").length,
   };
   const durationMs = Date.now() - batchStartedAt;
+  // All tests skipped is as likely a wrong target or a mistyped `requires:` as intended.
+  const noneRan = counts.passed === 0 && counts.failed === 0;
   if (args.json) {
     console.log(
-      JSON.stringify({ ok: counts.failed === 0, ...counts, durationMs, flows: results }, null, 2)
+      JSON.stringify(
+        // `flows` is the deprecated spelling of `e2eTests`.
+        {
+          ok: counts.failed === 0 && !noneRan,
+          ...counts,
+          durationMs,
+          e2eTests: results,
+          flows: results,
+        },
+        null,
+        2
+      )
     );
   } else {
     for (const line of renderFailedFlows(failures)) console.log(line);
     console.log(`\n${renderBatchSummary(counts, durationMs)}`);
+    if (noneRan) console.error(`No e2e test in ${dir} ran on the selected target.`);
   }
-  return exitAfterFlush(unreachable ? 2 : counts.failed === 0 ? 0 : 1);
+  return exitAfterFlush(unreachable || noneRan ? 2 : counts.failed === 0 ? 0 : 1);
 }
 
-export async function e2e(argv: string[], options: FlowCommandOptions): Promise<void> {
+export async function e2e(argv: string[], options: E2eCommandOptions): Promise<void> {
   const [sub, ...rest] = argv;
 
   if (!sub || sub === "--help" || sub === "-h") {
