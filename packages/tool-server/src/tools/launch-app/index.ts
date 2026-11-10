@@ -60,7 +60,7 @@ const zodSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      'Apple simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them<flag:macos-apps>, except a Mac app: use restart-app for that. Omitted on a Mac app, a stopped app gets the arguments of its last start</flag:macos-apps>.'
+      'Apple simulators<flag:macos-apps>, Mac apps</flag:macos-apps> and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them<flag:macos-apps>, except a Mac app: use restart-app for that. Omitted on a Mac app, a stopped app gets the arguments of its last start</flag:macos-apps>. The call fails, launching nothing, if terminating it does not finish within 15s on a local iOS simulator, or fails for a reason other than the app not running on a remote one.'
     ),
 });
 
@@ -75,6 +75,8 @@ type Params = z.infer<typeof zodSchema>;
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
+    // Android's device probes plus `am start -W` can outlast the 30s MCP fetch timeout.
+    longRunning: true,
     description: `Open an installed app, or confirm the running renderer (Chromium).<flag:macos-apps> On a Mac app it starts the app in the background when it does not run, and leaves a running app as it is.</flag:macos-apps>
 Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (iOS and Apple TV).
 Returns { launched, bundleId, <flag:macos-apps>appPath?, args?, </flag:macos-apps>note?, networkCapture? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready.<flag:macos-apps> appPath and args (Mac app) are the .app that runs and its arguments; note (Mac app) also says when the app already ran or shows no window.</flag:macos-apps> networkCapture (Android) says whether native network capture followed the launch.

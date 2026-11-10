@@ -69,9 +69,11 @@ type Params = z.infer<typeof zodSchema>;
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
   return {
     id: "restart-app",
+    // Android's device probes, force-stop and `am start -W` can outlast the 30s MCP fetch timeout.
+    longRunning: true,
     description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos><flag:macos-apps>macOS, </flag:macos-apps>or Vega.
 Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).<flag:macos-apps> On a Mac app it quits the app and starts the same .app again in the background.</flag:macos-apps>
-Returns { restarted, bundleId, <flag:macos-apps>appPath?, args?, note?, </flag:macos-apps>networkCapture? }. networkCapture (Android) says whether native network capture followed the launch.<flag:macos-apps> appPath and args (Mac app) are the .app that runs and its arguments; note (Mac app) warns about the start, for example a force-quit or no window.</flag:macos-apps> Fails if the app is not installed.`,
+Returns { restarted, bundleId, <flag:macos-apps>appPath?, args?, note?, </flag:macos-apps>networkCapture? }. networkCapture (Android) says whether native network capture followed the launch.<flag:macos-apps> appPath and args (Mac app) are the .app that runs and its arguments; note (Mac app) warns about the start, for example a force-quit or no window.</flag:macos-apps> Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

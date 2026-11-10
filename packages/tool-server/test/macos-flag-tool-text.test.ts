@@ -11,8 +11,9 @@ vi.mock("@argent/configuration-core", async (importOriginal) => {
   return { ...actual, isFlagEnabled: vi.fn(() => false) };
 });
 
-// "macOS host" is the Android emulator's host, not a Mac app.
-const MAC_TEXT = /\bmac\b|\bmacos\b(?! host)|macosapp|appkit/i;
+// "macOS host" is the Android emulator's host, and stop-metro's "On macOS
+// another user's listener" is the host's netstat: neither is a Mac app.
+const MAC_TEXT = /\bmac\b|\bmacos\b(?! host| another user's)|macosapp|appkit/i;
 
 // Asserted over the whole catalog, so Mac app text added to any tool without
 // its flag span fails here.

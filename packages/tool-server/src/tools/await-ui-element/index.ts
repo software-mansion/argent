@@ -10,6 +10,9 @@ import type {
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { describeTvFocus } from "../describe/platforms/tv-focus";
+import { resolveTvApi } from "../tv/tv-service";
+import type { TvControlApi } from "../../blueprints/tv-control-types";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
@@ -59,9 +62,8 @@ const HIDDEN_UNREADABLE_NOTE =
 
 /**
  * WHY an unmet wait came back `success: false`. {@link isUnmetUiWaitResult}
- * answers "did this wait fail", which is all `run-sequence` and `flow-run`
- * need. A caller that NARRATES the failure needs more, because only one cause
- * judges the condition:
+ * answers "did this wait fail". A caller that NARRATES the failure needs more,
+ * because only one cause judges the condition:
  *
  * - `unmet` — the tree was read and the condition was false there.
  * - `unreadable` — the tree source never answered, so nothing was observed.
@@ -217,6 +219,20 @@ function isMacos(params: Params): boolean {
   return params.udid !== undefined && resolveDevice(params.udid).platform === "macos";
 }
 
+// A blind read judges nothing; a partial one (an Apple TV hierarchy cut at its
+// node cap) shows what it found, but its misses prove nothing: `exists` needs a
+// match, the other conditions a visible one.
+function cannotJudge(
+  data: DescribeTreeData,
+  matches: DescribeNode[],
+  everMatched: boolean,
+  condition: Params["condition"]
+): boolean {
+  if (isBlindRead(data, everMatched, condition)) return true;
+  if (data.partial !== true) return false;
+  return condition === "exists" ? matches.length === 0 : !matches.some(isVisible);
+}
+
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
 // the real cause rather than a bare "no element matched".
 function appendDiagnostics(base: string, lastData: DescribeTreeData | null): string {
@@ -275,7 +291,7 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id; not Apple TV, whose tree it cannot read)."
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
       ),
     condition: z
       .enum(["exists", "visible", "hidden", "text"])
@@ -345,19 +361,22 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     device: DeviceInfo,
     params: Params,
     services: Record<string, unknown>,
-    isTvOs: boolean,
+    tvApi: TvControlApi | null,
     androidIsTv: boolean,
     budgetMs: number
   ): Promise<DescribeTreeData> {
     // ios-remote reads the same AX tree through describeIos: the ax-service
     // blueprint routes it over the sim-remote tunnel, so only the preflight dep
-    // differs from the local branch. `isTvOs` is false for it, matching describe.
+    // differs from the local branch. It is never tvOS, matching describe.
     if (device.platform === "ios" || device.platform === "ios-remote") {
       // Physical devices poll the same XCUITest runner snapshot as describe.
       if (device.kind === "device") {
         return describeIosDevice(registry, device);
       }
-      return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
+      // Apple TV: match against the focus view; describeIos short-circuits tvOS
+      // to an empty tree, so no selector could ever resolve (#620).
+      if (tvApi) return describeTvFocus(tvApi);
+      return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs: false });
     }
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
@@ -381,7 +400,7 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     id: AWAIT_UI_ELEMENT_TOOL_ID,
     description: `Block until a UI element reaches an expected state or the timeout elapses, so you don't have to poll screenshot/describe yourself. It polls the same tree as \`describe\`.
 Use when the next step needs an element that appears or disappears asynchronously, e.g. after a tap or navigation, or before tapping something that loads late.
-Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false instead of failing, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
+Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
@@ -417,6 +436,10 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
       const isTvOs =
         device.platform === "ios" && device.kind !== "device" && (await isTvOsSimulator(device.id));
+      // Resolved before the clock starts: the first resolution spawns the tvOS
+      // daemons and can take seconds. A failure is infrastructure, so it throws
+      // rather than reporting an unmet condition.
+      const tvApi = isTvOs ? await resolveTvApi(registry, device.id) : null;
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
 
       // Clock starts after setup so its fixed cost isn't charged to timeoutMs.
@@ -440,14 +463,14 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
       let lastTrustedReadAt: number | undefined;
 
       const poll = await pollDescribeTree<WaitResult>({
-        fetchTree: (budgetMs) => fetchTree(device, params, services, isTvOs, androidIsTv, budgetMs),
+        fetchTree: (budgetMs) => fetchTree(device, params, services, tvApi, androidIsTv, budgetMs),
         timeoutMs,
         pollIntervalMs,
         signal,
         onSample: (data, nowMs) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
-          const blind = isBlindRead(data, everMatched, params.condition);
+          const blind = cannotJudge(data, matches, everMatched, params.condition);
           if (!blind && !data.stale) lastTrustedReadAt = nowMs;
           if (!blind && evaluateMatches(params, matches)) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
@@ -480,7 +503,12 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
           : poll.lastAttempt === "tree" &&
               poll.lastData !== null &&
               !poll.lastData.stale &&
-              !isBlindRead(poll.lastData, everMatched, params.condition)
+              !cannotJudge(
+                poll.lastData,
+                findAll(poll.lastData.tree, selector),
+                everMatched,
+                params.condition
+              )
             ? "trusted"
             : "untrusted";
       return {

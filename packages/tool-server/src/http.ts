@@ -71,6 +71,7 @@ import {
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
 import { renderFlagGated } from "./utils/flag-gated-text";
+import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -1115,11 +1116,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           deviceArg && isProfiling(canonicalDeviceId(deviceArg) ?? deviceArg)
             ? { profiling: true }
             : {};
+        // A failure the tool returned rather than threw, so a client that only
+        // checks for an error (`argent run`'s exit status) still sees it.
+        const failure = directCallFailure(name, data);
+        const failurePayload = failure !== undefined ? { failure } : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload, ...profilingPayload });
+          writeLine({
+            event: "result",
+            data,
+            ...notePayload,
+            ...profilingPayload,
+            ...failurePayload,
+          });
           res.end();
         } else {
-          res.json({ data, ...notePayload, ...profilingPayload });
+          res.json({ data, ...notePayload, ...profilingPayload, ...failurePayload });
         }
       } catch (err: unknown) {
         /**
