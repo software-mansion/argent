@@ -1364,6 +1364,42 @@ describe("flow-execute over a link, from the real argent client", () => {
     expect(steps.invokeTool).not.toHaveBeenCalled();
   });
 
+  it("keeps on one line the reason for a run: target the client did not send", async () => {
+    const root = await write(
+      ".argent/flows/root.yaml",
+      'steps:\n  - echo: before\n  - run: "sub\\nx/frag.yaml"\n'
+    );
+    await write(".argent/flows/sub\nx/frag.yaml", "steps:\n  - echo: frag\n");
+    const { createToolsClient } = (await import(clientSrc)) as {
+      createToolsClient(options: object): {
+        callTool(name: string, args: unknown): Promise<{ data: unknown }>;
+      };
+    };
+    const client = createToolsClient({
+      baseUrl: async () => ({ url, token: "", remote: true }),
+      fetchImpl: async (target: string, init: RequestInit) => {
+        if (!target.endsWith("/tools/flow-execute")) return fetch(target, init);
+        const body = JSON.parse(String(init.body));
+        const wire = body.e2e_test_path;
+        wire.members = wire.members.filter((m: { key: string }) => !m.key.includes("\n"));
+        return fetch(target, { ...init, body: JSON.stringify(body) });
+      },
+    });
+
+    const { data } = await client.callTool("flow-execute", {
+      e2e_test_path: root,
+      project_root: projectRoot,
+      device: DEVICE,
+    });
+
+    const reason = (data as FlowRunResult).steps[1]?.reason ?? "";
+    expect(reason).toMatch(/^could not load fragment "sub\\nx\/frag\.yaml": /);
+    expect(reason).toContain(
+      "sub\\nx/frag.yaml is not a run: target of an e2e test this client sent"
+    );
+    expect(reason).not.toContain("\n");
+  });
+
   it("tells a client that sends a run: flow without its fragments to update", async () => {
     const root = await tapThenRun("frag.yaml");
     await write(".argent/flows/frag.yaml", "steps:\n  - echo: frag\n");

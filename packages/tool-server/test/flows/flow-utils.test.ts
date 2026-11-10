@@ -235,6 +235,13 @@ describe("parseFlow", () => {
     );
   });
 
+  it.each([
+    ["spaces", "  executionPrerequisite: x\nsteps:\n  - echo: hi\n"],
+    ["a tab after blank lines", "\n\n\tsteps:\n  - echo: hi\n"],
+  ])("parses a file whose first content line is indented with %s", (_, content) => {
+    expect(parseFlow(content).steps).toEqual([{ kind: "echo", message: "hi" }]);
+  });
+
   // `step must be an object` is spelled twice — here for a top-level entry, and
   // in parseBlockSteps for a block directive's own steps: list. Nothing else
   // asserts either copy, so the two are free to drift apart or be dropped with

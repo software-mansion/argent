@@ -479,31 +479,37 @@ describe("refuseRelativeProjectPaths", () => {
       .filter((r) => r.url === "/tools/record")
       .map((r) => JSON.parse(r.body) as Record<string, unknown>);
 
-  it("refuses a relative project_root without calling the tool", async () => {
-    const { callTool } = createToolsClient({
-      baseUrl: async () => ({ url, token: "t", remote: false }),
-      refuseRelativeProjectPaths: true,
-    });
+  it.each([".", "myapp"])(
+    "refuses a relative project_root %s without calling the tool",
+    async (root) => {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
 
-    await expect(callTool("record", { project_root: "." })).rejects.toThrow(
-      'project_root must be an absolute path (got ".")'
-    );
-    expect(recordBodies()).toEqual([]);
-  });
+      await expect(callTool("record", { project_root: root })).rejects.toThrow(
+        `project_root must be an absolute path (got "${root}")`
+      );
+      expect(recordBodies()).toEqual([]);
+    }
+  );
 
-  it("refuses a relative e2e_test_path without calling the tool", async () => {
-    const { callTool } = createToolsClient({
-      baseUrl: async () => ({ url, token: "t", remote: false }),
-      refuseRelativeProjectPaths: true,
-    });
+  it.each([".argent/e2e/t.yaml", "tests/t.yaml"])(
+    "refuses a relative e2e_test_path %s without calling the tool",
+    async (file) => {
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote: false }),
+        refuseRelativeProjectPaths: true,
+      });
 
-    await expect(
-      callTool("run-flow", { e2e_test_path: ".argent/e2e/t.yaml", project_root: TEST_HOME })
-    ).rejects.toThrow(
-      'e2e_test_path must be an absolute path (got ".argent/e2e/t.yaml"). Pass the absolute path to the e2e test file.'
-    );
-    expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
-  });
+      await expect(
+        callTool("run-flow", { e2e_test_path: file, project_root: TEST_HOME })
+      ).rejects.toThrow(
+        `e2e_test_path must be an absolute path (got "${file}"). Pass the absolute path to the e2e test file.`
+      );
+      expect(requests.map((r) => r.url)).not.toContain("/tools/run-flow");
+    }
+  );
 
   it.each(["e2e_test_path", "flow_path"])(
     "refuses a relative %s for a tool-server that names it flow_path",
