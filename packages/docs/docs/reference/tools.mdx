@@ -96,7 +96,7 @@ On an Apple TV simulator, `await-screen-idle` and `await-ui-element` read the el
 
 - To wait until the cursor lands on an element, give `await-ui-element` a selector with `role: "focused"`.
 - `await-screen-idle` waits up to 1.2 seconds longer on a screen with no cursor, because a remote press before the cursor lands has no effect. On a screen with no cursor, the result has a `note`, also when `settled` is `true`.
-- A `role` selector matches only elements that the remote can focus.
+- A `role` selector matches the traits of focusable elements, such as `button`. Other text on the screen has the role `element`.
 - Text behind an alert counts as on the screen, so `hidden` does not pass for it.
 - Argent reads at most 800 elements and 12 levels of nesting. Argent does not see text past these limits. When a screen has more than 800 elements, `hidden` does not pass, and a missing element gives `cause: "unreadable"` with a `note`. Argent cannot detect the nesting limit, so `hidden` can pass for text that is nested too deep.
 - A screen with no text and no focusable elements looks the same as an app that is launching. On that screen, `hidden` returns `success: false` with `cause: "unreadable"`.

@@ -207,13 +207,17 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
 }
 
 // A blind read judges nothing; a partial one (an Apple TV hierarchy cut at its
-// node cap) shows what it found, but its misses prove nothing.
+// node cap) shows what it found, but its misses prove nothing: `exists` needs a
+// match, the other conditions a visible one.
 function cannotJudge(
   data: DescribeTreeData,
   matches: DescribeNode[],
-  everMatched: boolean
+  everMatched: boolean,
+  condition: Params["condition"]
 ): boolean {
-  return isBlindRead(data, everMatched) || (data.partial === true && !matches.some(isVisible));
+  if (isBlindRead(data, everMatched)) return true;
+  if (data.partial !== true) return false;
+  return condition === "exists" ? matches.length === 0 : !matches.some(isVisible);
 }
 
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
@@ -445,7 +449,7 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
         onSample: (data, nowMs) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
-          const blind = cannotJudge(data, matches, everMatched);
+          const blind = cannotJudge(data, matches, everMatched, params.condition);
           if (!blind && !data.stale) lastTrustedReadAt = nowMs;
           if (!blind && evaluateMatches(params, matches)) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
@@ -478,7 +482,12 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
           : poll.lastAttempt === "tree" &&
               poll.lastData !== null &&
               !poll.lastData.stale &&
-              !cannotJudge(poll.lastData, findAll(poll.lastData.tree, selector), everMatched)
+              !cannotJudge(
+                poll.lastData,
+                findAll(poll.lastData.tree, selector),
+                everMatched,
+                params.condition
+              )
             ? "trusted"
             : "untrusted";
       return {

@@ -462,6 +462,30 @@ describe("await-ui-element on an Apple TV", () => {
     expect(missing.cause).toBe("unreadable");
   });
 
+  it("lets a zero-area match satisfy `exists` on a capped read, but not `hidden`", async () => {
+    // A scrolled-away row: present, zero-area once off-screen.
+    const api = makeTvApi([SCREEN]);
+    api.hierarchy = async () => ({
+      nodeCount: 801,
+      screenFrame: { width: 1920, height: 1080 },
+      tree: {
+        children: [{ label: "Far row", frame: { x: 0, y: 1200, width: 400, height: 80 } }],
+      },
+    });
+
+    expect(
+      (await runElement(api, { condition: "exists", selector: { text: "Far row" } })).success
+    ).toBe(true);
+    const hidden = await runElement(api, {
+      condition: "hidden",
+      selector: { text: "Far row" },
+      timeoutMs: 300,
+      pollIntervalMs: 50,
+    });
+    expect(hidden.success).toBe(false);
+    expect(hidden.cause).toBe("unreadable");
+  });
+
   it("matches non-focusable text, and waits for it to go", async () => {
     const loading = {
       screenFrame: { width: 1920, height: 1080 },
