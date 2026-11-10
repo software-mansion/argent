@@ -424,8 +424,8 @@ Fails if no active profiling session exists, another stop is running, the CDP co
           commitTimings,
         } = flattenProfilingData(merged, stopRead.displayNameById, fiberMeta);
 
-        // Counts over every commit, saved next to the hot ±1 commits below, which
-        // stay as they are: cheap but frequent renders never reach the 16ms floor.
+        // Counts over every commit, saved next to the hot ±1 commits below: cheap
+        // but frequent renders never reach the 16ms floor.
         const renderSummary = summarizeRenders(
           allCommits,
           commitTimings,

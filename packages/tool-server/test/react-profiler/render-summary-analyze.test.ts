@@ -153,7 +153,34 @@ describe("source index on a session with no hot commit", () => {
       index: new Map([["Other", { file: "/app/src/Other.tsx", line: 1 }]]),
       treeSitterAvailable: true,
     });
-    expect(await analyze("SomeLibraryRow", 1)).not.toContain("Frequent Re-renders");
+    const report = await analyze("SomeLibraryRow", 1);
+    expect(report).not.toContain("## Most Frequent Re-renders");
+    expect(report).not.toContain("| `SomeLibraryRow` |");
+  });
+
+  it("names a frequent component the source does not know, with no table to hold it", async () => {
+    // The shape of a wrong project_root: an index that holds none of the app.
+    buildIndex.mockResolvedValue({
+      index: new Map([["Other", { file: "/elsewhere/Other.tsx", line: 1 }]]),
+      treeSitterAvailable: true,
+    });
+    const report = await analyze("ClockRow", 1);
+    expect(report).toContain(
+      "left out as library code, because the name was not found in the source under `project_root`: `ClockRow`."
+    );
+    expect(report).toContain("mode=`render_counts` has the counts");
+  });
+
+  it("does not name a component that is too cheap for the table anyway", async () => {
+    buildIndex.mockResolvedValue({
+      index: new Map([["Other", { file: "/elsewhere/Other.tsx", line: 1 }]]),
+      treeSitterAvailable: true,
+    });
+    expect(await analyze("Outlet", 0.01)).not.toContain("left out as library code");
+  });
+
+  it("does not name a component that names alone rule out", async () => {
+    expect(await analyze("Text", 1)).not.toContain("left out as library code");
   });
 });
 
@@ -224,7 +251,11 @@ describe("source index on a hot session with a frequent component outside its fi
     });
     const report = await analyzeHot(3);
     expect(report).toContain("## Top Components");
-    expect(report).not.toContain("Frequent Re-renders");
+    expect(report).not.toContain("## Most Frequent Re-renders");
+    // Not a table row, but not silent either: Top Components does not hold it.
+    expect(report).toContain(
+      "left out as library code, because the name was not found in the source under `project_root`: `ClockRow`."
+    );
   });
 
   it("is built for a stored session whose hot commit cannot be shown", async () => {

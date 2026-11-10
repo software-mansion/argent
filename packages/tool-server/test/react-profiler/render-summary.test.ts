@@ -419,6 +419,29 @@ describe("component origin", () => {
     expect(classify("Forget(t29)").origin).toBe("app");
   });
 
+  it("drops animation wrappers, providers and dev-only views with no source index to fall back on", () => {
+    const nameOnly = createComponentOriginClassifier(null);
+    for (const name of [
+      "AnimatedComponent(View)",
+      "ThemeProvider",
+      "ThemeContext.Consumer",
+      "PressabilityDebugView",
+      "LogBoxInspectorContainer",
+      "Forget(AnimatedHeader)",
+      "Forget(LogBoxButton)",
+    ]) {
+      expect(nameOnly(name).origin, name).toBe("library");
+    }
+  });
+
+  it("marks only the names the source index alone ruled out", () => {
+    expect(classify("GestureDetector")).toEqual({ origin: "library", notInSource: true });
+    expect(classify("View").notInSource).toBeUndefined();
+    expect(classify("ThemeProvider").notInSource).toBeUndefined();
+    expect(classify("ClockRow").notInSource).toBeUndefined();
+    expect(createComponentOriginClassifier(null)("ClockRow").notInSource).toBeUndefined();
+  });
+
   it("keeps names it cannot place when no index is available", () => {
     const nameOnly = createComponentOriginClassifier(null);
     expect(nameOnly("ClockRow").origin).toBe("unknown");

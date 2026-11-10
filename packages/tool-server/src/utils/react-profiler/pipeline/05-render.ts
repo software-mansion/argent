@@ -18,6 +18,7 @@ import {
   formatRenderSummaryReason,
   formatRenderTime,
   hasUnnamedSlowCommit,
+  selectFrequentOutsideSource,
   selectFrequentRerenders,
   type FrequentRerenderRow,
   type RenderSummary,
@@ -25,6 +26,7 @@ import {
 import { createComponentOriginClassifier, type ComponentOriginResult } from "../component-origin";
 
 const MAX_INLINE_COMMITS = 10;
+const MAX_OUTSIDE_SOURCE_NAMES = 5;
 const REPORT_FILENAME = "react-profiler-report.md";
 
 interface RenderInput {
@@ -37,7 +39,7 @@ interface RenderInput {
   annotations?: Array<{ offsetMs: number; label: string }>;
   debugDir: string;
   noHotCommits?: boolean;
-  /** Stop recorded no commit at all; true also for sessions with no summary. */
+  /** Stop recorded no commit at all. Read from the commit count, so it needs no summary. */
   noReactCommits?: boolean;
   maxCommitMs?: number;
   /** Counts over all commits; null/undefined for sessions saved before stop wrote it. */
@@ -182,7 +184,7 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
   }
 
   const rows = frequentRerenderRows(input);
-  lines.push(...renderFrequentRerenders(summary, rows));
+  lines.push(...renderFrequentRerenders(summary, rows, frequentOutsideSource(input)));
 
   lines.push(``, `---`, `## Next Steps`, ``);
   if (rows.length > 0) {
@@ -216,12 +218,25 @@ function frequentRerenderRows(input: RenderInput): FrequentRerenderRow[] {
     : [];
 }
 
+function frequentOutsideSource(input: RenderInput): string[] {
+  return input.renderSummary
+    ? selectFrequentOutsideSource(
+        input.renderSummary,
+        input.componentOrigin ?? createComponentOriginClassifier(null)
+      )
+    : [];
+}
+
 /** The section is the same in a report with hot commits and in one without. */
 function renderFrequentRerenders(
   summary: RenderSummary | null,
-  rows: FrequentRerenderRow[]
+  rows: FrequentRerenderRow[],
+  outsideSource: string[]
 ): string[] {
-  if (!summary || rows.length === 0) return [];
+  if (!summary) return [];
+  // Printed with no table too: when the source is not the app's, this is all that is left of it.
+  const outsideNote = outsideSource.length > 0 ? [``, renderOutsideSourceNote(outsideSource)] : [];
+  if (rows.length === 0) return outsideNote;
   // With no source index, names alone cannot tell the app's components from a library's.
   const unplaced = rows.some((row) => row.origin.origin === "unknown");
   return [
@@ -229,12 +244,25 @@ function renderFrequentRerenders(
     `---`,
     `## Most Frequent Re-renders`,
     ``,
-    `${unplaced ? "Components" : "App components"} that re-rendered in at least 10 of the ${formatCount(summary.totalCommits)} commits, by self time per second. This shows what re-rendered most, not that it is a problem. ${unplaced ? "The project source could not be indexed (check `project_root`), so library components may be listed. " : ""}React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
+    `${unplaced ? "Components" : "App components"} that re-rendered in at least 10 of the ${formatCount(summary.totalCommits)} commits and used at least 1 ms of self time per second of recording, by self time per second. This shows where frequent re-renders add up, not that it is a problem. ${unplaced ? "The project source could not be indexed (check `project_root`), so library components may be listed. " : ""}React Native primitives, list internals, animation wrappers, providers and dev-only components are left out; \`profiler-commit-query\` mode=\`render_counts\` lists every component.`,
     ``,
     `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
     `|---|---|---|---|---|---|---|`,
     ...rows.map(renderFrequentRow),
+    ...outsideNote,
   ];
+}
+
+function renderOutsideSourceNote(names: string[]): string {
+  const shown = names
+    .slice(0, MAX_OUTSIDE_SOURCE_NAMES)
+    .map((name) => `\`${name}\``)
+    .join(", ");
+  const more =
+    names.length > MAX_OUTSIDE_SOURCE_NAMES
+      ? ` and ${names.length - MAX_OUTSIDE_SOURCE_NAMES} more`
+      : "";
+  return `Frequent re-renders left out as library code, because the name was not found in the source under \`project_root\`: ${shown}${more}. If one is yours, check \`project_root\`. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
 }
 
 function renderFrequentRow(row: FrequentRerenderRow): string {
@@ -331,14 +359,18 @@ function buildFullMarkdown(
     }
   }
 
-  // The sections above cover the stored commits only, so a cheap component that
-  // re-renders in every commit between the slow ones can be missing from all of
-  // them. The list is added only then: a component in the table above already
-  // shows its count over all commits there.
+  // The sections above cover the stored commits only, and Top Components also
+  // drops some names, such as rows of a recycled list, so a frequent component
+  // can be missing from all of them. The list is added only then: a component in
+  // the table above already shows its count over all commits there.
   const frequent = frequentRerenderRows(input);
   const inTopComponents = new Set(input.componentFindings.map((f) => f.component));
-  if (frequent.some((row) => !inTopComponents.has(row.component.name))) {
-    lines.push(...renderFrequentRerenders(input.renderSummary ?? null, frequent));
+  const outsideSource = frequentOutsideSource(input).filter((name) => !inTopComponents.has(name));
+  if (
+    outsideSource.length > 0 ||
+    frequent.some((row) => !inTopComponents.has(row.component.name))
+  ) {
+    lines.push(...renderFrequentRerenders(input.renderSummary ?? null, frequent, outsideSource));
   }
 
   const suggestionsSection = renderSuggestedImprovements(

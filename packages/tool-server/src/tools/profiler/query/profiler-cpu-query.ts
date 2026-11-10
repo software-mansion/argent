@@ -18,9 +18,9 @@ import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/de
 import {
   resolveComponentName,
   renderComponentNameMiss,
-  describeResolution,
 } from "../../../utils/react-profiler/component-names";
 import {
+  describeStoredResolution,
   parseRenderSummary,
   renderNameOutsideStoredCommits,
   storedOnlyNote,
@@ -329,7 +329,7 @@ function renderComponentCpu(
     });
   }
   const resolvedName = resolution.rawName;
-  const resolutionNote = describeResolution(resolution);
+  const resolutionNote = describeStoredResolution(resolution, commitTree.renderSummary);
 
   const componentCommits = commitTree.commits.filter((c) => c.componentName === resolvedName);
 

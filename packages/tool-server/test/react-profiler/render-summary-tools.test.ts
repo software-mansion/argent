@@ -13,9 +13,14 @@ import { nativeProfilerSessionBlueprint } from "../../src/blueprints/native-prof
 import {
   cacheProfilerPaths,
   clearCachedProfilerPaths,
+  getCachedProfilerPaths,
   type ProfilerSessionPaths,
 } from "../../src/blueprints/react-profiler-session";
 import { readCommitTree, readCpuProfile } from "../../src/utils/react-profiler/debug/dump";
+import {
+  buildCpuSampleIndex,
+  serializeCpuSampleIndex,
+} from "../../src/utils/react-profiler/pipeline/00-cpu-correlate";
 import {
   parseRenderSummary,
   summarizeRenders,
@@ -354,6 +359,21 @@ function query(deviceId: string, params: Record<string, unknown>): Promise<strin
   } as never) as Promise<string>;
 }
 
+/** `Memo(Row)` holds the stored commits; with `plainRow`, a plain `Row` renders in 300 others. */
+async function cacheMemoRowSession(deviceId: string, plainRow: boolean): Promise<void> {
+  const stored = [fiber("Memo(Row)", 0, 30), fiber("Memo(Row)", 1, 30)];
+  const cheap = plainRow ? Array.from({ length: 300 }, (_, i) => fiber("Row", i + 4, 4)) : [];
+  await cacheSession(deviceId, stored, {
+    hotCommitIndices: [0, 1],
+    totalReactCommits: 2 + cheap.length,
+    renderSummary: summarizeRenders(
+      [...stored, ...cheap],
+      timings(new Array(2 + cheap.length).fill(5), 16),
+      5000
+    ),
+  });
+}
+
 /** 468 cheap commits: ClockRow ×30 per commit, nothing kept. */
 function clockSummary(): RenderSummary {
   const all: DevToolsFiberCommit[] = [];
@@ -450,6 +470,7 @@ describe("profiler-commit-query render_counts", () => {
       "**React render time:** 3,365 ms of 10.1 s (33%), peak 34% in 1 s, 468 commits"
     );
     const rows = out.split("\n").filter((l) => l.startsWith("| `"));
+    expect(out).toContain("| Per second | Re-render commits | Self total (ms) |");
     expect(rows[0]).toMatch(/^\| `ClockRow` \| 14,040 \| 1393\.7 \| 468 \| /);
     expect(rows[0]).toContain("props: now");
     expect(rows[1]).toMatch(/^\| `Text` \| 468 \|/);
@@ -621,6 +642,22 @@ describe("profiler-commit-query render_counts", () => {
     );
   });
 
+  it("does not treat a plain name as its wrapped fiber when the plain one is its own component", async () => {
+    await cacheMemoRowSession("row-memo-device", true);
+    const out = await query("row-memo-device", { mode: "by_component", component_name: "Row" });
+    expect(out).toContain("## Commits for `Memo(Row)`");
+    expect(out).toContain("A separate `Row` rendered 300 times outside the stored commits.");
+    expect(out).toContain("mode=`render_counts` component_name=`Row`");
+    expect(out).not.toContain("Either name works");
+  });
+
+  it("keeps the short note when the wrapped fiber is the only component of that name", async () => {
+    await cacheMemoRowSession("memo-only-device", false);
+    const out = await query("memo-only-device", { mode: "by_component", component_name: "Row" });
+    expect(out).toContain("Either name works here.");
+    expect(out).not.toContain("A separate");
+  });
+
   it("a name render_counts cannot find points at the full list, not at by_index", async () => {
     await cacheSession("counts-miss-device", [], {
       hotCommitIndices: [],
@@ -781,6 +818,59 @@ describe("profiler-cpu-query component_cpu", () => {
       top_n: 15,
     } as never) as Promise<string>;
   }
+
+  it("says when the wrapped fiber it answers for is not the only component of that name", async () => {
+    const stored = [fiber("Memo(Row)", 0, 30), fiber("Memo(Row)", 1, 30)];
+    const cheap = Array.from({ length: 300 }, (_, i) => fiber("Row", i + 4, 4));
+    await cacheCpuSession("cpu-row-memo-device", stored, {
+      hotCommitIndices: [0, 1],
+      totalReactCommits: 302,
+      renderSummary: summarizeRenders(
+        [...stored, ...cheap],
+        timings(new Array(302).fill(5), 16),
+        5000
+      ),
+    });
+    const out = await componentCpu("cpu-row-memo-device", "Row");
+    expect(out).toContain("## CPU During `Memo(Row)` Commits");
+    expect(out).toContain("A separate `Row` rendered 300 times outside the stored commits.");
+    expect(out).toContain(
+      "Run `profiler-commit-query` mode=`render_counts` component_name=`Row` for its counts."
+    );
+    expect(out).not.toContain("Either name works");
+  });
+
+  it("reads the stored commits through the index analyze cached", async () => {
+    // The path agents take: analyze wrote the index. No raw profile exists here,
+    // so a fall-through to it would fail instead of passing unnoticed.
+    const stored = [fiber("ClockRow", 7, 0.07), fiber("ClockRow", 8, 0.07)];
+    await cacheSession(
+      "cpu-cached-device",
+      stored,
+      { hotCommitIndices: [7], totalReactCommits: 468, renderSummary: clockSummary() },
+      join(scratch, "no-such-profile.json")
+    );
+    const frame = { scriptId: "0", url: "", lineNumber: 0, columnNumber: 0 };
+    const index = buildCpuSampleIndex({
+      startTime: 1000,
+      endTime: 1_001_000,
+      nodes: [
+        { id: 1, callFrame: { ...frame, functionName: "[root]" }, children: [2] },
+        { id: 2, callFrame: { ...frame, functionName: "work" } },
+      ],
+      samples: [2, 2],
+      timeDeltas: [0, 1_000_000],
+    } as never);
+    const cpuSampleIndexPath = join(scratch, "cpu-cached-device_index.json");
+    await fs.writeFile(cpuSampleIndexPath, JSON.stringify(serializeCpuSampleIndex(index)));
+    const paths = getCachedProfilerPaths(PORT, "cpu-cached-device")!;
+    cacheProfilerPaths(PORT, { ...paths, cpuSampleIndexPath }, "cpu-cached-device");
+
+    const out = await componentCpu("cpu-cached-device", "ClockRow");
+    expect(out).toContain("## CPU During `ClockRow` Commits");
+    expect(out).toContain("| `work` |");
+    expect(out).toContain("14,040 renders over all 468 commits");
+  });
 
   it("does not deny a component that rendered only in commits that were not stored", async () => {
     await cacheCpuSession("cpu-cold-device", [fiber("Hot", 7, 30)], {

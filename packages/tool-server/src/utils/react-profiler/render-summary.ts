@@ -4,8 +4,9 @@
  * react-profiler-stop persists per-fiber detail only for commits of 16 ms or more
  * and their ±1 neighbours, so on a session made of many cheap commits (a 60 Hz
  * timer re-rendering a list) the saved commits are empty and the report could not
- * see React spending a third of the session rendering. The summary is computed from every commit at stop time and saved as `meta.renderSummary`
- * next to the kept commits, which stay exactly as before.
+ * see React spending a third of the session rendering. The summary is computed
+ * from every commit at stop time and saved as `meta.renderSummary` next to the
+ * kept commits.
  *
  * Measured on six device sessions (Bluesky and an Expo fixture): 0.1-5 ms to
  * compute and 1-78 KB on disk, while every commit already crosses CDP at stop.
@@ -17,6 +18,7 @@ import type { ReRenderReason } from "./types/output";
 import { deriveReason, dominantReason, emptyReasonHistogram } from "./pipeline/utils";
 import type { ComponentOriginResult } from "./component-origin";
 import {
+  describeResolution,
   renderComponentNameMiss,
   resolveComponentName,
   type ComponentNameResolution,
@@ -417,6 +419,28 @@ export function renderNameOutsideStoredCommits(
 }
 
 /**
+ * `describeResolution` for a name looked up in the stored commits. `Row` can
+ * resolve there to `Memo(Row)` while a plain `Row` is its own component in commits
+ * that were not stored, so the two names do not mean the same thing.
+ */
+export function describeStoredResolution(
+  resolution: Extract<ComponentNameResolution, { kind: "exact" | "display" }>,
+  summary: RenderSummary | null
+): string {
+  const separate =
+    resolution.kind === "display"
+      ? summary?.components.find((c) => c.name === resolution.query)
+      : undefined;
+  if (resolution.kind !== "display" || !separate) return describeResolution(resolution);
+  const renders = allRenderCount(separate);
+  return (
+    `> Showing \`${resolution.rawName}\`, the only stored component named \`${resolution.query}\`. ` +
+    `A separate \`${separate.name}\` rendered ${formatCount(renders)} ${renders === 1 ? "time" : "times"} outside the stored commits. ` +
+    `Run \`profiler-commit-query\` mode=\`render_counts\` component_name=\`${separate.name}\` for its counts.`
+  );
+}
+
+/**
  * Only when commits under 16ms hold renders the stored total cannot show.
  * `renderCounts` names where to read them: a tool other than
  * `profiler-commit-query` has to name that tool too.
@@ -466,6 +490,19 @@ export interface FrequentRerenderRow {
   origin: ComponentOriginResult;
 }
 
+/** Components that pass the table's numeric limits, before any check of the name. */
+function frequentCandidates(summary: RenderSummary): Omit<FrequentRerenderRow, "origin">[] {
+  const seconds = Math.max(summary.recordingMs / 1000, 0.001);
+  const candidates: Omit<FrequentRerenderRow, "origin">[] = [];
+  for (const component of summary.components) {
+    if (component.rerenderCommits < MIN_FREQUENT_RERENDER_COMMITS) continue;
+    const selfMsPerSecond = component.rerenderSelfMs / seconds;
+    if (selfMsPerSecond < MIN_FREQUENT_SELF_MS_PER_S) continue;
+    candidates.push({ component, perSecond: component.rerenders / seconds, selfMsPerSecond });
+  }
+  return candidates;
+}
+
 /**
  * App components that re-rendered in at least 10 commits, sorted by summed self
  * time per second, at most five. Library components (React Native primitives,
@@ -477,16 +514,25 @@ export function selectFrequentRerenders(
   classify: (rawName: string) => ComponentOriginResult,
   limit = MAX_FREQUENT_ROWS
 ): FrequentRerenderRow[] {
-  const seconds = Math.max(summary.recordingMs / 1000, 0.001);
   const rows: FrequentRerenderRow[] = [];
-  for (const component of summary.components) {
-    if (component.rerenderCommits < MIN_FREQUENT_RERENDER_COMMITS) continue;
-    const selfMsPerSecond = component.rerenderSelfMs / seconds;
-    if (selfMsPerSecond < MIN_FREQUENT_SELF_MS_PER_S) continue;
-    const origin = classify(component.name);
-    if (origin.origin === "library") continue;
-    rows.push({ component, perSecond: component.rerenders / seconds, selfMsPerSecond, origin });
+  for (const candidate of frequentCandidates(summary)) {
+    const origin = classify(candidate.component.name);
+    if (origin.origin !== "library") rows.push({ ...candidate, origin });
   }
   rows.sort((a, b) => b.selfMsPerSecond - a.selfMsPerSecond);
   return rows.slice(0, limit);
+}
+
+/**
+ * Names that pass the table's limits and are left out only because the source
+ * index does not know them. Under a wrong `project_root` that is the app's own
+ * components, so the report names them instead of dropping them silently.
+ */
+export function selectFrequentOutsideSource(
+  summary: RenderSummary,
+  classify: (rawName: string) => ComponentOriginResult
+): string[] {
+  return frequentCandidates(summary)
+    .map((candidate) => candidate.component.name)
+    .filter((name) => classify(name).notInSource);
 }

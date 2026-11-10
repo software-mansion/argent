@@ -16,6 +16,7 @@ import {
 } from "../../../utils/react-profiler/component-names";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 import {
+  describeStoredResolution,
   parseRenderSummary,
   hasUnnamedSlowCommit,
   formatRenderTime,
@@ -140,7 +141,7 @@ function renderRenderCounts(
     "Every component that rendered, library components included, by re-render self time. The other modes see " +
       "only commits of 16ms or more and their neighbours; these counts cover every commit.",
     "",
-    "| Component | Re-renders | Per second | Commits | Self total (ms) | Self ms/s | Max (ms) | Mounts | No change data | Reason |",
+    "| Component | Re-renders | Per second | Re-render commits | Self total (ms) | Self ms/s | Max (ms) | Mounts | No change data | Reason |",
     "|---|---|---|---|---|---|---|---|---|---|"
   );
   for (const c of shown) {
@@ -195,7 +196,7 @@ function renderByComponent(
     });
   }
   const resolvedName = resolution.rawName;
-  const resolutionNote = describeResolution(resolution);
+  const resolutionNote = describeStoredResolution(resolution, summary);
 
   const matching = commits.filter((c) => c.componentName === resolvedName);
   if (matching.length === 0) {

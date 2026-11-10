@@ -49,6 +49,8 @@ export interface ComponentOriginResult {
   /** Source file of the app definition, when the index resolved one. */
   file?: string;
   line?: number;
+  /** Library only because the source index does not know the name. */
+  notInSource?: boolean;
 }
 
 /** The part of the AST index entry this module reads. */
@@ -140,6 +142,6 @@ export function createComponentOriginClassifier(
     }
     if (hasForget) return { origin: "app", ...located };
     if (!usableIndex) return { origin: "unknown" };
-    return entry ? { origin: "app", ...located } : { origin: "library" };
+    return entry ? { origin: "app", ...located } : { origin: "library", notInSource: true };
   };
 }

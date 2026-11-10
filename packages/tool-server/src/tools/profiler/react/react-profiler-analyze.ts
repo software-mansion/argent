@@ -126,8 +126,9 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     let commitTree: DevToolsCommitTree;
     let unattributedByCommit: Array<[number, number, number]> | undefined;
-    // Null for sessions saved before stop wrote it: the report then says what it
-    // cannot measure instead of summarising only the hot commits.
+    // Null for sessions saved before stop wrote it. With no hot commit the report
+    // then says commits under 16ms were not measured; with hot commits it only
+    // leaves out the lines that need the summary.
     let renderSummary: RenderSummary | null = null;
     if (sessionPaths.commitsPath) {
       const onDisk = await readCommitTree(sessionPaths.commitsPath);
