@@ -83,7 +83,15 @@ export {
 } from "./e2e-dirs";
 export type { ResolvedE2eFile } from "./e2e-dirs";
 export { parseURN } from "./urn";
-export { TOOL_ID_ALIASES, canonicalToolId } from "./tool-ids";
+export {
+  TOOL_ID_ALIASES,
+  TOOL_PARAM_ALIASES,
+  ToolParamAliasError,
+  canonicalToolArgs,
+  canonicalToolId,
+  toolParamAliases,
+  withFormerParamSpecs,
+} from "./tool-ids";
 export {
   ServiceNotFoundError,
   ServiceInitializationError,

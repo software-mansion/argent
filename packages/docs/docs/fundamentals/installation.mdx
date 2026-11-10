@@ -11,7 +11,7 @@ sidebar_custom_props:
 
 - **Node.js 22.15** or later, but not 23.0 to 23.7
 - **iOS / tvOS**: macOS with **Xcode** installed. Apple TV uses tvOS simulators, and Xcode downloads the tvOS runtime on demand.
-- **Android / Android TV**: **Android SDK Platform Tools** (`adb`) on `PATH`, plus the **Android Emulator** package to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
+- **Android / Android TV**: **Android SDK Platform Tools** (`adb`), plus the **Android Emulator** package to boot AVDs from Argent. Argent finds the SDK on `PATH`, in `$ANDROID_HOME`, or in the default SDK folder. The `android.sdkRoot` config key sets another location. Create AVDs via Android Studio or `avdmanager`.
 - **Fire TV (Vega)**: the **Vega SDK** (`vega` CLI) on `PATH`, plus **Android SDK Platform Tools** (`adb`) on `PATH`. Most Vega tools, including UI inspection and screenshots, run over `adb`.
 - **HarmonyOS**: **DevEco Studio**, which ships `hdc` (the device connector) and the `Emulator` manager. Argent looks for both in `$DEVECO_STUDIO_HOME` first, then in `/Applications/DevEco-Studio.app` on macOS. Argent also finds `hdc` on `PATH`, for hosts that installed the OpenHarmony command-line tools without the IDE. A phone needs only `hdc`. Run `argent enable harmonyos` to turn on HarmonyOS support.
 - **Electron / Chromium**: nothing extra to control an already running app. Launch it with `--remote-debugging-port`, or let Argent spawn your Electron app for you.
@@ -40,7 +40,7 @@ The installation wizard:
 
 - installs `@swmansion/argent` globally,
 - detects your editor and registers the MCP server,
-- copies skills, rules and agent definitions into your workspace.
+- copies skills and rules into your workspace.
 
 <Video
   src="/video/installation-wizard.mp4"
@@ -58,10 +58,10 @@ argent init
 
 ## Install from a GitHub release
 
-Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.31.0.tgz`. It is the same file npm serves. Download it and install it globally:
+Every release on [GitHub](https://github.com/software-mansion/argent/releases) carries the package tarball as an asset, for example `swmansion-argent-0.32.0.tgz`. It is the same file npm serves. Download it and install it globally:
 
 ```bash
-npm install -g ./swmansion-argent-0.31.0.tgz
+npm install -g ./swmansion-argent-0.32.0.tgz
 argent init
 ```
 
@@ -75,7 +75,7 @@ By default Argent installs **globally**. To version Argent with your repo, so ev
 npx @swmansion/argent@latest init --local
 ```
 
-This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP configs that launch the project-local copy. Commit `package.json` and your lockfile, the generated MCP config (`.mcp.json`, `.cursor/mcp.json`, and so on), `.argent/install.json`, and the skills, rules and agents files. Teammates then run `npm install`.
+This adds `@swmansion/argent` to your project's `devDependencies` and writes MCP configs that launch the project-local copy. Commit `package.json` and your lockfile, the generated MCP config (`.mcp.json`, `.cursor/mcp.json`, and so on), `.argent/install.json`, and the skills and rules files. Teammates then run `npm install`.
 
 Pass `--global` to force the default mode in scripts. `--local` and `--global` are mutually exclusive. A non-interactive (`--yes`) run defaults to global unless the project already opted into local mode.
 
@@ -84,6 +84,37 @@ Add `--no-telemetry` to also commit a telemetry opt-out for the repository. Loca
 :::note
 In local mode the committed MCP config runs the project-local copy, so the bare `argent` command is **not** on teammates' `PATH`. Note that `npm install` builds Argent's native dependencies (`tree-sitter`) on each machine. These are prebuilt for macOS, Linux x64 and Windows x64; other targets compile from source and need a C/C++ toolchain.
 :::
+
+## macOS hosts after an Xcode update
+
+After you install or update Xcode, Xcode must install its system components. Until then, a `simctl` or `devicectl` call can start that install. The install waits for an administrator password, also when nobody sees the prompt.
+
+Argent reads Xcode's files to find if a `simctl` or `devicectl` call starts the install.
+
+If a `simctl` call starts the install:
+
+- Argent does not look for booted simulators in the background.
+- `list-devices` does not show local iOS simulators. Its `hint` field gives the reason to the agent.
+- The tools that need `simctl` fail. Most of them return an error that gives the same reason to the agent.
+
+Argent reads the type of a simulator with `simctl`. Argent must know the type to find an Apple TV simulator or a foldable iOS simulator. Thus, the tools that send input to a simulator or capture its screen also fail if Argent does not know its type yet. This occurs, for example, when Argent starts after the Xcode update.
+
+If a `devicectl` call starts the install:
+
+- `list-devices` does not show physical iPhones. Its `hint` field gives the reason to the agent.
+- The tools that need `devicectl` fail. Most of them return an error that gives the same reason to the agent.
+- A tool that only talks to the runner on the iPhone keeps working while the runner is up.
+
+Argent stops only its own calls. An `xcrun simctl` or `xcrun devicectl` command that the agent or you run still starts the install. Commands that call `simctl` or `devicectl`, for example `npx react-native run-ios`, also start it.
+
+The `hint` field and the error name the Xcode that must install its components. If you have more than one Xcode, use the Xcode that Argent names.
+
+To install the components, do one of these steps:
+
+- Open that Xcode and let it install the components.
+- Run the `xcodebuild` of that Xcode with `sudo`, for example `sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -runFirstLaunch`.
+
+Argent finds the installed components at the next tool call. You do not need to restart Argent.
 
 ## Linux hosts running Android emulators
 

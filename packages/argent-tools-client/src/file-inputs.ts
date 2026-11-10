@@ -126,7 +126,7 @@ export interface PrepareFileInputsOptions {
    */
   uploadEndpoint?: { url: string; token: string; formats?: readonly string[] };
   /**
-   * Receives the `[flow-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on,
+   * Receives the `[e2e-files]` lines that `ARGENT_E2E_FILES_LOG=1` turns on,
    * one for each member a `collect` spec sends. Defaults to stderr.
    */
   log?: (line: string) => void;
@@ -420,7 +420,7 @@ export async function prepareFileInputs(
     const filePath = await specPath(spec, record);
     if (filePath === null) continue;
     // When the target IS a source param the interpolated path equals its
-    // value; a derived target (flow_file) is wrapped only when unset.
+    // value; a derived target (e2e_test_file) is wrapped only when unset.
     if (spec.target in record && record[spec.target] !== filePath) continue;
 
     const wire: FileInputWire = { [FILE_INPUT_MARKER]: true, path: filePath };
