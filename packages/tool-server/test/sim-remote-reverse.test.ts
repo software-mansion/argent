@@ -1,15 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Each scripted outcome answers one `sim-remote` call, in order: a string is the
-// stderr of a failed (exit 1) call, `null` a success. `latencyMs` delays the
-// answer, or `latencies[i]` that of call i; a call slower than its timeout is
-// killed the way execFile kills it.
+// stderr of a failed (exit 1) call, `null` a success. `latencyMs` delays the answer.
 let outcomes: Array<string | null> = [];
 let latencyMs = 0;
-let latencies: number[] = [];
 const calls: string[][] = [];
 const callTimes: number[] = [];
-const callTimeouts: number[] = [];
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -18,24 +14,16 @@ vi.mock("node:child_process", async () => {
     execFile: (
       _cmd: string,
       args: readonly string[],
-      opts: { timeout: number },
+      _opts: unknown,
       cb: (err: Error | null, out?: { stdout: string; stderr: string }) => void
     ) => {
-      const latency = latencies[calls.length] ?? latencyMs;
       calls.push([...args]);
       callTimes.push(Date.now());
-      callTimeouts.push(opts.timeout);
       const stderr = outcomes.shift() ?? null;
-      if (latency > opts.timeout) {
-        setTimeout(() => {
-          cb(Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" }));
-        }, opts.timeout);
-        return;
-      }
       setTimeout(() => {
         if (stderr === null) return cb(null, { stdout: "", stderr: "" });
         cb(Object.assign(new Error("Command failed"), { code: 1, stderr, stdout: "" }));
-      }, latency);
+      }, latencyMs);
     },
   };
 });
@@ -59,10 +47,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   outcomes = [];
   latencyMs = 0;
-  latencies = [];
   calls.length = 0;
   callTimes.length = 0;
-  callTimeouts.length = 0;
 });
 
 afterEach(() => {
@@ -88,20 +74,14 @@ describe("reverseStart / reverseStop", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it.each([
-    "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout",
-    "error: port forwarder: POST /rules answered HTTP 502 Bad Gateway",
-  ])("retries a forwarder gateway failure (%s)", async (stderr) => {
-    outcomes = [stderr, null];
-    expect(await start()).toBeUndefined();
-    expect(calls).toHaveLength(2);
-  });
-
   // Verbatim CLI messages.
   it.each([
     "error: the host's port forwarder has lost its proxy tunnel (HTTP 503); reverse tunnels cannot be set up on this machine until it reconnects",
     "error: the host's port forwarder is unreachable (no answer within 10s); reverse tunnels cannot be set up on this machine",
     "error: the host's port forwarder is unreachable (connection failed); reverse tunnels cannot be set up on this machine",
+    // A retry pays two more pushes, each timing out again if the forwarder stays slow.
+    "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout",
+    "error: port forwarder: POST /rules answered HTTP 502 Bad Gateway",
     "error: port forwarder: POST /rules answered HTTP 400 Bad Request",
     "error: port forwarder: POST /rules answered HTTP 500 Internal Server Error",
     "error: port forwarder: POST /rules answered HTTP 408 Request Timeout",
@@ -120,19 +100,19 @@ describe("reverseStart / reverseStop", () => {
     outcomes = [
       "error: tunnel-mux control send: connection lost",
       "error: tunnel-mux control send: connection lost",
-      "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout",
+      "error: tunnel-mux control send: stream reset",
       null,
     ];
     const err = await start();
-    expect((err as Error).message).toMatch(/HTTP 504 Gateway Timeout$/);
+    expect((err as Error).message).toMatch(/control send: stream reset$/);
     expect(calls).toHaveLength(3);
   });
 
-  it("starts no retry once the budget has too little left", async () => {
-    latencyMs = 9_000;
+  it("starts no retry once the retry window has passed", async () => {
+    latencyMs = 3_000;
     outcomes = [
-      "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout",
-      "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout",
+      "error: tunnel-mux control send: connection lost",
+      "error: tunnel-mux control send: connection lost",
       null,
     ];
     expect(await start()).toBeInstanceOf(Error);
@@ -156,33 +136,13 @@ describe("reverseStart / reverseStop", () => {
   });
 
   it.each([
-    [14_500, 2],
-    [14_501, 1],
-  ])("starts a retry only with 5 s of the 20 s budget left (504 after %i ms)", async (ms, n) => {
+    [4_500, 2],
+    [4_501, 1],
+  ])("starts a retry only within 5 s of the first attempt (failure after %i ms)", async (ms, n) => {
     latencyMs = ms;
-    outcomes = ["error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout", null];
+    outcomes = ["error: tunnel-mux control send: connection lost", null];
     await start();
     expect(calls).toHaveLength(n);
-  });
-
-  it("gives a retry the rest of the budget, then reports the error that prompted it", async () => {
-    const stderr = "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout";
-    latencies = [5_000, 60_000];
-    outcomes = [stderr, null];
-    const err = await start();
-    expect((err as Error).message).toBe(`sim-remote reverse start ${UDID} 37223 failed: ${stderr}`);
-    expect(callTimeouts).toEqual([30_000, 14_500]);
-    expect(Date.now() - callTimes[0]!).toBe(20_000);
-  });
-
-  it("reports a first attempt's own timeout", async () => {
-    latencies = [60_000];
-    outcomes = [null];
-    const err = await start();
-    expect((err as Error).message).toBe(
-      `sim-remote reverse start ${UDID} 37223 failed: Command failed`
-    );
-    expect(calls).toHaveLength(1);
   });
 
   it("swallows a failed stop", async () => {
