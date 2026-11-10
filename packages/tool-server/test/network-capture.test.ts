@@ -317,6 +317,8 @@ class FakeAndroid implements Pick<
 > {
   /** What the tools asked of the inspector, in order. */
   readonly calls: string[] = [];
+  /** What the service factory throws for this package, as the real one does for a name it refuses. */
+  factoryError: Error | undefined;
   /** What a start finds once it ran its attach. */
   startAnswer: () => AndroidCaptureStart | Promise<AndroidCaptureStart> = () => ({ armed: true });
   stopAnswer: { confirmed: boolean; reason?: string } = { confirmed: true };
@@ -392,8 +394,10 @@ const fakeAndroidInspectorBlueprint: ServiceBlueprint<unknown, string> = {
   async factory(_deps, _payload, options) {
     androidFactoryCalls++;
     const { packageName } = options as { packageName: string };
+    const fake = androidFor(packageName);
+    if (fake.factoryError) throw fake.factoryError;
     return {
-      api: androidFor(packageName),
+      api: fake,
       dispose: async () => {},
       events: new TypedEventEmitter<ServiceEvents>(),
     };
@@ -610,6 +614,23 @@ describe("network-capture-start", () => {
       expect(err?.message).not.toContain("view-network-logs");
       // An unavailable start leaves no mark to count from.
       expect(androidFor(APP).captureMark()).toBeUndefined();
+    });
+
+    it("fails with NETWORK_CAPTURE_UNAVAILABLE on Android when the inspector service refuses the package", async () => {
+      const refusal =
+        "AndroidNetworkInspector.factory needs { device, packageName } with an Android package name; use androidNetworkInspectorRef(device, packageName, metroPort).";
+      androidFor(APP).factoryError = new Error(refusal);
+
+      const err = await start(SERIAL, APP).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
+      expect(err?.message).toContain(
+        `js: ${METRO_DOWN}; android-native: [AndroidNetworkInspector:${SERIAL}:${APP}] ${refusal}`
+      );
+      expect(androidFor(APP).calls).toEqual([]);
     });
 
     it("does not fail while a layer is only waiting for the app", async () => {
