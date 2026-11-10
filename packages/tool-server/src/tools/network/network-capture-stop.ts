@@ -151,13 +151,33 @@ async function stopJsLayer(
   }
   const appId = dbg.runtimeApp?.appId;
   if (appId !== undefined && appId !== bundleId) {
+    const notOurs = `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s`;
+    // As when the runtime is not reached: the app's own capture is not stopped.
+    if (other) {
+      return {
+        layer: "js",
+        armed: other.intent === "started",
+        total: 0,
+        reason: `${notOurs}, so nothing changed there; ${otherPortHint(bundleId, other.port)}`,
+      };
+    }
+    if (!kept) {
+      return {
+        layer: "js",
+        armed: false,
+        total: 0,
+        reason: `${notOurs}, so nothing changed there; pass the port of ${bundleId}'s Metro`,
+      };
+    }
+    storeStopped(kept.paused === true);
+    const unconfirmed = kept.installed && kept.paused !== true;
     return {
       layer: "js",
-      armed: false,
+      armed: unconfirmed,
       total: 0,
-      reason: `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s, so nothing changed there; ${
-        other ? otherPortHint(bundleId, other.port) : `pass the port of ${bundleId}'s Metro`
-      }`,
+      reason: unconfirmed
+        ? `${notOurs}; the interceptor already in ${bundleId}'s JS runtime may still record, so call network-capture-stop again once that runtime answers on this port`
+        : `${notOurs}; while capture is stopped, ${bundleId}'s JS runtime gets no interceptor`,
     };
   }
   const stored = storeStopped(false);

@@ -1108,6 +1108,37 @@ describe("a JS runtime of another app on the port", () => {
     );
   });
 
+  it("stores the stop of this app's started capture there, and says its interceptor may still record", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    const otherRuntime = new FakeRuntime(OTHER);
+    await reconnect(PORT, IOS_UDID, otherRuntime);
+
+    const stopped = await stop(IOS_UDID, APP);
+
+    expect(layer(stopped, "js")).toEqual({
+      layer: "js",
+      armed: true,
+      total: 0,
+      reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; the interceptor already in ${APP}'s JS runtime may still record, so call network-capture-stop again once that runtime answers on this port`,
+    });
+    expect(findJsCapture(IOS_UDID, APP)).toMatchObject({
+      port: PORT,
+      intent: "stopped",
+      installed: true,
+    });
+    expect(otherRuntime.evaluated).toEqual([]);
+    expect(rt.paused).toBe(false);
+
+    // Once the app's runtime answers there again, the next stop pauses it.
+    await reconnect(PORT, IOS_UDID, rt);
+    rt.send("/a");
+    expect(layer(await stop(IOS_UDID, APP), "js")).toEqual({ layer: "js", armed: false, total: 1 });
+    expect(rt.paused).toBe(true);
+  });
+
   it("gets nothing from a stop and a start of this app, and a read then says capture is not started", async () => {
     const rt = new FakeRuntime(OTHER);
     serve(PORT, IOS_UDID, rt);
@@ -1216,9 +1247,10 @@ describe("a JS capture on another Metro port", () => {
       unavailable: true,
       reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; ${hint}`,
     });
+    // Capture is still on where it was, so the JS layer is not stopped.
     expect(layer(stopped, "js")).toEqual({
       layer: "js",
-      armed: false,
+      armed: true,
       total: 0,
       reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s, so nothing changed there; ${hint}`,
     });
