@@ -207,6 +207,8 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
     const result = await simctlListDevices();
     const out: IosRemoteDevice[] = [];
     for (const [runtime, devices] of Object.entries(result.devices)) {
+      const runtimeKind = simulatorRuntimeKind(runtime);
+      if (!runtimeKind) continue;
       for (const d of devices) {
         if (d.isAvailable === false) continue;
         out.push({
@@ -215,7 +217,7 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
           name: d.name,
           state: d.state,
           runtime,
-          runtimeKind: simulatorRuntimeKind(runtime),
+          runtimeKind,
         });
       }
     }
