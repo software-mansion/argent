@@ -125,8 +125,9 @@ function activeWindow(root: ParsedXmlNode): ParsedXmlNode {
 }
 
 /**
- * Collect the focused node and every focusable node. `parseUiAutomatorDump`
- * drops the `focused` attribute, so the focus walk needs its own pass.
+ * Collect the focused node and every focusable node, from the window holding
+ * focus. `parseUiAutomatorDump` prunes unlabelled focusables, so the focus
+ * walk needs its own pass.
  */
 function collectTvNodes(xml: string): { focused: TvNode | null; focusable: TvNode[] } {
   const root = parseUiAutomatorXml(xml);

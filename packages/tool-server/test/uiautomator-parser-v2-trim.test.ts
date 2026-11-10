@@ -306,6 +306,23 @@ ${row("Sound", 'focused="false" selected="false"').replace("[0,100][800,200]", "
     expect(flags("Sound")).toEqual([false, false]);
   });
 
+  it("keeps an unlabelled card that holds focus", () => {
+    const card = (title: string, focused: boolean, x: number) =>
+      `<node class="android.widget.FrameLayout" focusable="true" focused="${focused}" package="com.example.tv" bounds="[${x},0][${x + 400},300]">
+  <node class="android.widget.TextView" text="${title}" package="com.example.tv" bounds="[${x},250][${x + 400},300]" />
+</node>`;
+    const dump = (aFocused: boolean) =>
+      `<hierarchy rotation="0">${card("Movie A", aFocused, 0)}${card("Movie B", !aFocused, 400)}</hierarchy>`;
+
+    const focusedFrameX = (xml: string) =>
+      flatten(parseUiAutomatorDump(xml, 1920, 1080))
+        .filter((n) => n.focused)
+        .map((n) => n.frame.x);
+
+    expect(focusedFrameX(dump(true))).toEqual([0]);
+    expect(focusedFrameX(dump(false))).toEqual([400 / 1920]);
+  });
+
   it("keeps the focus of a wrapper collapsed into its same-bounds inner target", () => {
     const xml = `<hierarchy rotation="0">
 <node class="android.widget.FrameLayout" content-desc="Play" clickable="true" focusable="true" focused="true" selected="true" package="com.example.tv" bounds="[0,0][400,200]">

@@ -93,6 +93,14 @@ describe("a dump the system killed", () => {
     );
   });
 
+  it("reads a phone dump whose screen text says Killed as a tree", async () => {
+    dumpOutput = `<?xml version='1.0'?><hierarchy rotation="0"><node class="android.widget.TextView" text="Killed in action" bounds="[0,0][400,50]" package="com.example.news" /></hierarchy>`;
+
+    const res = await describeAndroid(undefined, "emulator-5554", undefined, false);
+
+    expect(res.tree.children.map((c) => c.label)).toEqual(["Killed in action"]);
+  });
+
   it("names the UiAutomation holder on an Android TV describe", async () => {
     const api = await tvApi("emulator-5554");
 

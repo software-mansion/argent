@@ -278,8 +278,11 @@ export function attrIsTrue(attrs: Record<string, string>, key: string): boolean 
 
 function isInteractive(attrs: Record<string, string>): boolean {
   if (hasGestureFlag(attrs)) return true;
-  // Focusable without a label is just a focus trap on a layout wrapper.
-  if (attrIsTrue(attrs, "focusable") && labelOf(attrs) !== "") return true;
+  // Focusable without a label is just a focus trap on a layout wrapper, unless
+  // it holds focus: on a TV that is the D-pad cursor.
+  if (attrIsTrue(attrs, "focusable") && (labelOf(attrs) !== "" || attrIsTrue(attrs, "focused"))) {
+    return true;
+  }
   return false;
 }
 
