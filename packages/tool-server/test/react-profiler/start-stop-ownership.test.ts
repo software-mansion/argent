@@ -488,6 +488,54 @@ describe("react-profiler-start and the Hermes sampler", () => {
       expect(sent.lastIndexOf("Profiler.stop")).toBeGreaterThan(sent.indexOf("Profiler.start"));
     }
   );
+
+  // On a dropped connection the rollback's own stop fails too. That must not
+  // replace why the start failed, or the sentence about the run it stopped.
+  it.each([
+    ["rejects", { startScript: "rejects" }, "Runtime.evaluate timed out"],
+    ["returns nothing", { startScript: "returns nothing" }, "no value returned from runtime"],
+    ["reports a failure", { startResult: { ok: false, reason: "no-renderers" } }, "no-renderers"],
+    [
+      "fails verification",
+      { startResult: { ok: true, isProfilingFlagSet: false, ownerInstalled: true } },
+      "post-start verification failed",
+    ],
+  ] as const)(
+    "keeps the start's own error when the rollback's stop fails and the start script %s",
+    async (_what, failure, reason) => {
+      lostRun();
+      const { registry } = fakeSession({
+        app: { isRunning: true, owner: owner("uuid-lost") },
+        profilerStopRejects: true,
+        ...failure,
+      });
+
+      const err = await start(registry).catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain(reason);
+      expect((err as Error).message).toContain("nothing is recording now");
+      expect((err as Error).message).not.toContain("Profiler.stop");
+    }
+  );
+
+  // A run that ended in the app leaves the flag set with no recording, so this
+  // start replaces nothing, yet its first stop has discarded the CPU profile.
+  it("does not offer a stop after a failed start discarded a run that ended in the app", async () => {
+    const { api, registry } = fakeSession({
+      app: { isRunning: false, owner: null },
+      sessionId: "uuid-mine",
+      profilingActive: true,
+      startResult: { ok: false, reason: "startProfiling-threw" },
+    });
+
+    await expect(start(registry)).rejects.toThrow("startProfiling-threw");
+
+    expect(api.profilingActive).toBe(false);
+    const res = await status(registry);
+    expect(res).toMatchObject({ session_status: "lost", lost_run: { cause: "stop_failed" } });
+    expect(res.note).toContain("Call react-profiler-start to record again");
+    expect(res.note).not.toContain("Call react-profiler-stop");
+  });
 });
 
 describe("profiler-load", () => {
