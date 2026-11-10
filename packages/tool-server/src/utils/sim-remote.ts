@@ -284,7 +284,8 @@ const REVERSE_START_RETRY_WINDOW_MS = 5_000;
  *   each start 10 s or more slower.
  */
 function isTransientReverseStartError(message: string): boolean {
-  return /tunnel-mux control send: connection lost/.test(message);
+  // Lost sending the request, or the relay header while dialling.
+  return /error: (?:tunnel-mux control send: )?connection lost/.test(message);
 }
 
 /**

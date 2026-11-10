@@ -82,8 +82,13 @@ describe("reverseStart / reverseStop", () => {
     ]);
   });
 
-  it("retries a control send that never reached the orchestrator", async () => {
-    outcomes = ["error: tunnel-mux control send: connection lost", null];
+  it.each([
+    // The control send of the request itself.
+    "error: tunnel-mux control send: connection lost",
+    // The relay header sent while dialling, before any request.
+    "error: connection lost",
+  ])("retries a request that never reached the orchestrator (%s)", async (stderr) => {
+    outcomes = [stderr, null];
     expect(await start()).toBeUndefined();
     expect(calls).toHaveLength(2);
   });
