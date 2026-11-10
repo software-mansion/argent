@@ -321,6 +321,28 @@ describe("tvControlBlueprint — ax respawn coalescing", () => {
     await instance.dispose();
   });
 
+  it("keeps a reply that lands while a recycle is pending", async () => {
+    const instance = await buildService();
+
+    // The reply beats the reap: the reader answering it is out of pkill's reach.
+    const order: string[] = [];
+    let recycling: Promise<void> | undefined;
+    h.state.axWriteHook = () => {
+      h.readers[h.readers.length - 1]!.cmd = "/fake/other-reader";
+      recycling = instance.api.recycleAx().then(() => {
+        order.push("recycle");
+      });
+    };
+
+    const res = await instance.api.describe();
+    order.push("describe");
+    await recycling;
+
+    expect(res.bundleId).toBe("com.example.tvapp");
+    expect(order).toEqual(["describe", "recycle"]);
+    await instance.dispose();
+  });
+
   it("reads a reader that dies mid-request with no recycle pending as an empty focus view", async () => {
     const instance = await buildService();
 
