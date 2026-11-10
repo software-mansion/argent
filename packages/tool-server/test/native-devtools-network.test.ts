@@ -300,6 +300,18 @@ describe("native-devtools network capture", () => {
     expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
   });
 
+  it("resolves a start armed when the app connects and acknowledges Network.enable within the wait the start gives it", async () => {
+    const api = await startService();
+
+    const arming = api.startNetworkCapture(BUNDLE, 8081, 5_000);
+    expect(await within50ms(arming)).toBe("pending");
+    const app = await connectApp(api.socketPath);
+
+    await expect(arming).resolves.toBe(true);
+    expect(enableRequests(app)).toHaveLength(1);
+    expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true);
+  });
+
   it("sends nothing at the handshake of an app capture is not on for", async () => {
     const api = await startService();
     const app = await connectApp(api.socketPath);
