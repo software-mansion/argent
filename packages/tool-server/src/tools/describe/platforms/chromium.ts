@@ -1532,8 +1532,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   // Whether an element hit at (x, y) is in el's flat tree and el's own painting puts it
   // there: no box between them is fixed or absolute, which would paint by its own
-  // containing block, escaping el's clips. Each point's carriers are found once: a point
-  // can hit a page's whole stack of boxes, and stacked content probes the same points.
+  // containing block, escaping el's clips. Each point's carriers are found once: stacked
+  // content probes the same points.
   const carriersAt = Object.create(null);
   function carriesHit(el, x, y) {
     const key = x + "," + y;
