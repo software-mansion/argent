@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 import { createRunFlowTool, type FlowRunResult } from "../../src/tools/flows/flow-run";
+import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import {
   parseFlow,
   serializeFlow,
@@ -137,7 +138,7 @@ describe("parsing a requires block", () => {
       requires: { platform: ["ios"] },
       steps: [{ kind: "echo", message: "hi" }],
     });
-    expect(yaml).toMatch(/^requires:\n {2}platform: ios\nsteps:/);
+    expect(yaml).toMatch(/^version: 1\nrequires:\n {2}platform: ios\nsteps:/);
   });
 
   it.each([
@@ -410,5 +411,54 @@ describe("the prerequisite notice", () => {
     const { registry, invokeTool } = mockRegistry([]);
     expect(await notice(registry, "echo-fragment")).toMatchObject({ notice: expect.any(String) });
     expect(invokeTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("a file with a newer format version", () => {
+  const NEWER = "version: 2\nrequires:\n  platform: ios\nsteps:\n  - tap: {}\n";
+  const NEWER_MESSAGE =
+    "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it.";
+
+  async function writeRaw(name: string, content: string): Promise<void> {
+    const dir = path.join(tmpDir, ".argent", "e2e");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, `${name}.yaml`), content, "utf8");
+  }
+
+  async function rejection(promise: Promise<unknown>): Promise<unknown> {
+    try {
+      await promise;
+    } catch (err) {
+      return err;
+    }
+    throw new Error("expected the call to throw");
+  }
+
+  // `argent e2e run <dir>` reads `not run (needs a newer Argent)` from this code and kind.
+  it.each([
+    ["nothing booted", [] as ListedDevice[], {}],
+    ["a target its requires excludes", [android(ANDROID)], { device: ANDROID }],
+  ])("fails e2e-execute with FLOW_FILE_NEWER_VERSION, %s", async (_, booted, params) => {
+    await writeRaw("newer", NEWER);
+    const { registry, invokeTool } = mockRegistry(booted);
+    const err = await rejection(run(registry, "newer", params));
+    expect((err as Error).message).toBe(NEWER_MESSAGE);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+      error_kind: "validation",
+    });
+    expect(invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("fails e2e-read-prerequisite with FLOW_FILE_NEWER_VERSION", async () => {
+    await writeRaw("newer", NEWER);
+    const err = await rejection(
+      flowReadPrerequisiteTool.execute({}, { name: "newer", project_root: tmpDir })
+    );
+    expect((err as Error).message).toBe(NEWER_MESSAGE);
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+      error_kind: "validation",
+    });
   });
 });
