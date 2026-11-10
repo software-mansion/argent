@@ -74,8 +74,6 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
-import { isUnmetUiWaitResult } from "../await-ui-element";
-import { isDebuggerNotConnectedResult } from "../debugger/not-connected";
 import {
   resolveFlowDevice,
   assertDeviceMeetsRequires,
@@ -86,7 +84,8 @@ import {
   stepRequiresDevice,
   type FlowPlatform,
 } from "./flow-device";
-import { isNestedOrchestratorTool, nestedOrchestratorOutcome } from "./flow-nested-outcome";
+import { isNestedOrchestratorTool } from "./flow-nested-outcome";
+import { toolResultVerdict } from "../../utils/tool-result-verdict";
 import {
   runDirective,
   invokeOnDevice,
@@ -3087,57 +3086,15 @@ async function execLeafStep(
             ? { flowStack: scope.runStack }
             : {}),
         });
-        if (isUnmetUiWaitResult(step.name, result)) {
-          const note = (result as { note?: string }).note;
+        // A tool that reports its failure in a result it returns instead of
+        // throwing would otherwise count as a passing step (#606).
+        const verdict = toolResultVerdict(step.name, result);
+        if (verdict) {
           return {
             ...base,
-            status: "fail",
+            status: verdict.status,
             tool: step.name,
-            reason: `await-ui-element condition not met${note ? `: ${note}` : ""}`,
-          };
-        }
-        // `flow-execute` and `run-sequence` run other tools and report what
-        // happened in their result instead of throwing, so without this a
-        // composition that failed everything counted as a passing step (#606).
-        const nested = nestedOrchestratorOutcome(step.name, result);
-        if (nested) {
-          return {
-            ...base,
-            status: nested.status,
-            tool: step.name,
-            reason: nested.reason,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        if (isDebuggerNotConnectedResult(step.name, result)) {
-          // Keep `detail` in the report: it is the only place the underlying
-          // error text lives (device_mismatch's guidance points the agent at
-          // the logicalDeviceId "listed in the detail message", and the
-          // metro_not_running `got:` fragment names what actually answered the
-          // port).
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `debugger not connected (${result.reason}): ${result.detail} — ${result.guidance}`,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        // Same hazard as the two above, on the native-devtools precheck: it
-        // RESOLVES its block rather than throwing, so a step that never reached
-        // the tool's work read as green. `launch:` already guards its own
-        // `restart-app` (see runLaunch); this is the `tool:` spelling of the
-        // same sub-tools, plus the native-* tools it never covered.
-        if (isNativeDevtoolsBlockResult(step.name, result)) {
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `${step.name} did not run (${result.status}): ${result.message}`,
+            reason: verdict.reason,
             result,
             outputHint,
             args,

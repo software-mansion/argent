@@ -23,7 +23,6 @@ describe("the all-clear report", () => {
       componentFindings: [],
       sessionContext: {
         reactCompilerEnabled: false,
-        strictModeEnabled: false,
         buildMode: "dev",
         rnArchitecture: "bridgeless",
         projectRoot: "/tmp/fake-project",

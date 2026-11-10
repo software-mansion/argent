@@ -18,7 +18,6 @@ const ROOT = "/repo/apps/mobile";
 
 const SESSION_CONTEXT: SessionContext = {
   reactCompilerEnabled: false,
-  strictModeEnabled: false,
   buildMode: "dev",
   rnArchitecture: "bridgeless",
   projectRoot: ROOT,
