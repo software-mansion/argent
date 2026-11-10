@@ -5,6 +5,12 @@ interface SelectedTarget {
   target: CDPTarget;
   webSocketUrl: string;
   isNewDebugger: boolean;
+  /**
+   * The legacy Hermes inspector, as opposed to a modern host (Fusebox, the C++
+   * connection, RN 0.74's experimental bridge page). Not `!isNewDebugger`: the
+   * bridge page is modern despite using the old frontend.
+   */
+  legacyInspector: boolean;
   deviceName: string;
 }
 
@@ -96,13 +102,13 @@ export function selectTarget(
   const fusebox = candidates.find(
     (t) => t.reactNative?.capabilities?.prefersFuseboxFrontend === true
   );
-  if (fusebox) return makeResult(fusebox, port, true);
+  if (fusebox) return makeResult(fusebox, port, true, false);
 
   const cppConn = candidates.find((t) => t.description?.endsWith("[C++ connection]"));
-  if (cppConn) return makeResult(cppConn, port, true);
+  if (cppConn) return makeResult(cppConn, port, true, false);
 
   const bridge = candidates.find((t) => t.title?.startsWith("React Native Bridge"));
-  if (bridge) return makeResult(bridge, port, false);
+  if (bridge) return makeResult(bridge, port, false, false);
 
   // The legacy inspector also lists worklet runtimes (Reanimated's "Reanimated
   // UI runtime", or one named by `createWorkletRuntime`), in any order. They are
@@ -111,9 +117,9 @@ export function selectTarget(
   const hermes = candidates.find((t) =>
     LEGACY_APP_RUNTIME_TITLES.has(t.title?.replace(CXX_CONNECTION_SUFFIX, ""))
   );
-  if (hermes) return makeResult(hermes, port, false);
+  if (hermes) return makeResult(hermes, port, false, true);
 
-  return makeResult(candidates[0]!, port, false);
+  return makeResult(candidates[0]!, port, false, true);
 }
 
 /** The bridge's (`HermesExecutorFactory`) and bridgeless (`HermesInstance`) names. */
@@ -125,11 +131,17 @@ const LEGACY_APP_RUNTIME_TITLES = new Set([
 /** RN 0.74's opt-in C++ packager connection appends this to every page title. */
 const CXX_CONNECTION_SUFFIX = / \[C\+\+ connection\]$/;
 
-function makeResult(target: CDPTarget, port: number, isNewDebugger: boolean): SelectedTarget {
+function makeResult(
+  target: CDPTarget,
+  port: number,
+  isNewDebugger: boolean,
+  legacyInspector: boolean
+): SelectedTarget {
   return {
     target,
     webSocketUrl: normalizeWsUrl(target.webSocketDebuggerUrl, port),
     isNewDebugger,
+    legacyInspector,
     deviceName: target.deviceName ?? target.title ?? "unknown",
   };
 }

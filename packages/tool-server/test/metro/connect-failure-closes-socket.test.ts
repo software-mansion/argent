@@ -19,8 +19,9 @@ scopeTempHome("argent-connect-failure-home-");
 let server: http.Server;
 let wss: WebSocketServer;
 let port: number;
-/** The method the mock runtime rejects, and whether it advertises Fusebox. */
+/** The method the mock runtime rejects, its page title, and whether it advertises Fusebox. */
 let rejected: string | null = "Runtime.enable";
+let title = "Hermes React Native";
 let fusebox = false;
 
 beforeAll(async () => {
@@ -36,7 +37,7 @@ beforeAll(async () => {
           JSON.stringify([
             {
               id: "0-1",
-              title: "Hermes React Native",
+              title,
               description: "com.example.app",
               vm: "Hermes",
               deviceName: "Pixel 7",
@@ -103,6 +104,7 @@ describe("debugger-connect failing partway", () => {
     "closes the socket it opened when %s fails",
     async (method) => {
       rejected = method;
+      title = "Hermes React Native";
       fusebox = false;
       expect(await connectAndCountOpenSockets()).toBe(0);
     }
@@ -112,12 +114,23 @@ describe("debugger-connect failing partway", () => {
     // A modern host rejects it only while it has no JS instance (mid-reload);
     // connecting then would write the binding off for the whole session.
     rejected = "Runtime.addBinding";
+    title = "Hermes React Native";
     fusebox = true;
+    expect(await connectAndCountOpenSockets()).toBe(0);
+  });
+
+  it("fails on RN 0.74's modern bridge page that rejects Runtime.addBinding", async () => {
+    // `inspectorEnableModernCDPRegistry` lists this page without Fusebox; its
+    // PageAgent rejects with -32601 while it has no instance, like Fusebox.
+    rejected = "Runtime.addBinding";
+    title = "React Native Bridge (Experimental)";
+    fusebox = false;
     expect(await connectAndCountOpenSockets()).toBe(0);
   });
 
   it("closes the socket when the console log file cannot be created", async () => {
     rejected = null;
+    title = "Hermes React Native";
     fusebox = false;
     fs.mkdirSync(path.join(os.homedir(), ".argent"));
     fs.writeFileSync(path.join(os.homedir(), ".argent", "tmp"), "");
