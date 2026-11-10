@@ -816,7 +816,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
   });
 
   // Documented in reference/e2e-yaml.mdx.
-  it("reads a field's aria-label, aria-labelledby or placeholder in place of its value, and an element's title", () => {
+  it("reads a field's aria-label, aria-labelledby or placeholder in place of its value, skips an aria-labelledby that names no element, and reads an element's title", () => {
     const labelEl = el({ text: "Email", attrs: { id: "lbl" }, rect: BOX }) as MockElement &
       Record<string, unknown>;
     labelEl.__textContent = "Email";
@@ -825,6 +825,12 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       inputEl({ value: "abc", attrs: { "id": "lb", "aria-labelledby": "lbl" }, rect: BOX }),
       labelEl,
       inputEl({ value: "abc", placeholder: "Type here", attrs: { id: "ph" }, rect: BOX }),
+      inputEl({
+        value: "abc",
+        placeholder: "Search",
+        attrs: { "id": "dangling", "aria-labelledby": "nope" },
+        rect: BOX,
+      }),
       textareaEl({ value: "abc", placeholder: "Notes", attrs: { id: "ta-ph" }, rect: BOX }),
       inputEl({ attrs: { id: "titled", title: "Hint" }, rect: BOX }),
       el({
@@ -836,6 +842,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "aria")).toMatchObject({ label: "Name" });
     expect(findById(tree, "lb")).toMatchObject({ label: "Email" });
     expect(findById(tree, "ph")).toMatchObject({ label: "Type here" });
+    expect(findById(tree, "dangling")).toMatchObject({ label: "Search" });
     expect(findById(tree, "ta-ph")).toMatchObject({ label: "Notes" });
     expect(findById(tree, "titled")).toMatchObject({ label: "Hint" });
     expect(findById(tree, "editor")).toMatchObject({ label: "Compose" });
