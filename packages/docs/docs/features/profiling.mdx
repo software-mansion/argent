@@ -79,7 +79,7 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 
 ## Limits
 
-- The React profiler is available in React Native apps with Hermes only. Argent does not profile Chromium and Electron apps.
+- The React profiler is available in React Native apps with Hermes only. Argent does not profile Chromium, Electron and Mac apps.
 - Argent records the data from the start of the session only. Start the session before you do the interaction.
 - One session at a time can own the React profiler of an app. If another agent owns the session, Argent tells the agent who the owner is. The agent must ask you before it takes over the session.
 - A session is stale after 5 minutes without a heartbeat. Only `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` calls refresh the heartbeat, so a long recording can go stale while you use the app. An agent on another tool-server can take over a stale session without asking you. Argent tells both agents about the takeover. On React Native 0.84 and older, Metro allows one debugger for each app. A call from a second tool-server disconnects the first tool-server. Argent reports this loss to the first agent as a lost debugger connection, not as a takeover.
