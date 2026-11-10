@@ -289,8 +289,9 @@ describe("restart-app on Chromium", () => {
 
   it("says it stopped the app when the port is still held after the kill", async () => {
     await bootElectronApp({ appPath: appDir, port });
-    // Beside the app's loopback listener, so it outlives the app on the port.
-    const foreign = await holdPort(cdpServer(), "0.0.0.0");
+    // The app is still running, but another process holds its port, so the port outlives the kill.
+    await releasePort(await childServers.get(children[0]!));
+    const foreign = await holdPort(cdpServer());
 
     const err = await registryWithRestartApp()
       .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
