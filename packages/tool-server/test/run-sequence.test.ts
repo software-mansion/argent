@@ -353,6 +353,14 @@ describe("run-sequence", () => {
     expect(await settledAfter([tap, tap], HARMONY)).toEqual(["gesture-tap", "gesture-tap"]);
   });
 
+  it("does not settle on a Mac app", async () => {
+    const tap = { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } };
+    expect(await settledAfter([tap, tap], "macos-app-com.example.Probe")).toEqual([
+      "gesture-tap",
+      "gesture-tap",
+    ]);
+  });
+
   it("does not settle on a device the idle tool does not support", async () => {
     const registry = {
       getTool: vi.fn((id: string) =>

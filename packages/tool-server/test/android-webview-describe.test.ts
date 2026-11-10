@@ -126,7 +126,7 @@ describe("describeAndroid — re-read on an unread WebView", () => {
   });
 });
 
-describe("describeAndroid — helper failure", () => {
+describe("describeAndroid: helper failure", () => {
   it("falls back to uiautomator dump when the helper cannot be started", async () => {
     const native = `<?xml version='1.0'?><hierarchy rotation="0">
       <node class="android.widget.Button" text="Settings" clickable="true" bounds="[0,0][200,100]"/>
