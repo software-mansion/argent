@@ -112,11 +112,13 @@ export async function toMcpContent(
   return [{ type: "text" as const, text: stringifyForText(result) }];
 }
 
-// Control characters a reader can't see. Tab and line breaks are left alone.
+// Control characters a reader can't see: C0, DEL and C1, which holds the 8-bit
+// CSI (U+009B) a terminal acts on. Tab and line breaks are left alone, and so
+// are U+2028 and U+2029, which real labels hold.
 // eslint-disable-next-line no-control-regex
-const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
+const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
 
-/** Control characters written as JSON would write them, so they stay visible. */
+/** Control characters written as JSON `\u` escapes, so they stay visible. */
 function showHiddenChars(text: string): string {
   return text.replace(HIDDEN_CHARS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
@@ -124,7 +126,7 @@ function showHiddenChars(text: string): string {
 /**
  * A string result goes out as text: JSON-encoding it would ship a report or a
  * tree as one quoted line of `\n` and `\"` escapes. Control characters are
- * written as JSON would write them, so they stay visible.
+ * written as JSON `\u` escapes, so they stay visible.
  * Anything else is compact JSON. JSON.stringify(undefined) returns undefined,
  * which would make an invalid MCP text block; coerce to "null".
  */

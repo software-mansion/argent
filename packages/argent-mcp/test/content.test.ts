@@ -50,6 +50,16 @@ describe("toMcpContent", () => {
     expect(result).toEqual([{ type: "text", text: "a\\u001b[0m\tb\r\nc\\u0000" }]);
   });
 
+  it("writes C1 control characters in a string result as visible escapes", async () => {
+    const result = await toMcpContent("a\u009b31mb\u0085c\u0080d\u009fe");
+    expect(result).toEqual([{ type: "text", text: "a\\u009b31mb\\u0085c\\u0080d\\u009fe" }]);
+  });
+
+  it("leaves line and paragraph separators and invisible format characters alone", async () => {
+    const text = "a\u2028b\u2029c\u200bd\u202ee\u00a0f";
+    expect(await toMcpContent(text)).toEqual([{ type: "text", text }]);
+  });
+
   it("writes object results without indentation", async () => {
     const value = { a: { b: [1, 2] }, c: null };
     const result = await toMcpContent(value);
@@ -1312,6 +1322,13 @@ describe("describeResultText", () => {
     const description = `${header}  button "Pay\u001b[31mRED\u0000now"  (0.1, 0.2, 0.3, 0.1)`;
     expect(describeResultText({ description, source: "ax-service", hint: "a\u0007b" })).toBe(
       `${header}button "Pay\\u001b[31mRED\\u0000now" (0.1, 0.2, 0.3, 0.1)\nHint: a\\u0007b`
+    );
+  });
+
+  it("writes C1 control characters as visible escapes, in the tree and after it", () => {
+    const description = `${header}  button "Pay\u009b31mRED\u0085now"  (0.1, 0.2, 0.3, 0.1)`;
+    expect(describeResultText({ description, source: "ax-service", hint: "a\u0080b" })).toBe(
+      `${header}button "Pay\\u009b31mRED\\u0085now" (0.1, 0.2, 0.3, 0.1)\nHint: a\\u0080b`
     );
   });
 
