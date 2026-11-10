@@ -38,6 +38,12 @@ const execFileAsync = promisify(execFile);
 
 /** Set in the simulator's launchd environment to arm the guest hook in apps launched afterwards. */
 const AUDIO_DIR_ENV = "ARGENT_AUDIO_DIR";
+/**
+ * Contract version the hook reports as `proto` in its status file (ArgentAudio.c `PROTO`). A hook with another
+ * version, or none (built before it existed), is refused at once instead of waiting for acknowledgements it may
+ * not give.
+ */
+export const AUDIO_HOOK_PROTO = 1;
 const POLL_INTERVAL_MS = 50;
 /** The guest polls every 50 ms and reacts to a request within a couple of polls. */
 const ACK_TIMEOUT_MS = 4_000;
@@ -141,6 +147,8 @@ export async function armAudio(
 
 /** Live view of one app's hook, parsed from its `st.<bundleId>` file. */
 interface AppAudioStatus {
+  /** Contract version of the hook; 0 when the hook predates it. */
+  proto: number;
   pid: number;
   /** Sample rate of the app's audio device; 0 until the app opens audio. */
   sampleRate: number;
@@ -168,6 +176,7 @@ export function parseAppStatus(text: string): AppAudioStatus {
   const num = (key: string) => Number(kv.get(key) ?? 0) || 0;
   const input = kv.get("input");
   return {
+    proto: num("proto"),
     pid: num("pid"),
     sampleRate: num("rate"),
     streams: num("streams"),
@@ -347,6 +356,21 @@ export function clearAudioInput(udid: string): void {
   removeFiles(dir, "in-");
 }
 
+/** Fails fast when the app runs a hook that speaks another version of the control protocol. */
+export function assertHookProto(status: AppAudioStatus | null, bundleId: string): void {
+  if (!status || status.proto === AUDIO_HOOK_PROTO) return;
+  throw new FailureError(
+    `${bundleId} runs an older audio hook (protocol ${status.proto || "none"}, this tool-server needs ` +
+      `${AUDIO_HOOK_PROTO}). Call restart-app for ${bundleId} so it loads the current hook, then retry.`,
+    {
+      error_code: FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE,
+      failure_stage: "audio_hook_status",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
 function noHookError(bundleId: string): FailureError {
   return new FailureError(
     `The audio hook is not live in ${bundleId}. Apps that were running before the first audio tool call ` +
@@ -375,6 +399,7 @@ export async function startRecording(
 ): Promise<void> {
   assertBundleId(bundleId);
   const status = readAppStatus(udid, bundleId);
+  assertHookProto(status, bundleId);
   // A dormant hook acknowledges nothing until the app opens audio; it reads the request when it does.
   const dormant = !status && (await isAppArmed(udid, bundleId));
   if (!status && !dormant) throw noHookError(bundleId);

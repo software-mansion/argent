@@ -65,6 +65,7 @@ import {
   clearAudioInput,
   ensureAudioEnv,
   listLiveApps,
+  assertHookProto,
   parseAppStatus,
   readAppStatus,
   setAudioInput,
@@ -79,6 +80,7 @@ const dir = audioDir(UDID);
 
 function statusText(fields: Record<string, string | number>): string {
   const all = {
+    proto: 1,
     pid: process.pid,
     rate: 48000,
     streams: 1,
@@ -171,6 +173,44 @@ describe("parseAppStatus", () => {
   it("reads an unknown or missing input as the microphone", () => {
     expect(parseAppStatus("pid=1\n").input).toBe("microphone");
     expect(parseAppStatus("input=mic\n").input).toBe("microphone");
+  });
+});
+
+describe("hook protocol", () => {
+  it("parses proto, 0 when missing", () => {
+    expect(parseAppStatus(statusText({})).proto).toBe(1);
+    expect(parseAppStatus("pid=1\n").proto).toBe(0);
+  });
+
+  it("accepts the matching version and no status at all", () => {
+    expect(() => assertHookProto(parseAppStatus(statusText({})), BUNDLE)).not.toThrow();
+    expect(() => assertHookProto(null, BUNDLE)).not.toThrow();
+  });
+
+  it.each([
+    ["missing", "pid=1\n", "none"],
+    ["mismatched", "proto=2\npid=1\n", "2"],
+  ])("refuses a %s version with AUDIO_HOOK_NOT_ACTIVE", (_, text, shown) => {
+    const err = (() => {
+      try {
+        assertHookProto(parseAppStatus(text), BUNDLE);
+      } catch (e) {
+        return e;
+      }
+    })();
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
+    expect((err as Error).message).toContain(`protocol ${shown}`);
+    expect((err as Error).message).toContain("restart-app");
+  });
+
+  it("fails a recording at once, without writing a request, for an app on an older hook", async () => {
+    fs.writeFileSync(path.join(dir, `st.${BUNDLE}`), statusText({}).replace(/^proto=1\n/, ""));
+    const t0 = Date.now();
+    const err = await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), false).catch((e: unknown) => e);
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
+    expect((err as Error).message).toContain("older audio hook");
+    expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
   });
 });
 

@@ -7,7 +7,9 @@ import {
   armAudio,
   clearAudioInput,
   listLiveApps,
+  assertHookProto,
   isAppArmed,
+  readAppStatus,
   setAudioInput,
 } from "../../utils/ios-audio";
 
@@ -91,6 +93,8 @@ Fails if the file cannot be decoded, the simulator is not booted, or the target 
     }
     // Every call arms, including the release: recording the speaker needs the hook but no input override.
     await armAudio(params.udid, services.nativeDevtools as NativeDevtoolsApi);
+    // An app on an older hook cannot be driven: say so before changing anything.
+    if (params.bundleId) assertHookProto(readAppStatus(params.udid, params.bundleId), params.bundleId);
     if (params.source === "microphone") {
       clearAudioInput(params.udid);
       return withApps(params, { source: "microphone" });
