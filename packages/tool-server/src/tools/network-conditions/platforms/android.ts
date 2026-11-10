@@ -1,28 +1,44 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { runAdb } from "../../../utils/adb";
-import { runEmuConsole } from "../../../utils/emulator-console";
-import type { NetworkConditions } from "../../../utils/network-conditions";
+import { adbShell, runAdb } from "../../../utils/adb";
 import { requestedConditions, type NetworkConditionsParams } from "../schema";
 import type { AndroidServices, NetworkConditionsResult } from "../types";
 
-/** Emulator console `network speed`: `<up>:<down>` in kbps, where 0 means no limit. */
-function emulatorSpeed(conditions: NetworkConditions | null): string {
-  if (conditions?.uploadKbps === undefined && conditions?.downloadKbps === undefined) {
-    return "full";
-  }
-  return `${conditions.uploadKbps ?? 0}:${conditions.downloadKbps ?? 0}`;
-}
+const NETWORK_UP_TIMEOUT_MS = 15_000;
+const NETWORK_UP_POLL_MS = 500;
 
-function emulatorDelay(conditions: NetworkConditions | null): string {
-  return conditions?.latencyMs ? String(conditions.latencyMs) : "none";
+function onlyOfflineSupported(): FailureError {
+  return new FailureError(
+    "On an Android emulator network-conditions supports only `offline`. The emulator console's " +
+      "speed and delay settings do not shape the Wi-Fi network that current system images use.",
+    {
+      error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+      failure_stage: "network_conditions_params",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    }
+  );
 }
-
-const offlineSerials = new Set<string>();
 
 async function setRadios(serial: string, enabled: boolean): Promise<void> {
   const state = enabled ? "enable" : "disable";
   await runAdb(["-s", serial, "shell", "svc", "wifi", state]);
-  await runAdb(["-s", serial, "shell", "svc", "data", state]);
+  await runAdb(["-s", serial, "shell", "svc", "data", state]).catch((err: unknown) => {
+    if (!String(err).includes("Can't find service")) throw err;
+  });
+}
+
+async function hasDefaultNetwork(serial: string): Promise<boolean> {
+  const out = await adbShell(serial, "dumpsys connectivity | grep -m1 'Active default network'");
+  return /Active default network: \d+/.test(out);
+}
+
+async function waitForNetwork(serial: string): Promise<void> {
+  const deadline = Date.now() + NETWORK_UP_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (await hasDefaultNetwork(serial).catch(() => false)) return;
+    await new Promise((resolve) => setTimeout(resolve, NETWORK_UP_POLL_MS));
+  }
 }
 
 export const androidImpl: PlatformImpl<
@@ -34,14 +50,14 @@ export const androidImpl: PlatformImpl<
   async handler(_services, params) {
     const serial = params.udid;
     const conditions = requestedConditions(params);
-    await runEmuConsole(serial, ["network", "speed", emulatorSpeed(conditions)]);
-    await runEmuConsole(serial, ["network", "delay", emulatorDelay(conditions)]);
-    if (conditions?.offline) {
+    const offlineOnly = conditions?.offline === true && Object.keys(conditions).length === 1;
+    if (conditions && !offlineOnly) throw onlyOfflineSupported();
+
+    if (conditions) {
       await setRadios(serial, false);
-      offlineSerials.add(serial);
-    } else if (conditions === null || offlineSerials.has(serial)) {
+    } else {
       await setRadios(serial, true);
-      offlineSerials.delete(serial);
+      await waitForNetwork(serial);
     }
     return { scope: "device", conditions };
   },

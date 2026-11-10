@@ -67,30 +67,36 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 
 `network-conditions` sets the network conditions of an iOS simulator app, an Android emulator or a Chromium tab. Each call replaces the conditions of the previous call.
 
-| Parameter      | Description                                                   |
-| -------------- | ------------------------------------------------------------- |
-| `udid`         | The device                                                    |
-| `bundleId`     | iOS only, and required on iOS: the app to throttle            |
-| `latencyMs`    | Added latency in milliseconds, from 0 to 60000                |
-| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.  |
-| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.    |
-| `offline`      | `true` makes every request fail as if no network is available |
+| Parameter      | Description                                                                       |
+| -------------- | --------------------------------------------------------------------------------- |
+| `udid`         | The device                                                                        |
+| `bundleId`     | iOS only, and required on iOS: the app to throttle                                |
+| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000 |
+| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                      |
+| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                        |
+| `offline`      | `true` makes every request fail as if no network is available                     |
 
-A call without `latencyMs`, `downloadKbps`, `uploadKbps` and `offline` removes the throttle. The result contains `scope` and `conditions`. `conditions` is `null` after a removal. `scope` tells which traffic Argent changes:
+A call without `latencyMs`, `downloadKbps`, `uploadKbps` and `offline` removes the throttle. An unknown parameter fails the call. The result contains `scope` and `conditions`. `conditions` is `null` after a removal. `scope` tells which traffic Argent changes:
 
 | `scope`  | Target             | Traffic                                                                                  |
 | -------- | ------------------ | ---------------------------------------------------------------------------------------- |
 | `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`) |
-| `device` | Android emulator   | All traffic of the emulator. Argent uses the emulator console.                           |
-| `tab`    | Chromium, Electron | The active tab. Argent applies the conditions again after a tab switch.                  |
+| `device` | Android emulator   | All traffic of the emulator. Only `offline` is available.                                |
+| `tab`    | Chromium, Electron | The requests of the page in the active tab                                               |
+
+`latencyMs` sets a minimum. A response that takes longer than `latencyMs` gets no extra delay.
 
 On iOS:
 
 - The app must not be an Apple system app, and the native devtools must connect to it. If the result has a `status` field, follow its `message`, as for `native-network-logs`.
-- Argent delays the data that the app receives. The server gets each request immediately.
+- Argent delays the data that the app receives. The server gets each request and each upload immediately. With `uploadKbps`, the app gets the response after the time that the upload would take.
+- Argent does not change WebSocket connections and requests to the Metro port of the device.
 - After a restart of the app, Argent applies the conditions again when the native devtools connect. Requests before that time have no throttle.
+- When the tool-server stops or `stop-all-simulator-servers` stops the native devtools, the app removes the conditions.
 
-On Android, `offline: true` turns off Wi-Fi and mobile data with `svc`. A call without conditions always turns on Wi-Fi and mobile data. A call with other conditions turns them on only if Argent turned them off.
+On Android, the emulator console cannot shape the Wi-Fi network of current system images. Thus `latencyMs`, `downloadKbps` and `uploadKbps` fail on an Android emulator. `offline: true` turns off Wi-Fi and mobile data with `svc`. A call without conditions turns on Wi-Fi and mobile data, and waits up to 15 seconds for a network. The emulator stays offline after the tool-server stops.
+
+On Chromium, Argent applies the conditions to the page of the active tab. Argent applies them again after a tab switch with `chromium-tabs`, and before a tab that `chromium-tabs` opens loads its URL. Service workers, web workers and cross-site iframes keep the full speed. When the active tab closes outside Argent, or when another DevTools client detaches from the page, the conditions can go away. Call `network-conditions` again.
 
 `network-conditions` fails on a physical iPhone and on a physical Android device.
 

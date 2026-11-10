@@ -161,7 +161,9 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
     label?: string;
     activate?: boolean;
   }): Promise<TabInfo[]> {
-    const url = opts?.url ?? "about:blank";
+    const activating = opts?.activate !== false;
+    // An active tab loads its url only after `onActivated` has prepared the new session.
+    const url = activating ? "about:blank" : (opts?.url ?? "about:blank");
     const created = await withBrowserClient(async (browser) => {
       let out: { targetId?: string };
       try {
@@ -200,12 +202,14 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       labelToTab.set(opts.label, tabId);
       tabToLabel.set(tabId, opts.label);
     }
-    if (opts?.activate !== false) {
-      const targets = await listTargets();
-      await activate(created, targets);
-      return targets.map(toInfo);
+    if (activating) {
+      await activate(created, await listTargets());
+      if (opts?.url) await cdp.send("Page.navigate", { url: opts.url });
     }
-    return list();
+    const tabs = await list();
+    return tabs.map((tab) =>
+      tab.targetId === created && !tab.url && opts?.url ? { ...tab, url: opts.url } : tab
+    );
   }
 
   async function close(ref?: string): Promise<TabInfo[]> {

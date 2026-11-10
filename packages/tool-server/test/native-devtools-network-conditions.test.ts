@@ -41,11 +41,11 @@ const SLOW: CdpNetworkConditions = {
   uploadThroughput: -1,
 };
 
-const ACTIVATE = { type: "Control", payload: { command: "activateNetworkInspection" } };
-const EMULATE_SLOW = {
-  type: "CDP",
-  payload: { method: "Network.emulateNetworkConditions", params: SLOW },
-};
+const ACTIVATE = ["Control", "activateNetworkInspection"];
+const BYPASS_METRO = ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [8081] }];
+const EMULATE_SLOW = ["CDP", "Network.emulateNetworkConditions", SLOW];
+
+type Message = { type: string; payload: Record<string, any> };
 
 interface FakeAgent {
   received: unknown[];
@@ -53,7 +53,10 @@ interface FakeAgent {
   close(): void;
 }
 
-function connectAgent(): Promise<FakeAgent> {
+/** `reply` answers each CDP request that carries an id; `undefined` leaves it unanswered. */
+function connectAgent(
+  reply: (msg: Message) => Record<string, unknown> | undefined = () => ({ result: {} })
+): Promise<FakeAgent> {
   return new Promise((resolve) => {
     const received: unknown[] = [];
     let buffer = "";
@@ -69,7 +72,22 @@ function connectAgent(): Promise<FakeAgent> {
       buffer += chunk.toString();
       const lines = buffer.split("\n");
       buffer = lines.pop()!;
-      for (const line of lines) if (line) received.push(JSON.parse(line));
+      for (const line of lines) {
+        if (!line) continue;
+        const msg = JSON.parse(line) as Message;
+        const { payload } = msg;
+        received.push(
+          [msg.type, payload.method ?? payload.command, payload.params].filter(
+            (part) => part !== undefined
+          )
+        );
+        const answer = msg.type === "CDP" && payload.id !== undefined ? reply(msg) : undefined;
+        if (answer) {
+          socket.write(
+            JSON.stringify({ type: "CDP", payload: { id: payload.id, ...answer } }) + "\n"
+          );
+        }
+      }
     });
   });
 }
@@ -83,79 +101,128 @@ afterEach(async () => {
   disposeInstance = null;
 });
 
-async function setup(): Promise<{ api: NativeDevtoolsApi; agent: FakeAgent }> {
+async function startService(): Promise<NativeDevtoolsApi> {
   const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
   disposeInstance = instance.dispose;
-  const api = instance.api as NativeDevtoolsApi;
-  const agent = await connectAgent();
+  return instance.api as NativeDevtoolsApi;
+}
+
+async function connect(api: NativeDevtoolsApi, reply?: Parameters<typeof connectAgent>[0]) {
+  const agent = await connectAgent(reply);
   agents.push(agent);
   await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+  return agent;
+}
+
+async function setup(reply?: Parameters<typeof connectAgent>[0]) {
+  const api = await startService();
+  const agent = await connect(api, reply);
   return { api, agent };
 }
 
 describe("native devtools network conditions", () => {
-  it("sends the conditions to the app as a CDP message", async () => {
+  it("sends the Metro bypass and the conditions, and resolves once the app confirms them", async () => {
     const { api, agent } = await setup();
 
-    api.setNetworkConditions(BUNDLE, SLOW);
+    await api.setNetworkConditions(BUNDLE, SLOW);
 
-    await vi.waitFor(() => expect(agent.received).toEqual([EMULATE_SLOW]));
+    expect(agent.received).toEqual([BYPASS_METRO, EMULATE_SLOW]);
   });
+
+  it("rejects with the app's error when the app refuses the conditions", async () => {
+    const { api } = await setup((msg) =>
+      msg.payload.method === "Network.emulateNetworkConditions"
+        ? { error: { message: "latency must be >= 0" } }
+        : { result: {} }
+    );
+
+    await expect(api.setNetworkConditions(BUNDLE, SLOW)).rejects.toThrow("latency must be >= 0");
+  });
+
+  it("rejects when the app never answers", async () => {
+    const { api } = await setup(() => undefined);
+
+    await expect(api.setNetworkConditions(BUNDLE, SLOW)).rejects.toThrow(/timed out/);
+  }, 10_000);
 
   it("re-sends the conditions after every network inspection activation", async () => {
     const { api, agent } = await setup();
-    api.setNetworkConditions(BUNDLE, SLOW);
+    await api.setNetworkConditions(BUNDLE, SLOW);
 
     api.activateNetworkInspection(BUNDLE);
 
-    await vi.waitFor(() => expect(agent.received).toEqual([EMULATE_SLOW, ACTIVATE, EMULATE_SLOW]));
+    await vi.waitFor(() =>
+      expect(agent.received).toEqual([
+        BYPASS_METRO,
+        EMULATE_SLOW,
+        ACTIVATE,
+        BYPASS_METRO,
+        EMULATE_SLOW,
+      ])
+    );
   });
 
   it("re-sends the conditions when the app reconnects after a relaunch", async () => {
     const { api } = await setup();
     api.activateNetworkInspection(BUNDLE);
-    api.setNetworkConditions(BUNDLE, SLOW);
+    await api.setNetworkConditions(BUNDLE, SLOW);
 
     const relaunched = await connectAgent();
     agents.push(relaunched);
 
-    await vi.waitFor(() => expect(relaunched.received).toEqual([ACTIVATE, EMULATE_SLOW]));
+    await vi.waitFor(() =>
+      expect(relaunched.received).toEqual([ACTIVATE, BYPASS_METRO, EMULATE_SLOW])
+    );
   });
 
   it("clears back to plain monitoring when network inspection is active", async () => {
     const { api, agent } = await setup();
     api.activateNetworkInspection(BUNDLE);
-    api.setNetworkConditions(BUNDLE, SLOW);
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    agent.received.length = 0;
 
-    api.setNetworkConditions(BUNDLE, null);
+    await api.setNetworkConditions(BUNDLE, null);
 
-    await vi.waitFor(() => expect(agent.received).toEqual([ACTIVATE, EMULATE_SLOW, ACTIVATE]));
+    expect(agent.received).toEqual([
+      ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [] }],
+      ["CDP", "Network.enable", {}],
+    ]);
   });
 
   it("clears with Network.disable when network inspection was never activated", async () => {
     const { api, agent } = await setup();
-    api.setNetworkConditions(BUNDLE, SLOW);
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    agent.received.length = 0;
 
-    api.setNetworkConditions(BUNDLE, null);
+    await api.setNetworkConditions(BUNDLE, null);
 
-    await vi.waitFor(() =>
-      expect(agent.received).toEqual([
-        EMULATE_SLOW,
-        { type: "CDP", payload: { method: "Network.disable" } },
-      ])
-    );
+    expect(agent.received).toEqual([
+      ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [] }],
+      ["CDP", "Network.disable", {}],
+    ]);
   });
 
   it("does not re-send cleared conditions on reconnect", async () => {
     const { api, agent } = await setup();
-    api.setNetworkConditions(BUNDLE, SLOW);
-    api.setNetworkConditions(BUNDLE, null);
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    await api.setNetworkConditions(BUNDLE, null);
 
     const relaunched = await connectAgent();
     agents.push(relaunched);
     await vi.waitFor(() => expect(agent.isClosed()).toBe(true));
-    api.setNetworkConditions(BUNDLE, SLOW);
+    api.activateNetworkInspection(BUNDLE);
 
-    await vi.waitFor(() => expect(relaunched.received).toEqual([EMULATE_SLOW]));
+    await vi.waitFor(() => expect(relaunched.received).toEqual([ACTIVATE]));
+  });
+
+  it("forgets conditions cleared while the app was not connected", async () => {
+    const api = await startService();
+    await api.setNetworkConditions(BUNDLE, SLOW);
+    await api.setNetworkConditions(BUNDLE, null);
+
+    const agent = await connect(api);
+    api.activateNetworkInspection(BUNDLE);
+
+    await vi.waitFor(() => expect(agent.received).toEqual([ACTIVATE]));
   });
 });

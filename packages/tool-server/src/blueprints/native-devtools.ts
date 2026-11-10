@@ -12,6 +12,7 @@ import {
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
 import { XcodeFirstLaunchPendingError } from "../utils/dependency-errors";
 import type { CdpNetworkConditions } from "../utils/network-conditions";
+import { metroPort } from "../utils/debugger/metro-port";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -498,11 +499,12 @@ export interface NativeDevtoolsApi {
    */
   activateNetworkInspection(bundleId: string): void;
   /**
-   * Throttles one app's URL loading, or with `null` removes the throttle.
-   * Sticky like {@link activateNetworkInspection}: re-sent after every
-   * activation and reconnect, since both reset the app's conditions.
+   * Throttles one app's URL loading, or with `null` removes the throttle, and
+   * resolves once a connected app confirms it. Sticky like
+   * {@link activateNetworkInspection}: re-sent after every activation and
+   * reconnect, since both reset the app's conditions.
    */
-  setNetworkConditions(bundleId: string, conditions: CdpNetworkConditions | null): void;
+  setNetworkConditions(bundleId: string, conditions: CdpNetworkConditions | null): Promise<void>;
   getNetworkLog(bundleId: string): NetworkEvent[];
   clearNetworkLog(bundleId: string): void;
   getAppState(bundleId: string): Promise<NativeAppState>;
@@ -755,7 +757,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       writeMessage(socket, "Control", { command: "activateNetworkInspection" });
     };
 
+    const metroBypass = () => ({ bypassPorts: [metroPort({ device_id: udid })] });
+
     const writeConditions = (socket: net.Socket, conditions: CdpNetworkConditions): void => {
+      writeMessage(socket, "CDP", { method: "NativeDevtoolsIos.configure", params: metroBypass() });
       writeMessage(socket, "CDP", {
         method: "Network.emulateNetworkConditions",
         params: conditions,
@@ -773,10 +778,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       return runningBundleIds.has(bundleId);
     };
 
-    function sendViewInspectorRpc(
+    function sendRpc(
       targetBundleId: string,
-      method: InspectorMethod,
-      params: Record<string, unknown> = {}
+      type: "ViewInspector" | "CDP",
+      method: string,
+      params: Record<string, unknown>,
+      timeoutMs: number
     ): Promise<unknown> {
       const conn = connections.get(targetBundleId);
       if (!conn) {
@@ -790,27 +797,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         );
       }
       const id = nextRpcId++;
-      // A heavy cold start can stall the app for several seconds, and the flow
-      // runner re-reads the hierarchy through exactly that window. Give the
-      // flows' workhorse read time to ride the stall out instead of failing the
-      // step — mirroring the Android devtools client's 5s default / 15s
-      // getHierarchy tiers. Everything else (including the per-read
-      // Application.getState probe and the interactive point queries) keeps the
-      // 5s ceiling so one-shot agent tools stay snappy on a wedged app.
-      const timeoutMs = method === "ViewHierarchy.getFullHierarchy" ? 15_000 : 5_000;
       return new Promise((resolve, reject) => {
         pendingRpc.set(id, { resolve, reject });
-        conn.socket.write(
-          JSON.stringify({
-            type: "ViewInspector",
-            payload: { id, method, params },
-          }) + "\n"
-        );
+        writeMessage(conn.socket, type, { id, method, params });
         setTimeout(() => {
           if (pendingRpc.has(id)) {
             pendingRpc.delete(id);
             reject(
-              new FailureError(`ViewInspector RPC timed out: ${method}`, {
+              new FailureError(`${type} RPC timed out: ${method}`, {
                 error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
                 failure_stage: "native_devtools_rpc_request",
                 failure_area: "tool_server",
@@ -821,6 +815,44 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }, timeoutMs);
       });
     }
+
+    function sendViewInspectorRpc(
+      targetBundleId: string,
+      method: InspectorMethod,
+      params: Record<string, unknown> = {}
+    ): Promise<unknown> {
+      // A heavy cold start can stall the app for several seconds, and the flow
+      // runner re-reads the hierarchy through exactly that window. Give the
+      // flows' workhorse read time to ride the stall out instead of failing the
+      // step — mirroring the Android devtools client's 5s default / 15s
+      // getHierarchy tiers. Everything else (including the per-read
+      // Application.getState probe and the interactive point queries) keeps the
+      // 5s ceiling so one-shot agent tools stay snappy on a wedged app.
+      const timeoutMs = method === "ViewHierarchy.getFullHierarchy" ? 15_000 : 5_000;
+      return sendRpc(targetBundleId, "ViewInspector", method, params, timeoutMs);
+    }
+
+    const sendCdpRpc = (
+      targetBundleId: string,
+      method: string,
+      params: Record<string, unknown> = {}
+    ) => sendRpc(targetBundleId, "CDP", method, params, 5_000);
+
+    const settleRpc = (payload: { id: number; result?: unknown; error?: { message: string } }) => {
+      const pending = pendingRpc.get(payload.id);
+      if (!pending) return;
+      pendingRpc.delete(payload.id);
+      if (payload.error) {
+        pending.reject(
+          new FailureError(payload.error.message, {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+            failure_stage: "native_devtools_rpc_response",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          })
+        );
+      } else pending.resolve(payload.result);
+    };
 
     // Stale socket file from a crashed previous run (unix-only). Never in
     // attach mode: that path is the provider's live socket, not ours.
@@ -861,6 +893,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
           if (msg.type === "CDP") {
             const p = msg.payload;
+            if (p.id !== undefined) settleRpc(p);
             // Unsolicited events have method but no id
             if (p.method && p.id === undefined) {
               const conn = connections.get(bundleId);
@@ -877,22 +910,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             }
           }
 
-          if (msg.type === "ViewInspector") {
-            const p = msg.payload;
-            const pending = pendingRpc.get(p.id);
-            if (!pending) return;
-            pendingRpc.delete(p.id);
-            if (p.error) {
-              pending.reject(
-                new FailureError(p.error.message, {
-                  error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
-                  failure_stage: "native_devtools_rpc_response",
-                  failure_area: "tool_server",
-                  error_kind: "subprocess",
-                })
-              );
-            } else pending.resolve(p.result);
-          }
+          if (msg.type === "ViewInspector") settleRpc(msg.payload);
         },
       });
 
@@ -1114,14 +1132,18 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (conn) sendNetworkSetup(bundleId, conn.socket);
       },
 
-      setNetworkConditions(bundleId, conditions) {
+      async setNetworkConditions(bundleId, conditions) {
         if (conditions) networkConditions.set(bundleId, conditions);
         else networkConditions.delete(bundleId);
-        const conn = connections.get(bundleId);
-        if (!conn) return;
-        if (conditions) writeConditions(conn.socket, conditions);
-        else if (activatedBundleIds.has(bundleId)) writeActivation(conn.socket);
-        else writeMessage(conn.socket, "CDP", { method: "Network.disable" });
+        if (!connections.has(bundleId)) return;
+        const bypassPorts = conditions ? metroBypass() : { bypassPorts: [] };
+        await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", bypassPorts);
+        if (conditions) {
+          await sendCdpRpc(bundleId, "Network.emulateNetworkConditions", { ...conditions });
+        } else {
+          const monitoring = activatedBundleIds.has(bundleId);
+          await sendCdpRpc(bundleId, monitoring ? "Network.enable" : "Network.disable");
+        }
       },
 
       getNetworkLog: (bundleId) => [...(connections.get(bundleId)?.networkLog ?? [])],

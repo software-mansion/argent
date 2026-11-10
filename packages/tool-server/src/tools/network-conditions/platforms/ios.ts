@@ -2,7 +2,9 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { toCdpNetworkConditions } from "../../../utils/network-conditions";
 import {
+  isInjectableBundleId,
   precheckNativeDevtools,
+  type NativeDevtoolsApi,
   type NativeDevtoolsPrecheckBlock,
 } from "../../../blueprints/native-devtools";
 import { requestedConditions, type NetworkConditionsParams } from "../schema";
@@ -26,6 +28,24 @@ function notConnected(bundleId: string): FailureError {
   });
 }
 
+function appleApp(bundleId: string): FailureError {
+  return new FailureError(
+    `${bundleId} is an Apple system app. network-conditions on iOS throttles only a non-Apple app that Argent launched with native devtools.`,
+    {
+      error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_INJECTABLE,
+      failure_stage: "network_conditions_params",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
+}
+
+async function isNotRunning(api: NativeDevtoolsApi, bundleId: string): Promise<boolean> {
+  if (api.isConnected(bundleId)) return false;
+  const state = await api.appConnectionState(bundleId).catch(() => null);
+  return state === "not_running";
+}
+
 export const iosImpl: PlatformImpl<
   IosServices,
   NetworkConditionsParams,
@@ -35,16 +55,17 @@ export const iosImpl: PlatformImpl<
   async handler(services, params) {
     const { bundleId } = params;
     if (!bundleId) throw missingBundleId();
+    if (!isInjectableBundleId(bundleId)) throw appleApp(bundleId);
     const api = services.nativeDevtools;
     const conditions = requestedConditions(params);
 
-    if (conditions) {
+    if (conditions || !(await isNotRunning(api, bundleId))) {
       const blocked = await precheckNativeDevtools(api, params.udid, bundleId);
       if (blocked) return blocked;
       if (!api.isConnected(bundleId)) throw notConnected(bundleId);
     }
 
-    api.setNetworkConditions(bundleId, conditions && toCdpNetworkConditions(conditions));
+    await api.setNetworkConditions(bundleId, conditions && toCdpNetworkConditions(conditions));
     return { scope: "app", conditions };
   },
 };

@@ -99,15 +99,20 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 
 Argent can make the network slow or offline. The agent then tests loading states, timeouts, retries and the offline behavior of the app.
 
-The agent sets an added latency, a download limit, an upload limit, or offline mode. The scope of the change depends on the platform:
+The agent sets a minimum latency, a download limit, an upload limit, or offline mode. The scope of the change depends on the platform:
 
-| Platform              | Scope                                                       |
-| --------------------- | ----------------------------------------------------------- |
-| iOS simulator         | One app. Argent slows the `URLSession` requests of the app. |
-| Android emulator      | The full emulator                                           |
-| Chromium and Electron | The active tab                                              |
+| Platform              | Scope                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| iOS simulator         | One app. Argent slows the `URLSession` requests of the app, except WebSockets.          |
+| Android emulator      | The full emulator. Only offline mode is available.                                      |
+| Chromium and Electron | The page of the active tab, without its workers, service workers and cross-site iframes |
 
-The conditions stay until the agent changes them or removes them. Argent does not set network conditions on a physical device.
+The conditions stay until the agent changes them or removes them, also in later steps and later e2e tests. Remove them at the end of an e2e test. Some events also remove them:
+
+- iOS: the tool-server stops, or `stop-all-simulator-servers` stops the native devtools of the device.
+- Chromium: the active tab closes outside Argent, or another DevTools client detaches from the page.
+
+On an Android emulator, offline mode stays after the tool-server stops. Argent does not set network conditions on a physical device. The [tools reference](/docs/reference/tools#network-conditions) gives the details.
 
 ## Example instructions
 

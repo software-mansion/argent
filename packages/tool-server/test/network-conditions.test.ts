@@ -3,7 +3,8 @@ import { TypedEventEmitter } from "@argent/registry";
 
 vi.mock("../src/utils/adb", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/adb")>()),
-  runAdb: vi.fn(async () => ({ stdout: "OK\n", stderr: "" })),
+  runAdb: vi.fn(async () => ({ stdout: "", stderr: "" })),
+  adbShell: vi.fn(async () => "Active default network: 101\n"),
 }));
 
 vi.mock("../src/utils/check-deps", async (importOriginal) => ({
@@ -13,8 +14,10 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
 }));
 
 import { networkConditionsTool } from "../src/tools/network-conditions";
+import { networkConditionsZodSchema } from "../src/tools/network-conditions/schema";
+import type { NativeDevtoolsAppState } from "../src/blueprints/native-devtools";
 import { createNetworkManager } from "../src/chromium-server/network";
-import { runAdb } from "../src/utils/adb";
+import { adbShell, runAdb } from "../src/utils/adb";
 
 const chromiumUdid = "chromium-cdp-9222";
 const androidEmulator = "emulator-5554";
@@ -39,15 +42,13 @@ function emulatedConditionsCalls(send: ReturnType<typeof fakeCdp>["send"]) {
   return send.mock.calls.filter(([method]) => method === "Network.emulateNetworkConditions");
 }
 
-function fakeNativeDevtools(options: { connected?: boolean } = {}) {
+function fakeNativeDevtools(state: NativeDevtoolsAppState = "connected") {
   const api = {
     getInitFailure: () => null,
     ensureEnvReady: vi.fn(async () => {}),
-    appConnectionState: vi.fn(async () =>
-      options.connected === false ? "not_running" : "connected"
-    ),
-    isConnected: vi.fn(() => options.connected !== false),
-    setNetworkConditions: vi.fn(),
+    appConnectionState: vi.fn(async () => state),
+    isConnected: vi.fn(() => state === "connected"),
+    setNetworkConditions: vi.fn(async () => {}),
   };
   return { api, services: { nativeDevtools: api } as never };
 }
@@ -58,6 +59,23 @@ function adbArgs(): string[][] {
 
 beforeEach(() => {
   vi.mocked(runAdb).mockClear();
+  vi.mocked(adbShell).mockClear();
+});
+
+describe("network-conditions parameters", () => {
+  it.each([{ latency: 3000 }, { downloadKbs: 500 }])("rejects the unknown key in %j", (typo) => {
+    expect(networkConditionsZodSchema.safeParse({ udid: iosUdid, ...typo }).success).toBe(false);
+  });
+
+  it("routes each platform to its own service", () => {
+    expect(Object.keys(networkConditionsTool.services!({ udid: chromiumUdid }))).toEqual([
+      "chromium",
+    ]);
+    expect(Object.keys(networkConditionsTool.services!({ udid: iosUdid, bundleId }))).toEqual([
+      "nativeDevtools",
+    ]);
+    expect(networkConditionsTool.services!({ udid: androidEmulator })).toEqual({});
+  });
 });
 
 describe("network-conditions on Chromium", () => {
@@ -111,68 +129,73 @@ describe("network-conditions on Chromium", () => {
   });
 });
 
-describe("network-conditions on an Android emulator", () => {
-  it("sets speed and delay on the emulator console and leaves the radios alone", async () => {
+describe("network-conditions on Chromium, when the tab refuses the conditions", () => {
+  it("keeps applying the previous conditions after a tab switch", async () => {
+    const { send, network, services } = chromiumServices();
+    await networkConditionsTool.execute(services, { udid: chromiumUdid, offline: true });
+    send.mockRejectedValueOnce(new Error("Target closed"));
+
     await expect(
-      networkConditionsTool.execute({} as never, {
-        udid: androidEmulator,
-        latencyMs: 400,
-        downloadKbps: 1600,
-        uploadKbps: 750,
-      })
-    ).resolves.toEqual({
-      scope: "device",
-      conditions: { latencyMs: 400, downloadKbps: 1600, uploadKbps: 750 },
-    });
+      networkConditionsTool.execute(services, { udid: chromiumUdid, latencyMs: 100 })
+    ).rejects.toThrow("Target closed");
+    send.mockClear();
+    await network.reattach();
+
+    expect(emulatedConditionsCalls(send)[0]![1]).toMatchObject({ offline: true, latency: 0 });
+  });
+});
+
+describe("network-conditions on an Android emulator", () => {
+  it.each([
+    { latencyMs: 400 },
+    { downloadKbps: 1600 },
+    { uploadKbps: 750 },
+    { offline: true, latencyMs: 1 },
+  ])(
+    "fails for %j, which the emulator console cannot shape, before any adb traffic",
+    async (conditions) => {
+      await expect(
+        networkConditionsTool.execute({} as never, { udid: androidEmulator, ...conditions })
+      ).rejects.toThrow(/supports only `offline`/);
+      expect(runAdb).not.toHaveBeenCalled();
+    }
+  );
+
+  it("turns Wi-Fi and mobile data off for offline", async () => {
+    await expect(
+      networkConditionsTool.execute({} as never, { udid: androidEmulator, offline: true })
+    ).resolves.toEqual({ scope: "device", conditions: { offline: true } });
 
     expect(adbArgs()).toEqual([
-      ["-s", androidEmulator, "emu", "network", "speed", "750:1600"],
-      ["-s", androidEmulator, "emu", "network", "delay", "400"],
+      ["-s", androidEmulator, "shell", "svc", "wifi", "disable"],
+      ["-s", androidEmulator, "shell", "svc", "data", "disable"],
     ]);
   });
 
-  it("leaves an unset direction unlimited", async () => {
-    await networkConditionsTool.execute({} as never, { udid: androidEmulator, downloadKbps: 500 });
+  it("turns the radios on at a reset and waits until a network is up", async () => {
+    vi.mocked(adbShell)
+      .mockResolvedValueOnce("Active default network: none\n")
+      .mockResolvedValueOnce("Active default network: 102\n");
 
-    expect(adbArgs()[0]).toEqual(["-s", androidEmulator, "emu", "network", "speed", "0:500"]);
-  });
-
-  it("resets to full speed, no delay and radios on when no condition is given", async () => {
     await expect(
       networkConditionsTool.execute({} as never, { udid: androidEmulator })
     ).resolves.toEqual({ scope: "device", conditions: null });
 
     expect(adbArgs()).toEqual([
-      ["-s", androidEmulator, "emu", "network", "speed", "full"],
-      ["-s", androidEmulator, "emu", "network", "delay", "none"],
       ["-s", androidEmulator, "shell", "svc", "wifi", "enable"],
       ["-s", androidEmulator, "shell", "svc", "data", "enable"],
     ]);
+    expect(adbShell).toHaveBeenCalledTimes(2);
   });
 
-  it("turns Wi-Fi and mobile data off for offline and back on at the next throttle call", async () => {
-    await networkConditionsTool.execute({} as never, { udid: androidEmulator, offline: true });
-
-    expect(adbArgs()).toContainEqual(["-s", androidEmulator, "shell", "svc", "wifi", "disable"]);
-    expect(adbArgs()).toContainEqual(["-s", androidEmulator, "shell", "svc", "data", "disable"]);
-    vi.mocked(runAdb).mockClear();
-
-    await networkConditionsTool.execute({} as never, { udid: androidEmulator, latencyMs: 100 });
-
-    expect(adbArgs()).toEqual([
-      ["-s", androidEmulator, "emu", "network", "speed", "full"],
-      ["-s", androidEmulator, "emu", "network", "delay", "100"],
-      ["-s", androidEmulator, "shell", "svc", "wifi", "enable"],
-      ["-s", androidEmulator, "shell", "svc", "data", "enable"],
-    ]);
-  });
-
-  it("fails when the emulator console rejects a command", async () => {
-    vi.mocked(runAdb).mockResolvedValueOnce({ stdout: "KO: bad speed\n", stderr: "" } as never);
+  it("still turns Wi-Fi on when the telephony service has not started yet", async () => {
+    vi.mocked(runAdb)
+      .mockResolvedValueOnce({ stdout: "", stderr: "" } as never)
+      .mockRejectedValueOnce(new Error("svc data enable failed: cmd: Can't find service: phone"));
 
     await expect(
-      networkConditionsTool.execute({} as never, { udid: androidEmulator, downloadKbps: 1 })
-    ).rejects.toThrow(/KO: bad speed/);
+      networkConditionsTool.execute({} as never, { udid: androidEmulator })
+    ).resolves.toEqual({ scope: "device", conditions: null });
   });
 
   it("rejects a physical Android device before any adb traffic", async () => {
@@ -199,6 +222,15 @@ describe("network-conditions on an iOS simulator", () => {
     });
   });
 
+  it("fails when the app does not confirm the conditions", async () => {
+    const { api, services } = fakeNativeDevtools();
+    api.setNetworkConditions.mockRejectedValueOnce(new Error("CDP RPC timed out"));
+
+    await expect(
+      networkConditionsTool.execute(services, { udid: iosUdid, bundleId, offline: true })
+    ).rejects.toThrow(/timed out/);
+  });
+
   it("requires a bundleId", async () => {
     const { api, services } = fakeNativeDevtools();
 
@@ -208,21 +240,40 @@ describe("network-conditions on an iOS simulator", () => {
     expect(api.setNetworkConditions).not.toHaveBeenCalled();
   });
 
-  it("returns the precheck status when the app is not connected", async () => {
-    const { api, services } = fakeNativeDevtools({ connected: false });
+  it.each([{ offline: true }, {}])(
+    "refuses an Apple system app with its own message for %j",
+    async (conditions) => {
+      const { api, services } = fakeNativeDevtools();
 
-    const result = await networkConditionsTool.execute(services, {
-      udid: iosUdid,
-      bundleId,
-      offline: true,
-    });
+      await expect(
+        networkConditionsTool.execute(services, {
+          udid: iosUdid,
+          bundleId: "com.apple.mobilesafari",
+          ...conditions,
+        })
+      ).rejects.toThrow(/Apple system app\. network-conditions on iOS/);
+      expect(api.setNetworkConditions).not.toHaveBeenCalled();
+    }
+  );
 
-    expect(result).toMatchObject({ status: "restart_required" });
-    expect(api.setNetworkConditions).not.toHaveBeenCalled();
-  });
+  it.each([{ offline: true }, {}])(
+    "returns restart_required for %j when the running app lost its connection",
+    async (conditions) => {
+      const { api, services } = fakeNativeDevtools("stale_process");
 
-  it("clears the conditions even when the app is not connected", async () => {
-    const { api, services } = fakeNativeDevtools({ connected: false });
+      const result = await networkConditionsTool.execute(services, {
+        udid: iosUdid,
+        bundleId,
+        ...conditions,
+      });
+
+      expect(result).toMatchObject({ status: "restart_required" });
+      expect(api.setNetworkConditions).not.toHaveBeenCalled();
+    }
+  );
+
+  it("clears the stored conditions when the app is not running", async () => {
+    const { api, services } = fakeNativeDevtools("not_running");
 
     await expect(
       networkConditionsTool.execute(services, { udid: iosUdid, bundleId })
