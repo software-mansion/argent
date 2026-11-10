@@ -322,6 +322,34 @@ describe("Registry -- lastUsedAt", () => {
     expect(attempts).toBe(2);
   });
 
+  it("stamps a service only the failed first attempt of a retried call used", async () => {
+    const registry = new Registry();
+    const deadHandle = new Error("dead handle");
+    registry.registerBlueprint({
+      namespace: "Sim",
+      getURN: (ctx: string) => `Sim:${ctx}`,
+      recoverable: (error) => error === deadHandle,
+      factory: async () => ({ api: {}, dispose: async () => {}, events: new TypedEventEmitter() }),
+    });
+    registry.registerBlueprint(createMockBlueprint("Ax"));
+    let attempts = 0;
+    registry.registerTool({
+      id: "tap",
+      services: () => ({ sim: "Sim:dev-1" }),
+      execute: async () => {
+        if (++attempts > 1) return;
+        await registry.resolveService("Ax:dev-1");
+        throw deadHandle;
+      },
+    });
+
+    vi.setSystemTime(1_020_000);
+    await registry.invokeTool("tap");
+
+    expect(attempts).toBe(2);
+    expect(lastUsedAt(registry, "Ax:dev-1")).toBe(1_020_000);
+  });
+
   it("reports a service as in use while the call is still starting it", async () => {
     const registry = new Registry();
     let release!: () => void;

@@ -178,6 +178,15 @@ export function deviceIdOwningUrn(
   return undefined;
 }
 
+/**
+ * Whether `urn` has the plain `<Namespace>:<deviceId>` shape, with nothing
+ * before or after the device id (see {@link PORT_KEYED_NAMESPACES} and
+ * {@link APP_KEYED_NAMESPACES}).
+ */
+export function isPlainDeviceUrn(urn: string): boolean {
+  return !isDeviceServiceUrn(urn, [...PORT_KEYED_NAMESPACES, ...APP_KEYED_NAMESPACES]);
+}
+
 /** Whether `urn` belongs to any of `namespaces`, regardless of which device. */
 export function isDeviceServiceUrn(urn: string, namespaces: readonly string[]): boolean {
   return namespaces.some((ns) => urn.startsWith(`${ns}:`));
