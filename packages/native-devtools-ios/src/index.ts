@@ -65,6 +65,15 @@ export const keyboardPatchDylibPath = () => {
   requireDarwin("keyboardPatchDylibPath");
   return requireDylibIn(DYLIB_DIR, "libKeyboardPatch.dylib");
 };
+/**
+ * The audio mock, injected into a simulator's apps only once an audio tool is
+ * used, so a simulator where audio is never mocked does not load it. Local iOS
+ * only: no tvOS or TCP variant.
+ */
+export const audioDylibPath = () => {
+  requireDarwin("audioDylibPath");
+  return requireDylibIn(DYLIB_DIR, "libArgentAudio.dylib");
+};
 
 export const bootstrapDylibPathTcp = () => {
   return requireTcpArtifact(

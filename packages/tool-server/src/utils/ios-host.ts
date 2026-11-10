@@ -3,8 +3,10 @@ import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import type { DeviceInfo } from "@argent/registry";
 import {
+  audioDylibPath,
   axServiceBinaryPath,
   axServiceBinaryPathTcp,
   bootstrapDylibPath,
@@ -189,6 +191,37 @@ function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: st
   return fs.existsSync(entry);
 }
 
+/** Control directory of the audio mock; set in every armed simulator, created by the host on first use. */
+export function audioDir(udid: string): string {
+  // The full UDID: unlike the native-devtools socket there is no unix path length to stay under, and two simulators
+  // must never share a control directory.
+  return `/tmp/argent-audio-${udid}`;
+}
+
+const AUDIO_ALWAYS_INSERTED_FLAG = "ios-audio-always-inserted";
+
+/**
+ * Whether arming a simulator also inserts the audio hook, so audio tools work on any app launched after arming
+ * without a restart. The hook stays dormant (no thread, no CoreAudio load) until the app opens audio. Read per arming
+ * so `argent disable ios-audio-always-inserted` applies without a tool-server restart; disabled, the hook is
+ * inserted by the first audio tool call instead.
+ */
+function audioAlwaysInserted(): boolean {
+  return isFeatureEnabled(AUDIO_ALWAYS_INSERTED_FLAG);
+}
+
+/**
+ * The audio hook's dylib, or null when this install has none (it ships separately from the other dylibs).
+ * Arming goes on without it: only the audio tools need it, and they say how to get it.
+ */
+function installedAudioDylib(): string | null {
+  try {
+    return audioDylibPath();
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Everything in `currentValue` that is not ours, in order. What both arming and
  * withdrawing agree on. Arming appends our bootstrap to it, withdrawing keeps
@@ -216,6 +249,19 @@ export function withdrawDyldInsertLibraries(
 ): string | null {
   const preserved = preservedDyldInsertLibraries(currentValue, bootstrapPath);
   return preserved.length === 0 ? null : preserved.join(":");
+}
+
+/**
+ * Appends one more dylib of ours to the list without disturbing the bootstrap or
+ * foreign entries. An older copy of the same dylib (by basename) is replaced so
+ * an upgrade does not accumulate stale paths. Exported for ios-audio.ts.
+ */
+export function appendDyldInsertLibrary(currentValue: string, dylibPath: string): string {
+  const name = path.basename(dylibPath);
+  const kept = splitDyldInsertLibraries(currentValue).filter(
+    (entry) => entry !== dylibPath && path.basename(entry) !== name
+  );
+  return [...kept, dylibPath].join(":");
 }
 
 async function ensureAccessibilityEnabled(udid: string): Promise<void> {
@@ -252,6 +298,7 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
 async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
   // tvOS simulators require a TVOSSIMULATOR-platform dylib — dyld silently skips
   // the IOSSIMULATOR slice and native injection never connects.
+  const tvOs = await isTvOsSimulator(udid);
   const bootstrapPath = await bootstrapPathFor(udid, endpoint);
 
   /**
@@ -270,7 +317,10 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
-  const updated = buildDyldInsertLibraries(existing, bootstrapPath);
+  let updated = buildDyldInsertLibraries(existing, bootstrapPath);
+  const audioDylib =
+    !tvOs && endpoint.transport === "unix" && audioAlwaysInserted() ? installedAudioDylib() : null;
+  if (audioDylib) updated = appendDyldInsertLibrary(updated, audioDylib);
 
   if (updated !== existing) {
     await execFileAsync(
@@ -309,6 +359,16 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
         "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
         endpoint.socketPath,
       ],
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+    );
+  }
+
+  if (audioDylib) {
+    // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
+    fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
+    await execFileAsync(
+      "xcrun",
+      [...prefix, "spawn", nativeId, "launchctl", "setenv", "ARGENT_AUDIO_DIR", audioDir(nativeId)],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }
@@ -433,6 +493,11 @@ async function listRunningApps(udid: string): Promise<string> {
     }
   );
   return stdout;
+}
+
+/** Pid of the app's running process from the simulator's launchd, or null when it is not running. */
+export async function runningAppPid(udid: string, bundleId: string): Promise<number | null> {
+  return parseUIKitApplicationJobs(await listRunningApps(udid)).get(bundleId) ?? null;
 }
 
 async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {

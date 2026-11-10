@@ -71,7 +71,11 @@ import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/nativ
 import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
 import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
+import { createAudioInputTool } from "../tools/audio/audio-input";
+import { createAudioRecordStartTool } from "../tools/audio/audio-record-start";
+import { createAudioRecordStopTool } from "../tools/audio/audio-record-stop";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
+import { iosAudioSessionBlueprint } from "../blueprints/ios-audio-session";
 import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
 import { screenRecordingStopTool } from "../tools/screen-recording/screen-recording-stop";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
@@ -122,6 +126,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(screenRecordingSessionBlueprint);
+  registry.registerBlueprint(iosAudioSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
@@ -143,6 +148,9 @@ export function createRegistry(): Registry {
   registry.registerTool(createScreenshotDiffTool(registry));
   registry.registerTool(createScreenRecordingStartTool(registry));
   registry.registerTool(screenRecordingStopTool);
+  registry.registerTool(createAudioInputTool(registry));
+  registry.registerTool(createAudioRecordStartTool(registry));
+  registry.registerTool(createAudioRecordStopTool(registry));
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
   registry.registerTool(chromiumCookiesTool);

@@ -1,0 +1,59 @@
+---
+sidebar_position: 6
+sidebar_label: Audio
+title: Audio
+sidebar_custom_props:
+  icon: audio-lines
+---
+
+Argent controls the sound of an app in an iOS Simulator. The agent chooses what the app hears as microphone input. The agent also records what the app plays on the speaker.
+
+Use this to test features that depend on sound without a person who speaks or listens. Examples are voice messages, speech recognition, calls, music players, games, and notification sounds.
+
+## Microphone input
+
+The agent gives the app an audio file or a generated tone in place of the microphone. The app uses its normal audio APIs and does not change. The app does not hear the real microphone of your Mac.
+
+- A file plays from the moment the agent sets it, and again each time the app opens a new audio input. An app that keeps its audio session open between recordings does not open a new input, so the agent sets the file again right before the app records. After the end, the app hears silence. The agent can also loop the file.
+- A tone has a frequency and a level.
+- The agent can change the input while the app records. A new source starts from its beginning.
+- The agent releases the input to give the real microphone back.
+
+## Recording the speaker
+
+The agent records everything that one app plays, mixed, into a WAV file. The agent starts the recording before the action that makes the app play a sound. The agent stops the recording when the sound ends. Argent gives you the file and its length.
+
+If the app stops or restarts during the recording, Argent keeps the sound that the app played until then.
+
+The agent can also mute the app on the speakers of your Mac during the recording. The recording keeps the sound.
+
+## How it starts
+
+Argent needs a small hook in the app process. Argent loads the hook into every app that starts after Argent connects to the simulator. The hook does nothing until the app opens audio: it starts no thread and costs no measurable launch time or memory. So the agent can use the audio tools on an app that it started with Argent, without a restart.
+
+An app that started before Argent connected to the simulator does not have the hook. The agent restarts that app once.
+
+To load the hook only into simulators where the agent used an audio tool, run `argent disable ios-audio-always-inserted`. Then the first audio request loads the hook, and only apps that start after that request have it. See [feature flags](/docs/reference/configuration).
+
+## Where the audio lands
+
+Argent saves each recording in the `.argent/recordings/` directory of the project. Argent uses the 16-bit WAV format with the sample rate of the simulator, usually 48 kHz.
+
+## Example instructions
+
+- "Play `hello.mp3` as the microphone and check that the app shows the transcript."
+- "Record what the app plays when I tap the alert button. Tell me how long the sound is."
+- "Give the app one second of a 440 Hz tone and check that the level meter moves."
+- "Record the call sound with the Mac speakers muted."
+
+## Limits
+
+- Argent supports iOS simulators on the same Mac as the tool server. Argent does not support tvOS simulators, physical iPhones, or remote simulators.
+- Argent does not cover web content in `WKWebView` such as `getUserMedia`, and does not cover `AVCaptureSession` audio.
+- The tool server feeds the microphone input and writes the recording. When the tool server stops, or when `stop-all-simulator-servers` releases the simulator, Argent gives the real microphone back and drops a recording that runs. If the tool server stops without a clean exit, the app hears silence.
+- Argent records one app at a time. When an app plays through several audio streams, the recording contains the mix that the app sends to the speaker.
+- An app that a tool starts with its own injected libraries does not get the hook. Xcode runs with the Main Thread Checker, Detox, and XCUITest do this. Start the app with Argent instead.
+- The audio hook uses private parts of the simulator audio stack that Apple can change. Argent tests it on iOS 26.5, 27.0, and 27.1.
+- Your Mac keeps the real microphone open during a test, so the microphone indicator can show.
+
+Argent does this with the `audio-input`, `audio-record-start`, and `audio-record-stop` tools. The [tools reference](/docs/reference/tools) contains all tools.

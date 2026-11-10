@@ -31,6 +31,7 @@ const probe = vi.hoisted(() => ({
 
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/dylibs/libArgentInjectionBootstrap.dylib",
+  audioDylibPath: () => "/fake/dylibs/libArgentAudio.dylib",
   bootstrapDylibPathTcp: () => "/fake/dylibs/tcp/libArgentInjectionBootstrap.dylib",
   bootstrapDylibPathTvos: () => "/fake/dylibs/tvos/libArgentInjectionBootstrap.dylib",
   tcpInjectionDylibs: () => [],

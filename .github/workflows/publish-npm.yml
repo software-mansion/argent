@@ -194,6 +194,7 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      # TODO: assert libArgentAudio.dylib once an argent-private release ships it.
       # tvOS (Apple TV) binaries — missing ones would silently ship a package
       # whose TV tooling crashes at runtime.
       - run: test -x packages/argent/bin/darwin/tvos-ax-service

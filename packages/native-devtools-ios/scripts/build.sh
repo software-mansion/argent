@@ -14,6 +14,7 @@
 #   PREBUILT_NATIVE_DEVTOOLS_IOS  - if set, copy this path to dylibs/ instead of building (CI on non-macOS)
 #   PREBUILT_KEYBOARD_PATCH       - same for keyboard patch dylib
 #   PREBUILT_INJECTION_BOOTSTRAP  - same for bootstrap dylib
+#   PREBUILT_ARGENT_AUDIO         - same for the audio mock dylib (unix transport only)
 #   PREBUILT_NATIVE_DEVTOOLS_IOS_TVOS / PREBUILT_KEYBOARD_PATCH_TVOS /
 #   PREBUILT_INJECTION_BOOTSTRAP_TVOS - tvOS-slice counterparts, copied to
 #     dylibs/tvos/; all three required together on the prebuilt path
@@ -70,6 +71,7 @@ fi
 DEST_FILE="${DEST_DIR}/libNativeDevtoolsIos.dylib"
 DEST_FILE_KB="${DEST_DIR}/libKeyboardPatch.dylib"
 DEST_FILE_BS="${DEST_DIR}/libArgentInjectionBootstrap.dylib"
+DEST_FILE_AU="${DEST_DIR}/libArgentAudio.dylib"
 
 if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS:-}" ]] && [[ -n "${PREBUILT_KEYBOARD_PATCH:-}" ]] && [[ -n "${PREBUILT_INJECTION_BOOTSTRAP:-}" ]]; then
   echo "Using pre-built dylibs"
@@ -77,6 +79,9 @@ if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS:-}" ]] && [[ -n "${PREBUILT_KEYBOARD_PA
   cp "$PREBUILT_NATIVE_DEVTOOLS_IOS" "$DEST_FILE"
   cp "$PREBUILT_KEYBOARD_PATCH" "$DEST_FILE_KB"
   cp "$PREBUILT_INJECTION_BOOTSTRAP" "$DEST_FILE_BS"
+  if [[ "$TRANSPORT" == "unix" && -n "${PREBUILT_ARGENT_AUDIO:-}" ]]; then
+    cp "$PREBUILT_ARGENT_AUDIO" "$DEST_FILE_AU"
+  fi
   # tvOS dylibs have no TCP variant, and all three must ship together because
   # InjectionBootstrap dlopen()s the other two from its own directory.
   if [[ "$TRANSPORT" == "unix" \
@@ -188,6 +193,25 @@ xcrun --sdk iphonesimulator clang \
   -arch x86_64 \
   "${SRC_DIR}/InjectionBootstrap.c" \
   -o "${DEST_FILE_BS}"
+
+# The audio mock is its own dylib, injected by the tool-server only once an audio tool is used, so a simulator
+# where audio is never mocked does not load it. Local iOS only: no tvOS or tcp variant.
+if [[ "$TRANSPORT" == "unix" ]]; then
+  echo "Building libArgentAudio.dylib..."
+  # CoreAudio is not linked: the hook binds to it by flat lookup, so a process that never loads it stays clean.
+  xcrun --sdk iphonesimulator clang \
+    -dynamiclib \
+    ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+    -isysroot "${SDK_PATH}" \
+    -mios-simulator-version-min=13.0 \
+    -arch arm64 \
+    -arch x86_64 \
+    -Wl,-U,_AudioDeviceCreateIOProcID \
+    -Wl,-U,_AudioObjectGetPropertyData \
+    -Wl,-U,_AudioObjectGetPropertyDataSize \
+    "${SRC_DIR}/ArgentAudio.c" \
+    -o "${DEST_FILE_AU}"
+fi
 
 echo "Building ax-service..."
 AX_SRC_DIR="${SUBMODULE_DIR}/Sources/AXService"
@@ -332,6 +356,8 @@ if [[ "$MODE" == "release" ]]; then
     codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_BS}"
     codesign --verify --verbose "${DEST_FILE_BS}"
     if [[ "$TRANSPORT" == "unix" ]]; then
+      codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_AU}"
+      codesign --verify --verbose "${DEST_FILE_AU}"
       codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE}"
       codesign --verify --verbose "${TVOS_DEST_FILE}"
       codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE_KB}"

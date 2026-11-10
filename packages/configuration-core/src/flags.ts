@@ -73,6 +73,15 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
       "Over `argent link` or ARGENT_TOOLS_URL, resolve each `{{secret:NAME}}` a call names on this machine and send the value with the call, so a remote tool-server can type a secret it does not hold. The linked tool-server then receives every secret of this machine that a call names, so link only one you trust with all of them. Values go only over https:// with the certificate checked, or to a loopback address. Off by default.",
   },
   {
+    name: "ios-audio-always-inserted",
+    description:
+      "Insert the iOS audio hook (libArgentAudio.dylib) into every app an armed simulator launches, so " +
+      "audio-input and audio-record-start work without restart-app. Dormant until the app opens audio. " +
+      "On by default; `argent disable ios-audio-always-inserted` inserts it only on the first audio tool call, " +
+      "for apps launched after that call.",
+    defaultEnabled: true,
+  },
+  {
     name: "video-watermark",
     description:
       "Overlay the argent corner watermark on recorded screen videos. On by default; turn it off with `argent disable video-watermark`.",

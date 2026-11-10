@@ -642,6 +642,30 @@ describe("materializeArtifacts durable destination", () => {
     expect(images).toHaveLength(0);
   });
 
+  it("remote: downloads an audio recording into <project>/.argent/recordings/", async () => {
+    const WAV = [0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4];
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "wav1",
+      kind: "audio-recording",
+      filename: "audio-com.example.app-20261110-120000.wav",
+      mimeType: "audio/wav",
+      size: WAV.length,
+      saveDir: ".argent/recordings",
+    };
+    const { result, images } = await materializeArtifacts(
+      { audio: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ wav1: WAV }) }
+    );
+
+    const out = (result as { audio: string }).audio;
+    expect(out).toBe(
+      join(projectRoot, ".argent/recordings", "audio-com.example.app-20261110-120000.wav")
+    );
+    expect(Buffer.from(await readFile(out))).toEqual(Buffer.from(WAV));
+    expect(images).toHaveLength(0);
+  });
+
   it("co-located: copies the host video into <project>/.argent/recordings/ and leaves the original", async () => {
     const hostPath = join(hostDir, "argent-screen-recording-DEV-1-42.mp4");
     await writeFile(hostPath, Buffer.from(MP4));
