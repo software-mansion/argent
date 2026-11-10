@@ -80,14 +80,14 @@ export function getGlobalBinaryPath(): string | null {
 }
 
 /**
- * The first live global argent on PATH: a binary that resolves to the package,
- * or one that still runs (a pnpm shim). A version-manager shim (nodenv's,
+ * The first live global argent on PATH: a link or pnpm shim that resolves to
+ * the package, or a binary that still runs. A version-manager shim (nodenv's,
  * mise's) outlives the package until a reshim and then fails, so it is passed
  * over: an install behind it still counts.
  */
 export function getRemainingGlobalBinaryPath(): string | null {
   for (const binaryPath of getGlobalBinaryPaths()) {
-    if (process.platform === "win32" || packageRootOf(binaryPath)) return binaryPath;
+    if (process.platform === "win32" || globalPackageRootOf(binaryPath)) return binaryPath;
     try {
       execFileSync(binaryPath, ["--version"], { stdio: "ignore", timeout: 10_000 });
       return binaryPath;
@@ -109,8 +109,37 @@ export function isGloballyInstalled(): boolean {
  * version and to scope tool-server teardown to THIS install.
  */
 export function getGloballyInstalledPackageRoot(): string | null {
-  const binaryPath = getGlobalBinaryPath();
-  return binaryPath ? packageRootOf(binaryPath) : null;
+  const binaryPath = getRemainingGlobalBinaryPath();
+  return binaryPath ? globalPackageRootOf(binaryPath) : null;
+}
+
+// A shim script's text, or null for a binary (a Volta or mise shim) or an
+// unreadable file. 64 KiB is far above any shim script.
+export function readShimScript(binaryPath: string): string | null {
+  try {
+    if (fs.statSync(binaryPath).size > 64 * 1024) return null;
+    return fs.readFileSync(binaryPath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+// pnpm's global bin is a shim script, not a link. pnpm 10+ ends it with a
+// `# cmd-shim-target=` line; older ones exec a path under `$basedir`.
+function shimTargetOf(binaryPath: string): string | null {
+  const shim = readShimScript(binaryPath);
+  if (!shim) return null;
+  const trailer = /^# cmd-shim-target=(.+)$/m.exec(shim);
+  if (trailer) return trailer[1]!.trim();
+  const relative = /"\$basedir(?:_abs)?"?\/'?([^"'\s]*node_modules\/[^"'\s]*)/.exec(shim);
+  return relative ? path.resolve(canonicalPath(path.dirname(binaryPath)), relative[1]!) : null;
+}
+
+function globalPackageRootOf(binaryPath: string): string | null {
+  const root = packageRootOf(binaryPath);
+  if (root) return root;
+  const target = shimTargetOf(binaryPath);
+  return target ? packageRootOf(target) : null;
 }
 
 export function packageRootOf(binaryPath: string): string | null {

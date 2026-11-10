@@ -21,6 +21,7 @@ import {
   getLocallyInstalledVersion,
   isYarnPnp,
 } from "./utils.js";
+import { yarnClassicNote } from "./package-manager.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { reportSkillRefresh } from "./skills.js";
@@ -245,7 +246,7 @@ async function runGlobal(opts: {
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
       await tel.trackPackageAction(
         "fresh_install",
         packageActionStartedAt,
@@ -272,7 +273,7 @@ async function runGlobal(opts: {
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
+      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
       await tel.finalize(INSTALL_FROM_TAR_PACKAGE_FAILED);
       process.exit(1);
     }
@@ -362,7 +363,7 @@ async function runGlobal(opts: {
         } catch (err) {
           updateSpinner.stop(pc.red("Update failed."));
           p.log.error(`${err}`);
-          p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
+          p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}${yarnClassicNote(cmd)}`);
           await tel.trackPackageAction(
             "update_failed",
             updateStartedAt,

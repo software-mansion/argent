@@ -34,6 +34,10 @@ Run `argent --help` for the list of commands, `argent <command> --help` for the 
 
 `argent init` exits with code `1` when the skills install fails and no skills are on disk.
 
+`argent update` and `argent uninstall` use the package manager that installed the global `argent` on `PATH`: npm, pnpm, bun or Yarn classic.
+
+`argent uninstall` exits with code `1` when a package removal fails, or when an `argent` command stays on `PATH` after the removal. It still removes the other install that you selected.
+
 ## `argent server start`
 
 `argent server start` starts the shared tool-server. The command accepts these options:

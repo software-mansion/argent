@@ -218,8 +218,11 @@ describe("uninstall — telemetry consent preservation", () => {
       process.chdir(tmpDir);
     });
 
-    it("removes it with yarn, not npm, when launched from Yarn 2+", async () => {
-      process.env.npm_config_user_agent = "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64";
+    it.each([
+      ["an npm", "npm/11.6.2 node/v24.14.1 darwin arm64"],
+      ["a Yarn 2+", "yarn/4.13.0 npm/? node/v24.14.1 darwin arm64"],
+    ])("removes it with yarn, not npm, under %s launcher", async (_launcher, agent) => {
+      process.env.npm_config_user_agent = agent;
 
       await uninstall(["--yes"]);
 
@@ -283,7 +286,7 @@ describe("uninstall — telemetry consent preservation", () => {
     it("reports success when the uninstall removes the package", async () => {
       const clack = await import("@clack/prompts");
       childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
-        if (bin === "npm" && args[0] === "uninstall") {
+        if (bin === "yarn" && args[0] === "global") {
           fs.rmSync(globalPkg, { recursive: true, force: true });
         }
         return undefined;
@@ -301,6 +304,9 @@ describe("uninstall — telemetry consent preservation", () => {
       const link = path.join(tmpDir, "prefix", "bin", "argent");
       fs.mkdirSync(path.dirname(link), { recursive: true });
       fs.symlinkSync(path.join(globalPkg, "bin", "argent"), link);
+      const linked = path.join(tmpDir, "prefix", "lib", "node_modules", "@swmansion", "argent");
+      fs.mkdirSync(path.dirname(linked), { recursive: true });
+      fs.symlinkSync(globalPkg, linked);
       childProcessMock.which.mockImplementation(() => link + "\n");
       childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
         if (bin === "npm" && args[0] === "uninstall") fs.rmSync(link);
@@ -334,6 +340,71 @@ describe("uninstall — telemetry consent preservation", () => {
     expect(vi.mocked(clack.log.success)).not.toHaveBeenCalledWith("Removed global package.");
   });
 
+  it("stops a pnpm global's tool-server and drops its CLI record", async () => {
+    const clack = await import("@clack/prompts");
+    const pkg = path.join(
+      tmpDir,
+      "pnpm-home",
+      "global",
+      "v11",
+      "h",
+      "node_modules",
+      "@swmansion",
+      "argent"
+    );
+    writeFile(path.join(pkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
+    writeFile(path.join(pkg, "dist", "cli.js"));
+    const shim = path.join(tmpDir, "pnpm-home", "bin", "argent");
+    writeFile(
+      shim,
+      `#!/bin/sh\nexec node "$basedir_abs"/'../x' "$@"\n# cmd-shim-target=${path.join(pkg, "dist", "cli.js")}\n`
+    );
+    childProcessMock.which.mockImplementation(() => shim + "\n");
+    childProcessMock.execFileSync.mockImplementation((bin: string, args: string[]) => {
+      if (bin === "pnpm" && args[0] === "remove") fs.rmSync(shim);
+      return undefined;
+    });
+    const record = path.join(tmpDir, ".argent", "cli.json");
+    writeFile(
+      record,
+      JSON.stringify({
+        cli: path.join(fs.realpathSync(pkg), "dist", "cli.js"),
+        node: process.execPath,
+      })
+    );
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "pnpm",
+      ["remove", "-g", "@swmansion/argent"],
+      expect.any(Object)
+    );
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(fs.realpathSync(pkg));
+    expect(fs.existsSync(record)).toBe(false);
+    expect(vi.mocked(clack.log.success)).toHaveBeenCalledWith("Removed global package.");
+  });
+
+  it("stops the tool-server of the global behind a stale version-manager shim", async () => {
+    const shim = path.join(tmpDir, "nodenv", "shims", "argent");
+    writeFile(shim, "#!/usr/bin/env bash\n");
+    const pkg = path.join(tmpDir, "yarn-global", "node_modules", "@swmansion", "argent");
+    writeFile(path.join(pkg, "package.json"), JSON.stringify({ name: "@swmansion/argent" }));
+    writeFile(path.join(pkg, "bin", "argent"), "#!/usr/bin/env node\n");
+    childProcessMock.which.mockImplementation(
+      () => `${shim}\n${path.join(pkg, "bin", "argent")}\n`
+    );
+    childProcessMock.versionProbe.mockImplementation(() => {
+      throw Object.assign(new Error("exit 127"), { status: 127 });
+    });
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes", "--global"]);
+
+    expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(fs.realpathSync(pkg));
+  });
+
   it.each([
     ["nodenv", 127],
     ["mise", 1],
@@ -344,7 +415,7 @@ describe("uninstall — telemetry consent preservation", () => {
       const shim = path.join(tmpDir, manager, "shims", "argent");
       writeFile(shim, "#!/usr/bin/env bash\n");
       childProcessMock.which.mockImplementation(() => shim + "\n");
-      childProcessMock.versionProbe.mockImplementationOnce(() => {
+      childProcessMock.versionProbe.mockImplementation(() => {
         throw Object.assign(new Error(`exit ${status}`), { status });
       });
       const projectDir = path.join(tmpDir, "project");

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { canonicalPath } from "@argent/configuration-core";
 import { PACKAGE_NAME } from "./constants.js";
-import { getRemainingGlobalBinaryPath, packageRootOf } from "./topology.js";
+import { getRemainingGlobalBinaryPath, packageRootOf, readShimScript } from "./topology.js";
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
@@ -45,20 +45,11 @@ const BUN_GLOBAL_ROOT = new RegExp(
     "$"
 );
 
-// A shim script's text, or null for a binary (a Volta or mise shim) or an
-// unreadable file. 64 KiB is far above any shim script.
-function readShimScript(binaryPath: string): string | null {
-  try {
-    if (fs.statSync(binaryPath).size > 64 * 1024) return null;
-    return fs.readFileSync(binaryPath, "utf8");
-  } catch {
-    return null;
-  }
-}
-
-// Yarn 2+ has no `yarn global`, so npm installs for it - except over a global npm
-// does not own, where it would add a second argent to PATH and leave the first in
-// place. `yarn` then fails without installing anything. npm's layout puts
+// The manager that owns the global argent on PATH, read from its layout: any
+// other would add a second argent beside it. With no global the launcher's
+// manager installs, but Yarn 2+ has no `yarn global` and gets npm (over a Yarn
+// classic global it gets `yarn`, which fails there without installing anything).
+// npm's layout puts
 // <prefix>/bin/argent beside <prefix>/lib/node_modules/@swmansion/argent, or on
 // Windows <prefix>\argent.cmd beside <prefix>\node_modules\@swmansion\argent.
 // A global in bun's folder gets bun; on Windows its bin is an .exe beside a
@@ -68,11 +59,8 @@ function readShimScript(binaryPath: string): string | null {
 // global, so it keeps npm. Any other names a package outside npm's layout
 // (Yarn classic's) and gets `yarn`.
 export function detectGlobalPackageManager(): PackageManager {
-  const pm = detectPackageManager();
-  const agent = process.env.npm_config_user_agent ?? "";
-  if (pm !== "yarn" || agent.startsWith("yarn/1.")) return pm;
   const binaryPath = getRemainingGlobalBinaryPath();
-  if (!binaryPath) return "npm";
+  if (!binaryPath) return isYarnBerryLauncher() ? "npm" : detectPackageManager();
   const binDir = path.dirname(binaryPath);
   const npmCopy =
     process.platform === "win32"
@@ -90,6 +78,19 @@ export function detectGlobalPackageManager(): PackageManager {
   const shim = readShimScript(binaryPath);
   if (shim === null || !/node_modules[\\/]/.test(shim)) return "npm";
   return PNPM_GLOBAL_TARGET.test(shim) ? "pnpm" : "yarn";
+}
+
+function isYarnBerryLauncher(): boolean {
+  const agent = process.env.npm_config_user_agent ?? "";
+  return agent.startsWith("yarn") && !agent.startsWith("yarn/1.");
+}
+
+// Appended to a pasted `yarn global` command when the launcher is Yarn 2+, whose
+// own `yarn` rejects it.
+export function yarnClassicNote(cmd: ShellCommand): string {
+  return cmd.bin === "yarn" && isYarnBerryLauncher()
+    ? " (with Yarn classic, outside this Yarn 2+ project)"
+    : "";
 }
 
 function asKnownPm(name: unknown): PackageManager | null {

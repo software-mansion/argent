@@ -263,6 +263,83 @@ describe("install under Yarn 2+", () => {
     else process.env.npm_config_user_agent = savedAgent;
   });
 
+  describe.skipIf(process.platform === "win32")("over a Yarn classic global", () => {
+    const savedPath = process.env.PATH;
+    let dir: string;
+
+    beforeEach(() => {
+      dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-yarn-classic-")));
+      const pkg = path.join(
+        dir,
+        ".config",
+        "yarn",
+        "global",
+        "node_modules",
+        "@swmansion",
+        "argent"
+      );
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(pkg, "package.json"), '{"name":"@swmansion/argent"}');
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.chmodSync(path.join(pkg, "dist", "cli.js"), 0o755);
+      fs.mkdirSync(path.join(dir, "bin"));
+      fs.symlinkSync(path.join(pkg, "dist", "cli.js"), path.join(dir, "bin", "argent"));
+      process.env.PATH = [path.join(dir, "bin"), "/usr/bin", "/bin"].join(path.delimiter);
+      vi.mocked(isGloballyInstalled).mockReturnValueOnce(true);
+      vi.mocked(runShellCommand).mockRejectedValue(new ShellCommandError("Usage Error", 1, null));
+    });
+
+    afterEach(() => {
+      process.env.PATH = savedPath;
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    function advice(prefix: string): string | undefined {
+      const esc = String.fromCharCode(27);
+      return vi
+        .mocked(p.log.info)
+        .mock.calls.map((c) =>
+          String(c[0])
+            .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+            .join("")
+        )
+        .find((line) => line.startsWith(prefix));
+    }
+
+    it("says the manual --from install needs Yarn classic", async () => {
+      await expect(
+        runInstall({
+          installMode: "global",
+          fromTar: "/tmp/argent.tgz",
+          nonInteractive: true,
+          version: "0.0.0",
+          tel: makeTel(),
+        })
+      ).rejects.toThrow(ExitCalled);
+
+      expect(advice("Install manually with: ")).toBe(
+        "Install manually with: yarn global add /tmp/argent.tgz (with Yarn classic, outside this Yarn 2+ project)"
+      );
+    });
+
+    it("says the manual update needs Yarn classic", async () => {
+      vi.mocked(getLatestVersion).mockReturnValueOnce("99.0.0");
+      vi.mocked(p.select).mockResolvedValueOnce("update");
+
+      await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        tel: makeTel(),
+      });
+
+      expect(advice("You can update manually later: ")).toBe(
+        "You can update manually later: yarn global add @swmansion/argent@99.0.0 (with Yarn classic, outside this Yarn 2+ project)"
+      );
+    });
+  });
+
   it("installs with npm and advises the npm command on failure", async () => {
     vi.mocked(runShellCommand).mockRejectedValue(new ShellCommandError("registry down", 1, null));
 

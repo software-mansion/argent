@@ -32,10 +32,17 @@ describe("update — version comparison logic", () => {
 
 describe("update — install command generation", () => {
   const original = process.env.npm_config_user_agent;
+  const originalPath = process.env.PATH;
+
+  // No argent on PATH, so the launcher picks the manager.
+  beforeEach(() => {
+    process.env.PATH = ["/usr/bin", "/bin"].join(path.delimiter);
+  });
 
   afterEach(() => {
     if (original === undefined) delete process.env.npm_config_user_agent;
     else process.env.npm_config_user_agent = original;
+    process.env.PATH = originalPath;
   });
 
   it("generates correct npm update command without --registry", () => {
@@ -165,6 +172,39 @@ describe.skipIf(process.platform === "win32")(
       const persistentBin = stageInstall(path.join(tmpDir, "persistent"), "9.9.9");
       // Transient first so a naive "first match" would pick it.
       process.env.PATH = [transientBin, persistentBin, SYSTEM_PATH].join(path.delimiter);
+
+      expect(getGloballyInstalledVersion()).toBe("9.9.9");
+    });
+
+    it.each([
+      ["pnpm 10+'s cmd-shim-target line", (pkg: string) => `# cmd-shim-target=${pkg}/dist/cli.js`],
+      [
+        "pnpm 9's $basedir path",
+        () => 'exec node "$basedir/global/5/node_modules/@swmansion/argent/dist/cli.js" "$@"',
+      ],
+    ])("reads the version of a pnpm global through %s", (_shape, line) => {
+      const pnpmHome = path.join(tmpDir, "pnpm-home");
+      const pkg = path.join(pnpmHome, "global", "5", "node_modules", PACKAGE_NAME);
+      fs.mkdirSync(path.join(pkg, "dist"), { recursive: true });
+      fs.writeFileSync(
+        path.join(pkg, "package.json"),
+        JSON.stringify({ name: PACKAGE_NAME, version: "9.9.9" })
+      );
+      fs.writeFileSync(path.join(pkg, "dist", "cli.js"), "");
+      fs.writeFileSync(path.join(pnpmHome, "argent"), `#!/bin/sh\nexit 0\n${line(pkg)}\n`);
+      fs.chmodSync(path.join(pnpmHome, "argent"), 0o755);
+      process.env.PATH = `${pnpmHome}${path.delimiter}${SYSTEM_PATH}`;
+
+      expect(getGloballyInstalledVersion()).toBe("9.9.9");
+    });
+
+    it("reads the version of the global behind a stale version-manager shim", () => {
+      const shims = path.join(tmpDir, "shims");
+      fs.mkdirSync(shims);
+      fs.writeFileSync(path.join(shims, "argent"), "#!/bin/sh\nexit 127\n");
+      fs.chmodSync(path.join(shims, "argent"), 0o755);
+      const binDir = stageInstall(path.join(tmpDir, "persistent"), "9.9.9");
+      process.env.PATH = [shims, binDir, SYSTEM_PATH].join(path.delimiter);
 
       expect(getGloballyInstalledVersion()).toBe("9.9.9");
     });
