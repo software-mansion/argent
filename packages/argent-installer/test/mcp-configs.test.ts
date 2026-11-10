@@ -258,6 +258,20 @@ describe("removeAllowlist reports whether it removed anything", () => {
       expect(adapter.removeAllowlist!(root, "global")).toBe(false);
     }
   );
+
+  it.each([
+    ["Cursor", [".cursor", "permissions.json"], { mcpAllowlist: ["github:*"] }],
+    ["Claude Code", [".claude", "settings.json"], { permissions: { defaultMode: "acceptEdits" } }],
+  ] as const)("%s returns false for a config without argent's rule", (name, file, config) => {
+    homedirOverride = tmpDir;
+    const configPath = path.join(tmpDir, ...file);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify(config));
+    const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
+
+    expect(adapter.removeAllowlist!(path.join(tmpDir, "proj"), "global")).toBe(false);
+    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(config);
+  });
 });
 
 // ── getArgentEntry env passthrough ────────────────────────────────────────────
