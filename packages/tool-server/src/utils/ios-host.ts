@@ -297,6 +297,8 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   }
 
   if (withAudio) {
+    // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
+    fs.mkdirSync(audioDir(udid), { recursive: true, mode: 0o700 });
     await execFileAsync(
       "xcrun",
       [...prefix, "spawn", udid, "launchctl", "setenv", "ARGENT_AUDIO_DIR", audioDir(udid)],
@@ -360,6 +362,11 @@ async function listRunningApps(udid: string): Promise<string> {
     }
   );
   return stdout;
+}
+
+/** Pid of the app's running process from the simulator's launchd, or null when it is not running. */
+export async function runningAppPid(udid: string, bundleId: string): Promise<number | null> {
+  return parseUIKitApplicationJobs(await listRunningApps(udid)).get(bundleId) ?? null;
 }
 
 async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {

@@ -8,8 +8,8 @@ import {
   clearAudioInput,
   listLiveApps,
   assertHookProto,
-  isAppArmed,
-  readAppStatus,
+  readAppHook,
+  type HookState,
   setAudioInput,
 } from "../../utils/ios-audio";
 
@@ -94,10 +94,11 @@ Fails if the file cannot be decoded, the simulator is not booted, or the target 
     // Every call arms, including the release: recording the speaker needs the hook but no input override.
     await armAudio(params.udid, services.nativeDevtools as NativeDevtoolsApi);
     // An app on an older hook cannot be driven: say so before changing anything.
-    if (params.bundleId) assertHookProto(readAppStatus(params.udid, params.bundleId), params.bundleId);
+    const hook = params.bundleId ? await readAppHook(params.udid, params.bundleId) : undefined;
+    if (hook?.state === "old-proto") assertHookProto(hook.status, params.bundleId!);
     if (params.source === "microphone") {
       clearAudioInput(params.udid);
-      return withApps(params, { source: "microphone" });
+      return withApps(params, { source: "microphone" }, hook?.state);
     }
     const applied =
       params.source === "file"
@@ -111,21 +112,25 @@ Fails if the file cannot be decoded, the simulator is not booted, or the target 
             frequencyHz: params.frequencyHz ?? 1000,
             amplitude: params.amplitude ?? 0.4,
           });
-    return withApps(params, { source: applied.source, durationMs: applied.durationMs });
+    return withApps(params, { source: applied.source, durationMs: applied.durationMs }, hook?.state);
   },
 };
 
-async function withApps(
+function withApps(
   params: Params,
-  result: Pick<AudioInputResult, "source" | "durationMs">
-): Promise<AudioInputResult> {
+  result: Pick<AudioInputResult, "source" | "durationMs">,
+  hook: HookState | undefined
+): AudioInputResult {
   const out: AudioInputResult = { ...result, liveApps: listLiveApps(params.udid) };
   if (params.bundleId) {
-    out.appReady = await isAppArmed(params.udid, params.bundleId);
+    out.appReady = hook === "dormant" || hook === "active";
     if (!out.appReady) {
       out.message =
-        `The audio hook is not live in ${params.bundleId}: it was launched before the simulator was armed. ` +
-        `Call restart-app for it; the input is already set and applies as soon as it runs again.`;
+        hook === "stale"
+          ? `${params.bundleId} has not reported its audio hook since it last started (or is not running). ` +
+            `Retry in a moment; if it persists, call restart-app for it.`
+          : `The audio hook is not live in ${params.bundleId}: it was launched before the simulator was armed. ` +
+            `Call restart-app for it; the input is already set and applies as soon as it runs again.`;
     }
   }
   return out;

@@ -7,7 +7,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { deviceSetForUdid, simctlPrefix } from "./ios-device-sets";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { InvalidToolInputError } from "./capability";
-import { appendDyldInsertLibrary, audioDir, localIosHost } from "./ios-host";
+import { appendDyldInsertLibrary, audioDir, runningAppPid } from "./ios-host";
 import { audioDylibPath } from "@argent/native-devtools-ios";
 import { isTvOsSimulator } from "./ios-devices";
 import type { NativeDevtoolsApi } from "../blueprints/native-devtools";
@@ -149,6 +149,8 @@ export async function armAudio(
 interface AppAudioStatus {
   /** Contract version of the hook; 0 when the hook predates it. */
   proto: number;
+  /** `dormant`: hook loaded, the app has not opened audio yet (no helper, no acknowledgements). */
+  state: "dormant" | "active";
   pid: number;
   /** Sample rate of the app's audio device; 0 until the app opens audio. */
   sampleRate: number;
@@ -177,6 +179,7 @@ export function parseAppStatus(text: string): AppAudioStatus {
   const input = kv.get("input");
   return {
     proto: num("proto"),
+    state: kv.get("state") === "dormant" ? "dormant" : "active",
     pid: num("pid"),
     sampleRate: num("rate"),
     streams: num("streams"),
@@ -217,14 +220,38 @@ export function readAppStatus(udid: string, bundleId: string): AppAudioStatus | 
 }
 
 /**
- * PROTOTYPE: whether the app carries the hook even though it has not written a status yet. With the hook inserted at
- * arming time it stays dormant (no helper thread, so no `st.` file) until the app opens audio; its launch environment
- * still shows the control directory.
+ * Whether the hook is loaded in the app, from its status file alone:
+ *   none       no file: the app was launched before arming, or by something that replaced the injected libraries
+ *   stale      the file's process is gone, or is not the app's running process (relaunched, not written yet)
+ *   old-proto  a hook speaking another contract version
+ *   dormant    loaded, the app has not opened audio yet: requests apply when it does
+ *   active     loaded and running its helper: requests are acknowledged
  */
-export async function isAppArmed(udid: string, bundleId: string): Promise<boolean> {
-  if (readAppStatus(udid, bundleId)) return true;
-  const app = await localIosHost.inspectRunningApp(udid, bundleId).catch(() => null);
-  return !!app?.process?.env.includes(`${AUDIO_DIR_ENV}=${audioDir(udid)}`);
+export type HookState = "none" | "stale" | "old-proto" | "dormant" | "active";
+
+export function decideHookState(
+  status: AppAudioStatus | null,
+  pidAlive: boolean,
+  runningPid: number | null
+): HookState {
+  if (!status) return "none";
+  if (!(status.pid > 0) || !pidAlive || runningPid === null || runningPid !== status.pid) return "stale";
+  if (status.proto !== AUDIO_HOOK_PROTO) return "old-proto";
+  return status.state;
+}
+
+export async function readAppHook(
+  udid: string,
+  bundleId: string
+): Promise<{ state: HookState; status: AppAudioStatus | null }> {
+  let status: AppAudioStatus | null = null;
+  try {
+    status = parseAppStatus(fs.readFileSync(path.join(audioDir(udid), `st.${bundleId}`), "utf8"));
+  } catch {
+    return { state: "none", status: null };
+  }
+  const running = await runningAppPid(udid, bundleId).catch(() => null);
+  return { state: decideHookState(status, status.pid > 0 && processAlive(status.pid), running), status };
 }
 
 /** Bundle ids of the apps whose hook is live, for telling the caller which apps can be driven. */
@@ -398,11 +425,12 @@ export async function startRecording(
   muteOutput: boolean
 ): Promise<void> {
   assertBundleId(bundleId);
-  const status = readAppStatus(udid, bundleId);
-  assertHookProto(status, bundleId);
+  const hook = await readAppHook(udid, bundleId);
+  if (hook.state === "old-proto") assertHookProto(hook.status, bundleId);
+  if (hook.state === "none" || hook.state === "stale") throw noHookError(bundleId);
+  const status = hook.status;
   // A dormant hook acknowledges nothing until the app opens audio; it reads the request when it does.
-  const dormant = !status && (await isAppArmed(udid, bundleId));
-  if (!status && !dormant) throw noHookError(bundleId);
+  const dormant = hook.state === "dormant";
   const key = recorderKey(udid, bundleId);
   if (status?.recording || recorders.has(key)) {
     throw new FailureError(

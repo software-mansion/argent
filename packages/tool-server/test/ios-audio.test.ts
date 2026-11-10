@@ -23,8 +23,14 @@ function wavFile(file: string, frames: number): void {
   fs.truncateSync(file, h.length + frames * 4); // sparse zeros
 }
 
+/** Pid the fake simulator's launchd reports for the app under test; null: not running. */
+let runningPid: number | null = process.pid;
 const defaultExec = (cmd: string, args: readonly string[]) => {
   if (cmd === "afconvert") wavFile(args[args.length - 1], 48_000); // 1 s
+  if (args.includes("launchctl") && args.includes("list")) {
+    const row = runningPid === null ? "" : `${runningPid}\t0\tUIKitApplication:com.example.app[1a2b][rb-legacy]\n`;
+    return { stdout: `PID\tStatus\tLabel\n${row}`, stderr: "" };
+  }
   return { stdout: "", stderr: "" };
 };
 const execFileMock = vi.fn(defaultExec);
@@ -52,6 +58,7 @@ vi.mock("node:child_process", async () => {
 vi.mock("../src/utils/ios-device-sets", () => ({
   deviceSetForUdid: async () => null,
   simctlPrefix: () => ["simctl"],
+  simctlArgsForUdid: async (_udid: string, args: readonly string[]) => ["simctl", ...args],
 }));
 
 vi.mock("@argent/native-devtools-ios", () => ({
@@ -66,7 +73,9 @@ import {
   ensureAudioEnv,
   listLiveApps,
   assertHookProto,
+  decideHookState,
   parseAppStatus,
+  readAppHook,
   readAppStatus,
   setAudioInput,
   startRecording,
@@ -211,6 +220,66 @@ describe("hook protocol", () => {
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
     expect((err as Error).message).toContain("older audio hook");
     expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
+  });
+});
+
+describe("hook state", () => {
+  const status = (fields: Record<string, string | number>) => parseAppStatus(statusText(fields));
+  const pid = process.pid;
+
+  it("decides from the status file, its pid's liveness and the app's running pid", () => {
+    expect(decideHookState(null, false, pid)).toBe("none");
+    expect(decideHookState(status({ state: "dormant" }), true, pid)).toBe("dormant");
+    expect(decideHookState(status({ state: "active" }), true, pid)).toBe("active");
+    expect(decideHookState(status({}), true, pid)).toBe("active"); // no state key: a full helper status
+    expect(decideHookState(status({ state: "dormant" }), false, pid)).toBe("stale"); // its process is gone
+    expect(decideHookState(status({ state: "dormant" }), true, pid + 1)).toBe("stale"); // relaunched, not written yet
+    expect(decideHookState(status({ state: "dormant" }), true, null)).toBe("stale"); // the app is not running
+    expect(decideHookState(status({ proto: 2 }), true, pid)).toBe("old-proto");
+    expect(decideHookState(parseAppStatus(`pid=${pid}\n`), true, pid)).toBe("old-proto"); // pre-proto hook
+  });
+
+  it("reads none without a file and dormant/active/stale/old-proto from one", async () => {
+    expect((await readAppHook(UDID, BUNDLE)).state).toBe("none");
+    writeStatus({ state: "dormant" });
+    expect((await readAppHook(UDID, BUNDLE)).state).toBe("dormant");
+    writeStatus({ state: "active" });
+    expect((await readAppHook(UDID, BUNDLE)).state).toBe("active");
+    writeStatus({ state: "dormant", pid: 2 ** 22 + 1 }); // dead pid
+    expect((await readAppHook(UDID, BUNDLE)).state).toBe("stale");
+    writeStatus({ proto: 0 });
+    expect((await readAppHook(UDID, BUNDLE)).state).toBe("old-proto");
+    runningPid = process.pid + 1; // the app was relaunched; the file is the old process's
+    try {
+      writeStatus({ state: "active" });
+      expect((await readAppHook(UDID, BUNDLE)).state).toBe("stale");
+      runningPid = null;
+      expect((await readAppHook(UDID, BUNDLE)).state).toBe("stale");
+    } finally {
+      runningPid = process.pid;
+    }
+  });
+
+  it("refuses to record an app whose status is not its running process's", async () => {
+    writeStatus({ state: "active" });
+    runningPid = process.pid + 1;
+    try {
+      const err = await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), false).catch((e: unknown) => e);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
+      expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
+    } finally {
+      runningPid = process.pid;
+    }
+  });
+
+  it("queues a recording for a dormant hook without waiting for an acknowledgement", async () => {
+    writeStatus({ state: "dormant" });
+    const t0 = Date.now();
+    await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), true);
+    expect(Date.now() - t0).toBeLessThan(500);
+    expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(/^id=\w+\nring=.*\nmute=1\n$/);
+    const done = await stopRecording(UDID, BUNDLE); // never opened audio: an empty recording, at once
+    expect(done.durationMs).toBe(0);
   });
 });
 
