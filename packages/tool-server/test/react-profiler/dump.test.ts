@@ -247,4 +247,28 @@ describe("readCommitTree", () => {
   it("throws when the file does not exist", async () => {
     await expect(readCommitTree("/nonexistent/commits.json")).rejects.toThrow();
   });
+
+  it("throws an actionable error for a truncated dump", async () => {
+    const dir = await getDebugDir();
+    const filePath = join(dir, "commit-tree-truncated.json");
+    await fs.writeFile(filePath, '{"commits":[{"commitIndex":0', "utf8");
+
+    const error = await readCommitTree(filePath).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("rerun react-profiler-start/stop");
+    expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+  });
+
+  it.each([
+    ["null", "null"],
+    ["an array", "[]"],
+    ["an object without commits", '{"meta":{}}'],
+    ["commits that are not an array", '{"commits":{}}'],
+  ])("throws an actionable error when the dump is %s", async (_label, contents) => {
+    const dir = await getDebugDir();
+    const filePath = join(dir, "commit-tree-malformed.json");
+    await fs.writeFile(filePath, contents, "utf8");
+
+    await expect(readCommitTree(filePath)).rejects.toThrow("rerun react-profiler-start/stop");
+  });
 });

@@ -98,7 +98,22 @@ interface CommitTreeOnDisk {
   };
 }
 
+/**
+ * Validates the shape like `readCpuProfile`, so a truncated or hand-edited dump
+ * fails with an actionable error instead of a raw `SyntaxError` or a later
+ * `TypeError` on `commits`.
+ */
 export async function readCommitTree(path: string): Promise<CommitTreeOnDisk> {
   const json = await fs.readFile(path, "utf8");
-  return JSON.parse(json) as CommitTreeOnDisk;
+  const corrupt = `On-disk commit tree at ${path} is corrupt or was written by an incompatible tool-server version; rerun react-profiler-start/stop to capture a fresh session.`;
+  let parsed: Partial<CommitTreeOnDisk> | null;
+  try {
+    parsed = JSON.parse(json) as Partial<CommitTreeOnDisk> | null;
+  } catch (err) {
+    throw new Error(corrupt, { cause: err });
+  }
+  if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.commits)) {
+    throw new Error(corrupt);
+  }
+  return parsed as CommitTreeOnDisk;
 }
