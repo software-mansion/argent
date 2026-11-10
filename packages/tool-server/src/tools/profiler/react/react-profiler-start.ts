@@ -427,14 +427,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         });
       }
 
-      // A replaced run's sampler is still on, also when this session node did
-      // not start it. Hermes ignores `Profiler.start` while it runs and clears
-      // samples only on `Profiler.stop`, so the new profile would begin where
-      // the replaced run began.
-      if (api.profilingActive || tookOver) {
-        await cdp.send("Profiler.stop").catch(ignore);
-        api.profilingActive = false;
-      }
+      // Hermes ignores `Profiler.start` while its sampler runs and clears
+      // samples only on `Profiler.stop`, so a sampler left on would start the
+      // new profile early. A replaced run leaves one on, and so does a run
+      // whose connection dropped before a JS reload: the app then reports no
+      // recording, so nothing here can tell. Always stop first; with no
+      // sampler on, Hermes only returns an empty profile.
+      await cdp.send("Profiler.stop").catch(ignore);
+      api.profilingActive = false;
 
       // A session keyed by Metro's logicalDeviceId (two or more devices on one
       // Metro) is not what the tools that drive the device name: they pass its
@@ -458,10 +458,15 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         .send("Profiler.start", { interval: params.sample_interval_us })
         .catch(rethrowWithTakeover);
 
+      // Every failure from here on rolls back the CPU sampler just started.
       const startJson = (await cdp
         .evaluate(buildStartScript(JSON.stringify(ownerPayload)))
-        .catch(rethrowWithTakeover)) as string | undefined;
+        .catch(async (err: unknown) => {
+          await cdp.send("Profiler.stop").catch(ignore);
+          return rethrowWithTakeover(err);
+        })) as string | undefined;
       if (!startJson) {
+        await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
           withTakeover("Failed to start React profiler (no value returned from runtime)."),
           {
@@ -482,7 +487,6 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       };
 
       if (!startResult.ok) {
-        // Roll back the CPU sampler.
         await cdp.send("Profiler.stop").catch(ignore);
         throw new FailureError(
           withTakeover(

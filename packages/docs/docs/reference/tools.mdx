@@ -239,7 +239,7 @@ One React profiler run at a time can record in an app. `react-profiler-status` r
 
 The `lost_run.cause` values are `js_reload`, `cdp_disconnected`, `session_torn_down`, `taken_over`, `stop_failed` and `ended_in_app`. After `ended_in_app`, the data stays in the app. Call `react-profiler-stop` to collect the data. A `react-profiler-start` discards the data.
 
-The tool-server keeps this record in memory only. After a crash or a `kill -9`, the run continues in the app, and the new tool-server shows the run as `taken_over`. A graceful restart, for example on SIGTERM, an update or the idle shutdown, ends the run in the app first. `react-profiler-status` then returns `not_started`.
+The tool-server keeps this record in memory only. After a `kill -9` or a native abort, such as an out-of-memory kill, the run continues in the app, and the new tool-server shows the run as `taken_over`. Any other exit, for example on SIGTERM, an update, the idle shutdown or an uncaught exception, ends the run in the app first. `react-profiler-status` then returns `not_started`. After an uncaught exception or an update, the tool-server stops within about 5 seconds. If the app does not answer in this time, the run continues in the app, as after a `kill -9`.
 
 A run is stale when its heartbeat is older than 5 minutes, also while you use the app during a long recording. `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` refresh the heartbeat of a run that their tool-server records. They do not refresh the heartbeat of a session that replaced this run.
 

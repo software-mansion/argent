@@ -216,6 +216,9 @@ describe("react-profiler-status: nothing recording", () => {
     const res = await runStatus(api);
     expect(res.session_status).toBe("lost");
     expect(res.lost_run).toEqual({ session_id: "uuid-mine", cause: "stop_failed" });
+    // Nothing is left in the app for a stop to collect.
+    expect(res.note).toContain("Call react-profiler-start to record again");
+    expect(res.note).not.toContain("Call react-profiler-stop");
   });
 
   it("says a failed stop's run is still recording, and that start can replace it", async () => {

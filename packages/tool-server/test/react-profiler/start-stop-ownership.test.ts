@@ -87,6 +87,8 @@ function fakeSession(opts: {
   profilingActive?: boolean;
   /** What the app's start script returns, when not a clean start. */
   startResult?: Record<string, unknown>;
+  /** Makes the app's start script fail: a timeout on a busy JS thread, or no value. */
+  startScript?: "rejects" | "returns nothing";
   /** Makes `Profiler.start` reject, as a dropped connection does. */
   profilerStartRejects?: boolean;
   /** Makes `Profiler.stop` reject, as a slow serialization past its timeout does. */
@@ -144,6 +146,10 @@ function fakeSession(opts: {
           });
         }
         if (expression.includes("__argent_doStart")) {
+          if (opts.startScript === "rejects") {
+            throw new Error("CDP request Runtime.evaluate timed out after 10000ms");
+          }
+          if (opts.startScript === "returns nothing") return undefined;
           return JSON.stringify(
             opts.startResult ?? {
               ok: true,
@@ -429,15 +435,36 @@ describe("react-profiler-start and the Hermes sampler", () => {
     expect(res.took_over).toMatchObject({ session_id: "uuid-lost", reason: "own_unsaved" });
   });
 
+  // A run whose connection dropped keeps its sampler through a JS reload, while
+  // the reloaded app reports no recording: nothing tells the start it is on.
   it.each([false, true])(
-    "sends no Profiler.stop when nothing was running (force: %s)",
+    "stops the sampler first when the app reports no recording (force: %s)",
     async (force) => {
       const { registry, sent } = fakeSession({ app: { isRunning: false, owner: null } });
 
       const res = await start(registry, force);
 
       expect(res.started_at).toBeDefined();
-      expect(sent).not.toContain("Profiler.stop");
+      expect(res).not.toHaveProperty("took_over");
+      const stopAt = sent.indexOf("Profiler.stop");
+      expect(stopAt).toBeGreaterThanOrEqual(0);
+      expect(stopAt).toBeLessThan(sent.indexOf("Profiler.start"));
+    }
+  );
+
+  it.each(["rejects", "returns nothing"] as const)(
+    "rolls the sampler back when the app's start script %s",
+    async (startScript) => {
+      lostRun();
+      const { registry, sent } = fakeSession({
+        app: { isRunning: true, owner: owner("uuid-lost") },
+        startScript,
+      });
+
+      const err = await start(registry).catch((e: unknown) => e);
+
+      expect((err as Error).message).toContain("nothing is recording now");
+      expect(sent.lastIndexOf("Profiler.stop")).toBeGreaterThan(sent.indexOf("Profiler.start"));
     }
   );
 });
@@ -1001,6 +1028,7 @@ describe("the run lifecycle, on the real session and scripts", () => {
       const app = makeApp();
       const ts = toolServer(app, PORT);
       await ts.start();
+      const sentByStart = ts.rig.sent.length;
 
       const results = await Promise.allSettled([ts.stop(), ts.stop()]);
 
@@ -1009,7 +1037,12 @@ describe("the run lifecycle, on the real session and scripts", () => {
       expect(getFailureSignal(rejected.reason)?.error_code).toBe(
         FAILURE_CODES.REACT_PROFILER_STOP_IN_PROGRESS
       );
-      expect(ts.sentMethods().filter((m) => m === "Profiler.stop")).toHaveLength(1);
+      expect(
+        ts
+          .sentMethods()
+          .slice(sentByStart)
+          .filter((m) => m === "Profiler.stop")
+      ).toHaveLength(1);
     });
 
     it("refuses a start that was reading the app when the stop began", async () => {
@@ -1133,12 +1166,13 @@ describe("the run lifecycle, on the real session and scripts", () => {
       const app = makeApp();
       const ts = toolServer(app, PORT);
       await ts.start();
+      const sentByStart = ts.rig.sent.length;
       app.commit("Screen");
 
       await ts.stop();
 
       const timeoutOf = (found: (c: Rig["sent"][number]) => boolean) =>
-        ts.rig.sent.find(found)?.timeout;
+        ts.rig.sent.slice(sentByStart).find(found)?.timeout;
       expect(timeoutOf((c) => c.method === "Profiler.stop")).toBe(60_000);
       expect(timeoutOf((c) => c.expression === STOP_AND_READ_SCRIPT)).toBe(60_000);
       expect(timeoutOf((c) => c.expression === RESOLVE_FIBER_META_SCRIPT)).toBe(15_000);
