@@ -358,6 +358,34 @@ describe("screenshotDiffToMcpContent", () => {
         { type: "text", text: `diffPath: ${diff.file}\ncontextDiffPath: ${context.file}` },
       ]);
     });
+
+    // The summary still says "see diffPath … in this result".
+    it("says a diff could not be fetched, and leaves out a diff the result never had", async () => {
+      const notFound = {
+        ...ctx,
+        fetchImpl: (async () => ({ ok: false, status: 404 })) as unknown as typeof fetch,
+      };
+      const remote = (id: string) => artifactHandle(id, `${id}.png`, "image/png");
+
+      const both = await screenshotDiffToMcpContent(
+        { summary: "see diffPath", diffPath: remote("full"), contextDiffPath: remote("context") },
+        notFound
+      );
+      expect(both).toEqual([
+        { type: "text", text: "see diffPath" },
+        { type: "text", text: "diffPath: (unavailable)\ncontextDiffPath: (unavailable)" },
+      ]);
+
+      const one = await screenshotDiffToMcpContent(
+        { summary: "see diffPath", diffPath: remote("full") },
+        notFound,
+        "path"
+      );
+      expect(one).toEqual([
+        { type: "text", text: "see diffPath" },
+        { type: "text", text: "diffPath: (unavailable)" },
+      ]);
+    });
   });
 });
 
@@ -1253,6 +1281,37 @@ describe("describeResultText", () => {
     const description = "  focused: Button Play\n  focusable: Button Stop\nNote:  (not a row)";
     expect(describeResultText({ description, source: "tv-focus" })).toBe(
       `${description}\nSource: tv-focus`
+    );
+  });
+
+  // The TV focus view has no frames; its indent marks a focusable row.
+  it("keeps a TV focus row whose label ends in a number in parentheses", () => {
+    const description = [
+      "App: com.x",
+      "Focused: Home",
+      "Focusable (3):",
+      "→ Home",
+      "  Top 10  (2024)",
+      "  Movies [button]",
+    ].join("\n");
+    expect(describeResultText({ description, source: "tv-focus" })).toBe(
+      `${description}\nSource: tv-focus`
+    );
+  });
+
+  it("trims the rows of the tree Android TV falls back to", () => {
+    const hint = "The Android TV focus engine reported no focusable elements.";
+    const tvHeader = "Source: uiautomator\nMode: nested\n\nROOT  FrameLayout (0, 0, 1, 1)\n\n";
+    const description = `${hint}\n\n${tvHeader}  Button "Season 2"  (0.1, 0.2, 0.3, 0.1)`;
+    expect(describeResultText({ description, source: "uiautomator", hint })).toBe(
+      `${hint}\n\n${tvHeader}Button "Season 2" (0.1, 0.2, 0.3, 0.1)`
+    );
+  });
+
+  it("writes control characters as visible escapes, in the tree and after it", () => {
+    const description = `${header}  button "Pay\u001b[31mRED\u0000now"  (0.1, 0.2, 0.3, 0.1)`;
+    expect(describeResultText({ description, source: "ax-service", hint: "a\u0007b" })).toBe(
+      `${header}button "Pay\\u001b[31mRED\\u0000now" (0.1, 0.2, 0.3, 0.1)\nHint: a\\u0007b`
     );
   });
 

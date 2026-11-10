@@ -116,6 +116,11 @@ export async function toMcpContent(
 // eslint-disable-next-line no-control-regex
 const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 
+/** Control characters written as JSON would write them, so they stay visible. */
+function showHiddenChars(text: string): string {
+  return text.replace(HIDDEN_CHARS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 /**
  * A string result goes out as text: JSON-encoding it would ship a report or a
  * tree as one quoted line of `\n` and `\"` escapes. Control characters are
@@ -126,7 +131,7 @@ const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 function stringifyForText(value: unknown): string {
   if (typeof value !== "string") return compactJson(value ?? null);
   if (value.length === 0) return '""';
-  return value.replace(HIDDEN_CHARS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+  return showHiddenChars(value);
 }
 
 /** Two or more strings: read as lines, as in `e2e-finish-recording`'s `summary`. */
@@ -167,15 +172,19 @@ const TREE_ROW = /(?<=^|\n) {2}( *)([^\n]*?) {2}(\([-\d., ]+\))(?=\n|$)/g;
  * the rendered tree, then the fields that qualify it. `source` is left out when
  * the tree's `Source:` line already names it. Rows lose the shared indent and
  * the second space before the frame, which carry nothing; this happens here so
- * SDK and CLI callers keep the tool-server's text. `undefined` for any other
- * shape (a tool-server from before the text tree), which then renders as JSON.
+ * SDK and CLI callers keep the tool-server's text. The TV focus view has no
+ * frames, and its two-space indent marks the focusable rows, so it keeps its
+ * rows as they are. Control characters are escaped as in any other text
+ * result. `undefined` for any other shape (a tool-server from before the text
+ * tree), which then renders as JSON.
  */
 export function describeResultText(result: unknown): string | undefined {
   if (!isRecord(result) || Array.isArray(result)) return undefined;
   const { description, source, should_restart, hint, ...extra } = result;
   if (typeof description !== "string" || description.length === 0) return undefined;
 
-  const lines = [description.replace(/\n+$/, "").replace(TREE_ROW, "$1$2 $3")];
+  const tree = description.replace(/\n+$/, "");
+  const lines = [source === "tv-focus" ? tree : tree.replace(TREE_ROW, "$1$2 $3")];
   if (typeof source === "string" && !description.includes(`Source: ${source}`)) {
     lines.push(`Source: ${source}`);
   }
@@ -185,7 +194,7 @@ export function describeResultText(result: unknown): string | undefined {
     lines.push(`Hint: ${hint}`);
   }
   if (Object.keys(extra).length > 0) lines.push(JSON.stringify(extra));
-  return lines.join("\n");
+  return showHiddenChars(lines.join("\n"));
 }
 
 /**
@@ -290,10 +299,12 @@ export async function screenshotDiffToMcpContent(
   }
 
   blocks.push({ type: "text" as const, text: result.summary });
-  // The summary points at these by name ("see diffPath … in this result").
-  const paths = Object.entries({ diffPath, contextDiffPath })
-    .filter(([, p]) => typeof p === "string")
-    .map(([k, p]) => `${k}: ${p as string}`);
+  // The summary points at these by name ("see diffPath … in this result"). A
+  // null is a handle that could not be fetched: say so, as `stepArtifactBlocks`
+  // does. A field the result never had stays out.
+  const paths = Object.entries({ diffPath, contextDiffPath }).flatMap(([k, p]) =>
+    typeof p === "string" ? [`${k}: ${p}`] : p === null ? [`${k}: (unavailable)`] : []
+  );
   if (paths.length > 0) blocks.push({ type: "text" as const, text: paths.join("\n") });
   return blocks;
 }

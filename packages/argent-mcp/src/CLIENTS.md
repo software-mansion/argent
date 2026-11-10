@@ -79,10 +79,12 @@ see them. Details of what is copied (and what is left out on purpose) live in
 
 ## Telemetry — `X-Argent-AI-Client`
 
-Every tool-server request carries a coarse slug derived from `clientInfo.name`
-(never the raw string). Unrecognized names become `other`. Mapping lives in
-`packages/telemetry/src/ai-identity.ts`; it does not change tool results or
-schemas.
+The tool list and tool call requests to the tool-server carry a coarse slug, never
+the raw `clientInfo.name`. `canonicalizeAiClient` in `packages/telemetry/src/ai-identity.ts`
+derives it from the name and, for a name that is ambiguous alone, the environment:
+`rmcp` with `WINDSURF_IDE_TYPE` set becomes `windsurf`. A name with no slug becomes
+`other`. An empty or missing name sends no header, so those requests have no client
+value. The slug does not change tool results or schemas.
 
 ## Quick matrix
 
