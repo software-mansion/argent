@@ -119,8 +119,9 @@ async function devicePixelsPerCssPixel(
  * One image pixel per CSS pixel, made from the capture already taken, so nothing
  * on the page or in the window changes. The ratio is the image against
  * `innerWidth`, not `devicePixelRatio`, so the image is the window's CSS width
- * at any browser zoom. Whatever cannot be read or decoded leaves the capture as
- * it came: larger, not wrong.
+ * at any browser zoom. A failed read uses the session's last ratio: if the ratio
+ * has dropped since that read, the image is smaller than the window until the next
+ * refresh. A capture that cannot be decoded stays as it came.
  */
 async function toCssPixels(ctx: CaptureContext, capture: Buffer): Promise<Buffer> {
   try {
