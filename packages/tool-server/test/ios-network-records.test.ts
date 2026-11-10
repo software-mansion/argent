@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   IOS_NATIVE_REQUEST_ID,
+  KEPT_BODY_CHARS_BUDGET,
   createIosNetworkRecords,
   findIosNativeRecord,
   hasIosNetworkCapture,
@@ -1332,6 +1333,129 @@ describe("iOS native network records: request body still being sent", () => {
     expect(app.request).toHaveBeenCalledTimes(1);
   });
 
+  it("asks the app again once a read it held open during the upload is unanswered 5 s after the upload ended", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    // Within 5 s of the end, a read still waits on the open one.
+    await vi.advanceTimersByTimeAsync(4_000);
+    const soon = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(soon.value).toEqual(refused(NO_ANSWER));
+
+    // Later, the app no longer holds the open read, so the next read asks again.
+    const again = store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    app.sent[1]!.reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+    expect(await store.requestPostData(id)).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the body a read asked again for as read last, past newer bodies read while the first read was open", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+    const lastSent = (): SentRead => app.sent[app.sent.length - 1]!;
+    for (let i = 0; i < MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      const read = store.responseBody(idOf(store, `r${i}`));
+      await settle();
+      lastSent().reply({ body: `body ${i}`, base64Encoded: false, wasTruncated: false });
+      await read;
+    }
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const again = store.requestPostData(id);
+    await settle();
+    lastSent().reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+    const later = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+    expect(later.value).toEqual(body("done"));
+  });
+
+  it("asks nothing again for a read the app held open and answered", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = store.requestPostData(id);
+    await settle();
+    app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+    expect(await during).toEqual(body("done"));
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await store.requestPostData(id)).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("never asks again for a read that waited its turn and went out after the upload ended", async () => {
+    const { app, store, agent, id } = uploading();
+    agent.complete("other", "https://e.com/other");
+    const other = store.responseBody(idOf(store, "other"));
+    await settle();
+    const queued = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(1);
+
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    app.sent[0]!.reply({ body: "other", base64Encoded: false, wasTruncated: false });
+    await other;
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(queued.value).toEqual(refused(NO_ANSWER));
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    void store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts the 5 s from the response of the upload, not from its later end", async () => {
+    const { app, store, agent, id } = uploading();
+    void store.requestPostData(id);
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    await vi.advanceTimersByTimeAsync(4_000);
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    void store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("never asks again for a read sent after the upload ended, however late the app answers", async () => {
+    const { app, store, agent, id } = uploading();
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+
+    for (let i = 0; i < 4; i++) {
+      const read = track(store.requestPostData(id));
+      await settle();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(read.value).toEqual(refused(NO_ANSWER));
+    }
+    expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
   it("gives the reason by the request's state when the wait ends, not when the read went out", async () => {
     const { store, agent, id } = uploading();
 
@@ -1576,6 +1700,90 @@ describe("iOS native network records: bodies kept", () => {
     );
   });
 
+  it(`keeps the ${MAX_CACHED_BODIES} bodies read most recently past a read that ends with a reason or stays open`, async () => {
+    vi.useFakeTimers();
+    const { app, store, agent } = bodyStore();
+    app.request.mockImplementation(async (_connection, method, params) => {
+      if (params.requestId === "fails") throw agentError(method, "internal error");
+      if (params.requestId === "upload") return new Promise(() => {});
+      return { body: `body of ${String(params.requestId)}`, base64Encoded: false };
+    });
+    const ids: string[] = [];
+    for (let i = 0; i <= MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      ids.push(idOf(store, `r${i}`));
+    }
+    agent.complete("fails", "https://e.com/fails");
+    agent.requestWillBeSent("upload", "https://e.com/upload", {
+      method: "POST",
+      hasPostData: true,
+    });
+    for (let i = 0; i < MAX_CACHED_BODIES; i++) await store.responseBody(ids[i]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES);
+
+    // A read that ends with a reason keeps nothing, so it pushes out nothing.
+    expect(await store.responseBody(idOf(store, "fails"))).toEqual(
+      refused("the agent did not return the body: internal error")
+    );
+    expect(await store.responseBody(ids[0]!)).toEqual(body("body of r0"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+
+    // A read still open holds no body, so the next body pushes out only the oldest one.
+    const upload = track(store.requestPostData(idOf(store, "upload")));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(upload.value).toEqual(refused(STILL_SENDING));
+    await store.responseBody(ids[MAX_CACHED_BODIES]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 3);
+    expect(await store.responseBody(ids[2]!)).toEqual(body("body of r2"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 3);
+  });
+
+  it(`keeps the bodies read most recently only up to ${KEPT_BODY_CHARS_BUDGET} chars in all`, async () => {
+    const { app, store, agent } = bodyStore();
+    const quarter = "q".repeat(KEPT_BODY_CHARS_BUDGET / 4);
+    const whole = "w".repeat(KEPT_BODY_CHARS_BUDGET + 1);
+    app.request.mockImplementation(async (_connection, _method, params) => ({
+      postData: params.requestId === "huge" ? whole : quarter,
+      base64Encoded: false,
+    }));
+    const ids: string[] = [];
+    for (const name of ["u0", "u1", "u2", "u3", "u4", "huge", "small"]) {
+      agent.requestWillBeSent(name, `https://e.com/${name}`, { method: "POST", hasPostData: true });
+      agent.responseReceived(name, `https://e.com/${name}`);
+      agent.loadingFinished(name, 2);
+      ids.push(idOf(store, name));
+    }
+    const [u0, u1, u2, u3, u4, huge, small] = ids as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+
+    // Four quarters fill the budget; a fifth pushes out the one read longest ago.
+    for (const id of [u0, u1, u2, u3, u4]) await store.requestPostData(id);
+    expect(app.request).toHaveBeenCalledTimes(5);
+    for (const id of [u1, u2, u3, u4]) await store.requestPostData(id);
+    expect(app.request).toHaveBeenCalledTimes(5);
+    await store.requestPostData(u0);
+    expect(app.request).toHaveBeenCalledTimes(6);
+
+    // A body past the budget alone stays until the next body comes.
+    expect((await store.requestPostData(huge)).body).toBe(whole);
+    expect(app.request).toHaveBeenCalledTimes(7);
+    expect((await store.requestPostData(huge)).body).toBe(whole);
+    expect(app.request).toHaveBeenCalledTimes(7);
+    await store.requestPostData(small);
+    await store.requestPostData(small);
+    expect(app.request).toHaveBeenCalledTimes(8);
+    await store.requestPostData(huge);
+    expect(app.request).toHaveBeenCalledTimes(9);
+  });
+
   it("counts a read of a kept body as a read, so the body read longest ago goes first", async () => {
     const { app, store, agent } = answering();
     const ids: string[] = [];
@@ -1626,6 +1834,38 @@ describe("iOS native network records: bodies kept", () => {
     await store.responseBody(ids[MAX_CACHED_BODIES]!);
     expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
     expect(await store.responseBody(ids[1]!)).toEqual(body("body of r1"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+  });
+
+  it("drops the request body of an evicted record, which no longer takes one of the places kept", async () => {
+    const { app, store, agent } = bodyStore();
+    app.request.mockImplementation(async (_connection, _method, params) => ({
+      postData: `post of ${String(params.requestId)}`,
+      base64Encoded: false,
+    }));
+    const ids: string[] = [];
+    for (let i = 0; i <= MAX_CACHED_BODIES; i++) {
+      agent.requestWillBeSent(`u${i}`, `https://e.com/${i}`, { method: "POST", hasPostData: true });
+      agent.responseReceived(`u${i}`, `https://e.com/${i}`);
+      agent.loadingFinished(`u${i}`, 2);
+      ids.push(idOf(store, `u${i}`));
+    }
+    // Every place taken, the oldest record's body read last.
+    for (let i = 1; i < MAX_CACHED_BODIES; i++) await store.requestPostData(ids[i]!);
+    await store.requestPostData(ids[0]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES);
+
+    // The oldest record goes, and its body with it.
+    for (let i = MAX_CACHED_BODIES + 1; i <= MAX_RECORDS; i++) {
+      agent.requestWillBeSent(`u${i}`, `https://e.com/${i}`);
+    }
+    expect(store.record(ids[0]!)).toBeUndefined();
+    expect(await store.requestPostData(ids[0]!)).toEqual(refused("no such request"));
+
+    // So 1 more body fits without pushing out the oldest one kept.
+    await store.requestPostData(ids[MAX_CACHED_BODIES]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+    expect(await store.requestPostData(ids[1]!)).toEqual(body("post of u1"));
     expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
   });
 });
@@ -1816,6 +2056,28 @@ describe("iOS native network records: inline request body", () => {
       body("a".repeat(MAX_VALUE_CHARS), { truncated: true, inlineChars: MAX_VALUE_CHARS + 10 })
     );
     expect(app.request).not.toHaveBeenCalled();
+  });
+
+  it("holds only the kept start of a large inline request body in memory", () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const usedHeap = (): number => {
+      gc();
+      return process.memoryUsage().heapUsed;
+    };
+    const { store, agent } = bodyStore();
+    const before = usedHeap();
+
+    for (let i = 0; i < 20; i++) {
+      agent.requestWillBeSent(`big-${i}`, `https://e.com/${i}`, {
+        method: "POST",
+        postData: String(i).padEnd(4 * 1024 * 1024, "p"),
+      });
+    }
+
+    // 20 bodies of 4 MiB each, of which the store keeps 20 starts of 64 KiB.
+    expect(store.records(8081)).toHaveLength(20);
+    expect(usedHeap() - before).toBeLessThan(16 * 1024 * 1024);
   });
 
   it("counts the kept start of an inline request body toward the size budget", async () => {

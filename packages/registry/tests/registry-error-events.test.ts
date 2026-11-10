@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import { Registry } from "../src/registry";
@@ -225,6 +226,29 @@ describe("Registry — failure signals", () => {
     ).toEqual({
       failure_command: "adb",
       failure_spawn_code: "ENOENT",
+    });
+  });
+
+  it("reads the exit code of an execFileSync failure from status", () => {
+    let error: unknown;
+    try {
+      execFileSync(process.execPath, ["-e", "process.exit(3)"], { stdio: "ignore" });
+    } catch (e) {
+      error = e;
+    }
+    expect(subprocessFailureMetadata(error, "unknown")).toEqual({
+      failure_command: "unknown",
+      failure_exit_code: 3,
+    });
+  });
+
+  it("reports an execFileSync timeout as ETIMEDOUT even when the child exited with a status", () => {
+    // A child that traps SIGTERM and exits 0 after the timeout.
+    expect(
+      subprocessFailureMetadata({ code: "ETIMEDOUT", status: 0, signal: null }, "unknown")
+    ).toEqual({
+      failure_command: "unknown",
+      failure_spawn_code: "ETIMEDOUT",
     });
   });
 

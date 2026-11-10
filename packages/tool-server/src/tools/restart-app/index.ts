@@ -66,9 +66,11 @@ type Params = z.infer<typeof zodSchema>;
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
   return {
     id: "restart-app",
+    // Android's device probes, force-stop and `am start -W` can outlast the 30s MCP fetch timeout.
+    longRunning: true,
     description: `Terminate then relaunch an app on iOS, Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>or Vega.
 Use when you need a clean in-memory state without a full reinstall. The relaunch also refreshes the native-devtools injection (iOS and Apple TV).
-Returns { restarted, bundleId, networkCapture? }. networkCapture (Android, local iOS simulators), once network-capture-start started native network capture for the app, says whether it followed the launch, or that network-capture-stop stopped it. Fails if the app is not installed.`,
+Returns { restarted, bundleId, networkCapture? }. networkCapture (Android, and local iOS simulators where capture stays on for later processes), once network-capture-start started native network capture for the app, says whether it followed the launch, or that network-capture-stop stopped it. Fails if the app is not installed, on a local iOS simulator if terminating it does not finish within 15s, or on a remote simulator if terminating it fails for a reason other than the app not running.`,
     zodSchema,
     alwaysLoad: true,
     searchHint:

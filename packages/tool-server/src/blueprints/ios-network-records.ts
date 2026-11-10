@@ -47,10 +47,16 @@ const POST_DATA_WAIT_MS = 5_000;
  * A request body read stays open until the app answers it or its connection
  * closes, across several waits: the app answers each read it got once it has
  * sent the whole body, so asking again would only bring the body once more.
- * This is setTimeout's longest delay.
+ * Only a read the app held open during the upload, and left unanswered 5 s
+ * after the upload ended, is asked again. This is setTimeout's longest delay.
  */
 const POST_DATA_TIMEOUT_MS = 2 ** 31 - 1;
 const RESPONSE_BODY_TIMEOUT_MS = 10_000;
+/**
+ * The chars of every body kept, together. The body read most recently stays
+ * even when it alone is larger.
+ */
+export const KEPT_BODY_CHARS_BUDGET = 64 * 1024 * 1024;
 
 const STILL_SENDING = "the app is still sending this request body; read it again later";
 /** A request body read of a request that has ended, which the app did not answer in time. */
@@ -146,6 +152,8 @@ export function createIosNetworkRecords(
   const byLayerId = new Map<string, NativeNetworkRecord>();
   const cleared = new WeakSet<NativeNetworkRecord>();
   const startArrivals = new WeakMap<NativeNetworkRecord, number>();
+  /** When the response or the end of a request with a body arrived, on the host's clock. */
+  const uploadEnds = new WeakMap<NativeNetworkRecord, number>();
   /** A request body that came with the request: its start, and its whole length. */
   const inlineBodies = new WeakMap<NativeNetworkRecord, { text: string; chars: number }>();
   /** Bodies read or being read, keyed `kind:id`, oldest first. */
@@ -190,7 +198,7 @@ export function createIosNetworkRecords(
     };
     if (postData.length > 0) {
       inlineBodies.set(record, {
-        text: postData.slice(0, MAX_VALUE_CHARS),
+        text: ownCopy(postData.slice(0, MAX_VALUE_CHARS)),
         chars: postData.length,
       });
     }
@@ -282,7 +290,7 @@ export function createIosNetworkRecords(
 
     const cacheKey = `${kind}:${id}`;
     const cached = bodies.get(cacheKey);
-    if (cached) {
+    if (cached && !(kind === "post" && lostRead(cached, record))) {
       // A read moves its body to the newest end, so the bodies read last are kept.
       bodies.delete(cacheKey);
       bodies.set(cacheKey, cached);
@@ -300,16 +308,19 @@ export function createIosNetworkRecords(
     const sent = new Promise<void>((resolve) => {
       markSent = resolve;
     });
-    const read: BodyRead = { sent, answer, settled: false };
+    const read: BodyRead = { sent, answer, settled: false, chars: 0 };
+    // A read that replaces a lost one also takes the newest place.
+    bodies.delete(cacheKey);
     bodies.set(cacheKey, read);
-    dropOldBodies();
     // Only a body is kept: every reason may change at the next read.
     void answer.then((body) => {
       read.settled = true;
+      read.chars = body.body.length;
       if (!body.available && bodies.get(cacheKey) === read) bodies.delete(cacheKey);
       dropOldBodies();
     });
     void withKeyedLock(bodyReads, String(record.connection), () => {
+      read.heldOpen = kind === "post" && record.state === "pending";
       adoptAnswer(sendBodyRead(record, kind));
       markSent();
       // The lock is held until this read answers, or for a request body until
@@ -320,13 +331,41 @@ export function createIosNetworkRecords(
   }
 
   /**
-   * Drops the bodies read longest ago past the bound. A read still open stays,
-   * because dropping it would send it to the app again.
+   * A request body read that went out while the app was still sending the body
+   * and is still unanswered 5 s after the upload ended. The app answers such a
+   * read when it has sent the whole body, so this one it no longer holds.
+   */
+  function lostRead(read: BodyRead, record: NativeNetworkRecord): boolean {
+    const ended = uploadEnds.get(record);
+    return (
+      read.heldOpen === true &&
+      !read.settled &&
+      ended !== undefined &&
+      performance.now() - ended >= POST_DATA_WAIT_MS
+    );
+  }
+
+  /**
+   * Drops the bodies read longest ago past either bound: their count, or their
+   * chars together. Only a body counts: a read still open stays, because
+   * dropping it would send it to the app again, and a read that ends with a
+   * reason keeps nothing.
    */
   function dropOldBodies(): void {
+    let kept = 0;
+    let chars = 0;
+    for (const read of bodies.values()) {
+      if (!read.settled) continue;
+      kept++;
+      chars += read.chars;
+    }
     for (const [key, read] of bodies) {
-      if (bodies.size <= MAX_CACHED_BODIES) return;
-      if (read.settled) bodies.delete(key);
+      if (kept <= MAX_CACHED_BODIES && (kept <= 1 || chars <= KEPT_BODY_CHARS_BUDGET)) return;
+      if (read.settled) {
+        bodies.delete(key);
+        kept--;
+        chars -= read.chars;
+      }
     }
   }
 
@@ -394,6 +433,7 @@ export function createIosNetworkRecords(
       }
       const record = byLayerId.get(keyOf(connection, layerId));
       if (!record) return;
+      const uploading = record.state === "pending" && record.request.hasPostData === true;
       switch (method) {
         case "Network.responseReceived": {
           const r = asObject(p.response);
@@ -429,6 +469,7 @@ export function createIosNetworkRecords(
           // Body chunks and anything else add nothing to the record.
           return;
       }
+      if (uploading) uploadEnds.set(record, performance.now());
       resize(record);
     },
 
@@ -471,12 +512,24 @@ export function createIosNetworkRecords(
   };
 }
 
+/**
+ * A copy that holds its own chars. A slice of a long string can keep the whole
+ * string in memory for as long as the slice lives.
+ */
+function ownCopy(text: string): string {
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
+
 /** A body read: `sent` settles once its request went out, `answer` with the app's answer. */
 interface BodyRead {
   sent: Promise<void>;
   answer: Promise<NativeNetworkBody>;
   /** The app answered, or the read failed. */
   settled: boolean;
+  /** The length of the body kept, once the app answered with one. */
+  chars: number;
+  /** A request body read that went out while the app was still sending the body. */
+  heldOpen?: boolean;
 }
 
 /**
@@ -516,9 +569,10 @@ function withinWait(
 }
 
 /**
- * One native-devtools service's view of its device: the apps capture is on
- * for, and the records of every app that connected. Both are live, owned by
- * the service.
+ * One native-devtools service's view of its device: the apps argent turned
+ * capture on for (none on a device whose provider lent its agent, where the
+ * capture is the provider's), and the records of every app that connected.
+ * Both are live, owned by the service.
  */
 interface IosNetworkCaptures {
   readonly udid: string;
@@ -571,7 +625,10 @@ function capturing(captures: IosNetworkCaptures, bundleId: string): boolean {
   return captures.bundleIds.has(bundleId) && captures.stores.has(bundleId);
 }
 
-/** Bundle ids with native network capture on for the device. */
+/**
+ * Bundle ids with native network capture on for the device, of the apps that
+ * connected at least once ({@link capturing}).
+ */
 export function liveIosNetworkCaptures(deviceId: string): string[] {
   const key = deviceKeyOf(deviceId);
   const bundleIds = new Set<string>();
@@ -584,7 +641,10 @@ export function liveIosNetworkCaptures(deviceId: string): string[] {
   return [...bundleIds].sort();
 }
 
-/** Udids of the devices with native network capture on for the app. */
+/**
+ * Udids of the devices with native network capture on for the app, where it
+ * connected at least once ({@link capturing}).
+ */
 export function liveIosNetworkCaptureDevices(bundleId: string): string[] {
   const udids = [...liveCaptures]
     .filter((captures) => capturing(captures, bundleId))

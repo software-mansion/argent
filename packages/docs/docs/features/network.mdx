@@ -74,11 +74,15 @@ If native network capture is unavailable, use the JS runtime layer for the reque
 
 ## Native `NSURLProtocol` layer on iOS
 
-The native `NSURLProtocol` layer captures the `URLSession` requests of an app on an iOS simulator. The start of the capture waits until the app acknowledges the capture, for at most 5 seconds. Thus the start for a connected app usually reports that the capture is ready. Argent does not capture the requests from before the start. Repeat the action that sends the request.
+The native `NSURLProtocol` layer captures the `URLSession` requests of an app on an iOS simulator. On a simulator without a [device provider](/docs/reference/device-providers), the start of the capture waits until the app acknowledges the capture, for at most 5 seconds. Thus the start for a connected app usually reports that the capture is ready. Argent does not capture the requests from before the start. Repeat the action that sends the request.
 
-If the app ran before the capture started, the header line of the first result tells that Argent did not record the launch. To capture the launch, ask the agent to restart the app.
+On a simulator without a device provider, the app can run before the capture starts. Then the header line of the first result tells that Argent did not record the launch. To capture the launch, ask the agent to restart the app.
 
-The capture follows the app until the agent stops it. Argent starts the capture in each new process of the app when the process connects. On a local simulator, the result of a launch or a restart tells the agent if the capture is ready in the new process. The launch steps of an e2e test do the same.
+On a simulator without a device provider, the capture follows the app until the agent stops it. Argent starts the capture in each new process of the app when the process connects. If the simulator is local, the result of a launch or a restart tells the agent if the capture is ready in the new process. The launch steps of an e2e test do the same.
+
+On a simulator where Argent uses the socket of a device provider, the provider controls the capture in the app. The start and the stop of the capture do not change the capture setting of the provider. If the provider has the capture off, the header line says so. Then turn on the capture in the provider. Argent records the requests from the time that Argent connects to the in-app agent of the provider. This time can be before the start. Thus the network log can show requests from before the start.
+
+If the app was already running when Argent connected, the header line of the first result tells that Argent did not record the earlier requests. On this simulator, a relaunch ends the capture. Thus Argent cannot record the launch. Do not ask the agent to restart the app for the launch.
 
 The network log of this layer keeps the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the network log of this layer. A request that runs when the connection of the app closes shows as failed. The error of the request tells if the app process ended.
 
@@ -175,7 +179,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - When native network capture records only a part of the requests of the app, the header line says so after `capture active:`.
 - For WebSockets, native network capture records only the connection request.
 - Native network capture attaches the in-app agent to the main process of the app only. It does not record the requests of a component that runs in its own process, for example a service with `android:process=":remote"`. If the `<application>` element sets `android:process`, Argent does not find the app and reads it as not running.
-- The two native layers read each body from the app process that sent the request. A relaunch or a crash of the app ends that process. On Android, an emulator snapshot load also ends it. After that, a request body or a response body is available only if the agent read it before. Argent keeps a copy of only the 64 most recent bodies that the agent read.
+- The two native layers read each body from the app process that sent the request. A relaunch or a crash of the app ends that process. On Android, an emulator snapshot load also ends it. After that, a request body or a response body is available only if the agent read it before. Argent keeps a copy of only the 64 most recent bodies that the agent read. On iOS, these copies also contain a maximum of approximately 64 MB together.
 - If a physical Android device loses its USB connection, the device removes each `adb reverse`. Argent tries to set the `adb reverse` of the capture again for approximately 15 seconds. After this time, Argent sets it again at the next app launch or at the next start of the capture. A read of the network log does not set it. Until then, the in-app agent cannot connect.
 - While the in-app agent has no connection, it keeps the events of the requests for a maximum of 60 seconds. After 60 seconds, it turns off the capture and deletes these events. The list then does not contain these requests, and the header line does not say that they are missing. The capture starts again when the in-app agent connects.
 - Native network capture and the native `NSURLProtocol` layer can slow the app. The launch results, the e2e test reports and the profiler start results tell the agent when one of them is on. Before you profile, ask the agent to stop the capture. Then restart the app.

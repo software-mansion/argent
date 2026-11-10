@@ -38,9 +38,13 @@ executionPrerequisite: User is signed in and viewing Settings
 steps: []
 ```
 
+The recorder also writes `version: 1`, the file format version. Keep it. A file without it is version 1, and a version newer than the installed Argent reads is refused.
+
 E2E tests never store a device id. The runner binds the device. `launch:` restarts the process but does not clear app, account, or backend data.
 
 The one exception is a device _scope_ rather than a target: `stop-all-simulator-servers`' `devices` list **is** kept in the YAML, because without it the step means the machine-wide sweep and would tear down devices other agents are mid-session on. Replay rebinds a recorded scope only when you pass `device` explicitly: an auto-detected device would retarget the teardown at a device the test never named. So the recorded ids are what run when you replay without `device`; on another host they reap nothing and come back in `unmatched`, so re-record the cleanup test there or pass `device`. A step that recorded no scope is narrowed onto the run's device **only when the run resolved one**. A cleanup test whose only step is that teardown needs no device, so with none or several booted it resolves none, replays as the machine-wide sweep, and still reports a pass. Record the scope, or pass `device` at replay, whenever the sweep must stay confined.
+
+A top-level `requires:` block limits the targets a test runs on: `platform` (`ios`, `android`, `chromium`, `vega`, or a list; `ios` covers a remote simulator) and `runtimeKind` (`tv` or `mobile`). Add it for a platform-specific or TV-specific scenario. A directory run skips a test whose target does not match; a `run:` fragment that does not match fails its step.
 
 ## Selectors
 
