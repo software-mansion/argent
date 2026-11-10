@@ -83,7 +83,8 @@ const vars = Object.fromEntries(values.var.map((kv) => kv.split(/=(.*)/s).slice(
 function fill(v) {
   if (typeof v === "string" && v.startsWith("$")) {
     const name = v.slice(1);
-    if (!(name in vars)) throw new Error(`no --var ${name}`);
+    // `--var name` with no `=` leaves the value undefined, which would drop the argument.
+    if (vars[name] === undefined) throw new Error(`no --var ${name}=<value>`);
     return vars[name];
   }
   if (Array.isArray(v)) return v.map(fill);
@@ -95,6 +96,8 @@ function fill(v) {
 for (const [i, step] of steps.entries()) {
   if (step.sleep) continue;
   try {
+    if (typeof step.tool !== "string") throw new Error('needs a "tool" name');
+    if (step.id !== undefined && typeof step.id !== "string") throw new Error('"id" must be text');
     step.args = fill(step.args ?? {});
   } catch (e) {
     process.stderr.write(`step ${i + 1} (${step.tool}): ${e.message}\n`);
