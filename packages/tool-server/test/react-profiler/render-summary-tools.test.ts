@@ -216,6 +216,27 @@ describe("react-profiler-stop render summary", () => {
     );
   });
 
+  it("counts updates in subtrees no rendered ancestor joins, named or not", async () => {
+    // 100 commits in 2 s: Screen, Row and an unnamed fiber each update on their
+    // own, so the DevTools duration is only the largest of them.
+    const durations: Array<[number, number]> = [
+      [1, 3],
+      [2, 2],
+      [3, 1],
+    ];
+    const commitData = Array.from({ length: 100 }, (_, i) => ({
+      timestamp: i * 16,
+      duration: 3,
+      fiberActualDurations: durations,
+      fiberSelfDurations: durations,
+      changeDescriptions: [] as Array<[number, unknown]>,
+    }));
+    const { response } = await stop({ dataForRoots: [{ commitData }] }, 2000);
+    expect(response["react_render_ms"]).toBe(600);
+    expect(response["react_render_share_pct"]).toBe(30);
+    expect(response["hot_commit_indices"]).toEqual([]);
+  });
+
   it("does not claim all commits were cheap when a slow one has no named fibers", async () => {
     const live = backend(4, false);
     live.dataForRoots[0]!.commitData.push({
@@ -486,7 +507,10 @@ describe("profiler-commit-query render_counts", () => {
       component_name: "Text",
     });
     expect(one).toContain("## Render Counts for `Text`");
-    expect(one.split("\n").filter((l) => l.startsWith("| `"))).toHaveLength(1);
+    const oneRows = one.split("\n").filter((l) => l.startsWith("| `"));
+    expect(oneRows).toHaveLength(1);
+    expect(oneRows[0]).toMatch(/^\| `Text` \|/);
+    expect(one).not.toContain("raise top_n");
 
     const capped = await query("counts-filter-device", { mode: "render_counts", top_n: 1 });
     expect(capped).toContain("_Showing 1 of 2 components; raise top_n for more._");
@@ -607,6 +631,23 @@ describe("profiler-commit-query render_counts", () => {
     expect(out).toContain("**Total occurrences:** 2 across 2 commits\n");
   });
 
+  it("by_component does not let stored entries that did not render hide renders elsewhere", async () => {
+    const bailouts = [0, 1, 2].map((i) => ({ ...fiber("Row", i, 0), didRender: false }));
+    const renders = [fiber("Row", 5, 4), fiber("Row", 6, 4)];
+    await cacheSession("bailout-device", bailouts, {
+      hotCommitIndices: [1],
+      renderSummary: summarizeRenders(
+        [...bailouts, ...renders],
+        timings(new Array(7).fill(5)),
+        1000
+      ),
+    });
+    const out = await query("bailout-device", { mode: "by_component", component_name: "Row" });
+    expect(out).toContain(
+      "(stored commits only; 2 renders over all 7 commits, see mode=`render_counts`)"
+    );
+  });
+
   it("by_component counts a provider that rendered only in unstored commits", async () => {
     const hot = fiber("Hot", 5, 30);
     await cacheSession("provider-cold-device", [hot], {
@@ -651,6 +692,25 @@ describe("profiler-commit-query render_counts", () => {
     expect(out).not.toContain("Either name works");
   });
 
+  it("counts the mounts of a separate component of that name", async () => {
+    const stored = [fiber("Memo(Row)", 0, 30), fiber("Memo(Row)", 1, 30)];
+    const mounts = Array.from({ length: 40 }, (_, i) => {
+      const row = fiber("Row", i + 4, 1);
+      return { ...row, changeDescription: { ...row.changeDescription!, isFirstMount: true } };
+    });
+    await cacheSession("row-mounts-device", stored, {
+      hotCommitIndices: [0, 1],
+      totalReactCommits: 42,
+      renderSummary: summarizeRenders(
+        [...stored, ...mounts],
+        timings(new Array(42).fill(5), 16),
+        5000
+      ),
+    });
+    const out = await query("row-mounts-device", { mode: "by_component", component_name: "Row" });
+    expect(out).toContain("A separate `Row` rendered 40 times outside the stored commits.");
+  });
+
   it("keeps the short note when the wrapped fiber is the only component of that name", async () => {
     await cacheMemoRowSession("memo-only-device", false);
     const out = await query("memo-only-device", { mode: "by_component", component_name: "Row" });
@@ -682,6 +742,20 @@ describe("profiler-commit-query render_counts", () => {
     const out = await query("counts-idle-device", { mode: "render_counts" });
     expect(out).toContain("No React commits were recorded");
     expect(out).not.toContain("| Component |");
+  });
+
+  it("says no component could be named instead of printing an empty table", async () => {
+    await cacheSession("counts-nameless-device", [], {
+      hotCommitIndices: [],
+      totalReactCommits: 2,
+      renderSummary: summarizeRenders([], timings([5, 5]), 1000),
+    });
+    for (const params of [{}, { component_name: "Row" }]) {
+      const out = await query("counts-nameless-device", { mode: "render_counts", ...params });
+      expect(out).toContain("**React render time:** 10 ms of 1.0 s");
+      expect(out).toContain("No component in this session could be named");
+      expect(out).not.toContain("| Component |");
+    }
   });
 });
 
@@ -896,6 +970,22 @@ describe("profiler-cpu-query component_cpu", () => {
     expect(out).toContain(
       "**Commits:** 2  **Total commit time:** 40.0ms (stored commits only; 14,040 renders over all 468 commits, see `profiler-commit-query` mode=`render_counts`)"
     );
+  });
+
+  it("does not let stored entries that did not render hide renders elsewhere", async () => {
+    const bailouts = [0, 1, 2].map((i) => ({ ...fiber("Row", i, 0), didRender: false }));
+    const renders = [fiber("Row", 5, 4), fiber("Row", 6, 4)];
+    await cacheCpuSession("cpu-bailout-device", bailouts, {
+      hotCommitIndices: [1],
+      totalReactCommits: 7,
+      renderSummary: summarizeRenders(
+        [...bailouts, ...renders],
+        timings(new Array(7).fill(5)),
+        1000
+      ),
+    });
+    const out = await componentCpu("cpu-bailout-device", "Row");
+    expect(out).toContain("(stored commits only; 2 renders over all 7 commits");
   });
 
   it("adds nothing when the stored commits hold every render", async () => {

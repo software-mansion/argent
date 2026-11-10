@@ -37,6 +37,7 @@ interface StoredCommits {
     timestamp: number;
     commitDuration: number;
     componentName: string;
+    didRender: boolean;
   }[];
   /** Null for sessions saved before react-profiler-stop wrote the summary. */
   renderSummary: RenderSummary | null;
@@ -386,7 +387,7 @@ function renderComponentCpu(
     `**Commits:** ${commitWindows.size}  **Total commit time:** ${totalCommitMs.toFixed(1)}ms` +
       storedOnlyNote(
         resolvedName,
-        componentCommits.length,
+        componentCommits.filter((c) => c.didRender).length,
         commitTree.renderSummary,
         "`profiler-commit-query` mode=`render_counts`"
       ),

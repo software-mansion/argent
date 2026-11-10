@@ -80,8 +80,9 @@ function normalizeChangeDescription(raw: unknown): DevToolsChangeDescription | n
  * (typically components unmounted before `STOP_AND_READ_SCRIPT` ran), so the report
  * can warn that a breakdown is incomplete. Tuple: `[commitIndex, fiberCount, ms]`.
  *
- * `commitTimings[i]` is the DevTools timestamp and duration of flat commit `i`, recorded for
- * every commit, including one whose fibers were all unattributed.
+ * `commitTimings[i]` is the DevTools timestamp and duration of flat commit `i` and the summed
+ * self time of its fibers, recorded for every commit, including one whose fibers were all
+ * unattributed.
  */
 export function flattenProfilingData(
   merged: ProfilingDataBackend,
@@ -114,12 +115,13 @@ export function flattenProfilingData(
       }
 
       const commitDuration = typeof c.duration === "number" ? c.duration : 0;
-      commitTimings.push({ timestamp: c.timestamp, durationMs: commitDuration });
 
       let droppedCount = 0;
       let droppedMs = 0;
+      let selfMs = 0;
 
       for (const [fiberID, actualDuration] of actualMap) {
+        if (actualDuration > 0) selfMs += selfMap.get(fiberID) ?? 0;
         const componentName = displayNameById[String(fiberID)] ?? null;
         if (!componentName) {
           droppedCount++;
@@ -146,6 +148,8 @@ export function flattenProfilingData(
           isCompilerOptimized: meta?.isCompilerOptimized === true,
         });
       }
+
+      commitTimings.push({ timestamp: c.timestamp, durationMs: commitDuration, selfMs });
 
       if (droppedCount > 0) {
         unattributedByCommit.push([

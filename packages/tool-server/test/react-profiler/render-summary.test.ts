@@ -158,6 +158,22 @@ describe("summarizeRenders", () => {
     expect(s.recordingMs).toBe(10_000);
   });
 
+  it("counts updates in separate subtrees, which the DevTools duration leaves out", () => {
+    // Store subscribers with no rendered common ancestor: DevTools reports only the largest.
+    const s = summarizeRenders(
+      [],
+      [
+        { timestamp: 0, durationMs: 0.3, selfMs: 9 },
+        { timestamp: 100, durationMs: 8, selfMs: 5 },
+      ],
+      10_000
+    );
+    expect(s.totalRenderMs).toBe(17);
+    expect(s.peakSecondRenderMs).toBe(17);
+    // The slowest commit stays the DevTools value: the 16 ms floor is defined on it.
+    expect(s.maxCommitMs).toBe(8);
+  });
+
   it("names the changed hooks from the fiber's hook types", () => {
     const s = summarizeRenders(
       [
@@ -196,6 +212,16 @@ describe("summarizeRenders", () => {
       components: [],
     });
     expect(formatRenderTime(s)).toBe("0.0 ms of 10.0 s (0%), 0 commits");
+  });
+});
+
+describe("formatRenderSummaryReason", () => {
+  it.each([
+    ["parent", "parent re-render"],
+    ["context", "context changed"],
+    ["force_update", "forceUpdate()"],
+  ] as const)("prints %s as %s", (reason, label) => {
+    expect(formatRenderSummaryReason(component("Row", 1, 1, { reason }))).toBe(label);
   });
 });
 

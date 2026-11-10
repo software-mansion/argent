@@ -162,6 +162,20 @@ describe("report with no hot commit", () => {
     expect(rows.map((r) => r.split("`")[1])).toEqual(["ClockRow", "ClockScreen", "ClockHeader"]);
   });
 
+  it("does not call mixed rows app components when only some could be placed", async () => {
+    // A React Compiler app with no usable index: the wrapper places `Forget(Clock)` alone.
+    const report = await render({
+      renderSummary: {
+        ...CLOCK,
+        components: [component("Forget(Clock)", 468, 300), ...CLOCK.components],
+      },
+      componentOrigin: createComponentOriginClassifier(new Map()),
+    });
+    expect(report).toContain("Components that re-rendered in at least 10 of the 468 commits");
+    expect(report).not.toContain("App components");
+    expect(report).toContain("library components may be listed");
+  });
+
   it("names the frequent components the source does not know, after the table", async () => {
     const report = await render({
       renderSummary: CLOCK,
@@ -172,12 +186,12 @@ describe("report with no hot commit", () => {
     const rows = report.split("\n").filter((l) => l.startsWith("| `"));
     expect(rows.map((r) => r.split("`")[1])).toEqual(["ClockRow"]);
     expect(report).toContain(
-      "left out as library code, because the name was not found in the source under `project_root`: `ClockScreen`, `ClockHeader`."
+      "left out because the source index has no definition for the name: `ClockScreen`, `ClockHeader`."
     );
-    expect(report.indexOf("| `ClockRow`")).toBeLessThan(report.indexOf("left out as library code"));
-    expect(report.indexOf("left out as library code")).toBeLessThan(
-      report.indexOf("## Next Steps")
-    );
+    expect(report).toContain("These are usually library components.");
+    expect(report).toContain("when `project_root` is wrong");
+    expect(report.indexOf("| `ClockRow`")).toBeLessThan(report.indexOf("left out because"));
+    expect(report.indexOf("left out because")).toBeLessThan(report.indexOf("## Next Steps"));
   });
 
   it("caps the names it lists that way", async () => {
@@ -478,7 +492,26 @@ describe("hot-commit report", () => {
       reactCommits: 51,
       componentOrigin: createComponentOriginClassifier(FIXTURE_INDEX),
     });
-    expect(report).not.toContain("left out as library code");
+    expect(report).not.toContain("left out because");
+  });
+
+  it("prints only the note when Top Components already shows every row", async () => {
+    const report = await render({
+      noHotCommits: false,
+      hotCommitSummaries: [HOT],
+      componentFindings: [{ ...SEARCH_SHELL, component: "TickRow" }],
+      renderSummary: {
+        ...TYPING,
+        components: [component("TickRow", 12_330, 227.5), component("Svg", 12_330, 100)],
+      },
+      recordingMs: 11_241.6,
+      reactCommits: 51,
+      componentOrigin: createComponentOriginClassifier(
+        new Map([["TickRow", { file: "/fixture/App.js", line: 5 }]])
+      ),
+    });
+    expect(report).not.toContain("## Most Frequent Re-renders");
+    expect(report).toContain("has no definition for the name: `Svg`.");
   });
 
   it("falls back to the stored count for a session without a summary", async () => {

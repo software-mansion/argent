@@ -48,6 +48,8 @@ export interface CommitTiming {
   timestamp: number;
   /** DevTools commit duration, ms. */
   durationMs: number;
+  /** Summed self time of the fibers that rendered in this commit, named or not, ms. */
+  selfMs?: number;
 }
 
 export interface RenderSummaryComponent {
@@ -77,12 +79,14 @@ export interface RenderSummary {
   /** Every commit the DevTools backend recorded, across all roots. */
   totalCommits: number;
   /**
-   * Sum of the DevTools commit durations. DevTools reports the largest rendered
-   * subtree of a commit (its max actualDuration), not the commit's total, so this
-   * leaves out updates in other subtrees and the walk through a deep tree, as well
-   * as effects and native mounting: 56 ms here against 347 ms of render-phase CPU
-   * samples on a Bluesky scroll. It also holds dev-only work and, under Strict
-   * Mode, second renders. Treat it as a rough dev-build number.
+   * Render time over all commits: for each one, the larger of its DevTools
+   * duration and the summed self time of its fibers. DevTools reports the largest
+   * rendered subtree (its max actualDuration), so updates in separate subtrees,
+   * such as store subscribers, show only in the self times, which in turn miss the
+   * fibers DevTools filters out. The walk through a deep tree, effects and native
+   * mounting are in neither: a Bluesky scroll measured 56 ms by duration against
+   * 347 ms of render-phase CPU samples. It also holds dev-only work and, under
+   * Strict Mode, second renders. Treat it as a rough dev-build number.
    */
   totalRenderMs: number;
   /** Most render time in any one second, so idle time cannot hide a burst. */
@@ -112,7 +116,12 @@ function validDuration(ms: number): number {
   return Number.isFinite(ms) && ms > 0 ? ms : 0;
 }
 
-/** Largest sum of commit durations inside any window of PEAK_WINDOW_MS. */
+/** One commit's share of `RenderSummary.totalRenderMs`. */
+function commitRenderMs(commit: CommitTiming): number {
+  return Math.max(validDuration(commit.durationMs), validDuration(commit.selfMs ?? 0));
+}
+
+/** Largest sum of commit render times inside any window of PEAK_WINDOW_MS. */
 function peakWindowMs(commitTimings: readonly CommitTiming[]): number {
   const sorted = commitTimings
     .filter((c) => Number.isFinite(c.timestamp))
@@ -121,9 +130,9 @@ function peakWindowMs(commitTimings: readonly CommitTiming[]): number {
   let inWindow = 0;
   let first = 0;
   for (const commit of sorted) {
-    inWindow += validDuration(commit.durationMs);
+    inWindow += commitRenderMs(commit);
     while (sorted[first]!.timestamp <= commit.timestamp - PEAK_WINDOW_MS) {
-      inWindow -= validDuration(sorted[first]!.durationMs);
+      inWindow -= commitRenderMs(sorted[first]!);
       first++;
     }
     if (inWindow > peak) peak = inWindow;
@@ -244,9 +253,10 @@ export function summarizeRenders(
 
   let totalRenderMs = 0;
   let maxCommitMs = 0;
-  for (const { durationMs } of commitTimings) {
-    const ms = validDuration(durationMs);
-    totalRenderMs += ms;
+  for (const commit of commitTimings) {
+    totalRenderMs += commitRenderMs(commit);
+    // The DevTools value alone: the 16 ms floor for a hot commit is defined on it.
+    const ms = validDuration(commit.durationMs);
     if (ms > maxCommitMs) maxCommitMs = ms;
   }
 

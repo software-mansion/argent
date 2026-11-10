@@ -112,6 +112,9 @@ function renderRenderCounts(
     );
   }
   if (summary.totalCommits === 0) return NO_COMMITS_RECORDED;
+  if (summary.components.length === 0) {
+    return `**React render time:** ${formatRenderTime(summary)}\n\nNo component in this session could be named, so there is nothing to list.`;
+  }
   const seconds = Math.max(summary.recordingMs / 1000, 0.001);
   let rows = summary.components;
   let heading = `## Render Counts — all ${formatCount(summary.totalCommits)} commits`;
@@ -230,7 +233,7 @@ function renderByComponent(
     `## Commits for \`${resolvedName}\``,
     "",
     ...(resolutionNote ? [resolutionNote, ""] : []),
-    `**Total occurrences:** ${matching.length} across ${byCommit.size} commits${storedOnlyNote(resolvedName, matching.length, summary)}`,
+    `**Total occurrences:** ${matching.length} across ${byCommit.size} commits${storedOnlyNote(resolvedName, matching.filter((c) => c.didRender).length, summary)}`,
     "",
     "| Commit | Instances | Duration (ms) | Commit Total (ms) | Time (ms) | Reason | Parent |",
     "|---|---|---|---|---|---|---|",

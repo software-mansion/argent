@@ -68,7 +68,7 @@ describe("buildAstIndexWithDiagnostics", () => {
     mkdirSync(join(dir, "__tests__"), { recursive: true });
     const mock = (name: string) => `export function ${name}() { return <Text />; }\n`;
     writeFileSync(join(dir, "feed.test.tsx"), mock("InTestFile"));
-    writeFileSync(join(dir, "feed.spec.ts"), mock("InSpecFile"));
+    writeFileSync(join(dir, "feed.spec.tsx"), mock("InSpecFile"));
     writeFileSync(join(dir, "__mocks__", "native.tsx"), mock("InMocks"));
     writeFileSync(join(dir, "__tests__", "helper.tsx"), mock("InTests"));
     writeFileSync(join(dir, "Latest.tsx"), mock("RealScreen"));

@@ -262,7 +262,7 @@ function renderOutsideSourceNote(names: string[]): string {
     names.length > MAX_OUTSIDE_SOURCE_NAMES
       ? ` and ${names.length - MAX_OUTSIDE_SOURCE_NAMES} more`
       : "";
-  return `Frequent re-renders left out as library code, because the name was not found in the source under \`project_root\`: ${shown}${more}. If one is yours, check \`project_root\`. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
+  return `Frequent re-renders left out because the source index has no definition for the name: ${shown}${more}. These are usually library components. Class components, components made by a wrapper such as \`observer()\`, and all of your components when \`project_root\` is wrong land here too. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
 }
 
 function renderFrequentRow(row: FrequentRerenderRow): string {
@@ -366,11 +366,15 @@ function buildFullMarkdown(
   const frequent = frequentRerenderRows(input);
   const inTopComponents = new Set(input.componentFindings.map((f) => f.component));
   const outsideSource = frequentOutsideSource(input).filter((name) => !inTopComponents.has(name));
-  if (
-    outsideSource.length > 0 ||
-    frequent.some((row) => !inTopComponents.has(row.component.name))
-  ) {
-    lines.push(...renderFrequentRerenders(input.renderSummary ?? null, frequent, outsideSource));
+  const tableAddsRow = frequent.some((row) => !inTopComponents.has(row.component.name));
+  if (tableAddsRow || outsideSource.length > 0) {
+    lines.push(
+      ...renderFrequentRerenders(
+        input.renderSummary ?? null,
+        tableAddsRow ? frequent : [],
+        outsideSource
+      )
+    );
   }
 
   const suggestionsSection = renderSuggestedImprovements(

@@ -166,7 +166,7 @@ describe("source index on a session with no hot commit", () => {
     });
     const report = await analyze("ClockRow", 1);
     expect(report).toContain(
-      "left out as library code, because the name was not found in the source under `project_root`: `ClockRow`."
+      "left out because the source index has no definition for the name: `ClockRow`."
     );
     expect(report).toContain("mode=`render_counts` has the counts");
   });
@@ -176,11 +176,11 @@ describe("source index on a session with no hot commit", () => {
       index: new Map([["Other", { file: "/elsewhere/Other.tsx", line: 1 }]]),
       treeSitterAvailable: true,
     });
-    expect(await analyze("Outlet", 0.01)).not.toContain("left out as library code");
+    expect(await analyze("Outlet", 0.01)).not.toContain("left out because");
   });
 
   it("does not name a component that names alone rule out", async () => {
-    expect(await analyze("Text", 1)).not.toContain("left out as library code");
+    expect(await analyze("Text", 1)).not.toContain("left out because");
   });
 });
 
@@ -254,7 +254,7 @@ describe("source index on a hot session with a frequent component outside its fi
     expect(report).not.toContain("## Most Frequent Re-renders");
     // Not a table row, but not silent either: Top Components does not hold it.
     expect(report).toContain(
-      "left out as library code, because the name was not found in the source under `project_root`: `ClockRow`."
+      "left out because the source index has no definition for the name: `ClockRow`."
     );
   });
 
