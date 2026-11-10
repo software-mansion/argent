@@ -1565,6 +1565,27 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "b2")!.label).toBe("T");
   });
 
+  it("names a control by its aria-labelledby targets over its aria-label, as Chrome does", () => {
+    const real = el({ tag: "span", text: "Real", rect: BOX, attrs: { id: "real" } });
+    const empty = el({ tag: "span", rect: BOX, attrs: { id: "empty" } });
+    const button = (id: string, labelledBy: string) =>
+      el({
+        tag: "button",
+        rect: BOX,
+        attrs: { id, "aria-label": "Close", "aria-labelledby": labelledBy },
+      });
+    const { tree } = run([
+      button("b1", "real"),
+      button("b2", "empty"),
+      button("b3", "nope"),
+      real,
+      empty,
+    ]);
+    expect(findById(tree, "b1")!.label).toBe("Real");
+    expect(findById(tree, "b2")!.label).toBe("Close");
+    expect(findById(tree, "b3")!.label).toBe("Close");
+  });
+
   it("reads aria-labelledby ids that name Object.prototype members", () => {
     const ids = ["constructor", "toString", "__proto__"];
     const labels = ids.map((id) => el({ tag: "span", text: `L-${id}`, rect: BOX, attrs: { id } }));

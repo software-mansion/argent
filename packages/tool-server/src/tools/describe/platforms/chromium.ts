@@ -130,10 +130,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const labelTexts = Object.create(null);
   const NAME_MAX = 200;
 
-  // A blank aria-label or aria-labelledby name falls through to the next source.
+  // A blank aria-labelledby name or aria-label falls through to the next source.
   function accessibleName(el) {
-    const aria = getAttr.call(el, "aria-label")?.trim();
-    if (aria) return aria.slice(0, NAME_MAX);
     const labelledBy = getAttr.call(el, "aria-labelledby");
     if (labelledBy) {
       const ids = labelledBy.split(/\\s+/);
@@ -149,6 +147,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const name = parts.join(" ");
       if (name) return name.slice(0, NAME_MAX);
     }
+    const aria = getAttr.call(el, "aria-label")?.trim();
+    if (aria) return aria.slice(0, NAME_MAX);
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
       if (el.placeholder) return el.placeholder.slice(0, NAME_MAX);
       // Chrome never names a text field by its value; describe does, so a filled one reads.
