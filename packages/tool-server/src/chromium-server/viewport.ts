@@ -13,13 +13,19 @@ const VIEWPORT_FAILURE = {
 /**
  * Throws rather than falling back to a default size: wrong dimensions would
  * corrupt every subsequent tap's normalized → CSS-pixel math.
+ *
+ * @param timeoutMs Replaces the CDP client's default timeout for this read.
  */
-export async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
-  const out = (await cdp.send("Runtime.evaluate", {
-    expression:
-      "JSON.stringify({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 })",
-    returnByValue: true,
-  })) as { result?: { value?: string } };
+export async function readViewport(cdp: CDPClient, timeoutMs?: number): Promise<ViewportSize> {
+  const out = (await cdp.send(
+    "Runtime.evaluate",
+    {
+      expression:
+        "JSON.stringify({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 })",
+      returnByValue: true,
+    },
+    timeoutMs
+  )) as { result?: { value?: string } };
   const raw = out.result?.value;
   if (typeof raw !== "string") {
     throw new FailureError(

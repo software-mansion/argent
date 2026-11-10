@@ -76,20 +76,22 @@ export async function createChromiumServer(
   // Also the initial attach: starts recording on the active page.
   await network.reattach();
 
+  const getViewport = () => viewport;
+
   const server: ChromiumServer = {
     port: opts.port,
     cdp,
     pageWebSocketUrl: wsUrl,
     network,
-    getViewport: () => viewport,
+    getViewport,
     refreshViewport: async () => {
       viewport = await readViewport(cdp);
       return viewport;
     },
     captureScreenshot: (opts2?: ScreenshotOpts) =>
-      captureScreenshot({ cdp, deviceId: opts.deviceId }, opts2),
+      captureScreenshot({ cdp, deviceId: opts.deviceId, getViewport }, opts2),
     copyScreenshotToClipboard: (opts2?: { rotation?: Rotation }) =>
-      copyScreenshotToClipboard({ cdp, deviceId: opts.deviceId }, opts2),
+      copyScreenshotToClipboard({ cdp, deviceId: opts.deviceId, getViewport }, opts2),
     sendTouch: (touchType: TouchType, point: Point, secondPoint?: Point | null) =>
       sendTouch(cdp, viewport, touchType, point, secondPoint),
     sendKey: (direction, key) => sendKey(cdp, direction, key),
