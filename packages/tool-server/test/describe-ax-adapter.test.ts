@@ -98,6 +98,22 @@ describe("describe ax-service adapter", () => {
     );
   });
 
+  it("carries the hint of an element with no label, value or id", () => {
+    const root = adaptAXDescribeToDescribeResult({
+      alertVisible: false,
+      elements: [
+        {
+          hint: "Opens the menu",
+          frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+          traits: [],
+        },
+      ],
+    });
+    expect(formatDescribeTree(root, { source: "ax-service" })).toContain(
+      'AXGroup hint="Opens the menu"'
+    );
+  });
+
   it("prints no hint for a daemon that does not send the field", () => {
     const root = adaptAXDescribeToDescribeResult({
       alertVisible: false,

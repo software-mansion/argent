@@ -448,6 +448,23 @@ describe("formatDescribeTree", () => {
     expect(formatDescribeTree(root, { source: "ax-service" })).not.toContain("hint=");
   });
 
+  it("omits a hint identical to the label and keeps one that differs in any way", () => {
+    const frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.1 };
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({ role: "AXLink", label: "Poland", hint: "Poland", frame }),
+        leaf({ role: "AXLink", label: "Warsaw", hint: "Capital of Poland", frame }),
+        leaf({ role: "AXButton", label: "Save", hint: "save", frame }),
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "ax-service" });
+    expect(out).toContain('AXLink "Poland"  (');
+    expect(out).toContain('AXLink "Warsaw" hint="Capital of Poland"');
+    expect(out).toContain('AXButton "Save" hint="save"');
+  });
+
   it.each(["ax-service", "native-devtools"] as const)(
     "lists an unlabelled %s element that reports only a hint, disabled or selected",
     (source) => {

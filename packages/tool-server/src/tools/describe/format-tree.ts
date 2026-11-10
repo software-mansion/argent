@@ -111,10 +111,12 @@ function formatLine(n: DescribeNode, indent: number, source: DescribeSource): st
   // iOS reports a text input's placeholder as both label and value; printing
   // it twice costs bytes for no signal.
   const dedupedValue = n.value && n.value !== n.label ? n.value : undefined;
+  // Safari reports an HTML `title` as the hint, and it is often the link's own text.
+  const dedupedHint = n.hint && n.hint !== n.label ? n.hint : undefined;
   const labelPart = formatLabel(n.label);
   const valuePart = formatAttr("value", dedupedValue);
   const idPart = formatAttr("id", n.identifier);
-  const hintPart = formatAttr("hint", n.hint);
+  const hintPart = formatAttr("hint", dedupedHint);
   const flagPart = formatFlags(n, source);
   const annotations = `${labelPart}${valuePart}${idPart}${hintPart}${flagPart}`.trim();
   const annotated = annotations ? ` ${annotations}` : "";
