@@ -49,11 +49,35 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
   }
 }
 
+/**
+ * How a screenshot reaches the client. Default / unknown clients use `image-and-path`.
+ * `screenshotForm` / `autoScreenshotForm` in client-images.ts pick the form per
+ * `clientInfo.name`; see CLIENTS.md for the full matrix.
+ * - `image-and-path` (default): the image, then `Saved: <path>`.
+ * - `image`: the image alone, for a client whose model sees it (auto-screenshots only).
+ * - `path`: no image, only the path and how to open it, for a client that would send the image
+ *   to the model as base64 text. A diff image gets its path alone.
+ */
+export type ScreenshotForm = "image-and-path" | "image" | "path";
+
+const PATH_NOTE_START = "Screenshot saved to ";
+
+/** The text that stands in for a screenshot in the `path` form. */
+export function screenshotPathNote(path: string): string {
+  return `${PATH_NOTE_START}${path}\nIt is not attached here, because this client would pass the image to the model as base64 text. To look at the screen, open that PNG with your file-read tool in Image mode.`;
+}
+
+/** True for a block that carries a screenshot, in any form. */
+export function isScreenshotBlock(block: ContentBlock): boolean {
+  return block.type === "image" || block.text.startsWith(PATH_NOTE_START);
+}
+
 export async function toMcpContent(
   result: unknown,
   outputHint?: string,
   ctx?: ContentContext,
-  args?: unknown
+  args?: unknown,
+  form: ScreenshotForm = "image-and-path"
 ): Promise<ContentBlock[]> {
   // `includeImageInContext: false` asks for the saved-path text only — no inline image.
   const suppressImage = isRecord(args) && args.includeImageInContext === false;
@@ -66,35 +90,113 @@ export async function toMcpContent(
 
     if (outputHint === "image") {
       if (images.length > 0) {
-        const saved: ContentBlock = { type: "text", text: `Saved: ${images[0]!.localPath}` };
-        if (suppressImage) return [saved];
-        const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
-        blocks.push(saved);
-        return blocks;
+        return screenshotBlocks(images, images[0]!.localPath, suppressImage, form);
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      return legacyImageContent(rewritten, suppressImage);
+      return legacyImageContent(rewritten, suppressImage, form);
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
-    // Surface any images that rode along on a non-image result.
-    if (!suppressImage) for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
+    // Surface any images that rode along on a non-image result. In the `path`
+    // form the text above already carries their paths.
+    if (!suppressImage && form !== "path") {
+      for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
+    }
     return blocks;
   }
 
   if (outputHint === "image") {
-    return legacyImageContent(result, suppressImage);
+    return legacyImageContent(result, suppressImage, form);
   }
 
   return [{ type: "text" as const, text: stringifyForText(result) }];
 }
 
+// Control characters a reader can't see: C0, DEL and C1, which holds the 8-bit
+// CSI (U+009B) a terminal acts on. Tab and line breaks are left alone, and so
+// are U+2028 and U+2029, which real labels hold.
+// eslint-disable-next-line no-control-regex
+const HIDDEN_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+
+/** Control characters written as JSON `\u` escapes, so they stay visible. */
+function showHiddenChars(text: string): string {
+  return text.replace(HIDDEN_CHARS, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 /**
- * JSON.stringify(undefined) returns undefined, which would make an invalid MCP
- * text block; coerce to "null".
+ * A string result goes out as text: JSON-encoding it would ship a report or a
+ * tree as one quoted line of `\n` and `\"` escapes. Control characters are
+ * written as JSON `\u` escapes, so they stay visible.
+ * Anything else is compact JSON. JSON.stringify(undefined) returns undefined,
+ * which would make an invalid MCP text block; coerce to "null".
  */
 function stringifyForText(value: unknown): string {
-  return JSON.stringify(value ?? null, null, 2);
+  if (typeof value !== "string") return compactJson(value ?? null);
+  if (value.length === 0) return '""';
+  return showHiddenChars(value);
+}
+
+/** Two or more strings: read as lines, as in `e2e-finish-recording`'s `summary`. */
+function isLineList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length > 1 && value.every((v) => typeof v === "string");
+}
+
+/**
+ * JSON with no indentation, which costs tokens and tells the model nothing. A
+ * top-level field that is a list of strings keeps one item per line, because
+ * `e2e-finish-recording` puts a step's warning on the line below the step. The
+ * lines differ from `JSON.stringify` only in whitespace, so it still parses.
+ */
+function compactJson(value: unknown): string {
+  if (!isRecord(value) || Array.isArray(value) || !Object.values(value).some(isLineList)) {
+    return JSON.stringify(value);
+  }
+  const fields = Object.entries(value).flatMap(([key, field]) => {
+    const text = isLineList(field)
+      ? `[\n${field.map((item) => JSON.stringify(item)).join(",\n")}\n]`
+      : JSON.stringify(field);
+    return text === undefined ? [] : [`${JSON.stringify(key)}:${text}`];
+  });
+  return `{${fields.join(",")}}`;
+}
+
+/**
+ * One tree row: the indent every row shares, any deeper indent, the role and
+ * its annotations, then two spaces and the frame, which always ends the row. A
+ * label can't span lines, so a frame quoted in a label can't be taken for it.
+ * Only `\n` ends a row. `^`, `$` and `.` would also stop at U+2028 and U+2029,
+ * which a label can hold.
+ */
+const TREE_ROW = /(?<=^|\n) {2}( *)([^\n]*?) {2}(\([-\d., ]+\))(?=\n|$)/g;
+
+/**
+ * `describe`'s `{ description, source, should_restart?, hint? }` as plain text:
+ * the rendered tree, then the fields that qualify it. `source` is left out when
+ * the tree's `Source:` line already names it. Rows lose the shared indent and
+ * the second space before the frame, which carry nothing; this happens here so
+ * SDK and CLI callers keep the tool-server's text. The TV focus view has no
+ * frames, and its two-space indent marks the focusable rows, so it keeps its
+ * rows as they are. Control characters are escaped as in any other text
+ * result. `undefined` for any other shape (a tool-server from before the text
+ * tree), which then renders as JSON.
+ */
+export function describeResultText(result: unknown): string | undefined {
+  if (!isRecord(result) || Array.isArray(result)) return undefined;
+  const { description, source, should_restart, hint, ...extra } = result;
+  if (typeof description !== "string" || description.length === 0) return undefined;
+
+  const tree = description.replace(/\n+$/, "");
+  const lines = [source === "tv-focus" ? tree : tree.replace(TREE_ROW, "$1$2 $3")];
+  if (typeof source === "string" && !description.includes(`Source: ${source}`)) {
+    lines.push(`Source: ${source}`);
+  }
+  if (should_restart === true) lines.push("should_restart: true");
+  // TV results already carry their hint inside the tree text.
+  if (typeof hint === "string" && hint.length > 0 && !description.includes(hint)) {
+    lines.push(`Hint: ${hint}`);
+  }
+  if (Object.keys(extra).length > 0) lines.push(JSON.stringify(extra));
+  return showHiddenChars(lines.join("\n"));
 }
 
 /**
@@ -104,7 +206,8 @@ function stringifyForText(value: unknown): string {
  */
 async function legacyImageContent(
   result: unknown,
-  suppressImage: boolean
+  suppressImage: boolean,
+  form: ScreenshotForm
 ): Promise<ContentBlock[]> {
   if (result && typeof result === "object" && "url" in result) {
     const r = result as { url: string; path?: string };
@@ -113,7 +216,7 @@ async function legacyImageContent(
     }
     const buf = await fetchPngBytes(r.url);
     if (buf) {
-      return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
+      return screenshotBlocks([{ data: buf, mimeType: "image/png" }], r.path ?? "", false, form);
     }
     return [
       {
@@ -122,7 +225,20 @@ async function legacyImageContent(
       },
     ];
   }
-  return [{ type: "text", text: JSON.stringify(result, null, 2) }];
+  return [{ type: "text", text: stringifyForText(result) }];
+}
+
+function screenshotBlocks(
+  images: ReadonlyArray<{ data: Buffer; mimeType: string }>,
+  path: string,
+  suppressImage: boolean,
+  form: ScreenshotForm
+): ContentBlock[] {
+  if (suppressImage) return [{ type: "text", text: `Saved: ${path}` }];
+  if (form === "path") return [{ type: "text", text: screenshotPathNote(path) }];
+  const blocks = images.map((img) => imageBlock(img.data, img.mimeType));
+  if (form === "image-and-path") blocks.push({ type: "text", text: `Saved: ${path}` });
+  return blocks;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -143,21 +259,24 @@ export function isScreenshotDiffResult(value: unknown): value is ScreenshotDiffR
 
 export async function screenshotDiffToMcpContent(
   result: ScreenshotDiffResult,
-  ctx?: ContentContext
+  ctx?: ContentContext,
+  form: ScreenshotForm = "image-and-path"
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
 
   // The context diff's bytes come back in `images` whether the file was already
   // on this machine or had to be downloaded from a remote tool-server.
+  let diffPath = result.diffPath;
   let contextDiffPath = result.contextDiffPath;
   let materializedImages: { localPath: string; data: Buffer; mimeType: string }[] = [];
   if (ctx) {
     const { result: rewritten, images } = await materializeArtifacts(result, ctx);
+    diffPath = (rewritten as ScreenshotDiffResult).diffPath;
     contextDiffPath = (rewritten as ScreenshotDiffResult).contextDiffPath;
     materializedImages = images;
   }
 
-  if (typeof contextDiffPath === "string") {
+  if (form !== "path" && typeof contextDiffPath === "string") {
     const fromMaterializer = materializedImages.find((img) => img.localPath === contextDiffPath);
     if (fromMaterializer) {
       blocks.push({
@@ -182,6 +301,13 @@ export async function screenshotDiffToMcpContent(
   }
 
   blocks.push({ type: "text" as const, text: result.summary });
+  // The summary points at these by name ("see diffPath … in this result"). A
+  // null is a handle that could not be fetched: say so, as `stepArtifactBlocks`
+  // does. A field the result never had stays out.
+  const paths = Object.entries({ diffPath, contextDiffPath }).flatMap(([k, p]) =>
+    typeof p === "string" ? [`${k}: ${p}`] : p === null ? [`${k}: (unavailable)`] : []
+  );
+  if (paths.length > 0) blocks.push({ type: "text" as const, text: paths.join("\n") });
   return blocks;
 }
 
@@ -292,7 +418,8 @@ function stepLabel(step: FlowStepResult): string {
  */
 export async function flowRunToMcpContent(
   result: FlowExecuteResult,
-  ctx?: ContentContext
+  ctx?: ContentContext,
+  form: ScreenshotForm = "image-and-path"
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
   const name = result.e2eTest ?? result.flow;
@@ -333,12 +460,14 @@ export async function flowRunToMcpContent(
     }
 
     if (step.result !== undefined) {
-      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
+      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args, form)));
     }
 
     // Snapshot steps carry artifacts instead of a result.
     if (isRecord(step.artifacts)) {
-      blocks.push(...(await stepArtifactBlocks(step.artifacts, step.status, ctx, step.depth)));
+      blocks.push(
+        ...(await stepArtifactBlocks(step.artifacts, step.status, ctx, step.depth, form))
+      );
     }
   }
 
@@ -373,13 +502,14 @@ export async function flowRunToMcpContent(
  * Only that diff is materialized; baseline and current are full-res PNGs nobody
  * renders, so their handles print as paths without pulling bytes over the wire.
  * Lines carry the step's depth indent so they stay attached to a nested step's
- * label, matching the CLI renderer.
+ * label, matching the CLI renderer. The `path` form lists the diff without the image.
  */
 async function stepArtifactBlocks(
   artifacts: Record<string, unknown>,
   status: string | undefined,
   ctx?: ContentContext,
-  depth?: number
+  depth?: number,
+  form: ScreenshotForm = "image-and-path"
 ): Promise<ContentBlock[]> {
   const failed = status === "fail" || status === "error";
   const entries: [string, string][] = [];
@@ -392,7 +522,7 @@ async function stepArtifactBlocks(
       // null ⇒ the handle couldn't be fetched; say so, don't dangle a reference.
       entries.push([k, typeof result === "string" ? result : "(unavailable)"]);
       const img = images.find((i) => i.localPath === result);
-      if (img) diffImage = imageBlock(img.data, img.mimeType);
+      if (img && form !== "path") diffImage = imageBlock(img.data, img.mimeType);
     } else if (isArtifactHandle(v)) {
       entries.push([k, v.hostPath ?? v.filename]);
     } else if (typeof v === "string") {
