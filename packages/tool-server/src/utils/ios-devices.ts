@@ -1,13 +1,19 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { SIMCTL_KILL_SIGNAL } from "./simctl-config";
 import {
   configuredAdditionalDeviceSets,
+  deviceSetForUdid,
   rememberDeviceSet,
   simctlPrefix,
   type DeviceSetPath,
 } from "./ios-device-sets";
+import { externalNativeId, isExternalId } from "./external-devices";
+import { resolveDevice } from "./device-info";
+import { XcodeFirstLaunchPendingError } from "./dependency-errors";
+import { xcodeInstallInstruction } from "./xcode-first-launch";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,6 +25,12 @@ export interface IosSimulator {
   runtimeKind?: "mobile" | "tv";
   /** Owning CoreSimulator device-set directory; absent for the default set. */
   deviceSet?: string;
+  /**
+   * Present, and true, for a foldable simulator: one whose device-type profile
+   * lists more than one integrated display (the iPhone Duo's cover and inner
+   * panels). Absent on every other device, so their listing is unchanged.
+   */
+  foldable?: true;
 }
 
 interface SimctlDevice {
@@ -33,24 +45,55 @@ interface SimctlOutput {
   devices: Record<string, SimctlDevice[]>;
 }
 
-/** List one device set's iOS/tvOS simulators; [] on any failure. */
-async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulator[]> {
+const SIMCTL_LIST_TIMEOUT_MS = 10_000;
+
+/** What to tell an agent after a `simctl list` timeout; `retry` names the call to repeat. */
+export function simctlListTimeoutAdvice(retry: string): string {
+  return (
+    `\`xcrun simctl list\` did not answer within ${SIMCTL_LIST_TIMEOUT_MS / 1000}s. ` +
+    `CoreSimulatorService is probably still starting, which can take about a minute after a ` +
+    `reboot, so call ${retry} again shortly. If it keeps timing out and Xcode was just updated, ` +
+    `ask the user to ${xcodeInstallInstruction()}; otherwise restart CoreSimulatorService.`
+  );
+}
+
+interface IosSimulatorScan {
+  simulators: IosSimulator[];
+  /** Some set's `simctl list` timed out, so the list is incomplete. */
+  timedOut: boolean;
+}
+
+/** Undefined for a runtime that is neither iOS nor tvOS, such as watchOS or visionOS (`xrOS`). */
+export function simulatorRuntimeKind(runtimeId: string): "mobile" | "tv" | undefined {
+  if (runtimeId.includes("tvOS")) return "tv";
+  return runtimeId.includes("iOS") ? "mobile" : undefined;
+}
+
+/**
+ * List one device set's iOS/tvOS simulators; none on any failure but the refusal
+ * while Xcode's component install is pending. Read as an empty set, it would
+ * make a simulator's type lookup answer "not tvOS, not foldable".
+ *
+ * @throws XcodeFirstLaunchPendingError
+ */
+async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSimulatorScan> {
   // simctl materializes a missing `--set` directory as a side effect, so a
   // config typo would leave a stray directory on disk.
-  if (deviceSet && !fs.existsSync(deviceSet)) return [];
+  if (deviceSet && !fs.existsSync(deviceSet)) return { simulators: [], timedOut: false };
   try {
     const { stdout } = await execFileAsync(
       "xcrun",
       [...simctlPrefix(deviceSet), "list", "devices", "--json"],
-      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+      { timeout: SIMCTL_LIST_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
+    const deviceTypes: string[] = [];
     for (const [runtimeId, devices] of Object.entries(data.devices)) {
-      if (!runtimeId.includes("iOS") && !runtimeId.includes("tvOS")) continue;
+      const runtimeKind = simulatorRuntimeKind(runtimeId);
+      if (!runtimeKind) continue;
       for (const d of devices) {
         if (!d.isAvailable) continue;
-        const runtimeKind = runtimeId.includes("tvOS") ? "tv" : "mobile";
         out.push({
           udid: d.udid,
           name: d.name,
@@ -59,11 +102,24 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
           runtimeKind,
           ...(deviceSet ? { deviceSet } : {}),
         });
+        deviceTypes.push(d.deviceTypeIdentifier);
       }
     }
-    return out;
-  } catch {
-    return [];
+    // A foldable is told from its device-type profile, not from any running
+    // service: `list-devices` runs before a simulator-server exists. The
+    // per-type verdict is memoized, so the listing pays for it once per type.
+    await Promise.all(
+      out.map(async (sim, i) => {
+        if (sim.runtimeKind !== "mobile") return;
+        const foldable = await isFoldableDeviceType(deviceTypes[i]!);
+        foldableCache.set(sim.udid, foldable);
+        if (foldable) sim.foldable = true;
+      })
+    );
+    return { simulators: out, timedOut: false };
+  } catch (err) {
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
+    return { simulators: [], timedOut: (err as { killed?: boolean }).killed === true };
   }
 }
 
@@ -73,13 +129,25 @@ async function listDeviceSetSimulators(deviceSet: DeviceSetPath): Promise<IosSim
  * with its owning set and remembered in the UDID → device-set map, so later
  * per-device simctl calls target the right set. Empty when xcrun is missing or
  * every set fails, keeping the rest of the tool surface usable off macOS.
+ *
+ * @throws XcodeFirstLaunchPendingError
  */
 export async function listIosSimulators(): Promise<IosSimulator[]> {
+  return (await scanIosSimulators()).simulators;
+}
+
+/**
+ * {@link listIosSimulators}, plus whether any set's `simctl list` timed out, as it
+ * does on a cold CoreSimulatorService (up to about a minute after a reboot).
+ *
+ * @throws XcodeFirstLaunchPendingError
+ */
+export async function scanIosSimulators(): Promise<IosSimulatorScan> {
   const sets: DeviceSetPath[] = [null, ...configuredAdditionalDeviceSets()];
   const perSet = await Promise.all(sets.map(listDeviceSetSimulators));
   const out: IosSimulator[] = [];
   const seen = new Set<string>();
-  for (const simulators of perSet) {
+  for (const { simulators } of perSet) {
     for (const sim of simulators) {
       // A UDID lives in exactly one set; first sighting wins, guarding against
       // a set listed twice in the config.
@@ -89,7 +157,7 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
       out.push(sim);
     }
   }
-  return out;
+  return { simulators: out, timedOut: perSet.some((set) => set.timedOut) };
 }
 
 // A simulator's runtime kind is fixed at creation, so memoize per-UDID and keep
@@ -107,9 +175,22 @@ const runtimeKindCache = new Map<string, "mobile" | "tv">();
 export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | "tv" | undefined> {
   const cached = runtimeKindCache.get(udid);
   if (cached) return cached;
-  const kind = (await listIosSimulators()).find((s) => s.udid === udid)?.runtimeKind;
+  const kind = (await findIosSimulator(udid))?.runtimeKind;
   if (kind) runtimeKindCache.set(udid, kind);
   return kind;
+}
+
+export async function findIosSimulator(udid: string): Promise<IosSimulator | undefined> {
+  /**
+   * An external provider's simulator is not in any configured set, so the
+   * all-sets listing cannot see it. Scope to the set the provider declared and
+   * match on the native UDID.
+   */
+  const listing = isExternalId(udid)
+    ? (await listDeviceSetSimulators(await deviceSetForUdid(udid))).simulators
+    : await listIosSimulators();
+  const native = externalNativeId(udid);
+  return listing.find((s) => s.udid === native);
 }
 
 /** True when the given iOS-shaped UDID is actually a tvOS (Apple TV) simulator. */
@@ -142,4 +223,111 @@ export function getCachedSimulatorRuntimeKind(udid: string): "mobile" | "tv" | u
 /** Test-only: clear the iOS runtime-kind memo so cases don't leak verdicts. */
 export function __resetSimulatorRuntimeKindCacheForTesting(): void {
   runtimeKindCache.clear();
+  foldableCache.clear();
+  deviceTypeFoldableCache.clear();
+  deviceTypeBundlePaths = null;
+}
+
+// ─── Foldable simulators ───────────────────────────────────────────────
+
+/**
+ * Whether a device type is foldable, memoized by identifier: the profile is
+ * static for the selected Xcode, and `list-devices` is called often.
+ */
+const deviceTypeFoldableCache = new Map<string, boolean>();
+/** Device-type identifier → `.simdevicetype` bundle path, from `simctl list devicetypes`. */
+let deviceTypeBundlePaths: Promise<Map<string, string>> | null = null;
+/** Per-UDID verdict, filled by every listing and by {@link isFoldableSimulator}. */
+const foldableCache = new Map<string, boolean>();
+
+async function listDeviceTypeBundlePaths(): Promise<Map<string, string>> {
+  try {
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      [...simctlPrefix(null), "list", "devicetypes", "--json"],
+      { timeout: 10_000, killSignal: SIMCTL_KILL_SIGNAL }
+    );
+    const data = JSON.parse(stdout) as {
+      devicetypes?: Array<{ identifier?: string; bundlePath?: string }>;
+    };
+    const out = new Map<string, string>();
+    for (const t of data.devicetypes ?? []) {
+      if (typeof t.identifier === "string" && typeof t.bundlePath === "string") {
+        out.set(t.identifier, t.bundlePath);
+      }
+    }
+    return out;
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * The bundle path of a device type. The listing is memoized for the process,
+ * and re-read once for an identifier it does not know — a device type added
+ * by an Xcode switch since the first listing — before that type is given up on.
+ */
+async function deviceTypeBundlePath(identifier: string): Promise<string | undefined> {
+  deviceTypeBundlePaths ??= listDeviceTypeBundlePaths();
+  let paths = await deviceTypeBundlePaths;
+  if (paths.has(identifier)) return paths.get(identifier);
+  deviceTypeBundlePaths = listDeviceTypeBundlePaths();
+  paths = await deviceTypeBundlePaths;
+  return paths.get(identifier);
+}
+
+/**
+ * Count the integrated displays a device-type profile declares. The profile's
+ * `capabilities.displays` also lists the tvOut, carPlay and resizable-scene
+ * surfaces; only `integrated` ones are panels the guest can render to.
+ */
+async function countIntegratedDisplays(bundlePath: string): Promise<number> {
+  const plist = path.join(bundlePath, "Contents", "Resources", "capabilities.plist");
+  if (!fs.existsSync(plist)) return 0;
+  try {
+    const { stdout } = await execFileAsync(
+      "plutil",
+      ["-extract", "capabilities.displays", "json", "-o", "-", plist],
+      { timeout: 5_000 }
+    );
+    const displays = JSON.parse(stdout) as Array<{ displayType?: string }>;
+    if (!Array.isArray(displays)) return 0;
+    return displays.filter((d) => d?.displayType === "integrated").length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Whether a device type is foldable: its profile lists more than one
+ * integrated display. False for any type whose profile cannot be read, so an
+ * unreadable profile degrades to the single-panel behaviour every device had
+ * before there were foldables.
+ */
+export async function isFoldableDeviceType(identifier: string): Promise<boolean> {
+  const cached = deviceTypeFoldableCache.get(identifier);
+  if (cached !== undefined) return cached;
+  const bundlePath = await deviceTypeBundlePath(identifier);
+  const foldable = bundlePath ? (await countIntegratedDisplays(bundlePath)) > 1 : false;
+  deviceTypeFoldableCache.set(identifier, foldable);
+  return foldable;
+}
+
+/**
+ * Whether the simulator behind `udid` is foldable. Memoized per UDID like the
+ * runtime kind, and warmed by every listing, so the hot paths that ask
+ * (the simulator-server factory, the visual tools) rarely pay for `simctl`.
+ * False for a UDID no listing knows.
+ */
+export async function isFoldableSimulator(udid: string): Promise<boolean> {
+  const device = resolveDevice(udid);
+  if (device.platform !== "ios" || device.kind !== "simulator") return false;
+  const cached = foldableCache.get(udid);
+  if (cached !== undefined) return cached;
+  const found = await findIosSimulator(udid);
+  const foldable = found?.foldable === true;
+  // A listing that did not see the UDID at all is not evidence about it;
+  // memoize only what a listing answered.
+  if (found) foldableCache.set(udid, foldable);
+  return foldable;
 }

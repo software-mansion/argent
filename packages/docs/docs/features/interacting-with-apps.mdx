@@ -24,20 +24,19 @@ The agent uses the same tools on iOS, Android, TV and Chromium. Argent reads the
 The agent does not read coordinates from a screenshot. Before a tap, the agent has the elements on the screen with their roles, labels and positions. Each interaction tool returns these elements together with the screenshot. The agent reads the screen separately only before the first action on a new screen. The source depends on the app:
 
 - the accessibility tree on iOS, Android and TV,
-- the React component tree in React Native apps,
 - the DOM in Chromium and Electron apps.
 
 After a screen change, the action returns the new screen: a screenshot and the element tree. The next tap needs no extra call. The `disable-auto-describe` flag stops the element tree.
 
 ## Launching apps
 
-The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data.
+The agent opens an app by its bundle id or package name. The agent does not tap an icon on the Home screen. Thus each run starts from a known state. The agent also opens deep links by URL, restarts an app, and reinstalls an app with clean data. On an Apple simulator or a physical iPhone, the agent can also give launch arguments to the app, for example to turn on a feature flag.
 
 ## Gestures and text
 
 The agent taps, swipes, pinches, rotates content, and sends custom touch sequences for long press or drag and drop. On Chromium, the agent scrolls with the mouse wheel and drags with the mouse. The agent taps a text field first, then types text and special keys such as enter or escape. When a user would use paste, the agent puts the text on the device clipboard and pastes it in one step.
 
-To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent.
+To type a credential, the agent uses a secret placeholder. Argent fills the value from your environment. The value does not enter the context of the agent. When Device Hub has opened a simulator, Argent types a secret instead of pasting it. The secret does not go to the Mac clipboard.
 
 ## Permissions
 
@@ -52,7 +51,7 @@ The agent grants, denies or resets a runtime permission such as location, camera
 
 ## Device state and hardware
 
-The agent also controls the device around the app. The agent rotates the device between portrait and landscape. The agent presses hardware buttons such as home, back and volume. On TV targets, the agent presses the remote. The agent shakes the device to start the handler that your app binds to a shake, for example a feedback sheet or the developer menu.
+The agent also controls the device around the app. The agent rotates the device between portrait and landscape. The agent folds and unfolds a foldable iOS simulator or Android emulator. Screenshots, element trees and taps use the panel that shows the UI. The agent presses hardware buttons such as home, back and volume. On TV targets, the agent presses the remote. The agent shakes the device to start the handler that your app binds to a shake, for example a feedback sheet or the developer menu.
 
 <Video
   src="/video/shake.mp4"
@@ -63,7 +62,7 @@ The agent also controls the device around the app. The agent rotates the device 
 
 ## Waiting and sequences
 
-The agent does not take screenshots in a loop. The agent waits for a condition on the UI, such as "this element is visible" or "the screen stopped changing".
+The agent does not take screenshots in a loop. The agent waits for a condition on the UI, such as "this element is visible" or "the screen stopped changing". When the wait for an element ends, Argent returns the screen: a screenshot and the element tree.
 
 If the agent knows several actions before the start, and there is nothing to examine between them, the agent runs them as one sequence. One call replaces several round trips.
 

@@ -3,63 +3,98 @@ import { bundledHelperApkPath, helperManifest } from "@argent/native-devtools-an
 
 /** Manifest-driven install of the argent-android-devtools helper APK. */
 
-const installedHelpers = new Map<string, true>();
-
-function cacheKey(serial: string, versionCode: number): string {
-  return `${serial}|${versionCode}`;
-}
-
 interface InstalledVersionProbe {
   installed: boolean;
   versionCode: number | null;
 }
 
 /**
- * `--show-versioncode` returns the version in the same round-trip; `pm path`
- * would need a follow-up `dumpsys package`.
+ * `--show-versioncode` returns the version in the same round-trip. Anything
+ * short of a listed versionCode — a throw, no matching line, or a line without
+ * one — falls back to `dumpsys package`: API 23 has no `cmd` (its shell prints
+ * `cmd: not found` and exits 0), and API 24-25 have no `--show-versioncode`.
  */
 async function probeInstalledVersion(
   serial: string,
   packageName: string
 ): Promise<InstalledVersionProbe> {
+  try {
+    const out = await adbShell(
+      serial,
+      `cmd package list packages --show-versioncode ${packageName}`,
+      { timeoutMs: 5_000 }
+    );
+    for (const line of out.split("\n")) {
+      const match = line.trim().match(/^package:([^\s]+)\s+versionCode:(\d+)$/);
+      if (match?.[1] === packageName) {
+        return { installed: true, versionCode: parseInt(match[2]!, 10) };
+      }
+    }
+  } catch {
+    // Fall through to `dumpsys package`.
+  }
+
   let out: string;
   try {
-    out = await adbShell(serial, `cmd package list packages --show-versioncode ${packageName}`, {
-      timeoutMs: 5_000,
-    });
+    out = await adbShell(serial, `dumpsys package ${packageName}`, { timeoutMs: 5_000 });
   } catch {
-    // `cmd package` is missing on older API levels.
-    try {
-      out = await adbShell(serial, `pm list packages ${packageName}`, { timeoutMs: 5_000 });
-    } catch {
-      return { installed: false, versionCode: null };
+    return { installed: false, versionCode: null };
+  }
+  const block = out.split(`Package [${packageName}]`)[1];
+  if (block === undefined) return { installed: false, versionCode: null };
+  const versionCode = block.match(/versionCode=(\d+)/);
+  return { installed: true, versionCode: versionCode ? parseInt(versionCode[1]!, 10) : null };
+}
+
+/**
+ * Install the helper APK unless the device already has at least the bundled
+ * versionCode.
+ *
+ * An older helper is upgraded in place: `-r` keeps the package, and the APK is
+ * always signed with the same key, so nothing is uninstalled or prompted. A
+ * newer helper is left alone, so an older tool-server sharing the device keeps
+ * using the helper a newer one installed instead of the two swapping it on
+ * every start. That only holds while the bundled APK really carries the
+ * manifest's versionCode; download-native-binaries.sh refuses one that does
+ * not, since a lower one would be reinstalled on every call.
+ *
+ * The probe runs on every call rather than being memoized per serial: a wipe or
+ * a snapshot restore drops the package while the same serial stays connected,
+ * and a memo would keep skipping the install for the life of the process. One
+ * `cmd package list packages` per service instantiation is cheap enough to pay.
+ *
+ * `force` installs without probing, and with `-d`. The probe cannot tell a
+ * working helper from a foreign build carrying the same or a higher
+ * versionCode, so a repair has to ignore its verdict. `-d` only lets the
+ * install go backwards on a debuggable build (emulator images without Play
+ * Store); release images reject a downgrade of the non-debuggable helper with
+ * INSTALL_FAILED_VERSION_DOWNGRADE. The repair runs only when the device says
+ * the instrumentation is missing, which a newer helper of the same package
+ * never does, so it does not touch a working newer helper.
+ */
+export async function ensureAndroidDevtoolsInstalled(
+  serial: string,
+  options: { force?: boolean } = {}
+): Promise<void> {
+  const manifest = helperManifest();
+
+  if (!options.force) {
+    const probe = await probeInstalledVersion(serial, manifest.packageName);
+    // A null versionCode means `dumpsys package` listed the package without one.
+    // Treat it as current: installing on every instantiation would replace a
+    // working helper each time, and a broken one is caught by the forced
+    // reinstall once `am instrument` refuses it.
+    if (
+      probe.installed &&
+      (probe.versionCode === null || probe.versionCode >= manifest.versionCode)
+    ) {
+      return;
     }
   }
 
-  for (const line of out.split("\n")) {
-    const match = line.trim().match(/^package:([^\s]+)(?:\s+versionCode:(\d+))?$/);
-    if (!match) continue;
-    if (match[1] !== packageName) continue;
-    const versionCode = match[2] ? parseInt(match[2], 10) : null;
-    return { installed: true, versionCode: Number.isFinite(versionCode!) ? versionCode! : null };
-  }
-  return { installed: false, versionCode: null };
-}
-
-/** Install the helper APK unless the device already has at least the bundled versionCode. */
-export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<void> {
-  const manifest = helperManifest();
-  const key = cacheKey(serial, manifest.versionCode);
-  if (installedHelpers.has(key)) return;
-
-  const probe = await probeInstalledVersion(serial, manifest.packageName);
-  if (probe.installed && probe.versionCode !== null && probe.versionCode >= manifest.versionCode) {
-    installedHelpers.set(key, true);
-    return;
-  }
-
   const apkPath = bundledHelperApkPath();
-  const args = ["-s", serial, "install", ...manifest.installFlags, apkPath];
+  const flags = options.force ? [...manifest.installFlags, "-d"] : manifest.installFlags;
+  const args = ["-s", serial, "install", ...flags, apkPath];
 
   try {
     await runAdb(args, { timeoutMs: 60_000 });
@@ -78,19 +113,15 @@ export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<vo
       throw err;
     }
   }
-
-  installedHelpers.set(key, true);
 }
 
 /**
- * Test-only helper to reset the install cache between runs.
+ * No-op: there is no install cache any more. Every call probes the device, so
+ * nothing survives between calls for a reset to clear.
  *
  * @public so knip keeps it: the only caller lives in the `argent-private`
  * submodule, which knip lists under `ignoreWorkspaces` and CI never checks out.
  * `research/android-describe-busy-ui/drivers/test-fallback.js` requires this
- * module from `dist/` and calls this twice - once to force the install-fallback
- * path, once to restore. Drop the tag when that driver becomes a vitest test.
+ * module from `dist/` and calls it. Drop the export once that driver does.
  */
-export function __resetAndroidDevtoolsInstallCache(): void {
-  installedHelpers.clear();
-}
+export function __resetAndroidDevtoolsInstallCache(): void {}

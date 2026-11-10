@@ -23,7 +23,12 @@ export const FAILURE_COMMANDS = [
   "adb",
   "emulator",
   "vega",
+  "hdc",
+  "deveco_emulator",
   "xcrun_simctl",
+  // The `sim-remote` CLI, which stands in for simctl (and more) against a
+  // remote simulator.
+  "sim_remote",
   "xctrace",
   "native_devtools",
   "android_devtools",
@@ -35,6 +40,8 @@ export const FAILURE_COMMANDS = [
   "npm",
   "npx",
   "unknown",
+  "devicectl",
+  "xcodebuild",
 ] as const;
 
 export type FailureCommand = (typeof FAILURE_COMMANDS)[number];
@@ -170,20 +177,26 @@ export function subprocessFailureMetadata(
   > = { failure_command };
   const err = error as {
     code?: string | number | null;
+    // execFileSync reports the exit code here; execFile in `code`.
+    status?: number | null;
     signal?: string | null;
   };
-  if (
-    typeof err.code === "number" &&
-    Number.isInteger(err.code) &&
-    err.code >= 0 &&
-    err.code <= 255
-  ) {
-    metadata.failure_exit_code = err.code;
-  } else if (
-    typeof err.code === "string" &&
-    FAILURE_SPAWN_CODE_SET.has(err.code as FailureSpawnCode)
-  ) {
-    metadata.failure_spawn_code = err.code as FailureSpawnCode;
+  if (typeof err.code === "string") {
+    // A string code wins over `status`: an execFileSync timeout whose child
+    // traps SIGTERM carries both ETIMEDOUT and the child's exit status.
+    if (FAILURE_SPAWN_CODE_SET.has(err.code as FailureSpawnCode)) {
+      metadata.failure_spawn_code = err.code as FailureSpawnCode;
+    }
+  } else {
+    const exitCode = typeof err.code === "number" ? err.code : err.status;
+    if (
+      typeof exitCode === "number" &&
+      Number.isInteger(exitCode) &&
+      exitCode >= 0 &&
+      exitCode <= 255
+    ) {
+      metadata.failure_exit_code = exitCode;
+    }
   }
   if (
     typeof err.signal === "string" &&
@@ -224,13 +237,6 @@ export class ServiceInitializationError extends Error {
 }
 
 export class ToolNotFoundError extends Error {
-  /**
-   * @public
-   * Knip's `classMembers` pass is workspace-local, so it cannot see the caller:
-   * `flow-add-step` keys `isToolNotFound` on this alongside the error identity,
-   * so a tool that ran and reported its own "not found" is not read as the
-   * command being absent.
-   */
   public readonly toolId: string;
   constructor(toolId: string) {
     super(`Tool "${toolId}" not found`);

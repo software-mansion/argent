@@ -19,6 +19,8 @@ Argent connects the agent to the JavaScript runtime of the running app. The agen
 
 Argent collects the console output of the app. The agent reads a summary of the logs. The agent sees the warnings and the errors, their count, and their source. Thus the agent knows about a crash or a failed render before you describe it.
 
+When the app crashes, Argent keeps the log file of the session for at least 24 hours. The agent reads the logs from before the crash.
+
 ## Code evaluation
 
 The agent runs JavaScript in the runtime of the app. On a device, the runtime is Hermes. In a Chromium or Electron app, the runtime is V8. The agent reads the state of a store, calls a function, or changes a value to test a theory. The app stays open during this work.

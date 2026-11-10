@@ -73,7 +73,7 @@ async function startEmptyMetro(): Promise<MockMetro> {
     res.statusCode = 404;
     res.end();
   });
-  await new Promise<void>((resolve) => server.listen(0, () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const port = (server.address() as AddressInfo).port;
   return {
     port,
@@ -248,7 +248,7 @@ describe("debugger-status not-connected results", () => {
     expect(result.deviceName).toBe("MockDevice");
     expect(result.appName).toBe("React Native (mock)");
     expect(result.isNewDebugger).toBe(true);
-    expect(result.loadedScripts).toBeGreaterThanOrEqual(1);
+    expect(result.loadedScripts).toBe(0);
     expect(result.enabledDomains).toContain("Runtime");
     expect(result.sourceMapReady).toBe(true);
 

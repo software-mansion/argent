@@ -2,21 +2,53 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   listAndroidDevices,
+  isFoldableAvd,
   listAvds,
   consolePortFromAdbSerial,
   ADB_DEVICES_TIMEOUT_MS,
 } from "../../utils/adb";
+import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
-import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import {
+  scanIosSimulators,
+  simctlListTimeoutAdvice,
+  simulatorRuntimeKind,
+  type IosSimulator,
+} from "../../utils/ios-devices";
+import { listIosPhysicalDevices } from "../../utils/ios-device/devicectl";
+import { xcodeFirstLaunchHint, xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { simctlListDevices } from "../../utils/sim-remote";
-import { withRemotePrefix } from "../../utils/device-info";
+import { withRemotePrefix, harmonyDeviceId, harmonyEmulatorId } from "../../utils/device-info";
+import { listHarmonyInstances, listHarmonyHdcTargets } from "../../utils/harmony-devices";
+import { isHarmonyEnabled } from "../../utils/harmony-flag";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
 import {
   listVegaDevices,
   filterVvdShadowsFromAndroid,
   type VegaDevice,
 } from "../../utils/vega-devices";
+import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
 type IosDevice = IosSimulator & { platform: "ios" };
+
+/**
+ * A physical iPhone from CoreDevice (`xcrun devicectl`). Physical-device
+ * support is iPhone-only for now; discovery skips iPads silently.
+ */
+type IosPhysicalDevice = {
+  platform: "ios";
+  kind: "device";
+  udid: string;
+  name: string;
+  // connected = wired transport. paired = listed but not reachable over USB.
+  state: "connected" | "paired";
+  runtime: string;
+  model: string | null;
+  developerModeEnabled: boolean | null;
+  pairingState: string | null;
+  transportType: string | null;
+  // Not reachability. The CoreDevice tunnel can stay up over Wi-Fi after unplug.
+  tunnelState: string | null;
+};
 
 type IosRemoteDevice = {
   platform: "ios-remote";
@@ -24,6 +56,7 @@ type IosRemoteDevice = {
   name: string;
   state: string;
   runtime: string;
+  runtimeKind?: "mobile" | "tv";
 };
 
 type AndroidDevice = {
@@ -38,12 +71,96 @@ type AndroidDevice = {
   avdName: string | null;
   sdkLevel: number | null;
   runtimeKind?: "mobile" | "tv";
+  /** Present, and true, for an emulator whose AVD profile has a hinge. */
+  foldable?: true;
 };
 
-type ListDevicesResult = {
-  devices: Array<IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice>;
-  avds: Array<{ name: string }>;
+/**
+ * `kind: "device"` is an `hdc` target (drivable); `kind: "emulator"` is a
+ * DevEco instance (bootable). A running emulator is listed as both.
+ */
+type HarmonyDevice = {
+  platform: "harmony";
+  udid: string;
+  name: string;
+  kind: "emulator" | "device";
+  /** `Connected`/`Offline` for a connected target; `running`/`stopped` for an instance. */
+  state: string;
+  deviceType?: string | null;
+  osVersion?: string | null;
+  connection?: string | null;
 };
+
+/**
+ * A device an external provider is sharing. It carries a neutral `id` plus the
+ * platform's conventional key (`udid` / `serial`), so an agent that learned
+ * "iOS entries use udid" is not surprised. `provider` is deliberately visible:
+ * it lets an agent pick the device belonging to its own project, and routes
+ * bug reports to the right tracker.
+ */
+type ExternalListedDevice = {
+  capabilities: string[];
+  external: true;
+  id: string;
+  kind: "device" | "emulator" | "simulator";
+  name: string;
+  platform: "android" | "ios";
+  provider: { id: string; name: string; workspace?: { name: string; path: string } };
+  serial?: string;
+  state: string;
+  udid?: string;
+};
+
+type ListedDevice =
+  | AndroidDevice
+  | ChromiumDevice
+  | ExternalListedDevice
+  | HarmonyDevice
+  | IosDevice
+  | IosPhysicalDevice
+  | IosRemoteDevice
+  | VegaDevice;
+
+type ListDevicesResult = {
+  devices: ListedDevice[];
+  avds: Array<{ name: string; foldable?: true }>;
+  /**
+   * Present only when it applies, unlike the description, which is read once
+   * per session: why local iOS targets are missing while Xcode's component
+   * install is pending, a retry notice when `simctl` timed out, the rules for a
+   * provider's device when one is listed, and how to reach the adb server when
+   * it is not adb's default.
+   */
+  hint?: string;
+};
+
+/** Only what differs from a device argent booted itself. */
+const EXTERNAL_DEVICES_HINT =
+  `Some entries are tagged 'external: true': another application is already driving that device, ` +
+  `and its 'provider' field names it ('provider.workspace' names the project it opened, when it published one). ` +
+  `Drive them with the usual tools, by the 'ext:'-prefixed id. Two rules differ: prefer the external device whose ` +
+  `'provider.workspace.path' matches the project you are working in, and do NOT call boot-device on them, since the ` +
+  `provider owns their lifecycle. stop-simulator-server IS safe on them and never stops the provider's server — it ` +
+  `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
+  `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
+  `withheld fails with a clear message naming the provider.`;
+
+function iosListTimedOutHint(): string {
+  return `iOS simulators may be missing from this list: ${simctlListTimeoutAdvice("list-devices")}`;
+}
+
+/**
+ * The agent's shell does not inherit the tool-server's environment, so its adb
+ * reaches the default server, where these serials do not exist. Given whenever
+ * the server differs, Android device or not: the agent may boot one next.
+ */
+function adbServerHint(prefix: string): string {
+  return (
+    `Argent reaches Android and Vega devices through an adb server other than adb's default, so ` +
+    `an adb command you run in your own shell does not see the serials listed here. Prefix every ` +
+    `adb command you run yourself: \`${prefix}adb -s <serial> ...\`.`
+  );
+}
 
 function sortIos(a: IosDevice, b: IosDevice): number {
   const aBooted = a.state === "Booted" ? 0 : 1;
@@ -65,12 +182,19 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
 
 // Floats booted/ready devices to the top across platforms; the merged array is
 // otherwise ordered iOS-first.
-function readinessRank(
-  d: IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice
-): number {
+function readinessRank(d: ListedDevice): number {
+  // Providers only advertise devices they are driving, each naming the state in
+  // its own platform's vocabulary, so accept every "ready" spelling.
+  if ("external" in d) {
+    return d.state === "Booted" || d.state === "device" || d.state === "running" ? 0 : 1;
+  }
   if (d.platform === "android") return d.state === "device" ? 0 : 1;
   if (d.platform === "vega") return d.state === "running" || d.state === "device" ? 0 : 1;
   if (d.platform === "chromium") return 0; // Chromium entries are only listed when their CDP is responsive
+  // A `Connected` target or a `running` instance is ready.
+  if (d.platform === "harmony") return d.state === "Connected" || d.state === "running" ? 0 : 1;
+  // Physical iOS: paired-but-unreachable ranks with shut-down devices.
+  if ("kind" in d && d.kind === "device") return d.state === "connected" ? 0 : 1;
   return d.state === "Booted" ? 0 : 1; // ios + ios-remote
 }
 
@@ -91,6 +215,7 @@ async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
           name: d.name,
           state: d.state,
           runtime,
+          runtimeKind: simulatorRuntimeKind(runtime),
         });
       }
     }
@@ -132,9 +257,11 @@ async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
 // It must sit ABOVE every branch's full worst case, or it stops being a last resort
 // and truncates branches that would have completed, dropping real devices. The long
 // pole is Vega at ~20s (6s `device list` + two serial 5s `ps` probes + 4s `device
-// info` on the recovery path); Android is ~11s; iOS / AVD-list / Chromium are far
-// below. list-devices-deadline.test.ts asserts the margin from the same exported
-// constants, so a future timeout bump fails loudly instead of silently breaching it.
+// info` on the recovery path); Android is ~11s; the two HarmonyOS branches run
+// concurrently and top out at the 8s `hdc list targets`; iOS / AVD-list / Chromium
+// are far below. list-devices-deadline.test.ts asserts the margin from the same
+// exported constants, so a future timeout bump fails loudly instead of silently
+// breaching it.
 //
 // This is a deadline, not cancellation: on timeout the fallback resolves while the
 // branch keeps running, settling shortly after once its own timeouts fire.
@@ -160,10 +287,60 @@ export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string)
   }
 }
 
+function toListedExternal(device: ExternalDevice): ExternalListedDevice {
+  return {
+    capabilities: Array.from(device.capabilities).sort(),
+    external: true,
+    id: device.id,
+    kind: device.kind,
+    name: device.name,
+    platform: device.platform,
+    provider: {
+      id: device.provider.id,
+      name: device.provider.name,
+      ...(device.provider.workspace ? { workspace: device.provider.workspace } : {}),
+    },
+    state: device.state,
+    /** Mirror the id into the key the agent associates with the platform. */
+    ...(device.platform === "ios" ? { udid: device.id } : { serial: device.id }),
+  };
+}
+
+/**
+ * Native ids a provider is currently claiming.
+ *
+ * The same device reaches this tool twice whenever the platform's own
+ * discovery can also see it: `adb devices` always sees a provider's emulator,
+ * and `simctl` sees its simulators once the provider's device set is listed in
+ * `ios.additionalDeviceSets`. Drop the plain row in both cases, the external
+ * entry is the one carrying the provider's attribution and capability grants,
+ * and driving the bare id would spawn a second simulator-server against a
+ * device already in use.
+ */
+function externalShadowIds(external: readonly ExternalDevice[]): Set<string> {
+  return new Set(external.map((device) => device.nativeId));
+}
+
 const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
+  description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, <flag:harmonyos>HarmonyOS phones and emulators, </flag:harmonyos>and Vega (Fire TV) devices in one place.
+Call this at the start of a session to pick a target id ('udid' for iOS<flag:harmonyos>/HarmonyOS</flag:harmonyos> entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
+Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', <flag:harmonyos>'harmony', </flag:harmonyos>or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
+<flag:harmonyos>HarmonyOS entries carry a 'kind': 'device' is a target connected over \`hdc\` (a phone on USB, or a booted emulator) and is what the interaction tools drive; 'emulator' is a DevEco Studio instance, running or not, and is what boot-device starts. A running emulator appears under both, exactly as a running Android AVD appears in both 'avds' and the device list. Instance state is 'running'/'stopped'; connected-target state is 'Connected'/'Offline'.
+</flag:harmonyos>Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone on USB / wireless adb). Physical phones use the same interaction tools as emulators and need no boot-device (just connect the phone with USB debugging authorised).
+Physical iPhones appear as iOS entries with kind 'device' (no iPads); no boot-device. State 'connected' = cabled and usable; 'paired' = not reachable over USB, never auto-bound.
+TV targets are tagged with runtimeKind 'tv' (Apple TV simulators, Android TV / leanback devices). They are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses, and \`keyboard\` to type, rather than the coordinate/gesture tools.
+iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration, e.g. devices created by Radon IDE) are tagged with their 'deviceSet' path; the same tools drive them by udid, but they run headless (no Simulator.app window).
+A foldable iOS simulator (the iPhone Duo) or Android emulator (and its AVD) has 'foldable: true'; use the \`fold\` tool to fold or unfold it.
+Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port>; use boot-device with electronAppPath to launch one.
+Booted/ready devices are listed first, but use a physical phone (kind 'device') only when the user asks for one. A platform is silently omitted when its CLI is not found; an empty result usually means xcode-select, Android platform-tools, <flag:harmonyos>DevEco Studio, </flag:harmonyos>or the Vega SDK is not installed.`,
+  zodSchema,
+  alwaysLoad: true,
+  searchHint:
+    "list devices simulators emulators avd serial udid ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos>app fire tv session start",
+  readOnly: true,
   interaction: {
     startedMsg: () => "Listing devices",
     completedMsg: ({ result }) => {
@@ -173,26 +350,34 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
     },
     failedMsg: ({ failureSignal }) => `Failed to list devices: ${failureSignal.error_code}`,
   },
-  description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, and Vega (Fire TV) devices in one place.
-Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
-Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
-Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
-TV targets are tagged with runtimeKind 'tv' (Apple TV simulators on iOS, Android TV / leanback devices on Android) — these are focus-driven, not touch-driven: use \`describe\` to read focus, \`tv-remote\` for remote presses (up/down/left/right/select/back/menu/home), and \`keyboard\` to type, rather than the coordinate/gesture tools.
-iOS simulators from an additional CoreSimulator device set (the 'ios.additionalDeviceSets' configuration — e.g. devices created by Radon IDE) are listed alongside default-set ones, tagged with their owning 'deviceSet' path; they are driven through the same tools by udid, but run headless (no Simulator.app window attaches to them).
-Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with electronAppPath to launch one.
-Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select, Android platform-tools, or the Vega SDK is not installed.`,
-  alwaysLoad: true,
-  searchHint:
-    "list devices simulators emulators avd serial udid ios android chromium vega app fire tv session start",
-  zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
+    const harmonyEnabled = isHarmonyEnabled();
+    const xcodeInstallPending = (["simctl", "devicectl"] as const).filter(xcodeFirstLaunchPending);
     // Wrapping even the already-self-bounded iOS / AVD-list / Chromium branches makes
     // the "no branch can hang the fan-out" guarantee universal. The deadline only
     // substitutes a fallback on *slowness*; a rejection still propagates, so the
     // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
-    const [ios, iosRemote, android, avds, chromium, vega] = await Promise.all([
-      withDeadline(listIosSimulators(), [], "ios"),
+    const [
+      ios,
+      iosPhysical,
+      iosRemote,
+      android,
+      avds,
+      chromium,
+      vega,
+      harmony,
+      harmonyTargets,
+      external,
+    ] = await Promise.all([
+      xcodeInstallPending.includes("simctl")
+        ? { simulators: [], timedOut: false }
+        : withDeadline(scanIosSimulators(), { simulators: [], timedOut: true }, "ios"),
+      withDeadline(
+        listIosPhysicalDevices().catch(() => []),
+        [],
+        "ios-physical"
+      ),
       withDeadline(listRemoteIosSimulators(), [], "ios-remote"),
       withDeadline(
         // list-devices is the one caller that surfaces TV vs mobile, so it pays for
@@ -215,10 +400,64 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
         [],
         "vega"
       ),
+      harmonyEnabled
+        ? withDeadline(
+            listHarmonyInstances().catch(() => []),
+            [],
+            "harmony"
+          )
+        : [],
+      harmonyEnabled
+        ? withDeadline(
+            listHarmonyHdcTargets().catch(() => []),
+            [],
+            "harmony-hdc"
+          )
+        : [],
+      /**
+       * One directory stat when no provider is registered (the common case)
+       * and a short HTTP probe per provider otherwise.
+       */
+      withDeadline(
+        listExternalDevices().catch(() => []),
+        [],
+        "external"
+      ),
     ]);
-    const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
+
+    const externalShadows = externalShadowIds(external);
+
+    const iosTagged: IosDevice[] = ios.simulators
+      .filter((simulator) => !externalShadows.has(simulator.udid))
+      .map((simulator) => ({ platform: "ios", ...simulator }));
+
     iosTagged.sort(sortIos);
+    const iosPhysicalTagged: IosPhysicalDevice[] = iosPhysical
+      .filter((d) => !externalShadows.has(d.udid))
+      .map((d) => ({
+        platform: "ios",
+        kind: "device",
+        udid: d.udid,
+        name: d.name,
+        state: d.transportType === "wired" ? "connected" : "paired",
+        runtime: d.osVersion ? `iOS ${d.osVersion} (physical device)` : "iOS (physical device)",
+        model: d.model,
+        developerModeEnabled: d.developerModeEnabled,
+        pairingState: d.pairingState,
+        transportType: d.transportType,
+        tunnelState: d.tunnelState,
+      }));
     iosRemote.sort(sortIosRemote);
+    // One config.ini read per AVD name, shared by the running emulators and the AVD list.
+    const foldableAvds = new Set(
+      (
+        await Promise.all(
+          [...new Set([...avds.map((a) => a.name), ...android.map((d) => d.avdName)])]
+            .filter((name): name is string => name !== null)
+            .map(async (name) => ((await isFoldableAvd(name)) ? name : null))
+        )
+      ).filter((name): name is string => name !== null)
+    );
     const androidTagged: AndroidDevice[] = android.map((d) => ({
       platform: "android",
       serial: d.serial,
@@ -229,17 +468,63 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       avdName: d.avdName,
       sdkLevel: d.sdkLevel,
       runtimeKind: d.runtimeKind,
+      ...(d.avdName !== null && foldableAvds.has(d.avdName) ? { foldable: true as const } : {}),
     }));
-    // Drop a running VVD's adb shadow row so it appears only once (as vega).
+    // Drop a running VVD's adb shadow row so it appears only once (as vega),
+    // and likewise any serial an external provider has claimed.
     const vvdShadowSerials = await resolveVvdShadowAdbSerials(androidTagged, vega);
-    const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, vvdShadowSerials);
+    const shadowSerials = new Set([...vvdShadowSerials, ...externalShadows]);
+    const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, shadowSerials);
     androidDeduped.sort(sortAndroid);
 
-    const devices: Array<
-      IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice
-    > = [...iosTagged, ...iosRemote, ...androidDeduped, ...chromium, ...vega];
+    const harmonyTagged: HarmonyDevice[] = [
+      ...harmonyTargets.map((t): HarmonyDevice => ({
+        platform: "harmony",
+        udid: harmonyDeviceId(t.connectKey),
+        name: t.connectKey,
+        kind: "device",
+        state: t.state,
+        connection: t.connection,
+      })),
+      ...harmony.map((h): HarmonyDevice => ({
+        platform: "harmony",
+        udid: harmonyEmulatorId(h.name),
+        name: h.name,
+        kind: "emulator",
+        state: h.running ? "running" : "stopped",
+        deviceType: h.deviceType,
+        osVersion: h.osVersion,
+      })),
+    ];
+
+    const devices: ListedDevice[] = [
+      ...iosTagged,
+      ...iosPhysicalTagged,
+      ...iosRemote,
+      ...androidDeduped,
+      ...chromium,
+      ...vega,
+      ...harmonyTagged,
+      ...external.map(toListedExternal),
+    ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
-    return { devices, avds };
+    const avdsTagged = avds.map((a) =>
+      foldableAvds.has(a.name) ? { ...a, foldable: true as const } : a
+    );
+
+    const adbPrefix = adbCommandPrefix(process.env);
+    const hints = [
+      ...(xcodeInstallPending.length > 0 ? [xcodeFirstLaunchHint(xcodeInstallPending)] : []),
+      ...(ios.timedOut ? [iosListTimedOutHint()] : []),
+      ...(external.length > 0 ? [EXTERNAL_DEVICES_HINT] : []),
+      ...(adbPrefix ? [adbServerHint(adbPrefix)] : []),
+    ];
+
+    return {
+      devices,
+      avds: avdsTagged,
+      ...(hints.length > 0 ? { hint: hints.join("\n\n") } : {}),
+    };
   },
 };

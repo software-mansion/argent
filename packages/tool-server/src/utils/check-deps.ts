@@ -1,27 +1,12 @@
-import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
+import type { ToolDependency } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { resolveVegaBinary } from "./vega-cli";
+import { resolveHarmonyEmulator } from "./harmony-cli";
+import { resolveHdc } from "./harmony-hdc";
 import { commandOnPath } from "./command-on-path";
+import { DependencyMissingError } from "./dependency-errors";
 
-/**
- * Thrown when a declared host-binary dependency (e.g. `adb`, `xcrun`) can't be
- * resolved. The HTTP dispatcher maps it to 424; `.message` is the install hint,
- * safe to bubble straight to the agent.
- */
-export class DependencyMissingError extends Error {
-  readonly missing: ToolDependency[];
-  constructor(missing: ToolDependency[], message: string) {
-    super(message);
-    this.name = "DependencyMissingError";
-    this.missing = missing;
-    withFailureSignal(this, {
-      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
-      failure_stage: "tool_dependency_preflight",
-      failure_area: "tool_server",
-      error_kind: "dependency_missing",
-    });
-  }
-}
+export { DependencyMissingError };
 
 // Short TTL: a burst of tool calls pays for at most one probe per dep, yet an
 // install mid-session recovers without a tool-server restart.
@@ -30,18 +15,24 @@ type CacheEntry = { available: boolean; checkedAt: number };
 const cache = new Map<ToolDependency, CacheEntry>();
 
 // This text is what the LLM sees on a missing-dep failure, so each hint says
-// how to unblock the user.
+// how to unblock the user. The agent will run what a hint says, so each one
+// names a route that works on any host, and any package-manager command names
+// its platform: an unlabelled `brew install` reads as the fix on Linux too.
 const INSTALL_HINTS: Record<ToolDependency, string> = {
   "xcrun":
-    "Xcode command-line tools are not installed. Run `xcode-select --install` (or install Xcode from the App Store) and retry. Only required for iOS simulators.",
+    "Xcode command-line tools not found — iOS/tvOS simulators need a macOS host with them installed. On macOS, run `xcode-select --install` (or install Xcode from the App Store) and retry.",
   "adb":
-    "Android SDK Platform Tools not found. Install with `brew install --cask android-platform-tools` or via Android Studio → SDK Manager. If installed, ensure `adb` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/platform-tools/adb`). Only required for Android devices and emulators.",
+    "Android SDK Platform Tools not found. Install `platform-tools` via Android Studio → SDK Manager or `sdkmanager 'platform-tools'` (`brew install --cask android-platform-tools` on macOS). If installed, ensure `adb` is on PATH or point `$ANDROID_HOME` (or the `android.sdkRoot` config key) at the SDK root (the resolver checks `<root>/platform-tools/adb`). Only required for Android devices and emulators.",
   "emulator":
-    "Android Emulator not found. Install via Android Studio → SDK Manager → Emulator, or `sdkmanager 'emulator'`. If installed, ensure `emulator` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/emulator/emulator`). Only required to launch new Android emulators via `boot-device`.",
+    "Android Emulator not found. Install via Android Studio → SDK Manager → Emulator, or `sdkmanager 'emulator'`. If installed, ensure `emulator` is on PATH or point `$ANDROID_HOME` (or the `android.sdkRoot` config key) at the SDK root (the resolver checks `<root>/emulator/emulator`). Only required to launch new Android emulators via `boot-device`.",
   "sim-remote":
     "`sim-remote` CLI not found on PATH. Install via the radon-cloud project (see its README) and run `sim-remote login` before invoking any ios-remote tool. Only required for remote iOS simulators.",
   "vega":
     "Vega SDK CLI not found. Install the Amazon Vega SDK and run `source ~/vega/env` so `vega` (or its `kepler` alias) is on PATH; the resolver also checks `~/vega/bin/vega`. Only required for Vega (Fire TV) devices.",
+  "harmony-emulator":
+    "HarmonyOS emulator manager not found. Install DevEco Studio; a macOS install at `/Applications/DevEco-Studio.app` is found automatically, and anywhere else set `$DEVECO_STUDIO_HOME` to the directory holding `tools/emulator/Emulator` (the resolver also checks that path under `Contents/`, so a macOS app bundle works too). Only required to list or launch HarmonyOS emulators.",
+  "hdc":
+    "`hdc`, the HarmonyOS device connector, was not found. Install DevEco Studio (it ships `hdc` under `sdk/default/openharmony/toolchains`, and a macOS install at `/Applications/DevEco-Studio.app` is found automatically), or put `hdc` from the OpenHarmony command-line tools on PATH, or set `$DEVECO_STUDIO_HOME` to the directory holding `sdk/default/openharmony/toolchains/hdc` (the resolver also checks that path under `Contents/`, so a macOS app bundle works too). Only required to drive HarmonyOS devices.",
 };
 
 async function probe(dep: ToolDependency): Promise<boolean> {
@@ -55,6 +46,13 @@ async function probe(dep: ToolDependency): Promise<boolean> {
   // resolver check the SDK's default install location.
   if (dep === "vega") {
     return (await resolveVegaBinary()) !== null;
+  }
+  // Both ship inside DevEco Studio rather than on PATH.
+  if (dep === "harmony-emulator") {
+    return (await resolveHarmonyEmulator()) !== null;
+  }
+  if (dep === "hdc") {
+    return (await resolveHdc()) !== null;
   }
   // Probe existence without invoking the dep: a bare `xcrun` can pop the Xcode
   // license dialog on first use.

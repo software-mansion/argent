@@ -27,9 +27,9 @@ import * as path from "path";
 // Timestamp format on both platforms: YYYYMMDD-HHMMSS (15 chars).
 // ---------------------------------------------------------------------------
 
-let scratch: string;
+let scratch = "";
 let debugDir: string;
-let restoreTmpdir: () => void;
+let restoreTmpdir: () => void = () => {};
 
 // Imported once; it reads getDebugDir() lazily inside execute, so per-test
 // tmpdir changes are honoured without re-importing.

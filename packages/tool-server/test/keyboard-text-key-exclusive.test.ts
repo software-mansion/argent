@@ -1,4 +1,10 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+
+// HarmonyOS is behind the `harmonyos` flag; these cases drive it with the flag on.
+vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-flag")>()),
+  isHarmonyEnabled: () => true,
+}));
 import { FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
 import { InvalidToolInputError } from "../src/utils/capability";
 import { CLIENT_UNSAFE_TOP_LEVEL_KEYWORDS, advertisedSchema } from "./helpers/catalog";
@@ -36,7 +42,22 @@ vi.mock("../src/utils/vega-input", async (importOriginal) => ({
   injectVegaNamedKey: vi.fn(async () => {}),
 }));
 
+vi.mock("../src/utils/harmony-hdc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-hdc")>()),
+  runHdcShell: vi.fn(async (_key: string, command: string) =>
+    command.startsWith("hidumper")
+      ? {
+          stdout:
+            "-- ScreenInfo\nscreen[0]: id=0, powerStatus=POWER_STATUS_ON, backlight=1, " +
+            "render resolution=1216x2688, physical resolution=1216x2688\n",
+          exitCode: 0,
+        }
+      : { stdout: "", exitCode: 0 }
+  ),
+}));
+
 import { injectVegaNamedKey, injectVegaText } from "../src/utils/vega-input";
+import { runHdcShell } from "../src/utils/harmony-hdc";
 import { createKeyboardTool } from "../src/tools/keyboard";
 import { NAMED_KEYS } from "../src/tools/keyboard/key-codes";
 
@@ -86,6 +107,15 @@ const BACKENDS = [
       vi.mocked(injectVegaText).mock.calls.length + vi.mocked(injectVegaNamedKey).mock.calls.length,
     pressedBackspace: () =>
       vi.mocked(injectVegaNamedKey).mock.calls.some((c) => c[0] === "backspace"),
+  },
+  {
+    platform: "harmony",
+    udid: "harmony-025DEK236V035771",
+    injections: () =>
+      vi.mocked(runHdcShell).mock.calls.filter(([, c]) => c.startsWith("uitest uiInput")).length,
+    // 2055 is backspace's keyID.
+    pressedBackspace: () =>
+      vi.mocked(runHdcShell).mock.calls.some(([, c]) => c === "uitest uiInput keyEvent 2055"),
   },
 ];
 
@@ -145,15 +175,15 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
         createKeyboardTool(r).execute({}, { udid, text: "hi", key: "enter", delayMs: 0 })
       );
       // Rejected before the dispatch, so the backend is never reached: no keys
-      // injected on any of the four.
+      // injected on any of them.
       expect(injections()).toBe(0);
       // Adds signal on ios and chromium only — those resolve a service (and
       // would spawn one) on a call that gets through. Android injects through
-      // `adbShell` directly and the vega branch never references the registry,
-      // so a SUCCESSFUL call resolves nothing there either and this line cannot
-      // fail on those two iterations. Kept because it holds for all four and
-      // guards the two that can regress; `injections()` above is what carries
-      // the android and vega rows.
+      // `adbShell` directly, and neither the vega nor the harmony branch
+      // references the registry, so a SUCCESSFUL call resolves nothing there
+      // either and this line cannot fail on those iterations. Kept because it
+      // holds for every backend and guards the two that can regress;
+      // `injections()` above is what carries the other rows.
       expect(r.resolveService).not.toHaveBeenCalled();
     });
 
@@ -200,6 +230,31 @@ describe("keyboard — `text` and `key` are mutually exclusive", () => {
       createKeyboardTool(registry()).execute({}, { udid: "emulator-5554" })
     ).resolves.toEqual({ typed: "", keys: 0 });
     expect(adbShell).not.toHaveBeenCalled();
+  });
+
+  it("physical iOS device: the empty request is the simulator's no-op, reached device-free", async () => {
+    // The device branch was the one backend that errored on `{}`. Its no-op
+    // must return before the runner is resolved AND before the tracked-app
+    // requirement: no launch-app ran here, so a branch that still called
+    // requireCurrentIosDeviceApp would reject with "No app is under
+    // automation". Resolving at all is what pins the early return.
+    const simResult = await createKeyboardTool(registry()).execute(
+      {},
+      { udid: "809A848B-1671-4A72-B9C9-B1683D95973E" }
+    );
+    const r = registry();
+    const deviceResult = await createKeyboardTool(r).execute(
+      {},
+      // Physical-iOS UDID shape (8 hex, dash, 16 hex) routes to the iosDevice
+      // branch (see utils/device-info.ts).
+      { udid: "00008110-000978540290401E" }
+    );
+    expect(deviceResult).toEqual({ typed: "", keys: 0 });
+    expect(deviceResult).toEqual(simResult);
+    // Unlike the simulator branch (which resolves simulator-server before its
+    // no-op return), the device branch resolves nothing.
+    expect(r.resolveService).not.toHaveBeenCalled();
+    expect(pressKey).not.toHaveBeenCalled();
   });
 
   it("rejects before resolving a secret placeholder", async () => {

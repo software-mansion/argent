@@ -28,10 +28,17 @@ export { readConfigObject, updateConfig, getAtPath, setAtPath, deleteAtPath } fr
 // `argent secrets` resolve names through.
 export {
   secretSources,
+  clientSecretSource,
+  decodeClientSecrets,
+  encodeClientSecrets,
   lookupSecret,
+  lookupPlaceholderSecret,
+  placeholderNames,
+  SECRET_PLACEHOLDER_RE,
   secretNames,
   describeSecretSources,
   secretPlacementAdvice,
+  clientSecretPlacementAdvice,
   SECRET_ENV_PREFIX,
   type SecretSource,
   type SecretSourceOptions,
@@ -53,7 +60,10 @@ export {
   asBoolean,
   asString,
   asNumber,
+  asPositiveInteger,
   asStringArray,
+  MIN_SCRIPT_HEAP_LIMIT_MB,
+  MIN_SCRIPT_TIMEOUT_MS,
   type ConfigDefinition,
 } from "./config-schema.js";
 
@@ -69,6 +79,8 @@ export {
   setRememberedAgent,
   clearRememberedAgent,
   getAdditionalIosDeviceSets,
+  getAndroidSdkRoot,
+  getAndroidAdbServerPort,
   UnknownConfigKeyError,
   ConfigScopeError,
   ConfigValidationError,

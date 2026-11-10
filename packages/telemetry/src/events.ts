@@ -1,6 +1,6 @@
 // sanitize.ts enforces this same event surface at runtime.
 
-import type { FailureSignal } from "@argent/registry";
+import type { DeviceKind, FailureSignal } from "@argent/registry";
 import type { AiTelemetryProps } from "./ai-identity.js";
 
 // Single source of truth for the telemetry device-platform enum: sanitize.ts's
@@ -18,70 +18,90 @@ export const PLATFORMS = [
   "android",
   "chromium",
   "vega",
+  "harmony",
   "tvos",
   "android-tv",
 ] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
+// Telemetry-only subset of the registry's `DeviceKind`: `unknown` is never
+// produced by `resolveDevice` and is rejected by the sanitizer, as
+// `platform: "unknown"` already is. Reported next to `platform` from the same
+// device id — `platform: "ios"` + `device_kind: "device"` is a physical iPhone.
+export const DEVICE_KINDS = [
+  "simulator",
+  "emulator",
+  "vvd",
+  "device",
+  "app",
+] as const satisfies readonly DeviceKind[];
+export type TelemetryDeviceKind = (typeof DEVICE_KINDS)[number];
+
 type FailureTelemetryProps = Partial<FailureSignal>;
 
-export interface InstallationCliInitStartProps {
+interface InstallationCliInitStartProps {
   package_manager: "npm" | "yarn" | "pnpm" | "bun" | "unknown";
   is_non_interactive: boolean;
 }
 
-export interface InstallationCliInitCompleteProps extends FailureTelemetryProps {
+interface InstallationCliInitCompleteProps extends FailureTelemetryProps {
   duration_ms: number;
   is_success: boolean;
   editors_configured_count: number;
   install_mode?: "global" | "local";
 }
 
-export interface InstallationCliInitCancelProps {
+interface InstallationCliInitCancelProps {
   step: "global_install" | "editors" | "scope" | "skills" | "allowlist" | "install_mode";
 }
 
-export interface InstallationInstallModeDecisionProps {
+interface InstallationInstallModeDecisionProps {
   install_mode: "global" | "local";
 }
 
-export interface InstallationGlobalInstallDecisionProps {
+interface InstallationGlobalInstallDecisionProps {
   /** The developer-only `--from <tarball>` path is not reported. */
   decision: "install" | "cancel" | "already_installed";
 }
 
-export interface InstallationUpdateDecisionProps {
+interface InstallationUpdateDecisionProps {
   from_major: number;
   to_major: number;
   decision: "update" | "skip" | "no_update";
 }
 
-export interface InstallationEditorsSelectProps {
+interface InstallationEditorsSelectProps {
   editors: string[];
   detected_editor_count: number;
   scope: "local" | "global" | "custom";
   install_mode?: "global" | "local";
 }
 
-export interface InstallationAllowlistDecisionProps {
+interface InstallationAllowlistDecisionProps {
   is_enabled: boolean;
 }
 
 // Post-write sweep in init/update: argent config in other scopes that would
 // shadow or block the entry just written.
-export interface InstallationStaleConfigCleanupProps {
+interface InstallationStaleConfigCleanupProps {
   removed_count: number;
   warned_count: number;
 }
 
-export interface InstallationSkillInstallProps {
+interface InstallationSkillInstallProps {
   method: "default" | "interactive" | "manual";
   is_online: boolean;
   has_offline_cache: boolean;
   outcome: "success" | "failure" | "skipped";
+  /** Which source the skills came from: the pinned ref or the bundled copy. */
+  source?: "pinned" | "bundled";
+  /** True when the pinned source failed and the bundled copy rescued the install. */
+  used_fallback?: boolean;
+  /** Why the pinned source lost, when it did. */
+  fallback_reason?: "ref_missing" | "unclassified";
 }
 
-export interface InstallationSkillRefreshResultProps extends FailureTelemetryProps {
+interface InstallationSkillRefreshResultProps extends FailureTelemetryProps {
   is_success: boolean;
   scope_count: number;
   synced_count: number;
@@ -102,7 +122,7 @@ type InstallationPackageAction =
   | "standalone_install"
   | "mcp_update";
 
-export interface InstallationPackageActionProps extends FailureTelemetryProps {
+interface InstallationPackageActionProps extends FailureTelemetryProps {
   trigger: InstallationPackageActionTrigger;
   action: InstallationPackageAction;
   is_success: boolean;
@@ -114,43 +134,60 @@ export interface InstallationPackageActionProps extends FailureTelemetryProps {
   last_attempt_duration_ms?: number;
 }
 
-export type InstallationCliUpdateStartProps = Record<string, never>;
+type InstallationCliUpdateStartProps = Record<string, never>;
 
-export interface InstallationCliUpdateCompleteProps {
+interface InstallationCliUpdateCompleteProps {
   duration_ms: number;
   install_mode?: "global" | "local";
 }
 
-export interface InstallationCliUpdateFailProps extends FailureTelemetryProps {
+interface InstallationCliUpdateFailProps extends FailureTelemetryProps {
   duration_ms: number;
   install_mode?: "global" | "local";
 }
 
-export type InstallationCliUninstallStartProps = Record<string, never>;
+type InstallationCliUninstallStartProps = Record<string, never>;
 
-export interface InstallationCliUninstallCompleteProps extends FailureTelemetryProps {
+interface InstallationCliUninstallCompleteProps extends FailureTelemetryProps {
   has_pruned_content: boolean;
   has_uninstalled_package: boolean;
   install_mode?: "global" | "local";
 }
 
-export interface ToolInvokeProps extends AiTelemetryProps {
+interface ToolInvokeProps extends AiTelemetryProps {
+  device_provider?: string;
+  /** The tool's current id, also when it was called by a former one. */
   tool: string;
+  /** True when the tool was called by a former id (a registry alias). */
+  alias_used?: boolean;
   tool_invocation_id: string;
   platform?: Platform;
+  /**
+   * Simulator / emulator / physical device / desktop app, derived with
+   * `platform` from the same device id. Omitted when `platform` is omitted, when
+   * the call names no concrete device (an `avdName`-only boot), or when the id
+   * has no positively recognised shape (see tool-server telemetry-platform.ts).
+   */
+  device_kind?: TelemetryDeviceKind;
 }
 
-export interface ToolCompleteProps extends AiTelemetryProps {
+interface ToolCompleteProps extends AiTelemetryProps {
+  device_provider?: string;
   tool: string;
+  alias_used?: boolean;
   tool_invocation_id: string;
   platform?: Platform;
+  device_kind?: TelemetryDeviceKind;
   duration_ms: number;
 }
 
-export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
+interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
+  device_provider?: string;
   tool: string;
+  alias_used?: boolean;
   tool_invocation_id?: string;
   platform?: Platform;
+  device_kind?: TelemetryDeviceKind;
   duration_ms: number;
   /**
    * Parameter names that failed zod validation on an HTTP tool call, plus the
@@ -185,21 +222,22 @@ export type DebuggerToolOutcome = (typeof DEBUGGER_TOOL_OUTCOMES)[number];
  * this event is where they are counted; tool_invocation_id joins the
  * tool:invoke / tool:complete pair 1:1.
  */
-export interface DebuggerToolOutcomeProps {
+interface DebuggerToolOutcomeProps {
   tool: "debugger-status" | "debugger-log-registry";
   outcome: DebuggerToolOutcome;
   platform?: Platform;
   tool_invocation_id?: string;
 }
 
-export interface CliRunFailProps extends FailureTelemetryProps {
+interface CliRunFailProps extends FailureTelemetryProps {
   tool: string;
+  alias_used?: boolean;
   duration_ms: number;
 }
 
-export type ToolserverStartProps = Record<string, never>;
+type ToolserverStartProps = Record<string, never>;
 
-export interface ToolserverStopProps extends FailureTelemetryProps {
+interface ToolserverStopProps extends FailureTelemetryProps {
   // "deferred": lost the port bind (EADDRINUSE) to a healthy argent peer and
   // exited cleanly in its favor — kept distinct from "signal" so a supervisor
   // relaunch loop over deferrals stays identifiable.
@@ -232,7 +270,7 @@ export interface ToolserverStopProps extends FailureTelemetryProps {
 // reused CLI window and multiple tabs. The counts are sampled server-side when
 // the client reports the round, so they reflect what was staged when the human
 // first saw it.
-export interface LensPreviewOpenedProps {
+interface LensPreviewOpenedProps {
   /** Proposal round the human rendered in the preview. */
   round: number;
   /** Elements with staged proposals when the round was reported (0 for a CLI up-front open). */
@@ -251,7 +289,7 @@ export interface LensPreviewOpenedProps {
   platform?: Platform;
 }
 
-export interface LensRoundCompletedProps {
+interface LensRoundCompletedProps {
   round: number;
   /** Elements the agent proposed variants for. */
   element_count: number;
@@ -287,7 +325,7 @@ export interface LensRoundCompletedProps {
 // the human submitted (window closed, `argent lens` exited mid-review, round
 // superseded). Fires at most once per round, from the store's single reset()
 // choke point — the drop-off `preview_opened`/`round_completed` can't show.
-export interface LensRoundAbandonedProps {
+interface LensRoundAbandonedProps {
   round: number;
   /** Elements that had staged proposals when the round was discarded. */
   element_count: number;
@@ -305,7 +343,7 @@ export interface LensRoundAbandonedProps {
 // counts the agent's calls and lens:preview_opened fires once PER ROUND, so
 // neither can count how many times a human ran `argent lens`. Counting these
 // events gives invocations; distinct telemetry ids over them give unique users.
-export interface LensCliSessionStartedProps {
+interface LensCliSessionStartedProps {
   /**
    * Coding-agent choices offered in the window's picker. `argent lens` sends 0
    * when no picker is shown (an `--agent` override, a remembered-and-still-

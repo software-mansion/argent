@@ -40,6 +40,8 @@ function mockRegistry(calls: Array<{ tool: string; args: Record<string, unknown>
   return {
     invokeTool: vi.fn(async (id: string, args: Record<string, unknown>) => {
       if (id === "list-devices") return { devices: [] };
+      // A failed step's screenshot (flow-failure-screen.test.ts) is not a step's action.
+      if (id === "screenshot") return {};
       calls.push({ tool: id, args });
       return { ok: true };
     }),
@@ -337,6 +339,19 @@ describe("rotate: gating", () => {
     expect(result.steps[0].reason).toMatch(/tap\/keyboard/);
     expect(result.steps[0].reason).not.toMatch(/no backend/i);
     expect(result.calls).toHaveLength(0);
+  });
+
+  it("dispatches rotate on a physical iOS device — the runner plays both fingers as one event stream", async () => {
+    await writeFlow("rotate-ios-device", {
+      executionPrerequisite: "",
+      steps: [{ kind: "rotate", by: 90 }],
+    });
+
+    const result = await run("rotate-ios-device", "00008110-000978540290401E");
+
+    expect(result.steps[0]).toMatchObject({ kind: "rotate", status: "pass" });
+    expect(result.calls.map((c) => c.tool)).toEqual(["gesture-rotate"]);
+    expect(result.calls[0].args).toMatchObject({ udid: "00008110-000978540290401E" });
   });
 });
 

@@ -13,10 +13,12 @@ import {
   removeClaudePermission,
   copyRulesAndAgents,
   findConfiguredAdapterScopes,
+  findRetiredRulesAndAgents,
   getManagedContentTargets,
   injectCodexRules,
   removeCodexRules,
 } from "../src/mcp-configs.js";
+import { hashBundledContent, type RetiredBundledPath } from "../src/utils.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Allows individual tests to redirect homedir() to a temp path so that
@@ -30,6 +32,23 @@ vi.mock("node:os", async (importOriginal) => {
   return {
     ...original,
     homedir: vi.fn(() => homedirOverride ?? original.homedir()),
+  };
+});
+
+// The real retired list matches only the bytes argent shipped, so tests stand
+// in a list that matches their own copies.
+const retiredOverride = vi.hoisted(() => ({
+  agents: undefined as RetiredBundledPath[] | undefined,
+}));
+vi.mock("../src/utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils.js")>();
+  return {
+    ...actual,
+    get RETIRED_BUNDLED_PATHS() {
+      return retiredOverride.agents
+        ? { agents: retiredOverride.agents, rules: [] }
+        : actual.RETIRED_BUNDLED_PATHS;
+    },
   };
 });
 
@@ -54,8 +73,24 @@ function setupTmpDir(): string {
   return dir;
 }
 
+// Temp dirs minted inside an it() body. Registering on creation keeps their
+// removal off the body's last line, where an assertion throwing above would
+// strand the directory.
+const bodyTempDirs: string[] = [];
+
+function mintTempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  bodyTempDirs.push(dir);
+  return dir;
+}
+
 function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function writeJsonFile(filePath: string, data: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
 }
 
 // JSONC-tolerant variant for tests that read back files the Zed adapter
@@ -77,11 +112,15 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  for (const dir of bodyTempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   // Safety net for tests that set the override inside an it() body: a leaked
   // override points homedir() at an already-removed tmpdir, which silently
   // neutralizes the home-branch of every later detection/adapter test (and
   // conversely, tests passing only thanks to the leak).
   homedirOverride = undefined;
+  retiredOverride.agents = undefined;
 });
 
 // ── isArgentManagedEntry ──────────────────────────────────────────────────────
@@ -362,7 +401,7 @@ describe("ALL_ADAPTERS", () => {
       "Cursor",
       "Claude Code",
       "VS Code",
-      "Windsurf",
+      "Devin Desktop",
       "Zed",
       "Gemini",
       "Codex",
@@ -501,7 +540,7 @@ describe("VS Code adapter", () => {
 // ── Windsurf adapter ─────────────────────────────────────────────────────────
 
 describe("Windsurf adapter", () => {
-  const adapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
 
   afterEach(() => {
     homedirOverride = undefined;
@@ -555,6 +594,81 @@ describe("Windsurf adapter", () => {
     const servers2 = readJsoncFile(configPath).mcpServers as Record<string, unknown>;
     expect(servers2).toHaveProperty("myserver");
     expect(servers2.argent as Record<string, unknown>).not.toHaveProperty("alwaysAllow");
+  });
+
+  // Devin Desktop's agent ignores alwaysAllow; it only auto-approves tools listed
+  // in permissions.allow of its own user config.
+  describe("Devin agent permission", () => {
+    let home: string;
+    let devinConfig: string;
+
+    beforeEach(() => {
+      home = path.join(tmpDir, "home");
+      homedirOverride = home;
+      devinConfig = path.join(home, ".config", "devin", "config.json");
+      adapter.write(path.join(home, ".codeium", "windsurf", "mcp_config.json"), getMcpEntry());
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("adds mcp__argent__* next to the user's own settings, once", () => {
+      writeJsonFile(devinConfig, { version: 1, permissions: { allow: ["mcp__github__*"] } });
+
+      adapter.addAllowlist!(tmpDir, "global");
+      adapter.addAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(devinConfig)).toEqual({
+        version: 1,
+        permissions: { allow: ["mcp__github__*", "mcp__argent__*"] },
+      });
+    });
+
+    it("removeAllowlist drops only argent's rule", () => {
+      writeJsonFile(devinConfig, { version: 1, permissions: { allow: ["mcp__github__*"] } });
+      adapter.addAllowlist!(tmpDir, "global");
+
+      adapter.removeAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(devinConfig)).toEqual({
+        version: 1,
+        permissions: { allow: ["mcp__github__*"] },
+      });
+    });
+
+    it("removes a Devin config that held only argent's rule", () => {
+      adapter.addAllowlist!(tmpDir, "global");
+      expect(readJsonFile(devinConfig)).toEqual({ permissions: { allow: ["mcp__argent__*"] } });
+
+      adapter.removeAllowlist!(tmpDir, "global");
+
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
+
+    it("leaves the Devin config alone on a scope-local cleanup", () => {
+      adapter.addAllowlist!(tmpDir, "global");
+      adapter.removeAllowlist!(tmpDir, "local");
+      expect(fs.existsSync(devinConfig)).toBe(true);
+    });
+
+    it("writes nothing when argent is not configured for Windsurf", () => {
+      fs.rmSync(path.join(home, ".codeium"), { recursive: true, force: true });
+      adapter.addAllowlist!(tmpDir, "global");
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
+
+    it("follows XDG_CONFIG_HOME like Devin does", () => {
+      const xdg = path.join(tmpDir, "xdg");
+      vi.stubEnv("XDG_CONFIG_HOME", xdg);
+
+      adapter.addAllowlist!(tmpDir, "global");
+
+      expect(readJsonFile(path.join(xdg, "devin", "config.json"))).toEqual({
+        permissions: { allow: ["mcp__argent__*"] },
+      });
+      expect(fs.existsSync(devinConfig)).toBe(false);
+    });
   });
 });
 
@@ -945,6 +1059,26 @@ describe("Codex adapter", () => {
     expect(content).toContain('command = "argent"');
   });
 
+  it("remove drops approval tables for tool ids the current server no longer lists", () => {
+    // Uninstall runs remove() before removeAllowlist(); approvals written by an
+    // older release (e.g. 0.29.0 flow-* ids) must not survive it.
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      'model = "o3"\n\n[mcp_servers.other]\ncommand = "npx"\n\n' +
+        '[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n\n' +
+        '[mcp_servers.argent.tools.flow-execute]\napproval_mode = "approve"\n\n' +
+        '[mcp_servers.argent.tools.tool-a]\napproval_mode = "approve"\n'
+    );
+
+    expect(adapter.remove(configPath)).toBe(true);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).not.toContain("mcp_servers.argent");
+    expect(content).toContain('model = "o3"');
+    expect(content).toContain("[mcp_servers.other]");
+  });
+
   it("removeAllowlist is a no-op when no tools section exists", () => {
     const configPath = path.join(tmpDir, ".codex", "config.toml");
     adapter.write(configPath, getMcpEntry());
@@ -1247,6 +1381,7 @@ describe("opencode adapter", () => {
   });
 
   it("globalPath returns ~/.config/opencode/opencode.json", () => {
+    homedirOverride = path.join(tmpDir, "home");
     expect(adapter.globalPath()).toBe(
       path.join(os.homedir(), ".config", "opencode", "opencode.json")
     );
@@ -1563,6 +1698,7 @@ describe("addClaudePermission / removeClaudePermission", () => {
 describe("getManagedContentTargets", () => {
   afterEach(() => {
     homedirOverride = undefined;
+    vi.unstubAllEnvs();
   });
 
   it("derives local managed paths from adapter definitions", () => {
@@ -1627,6 +1763,63 @@ describe("getManagedContentTargets", () => {
     );
     expect(targets.agentTargets.map((t) => t.label)).toEqual(["~/.config/opencode/agents"]);
   });
+
+  it("lists .kiro/skills as a Kiro skill target (local)", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Kiro");
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([".agents/skills", ".kiro/skills"]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists ~/.kiro/skills as a Kiro skill target (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Kiro");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([
+      "~/.agents/skills",
+      "~/.kiro/skills",
+    ]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists .devin/skills as a Devin Desktop skill target (local)", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([".agents/skills", ".devin/skills"]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("lists ~/.config/devin/skills as a Devin Desktop skill target (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual([
+      "~/.agents/skills",
+      "~/.config/devin/skills",
+    ]);
+    expect(targets.ruleTargets).toEqual([]);
+    expect(targets.agentTargets).toEqual([]);
+  });
+
+  it("resolves Devin's global skills dir from XDG_CONFIG_HOME, like the skills CLI", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const xdg = path.join(tmpDir, "xdg");
+    vi.stubEnv("XDG_CONFIG_HOME", xdg);
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "Devin Desktop");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.targetPath)).toEqual([
+      path.join(homedirOverride, ".agents", "skills"),
+      path.join(xdg, "devin", "skills"),
+    ]);
+  });
 });
 
 describe("copyRulesAndAgents", () => {
@@ -1683,7 +1876,7 @@ describe("copyRulesAndAgents", () => {
   });
 
   it("returns empty array for adapters without rules/agents targets", () => {
-    const windsurfAdapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+    const windsurfAdapter = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
     const results = copyRulesAndAgents([windsurfAdapter], tmpDir, "local", rulesDir, agentsDir);
     expect(results).toHaveLength(0);
   });
@@ -1761,6 +1954,32 @@ describe("copyRulesAndAgents", () => {
     });
   });
 
+  // A release that ships no agents at all must not leave an empty
+  // .claude/agents at every target, nor claim to have copied agents.
+  it("writes and reports nothing for an agents bundle with no files", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    fs.rmSync(agentsDir, { recursive: true });
+    fs.mkdirSync(path.join(agentsDir, "references"), { recursive: true });
+
+    const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(results).toEqual([`  Copied rules to ${path.join(".claude", "rules")}`]);
+    expect(fs.existsSync(path.join(tmpDir, ".claude", "agents"))).toBe(false);
+  });
+
+  // init and update ask before removing retired files (see retired-files.ts),
+  // so the copy itself must only add.
+  it("leaves files the bundle no longer ships in place", () => {
+    const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const retired = path.join(tmpDir, ".claude", "agents", "argent-environment-inspector.md");
+    fs.mkdirSync(path.dirname(retired), { recursive: true });
+    fs.writeFileSync(retired, "---\nname: argent-environment-inspector\n---\n");
+
+    copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
+
+    expect(fs.existsSync(retired)).toBe(true);
+  });
+
   it("injects Codex rules into developer_instructions in config.toml (local)", () => {
     const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
     // Pre-create the config.toml so the adapter can find it
@@ -1774,6 +1993,154 @@ describe("copyRulesAndAgents", () => {
     expect(content).toContain("argent rules");
     expect(content).toContain("developer_instructions");
   });
+});
+
+// ── findRetiredRulesAndAgents ────────────────────────────────────────────────
+
+describe("findRetiredRulesAndAgents", () => {
+  const INSPECTOR = "---\nname: argent-environment-inspector\n---\n\nInspects.\n";
+  const CHECKLIST = "## Quality control checklist\n\nFields.\n";
+  const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+  const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+  const opencodeAdapter = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+  let rulesDir: string;
+  let agentsDir: string;
+
+  function stageRetired(targetDir: string): void {
+    fs.mkdirSync(path.join(targetDir, "references"), { recursive: true });
+    fs.writeFileSync(path.join(targetDir, "argent-environment-inspector.md"), INSPECTOR);
+    fs.writeFileSync(path.join(targetDir, "references", "quality-control-checklist.md"), CHECKLIST);
+  }
+
+  function find(
+    adapters: typeof ALL_ADAPTERS,
+    scopes: Array<"local" | "global"> = ["local"],
+    root = tmpDir
+  ) {
+    return findRetiredRulesAndAgents(
+      scopes.map((scope) => ({ adapters, scope })),
+      root,
+      rulesDir,
+      agentsDir
+    );
+  }
+
+  beforeEach(() => {
+    // A release that ships neither retired agent.
+    rulesDir = path.join(tmpDir, "src-rules");
+    agentsDir = path.join(tmpDir, "src-agents");
+    fs.mkdirSync(rulesDir, { recursive: true });
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(rulesDir, "argent.md"), "# Rule");
+    fs.writeFileSync(path.join(agentsDir, "argent-current.md"), "# Agent");
+    retiredOverride.agents = [
+      { path: "argent-environment-inspector.md", shipped: [hashBundledContent(INSPECTOR)] },
+      { path: "references/quality-control-checklist.md", shipped: [hashBundledContent(CHECKLIST)] },
+    ];
+  });
+
+  it("finds retired agents the bundle no longer ships", () => {
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    const found = find([claudeAdapter]);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ kind: "agents", location: path.join(".claude", "agents") });
+    expect(found[0].files.map((f) => f.relativePath)).toEqual([
+      "argent-environment-inspector.md",
+      "references/quality-control-checklist.md",
+    ]);
+  });
+
+  it("finds none while the bundle still ships them", () => {
+    fs.writeFileSync(path.join(agentsDir, "argent-environment-inspector.md"), INSPECTOR);
+    fs.mkdirSync(path.join(agentsDir, "references"));
+    fs.writeFileSync(path.join(agentsDir, "references", "quality-control-checklist.md"), CHECKLIST);
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    expect(find([claudeAdapter])).toEqual([]);
+  });
+
+  it("finds them when the bundle ships no agents dir at all", () => {
+    fs.rmSync(agentsDir, { recursive: true });
+    stageRetired(path.join(tmpDir, ".claude", "agents"));
+
+    expect(find([claudeAdapter])[0].files).toHaveLength(2);
+  });
+
+  it("skips the user's own agents, at a retired name too", () => {
+    const agents = path.join(tmpDir, ".claude", "agents");
+    fs.mkdirSync(agents, { recursive: true });
+    fs.writeFileSync(path.join(agents, "my-agent.md"), INSPECTOR);
+    fs.writeFileSync(path.join(agents, "argent-environment-inspector.md"), "name: my-inspector");
+
+    expect(find([claudeAdapter])).toEqual([]);
+  });
+
+  it("looks in every agent target, global ones included", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    for (const dir of [
+      path.join(homedirOverride, ".claude", "agents"),
+      path.join(homedirOverride, ".gemini", "agents"),
+      path.join(homedirOverride, ".config", "opencode", "agents"),
+    ]) {
+      stageRetired(dir);
+    }
+
+    const found = find([claudeAdapter, geminiAdapter, opencodeAdapter], ["global"]);
+
+    expect(found.map((f) => f.location)).toEqual([
+      path.join("~", ".claude", "agents"),
+      path.join("~", ".gemini", "agents"),
+      path.join("~", ".config", "opencode", "agents"),
+    ]);
+  });
+
+  it("lists a dir once when run from the home dir, where local and global are one", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    stageRetired(path.join(homedirOverride, ".claude", "agents"));
+
+    const found = find([claudeAdapter], ["local", "global"], homedirOverride);
+
+    expect(found).toHaveLength(1);
+    expect(found[0].files).toHaveLength(2);
+  });
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  it.skipIf(process.platform === "win32")(
+    "lists a dir once when the local target links to the global one",
+    () => {
+      homedirOverride = path.join(tmpDir, "home");
+      const global = path.join(homedirOverride, ".claude", "agents");
+      stageRetired(global);
+      fs.mkdirSync(path.join(tmpDir, ".claude"), { recursive: true });
+      fs.symlinkSync(global, path.join(tmpDir, ".claude", "agents"));
+
+      const found = find([claudeAdapter], ["local", "global"]);
+
+      expect(found).toHaveLength(1);
+      expect(found[0].location).toBe(`.claude/agents -> ${path.join("~", ".claude", "agents")}`);
+    }
+  );
+
+  // Skipped on Windows, where creating symlinks needs admin rights.
+  it.skipIf(process.platform === "win32")(
+    "names where a linked target leads, and lists a dir two targets share once",
+    () => {
+      const canonical = path.join(tmpDir, ".agents", "agents");
+      stageRetired(canonical);
+      for (const base of [".claude", ".gemini"]) {
+        fs.mkdirSync(path.join(tmpDir, base), { recursive: true });
+        fs.symlinkSync(path.join("..", ".agents", "agents"), path.join(tmpDir, base, "agents"));
+      }
+
+      const found = find([claudeAdapter, geminiAdapter]);
+
+      expect(found.map((f) => f.location)).toEqual([
+        `.claude/agents -> ${path.join(".agents", "agents")}`,
+      ]);
+    }
+  );
 });
 
 // ── Codex developer_instructions injection ──────────────────────────────────
@@ -2080,7 +2447,7 @@ describe("generated configs are portable across machines (issue #238)", () => {
 describe("installer preserves foreign MCP config", () => {
   it("remove keeps an unrelated server's empty env/args and a sibling user key (Cursor)", () => {
     const adapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, ".cursor", "mcp.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(
@@ -2101,12 +2468,11 @@ describe("installer preserves foreign MCP config", () => {
     const after = JSON.parse(fs.readFileSync(configPath, "utf8"));
     expect(after.mcpServers.other).toEqual({ command: "other-bin", args: [], env: {} });
     expect(after.userSettings).toEqual({ theme: "dark", overrides: {} });
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("VS Code write preserves a pre-existing server in a JSONC (commented) file", () => {
     const adapter = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, ".vscode", "mcp.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(
@@ -2119,7 +2485,6 @@ describe("installer preserves foreign MCP config", () => {
     }) as Record<string, any>;
     expect(after.servers).toHaveProperty("argent");
     expect(after.servers).toHaveProperty("myserver");
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   // Same Defect B, but for the { mcpServers } adapters: Cursor and Kiro are
@@ -2128,10 +2493,10 @@ describe("installer preserves foreign MCP config", () => {
   // editJsoncFile, so a hand-authored comment and a pre-existing foreign server
   // survive an argent `write` — the old readJson → writeJson path reduced the
   // commented file to {} and rewrote it with only the argent entry.
-  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+  for (const name of ["Cursor", "Claude Code", "Devin Desktop", "Gemini", "Kiro"]) {
     it(`${name} write preserves a comment and a foreign server in a JSONC file`, () => {
       const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+      const dir = mintTempDir("argent-fc-");
       const configPath = path.join(dir, "mcp.json");
       fs.writeFileSync(
         configPath,
@@ -2143,7 +2508,6 @@ describe("installer preserves foreign MCP config", () => {
       const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
       expect(after.mcpServers).toHaveProperty("argent");
       expect(after.mcpServers).toHaveProperty("myserver");
-      fs.rmSync(dir, { recursive: true, force: true });
     });
   }
 
@@ -2154,7 +2518,7 @@ describe("installer preserves foreign MCP config", () => {
   // file on disk (it still has a foreign server), with only argent gone.
   it("VS Code remove preserves a comment and a foreign server (uninstall round-trip)", () => {
     const adapter = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, ".vscode", "mcp.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(
@@ -2169,13 +2533,12 @@ describe("installer preserves foreign MCP config", () => {
     expect(after.servers).not.toHaveProperty("argent");
     expect(after.servers).toHaveProperty("myserver");
     expect(fs.existsSync(configPath)).toBe(true);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  for (const name of ["Cursor", "Claude Code", "Windsurf", "Gemini", "Kiro"]) {
+  for (const name of ["Cursor", "Claude Code", "Devin Desktop", "Gemini", "Kiro"]) {
     it(`${name} remove preserves a comment and a foreign server (uninstall round-trip)`, () => {
       const adapter = ALL_ADAPTERS.find((a) => a.name === name)!;
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+      const dir = mintTempDir("argent-fc-");
       const configPath = path.join(dir, "mcp.json");
       fs.writeFileSync(
         configPath,
@@ -2188,7 +2551,6 @@ describe("installer preserves foreign MCP config", () => {
       const after = parseJsonc(raw, [], { allowTrailingComma: true }) as Record<string, any>;
       expect(after.mcpServers).not.toHaveProperty("argent");
       expect(after.mcpServers).toHaveProperty("myserver");
-      fs.rmSync(dir, { recursive: true, force: true });
     });
   }
 
@@ -2198,7 +2560,7 @@ describe("installer preserves foreign MCP config", () => {
     // tree (pruneEmptyConfig), silently stripping a foreign server's `args = []`
     // and any sibling empty table alongside deleting the argent entry.
     const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, "config.toml");
     fs.writeFileSync(
       configPath,
@@ -2218,17 +2580,15 @@ describe("installer preserves foreign MCP config", () => {
     expect(after).toContain("[other_section]");
     expect(after).toContain("[mcp_servers.other]");
     expect(after).toContain("args = []");
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it("Codex remove deletes the file when argent was the only content (TOML)", () => {
     const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-"));
+    const dir = mintTempDir("argent-fc-");
     const configPath = path.join(dir, "config.toml");
     fs.writeFileSync(configPath, '[mcp_servers.argent]\ncommand = "argent"\nargs = ["mcp"]\n');
     expect(adapter.remove(configPath)).toBe(true);
     expect(fs.existsSync(configPath)).toBe(false);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   // ── Allowlist writers (the last readJson → writeJson clobber path) ──────────
@@ -2245,7 +2605,7 @@ describe("installer preserves foreign MCP config", () => {
 
   it("Cursor addAllowlist preserves a comment and foreign rules in permissions.json", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    homedirOverride = mintTempDir("argent-fc-home-");
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
     fs.mkdirSync(path.dirname(permPath), { recursive: true });
     fs.writeFileSync(
@@ -2259,12 +2619,11 @@ describe("installer preserves foreign MCP config", () => {
     expect(after.mcpAllowlist).toContain("other:*"); // foreign rule survives
     expect(after.fileAllowlist).toEqual(["src/**"]); // foreign key survives
     expect(raw).toContain("do not touch"); // comment survives
-    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
   it("Cursor addAllowlist/removeAllowlist round-trip preserves foreign rules and keeps the file", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    homedirOverride = mintTempDir("argent-fc-home-");
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
     fs.mkdirSync(path.dirname(permPath), { recursive: true });
     fs.writeFileSync(permPath, `{\n  // keep me\n  "mcpAllowlist": ["other:*"]\n}\n`);
@@ -2275,17 +2634,15 @@ describe("installer preserves foreign MCP config", () => {
     const after = readJsoncFile(permPath);
     expect(after.mcpAllowlist).toEqual(["other:*"]); // argent gone, foreign kept
     expect(raw).toContain("keep me"); // comment survives
-    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
   it("Cursor removeAllowlist deletes the file when argent was the only rule", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    homedirOverride = mintTempDir("argent-fc-home-");
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
     cursor.addAllowlist!(tmpDir, "global"); // fresh create: { mcpAllowlist: ["argent:*"] }
     cursor.removeAllowlist!(tmpDir, "global");
     expect(fs.existsSync(permPath)).toBe(false);
-    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 
   it("addClaudePermission preserves a comment and foreign permissions in settings.json", () => {
@@ -2422,7 +2779,7 @@ describe("installer preserves foreign MCP config", () => {
 
   it("Cursor removeAllowlist prunes an emptied mcpAllowlist but keeps the file for a foreign key", () => {
     const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
-    homedirOverride = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fc-home-"));
+    homedirOverride = mintTempDir("argent-fc-home-");
     const permPath = path.join(homedirOverride, ".cursor", "permissions.json");
     fs.mkdirSync(path.dirname(permPath), { recursive: true });
     fs.writeFileSync(
@@ -2434,7 +2791,6 @@ describe("installer preserves foreign MCP config", () => {
     const after = readJsoncFile(permPath);
     expect(after).not.toHaveProperty("mcpAllowlist"); // emptied array pruned
     expect(after.fileAllowlist).toEqual(["src/**"]); // foreign key survives
-    fs.rmSync(homedirOverride, { recursive: true, force: true });
   });
 });
 
@@ -2448,7 +2804,7 @@ describe("detection evidence", () => {
   const codex = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
   const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
   const vscode = ALL_ADAPTERS.find((a) => a.name === "VS Code")!;
-  const windsurf = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+  const windsurf = ALL_ADAPTERS.find((a) => a.name === "Devin Desktop")!;
   const zed = ALL_ADAPTERS.find((a) => a.name === "Zed")!;
   const gemini = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
   const hermes = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;

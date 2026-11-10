@@ -5,8 +5,10 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import type { CDPClient } from "../utils/debugger/cdp-client";
-import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
+import { deviceIdsOf } from "../utils/debugger/device-alias";
+import { assertExternalCapability } from "../utils/external-devices";
+import type { CDPClient, ScriptInfo } from "../utils/debugger/cdp-client";
+import type { JsRuntimeDebuggerApi, RuntimeAppMetadata } from "./js-runtime-debugger";
 import {
   FIBER_ROOT_TRACKER_SCRIPT,
   STOP_FOR_TAKEOVER_SCRIPT,
@@ -14,7 +16,7 @@ import {
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
-export interface ScriptSourceEntry {
+interface ScriptSourceEntry {
   url: string;
   sourceMapURL: string;
 }
@@ -38,6 +40,7 @@ export interface ReactProfilerSessionApi {
   projectRoot: string;
   appName: string;
   deviceName: string;
+  runtimeApp?: RuntimeAppMetadata;
   hermesVersion: string;
   detectedArchitecture: "bridge" | "bridgeless" | null;
   sessionPaths: ProfilerSessionPaths | null;
@@ -49,6 +52,8 @@ export interface ReactProfilerSessionApi {
   profileStartWallMs: number | null;
   sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId while we own the run
   ownerToolServerPid: number | null; // process.pid while this tool-server owns the run
+  /** Set by the teardown, so a start that was awaiting the app knows its session is gone. */
+  disposed: boolean;
   disposeSession: () => void;
 }
 
@@ -88,6 +93,16 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         error_kind: "validation",
       });
     }
+
+    /**
+     * The React profiler rides the same CDP session as the JS debugger, so it
+     * is gated by the same mechanism. `JsRuntimeDebugger` is a declared
+     * dependency and has already checked this. Repeating it here keeps the
+     * gate visible at the blueprint that owns the tools rather than relying on
+     * a dependency edge staying in place. A no-op for Argent's own devices.
+     */
+    await assertExternalCapability(REACT_PROFILER_SESSION_NAMESPACE, deviceId, "js-debugger");
+
     const ignore = () => {};
     const warnOnError = (label: string) => (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -103,6 +118,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       projectRoot: debuggerApi.projectRoot,
       appName: debuggerApi.appName,
       deviceName: debuggerApi.deviceName,
+      runtimeApp: debuggerApi.runtimeApp,
       hermesVersion: "unknown",
       detectedArchitecture: null,
       sessionPaths: null,
@@ -114,19 +130,21 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       profileStartWallMs: null,
       sessionId: null,
       ownerToolServerPid: null,
+      disposed: false,
       disposeSession: () => events.emit("terminated"),
     };
 
     await cdp.send("Profiler.enable").catch(warnOnError("Profiler.enable"));
 
-    cdp.events.on("scriptParsed", (script) => {
+    const onScriptParsed = (script: ScriptInfo) => {
       if (script.sourceMapURL) {
         state.scriptSources.set(script.scriptId, {
           url: script.url,
           sourceMapURL: script.sourceMapURL,
         });
       }
-    });
+    };
+    cdp.events.on("scriptParsed", onScriptParsed);
 
     // Idempotent — guarded in JS
     await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(warnOnError("FIBER_ROOT_TRACKER_SCRIPT"));
@@ -173,7 +191,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       warnOnError("Hermes version probe")(err);
     }
 
-    cdp.events.on("disconnected", (error) => {
+    const onDisconnected = (error?: Error) => {
       // Clear only mid-run, so a completed session's cached paths survive the disconnect.
       if (state.profilingActive) {
         clearCachedProfilerPaths(state.port, state.deviceId);
@@ -188,11 +206,42 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
             error_kind: "network",
           })
       );
-    });
+    };
+    cdp.events.on("disconnected", onDisconnected);
+
+    // A JS reload (`debugger-reload-metro`, `r` in Metro, a red-box Reload)
+    // ends the run inside the app, and everything this session set up there.
+    // A page with React Native's `nativePageReloads` capability keeps this CDP
+    // connection open across the reload, so `disconnected` never fires: the
+    // runtime only reports its execution context gone. End the session here
+    // instead, so its run stops counting as a profile (profiling-devices.ts)
+    // and the next start sets up the new runtime.
+    const onCdpEvent = (method: string) => {
+      if (
+        method !== "Runtime.executionContextDestroyed" &&
+        method !== "Runtime.executionContextsCleared"
+      ) {
+        return;
+      }
+      if (state.profilingActive) {
+        state.profilingActive = false;
+        clearCachedProfilerPaths(state.port, state.deviceId);
+        stopSamplerInNextRuntime(cdp);
+      }
+      events.emit("terminated");
+    };
+    cdp.events.on("event", onCdpEvent);
 
     return {
       api: state,
       dispose: async () => {
+        state.disposed = true;
+        // `cdp.events` belongs to the JsRuntimeDebugger dependency and
+        // outlives every dispose but its own teardown; `react-profiler-stop`
+        // disposes only this node, once per run.
+        cdp.events.off("scriptParsed", onScriptParsed);
+        cdp.events.off("disconnected", onDisconnected);
+        cdp.events.off("event", onCdpEvent);
         // `react-profiler-stop` stops the renderers and the sampler before
         // disposing; a dispose from `stop-all-simulator-servers` arrives
         // mid-run instead, leaving the in-app DevTools backend recording every
@@ -219,7 +268,36 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
   },
 };
 
-const profilerPathsCache = new Map<string, ProfilerSessionPaths>();
+/**
+ * The Hermes sampler is process-wide: it runs on in the runtime a JS reload
+ * creates, and a later `Profiler.start` there keeps its old samples. A
+ * `Profiler.stop` sent before that runtime exists is refused, so it goes out
+ * when the runtime announces itself. The listener outlives the session that
+ * armed it, and no new run can start before it fires: nothing evaluates in a
+ * runtime that has not announced itself yet.
+ */
+function stopSamplerInNextRuntime(cdp: CDPClient): void {
+  const onEvent = (method: string) => {
+    if (method !== "Runtime.executionContextCreated") return;
+    disarm();
+    void cdp.send("Profiler.stop").catch(() => {});
+  };
+  const disarm = () => {
+    cdp.events.off("event", onEvent);
+    cdp.events.off("disconnected", disarm);
+  };
+  cdp.events.on("event", onEvent);
+  cdp.events.on("disconnected", disarm);
+}
+
+// A run is stored under the id its session connected with: the connect id when
+// an alias exists at react-profiler-start, the `logicalDeviceId` when the app has
+// restarted and none does. Tools can later name the device by either id, with or
+// without an alias, so a lookup tries every id the device has now and takes the
+// newest run. react-profiler-analyze and react-profiler-cpu-summary pass their
+// `device_id` as given; the query tools canonicalize it first.
+const profilerPathsCache = new Map<string, { paths: ProfilerSessionPaths; order: number }>();
+let storedRuns = 0;
 
 function cacheKey(port: number, deviceId: string): string {
   return `${port}:${deviceId}`;
@@ -230,16 +308,28 @@ export function cacheProfilerPaths(
   paths: ProfilerSessionPaths,
   deviceId: string
 ): void {
-  profilerPathsCache.set(cacheKey(port, deviceId), paths);
+  storedRuns += 1;
+  profilerPathsCache.set(cacheKey(port, deviceId), { paths, order: storedRuns });
 }
 
 export function getCachedProfilerPaths(
   port: number,
   deviceId: string
 ): ProfilerSessionPaths | undefined {
-  return profilerPathsCache.get(cacheKey(port, deviceId));
+  let newest: { paths: ProfilerSessionPaths; order: number } | undefined;
+
+  for (const id of deviceIdsOf(deviceId)) {
+    const stored = profilerPathsCache.get(cacheKey(port, id));
+    if (stored && (!newest || stored.order > newest.order)) {
+      newest = stored;
+    }
+  }
+
+  return newest?.paths;
 }
 
 export function clearCachedProfilerPaths(port: number, deviceId: string): void {
-  profilerPathsCache.delete(cacheKey(port, deviceId));
+  for (const id of deviceIdsOf(deviceId)) {
+    profilerPathsCache.delete(cacheKey(port, id));
+  }
 }

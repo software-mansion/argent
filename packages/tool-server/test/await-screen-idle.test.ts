@@ -25,6 +25,10 @@ function makeSequencedAXService(responses: AXDescribeResponse[]): AXServiceApi {
     degraded: false,
     describe: async () => responses[Math.min(i++, responses.length - 1)],
     alertCheck: async () => false,
+    livePanel: async () => null,
+    foregroundApp: async () => ({ alertVisible: false }),
+    fill: async () => ({ focused: false, verified: false }),
+    tree: async () => ({ alertVisible: false, nodes: [], truncated: false }),
     ping: async () => true,
   };
 }
@@ -47,7 +51,7 @@ const content = () => axResponse([{ label: "Settings", frame: FRAME, traits: ["b
 describe("await-screen-idle tool", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
-    __primeDepCacheForTests(["xcrun", "adb"]);
+    __primeDepCacheForTests(["xcrun", "adb", "sim-remote"]);
   });
 
   it("exposes the await-screen-idle id", () => {
@@ -69,6 +73,20 @@ describe("await-screen-idle tool", () => {
     expect(result.waitedMs).toBeGreaterThanOrEqual(30);
     expect(result.waitedMs).toBeLessThan(2000);
     expect(result.polls).toBeGreaterThan(1);
+  });
+
+  it("settles on a degraded simulator without a note", async () => {
+    // A degraded tree is live; its boot hint does not qualify a settle.
+    const ax = { ...makeSequencedAXService([content()]), degraded: true };
+    const tool = createAwaitScreenIdleTool(iosRegistry(ax));
+
+    const result = await tool.execute(
+      {},
+      { udid: IOS_UDID, timeoutMs: 2000, pollIntervalMs: 10, minStableMs: 0 }
+    );
+
+    expect(result.settled).toBe(true);
+    expect(result.note).toBeUndefined();
   });
 
   it("does not settle while the screen stays blank (times out)", async () => {
@@ -99,6 +117,35 @@ describe("await-screen-idle tool", () => {
     expect(result.waitedMs).toBeGreaterThanOrEqual(80);
   });
 
+  describe("schema validation", () => {
+    const schema = createAwaitScreenIdleTool(iosRegistry({} as AXServiceApi)).zodSchema!;
+
+    it.each(["minStableMS", "min_stable_ms", "frobnicate"])(
+      "rejects the top-level key %s instead of silently applying the default",
+      (key) => {
+        const result = schema.safeParse({ udid: IOS_UDID, [key]: 1000 });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues).toContainEqual(
+            expect.objectContaining({ code: "unrecognized_keys", keys: [key] })
+          );
+        }
+      }
+    );
+
+    it("accepts the declared fields", () => {
+      expect(
+        schema.safeParse({
+          udid: IOS_UDID,
+          timeoutMs: 3000,
+          pollIntervalMs: 200,
+          minStableMs: 250,
+        }).success
+      ).toBe(true);
+    });
+  });
+
   it("settles on the first non-empty read when minStableMs is 0", async () => {
     const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService([content()])));
 
@@ -109,5 +156,40 @@ describe("await-screen-idle tool", () => {
 
     expect(result.settled).toBe(true);
     expect(result.polls).toBe(1);
+  });
+
+  // ── ios-remote (a cloud sim reached through sim-remote) ──────────────────
+  // The AX service is the same one the local branch resolves; the blueprint
+  // puts it on a TCP transport across the tunnel. These pin that a remote udid
+  // actually EXECUTES, not merely that the capability gate lets it through.
+
+  it("settles on ios-remote through the same AX path as a local sim", async () => {
+    const tool = createAwaitScreenIdleTool(
+      iosRegistry(makeSequencedAXService([axResponse([]), content()]))
+    );
+
+    const result = await tool.execute(
+      {},
+      { udid: `remote:${IOS_UDID}`, timeoutMs: 2000, pollIntervalMs: 10, minStableMs: 20 }
+    );
+
+    expect(result.settled).toBe(true);
+    expect(result.polls).toBeGreaterThan(1);
+  });
+
+  it("does not settle on ios-remote while the screen keeps changing", async () => {
+    // a different label every poll never holds for minStableMs
+    const changing = Array.from({ length: 30 }, (_, i) =>
+      axResponse([{ label: `item-${i}`, frame: FRAME, traits: ["button"] }])
+    );
+    const tool = createAwaitScreenIdleTool(iosRegistry(makeSequencedAXService(changing)));
+
+    const result = await tool.execute(
+      {},
+      { udid: `remote:${IOS_UDID}`, timeoutMs: 80, pollIntervalMs: 5, minStableMs: 40 }
+    );
+
+    expect(result.settled).toBe(false);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(80);
   });
 });

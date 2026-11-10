@@ -12,8 +12,14 @@ const execFileAsync = promisify(execFile);
  */
 
 import { stripRemotePrefix } from "./device-info";
+import { simulatorRuntimeKind } from "./ios-devices";
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+export const SIM_REMOTE_TIMEOUT_MS = 30_000;
+
+/** The `execFile` rejection behind a `run()` failure, which holds `killed`, `code` and `signal`. */
+export function simRemoteExecError(err: unknown): { killed?: boolean } {
+  return ((err as { cause?: unknown }).cause ?? err) as { killed?: boolean };
+}
 
 interface SimRemoteOptions {
   timeoutMs?: number;
@@ -23,7 +29,7 @@ interface SimRemoteOptions {
 async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout: string }> {
   try {
     const { stdout } = await execFileAsync("sim-remote", args, {
-      timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeout: options?.timeoutMs ?? SIM_REMOTE_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
       encoding: "utf8",
       input: options?.stdin,
@@ -54,8 +60,10 @@ interface SimRemoteListDevicesResult {
   devices: Record<string, SimRemoteDevice[]>;
 }
 
-export async function simctlListDevices(): Promise<SimRemoteListDevicesResult> {
-  const { stdout } = await run(["simctl", "list", "devices", "--json"]);
+export async function simctlListDevices(options?: {
+  timeoutMs?: number;
+}): Promise<SimRemoteListDevicesResult> {
+  const { stdout } = await run(["simctl", "list", "devices", "--json"], options);
   try {
     return JSON.parse(stdout) as SimRemoteListDevicesResult;
   } catch (err) {
@@ -72,32 +80,46 @@ export async function simctlListDevices(): Promise<SimRemoteListDevicesResult> {
 const remoteRuntimeKindCache = new Map<string, "mobile" | "tv">();
 
 /**
- * True when a remote UDID is a tvOS (Apple TV) simulator.
+ * Runtime kind of a remote simulator, or undefined when the listing does not
+ * know the UDID or cannot be read. `timeoutMs` bounds the list call on a cache miss.
  *
  * `resolveDevice` classifies remote ids by shape alone, and iOS and tvOS sims
  * are both `platform: "ios-remote"` UUIDs, so the runtime is only knowable
  * from the orchestrator's device list, whose keys name the runtime.
+ */
+export async function getRemoteSimulatorRuntimeKind(
+  udid: string,
+  options?: { timeoutMs?: number }
+): Promise<"mobile" | "tv" | undefined> {
+  const id = stripRemotePrefix(udid);
+  const cached = remoteRuntimeKindCache.get(id);
+  if (cached) return cached;
+  try {
+    const { devices } = await simctlListDevices(options);
+    for (const [runtime, entries] of Object.entries(devices)) {
+      if (!entries.some((d) => d.udid === id)) continue;
+      const kind = simulatorRuntimeKind(runtime);
+      if (kind) remoteRuntimeKindCache.set(id, kind);
+      return kind;
+    }
+  } catch {
+    // unknown runtime
+  }
+  return undefined;
+}
+
+/**
+ * True when a remote UDID is a tvOS (Apple TV) simulator.
  *
  * A failed lookup resolves to `false` rather than throwing: callers use this
  * to narrow an already-supported device, so it must not turn a working phone
  * simulator into an error.
  */
-export async function isRemoteTvOsSimulator(udid: string): Promise<boolean> {
-  const id = stripRemotePrefix(udid);
-  const cached = remoteRuntimeKindCache.get(id);
-  if (cached) return cached === "tv";
-  try {
-    const { devices } = await simctlListDevices();
-    for (const [runtime, entries] of Object.entries(devices)) {
-      if (!entries.some((d) => d.udid === id)) continue;
-      const kind = runtime.includes("tvOS") ? "tv" : "mobile";
-      remoteRuntimeKindCache.set(id, kind);
-      return kind === "tv";
-    }
-  } catch {
-    // unknown runtime — treat as non-TV
-  }
-  return false;
+export async function isRemoteTvOsSimulator(
+  udid: string,
+  options?: { timeoutMs?: number }
+): Promise<boolean> {
+  return (await getRemoteSimulatorRuntimeKind(udid, options)) === "tv";
 }
 
 export async function simctlBoot(udid: string): Promise<void> {
@@ -109,9 +131,8 @@ export async function simctlShutdown(udid: string): Promise<void> {
 }
 
 export async function simctlBootstatus(udid: string, opts?: { boot?: boolean }): Promise<void> {
-  const args = ["simctl", "bootstatus"];
+  const args = ["simctl", "bootstatus", stripRemotePrefix(udid)];
   if (opts?.boot) args.push("-b");
-  args.push(stripRemotePrefix(udid));
   // Cold boot can take minutes.
   await run(args, { timeoutMs: 5 * 60_000 });
 }
@@ -154,6 +175,19 @@ export async function simctlPrivacy(
   bundleId: string
 ): Promise<void> {
   await run(["simctl", "privacy", stripRemotePrefix(udid), action, service, bundleId]);
+}
+
+/**
+ * Remote analogue of `xcrun simctl status_bar <udid> <action> ...` — overrides
+ * or clears the remote simulator's status bar. `sim-remote simctl` forwards its
+ * arguments verbatim, so the argv is the local one minus the udid.
+ */
+export async function simctlStatusBar(
+  udid: string,
+  args: string[],
+  options?: { timeoutMs?: number }
+): Promise<void> {
+  await run(["simctl", "status_bar", stripRemotePrefix(udid), ...args], options);
 }
 
 /** Copy text into the simulator's pasteboard (streamed over stdin). */
@@ -252,6 +286,82 @@ export async function proxyStop(udid: string, port: number): Promise<void> {
   } catch {
     // best-effort cleanup
   }
+}
+
+// The runner may first have to spawn simulator-server (up to 30 s) before it
+// starts the recording; past the default, the CLI is killed while the runner
+// goes on recording.
+const RECORDING_START_TIMEOUT_MS = 90_000;
+
+/**
+ * Start recording the remote simulator's screen, and return the recording's
+ * id. Returns as soon as the runner has begun recording — the recording then
+ * runs unattended until `screenRecordStop`, which is what lets it span other
+ * tool calls.
+ *
+ * `showTouches` draws the touch visualizer into the capture; it stays on in
+ * the live stream until the stop turns it off. How much the runner buffers is
+ * its own business, so nothing here sizes it.
+ */
+export async function screenRecordStart(
+  udid: string,
+  opts: { showTouches: boolean }
+): Promise<string> {
+  const args = ["screen-record", "start", stripRemotePrefix(udid)];
+  if (opts.showTouches) args.push("--show-touches");
+  const { stdout } = await run(args, { timeoutMs: RECORDING_START_TIMEOUT_MS });
+  const id = stdout.trim();
+  if (!id) throw new Error(`sim-remote ${args.join(" ")} printed no recording id`);
+  return id;
+}
+
+/** Whether `err` is the runner refusing a start because one is already recording. */
+export function isAlreadyRecordingError(err: unknown): boolean {
+  return /already recording/i.test(err instanceof Error ? err.message : String(err));
+}
+
+// Nothing is downloaded, but the runner still muxes the whole recording before
+// it answers, which it allows up to two minutes.
+const RECORDING_STOP_TIMEOUT_MS = 150_000;
+// The whole video crosses the control connection, so a download gets its own
+// budget rather than the default: a long capture of a high-resolution device
+// is hundreds of megabytes.
+const RECORDING_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Stop the recording. The runner keeps the mp4 under the id the start printed,
+ * for `screenRecordFetch`: ending and downloading are separate because only
+ * the download can be retried.
+ */
+export async function screenRecordStop(udid: string): Promise<void> {
+  await run(["screen-record", "stop", stripRemotePrefix(udid)], {
+    timeoutMs: RECORDING_STOP_TIMEOUT_MS,
+  });
+}
+
+/**
+ * Download a recording the runner kept from a stop, overwriting `outputFile`.
+ * It keeps the latest recordings of a simulator until the machine is
+ * released, so a download that broke off is repeated here instead of costing
+ * the recording.
+ */
+export async function screenRecordFetch(
+  udid: string,
+  recording: string,
+  outputFile: string
+): Promise<void> {
+  await run(
+    [
+      "screen-record",
+      "fetch",
+      stripRemotePrefix(udid),
+      outputFile,
+      "--recording",
+      recording,
+      "--force",
+    ],
+    { timeoutMs: RECORDING_DOWNLOAD_TIMEOUT_MS }
+  );
 }
 
 export interface MoqInfo {

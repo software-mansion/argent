@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
+import * as fs from "node:fs/promises";
 import * as http from "node:http";
 import { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
@@ -9,6 +10,8 @@ import {
   chromiumCdpRef,
   ensureCdpReachable,
 } from "../src/blueprints/chromium-cdp";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import { chromiumImpl } from "../src/tools/open-url/platforms/chromium";
 import { resolveDevice } from "../src/utils/device-info";
 
 interface FakeCdp {
@@ -134,9 +137,11 @@ async function startFakeCdp(): Promise<FakeCdp> {
 }
 
 const servers: FakeCdp[] = [];
+const filesToCleanup: string[] = [];
 
 afterEach(async () => {
   for (const s of servers.splice(0)) await s.close();
+  for (const p of filesToCleanup.splice(0)) await fs.rm(p, { force: true });
 });
 
 describe("chromiumCdpBlueprint (smoke)", () => {
@@ -190,9 +195,27 @@ describe("chromiumCdpBlueprint (smoke)", () => {
       // Screenshot — fake server returns a tiny PNG, we expect a real file
       // path in the unified media dir maintained by the chromium-server.
       const shot = await instance.api.captureScreenshot();
+      filesToCleanup.push(shot.path);
       expect(shot.path).toMatch(/argent-chromium-media/);
       expect(shot.path).toMatch(/argent-screenshot-/);
       expect(shot.url).toMatch(/^file:\/\//);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("open-url fails with the classified error when Chromium rejects the navigation", async () => {
+    const s = await startFakeCdp();
+    servers.push(s);
+    s.setReply("Page.navigate", { frameId: "F", errorText: "net::ERR_NAME_NOT_RESOLVED" });
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const instance = await chromiumCdpBlueprint.factory({}, device, { device });
+
+    try {
+      const err = await chromiumImpl
+        .handler({ chromium: instance.api }, { udid: device.id, url: "http://x.invalid/" }, device)
+        .catch((e: unknown) => e);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_NAVIGATE_FAILED);
     } finally {
       await instance.dispose();
     }

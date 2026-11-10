@@ -164,11 +164,13 @@ describe("POST /upload", () => {
       const entries = await fs.readdir(scratch);
       return new Set(entries.filter((e) => e.startsWith("argent-upload-")));
     };
-    const server = handle.app.listen(0);
+    const server = handle.app.listen(0, "127.0.0.1");
     try {
+      await new Promise<void>((resolve) => server.once("listening", resolve));
       const { port } = server.address() as { port: number };
       await new Promise<void>((resolve) => {
         const req = http.request({
+          host: "127.0.0.1",
           port,
           path: "/upload",
           method: "POST",

@@ -1,4 +1,5 @@
 import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
+import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../blueprints/ios-device-runner";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
 import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
@@ -11,7 +12,9 @@ import { NATIVE_PROFILER_SESSION_NAMESPACE } from "../../blueprints/native-profi
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../blueprints/js-runtime-debugger";
 import { NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/network-inspector";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profiler-session";
+import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
+import { externalNativeId } from "../../utils/external-devices";
 
 /**
  * The one URN matcher both `stop-simulator-server` and
@@ -55,6 +58,16 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
 ];
 
 /**
+ * Namespaces whose URN appends the app after the device id:
+ * `<Namespace>:<deviceId>:<package>`. The LAST colon separates them: an
+ * Android package name cannot contain one, while a wireless adb serial
+ * (`AndroidNetworkInspector:192.168.1.5:5555:com.example`) can. Their device
+ * id is the adb serial even when the service was asked for with an `ext:` id,
+ * so either spelling of the device matches.
+ */
+const APP_KEYED_NAMESPACES: readonly string[] = [ANDROID_NETWORK_INSPECTOR_NAMESPACE];
+
+/**
  * Every namespace whose service belongs to exactly one device. Membership is
  * "does `dispose()` reap a resource that outlives the call", with two
  * exceptions: `AndroidTvControl` is stateless adb shell-outs with a no-op
@@ -74,6 +87,7 @@ export const PORT_KEYED_NAMESPACES: readonly string[] = [
  */
 export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   SIMULATOR_SERVER_NAMESPACE,
+  IOS_DEVICE_RUNNER_NAMESPACE,
   NATIVE_DEVTOOLS_NAMESPACE,
   ANDROID_DEVTOOLS_NAMESPACE,
   CHROMIUM_CDP_NAMESPACE,
@@ -84,11 +98,14 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
   SCREEN_RECORDING_SESSION_NAMESPACE,
   NATIVE_PROFILER_SESSION_NAMESPACE,
   ...PORT_KEYED_NAMESPACES,
+  ...APP_KEYED_NAMESPACES,
 ];
 
 /**
  * The subset `stop-simulator-server` disposes: the device's transport session,
- * plus the TV-control daemons a tvOS udid may own alongside it.
+ * plus the TV-control daemons a tvOS udid may own alongside it. On a physical
+ * iPhone that transport is `IosDeviceRunner` rather than `SimulatorServer`,
+ * whose factory rejects `kind: "device"` outright.
  *
  * Deliberately narrower than {@link DEVICE_OWNED_NAMESPACES}. That tool is the
  * documented recovery for a wedged transport, so widening it to devtools/AX
@@ -104,18 +121,22 @@ export const DEVICE_OWNED_NAMESPACES: readonly string[] = [
 export function transportNamespacesForPlatform(platform: string): readonly string[] {
   if (platform === "chromium") return [CHROMIUM_CDP_NAMESPACE];
   if (platform === "android") return [SIMULATOR_SERVER_NAMESPACE, ANDROID_TV_CONTROL_NAMESPACE];
-  // A tvOS UDID is iOS-shaped and can't be told apart from a phone here without
-  // an async probe, so cover both.
-  return [SIMULATOR_SERVER_NAMESPACE, TV_CONTROL_NAMESPACE];
+  // Shape cannot tell tvOS from iOS or a simulator from a physical device here. Cover all three namespaces.
+  return [SIMULATOR_SERVER_NAMESPACE, IOS_DEVICE_RUNNER_NAMESPACE, TV_CONTROL_NAMESPACE];
 }
 
 /**
  * The device-id portion of `urn` if it belongs to `namespace`, else undefined.
- * Accounts for the two URN shapes (see {@link PORT_KEYED_NAMESPACES}).
+ * Accounts for the three URN shapes (see {@link PORT_KEYED_NAMESPACES} and
+ * {@link APP_KEYED_NAMESPACES}).
  */
 function deviceIdPortion(urn: string, namespace: string): string | undefined {
   if (!urn.startsWith(`${namespace}:`)) return undefined;
   const tail = urn.slice(namespace.length + 1);
+  if (APP_KEYED_NAMESPACES.includes(namespace)) {
+    const beforeApp = tail.lastIndexOf(":");
+    return beforeApp < 0 ? undefined : tail.slice(0, beforeApp);
+  }
   if (!PORT_KEYED_NAMESPACES.includes(namespace)) return tail;
   const afterPort = tail.indexOf(":");
   return afterPort < 0 ? undefined : tail.slice(afterPort + 1);
@@ -144,8 +165,13 @@ export function deviceIdOwningUrn(
     if (portion === undefined) continue;
     const tail = portion.toLowerCase();
     const owner = deviceIds.find((id) => {
-      const lower = id.toLowerCase();
-      return URN_SUFFIXES.some((suffix) => tail === `${lower}${suffix}`);
+      const spellings = APP_KEYED_NAMESPACES.includes(namespace)
+        ? [id, externalNativeId(id)]
+        : [id];
+      return spellings.some((spelling) => {
+        const lower = spelling.toLowerCase();
+        return URN_SUFFIXES.some((suffix) => tail === `${lower}${suffix}`);
+      });
     });
     // Namespaces contain no ":", so at most one can prefix a given URN — a
     // miss here is a miss outright, not a reason to keep scanning.

@@ -7,6 +7,7 @@ import {
 import { CHROMIUM_ID_PREFIX } from "../../utils/device-info";
 import { classifyDeviceForTelemetry } from "../../utils/telemetry-platform";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { metroPort } from "../../utils/debugger/metro-port";
 import { debuggerServiceRef } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
@@ -36,12 +37,14 @@ export interface DebuggerNotConnectedResult {
 const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
   metro_not_running:
     "Metro is not running on this port. Do not retry in a loop — the result will not change " +
-    "until Metro is started. Start Metro (e.g. `npx react-native start` or `npx expo start`) " +
-    "or ask the user, wait for it to report ready, then retry once.",
+    "until Metro is started. Start Metro with the project's own start script if it has one " +
+    "(else `npx react-native start` or `npx expo start`) or ask the user, wait for it to " +
+    "report ready, then retry once.",
   no_app_connected:
     "Metro is running but no app is attached. Do not retry immediately — launch or restart " +
     "the RN app on the target device (launch-app / restart-app), wait a few seconds for the " +
-    "bundle to load, then retry once.",
+    "bundle to load, then retry once. On Android, if the app cannot reach Metro, first run " +
+    "`adb reverse tcp:<port> tcp:<port>`.",
   device_mismatch:
     "The device_id does not match any debugger target on this Metro. Re-target with the " +
     "logicalDeviceId listed in the detail message, or give the device its own Metro port.",
@@ -110,13 +113,15 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
 export function buildNotConnected(
   reason: DebuggerNotConnectedReason,
   err: unknown,
-  params: { port: number; device_id?: string }
+  params: { port?: number; device_id?: string }
 ): DebuggerNotConnectedResult {
   const isChromium = params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ?? false;
   return {
     status: "not_connected",
     connected: false,
-    ...(isChromium ? {} : { port: params.port }),
+    // Resolved through metroPort so the reported port is the one the resolve
+    // actually used (caller, then provider-published, then 8081).
+    ...(isChromium ? {} : { port: metroPort(params) }),
     reason,
     detail: err instanceof Error ? err.message : String(err),
     guidance: (isChromium ? CHROMIUM_GUIDANCE[reason] : undefined) ?? GUIDANCE[reason],
@@ -159,7 +164,7 @@ export function trackDebuggerOutcome(
  */
 export async function resolveDebuggerService(
   registry: Registry,
-  params: { port: number; device_id?: string }
+  params: { port?: number; device_id?: string }
 ): Promise<JsRuntimeDebuggerApi> {
   const ref = debuggerServiceRef(params);
   return typeof ref === "string"

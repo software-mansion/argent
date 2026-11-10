@@ -4,7 +4,7 @@ import type {
   ToolCapability,
   ToolDependency,
 } from "@argent/registry";
-import { resolveDevice } from "./device-info";
+import { isIosPhysicalDevice, resolveDevice } from "./device-info";
 import { assertSupported, NotImplementedOnPlatformError } from "./capability";
 import { ensureDeps } from "./check-deps";
 
@@ -41,14 +41,28 @@ export function dispatchByPlatform<
   ChromiumServices = Record<string, unknown>,
   VegaServices = unknown,
   IosRemoteServices = IosServices,
+  HarmonyServices = unknown,
+  IosDeviceServices = IosServices,
 >(opts: {
   toolId: string;
   capability: ToolCapability;
   ios: PlatformImpl<IosServices, Params, Result>;
   android: PlatformImpl<AndroidServices, Params, Result>;
   iosRemote?: PlatformImpl<IosRemoteServices, Params, Result>;
+  /**
+   * Physical iOS device branch (`platform: "ios"`, `kind: "device"`). Optional
+   * so simulator-only tools compile unchanged. It is checked BEFORE the plain
+   * `ios` branch: a physical device must never fall through to the simulator
+   * handler, whose services (simulator-server, simctl) do not exist for
+   * hardware. Declared-but-unwired (capability says `apple: { device: true }`
+   * with no branch here) throws `NotImplementedOnPlatformError` (501) so the
+   * gap is a loud contributor hint, not a simulator-path misroute.
+   */
+  iosDevice?: PlatformImpl<IosDeviceServices, Params, Result>;
   chromium?: PlatformImpl<ChromiumServices, Params, Result>;
   vega?: PlatformImpl<VegaServices, Params, Result>;
+  /** Optional like `vega`: a declared but unwired `harmony` throws 501. */
+  harmony?: PlatformImpl<HarmonyServices, Params, Result>;
 }): (
   services: Record<string, unknown>,
   params: Params,
@@ -57,6 +71,29 @@ export function dispatchByPlatform<
   return async (services, params, invokeOptions) => {
     const device = resolveDevice(params.udid);
     assertSupported(opts.toolId, opts.capability, device);
+    if (isIosPhysicalDevice(device)) {
+      if (!opts.iosDevice) {
+        throw new NotImplementedOnPlatformError({
+          toolId: opts.toolId,
+          platform: "ios",
+          // The class's stock message derives platforms/ios.ts and says to add
+          // a capability block, both wrong for hardware, so the hint corrects.
+          hint:
+            `For physical iOS devices, implement ` +
+            `tools/${opts.toolId}/platforms/ios-device.ts instead; the capability ` +
+            `block already exists.`,
+        });
+      }
+      if (opts.iosDevice.requires?.length) {
+        await ensureDeps(opts.iosDevice.requires);
+      }
+      return opts.iosDevice.handler(
+        services as unknown as IosDeviceServices,
+        params,
+        device,
+        invokeOptions
+      );
+    }
     if (device.platform === "ios") {
       if (opts.ios.requires?.length) {
         await ensureDeps(opts.ios.requires);
@@ -99,6 +136,21 @@ export function dispatchByPlatform<
         await ensureDeps(opts.vega.requires);
       }
       return opts.vega.handler(services as unknown as VegaServices, params, device, invokeOptions);
+    }
+    if (device.platform === "harmony") {
+      // Explicit: chromium is the fallthrough below.
+      if (!opts.harmony) {
+        throw new NotImplementedOnPlatformError({ toolId: opts.toolId, platform: "harmony" });
+      }
+      if (opts.harmony.requires?.length) {
+        await ensureDeps(opts.harmony.requires);
+      }
+      return opts.harmony.handler(
+        services as unknown as HarmonyServices,
+        params,
+        device,
+        invokeOptions
+      );
     }
     // chromium
     if (!opts.chromium) {

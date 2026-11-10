@@ -4,13 +4,14 @@ import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/regist
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logbox";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
+import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
     ),
 });
 
@@ -26,20 +27,20 @@ export const debuggerReloadMetroTool: ToolDefinition<
   }
 > = {
   id: "debugger-reload-metro",
+  description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
+Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method (cdp or http), deviceName, appName, logicalDeviceId }. Fails if Metro is not running on the given port.`,
+  zodSchema,
   interaction: {
     startedMsg: () => "Reloading the app through Metro",
     completedMsg: () => "Reloaded the app through Metro",
     failedMsg: ({ failureSignal }) =>
       `Failed to reload the app through Metro: ${failureSignal.error_code}`,
   },
-  description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
-Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method, deviceName, appName, logicalDeviceId } indicating which reload path was used and which device/app was targeted. Fails if Metro is not running on the given port.`,
-  zodSchema,
   // RN-only: reloading a Chromium page is a different operation from restarting
   // the Metro bundle, so it would need its own tool.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}:${canonicalDeviceId(params.device_id)}`,
+    debugger: `JsRuntimeDebugger:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
   }),
   async execute(services, _params) {
     const api = services.debugger as JsRuntimeDebuggerApi;

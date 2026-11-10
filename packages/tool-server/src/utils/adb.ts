@@ -11,6 +11,7 @@ import {
 } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 import { formatSubprocessFailure } from "./subprocess-error";
+import { assertExternalCapabilitySync, externalNativeId } from "./external-devices";
 
 const execFileAsync = promisify(execFile);
 
@@ -151,6 +152,48 @@ function describeAdbFailure(args: string[], err: unknown): Error {
 }
 
 /**
+ * Substitute an external provider's real adb serial wherever Argent's `ext:`
+ * device id appears in an adb argv.
+ *
+ * Mapping the whole argv covers every `-s <serial>` call site at once, rather
+ * than threading a device-aware helper through dozens of functions. It is safe
+ * because only a device id can carry the prefix.
+ *
+ * This is also the gate for the `adb` capability. The real serial is only
+ * revealed when the provider granted it, which covers every adb call site at
+ * once.
+ *
+ * {@linkcode runAdb} applies it, so anything routed through there is covered.
+ * It is exported for the callers that cannot: a long-running `adb` whose
+ * stdin and stdout are the protocol has to spawn for itself, and must map its
+ * own argv or hand `adb` an `ext:` id it has never heard of.
+ */
+export function adbArgv(args: string[]): string[] {
+  return args.map((argument) => {
+    /**
+     * Unconditional, because a provider's emulator is reachable under the raw
+     * serial `adb devices` reports as well as under our `ext:` id and the grant
+     * covers the device either way. The check costs one failed `readdir` when
+     * no provider is registered, which is every install that has none.
+     */
+    assertExternalCapabilitySync("adb", argument, "adb");
+
+    return externalNativeId(argument);
+  });
+}
+
+/**
+ * With `ADB_TRACE` set, adb writes its own trace to stderr, and that trace
+ * repeats the command, so a caller judging the command by its stderr would
+ * match its own arguments.
+ */
+function envWithoutAdbTrace(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.ADB_TRACE;
+  return env;
+}
+
+/**
  * Run `adb` directly. Callers that target a single device must pass `-s <serial>`
  * themselves via `args` — `runAdb` does not inject it, so a serial-less call
  * will hit whichever device `ANDROID_SERIAL` / the default heuristic picks.
@@ -163,16 +206,23 @@ export async function runAdb(
   options: { timeoutMs?: number } = {}
 ): Promise<AdbRunResult> {
   const adbPath = await resolveAdbOrThrow();
+  /**
+   * Report the argv that actually ran: an error quoting the `ext:` id rather
+   * than the serial adb saw would not be copy-pasteable.
+   */
+  const argv = adbArgv(args);
+
   try {
-    const { stdout, stderr } = await execFileAsync(adbPath, args, {
+    const { stdout, stderr } = await execFileAsync(adbPath, argv, {
       timeout: options.timeoutMs ?? 30_000,
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf-8",
+      env: envWithoutAdbTrace(),
     });
     return { stdout, stderr };
   } catch (err) {
-    throw describeAdbFailure(args, err);
+    throw describeAdbFailure(argv, err);
   }
 }
 
@@ -182,8 +232,10 @@ export async function runAdb(
  */
 async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}): Promise<Buffer> {
   const adbPath = await resolveAdbOrThrow();
+  const argv = adbArgv(args);
+
   try {
-    const { stdout } = await execFileAsync(adbPath, args, {
+    const { stdout } = await execFileAsync(adbPath, argv, {
       timeout: options.timeoutMs ?? 30_000,
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
@@ -191,7 +243,7 @@ async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}
     });
     return stdout as unknown as Buffer;
   } catch (err) {
-    throw describeAdbFailure(args, err);
+    throw describeAdbFailure(argv, err);
   }
 }
 
@@ -214,6 +266,43 @@ export async function adbShell(
   return stdout;
 }
 
+/**
+ * {@linkcode adbShell} with `input` written to the device command's stdin, for
+ * data that must stay out of every argv: the host's and the device's process
+ * lists show the command line, and so does the error a failure throws.
+ */
+export async function adbShellInput(
+  serial: string,
+  shellCommand: string,
+  input: string,
+  options: { timeoutMs?: number } = {}
+): Promise<string> {
+  const adbPath = await resolveAdbOrThrow();
+  const argv = adbArgv(["-s", serial, "shell", shellCommand]);
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      adbPath,
+      argv,
+      {
+        timeout: options.timeoutMs ?? 30_000,
+        killSignal: ADB_KILL_SIGNAL,
+        maxBuffer: 64 * 1024 * 1024,
+        encoding: "utf-8",
+      },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(describeAdbFailure(argv, Object.assign(err, { stdout, stderr })));
+          return;
+        }
+        resolve(stdout);
+      }
+    );
+    // A stdin that broke early surfaces through the exit callback instead.
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(input);
+  });
+}
+
 /** `adb -s <serial> exec-out <shellCommand>` — preserves stdout bytes for binary payloads. */
 export async function adbExecOutBinary(
   serial: string,
@@ -223,7 +312,58 @@ export async function adbExecOutBinary(
   return runAdbBinary(["-s", serial, "exec-out", shellCommand], options);
 }
 
-interface AndroidDevice {
+/**
+ * With `hostPort` 0 adb picks a free host port and prints it, and that output
+ * is what this returns; it is empty otherwise.
+ */
+export async function adbForward(
+  serial: string,
+  hostPort: number,
+  devicePort: number,
+  options: { timeoutMs?: number } = {}
+): Promise<string> {
+  const { stdout } = await runAdb(
+    ["-s", serial, "forward", `tcp:${hostPort}`, `tcp:${devicePort}`],
+    options
+  );
+  return stdout.trim();
+}
+
+/**
+ * With `noRebind`, a device port that already has a reverse fails with
+ * "cannot rebind existing socket" instead of being taken over. A port a device
+ * process listens on fails with "cannot bind listener" either way.
+ */
+export async function adbReverse(
+  serial: string,
+  devicePort: number,
+  hostPort: number,
+  options: { timeoutMs?: number; noRebind?: boolean } = {}
+): Promise<void> {
+  await runAdb(
+    [
+      "-s",
+      serial,
+      "reverse",
+      ...(options.noRebind ? ["--no-rebind"] : []),
+      `tcp:${devicePort}`,
+      `tcp:${hostPort}`,
+    ],
+    { timeoutMs: options.timeoutMs }
+  );
+}
+
+export async function removeAdbReverse(serial: string, devicePort: number): Promise<void> {
+  try {
+    await runAdb(["-s", serial, "reverse", "--remove", `tcp:${devicePort}`], {
+      timeoutMs: 5_000,
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+export interface AndroidDevice {
   serial: string;
   state: string;
   isEmulator: boolean;
@@ -345,6 +485,47 @@ async function readAvdName(serial: string): Promise<string | null> {
   return modern.trim() || legacy.trim() || null;
 }
 
+export type EmulatorConsoleAvdName =
+  | { status: "ok"; avdName: string }
+  // Nothing listens on the console port: qemu has exited (adb may still list the
+  // serial for up to a second), so the port is free for the next emulator.
+  | { status: "unreachable" }
+  // Timed out or answered something else: alive but not responding (frozen,
+  // shutting down), or an unexpected console.
+  | { status: "unknown" };
+
+/**
+ * Ask an emulator's console for its AVD name (`adb -s <serial> emu avd name`).
+ *
+ * Unlike getprop, the console answers within milliseconds from the moment the
+ * serial is listed, while adb still reports it `offline`, and it tells a serial
+ * nothing is behind any more ("Connection refused") apart from one that is alive
+ * but not answering. `adb emu` connects to the console port straight from the
+ * serial, so it works whether or not the adb server still lists the device.
+ */
+export async function readEmulatorConsoleAvdName(
+  serial: string,
+  options: { timeoutMs?: number } = {}
+): Promise<EmulatorConsoleAvdName> {
+  try {
+    const { stdout } = await runAdb(["-s", serial, "emu", "avd", "name"], {
+      timeoutMs: options.timeoutMs ?? 2_000,
+    });
+    // "<name>\nOK\n" on success; "KO: …" when the console rejects the command.
+    const lines = stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const name = lines.find((line) => line !== "OK" && !line.startsWith("KO"));
+    if (name && lines.includes("OK")) return { status: "ok", avdName: name };
+    return { status: "unknown" };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (/Connection refused/i.test(message)) return { status: "unreachable" };
+    return { status: "unknown" };
+  }
+}
+
 /**
  * Detect whether an Android target is a TV (leanback) device — TV AVDs share the
  * `emulator-NNNN` serial shape with phones, so only a device capability can tell
@@ -435,10 +616,14 @@ async function resolveRuntimeKindCached(
  * Readiness goes through the cheap `adb devices` listing rather than the full
  * `listAndroidDevices` enrichment. The avdName getprop is read only for
  * `emulator-NNNN` serials, where it detects a reused console slot; a physical
- * serial is never reclaimed and has no qemu avd_name.
+ * serial is never reclaimed and has no qemu avd_name. `devicesTimeoutMs` bounds
+ * that listing, as in `listAndroidSerials`.
  */
-export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
-  const serials = await listAndroidSerials();
+export async function getAndroidRuntimeKind(
+  serial: string,
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<"mobile" | "tv" | undefined> {
+  const serials = await listAndroidSerials(options);
   const ready = serials.find((d) => d.serial === serial && d.state === "device");
   if (!ready) {
     // Gone / offline: drop any cached verdict so a future occupant of this
@@ -451,8 +636,11 @@ export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | 
 }
 
 /** True when the given Android serial is an Android TV (leanback) target. */
-export async function isAndroidTv(serial: string): Promise<boolean> {
-  return (await getAndroidRuntimeKind(serial)) === "tv";
+export async function isAndroidTv(
+  serial: string,
+  options: { devicesTimeoutMs?: number } = {}
+): Promise<boolean> {
+  return (await getAndroidRuntimeKind(serial, options)) === "tv";
 }
 
 /**
@@ -738,6 +926,23 @@ export async function resolveAvdPath(avdName: string): Promise<string | null> {
     }
   }
   return null;
+}
+
+/**
+ * True iff the AVD's profile has a hinge (`hw.sensor.hinge` in its
+ * `config.ini`): the Pixel folds and the generic foldables. Read from disk, so
+ * it answers for a stopped AVD and costs a running one no `adb` round-trip.
+ */
+export async function isFoldableAvd(avdName: string): Promise<boolean> {
+  const { readFile } = await import("node:fs/promises");
+  const avdPath = await resolveAvdPath(avdName);
+  if (!avdPath) return false;
+  try {
+    const hinge = parseIni(await readFile(`${avdPath}/config.ini`, "utf-8"))["hw.sensor.hinge"];
+    return hinge === true || hinge === "yes" || hinge === "true";
+  } catch {
+    return false;
+  }
 }
 
 /**

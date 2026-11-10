@@ -1,0 +1,87 @@
+import { describe, expect, it } from "vitest";
+import ts from "typescript";
+import { TOOL_ID_ALIASES, TOOL_PARAM_ALIASES } from "@argent/registry";
+import { renderSdkToolArgs, toType } from "../src/sdk-tool-args";
+import { EXPECTED_TOOL_COUNT } from "./helpers/catalog";
+
+describe("toType", () => {
+  it("maps scalars, literals and arrays", () => {
+    expect(toType({ type: "string" })).toBe("string");
+    expect(toType({ type: "integer" })).toBe("number");
+    expect(toType({ type: ["string", "null"] })).toBe("string | null");
+    expect(toType({ const: "a" })).toBe('"a"');
+    expect(toType({ enum: ["a", 1] })).toBe('"a" | 1');
+    expect(toType({ type: "array", items: { type: "boolean" } })).toBe("Array<boolean>");
+    expect(toType({ description: "anything" })).toBe("unknown");
+  });
+
+  it("parenthesizes allOf members so a union keeps its precedence", () => {
+    const schema = {
+      allOf: [{ anyOf: [{ type: "string" }, { type: "number" }] }, { enum: ["a", 1] }],
+    };
+    expect(toType(schema)).toBe('(string | number) & ("a" | 1)');
+  });
+
+  it("renders objects with optional members, docs and an index signature", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        "udid": { type: "string", description: "Device id. Ends */ here" },
+        "flag-name": { type: "boolean" },
+        "settle": { not: {} },
+      },
+      required: ["udid"],
+      additionalProperties: { type: "number" },
+    };
+    expect(toType(schema)).toBe(
+      [
+        "{",
+        "  /** Device id. Ends *\\/ here */",
+        "  udid: string;",
+        '  "flag-name"?: boolean;',
+        "  [key: string]: number;",
+        "}",
+      ].join("\n")
+    );
+    expect(toType({ type: "object", properties: {} })).toBe("Record<string, never>");
+  });
+
+  it("throws on a schema it cannot map instead of widening to unknown", () => {
+    expect(() => toType({ type: "array" })).toThrow(/No TypeScript mapping/);
+    expect(() => toType({ $ref: "#/x" })).toThrow(/No TypeScript mapping/);
+  });
+});
+
+describe("renderSdkToolArgs", () => {
+  const output = renderSdkToolArgs();
+
+  it("emits every tool", () => {
+    const aliases = Object.keys(TOOL_ID_ALIASES).length;
+    expect(output.match(/^ {2}("[^"]+"|\w+): /gm)).toHaveLength(EXPECTED_TOOL_COUNT + aliases);
+  });
+
+  it("types each former tool id as the tool it names", () => {
+    for (const [alias, id] of Object.entries(TOOL_ID_ALIASES)) {
+      expect(output).toContain(
+        `  /** @deprecated Renamed to \`${id}\`. */\n  "${alias}": ArgentToolArgs["${id}"];`
+      );
+    }
+  });
+
+  it("types each former param name as the param it names", () => {
+    for (const [id, aliases] of Object.entries(TOOL_PARAM_ALIASES)) {
+      const block = output.slice(output.indexOf(`  "${id}": {`)).split("\n  };")[0]!;
+      for (const [former, current] of Object.entries(aliases)) {
+        expect(block, id).toContain(`    ${current}?: string;`);
+        expect(block, id).toContain(
+          `    /** @deprecated Renamed to \`${current}\`. */\n    ${former}?: string;`
+        );
+      }
+    }
+  });
+
+  it("emits valid TypeScript", () => {
+    const { diagnostics } = ts.transpileModule(output, { reportDiagnostics: true });
+    expect(diagnostics).toEqual([]);
+  });
+});

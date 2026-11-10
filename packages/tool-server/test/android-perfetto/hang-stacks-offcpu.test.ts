@@ -155,7 +155,6 @@ describe("hang_stacks — off-CPU explanation", () => {
     expect(out).toContain("Main-thread State Breakdown");
     expect(out).toMatch(/No usable on-CPU stack samples/);
     // The thread was on-CPU/executing — this is genuine CPU work, not a wait.
-    expect(out).toMatch(/on-CPU/);
     expect(out).toMatch(/executing/);
     expect(out).toContain("`Running`");
     // It must NOT be mislabelled as off-CPU / runnable-but-not-scheduled.

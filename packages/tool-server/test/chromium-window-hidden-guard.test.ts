@@ -7,12 +7,13 @@ import { gestureScrollTool } from "../src/tools/gesture-scroll";
 // The hidden-window guard: a minimized / fully occluded Chromium window
 // throttles compositor hit-testing, so every MOUSE dispatch stalls ~5s
 // (measured live on an Electron testbed). tap, drag and scroll refuse up
-// front with an actionable error; keyboard/button skip the guard because key
-// events bypass hit-testing and stay fast on hidden windows. In practice the
-// guard is a backstop: primePageSession's focus emulation pins reported
-// visibility to "visible" while a session is attached, so the probe reads
-// "hidden" only on sessions where emulation could not be applied — exactly
-// where the stall is real.
+// front with an actionable error; keyboard skips the guard because key events
+// bypass hit-testing and stay fast on hidden windows, and button never reaches
+// it — its capability omits chromium. In practice the guard is a backstop:
+// focus emulation, applied to every session at connect, pins reported
+// visibility to "visible", so the probe reads "hidden" only where the runtime
+// refused it. The fakes below hard-code `visibility`, so what they pin is the
+// refusal, not the reading that provokes it.
 
 function fakeChromiumApi(visibility = "visible") {
   return {
@@ -46,7 +47,7 @@ describe("hidden-window guard on chromium mouse tools", () => {
         } as never
       )
     );
-    expect(err.message).toMatch(/hidden/);
+    expect(err.message).toMatch(/^Cannot tap: the Chromium window is hidden/);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_WINDOW_HIDDEN);
     expect(getFailureSignal(err)?.failure_stage).toBe("chromium_tap_window_hidden");
     expect(api.dispatchMouseEvent).not.toHaveBeenCalled();
@@ -66,12 +67,13 @@ describe("hidden-window guard on chromium mouse tools", () => {
         } as never
       )
     );
+    expect(err.message).toMatch(/^Cannot drag: the Chromium window is hidden/);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_WINDOW_HIDDEN);
     expect(getFailureSignal(err)?.failure_stage).toBe("chromium_drag_window_hidden");
     expect(api.dispatchMouseEvent).not.toHaveBeenCalled();
   });
 
-  it("gesture-scroll reports the dedicated failure code (migrated off CHROMIUM_INPUT_INVALID)", async () => {
+  it("gesture-scroll refuses before dispatching any wheel event", async () => {
     const api = fakeChromiumApi("hidden");
     const err = await captureFailure(
       gestureScrollTool.execute(
@@ -84,16 +86,67 @@ describe("hidden-window guard on chromium mouse tools", () => {
         } as never
       )
     );
+    expect(err.message).toMatch(/^Cannot scroll: the Chromium window is hidden/);
+    expect(api.server.sendWheel).not.toHaveBeenCalled();
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_WINDOW_HIDDEN);
-    // The stage string is unchanged so old and new telemetry stay joinable.
+    // The scroll stage predates the CHROMIUM_WINDOW_HIDDEN migration, which kept
+    // the spelling so rows from either side of it stay joinable.
     expect(getFailureSignal(err)?.failure_stage).toBe("chromium_scroll_window_hidden");
   });
 
-  it("proceeds when the visibility probe rejects (mid-navigation, bare test fakes)", async () => {
+  it("proceeds when the visibility probe rejects (mid-navigation teardown)", async () => {
     // A failed probe proves nothing about visibility; only an explicit
-    // "hidden" refuses. This also covers api objects with no `cdp` at all.
+    // "hidden" refuses.
     const api = fakeChromiumApi();
     api.cdp.send = vi.fn().mockRejectedValue(new Error("Execution context was destroyed"));
+    const result = (await gestureTapTool.execute(
+      { chromium: api } as never,
+      {
+        udid: "chromium-cdp-19222",
+        x: 0.5,
+        y: 0.5,
+      } as never
+    )) as { tapped: boolean };
+    expect(result.tapped).toBe(true);
+    expect(api.dispatchMouseEvent).toHaveBeenCalled();
+  });
+
+  it("proceeds when the api carries no `cdp` at all (bare tool fakes)", async () => {
+    // A distinct failure mode from the rejecting-send case above: here the
+    // throw is a TypeError raised while reading `.send` off `undefined`, not a
+    // rejected promise. The bare fakes in chromium-drag.test.ts and
+    // tools/gesture-tap.test.ts are exactly this shape, so the guard has to
+    // stay transparent to them; those files only cover it incidentally, for as
+    // long as neither of them grows a `cdp` key.
+    const api = {
+      getViewport: () => ({ width: 800, height: 600, devicePixelRatio: 1 }),
+      dispatchMouseEvent: vi.fn().mockResolvedValue(undefined),
+    };
+    const result = (await gestureTapTool.execute(
+      { chromium: api } as never,
+      {
+        udid: "chromium-cdp-19222",
+        x: 0.5,
+        y: 0.5,
+      } as never
+    )) as { tapped: boolean };
+    expect(result.tapped).toBe(true);
+    expect(api.dispatchMouseEvent).toHaveBeenCalled();
+  });
+
+  // The other half of "only an explicit `hidden` refuses": a probe that resolves
+  // with anything else. `Runtime.evaluate` omits `value` when the expression
+  // throws an Error, and a page can redefine `visibilityState` to whatever it
+  // likes, so the literal "hidden" is the only thing that is evidence of a
+  // hidden window — refusing on anything else blocks a tap on a live one.
+  it.each([
+    ["an empty result", {}],
+    ["a result with no value", { result: {} }],
+    ["a value of an unexpected shape", { result: { value: null } }],
+    ["a string other than `hidden`", { result: { value: "prerender" } }],
+  ])("proceeds when the probe resolves with %s", async (_label, resolved) => {
+    const api = fakeChromiumApi();
+    api.cdp.send = vi.fn().mockResolvedValue(resolved);
     const result = (await gestureTapTool.execute(
       { chromium: api } as never,
       {

@@ -10,7 +10,9 @@
   "references": [
     { "path": "../archive" },
     { "path": "../configuration-core" },
+    { "path": "../device-providers" },
     { "path": "../registry" },
+    { "path": "../telemetry" },
     { "path": "../update-core" },
     { "path": "../native-devtools-ios" },
     { "path": "../native-devtools-android" }

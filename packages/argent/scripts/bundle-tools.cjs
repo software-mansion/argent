@@ -8,6 +8,10 @@ const path = require("path");
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
+const DEVICE_PROVIDERS_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/device-providers/src/index.ts"
+);
 const ARCHIVE_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/archive/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
 const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
@@ -35,6 +39,10 @@ const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
+// Bundled over tsc's emit of src/client.ts, which imports private workspace
+// packages; tsc's client.d.ts is kept as the public types.
+const CLIENT_ENTRY = path.resolve(__dirname, "../src/client.ts");
+const CLIENT_OUT_FILE = path.resolve(__dirname, "../dist/client.js");
 const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/main.cjs");
 
 // Resolve workspace deps from source rather than each package's compiled dist/,
@@ -50,6 +58,7 @@ const ALIASES = {
   "@argent/cli": CLI_ENTRY,
   "@argent/configuration-core": CONFIGURATION_ENTRY,
   "@argent/telemetry": TELEMETRY_ENTRY,
+  "@argent/device-providers": DEVICE_PROVIDERS_ENTRY,
 };
 
 // Build-time constants for @argent/telemetry. An unset ARGENT_OTEL_INGEST_TOKEN
@@ -152,6 +161,24 @@ const TRACECFG_SRC = path.resolve(
   "packages/native-devtools-android/assets/argent.tracecfg.pbtxt"
 );
 const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt");
+// Nothing imports these, so esbuild cannot bundle them. The executor resolves
+// the runner from its own `__dirname` and the runner resolves both watchdogs
+// from its module URL, so all three must land flat beside tool-server.cjs.
+const FLOW_SCRIPT_SRC_DIR = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/tool-server/src/tools/flows/script"
+);
+const FLOW_SCRIPT_FILES = [
+  "flow-script-runner.mjs",
+  "flow-script-watchdog-lifeline.mjs",
+  "flow-script-watchdog-deadline.mjs",
+];
+const IOS_RUNNER_SRC = path.resolve(WORKSPACE_ROOT, "packages/ios-device-runner/ArgentRunner");
+const IOS_RUNNER_DEST = path.resolve(__dirname, "../dist/ios-device-runner/ArgentRunner");
+// Local Xcode state that must never ship: per-user schemes/breakpoints and
+// SwiftPM build output. Everything else in the project tree is source the
+// user-side xcodebuild needs.
+const IOS_RUNNER_SKIP_DIRS = new Set(["xcuserdata", ".build", ".swiftpm"]);
 
 // Declarative copy plan for copyAsset() below.
 //
@@ -176,6 +203,8 @@ const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt")
  * @property {string} [countExt]
  * @property {(src: string) => number} [count]
  * @property {string} [hint]
+ * @property {(src: string) => boolean} [filter] dir-only: cpSync filter, false skips the entry
+ * @property {boolean} [clean] dir-only: rm the dest first, so a re-bundle never merges stale files
  */
 /** @type {Asset[]} */
 const ASSETS = [
@@ -244,6 +273,26 @@ const ASSETS = [
     copiedLabel: "native dylib(s)",
     missLabel: "Native devtools dylibs",
     countExt: ".dylib",
+  },
+  // The physical-iOS runner's Xcode project, SOURCES not binaries: the runner
+  // must be signed with each user's own Apple team on each user's own Mac
+  // (a development profile whitelists device UDIDs, so no prebuilt can exist),
+  // and runner-artifact.ts resolves this exact dest relative to the bundled
+  // tool-server. Cleaned first so a re-bundle never merges a stale tree.
+  {
+    kind: "dir",
+    src: IOS_RUNNER_SRC,
+    dest: IOS_RUNNER_DEST,
+    required: true,
+    clean: true,
+    filter: (src) => !IOS_RUNNER_SKIP_DIRS.has(path.basename(src)),
+    copiedLabel: "iOS device-runner source file(s)",
+    missLabel: "iOS device-runner Xcode project",
+    // countExt reads one directory level; the Swift files sit two deep.
+    count: (src) =>
+      fs
+        .readdirSync(src, { recursive: true })
+        .filter((f) => typeof f === "string" && f.endsWith(".swift")).length,
   },
   // Android helper manifest.json: helperManifest()/bundledHelperApkPath() read it
   // at runtime, and the version-stamped APK filename comes from its versionName
@@ -343,6 +392,18 @@ const ASSETS = [
         .readdirSync(src, { withFileTypes: true })
         .filter((e) => e.isFile() && e.name.endsWith(".md")).length,
   },
+  ...FLOW_SCRIPT_FILES.map(
+    (name) =>
+      /** @type {Asset} */ ({
+        kind: "file",
+        src: path.join(FLOW_SCRIPT_SRC_DIR, name),
+        dest: path.resolve(__dirname, "../dist", name),
+        required: true,
+        copiedLabel: name,
+        missLabel: name,
+        hint: "This file is required for e2e test `script` steps.",
+      })
+  ),
 ];
 
 /**
@@ -398,7 +459,8 @@ function copyAsset(a) {
   }
 
   if (a.kind === "dir") {
-    fs.cpSync(a.src, a.dest, { recursive: true });
+    if (a.clean) fs.rmSync(a.dest, { recursive: true, force: true });
+    fs.cpSync(a.src, a.dest, { recursive: true, filter: a.filter });
   } else {
     fs.mkdirSync(path.dirname(a.dest), { recursive: true });
     fs.copyFileSync(a.src, a.dest);
@@ -452,6 +514,23 @@ export const PERFETTO_VERSION = "${version}";
   console.log(`✓ Generated bundled-meta.ts (perfetto=${version})`);
 }
 
+/** The bundles dist/cli.js lazy-imports for its subcommands. */
+const DISPATCHER_ESM_BUNDLES = [
+  { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
+  { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
+  // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
+  // proxy); esbuild can't inline a .node. Absent install → loadNodePty() returns
+  // null → lens falls back to a new terminal window.
+  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
+];
+
+if (process.argv.includes("--esm-only")) {
+  for (const b of DISPATCHER_ESM_BUNDLES) {
+    buildBundle({ ...b, format: "esm" });
+  }
+  process.exit(0);
+}
+
 // Must run before esbuild, so PERFETTO_VERSION is inlined into the bundles.
 generateBundledMeta();
 
@@ -500,6 +579,13 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // back to a literal and then chokes on dtrace-provider's own dynamic native
 // binding require. External restores bunyan's intent: the published package
 // never declares it, so the require misses and bunyan nulls it out.
+//
+// `sharp` is the optional Chromium screenshot post-processor: the tool-server
+// `require("sharp")`s it inside a try/catch and skips scale / rotation when it
+// is absent. It is never declared here, so in CI esbuild leaves the require
+// alone — but a developer with sharp in node_modules (e.g. installed to test
+// that path) would have the bundle inline its native addon and fail. External
+// keeps the runtime require resolving against whatever the user installed.
 buildBundle({
   entry: TOOLS_ENTRY,
   out: OUT_FILE,
@@ -512,6 +598,7 @@ buildBundle({
     "@fails-components/webtransport",
     "@fails-components/webtransport-transport-http3-quiche",
     "dtrace-provider",
+    "sharp",
   ],
 });
 
@@ -520,15 +607,18 @@ buildBundle({
 //     lazy-imports it, so its workspace dep needn't resolve in the published pkg);
 //   - MCP server: the @modelcontextprotocol/sdk ESM export paths resolve.
 const ESM_BUNDLES = [
-  { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
-  { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
-  // node-pty is a native addon `argent lens` loads at runtime (the agent PTY
-  // proxy); esbuild can't inline a .node. Absent install → loadNodePty() returns
-  // null → lens falls back to a new terminal window.
-  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands", external: ["node-pty"] },
+  ...DISPATCHER_ESM_BUNDLES,
+  // `@swmansion/argent/client`, the programmatic tool-server client.
+  { entry: CLIENT_ENTRY, out: CLIENT_OUT_FILE, label: "client" },
 ];
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });
+}
+// tsc's map describes its own client.js, which the bundle above replaced. The
+// generated tool args are types only, so only their .d.ts ships.
+fs.rmSync(`${CLIENT_OUT_FILE}.map`, { force: true });
+for (const ext of [".js", ".js.map"]) {
+  fs.rmSync(path.join(path.dirname(CLIENT_OUT_FILE), `tool-args.generated${ext}`), { force: true });
 }
 
 for (const a of ASSETS) {
@@ -562,18 +652,6 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
     fs.copyFileSync(src, dest);
     fs.chmodSync(dest, 0o755);
     console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
-    // Screen-sharing agent resources (jar + per-ABI .so) the `android_device`
-    // controller pushes to a connected phone. simulator-server resolves them
-    // relative to its working directory, which the spawn sets to its own
-    // platform dir. Optional: physical-device support degrades without them.
-    const resourcesSrc = path.join(BIN_SRC_ROOT, platform, "resources");
-    if (fs.existsSync(resourcesSrc)) {
-      const resourcesDest = path.join(destDir, "resources");
-      fs.cpSync(resourcesSrc, resourcesDest, { recursive: true });
-      console.log(
-        `✓ Copied screen-sharing agent resources (${platform}) → ${path.relative(process.cwd(), resourcesDest)}`
-      );
-    }
   } else if (platform === "darwin" && process.platform === "darwin") {
     throw new Error(
       `simulator-server binary not found at ${src}.\n` +
@@ -584,10 +662,24 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
   }
 }
 
-// The Android helper APK is the only Android native artifact left (the trace
-// processor ships as WASM under assets/trace-processor/). Its filename is
-// version-stamped from manifest.json's versionName (see bundledHelperApkPath());
-// it is required at runtime, so a missing one throws.
+// Screen-sharing agent resources (host-independent jar + per-ABI .so the
+// `android_device` controller pushes to a connected phone over adb): one shared
+// copy at the bin root; simulatorServerRunDir() points the spawn cwd here.
+// Optional: physical-device support degrades without them.
+const RESOURCES_SRC = path.join(BIN_SRC_ROOT, "resources");
+if (fs.existsSync(RESOURCES_SRC)) {
+  fs.cpSync(RESOURCES_SRC, path.join(BIN_DIR, "resources"), { recursive: true });
+  console.log(
+    `✓ Copied screen-sharing agent resources → ${path.relative(process.cwd(), BIN_DIR)}/resources`
+  );
+} else {
+  console.warn(`⚠ screen-sharing agent resources not found at ${RESOURCES_SRC} — skipping`);
+}
+
+// The Android helper APK's filename is version-stamped from manifest.json's
+// versionName (see bundledHelperApkPath()); it is required at runtime, so a
+// missing one throws. (The trace processor ships as WASM under
+// assets/trace-processor/.)
 const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
 const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
 const apkSrc = path.join(ANDROID_APK_SRC_DIR, apkName);
@@ -600,4 +692,18 @@ if (fs.existsSync(apkSrc)) {
       `Run: bash scripts/download-native-binaries.sh (fetches from argent-private-releases)\n` +
       `or: bash packages/native-devtools-android/scripts/build.sh`
   );
+}
+
+// The network inspector agent is optional at runtime: without it,
+// native-network-logs reports the Android app as not attachable and points to
+// the JS layer. So a local build without it only warns; publish-npm.yml fails a
+// release that lacks it.
+const NETWORK_INSPECTOR_SRC = path.join(ANDROID_APK_SRC_DIR, "network-inspector");
+if (fs.existsSync(NETWORK_INSPECTOR_SRC)) {
+  fs.cpSync(NETWORK_INSPECTOR_SRC, path.join(BIN_DIR, "network-inspector"), { recursive: true });
+  console.log(
+    `✓ Copied network inspector agent → ${path.relative(process.cwd(), BIN_DIR)}/network-inspector`
+  );
+} else {
+  console.warn(`⚠ network inspector agent not found at ${NETWORK_INSPECTOR_SRC} — skipping`);
 }

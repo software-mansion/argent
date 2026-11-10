@@ -1,12 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Registry } from "@argent/registry";
 import { attachRegistryEventLogger, createToolServerEventLog } from "../src/event-log";
 
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
 function eventLogPath(): string {
-  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "argent-events-")), "events.jsonl");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-events-"));
+  tempDirs.push(dir);
+  return path.join(dir, "events.jsonl");
 }
 
 function readEvents(filePath: string): Array<Record<string, unknown>> {

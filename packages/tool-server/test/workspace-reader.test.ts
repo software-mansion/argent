@@ -34,8 +34,16 @@ import {
 
 let tempDir: string;
 
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) await rm(dir, { recursive: true, force: true });
+});
+
 async function createTempDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "ws-reader-test-"));
+  const dir = await mkdtemp(join(tmpdir(), "ws-reader-test-"));
+  tempDirs.push(dir);
+  return dir;
 }
 
 async function writeJson(dir: string, name: string, data: unknown) {
@@ -172,10 +180,6 @@ deploy.staging:
 describe("readWorkspaceSnapshot", () => {
   beforeEach(async () => {
     tempDir = await createTempDir();
-  });
-
-  afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true });
   });
 
   it("returns correct snapshot for a minimal RN project", async () => {
@@ -379,7 +383,6 @@ module.exports = getDefaultConfig(__dirname);`
       await writeText(dir, lockName, "");
       const snap = await readWorkspaceSnapshot(dir);
       expect(snap.lockfile).toBe(lockName);
-      await rm(dir, { recursive: true, force: true });
     }
   });
 

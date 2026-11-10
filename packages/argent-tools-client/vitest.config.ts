@@ -4,8 +4,8 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     globals: true,
-    // Strips the developer's ARGENT_* overrides, which the launcher would otherwise pass
-    // through to a real spawned tool-server child.
-    setupFiles: ["test/setup/clear-argent-env.ts"],
+    // Suite-wide guards, one for each direction the environment leaks; each
+    // setup file documents why it exists.
+    setupFiles: ["test/setup/clear-argent-env.ts", "test/setup/assert-env-restored.ts"],
   },
 });

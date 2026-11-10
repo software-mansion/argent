@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildDyldInsertLibraries } from "../src/blueprints/native-devtools";
+import {
+  buildDyldInsertLibraries,
+  withdrawDyldInsertLibraries,
+} from "../src/blueprints/native-devtools";
 
 describe("buildDyldInsertLibraries", () => {
   const tempDirs: string[] = [];
@@ -48,7 +51,7 @@ describe("buildDyldInsertLibraries", () => {
     expect(result).toBe(["@loader_path/Other.dylib", unrelated, currentBootstrap].join(":"));
   });
 
-  it("strips legacy libInjectionBootstrap.dylib paths when merging with the renamed bootstrap", () => {
+  it("strips stale legacy libInjectionBootstrap.dylib paths when merging with the renamed bootstrap", () => {
     const currentBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
     const legacyBootstrap = "/tmp/old/libInjectionBootstrap.dylib";
     const thirdParty = makeTempFile("libSimCamLoader.dylib");
@@ -86,5 +89,78 @@ describe("buildDyldInsertLibraries", () => {
 
     // Both truncated entries stripped (not on disk), bootstrap deduped, thirdParty preserved
     expect(result).toBe([thirdParty, currentBootstrap].join(":"));
+  });
+});
+
+describe("withdrawDyldInsertLibraries", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function makeTempFile(name: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "native-devtools-env-"));
+    tempDirs.push(dir);
+    const filePath = path.join(dir, name);
+    fs.writeFileSync(filePath, "");
+    return filePath;
+  }
+
+  /**
+   * The case this exists for; we armed a simulator a device provider went on to
+   * claim. Its bootstrap has to survive, because it is the injection the
+   * provider's app is about to load.
+   */
+  it("removes our bootstrap and leaves a provider's in place", () => {
+    const ourBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
+    const providerBootstrap = makeTempFile("libInjectionBootstrap.dylib");
+
+    expect(
+      withdrawDyldInsertLibraries([providerBootstrap, ourBootstrap].join(":"), ourBootstrap)
+    ).toBe(providerBootstrap);
+  });
+
+  /**
+   * `null`, not `""`; dyld reads an empty entry as a malformed list, so the
+   * variable has to be unset rather than blanked.
+   */
+  it("asks for the variable to be unset when only our entries were in it", () => {
+    const ourBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
+    const staleBootstrap = "/tmp/old/location/libArgentInjectionBootstrap.dylib";
+
+    expect(
+      withdrawDyldInsertLibraries([staleBootstrap, ourBootstrap].join(":"), ourBootstrap)
+    ).toBe(null);
+    expect(withdrawDyldInsertLibraries("", ourBootstrap)).toBe(null);
+  });
+
+  it("keeps third-party and loader-path entries we never owned", () => {
+    const ourBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
+    const thirdParty = makeTempFile("libSimCamLoader.dylib");
+
+    expect(
+      withdrawDyldInsertLibraries(
+        [thirdParty, "@loader_path/Other.dylib", ourBootstrap].join(":"),
+        ourBootstrap
+      )
+    ).toBe([thirdParty, "@loader_path/Other.dylib"].join(":"));
+  });
+
+  it("is a no-op on an environment that never carried us", () => {
+    const ourBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
+    const thirdParty = makeTempFile("libSimCamLoader.dylib");
+
+    expect(withdrawDyldInsertLibraries(thirdParty, ourBootstrap)).toBe(thirdParty);
+  });
+
+  it("undoes exactly what arming did", () => {
+    const ourBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
+    const thirdParty = makeTempFile("libSimCamLoader.dylib");
+
+    const armed = buildDyldInsertLibraries(thirdParty, ourBootstrap);
+    expect(withdrawDyldInsertLibraries(armed, ourBootstrap)).toBe(thirdParty);
   });
 });

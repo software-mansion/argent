@@ -1,5 +1,11 @@
 export { TypedEventEmitter } from "./event-emitter";
-export { ServiceState, isLiveServiceState } from "./types";
+export {
+  CLIENT_SECRETS_HEADER,
+  E2E_DIR_CLIENT_HEADER,
+  LINKED_CALL_HEADER,
+  ServiceState,
+  isLiveServiceState,
+} from "./types";
 export type {
   ServiceEvents,
   ServiceInstance,
@@ -31,18 +37,61 @@ export {
   CLIENT_FILE_MARKER,
   FLOW_NAME_PATTERN,
   FLOW_FILE_NAME_PATTERN,
+  SCRIPT_FILE_NAME_PATTERN,
+  TOOL_FILE_EXTENSIONS,
   isFileInputWire,
   isClientFileDirective,
   interpolateFileInputPath,
+  hasToolFileExtension,
+  isClientFileArgument,
+  toolStepFiles,
 } from "./file-inputs";
 export type {
   FileInputWire,
   FileInputKind,
   FileInputSpec,
+  FileInputMember,
   ResolvedFileInput,
+  ResolvedMember,
   ClientFileDirective,
+  ToolStepFile,
 } from "./file-inputs";
+export {
+  baselineKeyFor,
+  canonicalFlowPath,
+  classifyOnDiskSpelling,
+  collectFlowRequests,
+  completeRunExtension,
+  flowMemberKey,
+  MAX_RUN_DEPTH,
+  nestedFlowTarget,
+  resolveFlowRelativeFile,
+} from "./flow-file-refs";
+export type { NestedFlowTarget, OnDiskSpelling, ResolvedFlowRelativeFile } from "./flow-file-refs";
+export {
+  E2E_DIR,
+  E2E_DIRS,
+  LEGACY_E2E_DIRS,
+  e2eDirFor,
+  e2eDirProject,
+  e2eDirsFor,
+  e2eFileCandidates,
+  e2eRunFallbackDirs,
+  e2eShadowWarning,
+  pickE2eFile,
+  resolveE2eFile,
+} from "./e2e-dirs";
+export type { ResolvedE2eFile } from "./e2e-dirs";
 export { parseURN } from "./urn";
+export {
+  TOOL_ID_ALIASES,
+  TOOL_PARAM_ALIASES,
+  ToolParamAliasError,
+  canonicalToolArgs,
+  canonicalToolId,
+  toolParamAliases,
+  withFormerParamSpecs,
+} from "./tool-ids";
 export {
   ServiceNotFoundError,
   ServiceInitializationError,

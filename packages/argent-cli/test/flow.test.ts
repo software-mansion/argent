@@ -4,7 +4,8 @@ import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { Writable } from "node:stream";
-import { exitAfterFlush, flow, parseRunArgs } from "../src/flow.js";
+import { e2e as flow, exitAfterFlush, parseRunArgs } from "../src/e2e.js";
+import { e2e, flow as flowAlias } from "../src/index.js";
 import { ToolInvocationError } from "@argent/tools-client";
 import { FlagParseException } from "../src/flag-parser.js";
 import type { ResolvedToolsUrl } from "@argent/tools-client";
@@ -19,12 +20,10 @@ const materializeArtifactsMock = vi.hoisted(() =>
   vi.fn(async (data: unknown) => ({ result: data, images: [] }))
 );
 const getResolvedToolsUrlMock = vi.hoisted(() =>
-  vi.fn(
-    async (): Promise<ResolvedToolsUrl> => ({
-      url: null,
-      source: "none",
-    })
-  )
+  vi.fn(async (): Promise<ResolvedToolsUrl> => ({
+    url: null,
+    source: "none",
+  }))
 );
 
 vi.mock("@argent/tools-client", async (importOriginal) => ({
@@ -46,8 +45,11 @@ interface StepFixture {
   flow?: string;
   message?: string;
   snapshotKey?: string;
+  target?: string;
+  scriptLog?: string;
+  scriptLogTruncated?: boolean;
   artifacts?: Record<string, unknown>;
-  /** Wire-only tool-step payload; the CLI StepReport type has no such field. */
+  /** Tool-step payload; a nested run's report for e2e-execute. */
   result?: unknown;
 }
 
@@ -88,6 +90,33 @@ const caseInsensitiveFs = ((): boolean => {
     fs.rmSync(probe, { recursive: true, force: true });
   }
 })();
+
+/** What fetch rejects with when nothing listens at the tool-server's address. */
+function connectRefused(): TypeError {
+  return new TypeError("fetch failed", {
+    cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:47899"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
+  });
+}
+
+const UNREACHABLE_ENV_MESSAGE =
+  "Could not reach the tool-server at http://127.0.0.1:47899 (set by ARGENT_TOOLS_URL): " +
+  "connection refused.\nStart that tool-server, or unset ARGENT_TOOLS_URL to use the local one.";
+
+const UPLOAD_REFUSED_MESSAGE =
+  "Upload to http://127.0.0.1:47899/upload failed: 413 Request Entity Too Large. A proxy " +
+  "between the client and the tool-server limits the size of a request body. The proxy must " +
+  "accept a body of at least 1 MB on POST /upload, for example client_max_body_size 1m in nginx";
+
+/** What the tools client throws when a proxy refuses a fragment's upload, before it sends the flow. */
+function uploadRefused(): ToolInvocationError {
+  return new ToolInvocationError(UPLOAD_REFUSED_MESSAGE, {
+    errorCode: "FILE_INPUT_UPLOAD_FAILED",
+    errorKind: "validation",
+  });
+}
 
 function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const steps: StepFixture[] = [{ index: 0, kind: "tap", status: "pass" }];
@@ -172,6 +201,13 @@ describe("parseRunArgs", () => {
     );
   });
 
+  it("throws on a separately supplied empty value, like the --flag= form", () => {
+    for (const flag of ["--device", "--platform", "--output"]) {
+      expect(() => parseRunArgs(["checkout.yaml", flag, ""])).toThrow(FlagParseException);
+      expect(() => parseRunArgs(["checkout.yaml", flag, ""])).toThrow(`${flag} requires a value`);
+    }
+  });
+
   it("accepts the --flag=value form for every value-taking flag", () => {
     expect(
       parseRunArgs(["checkout.yaml", "--device=SIM-1", "--platform=ios", "--output=dir"])
@@ -238,7 +274,7 @@ describe("parseRunArgs", () => {
 
   it("rejects extra positional arguments", () => {
     expect(() => parseRunArgs(["checkout.yaml", "extra.yaml"])).toThrow(
-      "flow run accepts one flow name, YAML file path, or directory path"
+      "e2e run accepts one e2e test name, YAML file path, or directory path"
     );
   });
 
@@ -256,7 +292,7 @@ describe("parseRunArgs", () => {
     });
     // The marker relaxes flag parsing, not the one-positional rule.
     expect(() => parseRunArgs(["--", "a", "b"])).toThrow(
-      "flow run accepts one flow name, YAML file path, or directory path"
+      "e2e run accepts one e2e test name, YAML file path, or directory path"
     );
   });
 
@@ -264,12 +300,12 @@ describe("parseRunArgs", () => {
     // A truthiness test here would take "extra.yaml" as the flow and run a file
     // the operator never named at that position.
     expect(() => parseRunArgs(["", "extra.yaml"])).toThrow(
-      "flow run accepts one flow name, YAML file path, or directory path"
+      "e2e run accepts one e2e test name, YAML file path, or directory path"
     );
   });
 });
 
-describe("argent flow run", () => {
+describe("argent e2e run", () => {
   let tempRoot: string;
   let checkoutPath: string;
   let bundleDirPath: string;
@@ -333,7 +369,7 @@ describe("argent flow run", () => {
     errSpy.mockRestore();
   });
 
-  it("resolves the YAML path and forwards flags to flow-execute", async () => {
+  it("resolves the YAML path and forwards flags to e2e-execute", async () => {
     // Downward-relative from the flow's own directory: a relative spelling
     // that climbs out of cwd would contain ".." segments, which the CLI now
     // rejects. process.cwd() after chdir is fully symlink-resolved (macOS
@@ -353,9 +389,9 @@ describe("argent flow run", () => {
     }
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
-      "flow-execute",
+      "e2e-execute",
       {
-        flow_path: path.join(runRoot, "checkout.yaml"),
+        e2e_test_path: path.join(runRoot, "checkout.yaml"),
         project_root: runRoot,
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -365,6 +401,61 @@ describe("argent flow run", () => {
       { onProgress: expect.any(Function) }
     );
     expect(logs.join("\n")).toContain("PASS — 1 passed, 0 failed, 0 errored, 0 skipped");
+  });
+
+  it("prints a script step's log live, under the step line the event produced", async () => {
+    const steps: StepFixture[] = [
+      { index: 0, kind: "echo", status: "pass", message: "seeding" },
+      {
+        index: 1,
+        kind: "script",
+        status: "pass",
+        target: "scripts/seed.mjs",
+        scriptLog: "creating order\norder 4711 created\n",
+        scriptLogTruncated: true,
+      },
+    ];
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of steps) opts?.onProgress?.(step);
+        return { data: report({ steps, passed: 1 }) };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+
+    const out = logs.join("\n");
+    expect(out).toContain("✓  1 script scripts/seed.mjs");
+    expect(out).toContain("       │ creating order");
+    expect(out).toContain("       │ order 4711 created");
+    expect(out).toContain("       │ … output truncated");
+    expect(out.match(/script scripts\/seed\.mjs/g)).toHaveLength(1);
+    expect(out).toContain("PASS (started on SIM-1) — 1 passed");
+  });
+
+  it("repeats a single run's failing step above its verdict", async () => {
+    const steps: StepFixture[] = [
+      { index: 0, kind: "tap", status: "pass", target: '"Cart"' },
+      { index: 1, kind: "tap", status: "fail", target: '"Checkout"', reason: "no match" },
+      { index: 2, kind: "await", status: "skip", target: 'visible "Paid"' },
+    ];
+    toolsClientMock.callTool.mockImplementation(
+      async (_tool: string, _payload: unknown, opts?: { onProgress?: (e: unknown) => void }) => {
+        for (const step of steps) opts?.onProgress?.(step);
+        return { data: report({ steps, ok: false, passed: 1, failed: 1, skipped: 1 }) };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.slice(-5)).toEqual([
+      '  ·  3 await visible "Paid"',
+      "",
+      '  ✗ step 2 tap "Checkout"',
+      "    no match",
+      "\nFAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 1 skipped",
+    ]);
+    expect(logs.join("\n")).not.toContain("re-run:");
   });
 
   it("exits 2 without calling the tool when --device is missing its value", async () => {
@@ -383,15 +474,15 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain("--platform requires a value");
   });
 
-  it("forwards --flag=value forms to flow-execute like the space-separated ones", async () => {
+  it("forwards --flag=value forms to e2e-execute like the space-separated ones", async () => {
     await expect(
       flow(["run", checkoutPath, "--platform=ios", "--device=SIM-1"], opts)
     ).rejects.toThrow("process.exit:0");
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
-      "flow-execute",
+      "e2e-execute",
       {
-        flow_path: checkoutPath,
+        e2e_test_path: checkoutPath,
         project_root: process.cwd(),
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -420,8 +511,26 @@ describe("argent flow run", () => {
   it("exits 2 when no flow name or path is given", async () => {
     await expect(flow(["run"], opts)).rejects.toThrow("process.exit:2");
     expect(errs.join("\n")).toContain(
-      "requires a flow name, a YAML file path, or a directory path"
+      "requires an e2e test name, a YAML file path, or a directory path"
     );
+    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+  });
+
+  // A --json reader parses stderr as records, so a usage error there is one
+  // record and no help, whichever token the parser stopped at.
+  it.each([
+    [["run", "checkout", "--json", "--device"], "--device requires a value"],
+    [["run", "checkout", "--json", "--bogus"], "Unknown flag: --bogus"],
+    [
+      ["run", "--json"],
+      "argent e2e run <test|test.yaml|dir> requires an e2e test name, a YAML file path, or a directory path.",
+    ],
+  ])("writes only an error record for the usage error in %j", async (argv, message) => {
+    await expect(flow(argv, opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.join("\n").split("\n")).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({ event: "error", error: message });
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
@@ -438,12 +547,12 @@ describe("argent flow run", () => {
     }
 
     expect(toolsClientMock.callTool).toHaveBeenCalledWith(
-      "flow-execute",
+      "e2e-execute",
       {
         // A name is sent as the path it resolves to, never as a `name` source:
         // one identity keys the report, __baselines__/, and --output whichever
         // form the operator typed.
-        flow_path: path.join(runRoot, ".argent", "flows", "saved.yaml"),
+        e2e_test_path: path.join(runRoot, ".argent", "flows", "saved.yaml"),
         project_root: runRoot,
         prerequisiteAcknowledged: true,
         device: "SIM-1",
@@ -452,12 +561,13 @@ describe("argent flow run", () => {
     );
   });
 
-  it("resolves a name and its spelled-out path to the same flow_path", async () => {
+  it("resolves a name and its spelled-out path to the same e2e_test_path", async () => {
     const previousCwd = process.cwd();
     const sent = async (ref: string): Promise<unknown> => {
       toolsClientMock.callTool.mockClear();
       await expect(flow(["run", ref], opts)).rejects.toThrow("process.exit:0");
-      return (toolsClientMock.callTool.mock.calls[0]![1] as { flow_path: string }).flow_path;
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string })
+        .e2e_test_path;
     };
     try {
       process.chdir(tempRoot);
@@ -465,6 +575,174 @@ describe("argent flow run", () => {
     } finally {
       process.chdir(previousCwd);
     }
+  });
+
+  describe("names across .argent/e2e and .argent/flows", () => {
+    let project: string;
+
+    beforeAll(async () => {
+      project = path.join(tempRoot, "both-dirs-project");
+      await fsp.mkdir(path.join(project, ".argent", "e2e"), { recursive: true });
+      await fsp.mkdir(path.join(project, ".argent", "flows"), { recursive: true });
+      for (const [dir, name] of [
+        ["e2e", "fresh"],
+        ["e2e", "both"],
+        ["flows", "both"],
+        ["flows", "old"],
+      ]) {
+        await fsp.writeFile(path.join(project, ".argent", dir!, `${name}.yaml`), "steps: []\n");
+      }
+    });
+
+    async function runIn(argv: string[]): Promise<string> {
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(project);
+        await expect(flow(argv, opts)).rejects.toThrow("process.exit:0");
+      } finally {
+        process.chdir(previousCwd);
+      }
+      return (toolsClientMock.callTool.mock.calls[0]![1] as { e2e_test_path: string })
+        .e2e_test_path;
+    }
+
+    it("runs a name saved under .argent/e2e", async () => {
+      const root = await fsp.realpath(project);
+      expect(await runIn(["run", "fresh"])).toBe(path.join(root, ".argent", "e2e", "fresh.yaml"));
+      expect(errs).toEqual([]);
+    });
+
+    it("runs a name saved only under the legacy .argent/flows", async () => {
+      const root = await fsp.realpath(project);
+      expect(await runIn(["run", "old"])).toBe(path.join(root, ".argent", "flows", "old.yaml"));
+      expect(errs).toEqual([]);
+    });
+
+    it("reads .argent/e2e first and warns about the shadowed legacy file", async () => {
+      const root = await fsp.realpath(project);
+      expect(await runIn(["run", "both"])).toBe(path.join(root, ".argent", "e2e", "both.yaml"));
+      expect(errs).toEqual([
+        "warning: .argent/flows/both.yaml is not used: .argent/e2e/both.yaml has the same name " +
+          "and is read first.",
+      ]);
+    });
+
+    it("gives the shadow warning as a JSON record under --json", async () => {
+      await runIn(["run", "both", "--json"]);
+      expect(errs.map((line) => JSON.parse(line))).toEqual([
+        {
+          event: "warning",
+          warning:
+            ".argent/flows/both.yaml is not used: .argent/e2e/both.yaml has the same name and " +
+            "is read first.",
+        },
+      ]);
+      expect(JSON.parse(logs.join("\n"))).toMatchObject({ ok: true });
+    });
+
+    // A nested `e2e-execute name:` resolves on the tool-server, which reports
+    // its own shadow warning only in that step's result, at any depth.
+    const shadowedNested =
+      ".argent/flows/frag.yaml is not used: .argent/e2e/frag.yaml is read first.";
+    const nestedRun = (): Record<string, unknown> =>
+      report({
+        steps: [
+          {
+            index: 0,
+            kind: "tool",
+            status: "pass",
+            tool: "flow-execute",
+            result: report({
+              steps: [
+                {
+                  index: 0,
+                  kind: "tool",
+                  status: "pass",
+                  tool: "e2e-execute",
+                  result: report({ warning: shadowedNested }),
+                },
+              ],
+              warning: shadowedNested,
+            }),
+          },
+        ],
+      });
+
+    it("prints a nested step's shadow warning once on stderr", async () => {
+      toolsClientMock.callTool.mockResolvedValue({ data: nestedRun() });
+      await runIn(["run", "fresh"]);
+      expect(errs).toEqual([`warning: ${shadowedNested}`]);
+    });
+
+    it("gives a nested step's warning as a JSON record under --json", async () => {
+      toolsClientMock.callTool.mockResolvedValue({ data: nestedRun() });
+      await runIn(["run", "fresh", "--json"]);
+      expect(errs.map((line) => JSON.parse(line))).toEqual([
+        { event: "warning", warning: shadowedNested },
+      ]);
+    });
+
+    it("prints nested step warnings for each test of a directory run", async () => {
+      toolsClientMock.callTool.mockResolvedValue({ data: nestedRun() });
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(project);
+        await expect(flow(["run", ".argent/e2e"], opts)).rejects.toThrow("process.exit:0");
+      } finally {
+        process.chdir(previousCwd);
+      }
+      expect(errs).toEqual([`warning: ${shadowedNested}`, `warning: ${shadowedNested}`]);
+    });
+  });
+
+  // `argent flow` is a silent alias (D7): every mode prints exactly what
+  // `argent e2e` prints and exits the same way.
+  it.each([
+    ["a passing run", ["run", "saved"], () => report()],
+    ["a passing run under --json", ["run", "saved", "--json"], () => report()],
+    ["a passing run under --json-stream", ["run", "saved", "--json-stream"], () => report()],
+    [
+      "a failing run",
+      ["run", "saved"],
+      () =>
+        report({
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ index: 0, kind: "tap", status: "fail", reason: "not found" }],
+        }),
+    ],
+    [
+      "a failing run under --json",
+      ["run", "saved", "--json"],
+      () => report({ ok: false, passed: 0, failed: 1 }),
+    ],
+    ["a missing name", ["run", "nosuch"], () => report()],
+    ["a usage error under --json", ["run", "--json"], () => report()],
+    ["help", ["--help"], () => report()],
+    ["list", ["list"], () => report()],
+    ["an unknown subcommand", ["frobnicate"], () => report()],
+  ])("prints the same for `flow` and `e2e` on %s", async (_label, argv, data) => {
+    const capture = async (command: typeof e2e) => {
+      logs.length = 0;
+      errs.length = 0;
+      toolsClientMock.callTool.mockResolvedValue({ data: data() });
+      let exit = "returned";
+      const previousCwd = process.cwd();
+      try {
+        process.chdir(tempRoot);
+        await command(argv, opts);
+      } catch (err) {
+        exit = (err as Error).message;
+      } finally {
+        process.chdir(previousCwd);
+      }
+      return { logs: [...logs], errs: [...errs], exit };
+    };
+    const viaE2e = await capture(e2e);
+    const viaFlow = await capture(flowAlias);
+    expect(viaFlow).toEqual(viaE2e);
+    expect(viaE2e.logs.join("\n") + viaE2e.errs.join("\n")).not.toContain("argent flow");
   });
 
   it("says where a name looked when no flow is saved under it", async () => {
@@ -478,9 +756,9 @@ describe("argent flow run", () => {
     }
 
     expect(errs.join("\n")).toContain(
-      `Flow file not found: ${path.join(runRoot, ".argent", "flows", "nosuchflow.yaml")}`
+      `E2E test file not found: ${path.join(runRoot, ".argent", "e2e", "nosuchflow.yaml")}`
     );
-    expect(errs.join("\n")).toContain("argent flow list");
+    expect(errs.join("\n")).toContain("argent e2e list");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -499,13 +777,15 @@ describe("argent flow run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(errs.join("\n")).toContain(`Flow file not found: ${path.join(runRoot, "saved.yaml")}`);
+    expect(errs.join("\n")).toContain(
+      `E2E test file not found: ${path.join(runRoot, "saved.yaml")}`
+    );
     expect(errs.join("\n")).not.toContain(path.join(".argent", "flows", "saved.yaml"));
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     // Refused, but not blindly: the flow it names is saved one directory down,
     // so the message points at the name form rather than leaving the operator
     // to guess why a file they can see was not found.
-    expect(errs.join("\n")).toContain("did you mean: argent flow run saved");
+    expect(errs.join("\n")).toContain("did you mean: argent e2e run saved");
   });
 
   it("does not offer the name form for a missing path with no saved flow behind it", async () => {
@@ -517,7 +797,7 @@ describe("argent flow run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(errs.join("\n")).toContain("Flow file not found");
+    expect(errs.join("\n")).toContain("E2E test file not found");
     // Matched case-insensitively: every other recovery in this file spells the
     // phrase "Did you mean", so a capitalized hint must fail this too.
     expect(errs.join("\n")).not.toMatch(/did you mean/i);
@@ -538,7 +818,7 @@ describe("argent flow run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(errs.join("\n")).toContain("did you mean: argent flow run saved");
+    expect(errs.join("\n")).toContain("did you mean: argent e2e run saved");
     expect(errs.join("\n")).not.toContain("run Saved");
   });
 
@@ -557,11 +837,9 @@ describe("argent flow run", () => {
 
       // The operator typed a name, so the recovery is a name — not a path into a
       // directory they never spelled out.
-      expect(errs.join("\n")).toContain("Flow path must name the file as it appears on disk");
-      expect(errs.join("\n")).toContain("Did you mean: argent flow run saved");
-      expect(errs.join("\n")).not.toContain(
-        `Did you mean: argent flow run ${path.join(".argent")}`
-      );
+      expect(errs.join("\n")).toContain("E2E test path must name the file as it appears on disk");
+      expect(errs.join("\n")).toContain("Did you mean: argent e2e run saved");
+      expect(errs.join("\n")).not.toContain(`Did you mean: argent e2e run ${path.join(".argent")}`);
       expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     }
   );
@@ -580,7 +858,7 @@ describe("argent flow run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(errs.join("\n")).toContain("Flow file not found");
+    expect(errs.join("\n")).toContain("E2E test file not found");
     expect(errs.join("\n")).not.toMatch(/did you mean/i);
   });
 
@@ -597,15 +875,15 @@ describe("argent flow run", () => {
     // a different file from the ./saved this argument names, and one that would
     // actually run. The recovery must not re-point the operator there.
     expect(errs.join("\n")).toContain("must not end in a path separator");
-    expect(errs.join("\n")).toContain(`Did you mean: argent flow run .${path.sep}saved`);
-    expect(errs.join("\n")).not.toMatch(/Did you mean: argent flow run saved$/m);
+    expect(errs.join("\n")).toContain(`Did you mean: argent e2e run .${path.sep}saved`);
+    expect(errs.join("\n")).not.toMatch(/Did you mean: argent e2e run saved$/m);
   });
 
   it("names the flow-name charset for a bare argument that is neither a name nor a path", async () => {
     await expect(flow(["run", "my flow"], opts)).rejects.toThrow("process.exit:2");
 
     expect(errs.join("\n")).toContain(
-      'Flow name must contain only letters, numbers, "_", or "-": my flow'
+      'E2E test name must contain only letters, numbers, "_", or "-": my flow'
     );
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
@@ -615,19 +893,19 @@ describe("argent flow run", () => {
     await expect(flow(["run", path.join(tempRoot, "missing.yaml")], opts)).rejects.toThrow(
       "process.exit:2"
     );
-    expect(errs.join("\n")).toContain("Flow file not found");
+    expect(errs.join("\n")).toContain("E2E test file not found");
 
     errs.length = 0;
     await expect(flow(["run", path.join(tempRoot, "checkout.yml")], opts)).rejects.toThrow(
       "process.exit:2"
     );
-    expect(errs.join("\n")).toContain("Flow path must end in .yaml");
+    expect(errs.join("\n")).toContain("E2E test path must end in .yaml");
 
     errs.length = 0;
     await expect(flow(["run", path.join(tempRoot, "unsafe name.yaml")], opts)).rejects.toThrow(
       "process.exit:2"
     );
-    expect(errs.join("\n")).toContain("Flow filename must have a non-empty name");
+    expect(errs.join("\n")).toContain("E2E test filename must have a non-empty name");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -637,7 +915,7 @@ describe("argent flow run", () => {
       "process.exit:2"
     );
 
-    expect(errs.join("\n")).toContain("Flow extension must be lowercase .yaml, not .YAML");
+    expect(errs.join("\n")).toContain("E2E test extension must be lowercase .yaml, not .YAML");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -649,7 +927,7 @@ describe("argent flow run", () => {
   // keying __baselines__/ and --output. These fixtures probe the filesystem
   // rather than assume it: on a case-sensitive one (ext4 CI) the lowercase
   // spelling is simply ENOENT. Both branches assert the contract that
-  // matters — rejected either way, flow-execute never invoked — and the
+  // matters — rejected either way, e2e-execute never invoked — and the
   // case-insensitive branch additionally pins the message, since there the
   // supplied path looks perfectly valid to the operator.
   it("refuses a case-insensitive extension match, telling the operator to rename the file", async () => {
@@ -668,11 +946,11 @@ describe("argent flow run", () => {
     if (caseInsensitiveFs) {
       // The real name is itself unrunnable (uppercase extension), so the
       // recovery must be a rename — not a Did-you-mean that would be refused.
-      expect(out).toContain("Flow path must name the file as it appears on disk");
+      expect(out).toContain("E2E test path must name the file as it appears on disk");
       expect(out).toContain('"Upper.YAML"');
       expect(out).toContain("Rename Upper.YAML to upper.yaml");
     } else {
-      expect(out).toContain("Flow file not found");
+      expect(out).toContain("E2E test file not found");
     }
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
@@ -694,12 +972,10 @@ describe("argent flow run", () => {
     if (caseInsensitiveFs) {
       // "Checkout.yaml" passes every name guard, so here the hint can be the
       // command that actually works.
-      expect(out).toContain("Flow path must name the file as it appears on disk");
-      expect(out).toContain(
-        `Did you mean: argent flow run ${path.join(caseRoot, "Checkout.yaml")}`
-      );
+      expect(out).toContain("E2E test path must name the file as it appears on disk");
+      expect(out).toContain(`Did you mean: argent e2e run ${path.join(caseRoot, "Checkout.yaml")}`);
     } else {
-      expect(out).toContain("Flow file not found");
+      expect(out).toContain("E2E test file not found");
     }
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
@@ -728,7 +1004,7 @@ describe("argent flow run", () => {
     async (supplied) => {
       await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
 
-      expect(errs.join("\n")).toContain("Flow filename must have a non-empty name");
+      expect(errs.join("\n")).toContain("E2E test filename must have a non-empty name");
       expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
       expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     }
@@ -743,8 +1019,8 @@ describe("argent flow run", () => {
     await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
 
     const out = errs.join("\n");
-    expect(out).toContain('Flow path must not contain ".." segments');
-    expect(out).toContain("Pass the fully resolved path to the flow's YAML.");
+    expect(out).toContain('E2E test path must not contain ".." segments');
+    expect(out).toContain("Pass the fully resolved path to the e2e test's YAML.");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -771,11 +1047,11 @@ describe("argent flow run", () => {
     // (/var -> /private/var), so the hint's path differs from the joined one.
     const kernelTarget = await fsp.realpath(path.join(decoyDir, "login.yaml"));
     const out = errs.join("\n");
-    expect(out).toContain('Flow path must not contain ".." segments');
-    expect(out).toContain(`Did you mean: argent flow run ${kernelTarget}`);
+    expect(out).toContain('E2E test path must not contain ".." segments');
+    expect(out).toContain(`Did you mean: argent e2e run ${kernelTarget}`);
     // Readability pin: a path a shell passes through verbatim stays bare —
     // quoting is reserved for paths that need it.
-    expect(out).not.toContain("argent flow run '");
+    expect(out).not.toContain("argent e2e run '");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -798,7 +1074,7 @@ describe("argent flow run", () => {
     // quoting helper, so the test cannot inherit a helper bug.
     const realRoot = await fsp.realpath(tempRoot);
     expect(errs.join("\n")).toContain(
-      `Did you mean: argent flow run '${realRoot}/o'\\''brien lab/login.yaml'`
+      `Did you mean: argent e2e run '${realRoot}/o'\\''brien lab/login.yaml'`
     );
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -818,7 +1094,7 @@ describe("argent flow run", () => {
     await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
 
     const hinted = path.join(await fsp.realpath(flowsDir), "linked.yaml");
-    expect(errs.join("\n")).toContain(`Did you mean: argent flow run ${hinted}`);
+    expect(errs.join("\n")).toContain(`Did you mean: argent e2e run ${hinted}`);
     // Pasting the hint back must actually work: the path exists, keeps the
     // link's own name, and passes run's exact-basename guard.
     await expect(flow(["run", hinted], opts)).rejects.toThrow("process.exit:0");
@@ -836,8 +1112,8 @@ describe("argent flow run", () => {
     await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
 
     const out = errs.join("\n");
-    expect(out).toContain('Flow path must not contain ".." segments');
-    expect(out).toContain("Pass the fully resolved path to the flow's YAML.");
+    expect(out).toContain('E2E test path must not contain ".." segments');
+    expect(out).toContain("Pass the fully resolved path to the e2e test's YAML.");
     expect(out).not.toContain("Did you mean");
   });
 
@@ -851,8 +1127,8 @@ describe("argent flow run", () => {
       await expect(flow(["run", checkoutPath + trailer], opts)).rejects.toThrow("process.exit:2");
 
       const out = errs.join("\n");
-      expect(out).toContain("Flow path must not end in a path separator");
-      expect(out).toContain(`Did you mean: argent flow run ${checkoutPath}`);
+      expect(out).toContain("E2E test path must not end in a path separator");
+      expect(out).toContain(`Did you mean: argent e2e run ${checkoutPath}`);
       expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
       expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     }
@@ -867,8 +1143,8 @@ describe("argent flow run", () => {
     await expect(flow(["run", trimmed + path.sep], opts)).rejects.toThrow("process.exit:2");
 
     const out = errs.join("\n");
-    expect(out).toContain("Flow path must not end in a path separator");
-    expect(out).toContain(`Did you mean: argent flow run '${trimmed}'`);
+    expect(out).toContain("E2E test path must not end in a path separator");
+    expect(out).toContain(`Did you mean: argent e2e run '${trimmed}'`);
   });
 
   it("lets the .. guard win when a path has both a .. segment and a trailing separator", async () => {
@@ -880,8 +1156,8 @@ describe("argent flow run", () => {
     await expect(flow(["run", supplied], opts)).rejects.toThrow("process.exit:2");
 
     const out = errs.join("\n");
-    expect(out).toContain('Flow path must not contain ".." segments');
-    expect(out).not.toContain("Flow path must not end in a path separator");
+    expect(out).toContain('E2E test path must not contain ".." segments');
+    expect(out).not.toContain("E2E test path must not end in a path separator");
   });
 
   it("dispatches a path that is only separators to directory mode, not the separator guard", async () => {
@@ -891,18 +1167,18 @@ describe("argent flow run", () => {
     await expect(flow(["run", "/"], opts)).rejects.toThrow("process.exit:2");
 
     const out = errs.join("\n");
-    expect(out).toContain("No flows found in /");
-    expect(out).not.toContain("Flow path must not end in a path separator");
+    expect(out).toContain("No e2e tests found in /");
+    expect(out).not.toContain("E2E test path must not end in a path separator");
   });
 
-  it("exits 2 on an empty directory named like a flow instead of handing it to flow-execute", async () => {
+  it("exits 2 on an empty directory named like a flow instead of handing it to e2e-execute", async () => {
     // A directory — even one named `bundle.yaml` — dispatches to directory
     // mode (the isDirectory() branch runs before any file check), so it is
-    // never handed to flow-execute as a file; empty, it fails discovery
+    // never handed to e2e-execute as a file; empty, it fails discovery
     // before routing is consulted or a client is built.
     await expect(flow(["run", bundleDirPath], opts)).rejects.toThrow("process.exit:2");
 
-    expect(errs.join("\n")).toContain(`No flows found in ${bundleDirPath}`);
+    expect(errs.join("\n")).toContain(`No e2e tests found in ${bundleDirPath}`);
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
@@ -910,7 +1186,7 @@ describe("argent flow run", () => {
   // Skipped as root / on Windows, where a mode-000 file is still readable —
   // see canDenyRead.
   it.skipIf(!canDenyRead)(
-    "exits 2 on an unreadable flow file rather than letting flow-execute hit EACCES",
+    "exits 2 on an unreadable flow file rather than letting e2e-execute hit EACCES",
     async () => {
       // The exit code is the contract, not just the wording: without the
       // readability probe the EACCES surfaces out of the tool call instead,
@@ -918,55 +1194,30 @@ describe("argent flow run", () => {
       // failure (1) would silently reclassify an unreadable file as a failing run.
       await expect(flow(["run", unreadablePath], opts)).rejects.toThrow("process.exit:2");
 
-      expect(errs.join("\n")).toContain(`Could not read flow file: ${unreadablePath}`);
+      expect(errs.join("\n")).toContain(`Could not read e2e test file: ${unreadablePath}`);
       expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
       expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     }
   );
 
-  it.each([
-    ["env", "Unset ARGENT_TOOLS_URL"],
-    ["link", "argent unlink"],
-  ] as const)("rejects %s routing without invoking flow-execute", async (source, recovery) => {
-    getResolvedToolsUrlMock.mockResolvedValue({
-      url: "http://example.test:4141",
-      source,
+  it("sends e2e_test_path and project_root to e2e-execute", async () => {
+    // The tool-server decides what a run can do, local or over a link: an
+    // uploaded flow that is self-contained runs, one that reads beside its
+    // file is refused there.
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(toolsClientMock.callTool.mock.calls[0]![0]).toBe("e2e-execute");
+    expect(toolsClientMock.callTool.mock.calls[0]![1]).toMatchObject({
+      e2e_test_path: checkoutPath,
+      project_root: process.cwd(),
+      prerequisiteAcknowledged: true,
     });
-
-    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
-
-    expect(errs.join("\n")).toContain("requires the auto-started local tool server");
-    expect(errs.join("\n")).toContain(recovery);
-    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
-  });
-
-  it("names both recoveries when env routing shadows an existing link", async () => {
-    // Unsetting only ARGENT_TOOLS_URL would re-route through the shadowed link
-    // and produce a second refusal — the message must instruct both steps.
-    getResolvedToolsUrlMock.mockResolvedValue({
-      url: "http://example.test:4141",
-      source: "env",
-      shadowedLink: {
-        url: "http://linked.test:5252",
-        host: "linked.test",
-        port: 5252,
-        createdAt: "2026-07-31T00:00:00.000Z",
-      },
-    });
-
-    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
-
-    const out = errs.join("\n");
-    expect(out).toContain("requires the auto-started local tool server; env routing is configured");
-    expect(out).toContain("Unset ARGENT_TOOLS_URL");
-    expect(out).toContain("argent unlink");
-    expect(out).toContain("http://linked.test:5252");
-    expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
   it("lists runnable YAML paths without consulting remote routing", async () => {
     const listRoot = path.join(tempRoot, "list-project");
-    const flowsDir = path.join(listRoot, ".argent", "flows");
+    const flowsDir = path.join(listRoot, ".argent", "e2e");
     await fsp.mkdir(flowsDir, { recursive: true });
     await Promise.all([
       fsp.writeFile(path.join(flowsDir, "z-last.yaml"), "steps: []\n"),
@@ -986,7 +1237,7 @@ describe("argent flow run", () => {
     }
 
     expect(logs.join("\n")).toBe(
-      [".argent/flows/a-first.yaml", ".argent/flows/z-last.yaml"].join("\n")
+      [".argent/e2e/a-first.yaml", ".argent/e2e/z-last.yaml"].join("\n")
     );
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
@@ -997,7 +1248,7 @@ describe("argent flow run", () => {
     // intermediate directory is just as runnable as a top-level one — a
     // non-recursive listing would hide it.
     const listRoot = path.join(tempRoot, "list-nested-project");
-    const flowsDir = path.join(listRoot, ".argent", "flows");
+    const flowsDir = path.join(listRoot, ".argent", "e2e");
     await fsp.mkdir(path.join(flowsDir, "suite", "deep"), { recursive: true });
     await Promise.all([
       fsp.writeFile(path.join(flowsDir, "top.yaml"), "steps: []\n"),
@@ -1012,14 +1263,14 @@ describe("argent flow run", () => {
       // Deterministic: sorted over the full relative paths, not walk order.
       expect(logs.join("\n")).toBe(
         [
-          ".argent/flows/suite/checkout.yaml",
-          ".argent/flows/suite/deep/login.yaml",
-          ".argent/flows/top.yaml",
+          ".argent/e2e/suite/checkout.yaml",
+          ".argent/e2e/suite/deep/login.yaml",
+          ".argent/e2e/top.yaml",
         ].join("\n")
       );
 
       // The other half of the agreement: the deepest advertised path runs.
-      await expect(flow(["run", ".argent/flows/suite/deep/login.yaml"], opts)).rejects.toThrow(
+      await expect(flow(["run", ".argent/e2e/suite/deep/login.yaml"], opts)).rejects.toThrow(
         "process.exit:0"
       );
       expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
@@ -1033,7 +1284,7 @@ describe("argent flow run", () => {
     // that own them (nested flows keep theirs beside themselves) — a YAML
     // dropped inside one is not a flow to advertise.
     const listRoot = path.join(tempRoot, "list-baselines-project");
-    const flowsDir = path.join(listRoot, ".argent", "flows");
+    const flowsDir = path.join(listRoot, ".argent", "e2e");
     await fsp.mkdir(path.join(flowsDir, "__baselines__", "checkout"), { recursive: true });
     await fsp.mkdir(path.join(flowsDir, "suite", "__baselines__", "login"), { recursive: true });
     await Promise.all([
@@ -1054,13 +1305,13 @@ describe("argent flow run", () => {
     }
 
     expect(logs.join("\n")).toBe(
-      [".argent/flows/checkout.yaml", ".argent/flows/suite/login.yaml"].join("\n")
+      [".argent/e2e/checkout.yaml", ".argent/e2e/suite/login.yaml"].join("\n")
     );
   });
 
   it("omits .yaml files whose names `flow run` would reject — and `run` does reject them", async () => {
     const listRoot = path.join(tempRoot, "list-unsafe-project");
-    const flowsDir = path.join(listRoot, ".argent", "flows");
+    const flowsDir = path.join(listRoot, ".argent", "e2e");
     await fsp.mkdir(flowsDir, { recursive: true });
     await Promise.all([
       fsp.writeFile(path.join(flowsDir, "sign.in.yaml"), "steps: []\n"),
@@ -1073,17 +1324,17 @@ describe("argent flow run", () => {
       await flow(["list"], opts);
 
       // Silently omitted, like non-.yaml entries — every printed path is runnable.
-      expect(logs.join("\n")).toBe(".argent/flows/sign-in.yaml");
+      expect(logs.join("\n")).toBe(".argent/e2e/sign-in.yaml");
 
       // The omissions are agreements, not gaps: the very fixtures `list`
       // hides must be ones `run` refuses, or the omission would be hiding
       // runnable paths. Pin both halves against the same files.
       for (const unsafe of ["sign.in.yaml", "ok (copy).yaml"]) {
         errs.length = 0;
-        await expect(flow(["run", `.argent/flows/${unsafe}`], opts)).rejects.toThrow(
+        await expect(flow(["run", `.argent/e2e/${unsafe}`], opts)).rejects.toThrow(
           "process.exit:2"
         );
-        expect(errs.join("\n")).toContain("Flow filename must have a non-empty name");
+        expect(errs.join("\n")).toContain("E2E test filename must have a non-empty name");
       }
       expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     } finally {
@@ -1093,7 +1344,7 @@ describe("argent flow run", () => {
 
   it("omits a directory named like a flow, which `flow run` rejects as not a file", async () => {
     const listRoot = path.join(tempRoot, "list-dir-project");
-    const flowsDir = path.join(listRoot, ".argent", "flows");
+    const flowsDir = path.join(listRoot, ".argent", "e2e");
     await fsp.mkdir(path.join(flowsDir, "bundle.yaml"), { recursive: true });
     await fsp.writeFile(path.join(flowsDir, "checkout.yaml"), "steps: []\n");
     const previousCwd = process.cwd();
@@ -1104,7 +1355,7 @@ describe("argent flow run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(logs.join("\n")).toBe(".argent/flows/checkout.yaml");
+    expect(logs.join("\n")).toBe(".argent/e2e/checkout.yaml");
   });
 
   // Skipped as root / on Windows, where a mode-000 file is still readable —
@@ -1113,7 +1364,7 @@ describe("argent flow run", () => {
     "omits an unreadable flow file, which `flow run` rejects as unreadable",
     async () => {
       const listRoot = path.join(tempRoot, "list-noperm-project");
-      const flowsDir = path.join(listRoot, ".argent", "flows");
+      const flowsDir = path.join(listRoot, ".argent", "e2e");
       await fsp.mkdir(flowsDir, { recursive: true });
       const unreadable = path.join(flowsDir, "noperm.yaml");
       await fsp.writeFile(path.join(flowsDir, "checkout.yaml"), "steps: []\n");
@@ -1131,13 +1382,13 @@ describe("argent flow run", () => {
 
       // stat() succeeds on it — only the readability probe keeps `list` from
       // advertising a path `flow run` then refuses.
-      expect(logs.join("\n")).toBe(".argent/flows/checkout.yaml");
+      expect(logs.join("\n")).toBe(".argent/e2e/checkout.yaml");
     }
   );
 
   it("lists a symlink to a flow file, which `flow run` accepts, but not a broken one", async () => {
     const listRoot = path.join(tempRoot, "list-symlink-project");
-    const flowsDir = path.join(listRoot, ".argent", "flows");
+    const flowsDir = path.join(listRoot, ".argent", "e2e");
     await fsp.mkdir(flowsDir, { recursive: true });
     await fsp.writeFile(path.join(tempRoot, "shared-flow.yaml"), "steps: []\n");
     await fsp.symlink(path.join(tempRoot, "shared-flow.yaml"), path.join(flowsDir, "linked.yaml"));
@@ -1150,12 +1401,12 @@ describe("argent flow run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(logs.join("\n")).toBe(".argent/flows/linked.yaml");
+    expect(logs.join("\n")).toBe(".argent/e2e/linked.yaml");
   });
 
   it("prints the no-flows message when no entry in the directory is runnable", async () => {
     const listRoot = path.join(tempRoot, "list-empty-project");
-    const flowsDir = path.join(listRoot, ".argent", "flows");
+    const flowsDir = path.join(listRoot, ".argent", "e2e");
     await fsp.mkdir(path.join(flowsDir, "bundle.yaml"), { recursive: true });
     const previousCwd = process.cwd();
     try {
@@ -1165,7 +1416,78 @@ describe("argent flow run", () => {
       process.chdir(previousCwd);
     }
 
-    expect(logs.join("\n")).toBe("No flows found in .argent/flows");
+    expect(logs.join("\n")).toBe("No e2e tests found in .argent/e2e or .argent/flows");
+  });
+
+  it("lists both e2e test directories as bare paths, with legacy and shadow notes on stderr", async () => {
+    const listRoot = path.join(tempRoot, "list-both-dirs-project");
+    const e2eDir = path.join(listRoot, ".argent", "e2e");
+    const legacyDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(path.join(legacyDir, "suite"), { recursive: true });
+    await fsp.mkdir(e2eDir, { recursive: true });
+    await Promise.all([
+      fsp.writeFile(path.join(e2eDir, "checkout.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(legacyDir, "checkout.yaml"), "steps: []\n"),
+      fsp.writeFile(path.join(legacyDir, "login.yaml"), "steps: []\n"),
+      // Only a top-level file is reachable by name, so a nested one is never shadowed.
+      fsp.writeFile(path.join(legacyDir, "suite", "checkout.yaml"), "steps: []\n"),
+    ]);
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe(
+      [
+        ".argent/e2e/checkout.yaml",
+        ".argent/flows/checkout.yaml",
+        ".argent/flows/login.yaml",
+        ".argent/flows/suite/checkout.yaml",
+      ].join("\n")
+    );
+    expect(errs).toEqual([
+      "warning: .argent/flows/checkout.yaml is shadowed by .argent/e2e/checkout.yaml when run by name",
+      "note: 3 tests listed from .argent/flows (legacy); move them to .argent/e2e",
+    ]);
+  });
+
+  it("keeps list stdout to bare paths for a legacy-only project, so it pipes into xargs", async () => {
+    const listRoot = path.join(tempRoot, "list-legacy-only-project");
+    const legacyDir = path.join(listRoot, ".argent", "flows");
+    await fsp.mkdir(legacyDir, { recursive: true });
+    await fsp.writeFile(path.join(legacyDir, "a.yaml"), "steps: []\n");
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs).toEqual([".argent/flows/a.yaml"]);
+    expect(logs.join("\n")).not.toMatch(/[ ()]/);
+    expect(errs).toEqual([
+      "note: 1 test listed from .argent/flows (legacy); move it to .argent/e2e",
+    ]);
+  });
+
+  it("says neither e2e test directory exists", async () => {
+    const listRoot = path.join(tempRoot, "list-no-dirs-project");
+    await fsp.mkdir(listRoot, { recursive: true });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(listRoot);
+      await flow(["list"], opts);
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n")).toBe(
+      "No .argent/e2e or .argent/flows directory in the current working directory."
+    );
   });
 
   it("renders the report — echo lines unnumbered, real steps numbered, reasons and fragment tags shown — and exits 1 on failure", async () => {
@@ -1188,7 +1510,7 @@ describe("argent flow run", () => {
     await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
 
     const out = logs.join("\n");
-    expect(out).toContain('Flow "checkout" on SIM-1');
+    expect(out).toContain('E2E test "checkout" on SIM-1');
     expect(out).toContain("assumes: App on the login screen");
     // Echo is narration — no index; numbering starts at the first real step.
     expect(out).toContain("› Opening settings");
@@ -1196,6 +1518,19 @@ describe("argent flow run", () => {
     expect(out).toMatch(/✗ {2}2 assert \[login\] — never visible/);
     expect(out).toMatch(/· {2}3 tool screenshot/);
     expect(out).toContain("FAIL — 1 passed, 1 failed, 0 errored, 1 skipped");
+  });
+
+  it("exits 1 on a passing run over a link whose baselines were not all written, naming each", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+      }),
+    });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+    expect(logs.join("\n")).toContain(
+      "✗ baseline not written: /p/b.png: EACCES: permission denied"
+    );
   });
 
   it("renders legacy warnings with the ⚠ glyph and counts them in the summary", async () => {
@@ -1290,6 +1625,28 @@ describe("argent flow run", () => {
     expect(errs).toEqual(["invalid flow"]);
   });
 
+  it("prints a JSON error object on stderr when the server rejects the flow under --json", async () => {
+    // --json owns stdout for the report alone, so a run with no report leaves
+    // it empty and carries the same record --json-stream would, on stderr.
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("invalid flow", {
+        errorCode: "FLOW_FILE_INVALID",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual([]);
+    expect(errs).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({
+      event: "error",
+      error: "invalid flow",
+      error_code: "FLOW_FILE_INVALID",
+      error_kind: "validation",
+    });
+  });
+
   it("rejects --json with --json-stream without writing human text to stdout", async () => {
     await expect(flow(["run", checkoutPath, "--json", "--json-stream"], opts)).rejects.toThrow(
       "process.exit:2"
@@ -1300,7 +1657,7 @@ describe("argent flow run", () => {
       { event: "error", error: "--json and --json-stream cannot be combined" },
     ]);
     expect(errs.join("\n")).toContain("--json and --json-stream cannot be combined");
-    expect(errs.join("\n")).toContain("Usage: argent flow");
+    expect(errs.join("\n")).toContain("Usage: argent e2e");
   });
 
   it("keeps help off stdout after --json-stream selects machine mode", async () => {
@@ -1308,7 +1665,7 @@ describe("argent flow run", () => {
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     expect(logs).toEqual([]);
-    expect(errs.join("\n")).toContain("Usage: argent flow");
+    expect(errs.join("\n")).toContain("Usage: argent e2e");
     expect(errs.join("\n")).toContain("--json-stream");
   });
 
@@ -1318,7 +1675,7 @@ describe("argent flow run", () => {
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     expect(logs.map((line) => JSON.parse(line))).toEqual([
-      { event: "error", error: expect.stringContaining(`Flow file not found: ${missing}`) },
+      { event: "error", error: expect.stringContaining(`E2E test file not found: ${missing}`) },
     ]);
   });
 
@@ -1506,6 +1863,190 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain("tool-server unreachable");
   });
 
+  // A routed tool-server that refuses the connection ran nothing, so the run
+  // is a setup error (exit 2) that names the address and where it came from,
+  // not undici's bare "fetch failed".
+  it("reports a routed tool-server that refuses the connection as unreachable", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual(['E2E test "checkout"', "  ✗ not run (tool-server unreachable)"]);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+  });
+
+  it.each([
+    [
+      "a link",
+      { url: "http://10.0.0.5:4141", source: "link" },
+      "ENOTFOUND",
+      "Could not reach the tool-server at http://10.0.0.5:4141 (set by argent link): host not found.\n" +
+        "Start the tool-server on the linked machine, or run `argent unlink`.",
+    ],
+    [
+      "ARGENT_TOOLS_URL over a link",
+      {
+        url: "http://127.0.0.1:47899",
+        source: "env",
+        shadowedLink: {
+          url: "http://10.0.0.5:4141",
+          host: "10.0.0.5",
+          port: 4141,
+          createdAt: "2026-10-01T00:00:00.000Z",
+        },
+      },
+      "UND_ERR_CONNECT_TIMEOUT",
+      "Could not reach the tool-server at http://127.0.0.1:47899 (set by ARGENT_TOOLS_URL): timed out.\n" +
+        "Start that tool-server, or unset ARGENT_TOOLS_URL and run `argent unlink` to use the local one. " +
+        "A link to http://10.0.0.5:4141 is also configured and takes over once the env var is unset.",
+    ],
+  ] as const)(
+    "names where the unreachable address came from for %s",
+    async (_case, routing, code, message) => {
+      getResolvedToolsUrlMock.mockResolvedValue(routing);
+      toolsClientMock.callTool.mockRejectedValue(
+        new TypeError("fetch failed", { cause: Object.assign(new Error(code), { code }) })
+      );
+
+      await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+      expect(errs).toEqual([message]);
+    }
+  );
+
+  it("writes an unreachable tool-server as a record a script can branch on under --json", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UNREACHABLE_ENV_MESSAGE,
+        error_code: "TOOL_SERVER_UNREACHABLE",
+        error_kind: "network",
+      },
+    ]);
+  });
+
+  it("ends the stream on an unreachable tool-server with the same record under --json-stream", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", checkoutPath, "--json-stream"], opts)).rejects.toThrow(
+      "process.exit:2"
+    );
+
+    expect(logs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UNREACHABLE_ENV_MESSAGE,
+        error_code: "TOOL_SERVER_UNREACHABLE",
+        error_kind: "network",
+      },
+    ]);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+  });
+
+  // A refused upload ends the call before the tool-server gets the flow, so
+  // nothing ran: the flow is rejected with its own verdict and code.
+  it("reports a refused fragment upload as a flow that did not run", async () => {
+    toolsClientMock.callTool.mockRejectedValue(uploadRefused());
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual(['E2E test "checkout"', "  ✗ not run (upload failed)"]);
+    expect(errs).toEqual([UPLOAD_REFUSED_MESSAGE]);
+  });
+
+  it("writes a refused fragment upload as a record with its code under --json", async () => {
+    toolsClientMock.callTool.mockRejectedValue(uploadRefused());
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: UPLOAD_REFUSED_MESSAGE,
+        error_code: "FILE_INPUT_UPLOAD_FAILED",
+        error_kind: "validation",
+      },
+    ]);
+  });
+
+  // Not every refused connect is a missing tool-server: with no routing it is
+  // the auto-started local one, and an open socket can end with the same
+  // codes after the run started. Both stay run errors, and a failure that is
+  // not a connect never reads the routing.
+  it.each([
+    [
+      "a refused connect to the local tool-server",
+      { url: null, source: "none" },
+      "ECONNREFUSED",
+      "connect",
+      true,
+    ],
+    [
+      "a timeout on an open socket",
+      { url: "http://127.0.0.1:47899", source: "env" },
+      "ETIMEDOUT",
+      "read",
+      false,
+    ],
+  ] as const)("keeps %s a run error", async (_case, routing, code, syscall, readsRouting) => {
+    getResolvedToolsUrlMock.mockResolvedValue(routing);
+    toolsClientMock.callTool.mockRejectedValue(
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error(`${syscall} ${code}`), { code, syscall }),
+      })
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toEqual(['E2E test "checkout"', "  ✗ did not finish (run error)"]);
+    expect(errs).toEqual(["fetch failed"]);
+    expect(getResolvedToolsUrlMock).toHaveBeenCalledTimes(readsRouting ? 1 : 0);
+  });
+
+  // fail()'s message-only call sites hand it no error object, and under
+  // --json each must still reach stderr as a record, never as prose.
+  it("writes a missing flow file as an error record under --json", async () => {
+    const missing = path.join(tempRoot, "missing.yaml");
+
+    await expect(flow(["run", missing, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: `E2E test file not found: ${missing}` },
+    ]);
+  });
+
+  it("writes a wrong flow extension as an error record under --json", async () => {
+    const yml = path.join(tempRoot, "checkout.yml");
+
+    await expect(flow(["run", yml, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: `E2E test path must end in .yaml: ${yml}` },
+    ]);
+  });
+
+  it("writes a reply that is not a run report as an error record under --json", async () => {
+    toolsClientMock.callTool.mockResolvedValue({ data: { flow: "checkout", notice: "x" } });
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs).toEqual([]);
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: '"checkout" did not produce a run report.' },
+    ]);
+  });
+
   it("exits 2 when the result is not a run report (e.g. a prerequisite notice)", async () => {
     toolsClientMock.callTool.mockResolvedValue({
       data: { flow: "checkout", notice: "prerequisite", executionPrerequisite: "logged in" },
@@ -1515,21 +2056,222 @@ describe("argent flow run", () => {
     expect(errs.join("\n")).toContain('"checkout" did not produce a run report');
   });
 
+  // Same ledger contract the directory run keeps: stdout alone says how the
+  // run ended. Live step lines make the gap worse here than in a batch — the
+  // last thing an archived log shows is a passing step, so a run that died
+  // reads as one that succeeded and got truncated.
+  it("gives a run that dies mid-stream a verdict under its step lines", async () => {
+    toolsClientMock.callTool.mockImplementationOnce(
+      async (
+        _tool: string,
+        _payload: unknown,
+        callOpts?: { onProgress?: (e: unknown) => void }
+      ) => {
+        callOpts?.onProgress?.({ index: 0, kind: "tap", status: "pass" });
+        throw new Error("tool-server unreachable");
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "checkout"',
+      expect.stringMatching(/^ {2}✓ {2}1 tap/),
+      "  ✗ did not finish (run error)",
+    ]);
+  });
+
+  it("names the flow before the verdict when the run failed before any step", async () => {
+    toolsClientMock.callTool.mockRejectedValue(new Error("tool-server unreachable"));
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "checkout"',
+      "  ✗ did not finish (run error)",
+    ]);
+  });
+
+  // A failure the server did NOT scope to this call: the run died, so it reads
+  // as one that did not finish, never as a rejection. Two signals reach here —
+  // a kind other than validation, and the absent kind a pre-signal server sends.
+  it.each([
+    ["marks as something other than validation", { errorKind: "subprocess" }],
+    ["leaves unset, as a pre-signal server does", {}],
+  ])("does not read a server error the signal %s as a rejection", async (_case, signal) => {
+    toolsClientMock.callTool.mockRejectedValue(new ToolInvocationError("boot failed", signal));
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "checkout"',
+      "  ✗ did not finish (run error)",
+    ]);
+  });
+
+  // Shapes the renderers cannot walk, all of which the guard is the only thing
+  // turning away. Three reach the CLI's top-level catch as a raw TypeError with
+  // stdout left empty — a nullish value on the `steps` read, a non-array
+  // `steps` on the first iteration, a nullish element on the first field read
+  // off it. The fourth is quieter and worse: a primitive element throws
+  // nowhere, so the verdict falls to the value's own `ok`, which the rows below
+  // set true: a PASS and an exit 0 on a report the run never got.
+  it.each([
+    ["a null", null],
+    ["an absent", undefined],
+    ["a primitive", "flow-execute is not implemented"],
+    ["a numeric steps", { flow: "checkout", ok: true, steps: 42 }],
+    ["a null steps", { flow: "checkout", ok: true, steps: null }],
+    ["an object steps", { flow: "checkout", ok: true, steps: {} }],
+    ["a null-element steps", { flow: "checkout", ok: true, steps: [null] }],
+    ["a primitive-element steps", { flow: "checkout", ok: true, steps: ["tap"] }],
+  ])("treats %s wire value as no report rather than crashing", async (_case, data) => {
+    toolsClientMock.callTool.mockResolvedValue({ data });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+    expect(errs.join("\n")).toContain('"checkout" did not produce a run report');
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "checkout"',
+      "  ✗ did not finish (no run report)",
+    ]);
+  });
+
+  // The other side of that guard: an empty step list is what the server sends
+  // for a flow with no steps, so it has to stay a report. Reading it as one
+  // more unwalkable shape would fail a passing flow — and in a batch, stop it.
+  it("counts a report with no steps as a report", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({ steps: [], passed: 0 }),
+    });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+    expect(logs.join("\n")).toContain("PASS");
+    expect(logs.join("\n")).not.toContain("no run report");
+  });
+
+  it("gives a report-less run a verdict on stdout", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: { flow: "checkout", notice: "prerequisite", executionPrerequisite: "logged in" },
+    });
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "checkout"',
+      "  ✗ did not finish (no run report)",
+    ]);
+  });
+
+  // A server that streamed steps and then answered with something that is not
+  // a report has already had the header printed for it by the first event.
+  it("does not repeat the header when a streamed run ends without a report", async () => {
+    toolsClientMock.callTool.mockImplementationOnce(
+      async (
+        _tool: string,
+        _payload: unknown,
+        callOpts?: { onProgress?: (e: unknown) => void }
+      ) => {
+        callOpts?.onProgress?.({ index: 0, kind: "tap", status: "pass" });
+        return { data: { flow: "checkout", notice: "prereq" } };
+      }
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.join("\n").split("\n")).toEqual([
+      'E2E test "checkout"',
+      expect.stringMatching(/^ {2}✓ {2}1 tap/),
+      "  ✗ did not finish (no run report)",
+    ]);
+  });
+
+  // The wording tells the reader which file to open, so it comes from the
+  // failure code — `validation` marks any rejection scoped to one call, device
+  // resolution included, and cannot license a claim about the YAML.
+  it.each([
+    ["FLOW_FILE_INVALID", "not run (invalid e2e test)"],
+    ["FLOW_FILE_NEWER_VERSION", "not run (needs a newer Argent)"],
+    ["FLOW_DEVICE_RESOLUTION", "not run (no device resolved)"],
+    ["FLOW_REQUIREMENTS_UNMET", "not run (requires not met)"],
+    ["A_CODE_THIS_CLI_DOES_NOT_MAP", "not run (rejected)"],
+  ])("renders a %s rejection of a single flow as %j", async (errorCode, verdict) => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("rejected", { errorCode, errorKind: "validation" })
+    );
+
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toEqual(['E2E test "checkout"', `  ✗ ${verdict}`]);
+  });
+
+  // The negative control the ledger needs: a verdict marks the runs that
+  // earned one, so completeness cannot be met by verdicting everything.
+  it("leaves a passing run's stdout free of any failure verdict", async () => {
+    await expect(flow(["run", checkoutPath], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs.join("\n")).not.toContain("✗");
+  });
+
+  // A single run's --json is the report itself, so a run that produced none
+  // has nothing to print: stdout stays empty rather than gaining the prose
+  // verdict, which would be the one thing `| jq` cannot survive.
+  it.each([
+    ["produces no report", { data: { flow: "checkout", notice: "prereq" } }, "process.exit:2"],
+    ["is rejected", new ToolInvocationError("nope", { errorKind: "validation" }), "process.exit:1"],
+  ])("prints no prose on stdout under --json when the run %s", async (_case, outcome, exitCode) => {
+    if (outcome instanceof Error) toolsClientMock.callTool.mockRejectedValue(outcome);
+    else toolsClientMock.callTool.mockResolvedValue(outcome);
+
+    await expect(flow(["run", checkoutPath, "--json"], opts)).rejects.toThrow(exitCode);
+
+    expect(logs).toEqual([]);
+  });
+
+  // The --json-stream half of the same guard: streaming owns stdout, and the
+  // error record it ends on is the whole account of the failure.
+  it.each([
+    [
+      "is rejected",
+      new ToolInvocationError("nope", { errorCode: "FLOW_FILE_INVALID", errorKind: "validation" }),
+      "process.exit:1",
+      {
+        event: "error",
+        error: "nope",
+        error_code: "FLOW_FILE_INVALID",
+        error_kind: "validation",
+      },
+    ],
+    [
+      "produces no report",
+      { data: { flow: "checkout", notice: "prereq" } },
+      "process.exit:2",
+      { event: "error", error: '"checkout" did not produce a run report.' },
+    ],
+  ])(
+    "keeps stdout NDJSON-only under --json-stream when the run %s",
+    async (_case, outcome, exitCode, record) => {
+      if (outcome instanceof Error) toolsClientMock.callTool.mockRejectedValue(outcome);
+      else toolsClientMock.callTool.mockResolvedValue(outcome);
+
+      await expect(flow(["run", checkoutPath, "--json-stream"], opts)).rejects.toThrow(exitCode);
+
+      expect(logs.map((line) => JSON.parse(line))).toEqual([record]);
+    }
+  );
+
   it("exits 2 on an unknown subcommand", async () => {
     await expect(flow(["frobnicate"], opts)).rejects.toThrow("process.exit:2");
-    expect(errs.join("\n")).toContain('Unknown flow subcommand "frobnicate"');
+    expect(errs.join("\n")).toContain('Unknown e2e subcommand "frobnicate"');
   });
 
   it("prints help and returns (no exit) with no subcommand", async () => {
     await flow([], opts);
-    expect(logs.join("\n")).toContain("Usage: argent flow");
+    expect(logs.join("\n")).toContain("Usage: argent e2e");
     expect(logs.join("\n")).toContain(
       "filename (minus .yaml) names the run's report and artifacts"
     );
     expect(logs.join("\n")).toContain('contain only letters, numbers, "_", or "-"');
-    expect(logs.join("\n")).toContain(
-      "ARGENT_TOOLS_URL and `argent link` routing are not supported"
-    );
+    expect(logs.join("\n")).toContain("the one that `argent link` or ARGENT_TOOLS_URL names");
     expect(logs.join("\n")).toContain("--json-stream");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
@@ -1544,18 +2286,20 @@ describe("argent flow run", () => {
 
   it("prints help instead of running when -h trails other run flags", async () => {
     await flow(["run", "checkout", "--device", "SIM-1", "-h"], opts);
-    expect(logs.join("\n")).toContain("Usage: argent flow");
+    expect(logs.join("\n")).toContain("Usage: argent e2e");
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 });
 
-describe("argent flow run <dir>", () => {
+describe("argent e2e run <dir>", () => {
   let tempRoot: string;
   let flowsDir: string;
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let logs: string[];
   let errs: string[];
+  /** Both streams in the order a terminal or a `2>&1` log interleaves them. */
+  let merged: ["out" | "err", string][];
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errSpy: ReturnType<typeof vi.spyOn>;
 
@@ -1592,14 +2336,22 @@ describe("argent flow run <dir>", () => {
     toolsClientMock.callTool.mockResolvedValue({ data: report() });
     logs = [];
     errs = [];
-    logSpy = vi.spyOn(console, "log").mockImplementation((...a) => void logs.push(a.join(" ")));
-    errSpy = vi.spyOn(console, "error").mockImplementation((...a) => void errs.push(a.join(" ")));
+    merged = [];
+    logSpy = vi.spyOn(console, "log").mockImplementation((...a) => {
+      logs.push(a.join(" "));
+      merged.push(["out", a.join(" ")]);
+    });
+    errSpy = vi.spyOn(console, "error").mockImplementation((...a) => {
+      errs.push(a.join(" "));
+      merged.push(["err", a.join(" ")]);
+    });
     exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`process.exit:${code}`);
     }) as typeof process.exit);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     exitSpy.mockRestore();
     logSpy.mockRestore();
     errSpy.mockRestore();
@@ -1611,13 +2363,13 @@ describe("argent flow run <dir>", () => {
     // Only the two safe top-level .yaml files, in lexicographic order, and
     // never with onProgress (batch output is failures-only).
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
-    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(1, "flow-execute", {
-      flow_path: path.join(flowsDir, "a-login.yaml"),
+    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(1, "e2e-execute", {
+      e2e_test_path: path.join(flowsDir, "a-login.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
-    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(2, "flow-execute", {
-      flow_path: path.join(flowsDir, "b-checkout.yaml"),
+    expect(toolsClientMock.callTool).toHaveBeenNthCalledWith(2, "e2e-execute", {
+      e2e_test_path: path.join(flowsDir, "b-checkout.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
@@ -1627,7 +2379,99 @@ describe("argent flow run <dir>", () => {
     expect(out).toContain("PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped");
     // Passing steps stay silent in batch mode.
     expect(out).not.toMatch(/✓ {2}1 tap/);
-    expect(out).toContain("PASS — 2 flows: 2 passed, 0 failed, 0 skipped");
+    expect(out).not.toContain("Failed e2e tests");
+    expect(out).toContain("PASS — 2 e2e tests: 2 passed, 0 failed, 0 skipped");
+  });
+
+  it("skips a flow whose requires: excludes the target and runs the rest", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+          errorCode: "FLOW_REQUIREMENTS_UNMET",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report() });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs).toContain("  · skipped (requires not met)\n    excludes device SIM-1 (ios)");
+    expect(logs.at(-1)).toMatch(/^\nPASS — 2 e2e tests: 1 passed, 0 failed, 1 skipped/);
+    expect(errs).toEqual([]);
+  });
+
+  it("exits 2 with a NONE RAN verdict when requires: skipped every flow", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(logs.at(-1)).toMatch(/^\nNONE RAN — 2 e2e tests: 0 passed, 0 failed, 2 skipped/);
+    expect(errs).toEqual([`No e2e test in ${flowsDir} ran on the selected target.`]);
+  });
+
+  it("reports a requires: skip with its reason, and ok: false when nothing ran, under --json", async () => {
+    toolsClientMock.callTool.mockRejectedValue(
+      new ToolInvocationError("[Tool:e2e-execute] excludes device SIM-1 (ios)", {
+        errorCode: "FLOW_REQUIREMENTS_UNMET",
+        errorKind: "validation",
+      })
+    );
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const out = JSON.parse(logs.join("\n"));
+    expect(out).toMatchObject({ ok: false, total: 2, skipped: 2 });
+    expect(out.e2eTests[0]).toEqual({
+      path: "a-login.yaml",
+      status: "skip",
+      reason: "excludes device SIM-1 (ios)",
+    });
+  });
+
+  it("ends each flow verdict with its run time and the batch verdict with the batch time", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    toolsClientMock.callTool.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 45_000);
+      return { data: report({ durationMs: 44_000 }) };
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(logs).toContain(
+      "  PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped (44.0s)"
+    );
+    expect(logs.at(-1)).toBe("\nPASS — 2 e2e tests: 2 passed, 0 failed, 0 skipped (1m 30s)");
+  });
+
+  it("prints a passing script's output, the only record a green batch run leaves", async () => {
+    toolsClientMock.callTool.mockResolvedValue({
+      data: report({
+        steps: [
+          {
+            index: 0,
+            kind: "script",
+            status: "pass",
+            target: "scripts/seed.mjs",
+            scriptLog: "seeded order 4711\n",
+          },
+          { index: 1, kind: "tap", status: "pass" },
+        ],
+        passed: 2,
+      }),
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    const out = logs.join("\n");
+    expect(out).toContain("✓  1 script scripts/seed.mjs");
+    expect(out).toContain("│ seeded order 4711");
+    // The widened gate still admits only the script step, not its neighbour.
+    expect(out).not.toMatch(/✓ {2}2 tap/);
   });
 
   it("rejects directory runs with --json-stream", async () => {
@@ -1637,11 +2481,11 @@ describe("argent flow run <dir>", () => {
     expect(logs.map((line) => JSON.parse(line))).toEqual([
       {
         event: "error",
-        error: "--json-stream supports a single flow; directory runs are not supported.",
+        error: "--json-stream supports a single e2e test; directory runs are not supported.",
       },
     ]);
     expect(errs.join("\n")).toContain(
-      "--json-stream supports a single flow; directory runs are not supported"
+      "--json-stream supports a single e2e test; directory runs are not supported"
     );
   });
 
@@ -1679,7 +2523,7 @@ describe("argent flow run <dir>", () => {
     expect(out).toMatch(/✗ {2}2 assert — never visible/);
     expect(out).not.toMatch(/✓ {2}1 tap/);
     expect(out).toContain("FAIL (started on SIM-1) — 1 passed, 1 failed, 0 errored, 0 skipped");
-    expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
+    expect(out).toContain("FAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped");
   });
 
   it("stops the batch on a tool-call throw and counts the remaining flows skipped", async () => {
@@ -1694,7 +2538,7 @@ describe("argent flow run <dir>", () => {
     const out = logs.join("\n");
     expect(out).toContain(`[3/3] ${path.join("sub", "c-search.yaml")}`);
     expect(out).toContain("· not run (batch stopped)");
-    expect(out).toContain("FAIL — 3 flows: 1 passed, 1 failed, 1 skipped");
+    expect(out).toContain("FAIL — 3 e2e tests: 1 passed, 1 failed, 1 skipped");
   });
 
   it("continues past a flow the tool-server rejects as invalid", async () => {
@@ -1714,18 +2558,340 @@ describe("argent flow run <dir>", () => {
     expect(errs.join("\n")).toContain("flow file is not valid YAML");
     const out = logs.join("\n");
     expect(out).not.toContain("not run (batch stopped)");
-    expect(out).toContain("FAIL — 2 flows: 1 passed, 1 failed, 0 skipped");
+    expect(out).toContain("FAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped");
   });
 
-  it("stops the batch on a server error the signal does not mark as validation", async () => {
+  it("gives a rejected flow a verdict on stdout, not just a message on stderr", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    // stdout on its own is a complete ledger: each flow's outcome sits directly
+    // under its `[i/n]` header. Without one, a redirected stdout log shows this
+    // flow's header immediately followed by the next flow's — an entry that
+    // reads as though it never ran, while the tally still counts a failure and
+    // names no flow. Matched exactly: an indented line under a header is as
+    // likely to be a failing step as an outcome.
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ not run (invalid e2e test)");
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toMatch(/^ {2}PASS /);
+    // Only the flow that earned a verdict carries one, so the completeness
+    // above is not met by verdicting everything. The count discriminates only
+    // because the other flow passes cleanly: renderStepLine gives a failed step
+    // the same `  ✗ ` prefix, which no count tells apart from a verdict.
+    const perFlow = lines.slice(0, lines.indexOf("Failed e2e tests (1)"));
+    expect(perFlow.filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
+  });
+
+  // One merged ledger: both runners print the verdict under the header and the
+  // stderr detail after it, so `2>&1` on a batch reads like `2>&1` on one run.
+  // Both branches that write to the two streams, since only one of them throws.
+  it.each([
+    [
+      "is rejected",
+      new ToolInvocationError("flow file is not valid YAML", {
+        errorCode: "FLOW_FILE_INVALID",
+        errorKind: "validation",
+      }),
+      "  ✗ not run (invalid e2e test)",
+      "flow file is not valid YAML",
+    ],
+    [
+      "answers without a report",
+      { data: { flow: "a-login", notice: "prerequisite" } },
+      "  ✗ did not finish (no run report)",
+      '"a-login.yaml" did not produce a run report.',
+    ],
+  ])(
+    "prints the verdict of a flow that %s ahead of the stderr detail",
+    async (_case, outcome, verdict, detail) => {
+      if (outcome instanceof Error) toolsClientMock.callTool.mockRejectedValueOnce(outcome);
+      else toolsClientMock.callTool.mockResolvedValueOnce(outcome);
+
+      await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+      expect(merged.slice(0, 3)).toEqual([
+        ["out", "[1/2] a-login.yaml"],
+        ["out", verdict],
+        ["err", detail],
+      ]);
+    }
+  );
+
+  // The batch continuing past a rejection is the point of the feature, so the
+  // entry that proves the verdict travels with the flow is a later one.
+  it("gives a rejected flow that is not the first its own verdict", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toBe(
+      "  ✗ not run (invalid e2e test)"
+    );
+  });
+
+  // `validation` is the wire signal for every rejection the server means for
+  // one call, not a statement about the YAML — device resolution rejects that
+  // way too, and a batch run with nothing booted would otherwise report every
+  // flow file as broken.
+  it.each([
+    ["FLOW_FILE_INVALID", "not run (invalid e2e test)"],
+    ["FLOW_ENTRY_UNRECOGNIZED", "not run (invalid e2e test)"],
+    ["FLOW_E2E_HAS_PREREQUISITE", "not run (invalid e2e test)"],
+    ["FLOW_FILE_NEWER_VERSION", "not run (needs a newer Argent)"],
+    ["FLOW_DEVICE_RESOLUTION", "not run (no device resolved)"],
+    ["A_CODE_THIS_CLI_DOES_NOT_MAP", "not run (rejected)"],
+  ])("renders a %s rejection as %j", async (errorCode, verdict) => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError("rejected", { errorCode, errorKind: "validation" })
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines).toContain(`  ✗ ${verdict}`);
+    // The batch's only ✗ above the recap. It counts because the other flow
+    // passes cleanly: a failing step line carries the same prefix.
+    const recap = lines.indexOf("Failed e2e tests (1)");
+    expect(lines.slice(0, recap).filter((l) => l.startsWith("  ✗ "))).toHaveLength(1);
+    expect(lines).toContain(`  ✗ a-login.yaml › ${verdict}`);
+  });
+
+  it("gives the flow that stopped the batch its own stdout verdict", async () => {
     toolsClientMock.callTool.mockRejectedValueOnce(
       new ToolInvocationError("simulator boot failed", { errorKind: "subprocess" })
     );
 
     await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
 
+    // Distinguishable from the flows that follow it, which never started.
+    expect(logs.join("\n").split("\n")).toContain("  ✗ did not finish (run error)");
+    expect(logs.join("\n")).toContain("· not run (batch stopped)");
+  });
+
+  it("gives a report-less flow its own stdout verdict", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: { flow: "a-login", notice: "prerequisite" },
+    });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs.join("\n").split("\n")).toContain("  ✗ did not finish (no run report)");
+  });
+
+  // The aggregate is what a CI job reads for a batch, so the classification the
+  // verdict is chosen from reaches it as data, under the names --json-stream
+  // publishes. Without the two fields both rows below are one `status: "fail"`
+  // with the same key set and a message assembled per failure.
+  it.each([
+    ["a rejection", { errorCode: "FLOW_DEVICE_RESOLUTION", errorKind: "validation" }],
+    ["an infra failure", { errorCode: "CHROMIUM_ELECTRON_SPAWN_FAILED", errorKind: "subprocess" }],
+  ])("carries the failure signal of %s into the --json aggregate", async (_case, signal) => {
+    toolsClientMock.callTool.mockRejectedValueOnce(new ToolInvocationError("nope", signal));
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    // One document: the verdict is prose, and --json owns stdout.
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]).flows[0]).toEqual({
+      path: "a-login.yaml",
+      status: "fail",
+      error: "nope",
+      error_code: signal.errorCode,
+      error_kind: signal.errorKind,
+    });
+  });
+
+  // Every verdict is stdout prose, so --json must emit the aggregate alone —
+  // one `| jq` away from a parse error otherwise.
+  it("keeps --json a single document when a flow returns no report", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: { flow: "a-login", notice: "prerequisite" },
+    });
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(logs).toHaveLength(1);
+    const aggregate = JSON.parse(logs[0]) as { flows: unknown[] };
+    expect(aggregate).toMatchObject({ ok: false, failed: 1, skipped: 1 });
+    // No failure signal on this one: nothing threw, so there is none to carry.
+    expect(aggregate.flows[0]).toEqual({
+      path: "a-login.yaml",
+      status: "fail",
+      error: '"a-login.yaml" did not produce a run report.',
+    });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: '"a-login.yaml" did not produce a run report.' },
+    ]);
+  });
+
+  it("writes a rejected flow's message on stderr as a record under --json", async () => {
+    const message =
+      "This flow is not self-contained, and it arrived as an upload. The steps below read or " +
+      "write project files, which stay on the client:\n" +
+      "  - step 1: run: frag.yaml\n" +
+      "Run the flow on the computer that runs the tool-server, with no link and no " +
+      "ARGENT_TOOLS_URL, so that the tool-server reads the files in place.";
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(
+        new ToolInvocationError(message, {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      )
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({ ok: false, passed: 1, failed: 1 });
+    // Every stderr line parses: the multi-line prose arrives escaped inside one record.
+    const lines = errs.join("\n").split("\n");
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      {
+        event: "error",
+        error: message,
+        error_code: "FLOW_FILE_INVALID",
+        error_kind: "validation",
+      },
+    ]);
+  });
+
+  // A report the renderers cannot walk costs the batch twice over: the throw
+  // lands past the try, so the flow gets no verdict AND the run ends with no
+  // batch summary and no tally — the whole ledger, not one line of it. The
+  // primitive-entry row is the shape that does not throw at all, and would
+  // otherwise be counted a pass.
+  it.each([
+    ["are not a list", { flow: "a-login", ok: true, steps: 42 }],
+    ["hold a null entry", { flow: "a-login", ok: true, steps: [null] }],
+    ["hold a primitive entry", { flow: "a-login", ok: true, steps: ["tap"] }],
+  ])("treats a flow whose steps %s as one that produced no report", async (_case, data) => {
+    toolsClientMock.callTool.mockResolvedValueOnce({ data });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe(
+      "  ✗ did not finish (no run report)"
+    );
+    expect(logs.join("\n")).toContain("FAIL — 2 e2e tests: 0 passed, 1 failed, 1 skipped");
+  });
+
+  // Two signals leave a rejection unscoped to the one call - a kind other than
+  // validation, and the absent kind a pre-signal server sends. Each stops the
+  // batch, so the verdict is the run's rather than a rejection's.
+  it.each([
+    ["marks as something other than validation", { errorKind: "subprocess" }],
+    ["leaves unset, as a pre-signal server does", {}],
+  ])("stops the batch on a server error the signal %s", async (_case, signal) => {
+    toolsClientMock.callTool.mockRejectedValueOnce(
+      new ToolInvocationError("simulator boot failed", signal)
+    );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
-    expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ did not finish (run error)");
+    expect(logs.join("\n")).toContain("FAIL — 2 e2e tests: 0 passed, 1 failed, 1 skipped");
+  });
+
+  it("stops at the first flow when the routed tool-server is unreachable, exiting 2", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
+    expect(errs).toEqual([UNREACHABLE_ENV_MESSAGE]);
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe(
+      "  ✗ not run (tool-server unreachable)"
+    );
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toBe("  · not run (batch stopped)");
+    const recap = lines.slice(lines.indexOf("Failed e2e tests (1)"));
+    expect(recap).toContain("  ✗ a-login.yaml › not run (tool-server unreachable)");
+    for (const line of UNREACHABLE_ENV_MESSAGE.split("\n")) expect(recap).toContain(`    ${line}`);
+    expect(lines.at(-1)).toMatch(/^FAIL — 2 e2e tests: 0 passed, 1 failed, 1 skipped /);
+  });
+
+  it("carries an unreachable tool-server into the --json aggregate and stderr record", async () => {
+    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://127.0.0.1:47899", source: "env" });
+    toolsClientMock.callTool.mockRejectedValue(connectRefused());
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:2");
+
+    const signal = { error_code: "TOOL_SERVER_UNREACHABLE", error_kind: "network" };
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({
+      ok: false,
+      failed: 1,
+      skipped: 1,
+      flows: [
+        { path: "a-login.yaml", status: "fail", error: UNREACHABLE_ENV_MESSAGE, ...signal },
+        { path: "b-checkout.yaml", status: "skip" },
+      ],
+    });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: UNREACHABLE_ENV_MESSAGE, ...signal },
+    ]);
+  });
+
+  // A refused upload depends on the size of that flow's own fragments. Each
+  // later flow sends its own files, so the batch goes on.
+  it("continues past a flow whose fragment upload is refused", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(uploadRefused())
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(errs).toEqual([UPLOAD_REFUSED_MESSAGE]);
+    const lines = logs.join("\n").split("\n");
+    expect(lines[lines.indexOf("[1/2] a-login.yaml") + 1]).toBe("  ✗ not run (upload failed)");
+    expect(lines[lines.indexOf("[2/2] b-checkout.yaml") + 1]).toMatch(/^ {2}PASS /);
+    expect(lines).toContain("  ✗ a-login.yaml › not run (upload failed)");
+    expect(lines.at(-1)).toMatch(/^FAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped /);
+  });
+
+  it("carries a refused fragment upload into the --json aggregate and runs the next flow", async () => {
+    toolsClientMock.callTool
+      .mockRejectedValueOnce(uploadRefused())
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+
+    await expect(flow(["run", flowsDir, "--json"], opts)).rejects.toThrow("process.exit:1");
+
+    const signal = { error_code: "FILE_INPUT_UPLOAD_FAILED", error_kind: "validation" };
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({
+      ok: false,
+      passed: 1,
+      failed: 1,
+      skipped: 0,
+      flows: [
+        { path: "a-login.yaml", status: "fail", error: UPLOAD_REFUSED_MESSAGE, ...signal },
+        { path: "b-checkout.yaml", status: "pass" },
+      ],
+    });
+    expect(errs.map((line) => JSON.parse(line))).toEqual([
+      { event: "error", error: UPLOAD_REFUSED_MESSAGE, ...signal },
+    ]);
   });
 
   it("treats a non-report result as a failure that stops the batch", async () => {
@@ -1737,14 +2903,227 @@ describe("argent flow run <dir>", () => {
 
     expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
     expect(errs.join("\n")).toContain('"a-login.yaml" did not produce a run report');
-    expect(logs.join("\n")).toContain("FAIL — 2 flows: 0 passed, 1 failed, 1 skipped");
+    expect(logs.join("\n")).toContain("FAIL — 2 e2e tests: 0 passed, 1 failed, 1 skipped");
+  });
+
+  it("ends a failed batch with the failed flows, each with a command that runs it alone", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          ok: false,
+          passed: 1,
+          failed: 1,
+          steps: [
+            { index: 0, kind: "echo", status: "pass", message: "logging in" },
+            { index: 1, kind: "tap", status: "pass" },
+            {
+              index: 2,
+              kind: "assert",
+              status: "fail",
+              target: 'visible "Home"',
+              reason: 'no element matched selector text="Home"',
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "./flows", "--platform", "ios"], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    // The recap follows the last flow's block and precedes the batch verdict,
+    // which stays the last line, so `tail -1` still reads it.
+    const lines = logs.join("\n").split("\n");
+    expect(lines.slice(lines.indexOf("[2/2] b-checkout.yaml"))).toEqual([
+      "[2/2] b-checkout.yaml",
+      "  PASS (started on SIM-1) — 1 passed, 0 failed, 0 errored, 0 skipped",
+      "",
+      "Failed e2e tests (1)",
+      "",
+      '  ✗ a-login.yaml › step 2 assert visible "Home"',
+      '    no element matched selector text="Home"',
+      `    re-run: argent e2e run ${path.join("flows", "a-login.yaml")} --platform ios`,
+      "",
+      "FAIL — 2 e2e tests: 1 passed, 1 failed, 0 skipped (0.0s)",
+    ]);
+  });
+
+  it("re-runs a flow outside the working directory by its absolute path, quoted", async () => {
+    const suiteDir = path.join(tempRoot, "night suite");
+    await fsp.mkdir(suiteDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "one.yaml"), "steps: []\n");
+    toolsClientMock.callTool.mockRejectedValueOnce(new Error("tool stream ended"));
+
+    await expect(flow(["run", suiteDir, "--device", "SIM-1"], opts)).rejects.toThrow(
+      "process.exit:1"
+    );
+
+    expect(logs.join("\n")).toContain(
+      `    re-run: argent e2e run '${path.join(suiteDir, "one.yaml")}' --device SIM-1`
+    );
+  });
+
+  it("re-runs a flow whose name starts with a dash through ./, not as an option", async () => {
+    const suiteDir = path.join(tempRoot, "dash-suite");
+    await fsp.mkdir(suiteDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "-nightly.yaml"), "steps: []\n");
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ flow: "-nightly", ok: false, steps: [] }),
+    });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(suiteDir);
+      await expect(flow(["run", "."], opts)).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const shown = `.${path.sep}-nightly.yaml`;
+    const lines = logs.join("\n").split("\n");
+    expect(lines).toContain("  ✗ -nightly.yaml › failed with no failing step");
+    expect(lines).toContain(`    re-run: argent e2e run ${shown}`);
+    expect(parseRunArgs([shown]).flowRef).toBe(shown);
+  });
+
+  it("quotes a path that starts with =, which zsh would expand to a command's path", async () => {
+    const suiteDir = path.join(tempRoot, "=nightly");
+    await fsp.mkdir(suiteDir, { recursive: true });
+    await fsp.writeFile(path.join(suiteDir, "a-login.yaml"), "steps: []\n");
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ flow: "a-login", ok: false, steps: [] }),
+    });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(flow(["run", "=nightly", "--output", "=out"], opts)).rejects.toThrow(
+        "process.exit:1"
+      );
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    expect(logs.join("\n").split("\n")).toContain(
+      `    re-run: argent e2e run '${path.join("=nightly", "a-login.yaml")}' --output '=out'`
+    );
+  });
+
+  it("re-runs with the batch's --update-baselines, exporting where the batch exported", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login", ok: false, steps: [] }) })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) })
+      .mockResolvedValueOnce({ data: report({ flow: "c-search", ok: false, steps: [] }) });
+    const previousCwd = process.cwd();
+    try {
+      process.chdir(tempRoot);
+      await expect(
+        flow(["run", "./flows", "-r", "--update-baselines", "--output", "out"], opts)
+      ).rejects.toThrow("process.exit:1");
+    } finally {
+      process.chdir(previousCwd);
+    }
+
+    const lines = logs.join("\n").split("\n");
+    expect(lines).toContain(
+      `    re-run: argent e2e run ${path.join("flows", "a-login.yaml")} --update-baselines --output out`
+    );
+    expect(lines).toContain(
+      `    re-run: argent e2e run ${path.join("flows", "sub", "c-search.yaml")} --update-baselines --output ${path.join("out", "sub")}`
+    );
+  });
+
+  it("re-runs with an --output that starts with a dash through ./, not as an option", async () => {
+    toolsClientMock.callTool.mockResolvedValueOnce({
+      data: report({ flow: "a-login", ok: false, steps: [] }),
+    });
+
+    await expect(flow(["run", flowsDir, "--output=-out"], opts)).rejects.toThrow("process.exit:1");
+
+    const shown = `.${path.sep}-out`;
+    expect(logs.join("\n")).toContain(
+      `    re-run: argent e2e run ${path.join(flowsDir, "a-login.yaml")} --output ${shown}`
+    );
+    expect(parseRunArgs(["a-login.yaml", "--output", shown]).output).toBe(shown);
+  });
+
+  it("repeats a rejected flow's server message in the recap, as it went to stderr", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
+      .mockRejectedValueOnce(
+        new ToolInvocationError("flow file is not valid YAML: bad indentation (line 4)", {
+          errorCode: "FLOW_FILE_INVALID",
+          errorKind: "validation",
+        })
+      );
+
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:1");
+
+    expect(errs).toContain("flow file is not valid YAML: bad indentation (line 4)");
+    const lines = logs.join("\n").split("\n");
+    const entry = lines.indexOf("  ✗ b-checkout.yaml › not run (invalid e2e test)");
+    expect(lines.slice(entry + 1, entry + 3)).toEqual([
+      "    flow file is not valid YAML: bad indentation (line 4)",
+      `    re-run: argent e2e run ${path.join(flowsDir, "b-checkout.yaml")}`,
+    ]);
+  });
+
+  it("lists the flow that stopped the batch, but not the flows it never reached", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    toolsClientMock.callTool.mockRejectedValueOnce(new Error("tool stream ended without a result"));
+
+    await expect(flow(["run", flowsDir, "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    const lines = logs.join("\n").split("\n");
+    const recap = lines.slice(lines.indexOf("Failed e2e tests (1)"));
+    expect(recap).toEqual([
+      "Failed e2e tests (1)",
+      "",
+      "  ✗ a-login.yaml › did not finish (run error)",
+      "    tool stream ended without a result",
+      `    re-run: argent e2e run ${path.join(flowsDir, "a-login.yaml")}`,
+      "",
+      "FAIL — 3 e2e tests: 0 passed, 1 failed, 2 skipped (0.0s)",
+    ]);
+  });
+
+  it("lists every failed flow in run order", async () => {
+    toolsClientMock.callTool
+      .mockResolvedValueOnce({
+        data: report({
+          flow: "a-login",
+          ok: false,
+          passed: 0,
+          failed: 1,
+          steps: [{ index: 0, kind: "tap", status: "fail", reason: "gone" }],
+        }),
+      })
+      .mockResolvedValueOnce({ data: report({ flow: "b-checkout" }) })
+      .mockResolvedValueOnce({ data: { flow: "c-search" } });
+
+    await expect(flow(["run", flowsDir, "-r"], opts)).rejects.toThrow("process.exit:1");
+
+    const entries = logs
+      .join("\n")
+      .split("\n")
+      .filter((l) => l.includes(" › "));
+    expect(entries).toEqual([
+      "  ✗ a-login.yaml › step 1 tap",
+      `  ✗ ${path.join("sub", "c-search.yaml")} › did not finish (no run report)`,
+    ]);
   });
 
   it("finds nested flows with --recursive, skipping dot-directories and node_modules", async () => {
     await expect(flow(["run", flowsDir, "--recursive"], opts)).rejects.toThrow("process.exit:0");
 
     const flowPaths = toolsClientMock.callTool.mock.calls.map(
-      (c) => (c[1] as { flow_path: string }).flow_path
+      (c) => (c[1] as { e2e_test_path: string }).e2e_test_path
     );
     expect(flowPaths).toEqual([
       path.join(flowsDir, "a-login.yaml"),
@@ -1761,12 +3140,12 @@ describe("argent flow run <dir>", () => {
 
     await expect(flow(["run", dirYaml], opts)).rejects.toThrow("process.exit:0");
 
-    expect(toolsClientMock.callTool).toHaveBeenCalledWith("flow-execute", {
-      flow_path: path.join(dirYaml, "one.yaml"),
+    expect(toolsClientMock.callTool).toHaveBeenCalledWith("e2e-execute", {
+      e2e_test_path: path.join(dirYaml, "one.yaml"),
       project_root: process.cwd(),
       prerequisiteAcknowledged: true,
     });
-    expect(logs.join("\n")).toContain("PASS — 1 flow: 1 passed, 0 failed, 0 skipped");
+    expect(logs.join("\n")).toContain("PASS — 1 e2e test: 1 passed, 0 failed, 0 skipped");
   });
 
   it("exits 2 when --recursive is given a file path", async () => {
@@ -1775,7 +3154,7 @@ describe("argent flow run <dir>", () => {
     );
 
     expect(errs.join("\n")).toContain(
-      `flow run --recursive requires a directory path: ${path.join(flowsDir, "a-login.yaml")}`
+      `e2e run --recursive requires a directory path: ${path.join(flowsDir, "a-login.yaml")}`
     );
     expect(getResolvedToolsUrlMock).not.toHaveBeenCalled();
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
@@ -1785,7 +3164,7 @@ describe("argent flow run <dir>", () => {
     const missing = path.join(tempRoot, "missing-dir");
     await expect(flow(["run", missing, "-r"], opts)).rejects.toThrow("process.exit:2");
 
-    expect(errs.join("\n")).toContain(`Flow directory not found: ${missing}`);
+    expect(errs.join("\n")).toContain(`E2E test directory not found: ${missing}`);
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
@@ -1794,46 +3173,104 @@ describe("argent flow run <dir>", () => {
     await fsp.mkdir(emptyDir, { recursive: true });
 
     await expect(flow(["run", emptyDir], opts)).rejects.toThrow("process.exit:2");
-    expect(errs.join("\n")).toContain(`No flows found in ${emptyDir}`);
+    expect(errs.join("\n")).toContain(`No e2e tests found in ${emptyDir}`);
     expect(errs.join("\n")).toContain("-r/--recursive");
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
 
     // Already recursive: the hint would be a dead end, so it is omitted.
     errs.length = 0;
     await expect(flow(["run", emptyDir, "-r"], opts)).rejects.toThrow("process.exit:2");
-    expect(errs.join("\n")).toContain("No flows found");
+    expect(errs.join("\n")).toContain("No e2e tests found");
     expect(errs.join("\n")).not.toContain("subdirectories");
   });
 
-  it("rejects remote routing before running any flow in the directory", async () => {
-    getResolvedToolsUrlMock.mockResolvedValue({ url: "http://example.test:4141", source: "env" });
+  it("prints a JSON error object on stderr for a directory with no flows under --json", async () => {
+    const emptyDir = path.join(tempRoot, "empty-json");
+    await fsp.mkdir(emptyDir, { recursive: true });
 
-    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:2");
+    await expect(flow(["run", emptyDir, "--json"], opts)).rejects.toThrow("process.exit:2");
 
-    expect(errs.join("\n")).toContain("requires the auto-started local tool server");
+    expect(logs).toEqual([]);
+    expect(errs).toHaveLength(1);
+    expect(JSON.parse(errs[0]!)).toEqual({
+      event: "error",
+      error: `No e2e tests found in ${emptyDir}\nPass -r/--recursive to include subdirectories.`,
+    });
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
   });
 
+  // Skipped as root / on Windows, where a mode-000 directory is still
+  // listable. See canDenyRead.
+  it.skipIf(!canDenyRead).each([
+    ["human", [], (dir: string) => `Could not read e2e test directory: ${dir}`],
+    [
+      "--json",
+      ["--json"],
+      (dir: string) =>
+        JSON.stringify({ event: "error", error: `Could not read e2e test directory: ${dir}` }),
+    ],
+  ] as const)(
+    "exits 2 on a directory it cannot list, in %s mode",
+    async (_mode, flags, expected) => {
+      const lockedDir = path.join(tempRoot, `unlistable-${flags.length}`);
+      await fsp.mkdir(lockedDir, { recursive: true });
+      await fsp.writeFile(path.join(lockedDir, "a.yaml"), "steps: []\n");
+      await fsp.chmod(lockedDir, 0o000);
+      try {
+        await expect(flow(["run", lockedDir, ...flags], opts)).rejects.toThrow("process.exit:2");
+      } finally {
+        await fsp.chmod(lockedDir, 0o755);
+      }
+
+      expect(logs).toEqual([]);
+      expect(errs).toEqual([expected(lockedDir)]);
+      expect(toolsClientMock.callTool).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sends every flow in the directory to e2e-execute", async () => {
+    await expect(flow(["run", flowsDir], opts)).rejects.toThrow("process.exit:0");
+
+    expect(toolsClientMock.callTool).toHaveBeenCalledTimes(2);
+    expect(toolsClientMock.callTool.mock.calls.map((c) => c[0])).toEqual([
+      "e2e-execute",
+      "e2e-execute",
+    ]);
+    expect(logs.join("\n")).toContain("2 passed");
+  });
+
   it("prints only the aggregate object with --json, tagging infra failures and skips", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
     toolsClientMock.callTool
-      .mockResolvedValueOnce({ data: report({ flow: "a-login" }) })
-      .mockRejectedValueOnce(new Error("boom"));
+      .mockImplementationOnce(async () => {
+        advance(4000);
+        return { data: report({ flow: "a-login" }) };
+      })
+      .mockImplementationOnce(async () => {
+        advance(1500);
+        throw new Error("boom");
+      });
 
     await expect(flow(["run", flowsDir, "--json", "-r"], opts)).rejects.toThrow("process.exit:1");
 
     // A single parseable object on stdout — no headers or verdict lines.
+    // `flows` is the deprecated spelling of `e2eTests`, with the same content.
     const parsed = JSON.parse(logs.join("\n")) as Record<string, unknown>;
+    const entries = [
+      { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
+      { path: "b-checkout.yaml", status: "fail", error: "boom" },
+      { path: path.join("sub", "c-search.yaml"), status: "skip" },
+    ];
     expect(parsed).toEqual({
       ok: false,
       total: 3,
       passed: 1,
       failed: 1,
       skipped: 1,
-      flows: [
-        { path: "a-login.yaml", status: "pass", report: report({ flow: "a-login" }) },
-        { path: "b-checkout.yaml", status: "fail", error: "boom" },
-        { path: path.join("sub", "c-search.yaml"), status: "skip" },
-      ],
+      durationMs: 5500,
+      e2eTests: entries,
+      flows: entries,
     });
   });
 
@@ -1921,13 +3358,13 @@ describe("argent flow run <dir>", () => {
       await expect(flow(["run", suiteDir, "-r"], opts)).rejects.toThrow("process.exit:0");
 
       // The readable top-level flow still ran; the locked subtree was skipped
-      // without the top-level "Could not read flow directory" abort.
+      // without the top-level "Could not read e2e test directory" abort.
       expect(toolsClientMock.callTool).toHaveBeenCalledTimes(1);
       expect(toolsClientMock.callTool).toHaveBeenCalledWith(
-        "flow-execute",
-        expect.objectContaining({ flow_path: path.join(suiteDir, "open.yaml") })
+        "e2e-execute",
+        expect.objectContaining({ e2e_test_path: path.join(suiteDir, "open.yaml") })
       );
-      expect(errs.join("\n")).not.toContain("Could not read flow directory");
+      expect(errs.join("\n")).not.toContain("Could not read e2e test directory");
     } finally {
       await fsp.chmod(lockedDir, 0o755);
     }

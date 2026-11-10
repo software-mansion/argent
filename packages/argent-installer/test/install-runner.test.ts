@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { execFileSync } from "node:child_process";
+import * as p from "@clack/prompts";
 import { runInstall } from "../src/install-runner.js";
 import { runShellCommand, ShellCommandError } from "../src/shell.js";
-import { isLocallyInstalled } from "../src/utils.js";
+import { isGloballyInstalled, isLocallyInstalled, resolveProjectRoot } from "../src/utils.js";
 import type { InitTelemetry } from "../src/init-telemetry.js";
 
 // Exercises installLocally's failure handling: the retry-once semantics, the
@@ -27,6 +32,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
     isYarnPnp: vi.fn(() => false),
     getLocallyInstalledVersion: vi.fn(() => "1.0.0"),
     detectProjectPackageManager: vi.fn(() => "pnpm" as const),
+    isGloballyInstalled: vi.fn(() => false),
   };
 });
 
@@ -41,6 +47,7 @@ vi.mock("@clack/prompts", async (importOriginal) => {
 });
 
 vi.mock("@argent/telemetry", () => ({ track: vi.fn() }));
+vi.mock("../src/skills.js", () => ({ reportSkillRefresh: vi.fn() }));
 
 class ExitCalled extends Error {
   constructor(readonly code: number | undefined) {
@@ -187,5 +194,92 @@ describe("installLocally failure handling", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "quotes the project root in the manual-install advice",
+    async () => {
+      // The advice is pasted into a shell, so the path has to survive as one
+      // word: `cd /a/My Project` runs `cd /a/My`.
+      const parent = fs.mkdtempSync(path.join(os.tmpdir(), "argent-install-advice-"));
+      const projectRoot = path.join(parent, "My 'Project' $x");
+      fs.mkdirSync(projectRoot);
+      try {
+        vi.mocked(p.log.info).mockClear();
+        vi.mocked(resolveProjectRoot).mockReturnValueOnce(projectRoot);
+        vi.mocked(runShellCommand).mockRejectedValue(
+          new ShellCommandError("registry down", 1, null)
+        );
+
+        await expect(localInstall(makeTel())).rejects.toThrow(ExitCalled);
+
+        const esc = String.fromCharCode(27);
+        const advice = vi
+          .mocked(p.log.info)
+          .mock.calls.map((c) =>
+            String(c[0])
+              .split(new RegExp(`${esc}\\[[0-9;]*m`, "g"))
+              .join("")
+          )
+          .find((line) => line.startsWith("Install manually with: "));
+        expect(advice).toBeDefined();
+
+        const cd = advice!.slice(advice!.indexOf("cd ")).split(" && ")[0];
+        const landed = execFileSync("/bin/sh", ["-c", `${cd} && pwd`], { encoding: "utf8" }).trim();
+        expect(landed).toBe(projectRoot);
+      } finally {
+        fs.rmSync(parent, { recursive: true, force: true });
+      }
+    }
+  );
+});
+
+describe("global install PATH check", () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.mocked(runShellCommand).mockReset();
+    vi.mocked(runShellCommand).mockResolvedValue(undefined);
+    vi.mocked(isGloballyInstalled).mockReset();
+    vi.mocked(p.log.warn).mockClear();
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new ExitCalled(code);
+    }) as never);
+  });
+
+  afterEach(() => {
+    exitSpy.mockRestore();
+  });
+
+  function globalInstall(tel: InitTelemetry): Promise<string> {
+    return runInstall({
+      installMode: "global",
+      fromTar: null,
+      nonInteractive: true,
+      version: "0.0.0",
+      tel,
+    });
+  }
+
+  it("warns and continues when the install succeeds but argent is not on PATH", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValue(false);
+    const tel = makeTel();
+
+    await globalInstall(tel);
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(p.log.warn).toHaveBeenCalledTimes(1);
+    expect(p.log.warn).toHaveBeenCalledWith(expect.stringContaining("is not on PATH"));
+    expect(tel.trackPackageAction).toHaveBeenCalledWith("fresh_install", expect.any(Number), true);
+  });
+
+  it("does not warn when the fresh install is on PATH", async () => {
+    vi.mocked(isGloballyInstalled).mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const tel = makeTel();
+
+    await globalInstall(tel);
+
+    expect(runShellCommand).toHaveBeenCalledTimes(1);
+    expect(p.log.warn).not.toHaveBeenCalled();
   });
 });

@@ -1,0 +1,39 @@
+name: iOS device runner build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/ios-device-runner/**"
+      - ".github/workflows/ios-device-runner-build.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/ios-device-runner/**"
+      - ".github/workflows/ios-device-runner-build.yml"
+
+concurrency:
+  group: ios-device-runner-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-runner:
+    name: Compile the XCUITest runner
+    # Argent's self-hosted tart VMs. Fork PRs get a GitHub-hosted runner so
+    # untrusted code stays off them.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'macos-latest-xlarge' || fromJSON('["self-hosted","macOS","ARM64","sand"]') }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show the selected Xcode
+        run: xcodebuild -version
+
+      - name: Build for testing (generic iOS, unsigned)
+        run: xcodebuild build-for-testing -project packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj -scheme ArgentRunner -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY= -derivedDataPath "$RUNNER_TEMP/argent-runner-dd" -quiet

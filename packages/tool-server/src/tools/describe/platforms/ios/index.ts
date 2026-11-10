@@ -1,4 +1,10 @@
-import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  getFailureSignal,
+  type DeviceInfo,
+  type Registry,
+  type ToolDependency,
+} from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import {
   buildAppStateMessage,
@@ -9,6 +15,11 @@ import {
 } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { isTvOsSimulator } from "../../../../utils/ios-devices";
+import {
+  externalSupportHint,
+  findExternalDevice,
+  isExternalId,
+} from "../../../../utils/external-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
@@ -35,6 +46,40 @@ const DEGRADED_STANDING_HINT =
   "in this tree; everything else reads normally. If something you expect is missing, boot-device with " +
   "force=true reboots the simulator with the full accessibility settings";
 
+/**
+ * The two caveats above, re-addressed to the provider that owns the device:
+ * their remedy (`boot-device force=true`) is refused on one, so telling an
+ * agent to reboot it is a dead end. Same blind/standing split, different
+ * audience.
+ */
+function externalCaveat(deviceId: string, body: string): string {
+  return `${externalSupportHint(deviceId) ?? "This device is supplied by an external provider."} ${body}`;
+}
+
+const EXTERNAL_BLIND_BODY =
+  "The accessibility read returned no elements, and argent cannot reboot this device to apply the " +
+  "pre-boot accessibility settings. Restart it from that application, or take a screenshot to see " +
+  "the screen.";
+
+const EXTERNAL_STANDING_BODY =
+  "System dialogs and native modals may not appear in this tree; everything else reads normally. " +
+  "Argent cannot reboot this device to apply the full accessibility settings — restart it from that " +
+  "application if something you expect is missing.";
+
+/**
+ * Which caveat a hint carries, in either wording. The provider's version names
+ * the provider, so there is no single constant to compare against, but its body
+ * is fixed. Without this, a provider's device is the one device told the
+ * standing caveat on every call.
+ */
+function isStandingCaveat(hint: string | undefined): boolean {
+  return hint === DEGRADED_STANDING_HINT || Boolean(hint?.endsWith(EXTERNAL_STANDING_BODY));
+}
+
+function isBlindCaveat(hint: string | undefined): boolean {
+  return hint === DEGRADED_BLIND_HINT || Boolean(hint?.endsWith(EXTERNAL_BLIND_BODY));
+}
+
 // Devices already told DEGRADED_STANDING_HINT. Not cleared on shutdown or
 // disposal — the externally-booted state outlives any one service instance —
 // but cleared per device when a read comes back off that state, so a later
@@ -55,11 +100,11 @@ export function withBootCaveatOncePerDevice(
   deviceId: string,
   data: DescribeTreeData
 ): DescribeTreeData {
-  if (data.hint !== DEGRADED_STANDING_HINT) {
+  if (!isStandingCaveat(data.hint)) {
     // A read that is not degraded at all means the caveat no longer describes
     // this device, so a later external boot has to be able to say it again. The
     // blind caveat is the same degraded state read blind, so it does not reset.
-    if (data.hint !== DEGRADED_BLIND_HINT) bootCaveatToldDevices.delete(deviceId);
+    if (!isBlindCaveat(data.hint)) bootCaveatToldDevices.delete(deviceId);
     return data;
   }
   if (!bootCaveatToldDevices.has(deviceId)) {
@@ -110,6 +155,14 @@ function emptyTree(): DescribeNode {
   });
 }
 
+/**
+ * The only shape in which the fallback can run on a device we did not boot.
+ */
+function lendsNativeDevtools(deviceId: string): boolean {
+  const external = findExternalDevice(deviceId);
+  return Boolean(external?.capabilities.has("native-devtools") && external.nativeDevtools);
+}
+
 interface DescribeIosParams {
   bundleId?: string;
 }
@@ -154,6 +207,8 @@ export async function describeIos(
     axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
     degraded = axApi.degraded;
   } catch (err) {
+    // Not an empty screen, and the reboot the empty tree prescribes is refused too.
+    if (isFirstLaunchRefusal(err)) throw err;
     // Carry on with an empty tree so the native-devtools fallback below still
     // runs. A missing TCP-transport artifact is a config error, not a boot-state
     // one, so it must not read as degraded.
@@ -178,13 +233,25 @@ export async function describeIos(
     : tree.children.length === 0
       ? DEGRADED_BLIND_HINT
       : DEGRADED_STANDING_HINT;
+  // Both degraded hints end in "boot-device with force=true", which is refused
+  // on a provider's device. Keep the blind/standing split, redirect the remedy.
+  // Redirected before the composition below, so the comparison still sees a
+  // bare constant.
+  const deviceDegradedHint =
+    degradedHint !== undefined && isExternalId(device.id)
+      ? externalCaveat(
+          device.id,
+          degradedHint === DEGRADED_BLIND_HINT ? EXTERNAL_BLIND_BODY : EXTERNAL_STANDING_BODY
+        )
+      : degradedHint;
+
   const hint =
     resolverHint ??
     (readFailureHint
-      ? degradedHint
-        ? `${degradedHint}. ${readFailureHint}`
+      ? deviceDegradedHint
+        ? `${deviceDegradedHint}. ${readFailureHint}`
         : readFailureHint
-      : degradedHint);
+      : deviceDegradedHint);
 
   if (tree.children.length > 0) {
     return { tree, source: "ax-service", hint };
@@ -208,6 +275,21 @@ export async function describeIos(
     return { tree, source: "ax-service", hint: hint ?? NON_INJECTABLE_HINT };
   }
 
+  // Without a lent socket the fallback would inject our own dylib, which is
+  // refused here. Say so rather than let that error replace describe's real
+  // empty-tree result. An unexplained "no elements" reads as a bug.
+  if (isExternalId(device.id) && !lendsNativeDevtools(device.id)) {
+    return {
+      hint:
+        hint ??
+        `${externalSupportHint(device.id) ?? "This device is supplied by an external provider."} ` +
+          `The native view-hierarchy fallback is unavailable on it, so an empty tree here ` +
+          `means the accessibility tree itself was empty. Take a screenshot to see the screen.`,
+      source: "ax-service",
+      tree,
+    };
+  }
+
   let nativeApi: NativeDevtoolsApi;
   try {
     const ndRef = nativeDevtoolsRef(device);
@@ -225,10 +307,12 @@ export async function describeIos(
 
     // Degrade a rejection (the env re-apply this runs first fails on a sim that
     // went away mid-call) rather than letting the outer catch turn a named
-    // remedy into a bare "could not be read".
-    const state = await nativeApi
-      .appConnectionState(target.bundleId)
-      .catch(() => "indeterminate" as const);
+    // remedy into a bare "could not be read". A refusal is not an unmeasured
+    // app, which would be told to restart, so it goes to the outer catch.
+    const state = await nativeApi.appConnectionState(target.bundleId).catch((err: unknown) => {
+      if (isFirstLaunchRefusal(err)) throw err;
+      return "indeterminate" as const;
+    });
     if (state !== "connected") {
       // The diagnosis rides out as a hint in every state: `hint` is describe's
       // only prose channel, and the one place `should_restart` is rendered as
@@ -260,7 +344,11 @@ export async function describeIos(
     return { tree: nativeTree, source: "native-devtools", hint };
   } catch (err) {
     // The service answered but no hierarchy came back: no connected app to
-    // auto-target, an ambiguous frontmost, or the query threw. Returning the
+    // auto-target, an ambiguous frontmost, the query threw, or measuring the
+    // app was refused because Xcode's component install is pending. That
+    // refusal says nothing about the accessibility read, so it is not thrown:
+    // a wait keeps polling until the tree fills, and the hint carries the
+    // refusal's reason. Returning the
     // bare tree would say the screen is empty when it could not be read — and
     // `await-ui-element`'s blind-read guard keys off `hint` / `should_restart`,
     // so with neither set a `hidden` wait resolves against an element that may
@@ -268,6 +356,10 @@ export async function describeIos(
     // invent beyond the message the resolver already carries.
     return { tree, source: "ax-service", hint: unexplainedHint(hint, errMsg(err), params) };
   }
+}
+
+function isFirstLaunchRefusal(err: unknown): boolean {
+  return getFailureSignal(err)?.error_code === FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING;
 }
 
 function errMsg(err: unknown): string {

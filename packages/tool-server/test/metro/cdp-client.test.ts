@@ -287,6 +287,35 @@ describe("CDPClient", () => {
       await client.disconnect();
     });
 
+    it("an unanswered binding rejects with DEBUGGER_CDP_BINDING_TIMEOUT and paused-vs-frozen recovery", async () => {
+      const client = new CDPClient(`ws://localhost:${port}`);
+      await client.connect();
+      const ws = await waitForServer();
+      // The evaluate is answered, the binding never fires — exactly what a
+      // runtime paused at a breakpoint does, since the script is dispatched
+      // with awaitPromise off.
+      ws.on("message", (raw) => {
+        const msg = JSON.parse(raw.toString());
+        ws.send(JSON.stringify({ id: msg.id, result: { result: { value: "ok" } } }));
+      });
+
+      const err = await rejection(client.evaluateWithBinding("s()", "req-t", { timeout: 50 }));
+      const message = (err as Error).message;
+      expect(message).toContain("Binding response for requestId=req-t timed out");
+      // Without recovery guidance an agent reads this as transient and
+      // retry-loops, each pass waiting out the full timeout.
+      expect(message).toMatch(/paused at a breakpoint/);
+      expect(message).toMatch(/resume/);
+      expect(message).toMatch(/restart the app/);
+      expect(message).toMatch(/Do not retry in a loop/);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_TIMEOUT,
+        failure_stage: "debugger_cdp_binding",
+        error_kind: "timeout",
+      });
+      await client.disconnect();
+    });
+
     it("server close mid-request rejects the pending send with DEBUGGER_CDP_CONNECTION_CLOSED", async () => {
       const client = new CDPClient(`ws://localhost:${port}`);
       await client.connect();

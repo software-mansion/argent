@@ -59,13 +59,21 @@ function parsedDataA(): NativeProfilerParsedData {
     ],
     cpuHotspots: [],
     memoryLeaks: [],
+    leaksRecorded: true,
     mallocStackLogging: true,
     wallClockStartMs: A_START, // frozen at analyze — the anchor that must be used
   };
 }
 
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  for (const dir of tempDirs.splice(0)) await fs.rm(dir, { recursive: true, force: true });
+});
+
 async function writeReactCommits(): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "p5-frozen-anchor-"));
+  tempDirs.push(dir);
   const commitsPath = path.join(dir, "commits.json");
   const commit = {
     commitIndex: 0,

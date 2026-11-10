@@ -19,7 +19,9 @@ import {
   MAX_RECORDINGS,
   getFlowPath,
   appIdForPlatform,
+  authoringPlatform,
   chromiumLaunchSpec,
+  iosLaunchArgs,
   writeNewFlowFile,
   blockSteps,
   BLOCK_DIRECTIVE_KEYS,
@@ -29,14 +31,18 @@ import {
 // ── serializeFlow ────────────────────────────────────────────────────
 
 describe("serializeFlow", () => {
+  it("writes the format version as the first key", async () => {
+    expect(serializeFlow({ executionPrerequisite: "", steps: [] })).toBe("version: 1\nsteps: []\n");
+  });
+
   it("serializes an empty flow with prerequisite", async () => {
     const flow: FlowFile = {
       executionPrerequisite: "App on home screen",
       steps: [],
     };
-    const result = serializeFlow(flow);
-    expect(result).toContain("executionPrerequisite: App on home screen");
-    expect(result).toContain("steps: []");
+    expect(serializeFlow(flow)).toBe(
+      "version: 1\nsteps: []\nexecutionPrerequisite: App on home screen\n"
+    );
   });
 
   it("serializes echo steps", async () => {
@@ -168,7 +174,7 @@ describe("parseFlow", () => {
 
   it("throws on unrecognized entries", async () => {
     const content = 'executionPrerequisite: ""\nsteps:\n  - bogus: line\n';
-    expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
+    expect(() => parseFlow(content)).toThrow("Unrecognized e2e test entry");
   });
 
   it("renders a small unrecognized entry in full", async () => {
@@ -189,15 +195,18 @@ describe("parseFlow", () => {
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
-    expect(message).toContain("Unrecognized flow entry");
+    expect(message).toContain("Unrecognized e2e test entry");
     expect(message).toContain("…(+");
     expect(message).not.toContain("SECRET-TAIL");
     expect(message.length).toBeLessThan(400);
   });
 
-  it("throws when content is not an object with steps", async () => {
-    expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
-  });
+  it.each([["- echo: Hello\n"], ["~\n"], ["hello\n"], ["42\n"]])(
+    "throws when content is not an object with steps: %j",
+    async (content) => {
+      expect(() => parseFlow(content)).toThrow("expected an object with a steps array");
+    }
+  );
 
   it("classifies a YAML syntax error as a validation failure with the parser's detail", async () => {
     let thrown: unknown;
@@ -212,7 +221,7 @@ describe("parseFlow", () => {
     expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_FILE_INVALID);
     // The yaml library's line/column detail must survive so the user can
     // locate the syntax error.
-    expect((thrown as Error).message).toContain("Invalid flow file:");
+    expect((thrown as Error).message).toContain("Invalid e2e test file:");
     expect((thrown as Error).message).toContain("line 1");
   });
 
@@ -237,7 +246,7 @@ describe("parseFlow", () => {
     ["a null", 'executionPrerequisite: ""\nsteps:\n  - ~\n'],
   ])("names the step shape when %s sits in the top-level steps list", (_shape, content) => {
     expect(entryRejectionMessage(content)).toContain(
-      "Unrecognized flow entry (step must be an object)"
+      "Unrecognized e2e test entry (step must be an object)"
     );
   });
 
@@ -248,8 +257,19 @@ describe("parseFlow", () => {
     // `when:` is only the vehicle — it is today's sole block directive, and the
     // guard it reaches is parseBlockSteps', shared by every block directive.
     expect(entryRejectionMessage(content)).toContain(
-      "Unrecognized flow entry (step must be an object)"
+      "Unrecognized e2e test entry (step must be an object)"
     );
+  });
+
+  it.each([
+    ["await.text.in", "steps:\n  - await: { text: { contains: Welcome } }\n"],
+    ["assert.text.in", "steps:\n  - assert: { text: { contains: Welcome } }\n"],
+    ["when.text.in", "steps:\n  - when: { text: { contains: Welcome } }\n    steps: [echo: hi]\n"],
+    ["type.into", "steps:\n  - type: { text: hello }\n"],
+  ])("classifies an omitted %s instead of crashing on the render", (where, content) => {
+    // An absent key reaches badEntry as `undefined`, which JSON.stringify
+    // renders as the value `undefined` rather than a string.
+    expect(entryRejectionMessage(content)).toContain(`Unrecognized e2e test entry (${where}:`);
   });
 
   it("sugars a bare-string selector into a loose { text } for tap", async () => {
@@ -340,7 +360,7 @@ describe("parseFlow", () => {
           parseFlow(`steps:\n  - tap: { text: ${yamlText}, ${field}: ${value} }\n`);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          const detail = /^Unrecognized flow entry \((.*)\): /.exec(message)?.[1];
+          const detail = /^Unrecognized e2e test entry \((.*)\): /.exec(message)?.[1];
           expect(detail).toBeDefined();
           return detail!;
         }
@@ -671,7 +691,7 @@ describe("parseFlow", () => {
           },
         ],
       })
-    ).toThrow("Cannot serialize flow await.timeout: needs a positive number of milliseconds");
+    ).toThrow("Cannot serialize e2e test await.timeout: needs a positive number of milliseconds");
   });
 
   it("rejects a timeout on an assert step (an assert is an immediate check)", async () => {
@@ -740,8 +760,26 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([{ kind: "snapshot", name: "home", maxMismatch: 1.5 }]);
   });
 
+  it.each([
+    ['" 1.5 "', 1.5],
+    ['".5"', 0.5],
+    ['"+1"', 1],
+    ['"5."', 5],
+  ])("accepts the quoted decimal maxMismatch %s", (quoted, expected) => {
+    const flow = parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${quoted} }\n`);
+    expect(flow.steps).toEqual([{ kind: "snapshot", name: "home", maxMismatch: expected }]);
+  });
+
   it("rejects a non-numeric, negative, or out-of-range maxMismatch", async () => {
     for (const bad of ['"5%"', "-1", "101", ".nan"]) {
+      expect(() =>
+        parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)
+      ).toThrow("snapshot maxMismatch must be a number between 0 and 100");
+    }
+  });
+
+  it("rejects maxMismatch values that Number() would silently coerce", async () => {
+    for (const bad of ["", "null", "true", "false", "[]", '"  "', '"0x10"']) {
       expect(() =>
         parseFlow(`steps:\n  - snapshot: { name: home, maxMismatch: ${bad} }\n`)
       ).toThrow("snapshot maxMismatch must be a number between 0 and 100");
@@ -847,6 +885,76 @@ describe("parseFlow", () => {
     expect(parseFlow(yaml).steps).toEqual(steps);
   });
 
+  describe("format version", () => {
+    const thrown = (content: string): unknown => {
+      try {
+        parseFlow(content);
+      } catch (e) {
+        return e;
+      }
+      throw new Error("parseFlow did not throw");
+    };
+
+    it("reads a file without version, and one with version 1, the same", async () => {
+      const body = "steps:\n  - echo: hi\n";
+      expect(parseFlow(`version: 1\n${body}`)).toEqual(parseFlow(body));
+    });
+
+    it.each([[2], [3]])("refuses a version %i file and says to update", async (v) => {
+      const err = thrown(`version: ${v}\nsteps:\n  - echo: hi\n`);
+      expect((err as Error).message).toBe(
+        `The e2e test file is version ${v}, but this Argent reads up to version 1. Update Argent to run it.`
+      );
+      // `validation` is what lets `argent e2e run <dir>` move on to the next file.
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+        error_kind: "validation",
+      });
+    });
+
+    it.each([
+      ["adds a top-level key", "version: 2\nmetadata: x\nsteps: []\n"],
+      ["reshapes steps", "version: 2\nsteps:\n  main: []\n"],
+    ])("refuses a newer file that %s as newer, not as malformed", async (_, file) => {
+      expect(() => parseFlow(file)).toThrow(
+        "The e2e test file is version 2, but this Argent reads up to version 1. Update Argent to run it."
+      );
+    });
+
+    it.each([
+      ["0", "0"],
+      ["1.5", "1.5"],
+      ['"1"', '"1"'],
+      [".inf", "Infinity"],
+      [".nan", "NaN"],
+      ["&a [*a]", "[cyclic entry]"],
+    ])("rejects version: %s, naming it as %s", async (v, shown) => {
+      const err = thrown(`version: ${v}\nsteps: []\n`);
+      expect((err as Error).message).toBe(
+        `Invalid e2e test file: version must be a positive integer, got ${shown}`
+      );
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        error_kind: "validation",
+      });
+    });
+
+    it.each([["version:"], ["version: ~"], ["version: null"]])(
+      "reads %j as version 1",
+      async (line) => {
+        expect(parseFlow(`${line}\nsteps:\n  - echo: hi\n`)).toEqual(
+          parseFlow("steps:\n  - echo: hi\n")
+        );
+      }
+    );
+
+    it("caps an oversized version in the message", async () => {
+      expect(() => parseFlow(`version: ${"x".repeat(300)}\nsteps: []\n`)).toThrow(
+        /got "x{199}…\(\+102 chars\)$/
+      );
+    });
+  });
+
   // Flows are hand-authored YAML, so a misspelled option key must fail at
   // parse time — silently dropping it would apply the default instead and
   // surface later as a misleading runtime failure (wrong scroll direction,
@@ -943,10 +1051,25 @@ describe("parseFlow", () => {
       );
     });
 
+    it("names a non-finite step entry instead of null", async () => {
+      expect(() => parseFlow("steps:\n  - .inf\n")).toThrow(
+        "Unrecognized e2e test entry (step must be an object): Infinity"
+      );
+    });
+
     it("rejects an unknown top-level flow file key", async () => {
       expect(() =>
         parseFlow("executionPrerequisit: Settings open\nsteps:\n  - echo: hi\n")
       ).toThrow(/unknown key `executionPrerequisit` \(did you mean `executionPrerequisite`\?\)/);
+    });
+
+    it.each([
+      ["verison: 1", "unknown key `verison` (did you mean `version`?)"],
+      ["metadata: x", "unknown key `metadata`"],
+    ])("names the allowed top-level keys for %j", async (line, unknown) => {
+      expect(() => parseFlow(`${line}\nsteps: []\n`)).toThrow(
+        `Invalid e2e test file: ${unknown} — allowed top-level keys: version, executionPrerequisite, requires, steps`
+      );
     });
   });
 
@@ -1009,6 +1132,380 @@ const BLOCK_DIRECTIVE_SIBLING_REJECTIONS: Record<
     message: "a when step takes exactly { when: <condition>, steps: [...] }",
   },
 };
+
+describe("output references", () => {
+  const REFUSALS: [label: string, yaml: string][] = [
+    ["an echo message", 'steps:\n  - echo: "created {{output:user.id}}"\n'],
+    ["typed text", 'steps:\n  - type: { into: { id: name }, text: "{{output:user.name}}" }\n'],
+    ["a typed-into selector", 'steps:\n  - type: { into: { id: "{{output:field}}" }, text: hi }\n'],
+    ["selector text", 'steps:\n  - tap: { text: "{{output:user.name}}" }\n'],
+    ["a selector identifier", 'steps:\n  - tap: { id: "{{output:row}}" }\n'],
+    ["a selector role", 'steps:\n  - tap: { id: row, role: "{{output:kind}}" }\n'],
+    [
+      "a nested relation's selector",
+      'steps:\n  - tap: { id: row, within: { id: "{{output:card}}" } }\n',
+    ],
+    ["an await selector", 'steps:\n  - await: { visible: { id: "{{output:row}}" } }\n'],
+    [
+      "an await expectation",
+      'steps:\n  - await: { text: { in: total, equals: "{{output:sum}}" } }\n',
+    ],
+    [
+      "the selector an await text condition locates",
+      'steps:\n  - await: { text: { in: { id: "{{output:row}}" }, contains: Done } }\n',
+    ],
+    [
+      "an assert expectation",
+      'steps:\n  - assert: { text: { in: total, contains: "{{output:sum}}" } }\n',
+    ],
+    [
+      "a when guard selector",
+      'steps:\n  - when: { visible: { id: "{{output:row}}" } }\n    steps:\n      - echo: hi\n',
+    ],
+    [
+      "a when guard expectation",
+      'steps:\n  - when: { text: { in: total, equals: "{{output:sum}}" } }\n    steps:\n      - echo: hi\n',
+    ],
+    [
+      "a scroll-to target",
+      'steps:\n  - scroll-to: { target: { id: "{{output:row}}" }, direction: down }\n',
+    ],
+    [
+      "a scroll-to container",
+      'steps:\n  - scroll-to: { target: row, direction: down, within: { id: "{{output:list}}" } }\n',
+    ],
+    ["a long-press selector", 'steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n'],
+    ["a pinch selector", 'steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n'],
+    ["a rotate selector", 'steps:\n  - rotate: { on: { id: "{{output:map}}" }, by: 45 }\n'],
+    [
+      "a snapshot crop selector",
+      'steps:\n  - snapshot: { name: home, cropOn: { id: "{{output:row}}" } }\n',
+    ],
+    ["a tool arg", 'steps:\n  - tool: keyboard\n    args: { text: "{{output:code}}" }\n'],
+    [
+      "a tool arg nested in an array",
+      'steps:\n  - tool: run-sequence\n    args: { steps: [{ args: { text: "{{output:code}}" } }] }\n',
+    ],
+    [
+      "a step inside a when block",
+      'steps:\n  - when: { visible: { id: row } }\n    steps:\n      - echo: "{{output:user.id}}"\n',
+    ],
+    ["an exists condition's selector", 'steps:\n  - await: { exists: { id: "{{output:row}}" } }\n'],
+    ["a hidden condition's selector", 'steps:\n  - await: { hidden: { id: "{{output:row}}" } }\n'],
+    ["an after relation", 'steps:\n  - tap: { id: row, after: { id: "{{output:card}}" } }\n'],
+    ["a next relation", 'steps:\n  - tap: { id: row, next: { id: "{{output:card}}" } }\n'],
+    [
+      "a step inside a platform-guarded when block",
+      'steps:\n  - when: { platform: ios }\n    steps:\n      - echo: "{{output:user.id}}"\n',
+    ],
+  ];
+
+  it.each(REFUSALS)("refuses one in %s", (_label, yaml) => {
+    expect(() => parseFlow(yaml)).toThrow(/unsupported template syntax/);
+  });
+
+  it("names the field and asks for a literal value", () => {
+    let message = "";
+    try {
+      parseFlow('steps:\n  - type: { into: { id: name }, text: "{{output:user.name}}" }\n');
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("`type.text`");
+    expect(message).toContain("{{output:");
+    expect(message).toContain("Replace it with the literal value the step needs");
+  });
+
+  it("addresses a condition's selector and its expectation apart", () => {
+    const fieldNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /`([^`]+)` uses unsupported template syntax/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    expect(
+      fieldNamed('steps:\n  - await: { text: { in: { id: "{{output:row}}" }, contains: Done } }\n')
+    ).toBe("await.text.in.id");
+    expect(
+      fieldNamed('steps:\n  - await: { text: { in: total, contains: "{{output:sum}}" } }\n')
+    ).toBe("await.text.contains");
+    expect(fieldNamed('steps:\n  - assert: { visible: { id: "{{output:row}}" } }\n')).toBe(
+      "assert.visible.id"
+    );
+    expect(
+      fieldNamed(
+        'steps:\n  - when: { text: { in: total, equals: "{{output:sum}}" } }\n    steps:\n      - echo: hi\n'
+      )
+    ).toBe("when.text.equals");
+    expect(
+      fieldNamed('steps:\n  - scroll-to: { target: { id: "{{output:row}}" }, direction: down }\n')
+    ).toBe("scroll-to.target.id");
+  });
+
+  it("addresses a relation scope apart from the target it narrows", () => {
+    const locatorNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /\): (.*?) uses unsupported template syntax/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    expect(
+      locatorNamed(
+        'steps:\n  - await: { visible: { text: Ok, within: { text: "{{output:x}}" } } }\n'
+      )
+    ).toBe("`await.visible.within.text`");
+    expect(
+      locatorNamed('steps:\n  - tap: { id: a, within: { id: b, after: { id: "{{output:x}}" } } }\n')
+    ).toBe(
+      "`tap.within.after.id` (spelled `tap.on.within.after.id` if the target sits under `on:`)"
+    );
+  });
+
+  it("addresses a gesture target under `on:` whenever the step is known to spell it there", () => {
+    const locatorNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /\): (.*?) uses unsupported template syntax/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    // An option beside the target proves the options form; `pinch` and
+    // `rotate` have no other form. Each of these names one path.
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 2 }\n')).toBe(
+      "`tap.on.id`"
+    );
+    expect(
+      locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
+    ).toBe("`long-press.on.id`");
+    expect(locatorNamed('steps:\n  - pinch: { on: { id: "{{output:map}}" }, scale: 2 }\n')).toBe(
+      "`pinch.on.id`"
+    );
+    expect(locatorNamed('steps:\n  - rotate: { on: { id: "{{output:map}}" }, by: 45 }\n')).toBe(
+      "`rotate.on.id`"
+    );
+  });
+
+  it("names both gesture spellings when the parse cannot tell them apart", () => {
+    // A `tap`/`long-press` step with no option beside its target parses the
+    // same from either form, so exactly one of these two paths is in the
+    // author's file and the parse cannot say which. `times: 1` and an omitted
+    // `duration` are the shapes that reach this: both normalize away.
+    const locatorNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /\): (.*?) uses unsupported template syntax/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    expect(locatorNamed('steps:\n  - tap: { id: "{{output:row}}" }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 1 }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(
+      "`long-press.id` (spelled `long-press.on.id` if the target sits under `on:`)"
+    );
+  });
+
+  it("names the constraint a bare-string target parses into", () => {
+    const locatorNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /\): (.*?) uses unsupported template syntax/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    expect(locatorNamed('steps:\n  - tap: "{{output:row}}"\n')).toBe(
+      "`tap.text` (spelled `tap.on.text` if the target sits under `on:`)"
+    );
+    expect(
+      locatorNamed('steps:\n  - scroll-to: { target: "{{output:row}}", direction: down }\n')
+    ).toBe("`scroll-to.target.text`");
+  });
+
+  it("names the step, so a reference inside a block says which one", () => {
+    let message = "";
+    try {
+      parseFlow(
+        'steps:\n  - echo: first\n  - when: { visible: { id: row } }\n    steps:\n      - echo: ok\n      - echo: "{{output:user.id}}"\n'
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("Step 2.2 (`echo`)");
+  });
+
+  it("addresses a tool arg by its own path through the args", () => {
+    let message = "";
+    try {
+      parseFlow(
+        'steps:\n  - tool: run-sequence\n    args: { steps: [{ args: { text: "{{output:code}}" } }] }\n'
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("`args.steps[0].args.text`");
+  });
+
+  it("carries the parser's own entry failure code", () => {
+    let signal;
+    try {
+      parseFlow('steps:\n  - echo: "{{output:user.id}}"\n');
+    } catch (err) {
+      signal = getFailureSignal(err);
+    }
+    expect(signal?.error_code).toBe(FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED);
+  });
+
+  it("survives a cyclic tool-args anchor rather than blowing the stack", () => {
+    expect(() =>
+      parseFlow("steps:\n  - tool: keyboard\n    args: &a\n      self: *a\n")
+    ).not.toThrow();
+    expect(() =>
+      parseFlow(
+        'steps:\n  - tool: keyboard\n    args: &a\n      self: *a\n      text: "{{output:code}}"\n'
+      )
+    ).toThrow(/unsupported template syntax/);
+  });
+
+  it("reaches a leaf inside the two containers own properties do not show", () => {
+    expect(() =>
+      parseFlow(
+        '%YAML 1.1\n---\nsteps:\n  - tool: t\n    args:\n      inner: !!set\n        ? "{{output:x}}"\n'
+      )
+    ).toThrow(/`args.inner` uses unsupported template syntax/);
+    expect(() =>
+      parseFlow(
+        '%YAML 1.1\n---\nsteps:\n  - tool: t\n    args: !!omap\n      - k: "{{output:x}}"\n'
+      )
+    ).toThrow(/`args.k` uses unsupported template syntax/);
+  });
+
+  it("leaves fields off the supported list alone", () => {
+    expect(parseFlow('steps:\n  - launch: "com.acme.{{output:app}}"\n').steps[0]).toEqual({
+      kind: "launch",
+      app: "com.acme.{{output:app}}",
+    });
+    expect(
+      parseFlow(
+        'steps:\n  - launch: { chromium: { path: ./app, args: ["--seed={{output:order.id}}"] } }\n'
+      ).steps[0]
+    ).toEqual({
+      kind: "launch",
+      app: { chromium: { path: "./app", args: ["--seed={{output:order.id}}"] } },
+    });
+    expect(parseFlow('steps:\n  - run: "{{output:x}}/login.yaml"\n').steps[0]).toEqual({
+      kind: "run",
+      flow: "{{output:x}}/login.yaml",
+    });
+  });
+
+  it("refuses the three unscanned names whose own charset already forbids one", () => {
+    expect(() => parseFlow('steps:\n  - run: "{{output:x}}"\n')).toThrow(/must end in .yaml/);
+    expect(() => parseFlow('steps:\n  - script: { path: "{{output:x}}.mjs" }\n')).toThrow(
+      /filename must match/
+    );
+    expect(() => parseFlow('steps:\n  - snapshot: "{{output:x}}"\n')).toThrow(
+      /snapshot name .* must match/
+    );
+  });
+
+  it("cuts a long offending value in the message rather than quoting all of it", () => {
+    const filler = "x".repeat(400);
+    let message = "";
+    try {
+      parseFlow(`steps:\n  - echo: "{{output:user.id}}${filler}"\n`);
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    const quoted = /Replace it with the literal value the step needs: "(.*)"$/s.exec(message)?.[1];
+    expect(quoted).toBeDefined();
+    expect(quoted!.endsWith("…")).toBe(true);
+    // `MAX_ENTRY_RENDER_CHARS` (200) plus the ellipsis that replaces the rest.
+    expect(quoted!.length).toBe(201);
+    expect(message.length).toBeLessThan(1000);
+  });
+
+  it("leaves a pattern alone, at both levels that spell one", () => {
+    // A regular expression is not a literal — a `{{` in one is a
+    // quantifier-shaped sequence the author meant — so no regex is on the
+    // supported list. The marker is UNESCAPED in both patterns here: an escaped
+    // `\\{\\{output:` does not contain the marker at all, so it would pass
+    // whether or not the field were scanned, and pin nothing.
+    expect(parseFlow('steps:\n  - tap: { text: { matches: "{{output:.*" } }\n').steps[0]).toEqual({
+      kind: "tap",
+      selector: { textMatches: "{{output:.*" },
+    });
+    expect(
+      parseFlow('steps:\n  - assert: { text: { in: total, matches: "{{output:.*" } }\n').steps[0]
+    ).toMatchObject({ kind: "assert", expectedText: "{{output:.*", textMatch: "matches" });
+  });
+
+  it("refuses a pattern in a `when` guard, the one context where it fails silently", () => {
+    // The exemption above holds where an unmatchable pattern is LOUD: a tap
+    // finds nothing, an assert fails. A `when` guard that matches nothing is
+    // simply not met — the block is skipped and the run is green — so the two
+    // regex spellings are scanned there, exactly as the `{{secret:` guard in
+    // parseWhenCondition scans them.
+    const fieldNamed = (yaml: string): string => {
+      try {
+        parseFlow(yaml);
+      } catch (err) {
+        return /`([^`]+)` uses unsupported template syntax/.exec(
+          err instanceof Error ? err.message : ""
+        )![1]!;
+      }
+      throw new Error(`expected parseFlow to reject: ${yaml}`);
+    };
+
+    expect(
+      fieldNamed(
+        'steps:\n  - when: { visible: { text: { matches: "{{output:x}}" } } }\n    steps:\n      - echo: hi\n'
+      )
+    ).toBe("when.visible.text.matches");
+    expect(
+      fieldNamed(
+        'steps:\n  - when: { text: { in: { text: Total }, matches: "{{output:sum}}" } }\n    steps:\n      - echo: hi\n'
+      )
+    ).toBe("when.text.matches");
+    // A pattern in a relational scope of the guard degrades it the same way.
+    expect(
+      fieldNamed(
+        'steps:\n  - when: { visible: { text: Ok, within: { text: { matches: "{{output:x}}" } } } }\n    steps:\n      - echo: hi\n'
+      )
+    ).toBe("when.visible.within.text.matches");
+  });
+
+  it("does not confuse a secret placeholder for one", () => {
+    expect(
+      parseFlow('steps:\n  - type: { into: { id: pw }, text: "{{secret:APP_PASSWORD}}" }\n')
+        .steps[0]
+    ).toMatchObject({ kind: "type", text: "{{secret:APP_PASSWORD}}" });
+  });
+});
 
 // The parser's block list and blockSteps' runtime answer are the same claim
 // asked twice; a directive only one of them knows drops its whole block from
@@ -1080,7 +1577,7 @@ describe("chromium launch parsing", () => {
 
   it("rejects a chromium map with non-string args", async () => {
     expect(() =>
-      parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [1, 2] } }\n")
+      parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [[--flag]] } }\n")
     ).toThrow(/launch needs/);
   });
 });
@@ -1112,6 +1609,75 @@ describe("chromiumLaunchSpec", () => {
     );
     expect(appIdForPlatform({ chromium: "./app" }, "chromium")).toBe("./app");
     expect(appIdForPlatform({ ios: "com.acme.app" }, "chromium")).toBeNull();
+  });
+});
+
+describe("ios launch args", () => {
+  it("parses an ios { app, args } entry", async () => {
+    const flow = parseFlow(
+      'steps:\n  - launch: { ios: { app: com.acme.app, args: [-Flag, "YES"] }, android: com.acme.app }\n'
+    );
+    expect(flow.steps).toEqual([
+      {
+        kind: "launch",
+        app: { ios: { app: "com.acme.app", args: ["-Flag", "YES"] }, android: "com.acme.app" },
+      },
+    ]);
+  });
+
+  it("parses an ios { app } entry with no args", async () => {
+    const flow = parseFlow("steps:\n  - launch: { ios: { app: com.acme.app } }\n");
+    expect(flow.steps).toEqual([{ kind: "launch", app: { ios: { app: "com.acme.app" } } }]);
+  });
+
+  it("round-trips an ios { app, args } launch through YAML", async () => {
+    const flow: FlowFile = {
+      executionPrerequisite: "",
+      steps: [{ kind: "launch", app: { ios: { app: "com.acme.app", args: ["-Flag", "YES"] } } }],
+    };
+    expect(parseFlow(serializeFlow(flow)).steps).toEqual(flow.steps);
+  });
+
+  it("rejects an ios map with no app, an empty app, or non-string args", async () => {
+    expect(() => parseFlow("steps:\n  - launch: { ios: { args: [-Flag] } }\n")).toThrow(
+      /launch needs/
+    );
+    expect(() => parseFlow('steps:\n  - launch: { ios: { app: "" } }\n')).toThrow(/launch needs/);
+    expect(() =>
+      parseFlow("steps:\n  - launch: { ios: { app: com.acme.app, args: [[-Flag]] } }\n")
+    ).toThrow(/launch needs/);
+  });
+
+  it("names an unquoted number or boolean arg and says to quote it", async () => {
+    expect(() =>
+      parseFlow("steps:\n  - launch: { ios: { app: com.acme.app, args: [-Count, 5] } }\n")
+    ).toThrow('launch.ios.args[1] is a number (5); quote it so it stays a string: "5"');
+    expect(() =>
+      parseFlow("steps:\n  - launch: { ios: { app: com.acme.app, args: [-Flag, true] } }\n")
+    ).toThrow('launch.ios.args[1] is a boolean (true); quote it so it stays a string: "true"');
+    expect(() =>
+      parseFlow("steps:\n  - launch: { chromium: { path: ./app, args: [--port, 9222] } }\n")
+    ).toThrow("launch.chromium.args[1] is a number (9222)");
+  });
+
+  it("rejects an unknown key in an ios map", async () => {
+    expect(() =>
+      parseFlow("steps:\n  - launch: { ios: { app: com.acme.app, arg: [-Flag] } }\n")
+    ).toThrow(/launch.ios has unknown key `arg`/);
+  });
+
+  it("appIdForPlatform returns the bundle id for ios and ios-remote", async () => {
+    const app = { ios: { app: "com.acme.app", args: ["-Flag"] }, native: "com.acme.native" };
+    expect(appIdForPlatform(app, "ios")).toBe("com.acme.app");
+    expect(appIdForPlatform(app, "ios-remote")).toBe("com.acme.app");
+    expect(appIdForPlatform(app, "android")).toBe("com.acme.native");
+  });
+
+  it("iosLaunchArgs reads only an ios { app, args } entry", async () => {
+    expect(iosLaunchArgs({ ios: { app: "com.acme.app", args: ["-Flag"] } })).toEqual(["-Flag"]);
+    expect(iosLaunchArgs({ ios: "com.acme.app" })).toBeUndefined();
+    expect(iosLaunchArgs("com.acme.app")).toBeUndefined();
+    expect(iosLaunchArgs(undefined)).toBeUndefined();
   });
 });
 
@@ -1155,6 +1721,47 @@ describe("native launch shorthand", () => {
   });
 });
 
+// ── the authoring platform fold ──────────────────────────────────────
+
+describe("the authoring platform fold", () => {
+  it("folds only ios-remote, and leaves every writable platform alone", async () => {
+    expect(authoringPlatform("ios-remote")).toBe("ios");
+    for (const p of ["ios", "android", "chromium", "vega"]) {
+      expect(authoringPlatform(p)).toBe(p);
+    }
+  });
+
+  it("a launch map resolves its ios entry on a remote simulator", async () => {
+    // A remote sim runs the same app from the same store as a local one, and a
+    // flow file names no host — so the author's `ios` key is its entry.
+    const app = { ios: "com.acme.app", android: "com.acme.app.android" };
+    expect(appIdForPlatform(app, "ios-remote")).toBe("com.acme.app");
+    expect(appIdForPlatform(app, "ios")).toBe("com.acme.app");
+  });
+
+  it("declares nothing on a remote simulator when the map has no ios and no native key", async () => {
+    // The fold shares iOS's entry; it does not invent one out of another
+    // platform's. A flow that only ever ran on Android still fails here.
+    expect(appIdForPlatform({ android: "com.acme.app.android" }, "ios-remote")).toBeNull();
+  });
+
+  it("still falls back to native on a remote simulator", async () => {
+    expect(appIdForPlatform({ native: "com.acme.app" }, "ios-remote")).toBe("com.acme.app");
+    // …and a specific ios key still wins over it.
+    expect(appIdForPlatform({ native: "com.acme.app", ios: "com.acme.dev" }, "ios-remote")).toBe(
+      "com.acme.dev"
+    );
+  });
+
+  it("keeps `ios-remote` unwritable: the launch map still rejects the key", async () => {
+    // The fold exists so no flow file needs a remote key. Accepting one would
+    // let a flow name the host, which is the thing a flow deliberately cannot do.
+    expect(() => parseFlow('steps:\n  - launch: { "ios-remote": com.acme.app }\n')).toThrow(
+      /allowed keys: native, ios, android, chromium, vega/
+    );
+  });
+});
+
 // ── Recording sessions ───────────────────────────────────────────────
 
 // Recordings live in a map keyed by the resolved flow file path, so a session
@@ -1181,7 +1788,7 @@ describe("recording sessions", () => {
 
   it("throws when the key has no recording", async () => {
     await expect(requireRecordingSession("/tmp/proj-a", "my-flow")).rejects.toThrow(
-      /No active recording for flow "my-flow"/
+      /No active recording for e2e test "my-flow"/
     );
   });
 
@@ -1201,7 +1808,7 @@ describe("recording sessions", () => {
     await start("/tmp/proj-a", "checkout");
     await start("/tmp/proj-b", "login");
     await expect(requireRecordingSession("/tmp/proj-a", "chekout")).rejects.toThrow(
-      /No active recording for flow "chekout" in \/tmp\/proj-a\./
+      /No active recording for e2e test "chekout" in \/tmp\/proj-a\./
     );
     await expect(requireRecordingSession("/tmp/proj-a", "chekout")).rejects.toThrow(
       /Active recordings: "checkout" \(plus 1 in other projects\)\./
@@ -1299,7 +1906,7 @@ describe("recording sessions", () => {
     clearRecordingSession(await requireRecordingSession("/tmp/proj-a", "my-flow"));
     expect(await getRecordingSession("/tmp/proj-a", "my-flow")).toBeUndefined();
     await expect(requireRecordingSession("/tmp/proj-a", "my-flow")).rejects.toThrow(
-      /No active recording for flow "my-flow"/
+      /No active recording for e2e test "my-flow"/
     );
     // The unrelated recording is untouched.
     expect((await requireRecordingSession("/tmp/proj-a", "other-flow")).name).toBe("other-flow");
@@ -1314,7 +1921,7 @@ describe("recording sessions", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clear-moved-key-"));
     try {
       const root = path.join(dir, "proj");
-      const flows = path.join(root, ".argent", "flows");
+      const flows = path.join(root, ".argent", "e2e");
       await fs.mkdir(flows, { recursive: true });
       const first = path.join(dir, "first.yaml");
       const second = path.join(dir, "second.yaml");
@@ -1441,7 +2048,7 @@ describe("getFlowPath name validation", () => {
 
   it("accepts plain alphanumeric names", async () => {
     expect(getFlowPath(root, "my-flow_1")).toBe(
-      path.join(root, ".argent", "flows", "my-flow_1.yaml")
+      path.join(root, ".argent", "e2e", "my-flow_1.yaml")
     );
   });
 
@@ -1452,23 +2059,23 @@ describe("getFlowPath name validation", () => {
   });
 
   it("rejects path-traversal segments", async () => {
-    expect(() => getFlowPath(root, "../../etc/passwd")).toThrow(/Invalid flow name/);
-    expect(() => getFlowPath(root, "../foo")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath(root, "../../etc/passwd")).toThrow(/Invalid e2e test name/);
+    expect(() => getFlowPath(root, "../foo")).toThrow(/Invalid e2e test name/);
   });
 
   it("rejects path separators", async () => {
-    expect(() => getFlowPath(root, "foo/bar")).toThrow(/Invalid flow name/);
-    expect(() => getFlowPath(root, "/abs/path")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath(root, "foo/bar")).toThrow(/Invalid e2e test name/);
+    expect(() => getFlowPath(root, "/abs/path")).toThrow(/Invalid e2e test name/);
   });
 
   it("rejects names with spaces or shell metacharacters", async () => {
-    expect(() => getFlowPath(root, "foo bar")).toThrow(/Invalid flow name/);
-    expect(() => getFlowPath(root, "foo;bar")).toThrow(/Invalid flow name/);
-    expect(() => getFlowPath(root, "foo$(id)")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath(root, "foo bar")).toThrow(/Invalid e2e test name/);
+    expect(() => getFlowPath(root, "foo;bar")).toThrow(/Invalid e2e test name/);
+    expect(() => getFlowPath(root, "foo$(id)")).toThrow(/Invalid e2e test name/);
   });
 
   it("rejects empty names", async () => {
-    expect(() => getFlowPath(root, "")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath(root, "")).toThrow(/Invalid e2e test name/);
   });
 });
 

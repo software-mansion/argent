@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { PNG } from "pngjs";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   analyzeScreenshotTextChanges,
   DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE,
@@ -27,7 +28,7 @@ export interface DiffBounds {
   height: number;
 }
 
-export interface DominantColorChange {
+interface DominantColorChange {
   channel: "red" | "green" | "blue" | "luminance" | "none";
   direction: "increase" | "decrease" | "none";
   magnitude: number;
@@ -386,14 +387,28 @@ async function writeDiffArtifacts(params: {
   );
 }
 
+// Both sides decode concurrently, so naming the path is the only thing that
+// tells the caller which of the two images was the bad one.
 async function decodePngFile(filePath: string): Promise<DecodedPng> {
-  const buffer = await fs.readFile(filePath);
-  const png = PNG.sync.read(buffer);
-  return {
-    width: png.width,
-    height: png.height,
-    data: png.data,
-  };
+  try {
+    const buffer = await fs.readFile(filePath);
+    const png = PNG.sync.read(buffer);
+    return {
+      width: png.width,
+      height: png.height,
+      data: png.data,
+    };
+  } catch (err) {
+    throw new FailureError(
+      `Could not read PNG at ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      {
+        error_code: FAILURE_CODES.SCREENSHOT_DIFF_INPUT_INVALID,
+        failure_stage: "screenshot_diff_decode_failed",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 }
 
 async function analyzeScreenshotTextChangesSafely(

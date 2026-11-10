@@ -20,15 +20,7 @@ import {
 } from "../../../utils/react-profiler/scripts";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
-
-const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .describe(
-      "Device id from list-devices — the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
-    ),
-});
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 interface StopReadResult {
   live: ProfilingDataBackend | null;
@@ -144,29 +136,37 @@ export function flattenProfilingData(
   return { commits, totalCommits: flatCommitIndex, unattributedByCommit };
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: z
+    .string()
+    .describe(
+      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+    ),
+});
+
 export function createReactProfilerStopTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-stop",
+    description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
+Stores the results for react-profiler-analyze or react-profiler-cpu-summary.
+Call react-profiler-start first, then exercise the app, then call this.
+Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices }.
+If some fibers' display names could not be resolved (typically modals, tooltips or animations that unmounted before stop), it also returns { unattributed_ms, unattributed_fiber_count, unattributed_commit_count }: the work missing from the per-component breakdown. Per-commit durations stay correct.
+Fails if no active profiling session exists or the CDP connection was lost during recording.`,
+    zodSchema,
     interaction: {
       startedMsg: () => "Stopping React profiler",
       completedMsg: () => "Stopped React profiler",
       failedMsg: ({ failureSignal }) =>
         `Failed to stop React profiler: ${failureSignal.error_code}`,
     },
-    description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
-Reads commit data from the in-app React DevTools backend.
-Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
-Call react-profiler-start first, then exercise the app, then call this.
-Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices } summarizing the session.
-When any commit had fibers whose display name could not be resolved at stop time (typically transient components like modals/tooltips/animations that unmounted before stop), the response also includes { unattributed_ms, unattributed_fiber_count, unattributed_commit_count } — these quantify how much work is not accounted for in the per-component breakdown (the per-commit duration itself remains correct).
-Fails if no active profiling session exists or the CDP connection was lost during recording.`,
-    zodSchema,
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${canonicalDeviceId(params.device_id)}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`;
       const snapshot = registry.getSnapshot();
       const entry = snapshot.services.get(psUrn);
 
@@ -207,8 +207,8 @@ Fails if no active profiling session exists or the CDP connection was lost durin
       // started fails further down with a far less actionable message.
       if (!api.profilingActive) {
         throw new FailureError(
-          "No active profiling run to stop. The session exists but Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
-            "Check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again.",
+          "No active profiling run to stop. Either the run ended without its data (a JS reload ends it: Metro's `r`, a red-box Reload, debugger-reload-metro), or Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
+            "After a reload, call react-profiler-start again. Otherwise check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again.",
           {
             error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
             failure_stage: "react_profiler_stop_inactive",

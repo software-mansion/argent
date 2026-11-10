@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { FAILURE_CODES, FailureError, TypedEventEmitter } from "@argent/registry";
+import { FAILURE_CODES, FailureError, TypedEventEmitter, getFailureSignal } from "@argent/registry";
 import * as crypto from "node:crypto";
 
 export interface ScriptInfo {
@@ -10,7 +10,7 @@ export interface ScriptInfo {
   endLine: number;
 }
 
-export interface ConsoleCallArg {
+interface ConsoleCallArg {
   type: string;
   value?: unknown;
   description?: string;
@@ -31,8 +31,36 @@ export type CDPClientEvents = {
   bindingCalled: (name: string, payload: string) => void;
   scriptParsed: (script: ScriptInfo) => void;
   paused: (params: Record<string, unknown>) => void;
+  resumed: () => void;
   consoleAPICalled: (params: ConsoleAPICalledParams) => void;
 };
+
+/**
+ * Where a `Debugger.paused` stopped the runtime, reduced to what an error needs.
+ */
+interface PausedState {
+  /** First call frame's source location, when the event carried one. */
+  location?: string;
+  /** CDP's own word for why: `other` for a breakpoint, `exception`, … */
+  reason: string;
+}
+
+/**
+ * Methods that need the VM running. Everything else is answered while paused,
+ * including `Debugger.resume`, so guarding more would break the calls that
+ * recover the session.
+ */
+const BLOCKED_WHILE_PAUSED = new Set(["Runtime.evaluate", "Runtime.callFunctionOn"]);
+
+/**
+ * Drop the build configuration Metro appends to a bundle url, about 150
+ * characters of `platform`, `dev` and `transform.*` that help nobody find
+ * where their app stopped. Keeps the original if trimming leaves nothing.
+ */
+function trimBundleQuery(url: string): string {
+  const trimmed = url.split(/[?&]/)[0]!.replace(/\/+$/, "");
+  return trimmed || url;
+}
 
 interface CDPExceptionDetails {
   text?: string;
@@ -93,10 +121,17 @@ export class CDPClient {
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
   private pendingBindings = new Map<string, PendingBinding>();
-  /** Set by addBinding when the runtime ACKs the command but installs nothing. */
+  /** Set by addBinding when the runtime rejects the command, or ACKs it but installs nothing. */
   private bindingUnavailable = false;
   private scripts = new Map<string, ScriptInfo>();
   private enabledDomains = new Set<string>();
+  /**
+   * Where the runtime is stopped, when it is. Argent sets no breakpoints, so a
+   * value here means another debugger on this runtime put it there.
+   *
+   * @see {@linkcode pausedAt}
+   */
+  private paused: { callFrames: unknown; reason: string } | undefined;
   private wsUrl: string;
   private sendOrigin: boolean;
 
@@ -152,7 +187,28 @@ export class CDPClient {
           })
         );
       };
+      // `ws` sets no handshake deadline: a target that accepts the TCP connection
+      // but never answers the upgrade would leave this pending indefinitely.
+      const timer = setTimeout(() => {
+        cleanup();
+        ws.terminate();
+        reject(
+          new FailureError(
+            `CDP WebSocket handshake with ${this.wsUrl} did not complete within ` +
+              `${DEFAULT_TIMEOUT_MS}ms. The host may be unreachable, or the target frozen ` +
+              `or not a CDP endpoint.`,
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_CONNECT_FAILED,
+              failure_stage: "debugger_cdp_connect",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              network_failure: "timeout",
+            }
+          )
+        );
+      }, DEFAULT_TIMEOUT_MS);
       const cleanup = () => {
+        clearTimeout(timer);
         ws.removeListener("open", onOpen);
         ws.removeListener("error", onError);
         ws.removeListener("close", onClose);
@@ -214,6 +270,67 @@ export class CDPClient {
     return this.ws?.readyState === WebSocket.OPEN;
   }
 
+  /** Where the runtime is stopped, or `undefined` when it is running. */
+  pausedAt(): PausedState | undefined {
+    if (!this.paused) return undefined;
+
+    return {
+      ...(this.locateFrames(this.paused.callFrames) ?? {}),
+      reason: this.paused.reason,
+    };
+  }
+
+  /**
+   * The first call frame that names a place a person could open. Reading
+   * `callFrames[0].url` is not enough, Hermes leaves `url` empty and
+   * identifies scripts by `location.scriptId`. The top frame is often a
+   * synthetic eval whose script nothing announced. Walking down lands in the
+   * app's own bundle.
+   */
+  private locateFrames(callFrames: unknown): { location: string } | undefined {
+    const frames = (callFrames ?? []) as {
+      location?: { lineNumber?: number; scriptId?: string };
+      url?: string;
+    }[];
+
+    for (const frame of frames) {
+      const scriptId = frame.location?.scriptId;
+      const url = frame.url || (scriptId ? this.scripts.get(scriptId)?.url : undefined);
+
+      if (!url) continue;
+
+      const line = frame.location?.lineNumber;
+      const where = trimBundleQuery(url);
+
+      return { location: line === undefined ? where : `${where}:${line + 1}` };
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Why a call cannot run, in terms of what the caller can do about it.
+   * Without this the request simply times out, which reads as a broken app and
+   * sends whoever is debugging to the wrong place.
+   */
+  private pausedError(method: string): FailureError {
+    const paused = this.pausedAt()!;
+    const where = paused.location ? ` at ${paused.location}` : "";
+    const why = paused.reason === "exception" ? "on an exception" : "at a breakpoint";
+
+    return new FailureError(
+      `The JS runtime is paused ${why}${where}, so ${method} cannot run. Argent does not set ` +
+        `breakpoints, so another debugger attached to this runtime stopped it. Resume it there ` +
+        `(or clear the breakpoint) and retry.`,
+      {
+        error_code: FAILURE_CODES.JS_RUNTIME_PAUSED,
+        error_kind: "unsupported",
+        failure_area: "tool_server",
+        failure_stage: "js_runtime_debugger_paused",
+      }
+    );
+  }
+
   send(
     method: string,
     params?: Record<string, unknown>,
@@ -230,6 +347,11 @@ export class CDPClient {
           })
         );
       }
+
+      if (this.paused && BLOCKED_WHILE_PAUSED.has(method)) {
+        return reject(this.pausedError(method));
+      }
+
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -295,14 +417,31 @@ export class CDPClient {
     return result.result?.value;
   }
 
-  async addBinding(name: string): Promise<void> {
-    await this.send("Runtime.addBinding", { name });
+  /**
+   * With `legacyInspector`, a protocol error leaves the binding unavailable
+   * instead of failing: that inspector (RN 0.73 - 0.75) has no such method and
+   * answers -32601. A modern host answers the same while it has no JS instance
+   * (mid-reload), where disabling the binding for the session would be wrong.
+   */
+  async addBinding(name: string, options?: { legacyInspector?: boolean }): Promise<void> {
+    try {
+      await this.send("Runtime.addBinding", { name });
+    } catch (error) {
+      if (
+        !options?.legacyInspector ||
+        getFailureSignal(error)?.error_code !== FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR
+      ) {
+        throw error;
+      }
+      this.bindingUnavailable = true;
+      return;
+    }
 
-    // The legacy Hermes inspector ACKs Runtime.addBinding and never installs the
-    // binding: no Runtime.bindingCalled fires, so waiters hang for the full
-    // timeout. Probe once here so evaluateWithBinding can fail fast. Only a
-    // positive observation of absence disables it — a probe that throws or
-    // answers unexpectedly leaves the binding assumed working.
+    // The legacy Hermes inspector of RN <= 0.72 ACKs Runtime.addBinding and never
+    // installs the binding: no Runtime.bindingCalled fires, so waiters hang for
+    // the full timeout. Probe once here so evaluateWithBinding can fail fast.
+    // Only a positive observation of absence disables it — a probe that throws
+    // or answers unexpectedly leaves the binding assumed working.
     const probe = await this.evaluate(`typeof ${name}`).catch(() => undefined);
     this.bindingUnavailable = probe === "undefined";
   }
@@ -322,8 +461,8 @@ export class CDPClient {
     if (this.bindingUnavailable) {
       return Promise.reject(
         new FailureError(
-          "This JS runtime acknowledges Runtime.addBinding but never installs the binding " +
-            "(legacy Hermes, React Native <= 0.72), so it cannot deliver a result over the " +
+          "This JS runtime has no working Runtime.addBinding (the legacy Hermes inspector " +
+            "rejects it or never installs the binding), so it cannot deliver a result over the " +
             "binding channel. Tools that read the React tree this way are unavailable here; " +
             "use `describe` to read on-screen structure.",
           {
@@ -340,12 +479,20 @@ export class CDPClient {
       const timer = setTimeout(() => {
         this.pendingBindings.delete(id);
         reject(
-          new FailureError(`Binding response for requestId=${id} timed out`, {
-            error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_TIMEOUT,
-            failure_stage: "debugger_cdp_binding",
-            failure_area: "tool_server",
-            error_kind: "timeout",
-          })
+          new FailureError(
+            `Binding response for requestId=${id} timed out — the runtime took the script ` +
+              `but never called back over the binding. It may be paused at a breakpoint ` +
+              `(the script is dispatched without awaiting it, so a paused runtime still ` +
+              `accepts it and never runs the callback), or frozen. Check the debugger and ` +
+              `resume it; if nothing is paused, restart the app. Do not retry in a loop — ` +
+              `each attempt waits out the full timeout.`,
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_TIMEOUT,
+              failure_stage: "debugger_cdp_binding",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+            }
+          )
         );
       }, timeout);
 
@@ -457,7 +604,23 @@ export class CDPClient {
     }
 
     if (method === "Debugger.paused") {
+      /**
+       * Kept raw and resolved on demand. A provider replaying this to a client
+       * that attached mid-stop delivers it before `Debugger.enable` has
+       * re-announced the scripts, so resolving now would find an empty map and
+       * lose the location. By the time anyone asks, they have arrived.
+       */
+      this.paused = {
+        callFrames: params.callFrames,
+        reason: (params.reason as string) ?? "unknown",
+      };
+
       this.events.emit("paused", params);
+    }
+
+    if (method === "Debugger.resumed") {
+      this.paused = undefined;
+      this.events.emit("resumed");
     }
 
     this.events.emit("event", method, params);
@@ -473,6 +636,11 @@ export class CDPClient {
   }
 
   private cleanup(): void {
+    // Pause state belongs to the connection that observed it. A still-stopped
+    // runtime re-announces itself on reconnect, so keeping the old value could
+    // only make a resumed one look stuck.
+    this.paused = undefined;
+
     // A request rejected here was already delivered and may have taken effect —
     // callers must not blindly retry side-effectful sends.
     const connectionClosed = () =>

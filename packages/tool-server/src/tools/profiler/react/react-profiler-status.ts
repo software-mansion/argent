@@ -10,15 +10,7 @@ import {
 } from "../../../utils/react-profiler/scripts";
 import type { ProfilerSessionOwner } from "../../../utils/react-profiler/session-ownership";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
-
-const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-    ),
-});
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 type ReadStateResult =
   | { hookExists: false }
@@ -43,11 +35,23 @@ interface StatusResponse extends Record<string, unknown> {
   note: string;
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: z
+    .string()
+    .describe(
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    ),
+});
+
 export function createReactProfilerStatusTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-status",
+    description: `Check the state of the React profiler session without side effects. Use when resuming after an interruption (debugger disconnect, unexpected error, agent pause) to decide whether to continue with react-profiler-stop, start a new session, or reconnect the debugger. Returns { session_status, is_running, current_owner, note, … }: session_status is active, stopped, taken_over (e.g. this tool-server restarted after react-profiler-start) or no_react_runtime, and note says what to do next.`,
+    zodSchema,
+    readOnly: true,
     interaction: {
       startedMsg: () => "Checking React profiler",
       completedMsg: ({ result }) =>
@@ -55,13 +59,11 @@ export function createReactProfilerStatusTool(
       failedMsg: ({ failureSignal }) =>
         `Failed to check React profiler: ${failureSignal.error_code}`,
     },
-    description: `Check the state of the React profiler session without side effects. Use after an interruption (debugger disconnect, unexpected error, agent pause) to decide whether to continue with react-profiler-stop, start a new session, or reconnect the debugger. Ownership is verified server-side against this tool-server's in-memory session — no token-threading is required. Returns { session_status, is_running, current_owner, … }. If this tool-server process restarted after react-profiler-start, status will report 'taken_over'; use react-profiler-start { force: true } to reclaim.`,
-    zodSchema,
     // RN-only: companion to react-profiler-start.
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params): Promise<StatusResponse> {
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${params.device_id}`;
 
       const noRuntime = (note: string): StatusResponse => ({
         hook_exists: false,

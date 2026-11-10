@@ -4,12 +4,18 @@ import { createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
+  CLIENT_SECRETS_HEADER,
+  E2E_DIR_CLIENT_HEADER,
+  LINKED_CALL_HEADER,
+  ToolParamAliasError,
+  canonicalToolArgs,
   describeParamIssues,
   getFailureSignal,
+  withFormerParamSpecs,
   type FailureSignal,
   type FileInputSpec,
   type Registry,
@@ -19,6 +25,7 @@ import {
   AI_CLIENTS,
   type AiTelemetryProps,
   type Platform as TelemetryPlatform,
+  type TelemetryDeviceKind,
 } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
@@ -30,6 +37,7 @@ import {
   buildScreenRecordingNote,
   getActiveScreenRecordings,
 } from "./utils/screen-recording-reminder";
+import { consumePendingSigningDetectionNote } from "./utils/ios-device/team-detect";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inputs";
@@ -39,9 +47,16 @@ import {
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
-import { resolveDevice } from "./utils/device-info";
-import { canonicalDeviceId } from "./utils/debugger/device-alias";
-import { refineTvPlatform } from "./utils/telemetry-platform";
+import { isIosPhysicalDevice, resolveDevice } from "./utils/device-info";
+import {
+  enforceExternalDeviceGrant,
+  externalProviderLabel,
+  externalSupportHint,
+  isExternalId,
+} from "./utils/external-devices";
+import { canonicalDeviceId, isLogicalKeyedDevice } from "./utils/debugger/device-alias";
+import { isProfiling } from "./utils/profiling-devices";
+import { attributeDeviceForTelemetry, type DeviceAttribution } from "./utils/telemetry-platform";
 import { deriveInvalidParams } from "./utils/invalid-params";
 import type { Server as HttpServer } from "node:http";
 import {
@@ -54,6 +69,9 @@ import {
   createChromiumServerRouter,
 } from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
+import { RESULT_NOTE_KEY } from "./tools/screenshot/dropped-geometry";
+import { renderFlagGated } from "./utils/flag-gated-text";
+import { directCallFailure } from "./utils/tool-result-verdict";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -158,16 +176,40 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: TelemetryPlatform } & AiTelemetryProps;
+/**
+ * The physical iPhone the call names as the device it acts on, if any. Reads
+ * `device` as well as the three spellings above: `flow-execute` names its
+ * target that way, and a session that only replays flows on the phone must
+ * still be handed the signing note.
+ */
+function targetedIosPhysicalDevice(data: unknown): string | null {
+  const record = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
+  const flowDevice = typeof record?.device === "string" ? record.device : null;
+  const deviceArg = extractDeviceArg(data) ?? flowDevice;
+  if (deviceArg === null) return null;
+  const device = resolveDevice(deviceArg);
+  return isIosPhysicalDevice(device) ? device.id : null;
+}
+
+type InvocationMeta = {
+  /** Coarse vendor label only — see {@link externalProviderLabel}. */
+  device_provider?: string;
+  platform?: TelemetryPlatform;
+  device_kind?: TelemetryDeviceKind;
+} & AiTelemetryProps;
 // Coarse context only: the raw device id (UDID / serial) infers a platform and is
 // never stored or forwarded; invalid_params carries schema-declared parameter
 // NAMES only (see deriveInvalidParams), never values or user-typed keys.
 type HttpFailureMeta = {
+  /** The call named the tool by a former id; `toolId` is the current one. */
+  alias_used?: boolean;
+  device_provider?: string;
   platform?: TelemetryPlatform;
+  device_kind?: TelemetryDeviceKind;
   invalid_params?: string[];
 } & AiTelemetryProps;
 
-function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
+function inferDeviceAttribution(deviceId: string | null): DeviceAttribution | null {
   if (!deviceId) return null;
   try {
     // Telemetry-only: rewrite a forwarded Metro logicalDeviceId back to the id
@@ -175,7 +217,14 @@ function inferPlatform(deviceId: string | null): TelemetryPlatform | null {
     // the same platform for one invocation — the opaque hex handle would
     // otherwise shape-classify as android. Unaliased ids pass through unchanged.
     const canonical = canonicalDeviceId(deviceId) ?? deviceId;
-    return refineTvPlatform(resolveDevice(canonical).platform, canonical);
+    const attribution = attributeDeviceForTelemetry(canonical);
+    // A session addressable only by its logicalDeviceId has no device id to
+    // derive a kind from. The handle's shape already fails the hardware-serial
+    // gate today, but Metro ids are opaque and their shape is not contractual.
+    if (attribution.device_kind && isLogicalKeyedDevice(canonical)) {
+      return { platform: attribution.platform };
+    }
+    return attribution;
   } catch {
     return null;
   }
@@ -205,39 +254,69 @@ function extractInvocationMeta(
 ): InvocationMeta | null {
   const meta: InvocationMeta = { ...aiMeta };
   if (hasCapability && data && typeof data === "object") {
-    const platform = platformFromArgs(data);
-    if (platform) meta.platform = platform;
+    const attribution = deviceAttributionFromArgs(data);
+    if (attribution) Object.assign(meta, attribution);
   }
+  const deviceArg = extractDeviceArg(data);
+  const provider = deviceArg ? externalProviderLabel(deviceArg) : undefined;
+  if (provider) meta.device_provider = provider;
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
 /**
- * Telemetry platform from a tool call's device arg, or null when it carries none.
- * A device id refines to `tvos` / `android-tv` once the runtime-kind cache is warm
- * (coarse `ios` / `android` until then); the `avdName`-only fallback is always
- * coarse.
+ * Telemetry platform and device kind from a tool call's device arg, or null when
+ * it carries none. A device id refines to `tvos` / `android-tv` once the
+ * runtime-kind cache is warm (coarse `ios` / `android` until then); the
+ * `avdName`-only fallback is always coarse and carries no kind.
  * Exported for tests (http-platform-alias.test.ts).
  */
-export function platformFromArgs(data: unknown): TelemetryPlatform | null {
+export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | null {
   if (!data || typeof data !== "object") return null;
   const deviceArg = extractDeviceArg(data);
-  if (deviceArg) return inferPlatform(deviceArg) ?? null;
+  if (deviceArg) return inferDeviceAttribution(deviceArg);
   // An `avdName`-only call (boot-device before the emulator exists) has no serial
   // to resolve a runtime kind from, so it stays coarse `android`; later `udid` /
   // `device_id` calls refine an Android TV AVD once the cache is warm.
-  if (typeof (data as Record<string, unknown>).avdName === "string") return "android";
+  if (typeof (data as Record<string, unknown>).avdName === "string") {
+    return { platform: "android" };
+  }
+  // HarmonyOS twin: an instance is named, not addressed.
+  if (typeof (data as Record<string, unknown>).harmonyInstance === "string") {
+    return { platform: "harmony" };
+  }
   return null;
+}
+
+/** Platform half of {@link deviceAttributionFromArgs}. */
+export function platformFromArgs(data: unknown): TelemetryPlatform | null {
+  return deviceAttributionFromArgs(data)?.platform ?? null;
 }
 
 /**
  * Attribution for a sub-tool an orchestrator dispatches: the AI client is
- * inherited, but the platform is re-derived from the child's OWN device arg.
- * Orchestrators like flow-execute carry no platform (and a flow can span several
- * devices), so the parent's platform is only the fallback.
+ * inherited, but platform, device kind and provider label are re-derived from
+ * the child's OWN device arg. Orchestrators like flow-execute carry no platform
+ * (and a flow can span several devices), so the parent's trio is the fallback
+ * only when the child names no device.
  */
 function deriveChildInvocationMeta(parentMeta: InvocationMeta, childArgs: unknown): InvocationMeta {
-  const childPlatform = platformFromArgs(childArgs);
-  return childPlatform ? { ...parentMeta, platform: childPlatform } : parentMeta;
+  const childAttribution = deviceAttributionFromArgs(childArgs);
+  if (!childAttribution) return parentMeta;
+  const childDeviceArg = extractDeviceArg(childArgs);
+  /**
+   * Re-derived like the platform. A flow can dispatch across several devices,
+   * so inheriting the parent's label would misattribute them.
+   */
+  const childProvider = childDeviceArg ? externalProviderLabel(childDeviceArg) : undefined;
+  // The child named its own device, so its attribution replaces the parent's
+  // wholesale: an `avdName`-only child must not report the parent's kind next
+  // to its own platform, nor an `ext:` parent's label next to a native device.
+  const { platform: _p, device_kind: _k, device_provider: _d, ...inherited } = parentMeta;
+  return {
+    ...inherited,
+    ...(childProvider ? { device_provider: childProvider } : {}),
+    ...childAttribution,
+  };
 }
 
 interface HttpAppOptions {
@@ -343,6 +422,21 @@ const UPLOAD_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const MAX_UPLOAD_STREAM_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB
 // Bounds the total of unconsumed uploads, so many small ones can't do the same.
 const MAX_PENDING_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024; // 8 GiB
+
+/**
+ * Pull a tool's per-call note off its result so it can ride the response
+ * envelope. Mutates `data` so the reserved key never reaches the client, where
+ * it would otherwise surface in `--json` output and in non-image results. The
+ * key is stripped whatever its value; only a non-empty string becomes a note.
+ */
+function takeToolNote(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const bag = data as Record<string, unknown>;
+  if (!(RESULT_NOTE_KEY in bag)) return undefined;
+  const note = bag[RESULT_NOTE_KEY];
+  delete bag[RESULT_NOTE_KEY];
+  return typeof note === "string" && note.length > 0 ? note : undefined;
+}
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
@@ -588,7 +682,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     const tools = snapshot.tools
       .map((id) => registry.getTool(id))
       .filter((def): def is NonNullable<typeof def> => isToolExposed(def))
-      .map((def) => {
+      .flatMap((def) => {
         const entry: {
           name: string;
           description: string;
@@ -598,17 +692,35 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           alwaysLoad?: boolean;
           searchHint?: string;
           longRunning?: boolean;
+          hideFromMcp?: boolean;
+          readOnly?: boolean;
+          aliasOf?: string;
         } = {
           name: def.id,
-          description: def.description ?? "",
-          inputSchema: def.inputSchema ?? { type: "object", properties: {} },
+          description: renderFlagGated(def.description ?? "", isFlagEnabled),
+          inputSchema: renderFlagGated(
+            def.inputSchema ?? { type: "object", properties: {} },
+            isFlagEnabled
+          ),
         };
-        if (def.outputHint) entry.outputHint = def.outputHint;
-        if (def.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
+        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagEnabled);
+        if (def.fileInputs && def.fileInputs.length > 0) {
+          entry.fileInputs = withFormerParamSpecs(def.id, def.fileInputs);
+        }
         if (def.alwaysLoad) entry.alwaysLoad = true;
-        if (def.searchHint) entry.searchHint = def.searchHint;
+        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagEnabled);
         if (def.longRunning) entry.longRunning = true;
-        return entry;
+        if (def.hideFromMcp) entry.hideFromMcp = true;
+        if (def.readOnly) entry.readOnly = true;
+        // A former id is listed too, so a client that calls by it finds the
+        // tool's file inputs. Hidden from MCP, so agents see one name.
+        const aliases = (def.aliases ?? []).map((alias) => ({
+          ...entry,
+          name: alias,
+          hideFromMcp: true,
+          aliasOf: def.id,
+        }));
+        return [entry, ...aliases];
       });
     res.json({ tools });
   });
@@ -623,6 +735,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const name = req.params.name as string;
       const requestStartedAt = performance.now();
       const aiMeta = extractAiTelemetryMeta(req);
+      // "close" fires once. A caller that hangs up during the awaits below
+      // (file inputs, the device grant, the dependency preflight) is gone
+      // before the listeners further down exist, so it is noted from here.
+      let callerGone = false;
+      res.once("close", () => {
+        if (!res.writableFinished) callerGone = true;
+      });
 
       const emitHttpFailure = (
         signal: FailureSignal,
@@ -631,11 +750,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       ): void => {
         if (!options?.recordFailure) return;
         const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
-        const platform = inferPlatform(failedDeviceArg);
+        const provider = failedDeviceArg ? externalProviderLabel(failedDeviceArg) : undefined;
+        const attribution = inferDeviceAttribution(failedDeviceArg);
+        const toolId = registry.getTool(name)?.id ?? name;
         options.recordFailure(
-          name,
+          toolId,
           {
-            ...(platform ? { platform } : {}),
+            ...(toolId !== name ? { alias_used: true } : {}),
+            ...(provider ? { device_provider: provider } : {}),
+            ...attribution,
             ...(extraMeta?.invalid_params?.length
               ? { invalid_params: extraMeta.invalid_params }
               : {}),
@@ -664,15 +787,48 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         return;
       }
 
+      let clientSecrets: Map<string, string> | undefined;
+      const clientSecretsHeader = firstHeader(req.headers[CLIENT_SECRETS_HEADER]);
+      if (clientSecretsHeader !== undefined) {
+        try {
+          clientSecrets = decodeClientSecrets(clientSecretsHeader);
+        } catch (err) {
+          res.status(400).json({
+            error: `The ${CLIENT_SECRETS_HEADER} header ${err instanceof Error ? err.message : String(err)}.`,
+          });
+          return;
+        }
+      }
+
       // File boundary: turn client file-input wrappers back into plain
       // server-readable paths BEFORE schema validation, so the tool's zod schema
       // only ever sees the string params it declares. 422 on a file reachable
       // neither in place nor via uploaded content.
+      let body: unknown;
+      try {
+        body = canonicalToolArgs(def.id, req.body);
+      } catch (err) {
+        if (!(err instanceof ToolParamAliasError)) throw err;
+        emitHttpFailure(
+          {
+            error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+            failure_stage: "http_param_alias",
+            failure_area: "http",
+            error_kind: "validation",
+          },
+          req.body
+        );
+        // `error` in the zod issue shape: older CLIs `JSON.parse` it (see below).
+        const issues = [{ code: "custom", path: [], message: err.message }];
+        res.status(400).json({ error: JSON.stringify(issues), message: err.message, issues });
+        return;
+      }
+
       let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       let derivedTargets: string[];
       try {
-        const resolved = await resolveFileInputs(def, req.body, (id) => {
+        const resolved = await resolveFileInputs(def, body, (id) => {
           const entry = uploads.get(id);
           if (entry) uploads.delete(id);
           return entry;
@@ -682,7 +838,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         derivedTargets = resolved.derivedTargets;
         // Materialized uploads are call-scoped: remove them once the response
         // settles, however it ends.
-        res.once("close", () => void resolved.cleanup());
+        if (callerGone) void resolved.cleanup();
+        else res.once("close", () => void resolved.cleanup());
       } catch (err) {
         if (err instanceof FileInputError) {
           res.status(422).json({ error: err.message });
@@ -749,9 +906,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             res.status(400).json({ error: err.message });
             return;
           }
-          // Anything other than UnsupportedOperationError (today only a custom
-          // supports() refiner can throw one) is an internal fault, not a client
-          // validation error — 500/unknown rather than 400/validation.
+          // Anything else (today only a custom supports() refiner can throw one)
+          // is an internal fault, not a client validation error: 500/unknown
+          // rather than 400/validation.
           emitHttpFailure(
             {
               error_code: FAILURE_CODES.HTTP_DEVICE_RESOLUTION_FAILED,
@@ -763,6 +920,47 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           );
           res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
           return;
+        }
+      }
+
+      // Revocation. Factories re-read the provider's declaration, but the
+      // registry caches the resolved service, so a withdrawn or narrowed device
+      // would keep working through a warm handle. Dropping the cached services
+      // here makes the next resolve re-run the gates against the current grant.
+      // Uncached (one small local file read, like the per-request feature-flag
+      // read above) so a change bites on the next call. Not gated on the `ext:`
+      // spelling, a provider's device is reachable by its raw udid or serial
+      // too and that spelling caches its own service. Skipping the check there
+      // let a narrowed or withdrawn grant keep being served from a warm handle.
+      if (deviceArg) {
+        let revocation: { reason?: string; stale: boolean };
+
+        try {
+          revocation = await enforceExternalDeviceGrant(registry, deviceArg);
+        } catch (err) {
+          /**
+           * Fail closed. A handle that would not tear down is a handle that
+           * can still serve the grant the provider just took back and the
+           * next line would hand it the call. Refusing costs a retry, the
+           * alternative spends the revocation.
+           */
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.EXTERNAL_DEVICE_REVOCATION_INCOMPLETE,
+              failure_stage: "external_device_revocation",
+              failure_area: "http",
+              error_kind: "unknown",
+            },
+            parsedData
+          );
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+          return;
+        }
+
+        if (revocation.stale) {
+          process.stderr.write(
+            `[device-providers] dropped cached services for ${deviceArg}: ${revocation.reason}\n`
+          );
         }
       }
 
@@ -792,6 +990,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
       }
 
+      // Nobody is left to read the result.
+      if (callerGone) return;
+
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -814,8 +1015,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // through the registry inherit the same ai_client / platform instead of being
       // recorded as anonymous.
       let recordChildInvocation:
-        | ((childInvocationId: string, childArgs?: unknown) => () => void)
-        | undefined;
+        ((childInvocationId: string, childArgs?: unknown) => () => void) | undefined;
       const recordInvocation = options?.recordInvocation;
       if (recordInvocation) {
         const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
@@ -838,9 +1038,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         res.write(`${JSON.stringify(payload)}\n`);
       };
       if (wantsStream) {
+        // Every line must reach the client as soon as it is written.
+        // `no-transform` asks intermediaries not to compress the stream, and
+        // `X-Accel-Buffering: no` makes nginx pass each chunk through instead
+        // of holding it in its buffers.
         res.writeHead(200, {
           "Content-Type": "application/x-ndjson",
-          "Cache-Control": "no-cache",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
         });
       }
 
@@ -848,6 +1053,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
+          // The argent client marks every call it sends over a link. A false
+          // mark makes the recorder stricter for that caller and keeps its
+          // recording in memory, sent back in client-file directives.
+          ...(firstHeader(req.headers[LINKED_CALL_HEADER]) === "1" ? { linked: true } : {}),
+          // A client released before the rename writes client files only under
+          // `.argent/flows/`, so the recorder keeps its recordings there.
+          ...(firstHeader(req.headers[E2E_DIR_CLIENT_HEADER]) === "1"
+            ? {}
+            : { legacyE2eDir: true }),
+          ...(clientSecrets ? { clientSecrets } : {}),
           toolInvocationId,
           ...(recordChildInvocation ? { recordChildInvocation } : {}),
           ...(wantsStream
@@ -876,21 +1091,75 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
+        // Staged once per phone and team when keychain team detection signs the
+        // on-device runner (utils/ios-device/team-detect); drained here into the
+        // first completed call that targets that phone, so the agent driving it
+        // learns which team was picked and how to override, and a caller on
+        // another phone or platform sharing this tool-server never does.
+        const targetedPhone = targetedIosPhysicalDevice(parsedData);
+        const signingNote = targetedPhone
+          ? consumePendingSigningDetectionNote(targetedPhone)
+          : null;
+        if (signingNote) {
+          notes.push(signingNote);
+        }
+        // A tool can raise a per-call note by returning this reserved key. It
+        // rides the envelope rather than the result body because clients render
+        // image results as image blocks plus a "Saved:" line and drop every
+        // other field — a note inside `data` would never be seen.
+        const toolNote = takeToolNote(data);
+        if (toolNote) notes.push(toolNote);
         const notePayload = notes.length > 0 ? { note: notes.join("\n\n") } : {};
+        // For the MCP adapter: its post-action capture would load the app a
+        // profiler is recording on this device. Read at completion.
+        const profilingPayload =
+          deviceArg && isProfiling(canonicalDeviceId(deviceArg) ?? deviceArg)
+            ? { profiling: true }
+            : {};
+        // A failure the tool returned rather than threw, so a client that only
+        // checks for an error (`argent run`'s exit status) still sees it.
+        const failure = directCallFailure(name, data);
+        const failurePayload = failure !== undefined ? { failure } : {};
         if (wantsStream) {
-          writeLine({ event: "result", data, ...notePayload });
+          writeLine({
+            event: "result",
+            data,
+            ...notePayload,
+            ...profilingPayload,
+            ...failurePayload,
+          });
           res.end();
         } else {
-          res.json({ data, ...notePayload });
+          res.json({ data, ...notePayload, ...profilingPayload, ...failurePayload });
         }
       } catch (err: unknown) {
+        /**
+         * Attribution, applied once here rather than at ~30 throw sites. A
+         * failure on a provider-supplied device names the provider and points
+         * at ITS issue tracker, keeping those reports out of argent's queue.
+         */
+        const attribute = (message: string): string => {
+          if (!deviceArg || !isExternalId(deviceArg)) return message;
+          const hint = externalSupportHint(deviceArg);
+          if (!hint) return message;
+          /**
+           * Not every thrown message ends in punctuation and appending to one
+           * that doesn't runs the two sentences together.
+           */
+          const separator = /[.!?]$/.test(message.trimEnd()) ? " " : ". ";
+          return `${message.trimEnd()}${separator}${hint}`;
+        };
         if (wantsStream) {
-          writeLine({ event: "error", error: streamErrorMessage(err), ...errorSignalFields(err) });
+          writeLine({
+            event: "error",
+            error: attribute(streamErrorMessage(err)),
+            ...errorSignalFields(err),
+          });
           res.end();
           return;
         }
         if (err instanceof ToolNotFoundError) {
-          res.status(404).json({ error: err.message, ...errorSignalFields(err) });
+          res.status(404).json({ error: attribute(err.message), ...errorSignalFields(err) });
           return;
         }
         // Walk the cause chain so a ToolExecutionError wrapping a
@@ -899,9 +1168,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // their fall-back surface.
         const depErr = findDependencyMissing(err);
         if (depErr) {
-          res
-            .status(424)
-            .json({ error: depErr.message, missing: depErr.missing, ...errorSignalFields(err) });
+          res.status(424).json({
+            error: attribute(depErr.message),
+            missing: depErr.missing,
+            ...errorSignalFields(err),
+          });
           return;
         }
         // Unwrap the cause chain: thrown inside execute() / a service factory, these
@@ -909,7 +1180,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // them and fall through to a 500.
         const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
         if (unsupportedErr) {
-          res.status(400).json({ error: unsupportedErr.message, ...errorSignalFields(err) });
+          res
+            .status(400)
+            .json({ error: attribute(unsupportedErr.message), ...errorSignalFields(err) });
           return;
         }
         // A tool rejecting its arguments is a client input error, not an internal
@@ -923,7 +1196,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // http-dep-gate.test.ts.
         const invalidInputErr = findErrorInCauseChain(err, InvalidToolInputError);
         if (invalidInputErr) {
-          res.status(400).json({ error: invalidInputErr.message, ...errorSignalFields(err) });
+          res
+            .status(400)
+            .json({ error: attribute(invalidInputErr.message), ...errorSignalFields(err) });
           return;
         }
         if (getFailureSignal(err)?.error_code === FAILURE_CODES.TOOL_INPUT_INVALID) {
@@ -933,7 +1208,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
         if (notImplementedErr) {
           res.status(501).json({
-            error: notImplementedErr.message,
+            error: attribute(notImplementedErr.message),
             toolId: notImplementedErr.toolId,
             platform: notImplementedErr.platform,
             hint: notImplementedErr.hint,
@@ -941,7 +1216,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           });
           return;
         }
-        res.status(500).json({ error: formatErrorForAgent(err), ...errorSignalFields(err) });
+        res
+          .status(500)
+          .json({ error: attribute(formatErrorForAgent(err)), ...errorSignalFields(err) });
       } finally {
         if (keepAlive) clearInterval(keepAlive);
         releaseInvocationMeta?.();

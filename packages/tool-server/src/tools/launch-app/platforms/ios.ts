@@ -11,8 +11,11 @@ import {
   precheckNativeDevtools,
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
+import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
+import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -26,26 +29,76 @@ export function makeIosImpl(
   return {
     requires: ["xcrun"],
     handler: async (_services, params, device) => {
-      const ndRef = nativeDevtoolsRef(device);
-      const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
-        ndRef.urn,
-        ndRef.options
-      );
-      const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
-      if (blocked) return blocked;
+      /**
+       * native-devtools injection needs a grant most providers withhold, as it
+       * loads Argent's dylib into an app somebody else launched. Resolving
+       * here would fail an otherwise fine launch with capability-denied, so
+       * skip it. Only the native view-hierarchy fallback afterwards is lost.
+       *
+       * Keyed on the provider's claim, not on the `ext:` spelling. The same
+       * device named by its raw udid would otherwise take the branch below and
+       * fail on a grant the provider withheld, so one device would launch or
+       * not depending only on which of its names was used.
+       */
+      if (!externalClaimForAnyId(device.id)) {
+        const ndRef = nativeDevtoolsRef(device);
+        const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
+          ndRef.urn,
+          ndRef.options
+        );
+        const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
+        if (blocked) return blocked;
+      }
+      // A plain launch only foregrounds an app that is already running, so the
+      // arguments would be dropped. Terminate first to apply them.
+      if (params.launchArgs?.length) {
+        try {
+          await execFileAsync(
+            "xcrun",
+            await simctlArgsForUdid(params.udid, ["terminate", params.udid, params.bundleId]),
+            { timeout: 15_000, killSignal: SIMCTL_KILL_SIGNAL }
+          );
+        } catch (err) {
+          // Not running is fine; a timed-out terminate leaves a running app that would drop the args.
+          if ((err as { killed?: boolean }).killed) {
+            throw new FailureError(
+              `Terminating iOS app ${params.bundleId} on ${params.udid} to apply launchArgs did not finish within 15s.`,
+              {
+                error_code: FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED,
+                failure_stage: "ios_launch_app_simctl_terminate",
+                failure_area: "tool_server",
+                error_kind: "timeout",
+                ...subprocessFailureMetadata(err, "xcrun_simctl"),
+              },
+              { cause: err as Error }
+            );
+          }
+        }
+      }
       try {
         await execFileAsync(
           "xcrun",
-          await simctlArgsForUdid(params.udid, ["launch", params.udid, params.bundleId])
+          await simctlArgsForUdid(params.udid, [
+            "launch",
+            params.udid,
+            params.bundleId,
+            ...(params.launchArgs ?? []),
+          ]),
+          { timeout: 30_000, killSignal: SIMCTL_KILL_SIGNAL }
         );
       } catch (err) {
+        // Its message says what to do, and a flow step reports only the thrown message.
+        if (err instanceof XcodeFirstLaunchPendingError) throw err;
+        const timedOut = (err as { killed?: boolean }).killed === true;
         throw new FailureError(
-          `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,
+          timedOut
+            ? `Launching iOS app ${params.bundleId} on ${params.udid} did not finish within 30s.`
+            : `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,
           {
             error_code: FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED,
             failure_stage: "ios_launch_app_simctl_launch",
             failure_area: "tool_server",
-            error_kind: "subprocess",
+            error_kind: timedOut ? "timeout" : "subprocess",
             ...subprocessFailureMetadata(err, "xcrun_simctl"),
           },
           { cause: err instanceof Error ? err : new Error(String(err)) }

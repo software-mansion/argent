@@ -24,6 +24,7 @@ import {
   getFailureSignal,
   zodObjectToJsonSchema,
 } from "@argent/registry";
+import { InvalidToolInputError } from "../src/utils/capability";
 import { settingsPermissionsTool } from "../src/tools/settings-permissions";
 import { iosImpl } from "../src/tools/settings-permissions/platforms/ios";
 import { androidImpl } from "../src/tools/settings-permissions/platforms/android";
@@ -198,7 +199,7 @@ describe("settings-permissions schema", () => {
       properties?: Record<string, { pattern?: string; enum?: string[] }>;
     };
     expect(json.required).toEqual(["udid", "action", "permission", "bundleId"]);
-    expect(json.properties?.bundleId?.pattern).toBe("^[A-Za-z_][A-Za-z0-9._-]*$");
+    expect(json.properties?.bundleId?.pattern).toBe("^[A-Za-z0-9_][A-Za-z0-9._-]*$");
     expect(json.properties?.action?.enum).toEqual(["grant", "deny", "reset"]);
     expect(json.properties?.permission?.enum).toHaveLength(11);
   });
@@ -263,6 +264,12 @@ describe("settings-permissions iOS branch", () => {
     await expect(
       iosImpl.handler({}, params({ permission: "notifications" }), iosDevice)
     ).rejects.toSatisfy(failsWith(FAILURE_CODES.SETTINGS_PERMISSION_UNSUPPORTED));
+    // The dispatcher keys the HTTP status on the error class, not on
+    // `error_kind`, so only this class turns the rejection into a 400 the agent
+    // reads as unretryable instead of a 500 it retries (#1032).
+    await expect(
+      iosImpl.handler({}, params({ permission: "notifications" }), iosDevice)
+    ).rejects.toBeInstanceOf(InvalidToolInputError);
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
@@ -817,6 +824,10 @@ describe("settings-permissions Android branch", () => {
     await expect(
       androidImpl.handler({}, params({ permission: "reminders" }), androidDevice)
     ).rejects.toSatisfy(failsWith(FAILURE_CODES.SETTINGS_PERMISSION_UNSUPPORTED));
+    // Same 400-via-the-error-class contract as the iOS arm (#1032).
+    await expect(
+      androidImpl.handler({}, params({ permission: "reminders" }), androidDevice)
+    ).rejects.toBeInstanceOf(InvalidToolInputError);
     expect(mockAdbShell).not.toHaveBeenCalled();
   });
 

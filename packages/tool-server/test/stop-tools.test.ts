@@ -167,6 +167,25 @@ describe("stop-simulator-server", () => {
     expect(registry.disposeService).toHaveBeenCalledWith("ChromiumCdp:chromium-cdp-9222");
   });
 
+  it("stops the on-device runner for a physical iPhone: it IS that device's transport", async () => {
+    // A physical iPhone never has a SimulatorServer (the blueprint rejects
+    // `kind: "device"` outright), so IosDeviceRunner is the transport session
+    // this tool is the documented recovery for. Its dispose is also the only
+    // thing that reaps the detached `xcodebuild test-without-building` child
+    // and the .xctrunner app on the phone.
+    const udid = "00008110-000978540290401E";
+    const services = new Map([
+      [`IosDeviceRunner:${udid}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopSimulatorServerTool(registry);
+
+    const result = await tool.execute!({}, { udid });
+
+    expect(result).toEqual({ stopped: true, udid });
+    expect(registry.disposeService).toHaveBeenCalledWith(`IosDeviceRunner:${udid}`);
+  });
+
   it("names the device and the error code in failedMsg", () => {
     // The one formatter with no coverage — flattening it to a constant left the
     // suite green, and it is the line an agent reads when a teardown fails.
@@ -591,6 +610,28 @@ describe("stop-all-simulator-servers device scoping", () => {
     });
     expect(registry.disposeService).toHaveBeenCalledTimes(3);
     expect(registry.disposeService).not.toHaveBeenCalledWith(`TvControl:${THEIRS}`);
+  });
+
+  it("reaps the named phone's IosDeviceRunner and leaves the other phone's alone", async () => {
+    // Without the membership the answer is `{ stopped: [], unmatched: [udid] }`:
+    // a clean machine, reported while the detached xcodebuild child and the
+    // .xctrunner app on the phone keep running. The stale sweep does not cover
+    // it either: it reaps only orphans whose ppid is 1, and here the parent
+    // tool-server is alive.
+    const phone = "00008110-000978540290401E";
+    const otherPhone = "00008030-001A2B3C4D5E6F70";
+    const services = new Map([
+      [`IosDeviceRunner:${phone}`, { state: ServiceState.RUNNING, dependents: [] }],
+      [`IosDeviceRunner:${otherPhone}`, { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, { devices: [phone] });
+
+    expect(result).toEqual({ stopped: [`IosDeviceRunner:${phone}`] });
+    expect(registry.disposeService).toHaveBeenCalledOnce();
+    expect(registry.disposeService).toHaveBeenCalledWith(`IosDeviceRunner:${phone}`);
   });
 
   it("matches a transport-suffixed URN (NativeDevtools:<udid>:tcp)", async () => {
@@ -1083,6 +1124,50 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     });
   });
 
+  it("scopes the app-keyed AndroidNetworkInspector URN to its device, a wireless serial included", async () => {
+    const wireless = "192.168.1.5:5555";
+    const services = new Map([
+      [
+        "AndroidNetworkInspector:emulator-5554:com.example.app",
+        { state: ServiceState.RUNNING, dependents: [] },
+      ],
+      [
+        "AndroidNetworkInspector:emulator-5556:com.example.app",
+        { state: ServiceState.RUNNING, dependents: [] },
+      ],
+      [
+        `AndroidNetworkInspector:${wireless}:com.example.app`,
+        { state: ServiceState.RUNNING, dependents: [] },
+      ],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    expect(await tool.execute!({}, { devices: ["emulator-5554", wireless] })).toEqual({
+      stopped: [
+        "AndroidNetworkInspector:emulator-5554:com.example.app",
+        `AndroidNetworkInspector:${wireless}:com.example.app`,
+      ],
+    });
+    expect(registry.disposeService).not.toHaveBeenCalledWith(
+      "AndroidNetworkInspector:emulator-5556:com.example.app"
+    );
+
+    const registry2 = createMockRegistry(
+      new Map([
+        [
+          `AndroidNetworkInspector:${wireless}:com.example.app`,
+          { state: ServiceState.RUNNING, dependents: [] },
+        ],
+      ])
+    );
+    const tool2 = createStopAllSimulatorServersTool(registry2);
+    expect(await tool2.execute!({}, { devices: ["192.168.1.5", "com.example.app"] })).toEqual({
+      stopped: [],
+      unmatched: ["192.168.1.5", "com.example.app"],
+    });
+  });
+
   it("reaps AXService on an unscoped machine-wide sweep too", async () => {
     const services = new Map([
       [`AXService:${MINE}`, { state: ServiceState.RUNNING, dependents: [] }],
@@ -1531,10 +1616,8 @@ describe("stop-metro", () => {
   });
 
   it("returns stopped: false when no process on port", async () => {
-    // Port 1 is privileged, so only root can be listening on it — the probe
-    // finds nothing. This runs the real tool, which SIGTERMs every pid it
-    // finds, so an unprivileged port would both fail here and kill whatever
-    // a concurrent run (or the developer) happens to have bound.
+    // This runs the real tool, which SIGTERMs every listener it finds; port 1
+    // is normally unbound, unlike ports a concurrent run or the developer use.
     const result = await stopMetroTool.execute!({}, { port: 1 });
     expect(result.stopped).toBe(false);
     expect(result.port).toBe(1);

@@ -245,6 +245,26 @@ export function clearRememberedAgent(options: ConfigPathOptions = {}): void {
   unsetConfigValue(LENS_AGENT_KEY, "global", options);
 }
 
+const ANDROID_SDK_ROOT_KEY = "android.sdkRoot";
+
+/** The configured Android SDK root as an absolute path (`~` expanded), or null when unset. */
+export function getAndroidSdkRoot(options: ConfigPathOptions = {}): string | null {
+  const value = getConfigValueByKey(ANDROID_SDK_ROOT_KEY, options);
+  if (typeof value !== "string") return null;
+  const home = resolveHomeDir(options);
+  if (value === "~") return path.resolve(home);
+  if (value.startsWith("~/")) return path.resolve(home, value.slice(2));
+  return path.resolve(value);
+}
+
+const ANDROID_ADB_SERVER_PORT_KEY = "android.adbServerPort";
+
+/** The configured adb server port, or null when unset. */
+export function getAndroidAdbServerPort(options: ConfigPathOptions = {}): number | null {
+  const value = getConfigValueByKey(ANDROID_ADB_SERVER_PORT_KEY, options);
+  return typeof value === "number" ? value : null;
+}
+
 const IOS_ADDITIONAL_DEVICE_SETS_KEY = "ios.additionalDeviceSets";
 
 /**

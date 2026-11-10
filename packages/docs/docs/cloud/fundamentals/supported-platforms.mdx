@@ -1,0 +1,35 @@
+---
+sidebar_position: 4
+sidebar_label: Supported platforms
+title: Supported platforms
+sidebar_custom_props:
+  icon: layers
+---
+
+## Client computers
+
+`sim-remote` runs on these platforms:
+
+| Platform | Architecture  | Notes                                                  |
+| -------- | ------------- | ------------------------------------------------------ |
+| macOS    | Apple Silicon |                                                        |
+| Linux    | x86_64        | glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or newer) |
+| Linux    | arm64         | glibc 2.35 or newer (Ubuntu 22.04, Debian 12 or newer) |
+
+## Hosted devices
+
+Argent Cloud hosts these devices:
+
+| Device           | Status        |
+| ---------------- | ------------- |
+| iOS simulator    | Supported     |
+| Android emulator | Not available |
+| Physical device  | Not available |
+
+The device types and the iOS versions are the ones that Xcode on the hosted machine provides. Run this command to see them:
+
+```bash
+sim-remote simctl list devices available
+```
+
+A machine can have one pre-booted iPhone simulator, so the first boot of that device is fast. You can create more simulators with `sim-remote simctl create`.

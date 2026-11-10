@@ -8,25 +8,7 @@ import type {
 } from "../../../utils/react-profiler/types/input";
 import { readCpuProfile } from "../../../utils/react-profiler/debug/dump";
 import { isArgentProfilerFunction } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
-
-const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-    ),
-  top_n: z.coerce
-    .number()
-    .int()
-    .positive()
-    .default(20)
-    .describe("Number of top hotspot functions to return (default 20)"),
-  react_only: z
-    .boolean()
-    .default(false)
-    .describe("If true, only show React component functions (PascalCase names)"),
-});
+import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 interface HotspotEntry {
   function: string;
@@ -115,27 +97,45 @@ function renderMarkdownTable(entries: HotspotEntry[]): string {
   return [header, sep, ...rows].join("\n");
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: z
+    .string()
+    .describe(
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    ),
+  top_n: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(20)
+    .describe("Number of top hotspot functions to return"),
+  react_only: z
+    .boolean()
+    .default(false)
+    .describe("If true, only show React component functions (PascalCase names)"),
+});
+
 export const reactProfilerCpuSummaryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-cpu-summary",
+  description: `Return a raw Hermes CPU flamegraph summary: a markdown table of the top hotspot functions by self-time, with total time and location.
+FOR DEDICATED CPU INVESTIGATION ONLY: do NOT call this as part of a normal profiling session.
+Use react-profiler-analyze instead; it covers all React rendering performance analysis.
+Use when you specifically need to investigate JS CPU hotspots that are NOT tied to React rendering (e.g. regex slowness, cryptography, heavy computations).
+Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: () => "Summarizing React CPU profile",
     completedMsg: () => "Summarized React CPU profile",
     failedMsg: ({ failureSignal }) =>
       `Failed to summarize React CPU profile: ${failureSignal.error_code}`,
   },
-  description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
-FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call this as part of a normal profiling session.
-Use react-profiler-analyze instead; it covers all React rendering performance analysis.
-Use when you specifically need to investigate JS CPU hotspots that are NOT tied to React rendering (e.g. regex slowness, cryptography, heavy computations).
-Call react-profiler-stop first. Reads directly from the stored cpuProfile.
-Returns a markdown table of the top hotspot functions with self-time, total-time, and location.
-Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
-  zodSchema,
   // RN-only: reads a Hermes CPU profile; Chromium's V8 sample format differs.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
-    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
+    const sessionPaths = getCachedProfilerPaths(metroPort(params), params.device_id);
     if (!sessionPaths?.cpuProfilePath) {
       throw new FailureError(
         "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop.",

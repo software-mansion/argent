@@ -94,15 +94,15 @@ async function runFlow(
   registry: Registry,
   params: Record<string, unknown>
 ): Promise<FlowRunResult> {
-  // A co-located explicit flow_path (the flow file lives outside project_root),
+  // A co-located explicit e2e_test_path (the flow file lives outside project_root),
   // plus the artifact store runSnapshot requires from ctx. Not the upload
   // route: assertUploadSelfContained refuses a snapshot step there, since an
   // uploaded flow's baselines land in a temp dir no later run can read.
-  const flowPath = String(params.flow_file);
-  const { name: _name, flow_file: _flowFile, ...rest } = params;
+  const flowPath = String(params.e2e_test_file);
+  const { name: _name, e2e_test_file: _flowFile, ...rest } = params;
   const ctx = {
     fileInputs: {
-      flow_path: {
+      e2e_test_path: {
         clientPath: flowPath,
         presentOnHost: true,
         viaUpload: false,
@@ -114,7 +114,7 @@ async function runFlow(
   return asRun(
     await createRunFlowTool(registry).execute(
       {},
-      { ...rest, flow_path: flowPath } as never,
+      { ...rest, e2e_test_path: flowPath } as never,
       ctx as never
     )
   );
@@ -155,7 +155,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(makeRegistry(), {
       name: "cross-app",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       updateBaselines: true,
     });
 
@@ -193,7 +193,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(makeRegistry(), {
       name: "same-app",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       updateBaselines: true,
     });
 
@@ -228,7 +228,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(registry, {
       name: "pinned-same-app",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-21456",
       updateBaselines: true,
     });
@@ -267,7 +267,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(registry, {
       name: "pinned-cross-app",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-21456",
       updateBaselines: true,
     });
@@ -302,7 +302,7 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(registry, {
       name: "pre-launch",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       device: "chromium-cdp-21456",
       updateBaselines: true,
     });
@@ -324,12 +324,40 @@ describe("flow-execute cross-app snapshot collision", () => {
     const result = await runFlow(makeRegistry(), {
       name: "repeat",
       project_root: PROJECT_ROOT,
-      flow_file: flowFile,
+      e2e_test_file: flowFile,
       updateBaselines: true,
     });
 
     expect(result.ok).toBe(true);
     expect(result.steps[1]!.reason).toContain("baseline written");
     expect(result.steps[2]!.reason).toContain("baseline updated");
+  });
+});
+
+describe("one snapshot key reported from two hosts", () => {
+  it("marks the step a remote simulator captured, and not a local one", async () => {
+    // The key folds `ios-remote` to `ios`, so a cloud run and a local run of one
+    // flow report the same key. A client exporting files by it (the CLI's
+    // --output) reads this marker to keep the two runs' files apart.
+    const flowFile = await writeFlow("hosts", "steps:\n  - snapshot: shot\n");
+    const run = (device: string) =>
+      runFlow(makeRegistry(), {
+        name: "hosts",
+        project_root: PROJECT_ROOT,
+        e2e_test_file: flowFile,
+        device,
+      });
+
+    const remote = await run("remote:00000000-0000-0000-0000-0000000000ab");
+    const local = await run("00000000-0000-0000-0000-0000000000ab");
+
+    // No baseline, so both fail and carry the key the export names files by.
+    expect(remote.steps[0]).toMatchObject({
+      status: "fail",
+      snapshotKey: "shot__ios-600x372",
+      snapshotRemote: true,
+    });
+    expect(local.steps[0]).toMatchObject({ status: "fail", snapshotKey: "shot__ios-600x372" });
+    expect(local.steps[0]).not.toHaveProperty("snapshotRemote");
   });
 });

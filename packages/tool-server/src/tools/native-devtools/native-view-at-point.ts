@@ -9,19 +9,19 @@ import {
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 
+type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; view: unknown | null };
+
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   bundleId: z.string().describe("Bundle ID of the app"),
   x: z
     .number()
     .describe(
-      "Raw X coordinate in the app window's native point space. NOT normalized [0,1] tap space."
+      "Raw X coordinate in points, on the portrait axes of the screen (the axes of native-describe-screen frames). NOT normalized [0,1] tap space."
     ),
   y: z
     .number()
-    .describe(
-      "Raw Y coordinate in the app window's native point space. NOT normalized [0,1] tap space."
-    ),
+    .describe("Raw Y coordinate in points, on the same axes as x. NOT normalized [0,1] tap space."),
   includeAncestors: z
     .boolean()
     .optional()
@@ -35,7 +35,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "View fields to include. Defaults: pointer, className, tag, frame, " +
-        "windowFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
+        "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
         "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
         "Additional: center, transform, contentMode, backgroundColor, tintColor"
     ),
@@ -56,36 +56,36 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; view: unknown | null };
 
 export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-view-at-point",
+  description: `Inspect the deepest visible UIView at a raw native window point.
+
+Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,
+so it answers "what is visually here?" rather than "what would receive the touch?".
+
+Use when a screenshot shows something the accessibility tree does not name (an
+unlabeled icon, a decorative overlay, a custom-drawn cell) and you need the class,
+identifier or nativeID of whatever draws it.
+
+Returns { status: "ok", view }: the matched view with its class name, frames,
+identifier, label and layer name, plus its ancestors and subviews as requested.
+view is null when nothing is drawn at that point.
+
+To get x and y from a normalized describe frame, multiply its values by the
+screen size in points, also when the UI is landscape.
+
+If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+An Apple system app is rejected outright (terminal: never retry it).`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: ({ params }) => `Inspecting native view at (${params.x}, ${params.y})`,
     completedMsg: ({ params }) => `Inspected native view at (${params.x}, ${params.y})`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to inspect native view at (${params.x}, ${params.y}): ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
-  description: `Inspect the deepest visible UIView at a raw native window point.
-
-Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,
-so it answers "what is visually here?" rather than "what would receive the touch?".
-
-Use when a screenshot shows something the accessibility tree does not name — an
-unlabeled icon, a decorative overlay, a custom-drawn cell — and you need the class,
-identifier or nativeID of whatever draws it.
-
-Returns { status: "ok", view }: the matched view with its class name, frames,
-identifier, label and layer name, its ancestor chain by default, and its subviews on
-request. view is null when nothing is drawn at that point.
-
-IMPORTANT: x and y are raw iOS window coordinates in points, NOT normalized [0,1]
-simulator tap coordinates.
-
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting — do not restart it, wait a few seconds and retry. If status is init_failed: the simulator's native-devtools environment could not be initialised — follow the message (re-boot the simulator) rather than retrying this tool.
-A not-connected or not-running app comes back as one of those statuses rather than a failure. Failures are separate: an Apple system app is rejected outright (terminal — never retry it), and the point query itself can error or time out.`,
-  zodSchema,
+  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
   services: (params) => ({
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),

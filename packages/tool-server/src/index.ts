@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { homedir } from "node:os";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { getAndroidAdbServerPort, isFlagEnabled } from "@argent/configuration-core";
 import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
@@ -19,6 +19,7 @@ import { createRegistry } from "./utils/setup-registry";
 import { probeArgentToolServer } from "./utils/probe-argent-tool-server";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
+import { configuredAdbServerPort } from "./utils/adb-server";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import {
   variantProposalStore,
@@ -27,6 +28,7 @@ import {
   type CliSessionStartedStats,
 } from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
+import { renderFlagGated } from "./utils/flag-gated-text";
 import { disposeAudio } from "./utils/ios-audio";
 
 const PROCESS_TIMEOUT_MS = 5_000;
@@ -80,6 +82,12 @@ function initializeStdioTimestampWrapper(): void {
 
 export function start(): void {
   initializeStdioTimestampWrapper();
+
+  const adbServerPort = configuredAdbServerPort(process.env, getAndroidAdbServerPort());
+  if (adbServerPort !== null) {
+    process.env.ANDROID_ADB_SERVER_PORT = adbServerPort;
+    process.stderr.write(`android.adbServerPort → ANDROID_ADB_SERVER_PORT=${adbServerPort}\n`);
+  }
 
   // Exit on uncaught errors (state may be corrupted), but clean up first so
   // child processes are not orphaned.
@@ -150,8 +158,11 @@ export function start(): void {
     );
   });
 
-  const PORT = parseInt(process.env.ARGENT_PORT ?? DEFAULT_PORT, 10);
-  const HOST = process.env.ARGENT_HOST ?? DEFAULT_HOST;
+  // An empty or blank override is an unset one: `export ARGENT_HOST=` would
+  // otherwise reach listen(), which reads "" as "no host" and binds every
+  // interface, with auth off unless ARGENT_AUTH_TOKEN is set.
+  const PORT = parseInt(process.env.ARGENT_PORT?.trim() || DEFAULT_PORT, 10);
+  const HOST = process.env.ARGENT_HOST?.trim() || DEFAULT_HOST;
   const idleMinutes = parseInt(
     process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? DEFAULT_IDLE_TIMEOUT_MINUTES,
     10
@@ -193,7 +204,7 @@ export function start(): void {
   const serverStartedAt = Date.now();
   const updateChecker = startUpdateChecker();
 
-  const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
+  const { stop: stopWatcher } = startSimulatorWatcher(registry);
 
   let server: ReturnType<typeof httpHandle.app.listen> | null = null;
 
@@ -291,6 +302,9 @@ export function start(): void {
     if (exitCode > finalExitCode) finalExitCode = exitCode;
     if (shuttingDown) return;
     shuttingDown = true;
+    // First, before any await: the watcher's simctl calls run in their own
+    // process groups, so only this abort reaps them if the exit is cut short.
+    stopWatcher();
 
     eventLog?.info({
       type: "tool_server.stopping",
@@ -320,7 +334,6 @@ export function start(): void {
 
     previewWindow.dispose();
     updateChecker.dispose();
-    stopWatcher();
     httpHandle.dispose();
     // Apps hearing a mocked microphone get the real one back; a ring nobody feeds would leave them silent.
     try {
@@ -387,7 +400,10 @@ export function start(): void {
     recordFailure: (toolId, meta, signal, durationMs) => {
       telemetryTrack("tool:fail", {
         tool: toolId,
+        ...(meta.alias_used ? { alias_used: true } : {}),
+        ...(meta.device_provider ? { device_provider: meta.device_provider } : {}),
         ...(meta.platform ? { platform: meta.platform } : {}),
+        ...(meta.device_kind ? { device_kind: meta.device_kind } : {}),
         ...(meta.invalid_params?.length ? { invalid_params: meta.invalid_params } : {}),
         duration_ms: durationMs,
         ...signal,
@@ -396,11 +412,15 @@ export function start(): void {
     },
   });
 
-  // Do not bind until the first watcher poll has attempted dylib injection for
-  // every booted simulator (so launch-app cannot race it) and the identity
-  // warm-up has settled (so the accept path never pays for it).
-  Promise.all([watcherReady, identityWarm])
+  // Bind once the identity warm-up settles, so the accept path never pays for it.
+  // Not on the watcher's first poll: on a cold CoreSimulatorService its
+  // `simctl list` runs to its 10s timeout, which with process startup can pass
+  // the launcher's 15s ready timeout. What can start an iOS app either arms
+  // injection itself (launch-app, restart-app) or waits for that poll
+  // (firstSimulatorPoll).
+  identityWarm
     .then(() => {
+      if (shuttingDown) return;
       server = httpHandle.app.listen(PORT, HOST, () => {
         // Past this point a crash is a serving-time fault, not a startup fault.
         listening = true;
@@ -503,8 +523,8 @@ export function start(): void {
           },
         });
         shutdownReason = "crash";
-        // The readiness gate rejected before the listener bound, so this is always
-        // a startup crash. Best-effort: fall back to phase-only if describeCrash
+        // Only a throw before the listener bound lands here, so this is always a
+        // startup crash. Best-effort: fall back to phase-only if describeCrash
         // itself throws.
         try {
           shutdownCrashDiagnostics = describeCrash(err, "startup");
@@ -544,7 +564,10 @@ export function getAvailableTools(): Array<{
   const registry = createRegistry();
   return registry.getSnapshot().tools.map((id) => {
     const def = registry.getTool(id)!;
-    return { id: def.id, description: def.description, inputSchema: def.inputSchema };
+    return renderFlagGated(
+      { id: def.id, description: def.description, inputSchema: def.inputSchema },
+      isFlagEnabled
+    );
   });
 }
 

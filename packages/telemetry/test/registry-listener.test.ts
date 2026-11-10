@@ -50,6 +50,57 @@ describe("attachRegistryTelemetry", () => {
     handle.detach();
   });
 
+  it("threads the device kind through invoke / complete / fail events", () => {
+    const trackSpy = vi.spyOn(telemetry, "track");
+    const registry = new Registry();
+    const handle = attachRegistryTelemetry(registry);
+
+    handle.recordInvocation(INVOCATION_ID_1, { platform: "ios", device_kind: "device" });
+    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1, "Starting tool.");
+    registry.events.emit("toolCompleted", "gesture-tap", INVOCATION_ID_1, 10, "Completed tool.");
+
+    handle.recordInvocation(INVOCATION_ID_2, { platform: "ios", device_kind: "device" });
+    registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_2, "Starting tool.");
+    registry.events.emit(
+      "toolFailed",
+      "gesture-tap",
+      INVOCATION_ID_2,
+      withFailureSignal(new Error("boom"), {
+        error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
+        failure_stage: "test",
+        failure_area: "registry",
+        error_kind: "unknown",
+      }),
+      5,
+      "Failed tool."
+    );
+
+    expect(trackSpy).toHaveBeenCalledTimes(4);
+    for (const call of trackSpy.mock.calls) {
+      expect(call[1]).toMatchObject({ platform: "ios", device_kind: "device" });
+    }
+
+    handle.detach();
+  });
+
+  it("omits device_kind when the invocation meta carries none", () => {
+    const trackSpy = vi.spyOn(telemetry, "track");
+    const registry = new Registry();
+    const handle = attachRegistryTelemetry(registry);
+
+    handle.recordInvocation(INVOCATION_ID_1, { platform: "android" });
+    registry.events.emit("toolInvoked", "boot-device", INVOCATION_ID_1, "Starting tool.");
+
+    expect(trackSpy.mock.calls[0]![1]).toEqual({
+      tool: "boot-device",
+      tool_invocation_id: INVOCATION_ID_1,
+      platform: "android",
+    });
+    expect(trackSpy.mock.calls[0]![1]).not.toHaveProperty("device_kind");
+
+    handle.detach();
+  });
+
   it("threads the AI client through invoke / complete / fail events", () => {
     const trackSpy = vi.spyOn(telemetry, "track");
     const registry = new Registry();
@@ -240,6 +291,68 @@ describe("attachRegistryTelemetry", () => {
       }),
     ]);
 
+    handle.detach();
+  });
+});
+
+describe("attachRegistryTelemetry with a tool called by a former id", () => {
+  scopeHome();
+
+  beforeEach(() => {
+    telemetry.init("tool_server");
+    telemetry.markEnabled();
+    (globalThis as Record<string, unknown>).__ARGENT_OTEL_TOKEN_TEST = "";
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function registryWith(execute: () => Promise<unknown>): Registry {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "e2e-execute",
+      aliases: ["flow-execute"],
+      services: () => ({}),
+      execute,
+    });
+    return registry;
+  }
+
+  it("logs the current id plus alias_used on invoke, complete and fail", async () => {
+    const trackSpy = vi.spyOn(telemetry, "track");
+    let fail = false;
+    const registry = registryWith(async () => {
+      if (fail) throw new Error("boom");
+      return { ok: true };
+    });
+    const handle = attachRegistryTelemetry(registry);
+
+    await registry.invokeTool("flow-execute", {});
+    fail = true;
+    await expect(registry.invokeTool("flow-execute", {})).rejects.toThrow("boom");
+
+    expect(trackSpy.mock.calls.map(([event, props]) => [event, props])).toEqual([
+      ["tool:invoke", expect.objectContaining({ tool: "e2e-execute", alias_used: true })],
+      ["tool:complete", expect.objectContaining({ tool: "e2e-execute", alias_used: true })],
+      ["tool:invoke", expect.objectContaining({ tool: "e2e-execute", alias_used: true })],
+      ["tool:fail", expect.objectContaining({ tool: "e2e-execute", alias_used: true })],
+    ]);
+    handle.detach();
+  });
+
+  it("sends no alias_used when the tool is called by its current id", async () => {
+    const trackSpy = vi.spyOn(telemetry, "track");
+    const registry = registryWith(async () => ({ ok: true }));
+    const handle = attachRegistryTelemetry(registry);
+
+    await registry.invokeTool("e2e-execute", {});
+
+    expect(trackSpy).toHaveBeenCalledTimes(2);
+    for (const [, props] of trackSpy.mock.calls) {
+      expect(props).toMatchObject({ tool: "e2e-execute" });
+      expect(props).not.toHaveProperty("alias_used");
+    }
     handle.detach();
   });
 });

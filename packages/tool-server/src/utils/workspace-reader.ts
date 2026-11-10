@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { parse as parseDotenv } from "dotenv";
 
-export interface EnvFileInfo {
+interface EnvFileInfo {
   name: string;
   keys: string[];
 }

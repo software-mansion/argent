@@ -162,8 +162,17 @@ describe("toMcpContent", () => {
 });
 
 describe("screenshotDiffToMcpContent", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-mcp-content-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
   it("returns a context image followed by the summary text", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-mcp-content-"));
     const contextDiffPath = path.join(dir, "context.diff.png");
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     await fs.writeFile(contextDiffPath, pngBytes);
@@ -255,6 +264,58 @@ describe("toMcpContent with artifact ctx", () => {
     expect((result[1] as { text: string }).text).toMatch(/^Saved: .*shot\.png$/);
   });
 
+  // The renderer's half of the one-observation guarantee; the allow-list half
+  // is tool-server's run-sequence-observation-gate.test.ts. The result is
+  // walked whole, steps included, and every artifact handle found becomes its
+  // own image block — so a sequence holds at one frame only while its steps
+  // report none.
+  it("renders a multi-step sequence result without a frame of its own", async () => {
+    // A fetch that resolves. Left to the global one, a step-carried handle
+    // would fail to download and be swallowed, so the assertions below would
+    // hold just as well for a sequence whose frames were merely unreachable.
+    const fetchImpl = vi.fn(fetchReturning([...PNG_SIGNATURE, 0x42]));
+
+    const result = await toMcpContent(
+      {
+        completed: 3,
+        total: 3,
+        steps: [
+          { tool: "gesture-swipe", result: { swiped: true, timestampMs: 1 } },
+          { tool: "keyboard", result: { typed: "hello", keys: 0 } },
+          { tool: "gesture-tap", result: { tapped: true, timestampMs: 2 } },
+        ],
+      },
+      undefined,
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl }
+    );
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(result.filter((b) => b.type === "image")).toEqual([]);
+    expect(result).toHaveLength(1);
+    expect((result[0] as { text: string }).text).toContain("gesture-tap");
+  });
+
+  it("materializes an artifact handle carried on a step result", async () => {
+    // Keeps the pin above honest: the walk really does reach steps[].result,
+    // so a step tool that returned a frame would be inlined mid-sequence.
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const result = await toMcpContent(
+      {
+        completed: 1,
+        total: 1,
+        steps: [
+          { tool: "gesture-tap", result: { image: artifactHandle("s0", "shot.png", "image/png") } },
+        ],
+      },
+      undefined,
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) }
+    );
+
+    expect(result.filter((b) => b.type === "image")).toEqual([
+      { type: "image", data: Buffer.from(pngBytes).toString("base64"), mimeType: "image/png" },
+    ]);
+  });
+
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
     const result = await toMcpContent(
       { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },
@@ -271,13 +332,62 @@ describe("toMcpContent with artifact ctx", () => {
 
 describe("flowRunToMcpContent", () => {
   let originalFetch: typeof globalThis.fetch;
+  // The failure cases below drive the real materializeArtifacts, which writes
+  // under artifactsRoot() — tmpdir()/argent-artifacts unless pinned, a path no
+  // test would then own or remove.
+  let root: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalFetch = globalThis.fetch;
+    root = await mkdtemp(join(tmpdir(), "content-flow-artifacts-"));
+    process.env.ARGENT_ARTIFACTS_DIR = root;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("names the same-named test a run's test hides, under the header", async () => {
+    const warning =
+      "/p/.argent/flows/f.yaml is not used: /p/.argent/e2e/f.yaml has the same name and is read first.";
+    const blocks = await flowRunToMcpContent({ flow: "f", steps: [], warning });
+
+    expect(blocks.slice(0, 2)).toEqual([
+      { type: "text", text: 'Running e2e test "f" (0 steps)' },
+      { type: "text", text: `⚠ ${warning}` },
+    ]);
+  });
+
+  it("names each baseline a run over a link returned but could not write", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [],
+      baselineWrites: ["/p/a.png", { path: "/p/b.png", error: "EACCES: permission denied" }],
+    });
+
+    expect(blocks).toContainEqual({
+      type: "text",
+      text: "✗ baseline not written: /p/b.png: EACCES: permission denied",
+    });
+  });
+
+  it("names the e2e test from e2eTest, falling back to the flow an older tool-server sends", async () => {
+    const texts = async (input: FlowExecuteResult) =>
+      (await flowRunToMcpContent(input)).map((b) => (b.type === "text" ? b.text : ""));
+    expect(await texts({ e2eTest: "new", flow: "old", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ e2eTest: "new", steps: [] })).toEqual([
+      'Running e2e test "new" (0 steps)',
+      'E2E test "new" complete.',
+    ]);
+    expect(await texts({ flow: "old", steps: [] })).toEqual([
+      'Running e2e test "old" (0 steps)',
+      'E2E test "old" complete.',
+    ]);
   });
 
   it("produces header and footer text blocks", async () => {
@@ -286,11 +396,11 @@ describe("flowRunToMcpContent", () => {
 
     expect(blocks[0]).toEqual({
       type: "text",
-      text: 'Running flow "test" (0 steps)',
+      text: 'Running e2e test "test" (0 steps)',
     });
     expect(blocks[blocks.length - 1]).toEqual({
       type: "text",
-      text: 'Flow "test" complete.',
+      text: 'E2E test "test" complete.',
     });
   });
 
@@ -302,6 +412,84 @@ describe("flowRunToMcpContent", () => {
     const blocks = await flowRunToMcpContent(input);
 
     expect(blocks[1]).toEqual({ type: "text", text: "[1] Hello" });
+  });
+
+  it("renders a script step's captured output as its own block", async () => {
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "script",
+          status: "pass",
+          target: "scripts/seed.mjs",
+          scriptLog: "creating order\norder 4711 created\n",
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    expect(blocks[1]).toEqual({ type: "text", text: "[1] ✓ script scripts/seed.mjs" });
+    expect(blocks[2]).toEqual({
+      type: "text",
+      text: "script output:\ncreating order\norder 4711 created",
+    });
+  });
+
+  it("indents a nested script step's output block with its step line", async () => {
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        { index: 0, kind: "run", status: "pass", target: "seed.yaml" },
+        {
+          index: 1,
+          kind: "script",
+          status: "pass",
+          target: "scripts/seed.mjs",
+          depth: 1,
+          scriptLog: "creating order\n",
+          scriptLogTruncated: true,
+        },
+      ],
+    });
+
+    expect(blocks[2]).toEqual({ type: "text", text: "[2] ✓   script scripts/seed.mjs" });
+    expect(blocks[3]).toEqual({
+      type: "text",
+      text: "  script output:\ncreating order\n… output truncated",
+    });
+  });
+
+  it("says when a script's log was truncated, and ignores a non-string one off the wire", async () => {
+    const truncated = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        { index: 0, kind: "script", status: "fail", scriptLog: "…", scriptLogTruncated: true },
+      ],
+    });
+    expect(JSON.stringify(truncated)).toContain("output truncated");
+
+    const nothingLeft = await flowRunToMcpContent({
+      flow: "f",
+      steps: [{ index: 0, kind: "script", status: "pass", scriptLogTruncated: true }],
+    });
+    expect(nothingLeft[2]).toEqual({
+      type: "text",
+      text: "script output:\n… output truncated",
+    });
+
+    const hostile = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          index: 0,
+          kind: "script",
+          status: "pass",
+          scriptLog: { evil: true } as unknown as string,
+        },
+      ],
+    });
+    expect(hostile.filter((b) => b.type === "text")).toHaveLength(3); // header, step, footer
   });
 
   it("renders run steps by their as-written path, with a stem fallback for legacy servers", async () => {
@@ -416,7 +604,7 @@ describe("flowRunToMcpContent", () => {
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text);
 
-    expect(texts[0]).toBe('Running flow "checkout" on SIM (4 steps)');
+    expect(texts[0]).toBe('Running e2e test "checkout" on SIM (4 steps)');
     expect(texts[1]).toBe("[1] ✓ tap");
     expect(texts[2]).toBe("[2] ✓ assert");
     expect(texts[3]).toBe("[3] ✗ snapshot — diff 3.10% > 0.5% (home)");
@@ -424,6 +612,47 @@ describe("flowRunToMcpContent", () => {
     expect(texts[texts.length - 1]).toBe("FAIL — 2 passed, 1 failed, 0 errored, 1 skipped");
     // No invalid (text: undefined) blocks even though directive steps carry no result.
     expect(blocks.every((b) => b.type !== "text" || typeof b.text === "string")).toBe(true);
+  });
+
+  it("puts each step's time before its reason and the run time on the verdict", async () => {
+    const input: FlowExecuteResult = {
+      flow: "checkout",
+      device: "SIM",
+      ok: false,
+      passed: 1,
+      failed: 1,
+      errored: 0,
+      skipped: 1,
+      durationMs: 92_400,
+      steps: [
+        { index: 0, kind: "echo", status: "pass", message: "opening", durationMs: 0 },
+        { index: 1, kind: "launch", status: "pass", target: "com.acme.shop", durationMs: 3100 },
+        {
+          index: 2,
+          kind: "tap",
+          status: "fail",
+          target: '"Checkout"',
+          reason: "no match",
+          warning: "moving",
+          depth: 1,
+          durationMs: 5002,
+        },
+        { index: 3, kind: "await", status: "skip", target: 'visible "Done"' },
+        { index: 4, kind: "tap", status: "pass", durationMs: -1 },
+      ],
+    };
+    const texts = (await flowRunToMcpContent(input))
+      .filter((b): b is { type: "text"; text: string } => b.type === "text")
+      .map((b) => b.text);
+
+    expect(texts.slice(1)).toEqual([
+      "[1] ✓ opening",
+      "[2] ✓ launch com.acme.shop (3.1s)",
+      '[3] ✗   tap "Checkout" (5.0s) — no match ⚠ moving',
+      '[4] · await visible "Done"',
+      "[5] ✓ tap",
+      "FAIL — 1 passed, 1 failed, 0 errored, 1 skipped (1m 32s)",
+    ]);
   });
 
   it("surfaces a legacy passed step's warning on its status line (older tool-servers adopted missing baselines)", async () => {
@@ -476,6 +705,8 @@ describe("flowRunToMcpContent", () => {
     );
     expect(artifactText?.text).toContain("home-baseline.png");
     expect(artifactText?.text).toContain("home-current.png");
+    // Under the pinned root, not artifactsRoot()'s shared default.
+    expect(artifactText?.text).toContain(`diff: ${root}`);
     expect(artifactText?.text).toMatch(/diff: .*home-diff\.png/);
 
     // Exactly one inline image — the diff, not the full-res baseline/current.
@@ -684,7 +915,7 @@ describe("flowRunToMcpContent", () => {
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
       .map((b) => b.text);
 
-    expect(texts[0]).toContain("Running flow");
+    expect(texts[0]).toContain("Running e2e test");
     expect(texts[1]).toBe("[1] Start");
     expect(texts[2]).toBe("[2] gesture-tap");
     // [3] is JSON result

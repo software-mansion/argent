@@ -4,8 +4,11 @@ import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
 import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
+import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
+import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
+import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import {
   listenForDarwinNotification,
@@ -109,7 +112,9 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
   try {
     launchctlOutput = execFileSync(
       "xcrun",
-      simctlArgsForUdidSync(udid, ["spawn", udid, "launchctl", "list"]),
+      simctlArgsForUdidSync(udid, ["spawn", udid, "launchctl", "list"], {
+        granted: "native-profiler",
+      }),
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
@@ -117,6 +122,8 @@ export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: nu
       }
     );
   } catch (err) {
+    // Its message says what to do, and a flow step reports only the thrown message.
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
       `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
@@ -226,7 +233,9 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
   let runningUserApps: { info: AppInfo; pid: number }[];
   try {
     runningUserApps = enumerateRunningUserApps(udid);
-  } catch {
+  } catch (err) {
+    // A refused `simctl` says nothing about the app, so this is not "it isn't running yet".
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     return { executable: name, pid: null };
   }
   const matched = runningUserApps.find(
@@ -247,11 +256,15 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
     // (device_id included) is ever interpolated into a shell. Each stage buffers its
     // full stdout in Node, hence run-with-timeout.ts's 256 MiB maxBuffer; Node's
     // 1 MiB default would throw ENOBUFS on a well-populated simulator.
-    const listAppsPlist = execFileSync("xcrun", simctlArgsForUdidSync(udid, ["listapps", udid]), {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-      maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
-    });
+    const listAppsPlist = execFileSync(
+      "xcrun",
+      simctlArgsForUdidSync(udid, ["listapps", udid], { granted: "native-profiler" }),
+      {
+        encoding: "utf-8",
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
+      }
+    );
     listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
       input: listAppsPlist,
       encoding: "utf-8",
@@ -259,6 +272,7 @@ function getInstalledApps(udid: string): Record<string, AppInfo> {
       maxBuffer: DEFAULT_EXEC_MAX_BUFFER,
     });
   } catch (err) {
+    if (err instanceof XcodeFirstLaunchPendingError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new FailureError(
       `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
@@ -282,7 +296,9 @@ function getAppBundlePath(udid: string, bundleId: string): string {
   try {
     appPath = execFileSync(
       "xcrun",
-      simctlArgsForUdidSync(udid, ["get_app_container", udid, bundleId, "app"]),
+      simctlArgsForUdidSync(udid, ["get_app_container", udid, bundleId, "app"], {
+        granted: "native-profiler",
+      }),
       {
         encoding: "utf-8",
         timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
@@ -449,7 +465,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
         `ARGENT_IOS_CAPTURE="${reason.rawValue}" forces the "${reason.strategyName}" capture ` +
         `strategy, which attaches host-wide and cannot \`--launch\` a cold start. Unset ` +
         `ARGENT_IOS_CAPTURE (or set it to "device") to use malloc_stack_logging, or re-run without ` +
-        `malloc_stack_logging (leaks are still detected, just unattributed).`,
+        `malloc_stack_logging.`,
       {
         error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_STRATEGY_OVERRIDE,
         failure_stage: "native_profiler_start_malloc_capability",
@@ -463,8 +479,7 @@ function mallocNonDeviceStrategyError(reason: CaptureStrategyReason): FailureErr
   return new FailureError(
     `malloc_stack_logging needs to cold-launch the app under \`xctrace --device\`, but ` +
       `${versionNote} has the --device recording-start deadlock (Xcode 26.4 and later), so it would ` +
-      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging ` +
-      `(leaks are still detected, just unattributed), profile on a non-degraded Xcode, or set ` +
+      `terminate your app and then capture an empty trace. Re-run without malloc_stack_logging, or set ` +
       `ARGENT_IOS_CAPTURE=device to force the device path if you know it works on your host.`,
     {
       error_code: FAILURE_CODES.NATIVE_PROFILER_MALLOC_DEGRADED_XCODE,
@@ -489,6 +504,14 @@ export async function startNativeProfilerIos(
   // Warm the UDID → device-set cache; the synchronous simctl helpers below read it
   // via simctlArgsForUdidSync and would otherwise target the wrong set.
   await deviceSetForUdid(params.device_id);
+
+  /**
+   * `xctrace --device` resolves a CoreSimulator UDID, and the `ext:` prefix a
+   * provider-supplied id carries means nothing outside Argent. simctl argv is
+   * substituted by {@linkcode simctlArgsForUdidSync}, this one isn't.
+   */
+  const xctraceDevice = externalNativeId(params.device_id);
+
   if (api.profilingActive) {
     throw new FailureError(
       `A native profiling session is already running (PID: ${api.capturePid}).`,
@@ -546,6 +569,8 @@ export async function startNativeProfilerIos(
       throw mallocNonDeviceStrategyError(captureDecision.reason);
     }
     const info = resolveAppForLaunch(params.device_id, params.app_process);
+    // The relaunch below must not beat injection.
+    await firstSimulatorPoll();
     appProcess = info.CFBundleExecutable;
     launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
     // Terminate any running instance so the env var is set from process start
@@ -553,11 +578,11 @@ export async function startNativeProfilerIos(
     try {
       execFileSync(
         "xcrun",
-        simctlArgsForUdidSync(params.device_id, [
-          "terminate",
+        simctlArgsForUdidSync(
           params.device_id,
-          info.CFBundleIdentifier,
-        ]),
+          ["terminate", params.device_id, info.CFBundleIdentifier],
+          { granted: "native-profiler" }
+        ),
         {
           timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
           stdio: "ignore",
@@ -610,7 +635,7 @@ export async function startNativeProfilerIos(
         "--template",
         templatePath,
         "--device",
-        params.device_id,
+        xctraceDevice,
         "--output",
         outputFile,
         "--no-prompt",
@@ -624,7 +649,7 @@ export async function startNativeProfilerIos(
     } else {
       xctraceArgs = strategy!.buildRecordArgs({
         templatePath,
-        deviceId: params.device_id,
+        deviceId: xctraceDevice,
         target: detected!,
         outputFile,
         notifyName: notify ? notifyName : undefined,
@@ -708,11 +733,11 @@ export async function startNativeProfilerIos(
       try {
         execFileSync(
           "xcrun",
-          simctlArgsForUdidSync(params.device_id, [
-            "launch",
+          simctlArgsForUdidSync(
             params.device_id,
-            mallocRelaunchBundleId,
-          ]),
+            ["launch", params.device_id, mallocRelaunchBundleId],
+            { granted: "native-profiler" }
+          ),
           {
             timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
             stdio: "ignore",
@@ -938,11 +963,19 @@ export async function analyzeNativeProfilerIos(
   const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
     await runIosProfilerPipeline(api.exportedFiles, { cpuFilterPid: api.cpuFilterPid });
 
+  // No leaks export means no leak data, not zero leaks: a trace whose template
+  // has the Leaks instrument exports an empty table when nothing leaked. The
+  // all-processes fallback records the built-in Time Profiler template, which
+  // has none. A leaks file that stop wrote but is now gone or unreadable is no
+  // leak data either.
+  const leaksRecorded = api.exportedFiles.leaks != null && !leaksMissing;
+
   api.parsedData = {
     cpuSamples,
     uiHangs,
     cpuHotspots,
     memoryLeaks,
+    leaksRecorded,
     // Freeze the capture mode with the parsed data so drill-down consumers
     // (leak_stacks, combined report) stay paired with it after a newer capture
     // re-stamps the session fields.
@@ -1002,5 +1035,6 @@ export async function analyzeNativeProfilerIos(
     // capture-mode sidecar, so a restored session renders with null (the
     // unattributed-leaks note then goes by the attributed-leak count instead).
     mallocStackLogging: api.mallocStackLogging,
+    leaksRecorded,
   });
 }

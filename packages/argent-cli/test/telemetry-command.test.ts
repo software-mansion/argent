@@ -44,6 +44,8 @@ beforeEach(() => {
   process.env.USERPROFILE = homeDir;
   process.chdir(projectDir);
   _resetConsentCacheForTest();
+  vi.stubEnv("DO_NOT_TRACK", undefined);
+  vi.stubEnv("ARGENT_TELEMETRY", undefined);
   logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
@@ -58,6 +60,7 @@ afterEach(() => {
   if (originalUserProfile === undefined) delete process.env.USERPROFILE;
   else process.env.USERPROFILE = originalUserProfile;
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   _resetConsentCacheForTest();
   fs.rmSync(homeDir, { recursive: true, force: true });
   fs.rmSync(projectDir, { recursive: true, force: true });
@@ -125,14 +128,17 @@ describe("argent telemetry — scopes", () => {
 
   // `argent <command> --help` is what the top-level help tells the user to run,
   // and every other subcommand honours it after its own subcommand too.
+  // One argv per row, nested so `%j` names all of it: un-nested, the single placeholder
+  // takes only argv[0], which renders the two `status` rows identically and reads the rest
+  // as claims about a bare `enable` / `disable`.
   it.each([
-    ["--help"],
-    ["-h"],
-    ["status", "--help"],
-    ["status", "-h"],
-    ["enable", "--help"],
-    ["disable", "-h"],
-  ])("prints usage for %s and writes nothing", async (...args) => {
+    [["--help"]],
+    [["-h"]],
+    [["status", "--help"]],
+    [["status", "-h"]],
+    [["enable", "--help"]],
+    [["disable", "-h"]],
+  ])("prints usage for %j and writes nothing", async (args) => {
     await telemetry(args);
     expect(output()).toContain("argent telemetry status");
     expect(errSpy).not.toHaveBeenCalled();

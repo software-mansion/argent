@@ -21,17 +21,29 @@ import {
   getFailureSignalOrFallback,
 } from "./errors";
 import { FAILURE_CODES } from "./failure-codes";
+import { canonicalToolArgs, ToolParamAliasError } from "./tool-ids";
 import { parseURN } from "./urn";
 import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { z } from "zod";
 
 type ZodIssue = z.core.$ZodIssue;
+
+/**
+ * URNs resolved during a tool invocation, so
+ * {@linkcode Registry._recoverFailedServices} sees the services a tool
+ * resolved itself as well as the ones it declared. Per-invocation, so
+ * concurrent calls cannot dispose each other's services.
+ */
+const resolvedDuringInvocation = new AsyncLocalStorage<Set<URN>>();
 
 export class Registry {
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
+  /** Alias → the id of the tool that declares it in `aliases`. */
+  private toolAliases = new Map<string, string>();
   /**
    * Injected so the registry needs no dependency on the flag store; the
    * tool-server wires the real check. The default enables every flag, so a
@@ -62,8 +74,9 @@ export class Registry {
     return this.blueprints.get(namespace);
   }
 
+  /** The tool with this id, or the one that declares it as an alias. */
   getTool(id: string): ToolDefinition | undefined {
-    return this.tools.get(id)?.definition;
+    return this.tools.get(this.toolAliases.get(id) ?? id)?.definition;
   }
 
   /**
@@ -71,19 +84,27 @@ export class Registry {
    * `options` reach the blueprint factory only on that first instantiation.
    */
   resolveService<T = unknown>(urn: URN, options?: Record<string, unknown>): Promise<T> {
+    /**
+     * Most tools declare nothing in `services()` and resolve here instead. One
+     * of those can be holding just as dead a handle as a declared one.
+     */
+    resolvedDuringInvocation.getStore()?.add(urn);
     return this._resolve<T>(urn, [], options);
   }
 
   registerTool<TParams = void, TResult = unknown>(
     definition: ToolDefinition<TParams, TResult>
   ): void {
-    if (this.tools.has(definition.id)) {
-      throw new Error(`Tool "${definition.id}" already registered`);
+    for (const id of [definition.id, ...(definition.aliases ?? [])]) {
+      if (this.tools.has(id) || this.toolAliases.has(id)) {
+        throw new Error(`Tool "${id}" already registered`);
+      }
     }
     if (definition.zodSchema && !definition.inputSchema) {
       definition.inputSchema = zodObjectToJsonSchema(definition.zodSchema);
     }
     this.tools.set(definition.id, { definition });
+    for (const alias of definition.aliases ?? []) this.toolAliases.set(alias, definition.id);
     this.events.emit("toolRegistered", definition.id);
   }
 
@@ -92,10 +113,13 @@ export class Registry {
     params?: unknown,
     options?: InvokeToolOptions
   ): Promise<TResult> {
-    const record = this.tools.get(id);
+    const record = this.tools.get(this.toolAliases.get(id) ?? id);
     if (!record) throw new ToolNotFoundError(id);
 
     const { definition } = record;
+    // Events carry the tool's own id; `calledAs` keeps the alias the caller used.
+    const toolId = definition.id;
+    const calledAs = id === toolId ? undefined : id;
 
     // Gated on every dispatch path, not just the HTTP edge: a disabled tool
     // reads as "not found" (mirroring the HTTP 404) so a flow can't smuggle an
@@ -110,9 +134,9 @@ export class Registry {
 
     const startedMsg = formatInteractionMessage(
       () => definition.interaction?.startedMsg?.({ params: effectiveParams }),
-      `Tool ${id} was invoked.`
+      `Tool ${toolId} was invoked.`
     );
-    this.events.emit("toolInvoked", id, toolInvocationId, startedMsg);
+    this.events.emit("toolInvoked", toolId, toolInvocationId, startedMsg, calledAs);
 
     try {
       // Validated here, not just at the HTTP layer: internal callers
@@ -120,11 +144,23 @@ export class Registry {
       // `execute` with raw args, letting a flow YAML smuggle a string into a
       // `z.number()` port or shell metacharacters past a tool's regex.
       // `params ?? {}` mirrors express.json's {} for an empty body.
+      try {
+        params = canonicalToolArgs(toolId, params);
+      } catch (err) {
+        if (!(err instanceof ToolParamAliasError)) throw err;
+        throw new FailureError(`Invalid params for tool "${toolId}": ${err.message}`, {
+          error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+          failure_stage: "tool_params_parse",
+          failure_area: "registry",
+          error_kind: "validation",
+        });
+      }
+      effectiveParams = params;
       if (definition.zodSchema) {
         const parsed = definition.zodSchema.safeParse(params ?? {});
         if (!parsed.success) {
           throw new FailureError(
-            `Invalid params for tool "${id}": ${describeParamIssues(parsed.error, params)}`,
+            `Invalid params for tool "${toolId}": ${describeParamIssues(parsed.error, params)}`,
             {
               error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
               failure_stage: "tool_params_parse",
@@ -151,22 +187,30 @@ export class Registry {
       // tool register host files without declaring a per-tool service.
       const ctx: ToolContext = { ...options, toolInvocationId, artifacts: this.artifacts };
 
+      let lazilyResolved = new Set<URN>();
+
       const runOnce = async (): Promise<TResult> => {
-        const resolvedServices: Record<string, unknown> = {};
-        for (const { alias, urn, options: resolveOptions } of refs) {
-          resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
-        }
-        return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+        lazilyResolved = new Set<URN>();
+
+        return resolvedDuringInvocation.run(lazilyResolved, async () => {
+          const resolvedServices: Record<string, unknown> = {};
+          for (const { alias, urn, options: resolveOptions } of refs) {
+            resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
+          }
+          return definition.execute(resolvedServices, effectiveParams, ctx) as Promise<TResult>;
+        });
       };
 
       let result: TResult;
       try {
         result = await runOnce();
       } catch (execError) {
-        // Self-heal a cached-but-dead service: dispose the resolved services
-        // that call this error recoverable and retry against fresh ones.
-        // Bounded to a single retry so a genuinely broken service can't spin.
-        const recovered = await this._recoverFailedServices(refs, execError);
+        // Self-heal a cached-but-dead service: dispose the services that call
+        // this error recoverable — the ones the tool declared and the ones it
+        // resolved itself — and retry against fresh ones. Bounded to a single
+        // retry so a genuinely broken service can't spin.
+        const candidates = [...refs, ...[...lazilyResolved].map((urn) => ({ urn }))];
+        const recovered = await this._recoverFailedServices(candidates, execError);
         if (!recovered) throw execError;
         result = await runOnce();
       }
@@ -178,19 +222,19 @@ export class Registry {
             params: effectiveParams,
             result,
           }),
-        `Tool ${id} completed in ${duration.toFixed(2)} ms.`
+        `Tool ${toolId} completed in ${duration.toFixed(2)} ms.`
       );
-      this.events.emit("toolCompleted", id, toolInvocationId, duration, completedMsg);
+      this.events.emit("toolCompleted", toolId, toolInvocationId, duration, completedMsg, calledAs);
       return result as TResult;
     } catch (error) {
       const originalMsg = error instanceof Error ? error.message : String(error);
 
       const wrappedError =
         error instanceof ServiceInitializationError || error instanceof ServiceNotFoundError
-          ? new ToolExecutionError(id, `Service dependency failed: ${originalMsg}`, {
+          ? new ToolExecutionError(toolId, `Service dependency failed: ${originalMsg}`, {
               cause: error,
             })
-          : new ToolExecutionError(id, originalMsg, {
+          : new ToolExecutionError(toolId, originalMsg, {
               cause: error instanceof Error ? error : new Error(String(error)),
             });
       const failureSignal = getFailureSignalOrFallback(wrappedError);
@@ -201,16 +245,17 @@ export class Registry {
             error: wrappedError,
             failureSignal,
           }),
-        `Tool ${id} failed.`
+        `Tool ${toolId} failed.`
       );
 
       this.events.emit(
         "toolFailed",
-        id,
+        toolId,
         toolInvocationId,
         wrappedError,
         performance.now() - startTime,
-        failedMsg
+        failedMsg,
+        calledAs
       );
       throw wrappedError;
     }

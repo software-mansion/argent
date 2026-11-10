@@ -91,10 +91,8 @@ if (process.platform === "darwin") {
       console.warn("⚠ argent-private submodule unavailable — using pre-built dylibs\n");
     } else {
       console.error("✗ argent-private submodule unavailable and no pre-built dylibs found.");
-      console.error("  Grant SSH access to github.com/software-mansion-labs/argent-private");
-      console.error(
-        "  or obtain pre-built dylibs and place them in packages/native-devtools-ios/dylibs/"
-      );
+      console.error("  Get SSH access to github.com/software-mansion/argent-private,");
+      console.error("  or download the pre-built dylibs: npm run download:native-binaries");
       process.exit(1);
     }
   }
@@ -117,6 +115,13 @@ execSync("npm run build:dispatcher -w @swmansion/argent", {
   stdio: "inherit",
 });
 console.log("✓ Dispatcher TypeScript built\n");
+
+console.log("Bundling dispatcher subcommands...");
+execSync("node scripts/bundle-tools.cjs --esm-only", {
+  cwd: ARGENT_PKG,
+  stdio: "inherit",
+});
+console.log("✓ Dispatcher subcommands bundled\n");
 
 // Only the current host's key, unlike bundle-tools.cjs which copies every
 // supported host's binary. Mirrors hostPlatformKey() in
@@ -165,42 +170,8 @@ if (!fs.existsSync(STUB)) {
   );
 }
 
-function restoreMcpEntry(configPath, originalEntry, existedBefore) {
-  const config = readJson(configPath);
-  if (!config.mcpServers) config.mcpServers = {};
-
-  if (originalEntry) {
-    config.mcpServers.argent = originalEntry;
-  } else {
-    delete config.mcpServers.argent;
-  }
-
-  if (config.mcpServers && Object.keys(config.mcpServers).length === 0) {
-    delete config.mcpServers;
-  }
-
-  if (!existedBefore && Object.keys(config).length === 0) {
-    try {
-      fs.unlinkSync(configPath);
-    } catch {
-      /* file already absent — nothing to remove */
-    }
-    return;
-  }
-
-  writeJson(configPath, config);
-}
-
 const LOCAL_MCP_ENTRY = path.join(ARGENT_PKG, "dist", "cli.js");
 const LOG_FILE = path.join(STATE_DIR, "mcp-calls.log");
-
-const claudeConfigExists = fs.existsSync(CLAUDE_JSON);
-const claudeConfig = readJson(CLAUDE_JSON);
-const originalArgentEntry = claudeConfig?.mcpServers?.argent ?? null;
-const shouldPatchCursor = fs.existsSync(CURSOR_DIR);
-const cursorConfigExists = fs.existsSync(CURSOR_MCP_JSON);
-const cursorConfig = shouldPatchCursor ? readJson(CURSOR_MCP_JSON) : {};
-const originalCursorArgentEntry = cursorConfig?.mcpServers?.argent ?? null;
 
 const devMcpEntry = {
   type: "stdio",
@@ -212,23 +183,125 @@ const devMcpEntry = {
   env: { ARGENT_MCP_LOG: LOG_FILE, ARGENT_TOOLS_URL: `http://127.0.0.1:${PORT}` },
 };
 
-if (!claudeConfig.mcpServers) claudeConfig.mcpServers = {};
-claudeConfig.mcpServers.argent = devMcpEntry;
-writeJson(CLAUDE_JSON, claudeConfig);
-console.log(`✓ Patched ~/.claude.json → node ${LOCAL_MCP_ENTRY} mcp`);
+/**
+ * @typedef {object} McpTarget
+ * @property {string} label
+ * @property {string} configPath
+ * @property {object} devEntry
+ * @property {boolean} [patched]
+ * @property {boolean} [existedBefore]
+ * @property {object | null} [originalEntry]
+ */
+/** @type {McpTarget[]} */
+const mcpTargets = [{ label: "~/.claude.json", configPath: CLAUDE_JSON, devEntry: devMcpEntry }];
+if (fs.existsSync(CURSOR_DIR)) {
+  mcpTargets.push({
+    label: "~/.cursor/mcp.json",
+    configPath: CURSOR_MCP_JSON,
+    devEntry: { command: "node", args: [LOCAL_MCP_ENTRY, "mcp"], env: devMcpEntry.env },
+  });
+}
 
-if (shouldPatchCursor) {
-  if (!cursorConfig.mcpServers) cursorConfig.mcpServers = {};
-  cursorConfig.mcpServers.argent = {
-    command: "node",
-    args: [LOCAL_MCP_ENTRY, "mcp"],
-    // Same env as the Claude entry, so Cursor's MCP reuses the dev tool-server too.
-    env: devMcpEntry.env,
-  };
-  writeJson(CURSOR_MCP_JSON, cursorConfig);
-  console.log(`✓ Patched ~/.cursor/mcp.json → node ${LOCAL_MCP_ENTRY} mcp\n`);
-} else {
-  console.log("• Skipped Cursor patch (no ~/.cursor directory found)\n");
+function patchMcpEntry(target) {
+  target.existedBefore = fs.existsSync(target.configPath);
+  const config = readJson(target.configPath);
+  target.originalEntry = config.mcpServers?.argent ?? null;
+  config.mcpServers = { ...config.mcpServers, argent: target.devEntry };
+  writeJson(target.configPath, config);
+  target.patched = true;
+  console.log(`✓ Patched ${target.label} → node ${LOCAL_MCP_ENTRY} mcp`);
+}
+
+function holdsEntry(config, entry) {
+  return JSON.stringify(config.mcpServers?.argent) === JSON.stringify(entry);
+}
+
+/**
+ * Put the original entry back, unless something else (another dev run, an
+ * `argent init`) rewrote it meanwhile. Returns whether it acted.
+ */
+function restoreMcpEntry(target) {
+  if (!target.patched) return false;
+  const config = readJson(target.configPath);
+  if (!holdsEntry(config, target.devEntry)) return false;
+
+  if (target.originalEntry) {
+    config.mcpServers.argent = target.originalEntry;
+  } else {
+    delete config.mcpServers.argent;
+  }
+
+  if (Object.keys(config.mcpServers).length === 0) {
+    delete config.mcpServers;
+  }
+
+  if (!target.existedBefore && Object.keys(config).length === 0) {
+    try {
+      fs.unlinkSync(target.configPath);
+    } catch {
+      /* file already absent — nothing to remove */
+    }
+    return true;
+  }
+
+  writeJson(target.configPath, config);
+  return true;
+}
+
+// An external device provider (Radon IDE) spawns `[node, cli.js, "providers",
+// ...]`, resolving both paths from `~/.argent/cli.json`, written by `argent
+// init`/`update`, which a repo checkout never runs. Its only fallback is
+// `argent` on PATH, which dev mode does not provide, so without this the
+// provider integration is the one thing left pointing away from the local
+// build. Patched and restored like the editor configs above.
+const CLI_RECORD = path.join(STATE_DIR, "cli.json");
+let originalCliRecord = null;
+
+const devCliRecord = {
+  cli: LOCAL_MCP_ENTRY,
+  /**
+   * Neither "global" nor "local". This names a repo checkout. Nothing branches
+   * on it (`argent uninstall` compares paths) so the value is inert.
+   */
+  mode: "dev",
+  node: process.execPath,
+  updatedAt: new Date().toISOString(),
+  version: readJson(path.join(ARGENT_PKG, "package.json")).version ?? "0.0.0",
+};
+
+function patchEditorConfigs() {
+  for (const target of mcpTargets) patchMcpEntry(target);
+  if (mcpTargets.length === 1) {
+    console.log("• Skipped Cursor patch (no ~/.cursor directory found)");
+  }
+
+  originalCliRecord = fs.existsSync(CLI_RECORD) ? fs.readFileSync(CLI_RECORD, "utf8") : null;
+  writeJson(CLI_RECORD, devCliRecord);
+  console.log(`✓ Patched ~/.argent/cli.json → node ${LOCAL_MCP_ENTRY} providers\n`);
+}
+
+/**
+ * Put `~/.argent/cli.json` back, unless something else rewrote it meanwhile. An
+ * `argent init` mid-session leaves a record for a real install and clobbering
+ * that would point providers at a checkout we are shutting down. Returns
+ * whether it acted.
+ */
+function restoreCliRecord() {
+  try {
+    const current = fs.existsSync(CLI_RECORD) ? fs.readFileSync(CLI_RECORD, "utf8") : null;
+    if (current !== JSON.stringify(devCliRecord, null, 2) + "\n") return false;
+
+    if (originalCliRecord === null) {
+      fs.unlinkSync(CLI_RECORD);
+    } else {
+      fs.writeFileSync(CLI_RECORD, originalCliRecord);
+    }
+
+    return true;
+  } catch {
+    /** A stale record only costs the next run a re-patch */
+    return false;
+  }
 }
 
 let toolServerPid = null;
@@ -245,45 +318,86 @@ function cleanup() {
     /* state file already absent — nothing to remove */
   }
 
-  restoreMcpEntry(CLAUDE_JSON, originalArgentEntry, claudeConfigExists);
-  console.log("✓ Restored ~/.claude.json");
-  if (shouldPatchCursor) {
-    restoreMcpEntry(CURSOR_MCP_JSON, originalCursorArgentEntry, cursorConfigExists);
-    console.log("✓ Restored ~/.cursor/mcp.json");
+  for (const target of mcpTargets) {
+    if (restoreMcpEntry(target)) console.log(`✓ Restored ${target.label}`);
+  }
+  if (restoreCliRecord()) {
+    console.log("✓ Restored ~/.argent/cli.json");
   }
   console.log("Done.");
 }
 
-process.on("SIGINT", () => {
-  cleanup();
-  process.exit(0);
-});
-process.on("SIGTERM", () => {
-  cleanup();
-  process.exit(0);
-});
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    cleanup();
+    process.exit(0);
+  });
+}
 process.on("exit", cleanup);
+
+async function waitForExit(pid, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (isProcessAlive(pid) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+/**
+ * Stop the previous dev run through its own dev.cjs, so it restores the editor
+ * configs before this run reads them.
+ */
+async function stopPreviousRun() {
+  const state = readJson(STATE_FILE);
+  const pids = [state.devPid, state.pid].filter((pid) => pid && isProcessAlive(pid));
+  if (pids.length === 0) return;
+
+  console.log(`Stopping existing dev tool-server (PID ${pids[0]})...`);
+  process.kill(pids[0], "SIGTERM");
+  for (const pid of pids) await waitForExit(pid);
+}
+
+async function isPortAnswering(port) {
+  try {
+    await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1000) });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function toolServerEnv() {
+  /** @type {NodeJS.ProcessEnv} */
+  const env = { ...process.env, ARGENT_PORT: String(PORT), ARGENT_HOST: "127.0.0.1" };
+  delete env.ARGENT_AUTH_TOKEN;
+  return env;
+}
 
 async function main() {
   fs.mkdirSync(STATE_DIR, { recursive: true });
-  const existingState = readJson(STATE_FILE);
-  if (existingState.pid && isProcessAlive(existingState.pid)) {
-    console.log(`Stopping existing tool-server (PID ${existingState.pid})...`);
-    process.kill(existingState.pid, "SIGTERM");
-    await new Promise((r) => setTimeout(r, 600));
-  }
+  await stopPreviousRun();
   try {
     fs.unlinkSync(STATE_FILE);
   } catch {
     /* state file already absent — nothing to remove */
   }
 
+  if (await isPortAnswering(PORT)) {
+    console.error(
+      `✗ Port ${PORT} is already in use (another tool-server, e.g. npm run start?).\n` +
+        `  Stop it, or pick another port: PORT=4000 npm run dev`
+    );
+    process.exit(1);
+  }
+
+  patchEditorConfigs();
+
   console.log(`Starting dev tool-server on port ${PORT}...`);
 
-  const toolServer = spawn("npx", ["ts-node", "src/index.ts"], {
+  const tsNodeBin = require.resolve("ts-node/dist/bin.js", { paths: [TOOL_SERVER_PKG] });
+  const toolServer = spawn(process.execPath, [tsNodeBin, "src/index.ts", "start"], {
     cwd: TOOL_SERVER_PKG,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, PORT: String(PORT) },
+    env: toolServerEnv(),
   });
 
   toolServerPid = toolServer.pid;
@@ -292,10 +406,12 @@ async function main() {
   toolServer.stdout.pipe(logStream);
   toolServer.stderr.pipe(logStream);
 
-  toolServer.on("exit", (code) => {
-    if (code !== 0 && code !== null) {
-      console.error(`\nTool-server exited with code ${code}. Check ~/.argent/tool-server.log`);
-    }
+  toolServer.on("exit", (code, signal) => {
+    if (code === 0) return;
+    console.error(
+      `\nTool-server exited with ${signal ?? `code ${code}`}. Check ~/.argent/tool-server.log`
+    );
+    process.exitCode = 1;
   });
 
   process.stdout.write("Waiting for tool-server");
@@ -310,6 +426,7 @@ async function main() {
   writeJson(STATE_FILE, {
     port: PORT,
     pid: toolServerPid,
+    devPid: process.pid,
     startedAt: new Date().toISOString(),
     bundlePath: "dev",
   });

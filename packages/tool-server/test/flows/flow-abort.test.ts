@@ -117,6 +117,7 @@ describe("run cancellation mid-directive", () => {
     // "no visible element matched … add a scroll-to step" hint.
     expect(result.steps.map((s) => `${s.kind}:${s.status}`)).toEqual(["tap:skip"]);
     expect(result.steps[0].reason).toBe("run aborted");
+    expect(result.steps[0].durationMs).toBeUndefined();
     expect(result.ok).toBe(false);
     expect(calls).not.toContain("gesture-tap");
   });
@@ -294,7 +295,7 @@ describe("run cancellation mid-directive", () => {
 
   it("reports a raw tool step cancelled inside the gesture as a skip, not the tool's error", async () => {
     const controller = new AbortController();
-    // The third dispatch site, and the one flow-yaml.md sends authors to for a
+    // The third dispatch site, and the one e2e-yaml.md sends authors to for a
     // flick faster than the swipe directive's floor: a raw `tool: gesture-swipe`
     // step, whose signal invokeSubTool forwards to the tool itself.
     currentFetch = () => ({ tree: screen([]), source: "native-devtools" });

@@ -12,6 +12,7 @@ import {
   localInstallCommand,
   projectInstallCommand,
   formatShellCommand,
+  shellQuotePath,
   resolveProjectRoot,
   hasProjectPackageJson,
   isGloballyInstalled,
@@ -169,7 +170,9 @@ async function installLocally(opts: { fromTar: string | null; tel: InitTelemetry
           ? `${installError}`
           : `The install reported success but ${pc.cyan(PACKAGE_NAME)} is not in node_modules.`
       );
-      p.log.info(`Install manually with: ${pc.cyan(`cd ${projectRoot} && ${cmdStr}`)}`);
+      p.log.info(
+        `Install manually with: ${pc.cyan(`cd ${shellQuotePath(projectRoot)} && ${cmdStr}`)}`
+      );
     }
     await tel.trackPackageAction(
       "fresh_install",
@@ -232,6 +235,11 @@ async function runGlobal(opts: {
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed globally."));
+      if (!isGloballyInstalled()) {
+        p.log.warn(
+          `${pc.cyan("argent")} is not on PATH, so editors can't start it. Add your package manager's global bin directory to PATH.`
+        );
+      }
       version = getGloballyInstalledVersion() ?? getInstalledVersion() ?? version;
       await tel.trackPackageAction("fresh_install", packageActionStartedAt, true);
     } catch (err) {

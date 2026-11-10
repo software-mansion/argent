@@ -292,6 +292,51 @@ describe("formatDescribeTree", () => {
     expect(out).toContain("tap_y = frame.y + frame.height / 2");
   });
 
+  // Physical iOS plays two fingers through the runner's touch synthesizer, so
+  // the header recommends gesture-pinch there like on every other source.
+  it("recommends gesture-pinch in the xcuitest-runner header", () => {
+    const root: DescribeNode = {
+      role: "Application",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXButton",
+          label: "Zoom in",
+          frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.05 },
+        }),
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "xcuitest-runner" });
+    expect(out).toContain("Source: xcuitest-runner");
+    expect(out).toContain("Mode: nested");
+    expect(out).toContain(
+      "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+    );
+    expect(out).not.toContain("No two-finger gestures");
+  });
+
+  // format-tree.ts is deployed shared code: the xcuitest-runner branch above
+  // must leave every other source byte-identical. Pin the full simulator
+  // (ax-service) output, not a substring, so any accidental drift in deployed
+  // header text fails loudly.
+  it("keeps the simulator-source output byte-identical to the deployed string", () => {
+    const empty: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [],
+    };
+    const out = formatDescribeTree(empty, { source: "ax-service" });
+    expect(out).toBe(
+      "Source: ax-service\n" +
+        "Mode: flat\n" +
+        "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels.\n" +
+        "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.\n" +
+        "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n" +
+        "\n" +
+        "ROOT  AXGroup (0.000,0.000,1.000,1.000)\n"
+    );
+  });
+
   // Bluesky-style names mix emoji, ZWJ sequences, and bidirectional isolate
   // markers (U+202A/U+202C). Those must pass through escapeForLine unchanged
   // — only ASCII control chars (\\n, \\r, \\t) get backslash-escaped.
@@ -340,6 +385,13 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "uiautomator" });
     expect(out).toMatch(/\[clickable,long-clickable,checked,disabled\]/);
     expect(out).toMatch(/\[scrollHidden=7\]/);
+
+    // `uitest` reports `longClickable`, but HarmonyOS has no long-press tool.
+    const harmony = formatDescribeTree(root, { source: "harmony-uitest" });
+    expect(harmony).toMatch(/\[clickable,checked,disabled\]/);
+    expect(harmony).not.toContain("long-clickable");
+    // Suppressed at render: most of those nodes carry no other flag.
+    expect(harmony).toMatch(/\[scrollHidden=7\]/);
   });
 
   // scrollHidden=0 is the "no clipped children" signal from the Android
@@ -418,7 +470,23 @@ describe("formatDescribeTree", () => {
       ],
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
-    expect(out).toMatch(/\(0\.123, 0\.500, 0\.100, 0\.050\)/);
+    expect(out).toMatch(/\(0\.123,0\.500,0\.100,0\.050\)/);
+  });
+
+  it("keeps the sign and the leading zero of a negative coordinate", () => {
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXButton",
+          label: "X",
+          frame: { x: -0.125, y: 0.5, width: 1, height: 0.05 },
+        }),
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "ax-service" });
+    expect(out).toContain("(-0.125,0.500,1.000,0.050)");
   });
 
   // Long Compose / RN trees can stack 200+ wrapper layers. The renderer uses
@@ -484,6 +552,49 @@ describe("formatDescribeTree", () => {
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
     expect(elementLines(out)).toHaveLength(0);
+  });
+
+  // The Chromium walker sets `checked` alone, so a ticked box has to render
+  // differently from an unticked one without any `checkable` companion.
+  it("renders checked on a node that carries no checkable", () => {
+    const box = (checked: boolean): DescribeNode => ({
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "input",
+          label: "Accept terms",
+          identifier: "terms",
+          frame: { x: 0, y: 0.1, width: 0.04, height: 0.04 },
+          clickable: true,
+          checked,
+        }),
+      ],
+    });
+    const ticked = elementLines(formatDescribeTree(box(true), { source: "cdp-dom" }));
+    const unticked = elementLines(formatDescribeTree(box(false), { source: "cdp-dom" }));
+    expect(ticked[0]).toContain("[clickable,checked]");
+    expect(unticked[0]).toContain("[clickable]");
+    expect(ticked[0]).not.toEqual(unticked[0]);
+  });
+
+  // A `<div role="checkbox" aria-checked="true">` carries no other content
+  // signal, so hasContent() has to count `checked` or the node is dropped.
+  it("keeps an unlabeled node whose only content signal is checked", () => {
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "div",
+          frame: { x: 0.1, y: 0.1, width: 0.3, height: 0.05 },
+          checked: true,
+        }),
+      ],
+    };
+    const lines = elementLines(formatDescribeTree(root, { source: "cdp-dom" }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("[checked]");
   });
 
   // Regression: nested mode previously keyed on "uiautomator" only, so

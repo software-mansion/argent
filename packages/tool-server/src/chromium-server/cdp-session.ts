@@ -63,7 +63,8 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
       );
     }
     throw new FailureError(
-      `Chromium CDP on port ${port} reported no page targets. Is the app started with --remote-debugging-port=${port}?`,
+      `Chromium CDP on port ${port} answered but exposes no page target ` +
+        `(the app is running with no window). Open an app window and retry.`,
       {
         error_code: FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET,
         failure_stage: "chromium_cdp_discover_page_none",
@@ -101,20 +102,31 @@ export async function browserWebSocketUrl(port: number, signal?: AbortSignal): P
   return url;
 }
 
+/**
+ * Bound on one CDP HTTP request when the caller arms no signal of its own. A
+ * port that completes the TCP handshake and then never answers otherwise
+ * stalls for undici's 300s headers timeout, outliving every caller's deadline.
+ */
+const CDP_HTTP_TIMEOUT_MS = 5_000;
+
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(url, { signal });
+    res = await fetch(url, { signal: signal ?? AbortSignal.timeout(CDP_HTTP_TIMEOUT_MS) });
   } catch (err) {
     // A caller-driven abort is expected control flow, not a reachability failure.
     if (err instanceof Error && err.name === "AbortError") throw err;
+    // A stalled port produces no OS error at all — it arrives as the abort
+    // signal's TimeoutError, and is a reachability failure like any other.
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
     // undici wraps the OS error: the ECONN* code lives on err.cause, not on
     // err itself — check both, so the class is precise instead of always
     // connection_refused.
     const code =
       (err as NodeJS.ErrnoException).code ?? (err as { cause?: NodeJS.ErrnoException }).cause?.code;
-    const network_failure =
-      code === "ECONNREFUSED"
+    const network_failure = timedOut
+      ? "timeout"
+      : code === "ECONNREFUSED"
         ? "connection_refused"
         : code === "ECONNRESET"
           ? "connection_reset"
@@ -122,8 +134,11 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
             ? "timeout"
             : "other";
     throw new FailureError(
-      `Chromium CDP discovery: GET ${url} could not connect. ` +
-        `Is the app running with --remote-debugging-port?`,
+      timedOut
+        ? `Chromium CDP discovery: GET ${url} timed out. ` +
+            `Something is holding port ${new URL(url).port} without answering CDP.`
+        : `Chromium CDP discovery: GET ${url} could not connect. ` +
+            `Is the app running with --remote-debugging-port?`,
       {
         error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
         failure_stage: "chromium_cdp_discovery_connect",

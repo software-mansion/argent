@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-file-writer";
 import { scopeTempHome } from "../helpers/temp-home";
 
@@ -28,7 +31,7 @@ describe("LogFileWriter", () => {
 
   it("creates a flat log file in ~/.argent/tmp", () => {
     const filePath = writer.getFilePath();
-    expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+\.log$/);
+    expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+-p\d+\.log$/);
     expect(fs.existsSync(filePath)).toBe(true);
   });
 
@@ -79,6 +82,39 @@ describe("LogFileWriter", () => {
     expect(clusters[0].lastId).toBe(9);
     expect(clusters[1].message).toBe("Unique message");
     expect(clusters[1].count).toBe(1);
+  });
+
+  it("merges two messages sharing their first 80 chars, keeping the first arrival's text", () => {
+    const shared = "P".repeat(80);
+    writer.write(makeEntry(0, { message: `${shared}ALPHA` }));
+    writer.write(makeEntry(1, { message: `${shared}BETA` }));
+
+    const clusters = writer.getClusters();
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].message).toBe(`${shared}ALPHA`);
+    expect(clusters[0].count).toBe(2);
+  });
+
+  it("truncates the cluster message to 200 chars, still verbatim in the flat line", () => {
+    const long = "L".repeat(311);
+    writer.write(makeEntry(0, { message: long }));
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].message).toBe(long.slice(0, 200));
+
+    const content = fs.readFileSync(writer.getFilePath(), "utf-8");
+    expect(content).toContain(clusters[0].message);
+  });
+
+  it("keeps in the cluster message the newlines the flat line collapses", () => {
+    writer.write(makeEntry(0, { message: "first line\nsecond line" }));
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].message).toBe("first line\nsecond line");
+
+    const content = fs.readFileSync(writer.getFilePath(), "utf-8");
+    expect(content).not.toContain(clusters[0].message);
+    expect(content).toContain("first line second line");
   });
 
   it("limits clusters to requested count", () => {
@@ -164,6 +200,71 @@ describe("LogFileWriter", () => {
 
     writer.close();
     expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  const dayAgo = (Date.now() - 24 * 60 * 60 * 1000) / 1000;
+  const twoDaysAgo = (Date.now() - 48 * 60 * 60 * 1000) / 1000;
+
+  it("a new writer deletes a dead process's argent-logs files idle for over 24h, keeping fresher ones", () => {
+    const dir = path.dirname(writer.getFilePath());
+    const deadPid = spawnSync(process.execPath, ["-e", ""]).pid;
+    const stale = path.join(dir, `argent-logs-1-1-p${deadPid}.log`);
+    const fresh = path.join(dir, `argent-logs-2-2-p${deadPid}.log`);
+    fs.writeFileSync(stale, "");
+    fs.writeFileSync(fresh, "");
+    fs.utimesSync(stale, dayAgo - 60, dayAgo - 60);
+    fs.utimesSync(fresh, dayAgo + 60, dayAgo + 60);
+
+    new LogFileWriter(9998).close();
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("a new writer's sweep spares a live writer's file however long it has been quiet", () => {
+    const filePath = writer.getFilePath();
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+
+    new LogFileWriter(9998).close();
+
+    expect(fs.existsSync(filePath)).toBe(true);
+  });
+
+  it("a new writer's sweep spares quiet files of other live processes, signalable or not", () => {
+    const dir = path.dirname(writer.getFilePath());
+    // pid 1 refuses a non-root signal with EPERM.
+    const others = [process.ppid, 1].map((pid) => path.join(dir, `argent-logs-1-1-p${pid}.log`));
+    for (const other of others) {
+      fs.writeFileSync(other, "");
+      fs.utimesSync(other, twoDaysAgo, twoDaysAgo);
+    }
+
+    new LogFileWriter(9998).close();
+
+    expect(others.map((other) => fs.existsSync(other))).toEqual([true, true]);
+  });
+
+  it("a kept file outlives the sweep for 24h from the close, then is swept", () => {
+    const filePath = writer.getFilePath();
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+    writer.close({ keepFile: true });
+
+    new LogFileWriter(9998).close();
+    expect(fs.existsSync(filePath)).toBe(true);
+
+    fs.utimesSync(filePath, twoDaysAgo, twoDaysAgo);
+    new LogFileWriter(9998).close();
+    expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  it("constructs when the log directory cannot be listed", () => {
+    const dir = path.dirname(writer.getFilePath());
+    fs.chmodSync(dir, 0o300);
+    try {
+      expect(() => new LogFileWriter(9998).close()).not.toThrow();
+    } finally {
+      fs.chmodSync(dir, 0o700);
+    }
   });
 
   it("close() is idempotent", () => {
@@ -257,5 +358,41 @@ describe("LogFileWriter", () => {
 
     const clusters = writer.getClusters();
     expect(clusters[0].sourceFile).toBe("src/api/user.ts");
+  });
+});
+
+// Mode bits do not bite on Windows, nor for uid 0.
+const CAN_MAKE_UNWRITABLE = process.platform !== "win32" && process.getuid?.() !== 0;
+
+describe.skipIf(!CAN_MAKE_UNWRITABLE)("LogFileWriter whose log file cannot be created", () => {
+  let dir: string;
+  let unwritableWriter: LogFileWriter;
+
+  beforeEach(() => {
+    dir = path.join(os.homedir(), ".argent", "tmp");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.chmodSync(dir, 0o555);
+    unwritableWriter = new LogFileWriter(9998);
+  });
+
+  afterEach(() => {
+    fs.chmodSync(dir, 0o755);
+    unwritableWriter.close();
+  });
+
+  it("keeps no copy of a line it could not write", () => {
+    unwritableWriter.write(makeEntry(0, { message: "unreadable line" }));
+
+    expect(fs.existsSync(unwritableWriter.getFilePath())).toBe(false);
+    expect(unwritableWriter.readAll()).toEqual([]);
+
+    const retainedLines = Object.values(unwritableWriter as unknown as Record<string, unknown>)
+      .filter((value): value is unknown[] => Array.isArray(value))
+      .flat();
+    expect(retainedLines).toEqual([]);
+
+    // The entry itself is still accounted for, through the counts and clusters.
+    expect(unwritableWriter.getStats().totalEntries).toBe(1);
+    expect(unwritableWriter.getClusters()[0].message).toBe("unreadable line");
   });
 });

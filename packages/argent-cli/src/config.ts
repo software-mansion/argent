@@ -150,6 +150,8 @@ parsed (e.g. \`true\`, \`42\`, \`["a","b"]\`); anything else is stored as a stri
     const stored = setConfigValue(key, coerceCliValue(rawValue), targetScope);
     if (warning) console.error(pc.yellow(warning));
     console.log(`Set ${pc.bold(key)} = ${formatValuePlain(stored)} (${scopeLabel(targetScope)}).`);
+    const restart = restartHint(key);
+    if (restart) console.error(pc.yellow(restart));
   } catch (err) {
     // Built here, not in reportError: only this frame knows the value and scope typed.
     reportError(err, () => suggestCorrectedSet(err, key, rawValue, scope));
@@ -185,6 +187,8 @@ other scope / the default on the next read.`);
         ? `Unset ${pc.bold(key)} (${scopeLabel(targetScope)}).`
         : pc.dim(`${key} was not set at ${targetScope} scope.`)
     );
+    const restart = removed ? restartHint(key) : null;
+    if (restart) console.error(pc.yellow(restart));
   } catch (err) {
     reportError(err);
   }
@@ -251,6 +255,19 @@ function degenerateProjectScopeWarning(scope: FlagScope): string | null {
     );
   }
   return null;
+}
+
+/**
+ * Every other key takes effect without a restart, but the tool-server applies
+ * `android.adbServerPort` once, at start: the adb server is its connection to
+ * every Android device, so a change waits for a restart.
+ */
+function restartHint(key: string): string | null {
+  if (key !== "android.adbServerPort") return null;
+  return (
+    `The tool-server reads ${key} only when it starts. Apply the change with ` +
+    `\`argent server stop\`: this stops it for every session, and the next tool call starts it again.`
+  );
 }
 
 function formatValuePlain(value: unknown): string {
@@ -321,12 +338,27 @@ function reportError(err: unknown, suggest?: () => string | null): never {
   process.exit(2);
 }
 
+// Greedy word wrap to the 80-column width the rest of the usage text is written for.
+function wrapText(text: string, indent: string, width = 80): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (line && indent.length + line.length + 1 + word.length > width) {
+      lines.push(indent + line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(indent + line);
+  return lines;
+}
+
 function printUsage(): void {
-  const keys = CONFIG_SCHEMA.map((d) => d.key);
-  const maxKey = keys.reduce((m, k) => Math.max(m, k.length), 0);
   const keyLines = CONFIG_SCHEMA.map((d) => {
-    const managed = d.manageCommand ? pc.dim(` [managed by \`${d.manageCommand}\`]`) : "";
-    return `  ${d.key.padEnd(maxKey)}  ${d.description}${managed}`;
+    const lines = [`  ${d.key}`, ...wrapText(d.description, "      ")];
+    if (d.manageCommand) lines.push(pc.dim(`      [managed by \`${d.manageCommand}\`]`));
+    return lines.join("\n");
   });
 
   console.log(`Usage: argent config <command> [options]
@@ -343,7 +375,7 @@ Commands:
   unset <key>          Remove a value at a scope (default global)
 
 Recognized keys:
-${keyLines.join("\n")}
+${keyLines.join("\n\n")}
 
 Run \`argent config <command> --help\` for command-specific help.`);
 }
