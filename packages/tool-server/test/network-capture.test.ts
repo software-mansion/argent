@@ -103,11 +103,16 @@ function scriptName(expr: string): ScriptName {
   return "other";
 }
 
+/** How long CDPClient waits for the answer to an evaluate that gives no timeout. */
+const CDP_TIMEOUT_MS = 10_000;
+
 /** An app's JS runtime behind Metro. argent's scripts run in a real JS context of it. */
 class FakeRuntime {
   private readonly context: Context = createContext({});
   /** The scripts argent evaluated in it, in order. */
   readonly evaluated: ScriptName[] = [];
+  /** The runtime keeps the connection but answers no evaluate, as a busy or frozen one. */
+  frozen = false;
 
   constructor(
     readonly appId: string | undefined,
@@ -129,8 +134,17 @@ class FakeRuntime {
     );
   }
 
-  evaluate(expr: string): unknown {
+  evaluate(expr: string, timeout = CDP_TIMEOUT_MS): unknown {
     this.evaluated.push(scriptName(expr));
+    if (this.frozen) {
+      // CDPClient rejects a request that gets no answer within its timeout.
+      return new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Runtime.evaluate timed out after ${timeout} ms`)),
+          timeout
+        )
+      );
+    }
     return runInContext(expr, this.context);
   }
 
@@ -182,7 +196,8 @@ const fakeDebuggerBlueprint: ServiceBlueprint<unknown, string> = {
     }
     if (typeof answer === "string") throw notReached(answer, `Metro on port ${port}: ${answer}`);
     const cdp = {
-      evaluate: async (expr: string) => answer.evaluate(expr),
+      evaluate: async (expr: string, options?: { timeout?: number }) =>
+        answer.evaluate(expr, options?.timeout),
       events: new EventEmitter(),
       isConnected: () => true,
     };
@@ -763,6 +778,52 @@ describe("network-capture-start", () => {
       // The paused interceptor records nothing, so a stop that cannot reach it is confirmed.
       await reconnect(PORT, IOS_UDID, undefined);
       expect(layer(await stop(IOS_UDID, APP), "js")).toMatchObject({ armed: false });
+    });
+
+    it("is not armed within 5 s on a runtime that does not answer, and keeps the interceptor and the pause of an earlier start and stop", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+      await stop(IOS_UDID, APP);
+      // A new CDP session, to a runtime that is busy or frozen.
+      await reconnect(PORT, IOS_UDID, rt);
+      rt.frozen = true;
+      const before = rt.evaluated.length;
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const pending = start(IOS_UDID, APP);
+        let settled = false;
+        void pending.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          }
+        );
+        await vi.advanceTimersByTimeAsync(5_000);
+
+        expect(settled).toBe(true);
+        expect(layer(await pending, "js")).toEqual({
+          layer: "js",
+          armed: false,
+          reason:
+            "the app's JS runtime did not answer (Runtime.evaluate timed out after 5000 ms); call network-capture-start again once it answers",
+        });
+      } finally {
+        // An evaluate that still waits gives up, so the capture lock frees.
+        await vi.runAllTimersAsync();
+        vi.useRealTimers();
+      }
+      // Only the mark read reached the runtime: no install waited for it.
+      expect(rt.evaluated.slice(before)).toEqual(["mark"]);
+      expect(findJsCapture(IOS_UDID, APP)).toMatchObject({
+        intent: "started",
+        installed: true,
+        paused: true,
+      });
     });
 
     it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {

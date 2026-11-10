@@ -168,7 +168,7 @@ The two tools do not support Chromium and Vega. There, Argent starts the capture
 
 `network-capture-start` starts the layers at the same time. Each layer waits until its capture is ready:
 
-- JS runtime layer: Argent installs the capture in the JS runtime of the app.
+- JS runtime layer: Argent installs the capture in the JS runtime of the app. If the JS runtime does not answer within 5 seconds, Argent does not install the capture.
 - iOS: Argent sends `Network.enable` to the app. Then Argent waits until the app acknowledges it, for at most 5 seconds. If the app still connects to Argent, these 5 seconds also include the connection.
 - Android: Argent attaches the in-app agent to the running process of the app. Then Argent waits until the capture is ready, for at most 5 seconds.
 

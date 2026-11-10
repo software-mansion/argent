@@ -50,6 +50,8 @@ import {
 
 /** How long a start waits for an iOS app that is still connecting. */
 const IOS_CONNECT_WAIT_MS = 5_000;
+/** How long a start waits for the app's JS runtime to answer the read of the mark. */
+const JS_ANSWER_WAIT_MS = 5_000;
 
 export function createNetworkCaptureStartTool(
   registry: Registry
@@ -207,7 +209,20 @@ async function startJsLayer(
 
   const capture: JsCapture = { bundleId, intent: "started", installed: installedHere };
   setJsCapture(payload, capture);
-  capture.mark = await readMark(dbg);
+  try {
+    capture.mark = await readMark(dbg);
+  } catch (err) {
+    // A runtime that does not answer the mark does not answer the install either,
+    // and each evaluate of the install waits for the full CDP timeout. This start
+    // did not reach the JS context, so a pause a stop left there stays.
+    capture.mark = { install: null };
+    if (installedHere && found?.paused) capture.paused = true;
+    return {
+      layer: "js",
+      armed: false,
+      reason: `the app's JS runtime did not answer (${errorMessage(err)}); call network-capture-start again once it answers`,
+    };
+  }
   try {
     const api = await registry.resolveService<NetworkInspectorApi>(`NetworkInspector:${payload}`);
     const install = await installNetworkInterceptor(api.cdp, payload, dbg.runtimeApp);
@@ -234,18 +249,23 @@ async function startJsLayer(
   }
 }
 
-/** Where the context's log stands now; a context without the interceptor has no record yet. */
+/**
+ * Where the context's log stands now; a context without the interceptor has no record yet.
+ *
+ * @throws when the evaluate fails, for example when the runtime does not answer within
+ * {@link JS_ANSWER_WAIT_MS}
+ */
 async function readMark(dbg: JsRuntimeDebuggerApi): Promise<JsCaptureMark> {
+  const answer = await dbg.cdp.evaluate(NETWORK_CAPTURE_MARK_SCRIPT, {
+    timeout: JS_ANSWER_WAIT_MS,
+  });
   try {
-    const parsed = JSON.parse(String(await dbg.cdp.evaluate(NETWORK_CAPTURE_MARK_SCRIPT))) as {
-      install?: unknown;
-      lastId?: unknown;
-    };
+    const parsed = JSON.parse(String(answer)) as { install?: unknown; lastId?: unknown };
     return typeof parsed.install === "string" && typeof parsed.lastId === "number"
       ? { install: parsed.install, lastId: parsed.lastId }
       : { install: null };
   } catch {
-    // The install after this says why the runtime did not answer.
+    // An answer that is not a mark gives no record to count from.
     return { install: null };
   }
 }
