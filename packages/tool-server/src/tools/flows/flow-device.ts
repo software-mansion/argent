@@ -1,8 +1,19 @@
-import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
+import type { DeviceInfo, FailureCode, Platform, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { resolveDevice } from "../../utils/device-info";
+import { getAndroidRuntimeKind } from "../../utils/adb";
+import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
+import { externalNativeId } from "../../utils/external-devices";
+import { getSimulatorRuntimeKind } from "../../utils/ios-devices";
+import { getRemoteSimulatorRuntimeKind } from "../../utils/sim-remote";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { blockSteps, type FlowStep, type SelectablePlatform } from "./flow-utils";
+import {
+  authoringPlatform,
+  blockSteps,
+  type FlowRequires,
+  type FlowRuntimeKind,
+  type FlowStep,
+  type SelectablePlatform,
+} from "./flow-utils";
 
 /**
  * The platforms a run can be pointed at — SELECTABLE_PLATFORMS in flow-utils.
@@ -64,6 +75,7 @@ interface RawDevice {
   id?: string;
   /** Physical iPhone when kind is "device". */
   kind?: string;
+  runtimeKind?: FlowRuntimeKind;
 }
 
 function deviceEntryId(d: RawDevice): string | undefined {
@@ -134,16 +146,129 @@ function deviceResolutionError(message: string, all: RawDevice[]): FailureError 
   });
 }
 
+function describeRequires(requires: FlowRequires): string {
+  const parts: string[] = [];
+  if (requires.platform) parts.push(`platform: [${requires.platform.join(", ")}]`);
+  if (requires.runtimeKind) parts.push(`runtimeKind: ${requires.runtimeKind}`);
+  return `requires: { ${parts.join(", ")} }`;
+}
+
+function requirementsError(
+  message: string,
+  code: FailureCode = FAILURE_CODES.FLOW_REQUIREMENTS_UNMET
+): FailureError {
+  return new FailureError(message, {
+    error_code: code,
+    failure_stage: "flow_requirements",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+/** The runtime kinds of the platforms that have only one. HarmonyOS support covers phones only. */
+const CONSTANT_RUNTIME_KIND: Partial<Record<Platform, FlowRuntimeKind>> = {
+  chromium: "mobile",
+  harmony: "mobile",
+  vega: "tv",
+};
+
+function platformMeets(platform: Platform, requires: FlowRequires): boolean {
+  if (requires.platform && !(requires.platform as string[]).includes(authoringPlatform(platform))) {
+    return false;
+  }
+  const constant = CONSTANT_RUNTIME_KIND[platform];
+  return !(requires.runtimeKind && constant && constant !== requires.runtimeKind);
+}
+
+/** Throw unless `platform` can satisfy the flow's requirements; `target` names it in the error. */
+export function assertPlatformMeetsRequires(
+  platform: Platform,
+  requires: FlowRequires | undefined,
+  target: string,
+  subject = "This e2e test"
+): void {
+  if (!requires || platformMeets(platform, requires)) return;
+  throw requirementsError(
+    `${subject} declares ${describeRequires(requires)}, which excludes ${target}.`
+  );
+}
+
+async function probeRuntimeKind(device: DeviceInfo): Promise<FlowRuntimeKind | undefined> {
+  const constant = CONSTANT_RUNTIME_KIND[device.platform];
+  if (constant) return constant;
+  if (isIosPhysicalDevice(device)) return "mobile";
+  switch (device.platform) {
+    case "ios":
+      return getSimulatorRuntimeKind(device.id);
+    case "ios-remote":
+      return getRemoteSimulatorRuntimeKind(device.id);
+    case "android":
+      return getAndroidRuntimeKind(externalNativeId(device.id));
+    default:
+      return undefined;
+  }
+}
+
+/** Throw unless a resolved device satisfies the flow's requirements. */
+export async function assertDeviceMeetsRequires(
+  device: DeviceInfo,
+  requires: FlowRequires | undefined,
+  subject = "This e2e test"
+): Promise<void> {
+  if (!requires) return;
+  assertPlatformMeetsRequires(
+    device.platform,
+    requires,
+    `device ${device.id} (${device.platform})`,
+    subject
+  );
+  if (!requires.runtimeKind) return;
+  const kind = await probeRuntimeKind(device);
+  if (kind === undefined) {
+    throw unknownRuntimeKindError(requires, [`${device.id} (${device.platform})`], subject);
+  }
+  if (kind !== requires.runtimeKind) {
+    throw requirementsError(
+      `${subject} declares ${describeRequires(requires)}, which excludes device ` +
+        `${device.id} (${device.platform}, ${kind}).`
+    );
+  }
+}
+
+/** Unknown is not a mismatch: a directory run would skip the test and hide the broken probe. */
+function unknownRuntimeKindError(
+  requires: FlowRequires,
+  devices: string[],
+  subject = "This e2e test",
+  remedy = ""
+): FailureError {
+  return requirementsError(
+    `${subject} declares ${describeRequires(requires)}, but the runtime kind of ` +
+      `${devices.join(", ")} could not be determined.${remedy}`,
+    FAILURE_CODES.FLOW_DEVICE_RESOLUTION
+  );
+}
+
+function listedRuntimeKind(d: RawDevice): FlowRuntimeKind | undefined {
+  return CONSTANT_RUNTIME_KIND[d.platform] ?? d.runtimeKind;
+}
+
+/** Probes when the listing has no kind, as for an external device or a probe that timed out. */
+async function candidateRuntimeKind(d: RawDevice): Promise<FlowRuntimeKind | undefined> {
+  const id = deviceEntryId(d);
+  return listedRuntimeKind(d) ?? (id ? probeRuntimeKind(resolveDevice(id)) : undefined);
+}
+
 /**
  * Resolve the device a flow runs against. Order: explicit `device` id → the
  * single booted device of `platform` → the single booted device overall →
  * throw, enumerating what is available. A physical iPhone is reachable only
- * through the explicit id; see {@link isBooted}.
+ * through the explicit id; see {@link isBooted}. `requires` narrows the booted candidates.
  */
 export async function resolveFlowDevice(
   registry: Registry,
   ctx: ToolContext | undefined,
-  opts: { device?: string; platform?: FlowPlatform }
+  opts: { device?: string; platform?: FlowPlatform; requires?: FlowRequires }
 ): Promise<DeviceInfo> {
   if (opts.device) return resolveDevice(opts.device);
 
@@ -152,12 +277,49 @@ export async function resolveFlowDevice(
   };
   const booted = devices.filter(isBooted);
   const scoped = opts.platform ? booted.filter((d) => d.platform === opts.platform) : booted;
+  const requires = opts.requires;
+  const candidates = requires ? scoped.filter((d) => platformMeets(d.platform, requires)) : scoped;
+  const kinds = new Map<RawDevice, FlowRuntimeKind | undefined>();
+  if (requires?.runtimeKind) {
+    const wanted = requires.runtimeKind;
+    const anyMatch = () => candidates.some((d) => kinds.get(d) === wanted);
+    for (const d of candidates) kinds.set(d, listedRuntimeKind(d));
+    // A listed match is enough: probing the other devices can hang on a frozen one.
+    if (!anyMatch()) {
+      for (const d of candidates) {
+        if (kinds.get(d) === undefined) kinds.set(d, await candidateRuntimeKind(d));
+      }
+      const unknown = candidates.filter((d) => kinds.get(d) === undefined);
+      if (!anyMatch() && unknown.length > 0) {
+        throw unknownRuntimeKindError(
+          requires,
+          unknown.map(describeDevice),
+          undefined,
+          " Pass --device or --platform to choose a device."
+        );
+      }
+    }
+  }
+  const eligible = requires?.runtimeKind
+    ? candidates.filter((d) => kinds.get(d) === requires.runtimeKind)
+    : candidates;
 
-  if (scoped.length === 1) {
-    const id = deviceEntryId(scoped[0]);
+  if (eligible.length === 1) {
+    const id = deviceEntryId(eligible[0]);
     if (id) return resolveDevice(id);
   }
-  if (scoped.length === 0) {
+  if (eligible.length === 0 && requires && scoped.length > 0) {
+    const listed = scoped.map((d) => {
+      const known = kinds.get(d) ?? listedRuntimeKind(d);
+      const kind = requires.runtimeKind ? `, ${known ?? "kind unknown"}` : "";
+      return `${deviceEntryId(d) ?? "?"} (${d.platform}${kind})`;
+    });
+    throw requirementsError(
+      `No booted device satisfies this e2e test's ${describeRequires(requires)}. ` +
+        `Booted devices: ${listed.join(", ")}.`
+    );
+  }
+  if (eligible.length === 0) {
     const what = opts.platform
       ? `No booted ${opts.platform} device found.`
       : "No booted device found.";
@@ -167,8 +329,8 @@ export async function resolveFlowDevice(
     );
   }
   throw deviceResolutionError(
-    `${scoped.length} booted devices matched — pass --device or --platform to disambiguate.`,
-    scoped
+    `${eligible.length} booted devices matched — pass --device or --platform to disambiguate.`,
+    eligible
   );
 }
 

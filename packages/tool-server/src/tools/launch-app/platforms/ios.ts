@@ -14,6 +14,7 @@ import {
 import { externalClaimForAnyId } from "../../../utils/external-devices";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { simctlArgsForUdid } from "../../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../utils/dependency-errors";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
@@ -52,10 +53,24 @@ export function makeIosImpl(
         try {
           await execFileAsync(
             "xcrun",
-            await simctlArgsForUdid(params.udid, ["terminate", params.udid, params.bundleId])
+            await simctlArgsForUdid(params.udid, ["terminate", params.udid, params.bundleId]),
+            { timeout: 15_000, killSignal: SIMCTL_KILL_SIGNAL }
           );
-        } catch {
-          // App may not be running
+        } catch (err) {
+          // Not running is fine; a timed-out terminate leaves a running app that would drop the args.
+          if ((err as { killed?: boolean }).killed) {
+            throw new FailureError(
+              `Terminating iOS app ${params.bundleId} on ${params.udid} to apply launchArgs did not finish within 15s.`,
+              {
+                error_code: FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED,
+                failure_stage: "ios_launch_app_simctl_terminate",
+                failure_area: "tool_server",
+                error_kind: "timeout",
+                ...subprocessFailureMetadata(err, "xcrun_simctl"),
+              },
+              { cause: err as Error }
+            );
+          }
         }
       }
       try {
@@ -66,18 +81,22 @@ export function makeIosImpl(
             params.udid,
             params.bundleId,
             ...(params.launchArgs ?? []),
-          ])
+          ]),
+          { timeout: 30_000, killSignal: SIMCTL_KILL_SIGNAL }
         );
       } catch (err) {
         // Its message says what to do, and a flow step reports only the thrown message.
         if (err instanceof XcodeFirstLaunchPendingError) throw err;
+        const timedOut = (err as { killed?: boolean }).killed === true;
         throw new FailureError(
-          `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,
+          timedOut
+            ? `Launching iOS app ${params.bundleId} on ${params.udid} did not finish within 30s.`
+            : `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,
           {
             error_code: FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED,
             failure_stage: "ios_launch_app_simctl_launch",
             failure_area: "tool_server",
-            error_kind: "subprocess",
+            error_kind: timedOut ? "timeout" : "subprocess",
             ...subprocessFailureMetadata(err, "xcrun_simctl"),
           },
           { cause: err instanceof Error ? err : new Error(String(err)) }
