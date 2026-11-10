@@ -18,6 +18,7 @@ import type { ReRenderReason } from "./types/output";
 import { deriveReason, dominantReason, emptyReasonHistogram } from "./pipeline/utils";
 import type { ComponentOriginResult } from "./component-origin";
 import {
+  annotateComponentName,
   describeResolution,
   renderComponentNameMiss,
   resolveComponentName,
@@ -430,8 +431,10 @@ export function renderNameOutsideStoredCommits(
 
 /**
  * `describeResolution` for a name looked up in the stored commits. `Row` can
- * resolve there to `Memo(Row)` while a plain `Row` is its own component in commits
- * that were not stored, so the two names do not mean the same thing.
+ * resolve there to `Memo(Row)` while another component displayed as `Row`, such
+ * as a plain `Row` or a `Forget(Row)`, renders only in commits that were not
+ * stored, so the name does not mean one thing. Compared by display name, as the
+ * resolver does: a `display` resolution means no other stored name has it.
  */
 export function describeStoredResolution(
   resolution: Extract<ComponentNameResolution, { kind: "exact" | "display" }>,
@@ -439,7 +442,11 @@ export function describeStoredResolution(
 ): string {
   const separate =
     resolution.kind === "display"
-      ? summary?.components.find((c) => c.name === resolution.query)
+      ? summary?.components.find(
+          (c) =>
+            c.name !== resolution.rawName &&
+            annotateComponentName(c.name).displayName === resolution.query
+        )
       : undefined;
   if (resolution.kind !== "display" || !separate) return describeResolution(resolution);
   const renders = allRenderCount(separate);

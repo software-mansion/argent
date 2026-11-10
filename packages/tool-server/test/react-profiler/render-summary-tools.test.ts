@@ -381,9 +381,15 @@ function query(deviceId: string, params: Record<string, unknown>): Promise<strin
 }
 
 /** `Memo(Row)` holds the stored commits; with `plainRow`, a plain `Row` renders in 300 others. */
-async function cacheMemoRowSession(deviceId: string, plainRow: boolean): Promise<void> {
+async function cacheMemoRowSession(
+  deviceId: string,
+  withSibling: boolean,
+  siblingName = "Row"
+): Promise<void> {
   const stored = [fiber("Memo(Row)", 0, 30), fiber("Memo(Row)", 1, 30)];
-  const cheap = plainRow ? Array.from({ length: 300 }, (_, i) => fiber("Row", i + 4, 4)) : [];
+  const cheap = withSibling
+    ? Array.from({ length: 300 }, (_, i) => fiber(siblingName, i + 4, 4))
+    : [];
   await cacheSession(deviceId, stored, {
     hotCommitIndices: [0, 1],
     totalReactCommits: 2 + cheap.length,
@@ -692,6 +698,21 @@ describe("profiler-commit-query render_counts", () => {
     expect(out).not.toContain("Either name works");
   });
 
+  it.each(["Forget(Row)", "ForwardRef(Row)", "Forget(Memo(Row))"])(
+    "names a separate %s too, not only an unwrapped one",
+    async (sibling) => {
+      const device = `row-sibling-${sibling}`;
+      await cacheMemoRowSession(device, true, sibling);
+      const out = await query(device, { mode: "by_component", component_name: "Row" });
+      expect(out).toContain("## Commits for `Memo(Row)`");
+      expect(out).toContain(
+        `A separate \`${sibling}\` rendered 300 times outside the stored commits.`
+      );
+      expect(out).toContain(`mode=\`render_counts\` component_name=\`${sibling}\``);
+      expect(out).not.toContain("Either name works");
+    }
+  );
+
   it("counts the mounts of a separate component of that name", async () => {
     const stored = [fiber("Memo(Row)", 0, 30), fiber("Memo(Row)", 1, 30)];
     const mounts = Array.from({ length: 40 }, (_, i) => {
@@ -910,6 +931,26 @@ describe("profiler-cpu-query component_cpu", () => {
     expect(out).toContain("A separate `Row` rendered 300 times outside the stored commits.");
     expect(out).toContain(
       "Run `profiler-commit-query` mode=`render_counts` component_name=`Row` for its counts."
+    );
+    expect(out).not.toContain("Either name works");
+  });
+
+  it("says so for a wrapped separate component too", async () => {
+    const stored = [fiber("Memo(Row)", 0, 30), fiber("Memo(Row)", 1, 30)];
+    const cheap = Array.from({ length: 300 }, (_, i) => fiber("Forget(Row)", i + 4, 4));
+    await cacheCpuSession("cpu-row-forget-device", stored, {
+      hotCommitIndices: [0, 1],
+      totalReactCommits: 302,
+      renderSummary: summarizeRenders(
+        [...stored, ...cheap],
+        timings(new Array(302).fill(5), 16),
+        5000
+      ),
+    });
+    const out = await componentCpu("cpu-row-forget-device", "Row");
+    expect(out).toContain("## CPU During `Memo(Row)` Commits");
+    expect(out).toContain(
+      "A separate `Forget(Row)` rendered 300 times outside the stored commits."
     );
     expect(out).not.toContain("Either name works");
   });
