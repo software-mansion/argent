@@ -1320,8 +1320,10 @@ function createInspector(
 
   /**
    * Sends Network.disable. On the reply, the requests the connection carries
-   * that are still open fail: the agent reports no more of them. Resolves true
-   * once acknowledged, or once the connection closed.
+   * that are still open fail: the agent reports no more of them. An agent
+   * that does not reply in time, as in a frozen app, sends no events either,
+   * so they fail then too. Resolves true once acknowledged, or once the
+   * connection closed.
    */
   function disableOn(conn: AgentConnection, timeoutMs: number): Promise<boolean> {
     return conn.cdp
@@ -1331,6 +1333,9 @@ function createInspector(
         (err: unknown) => {
           if (conn.closed || disposed) return true;
           log(`Network.disable on connection ${conn.index} failed: ${errorMessage(err)}`);
+          // While stopped, no request opens, so the open ones are from before
+          // the stop. The requester drops a reply that comes after the timeout.
+          if (stopped && getFailureSignal(err)?.error_kind === "timeout") failStopped(conn);
           return false;
         }
       );

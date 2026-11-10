@@ -4235,6 +4235,58 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
   });
 
+  it("a stop the agent does not acknowledge within 5 s fails the open requests, and its late reply fails none of the next start's", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.started(agent.rid(1), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await stopping).toMatchObject({ confirmed: false });
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+
+    // The agent answers the stop only after the next start armed it again.
+    vi.useRealTimers();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    agent.started(agent.rid(2), "https://example.com/after-the-start");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(2));
+    agent.answer("Network.disable");
+    agent.send({ type: "Status", payload: { event: "capture", state: "waiting" } });
+    await vi.waitFor(() => expect(stderrText()).toContain("] capture waiting"));
+    expect(api.records(8081)[1]).toMatchObject({ state: "pending" });
+    expect(api.records(8081)[1]).not.toHaveProperty("errorText");
+  });
+
+  it("a Network.disable to an agent that connected while stopped fails none of the next start's requests when it times out after that start", async () => {
+    const api = await armedInspector();
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+      unanswered: ["Network.disable"],
+    }))!;
+    await vi.waitFor(() =>
+      expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+    );
+
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    again.started(again.rid(1), "https://example.com/after-the-start");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(stderrText()).toContain("Network.disable on connection 2 failed: ");
+    expect(api.records(8081)[0]).toMatchObject({ state: "pending" });
+  });
+
   it("an agent that connects while stopped gets Network.enable, then Network.disable, is never armed, and fails the open requests it resumes on the reply", async () => {
     const api = await armedInspector();
     const first = agents[0]!;
