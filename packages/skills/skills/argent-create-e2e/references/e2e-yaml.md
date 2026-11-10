@@ -67,12 +67,12 @@ Use single quotes for anchored, case-sensitive regexes:
 
 YAML selectors and live discovery use different screen projections:
 
-| Platform | Runner tree                                               | `describe` / `await-ui-element` | Important difference                                   |
-| -------- | --------------------------------------------------------- | ------------------------------- | ------------------------------------------------------ |
-| iOS sim  | projected UIView hierarchy                                | accessibility tree              | `native-full-hierarchy` is raw; nodes and roles differ |
-| Android  | full accessibility hierarchy                              | trimmed interactables           | Discovery can omit testID containers or merge nodes    |
-| Chromium | filtered DOM nodes with id, label, value, click, or focus | shorter DOM walk                | Projections and node limits differ (12,000 vs. 5,000)  |
-| Vega     | toolkit page source                                       | same source                     | Same elements, different shape                         |
+| Platform | Runner tree                                               | `describe` / `await-ui-element`                     | Important difference                                                                                                       |
+| -------- | --------------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| iOS sim  | projected UIView hierarchy                                | accessibility tree                                  | `native-full-hierarchy` is raw; nodes and roles differ                                                                     |
+| Android  | full accessibility hierarchy                              | trimmed interactables                               | Discovery can omit testID containers or merge nodes                                                                        |
+| Chromium | filtered DOM nodes with id, label, value, click, or focus | DOM walk; `describe` prints only rows in the window | Projections and node limits differ (12,000 vs. 5,000); `await-ui-element` with `exists` also finds rows outside the window |
+| Vega     | toolkit page source                                       | same source                                         | Same elements, different shape                                                                                             |
 
 On an iOS simulator, Android, and Chromium, an id absent from `describe` can still resolve in an e2e test. Verify it in a scratch fragment. Chromium exposes password fields to the runner as `[password]`; select them by id or role.
 
