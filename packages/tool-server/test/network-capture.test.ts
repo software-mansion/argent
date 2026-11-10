@@ -1370,6 +1370,33 @@ describe("network-capture-stop", () => {
     }
   );
 
+  it("stops and reads the capture a start stored with the device id in another case", async () => {
+    // list-devices prints an iOS UDID in upper case, and a caller can pass it in lower case.
+    const upper = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
+    const lower = upper.toLowerCase();
+    const rt = new FakeRuntime(APP);
+    // Metro has one runtime for the device, which a debugger reaches with either spelling.
+    serve(PORT, upper, rt);
+    serve(PORT, lower, rt);
+    ios.connected.add(APP);
+    await start(upper, APP);
+    rt.send("/a");
+
+    const started = "=== NETWORK LOGS (page 1/1, 1 total) ===";
+    expect(await read(lower)).toContain(started);
+    expect(await read(upper)).toContain(started);
+
+    expect(layer(await stop(lower, APP), "js")).toEqual({ layer: "js", armed: false, total: 1 });
+    expect(rt.paused).toBe(true);
+
+    const stopped = "=== NETWORK LOGS (page 1/1, 1 total; capture stopped) ===";
+    expect(await read(lower)).toContain(stopped);
+    expect(await read(upper)).toContain(stopped);
+    expect(jsCapturesOn(upper)).toEqual([
+      expect.objectContaining({ bundleId: APP, intent: "stopped", port: PORT }),
+    ]);
+  });
+
   it.each(PLATFORMS)(
     "on $platform, a second stop changes nothing",
     async ({ udid, connect, nativeRecord, nativeCalls }) => {

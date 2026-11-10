@@ -69,8 +69,16 @@ export function jsCapturePayload(port: number, device: string): string {
   return `${port}:${device}`;
 }
 
+/** The key of the entry on the payload's Metro port for the payload's device. */
+function storedPayload(payload: string): string | undefined {
+  const { port, device } = splitPayload(payload);
+  return payloadsOf([device]).find((key) => splitPayload(key).port === port);
+}
+
+/** The entry on the payload's Metro port, whatever the case of the device id. */
 export function jsCapture(payload: string): JsCapture | undefined {
-  return jsCaptures.get(payload);
+  const key = storedPayload(payload);
+  return key === undefined ? undefined : jsCaptures.get(key);
 }
 
 /** Forgets the app's entries on the device, on every Metro port. */
@@ -84,6 +92,9 @@ export function forgetJsCapture(device: string, bundleId: string): void {
 
 export function setJsCapture(payload: string, capture: JsCapture): void {
   forgetJsCapture(splitPayload(payload).device, capture.bundleId);
+  // A port holds one entry for the device, and that entry can have the device id in another case.
+  const held = storedPayload(payload);
+  if (held !== undefined) jsCaptures.delete(held);
   jsCaptures.set(payload, capture);
 }
 
@@ -199,7 +210,7 @@ export async function installNetworkInterceptor(
   if (resolveDevice(device).platform === "vega") {
     return parseInstall(await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT));
   }
-  const capture = jsCaptures.get(payload);
+  const capture = jsCapture(payload);
   if (capture?.intent !== "started") {
     return { installed: false, reason: `capture is ${capture ? "stopped" : "not started"}` };
   }

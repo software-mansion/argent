@@ -314,6 +314,21 @@ describe("installNetworkInterceptor", () => {
     ]);
   });
 
+  it("installs for a started capture stored with the device id in another case", async () => {
+    setJsCapture(jsCapturePayload(8081, IOS_UDID), started());
+    const cdp = fakeCdp();
+    const payload = jsCapturePayload(8081, IOS_UDID.toLowerCase());
+
+    expect(await installNetworkInterceptor(asCdp(cdp), payload, { appId: APP })).toEqual({
+      installed: true,
+    });
+    expect(cdp.scripts).toEqual([
+      makeNetworkCaptureControlScript(false),
+      NETWORK_INTERCEPTOR_SCRIPT,
+    ]);
+    expect(jsCapture(jsCapturePayload(8081, IOS_UDID))?.installed).toBe(true);
+  });
+
   it("counts a context that already has the interceptor as installed", async () => {
     setJsCapture(ANDROID_PAYLOAD, started());
     const cdp = fakeCdp({ installed: false, reason: "already installed" });
@@ -502,6 +517,17 @@ describe("JS capture map", () => {
 
     expect(findJsCapture("emulator-5554", APP)).toBeUndefined();
     expect(jsCapture(ANDROID_PAYLOAD)).toMatchObject({ bundleId: "com.other.app" });
+  });
+
+  it("holds one capture per Metro port and device whatever the case of the device id", () => {
+    setJsCapture(jsCapturePayload(8081, IOS_UDID), started());
+    setJsCapture(jsCapturePayload(8081, IOS_UDID.toLowerCase()), stopped("com.other.app"));
+
+    expect(jsCapture(jsCapturePayload(8081, IOS_UDID))).toMatchObject({
+      bundleId: "com.other.app",
+      intent: "stopped",
+    });
+    expect(jsCapturesOn(IOS_UDID)).toHaveLength(1);
   });
 
   it("finds nothing for an app or device without an entry", () => {
