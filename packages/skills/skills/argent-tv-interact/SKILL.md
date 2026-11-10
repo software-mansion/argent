@@ -16,8 +16,8 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 ## The navigation loop
 
 1. `describe`: find the cursor and your target.
-2. `tv-remote`: move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; on Vega, count rows/columns from the frames to build the path. The Apple TV / Android TV focus view is a flat list with no positions, so read the grid's shape from the screenshot.
-3. Read where focus landed from the focus view returned under `--- Elements after action (describe) ---`; call `describe` only when that section is missing. On a miss, repeat.
+2. `tv-remote`: move focus toward the target. Prefer **one** call with a path ending in `select`, e.g. `{button:["down","right","select"]}`; on Vega, count rows/columns from the frames to build the path. The Apple TV / Android TV focus view is a flat list with no positions: count from the list order, and read the grid's shape from the screenshot.
+3. Read where focus landed from the focus view returned under `--- Elements after action (describe) ---`; call `describe` only when that section is missing. To wait for focus to land on Apple TV, `await-ui-element {condition:"exists", selector:{text:"X", role:"focused"}}`. On a miss, repeat.
 
 ## Tools
 
@@ -29,7 +29,7 @@ description: Control and inspect TV apps via argent, Apple TV (tvOS), Android TV
 
 ### Apple TV (tvOS simulator)
 
-- Boot like any iOS sim (`boot-device`); the AX + HID daemons auto-start on the first `describe` / `tv-remote` (first call may take a few seconds).
+- Boot like any iOS sim (`boot-device`); the first `describe` / `tv-remote` starts the AX + HID daemons (a few seconds).
 - Dev build: `open-url {udid, url:"<scheme>://expo-development-client/?url=http%3A%2F%2F<HOST_IP>%3A8081"}` (`<HOST_IP>` = your Mac's LAN IP, shown on the launcher).
 
 ### Android TV (leanback emulator)
