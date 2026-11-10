@@ -284,3 +284,40 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(labels).toContain("on screen");
   });
 });
+
+describe("parseUiAutomatorDump — D-pad cursor", () => {
+  const row = (label: string, extra: string) =>
+    `<node class="android.widget.LinearLayout" text="${label}" clickable="true" focusable="true" ${extra} package="com.android.tv.settings" bounds="[0,100][800,200]" />`;
+
+  it("marks the focused and the selected element", () => {
+    const xml = `<hierarchy rotation="0">
+${row("Network", 'focused="true" selected="false"')}
+${row("Display", 'focused="false" selected="true"').replace("[0,100][800,200]", "[0,200][800,300]")}
+${row("Sound", 'focused="false" selected="false"').replace("[0,100][800,200]", "[0,300][800,400]")}
+</hierarchy>`;
+
+    const nodes = flatten(parseUiAutomatorDump(xml, 1920, 1080));
+    const flags = (label: string) => {
+      const n = nodes.find((x) => x.label === label)!;
+      return [n.focused ?? false, n.selected ?? false];
+    };
+    expect(flags("Network")).toEqual([true, false]);
+    expect(flags("Display")).toEqual([false, true]);
+    expect(flags("Sound")).toEqual([false, false]);
+  });
+
+  it("keeps the focus of a wrapper collapsed into its same-bounds inner target", () => {
+    const xml = `<hierarchy rotation="0">
+<node class="android.widget.FrameLayout" content-desc="Play" clickable="true" focusable="true" focused="true" selected="true" package="com.example.tv" bounds="[0,0][400,200]">
+  <node class="android.widget.Button" text="" clickable="true" focusable="false" focused="false" package="com.example.tv" bounds="[0,0][400,200]" />
+</node>
+</hierarchy>`;
+
+    const nodes = flatten(parseUiAutomatorDump(xml, 1920, 1080));
+    const play = nodes.filter((n) => n.label === "Play");
+    expect(play).toHaveLength(1);
+    expect(play[0]!.role).toBe("Button");
+    expect(play[0]!.focused).toBe(true);
+    expect(play[0]!.selected).toBe(true);
+  });
+});
