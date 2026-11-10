@@ -4,12 +4,12 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
-import { deviceSetForUdid, simctlPrefix } from "./ios-device-sets";
+import { audioDylibPath } from "@argent/native-devtools-ios";
+import { simctlTargetForUdid } from "./ios-device-sets";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { InvalidToolInputError } from "./capability";
 import { appendDyldInsertLibrary, audioDir, runningAppPid } from "./ios-host";
-import { audioDylibPath } from "@argent/native-devtools-ios";
-import { isTvOsSimulator } from "./ios-devices";
+import { externalNativeId } from "./external-devices";
 import type { NativeDevtoolsApi } from "../blueprints/native-devtools";
 import {
   InputFeeder,
@@ -49,14 +49,36 @@ const POLL_INTERVAL_MS = 50;
 const ACK_TIMEOUT_MS = 4_000;
 /** Clips are streamed from disk, so this only bounds the converted copy: 10 minutes is about 115 MB. */
 const MAX_CLIP_SECONDS = 600;
-/** One feeder per simulator and one recorder per app, alive in this process only. */
-const feeders = new Map<string, InputFeeder>();
-const recorders = new Map<string, OutputRecorder>();
-/** Simulators whose launchd environment this process verified; a reboot wipes it, which {@link armAudio} re-checks. */
-const envVerified = new Set<string>();
 const BUNDLE_ID_PATTERN = /^[A-Za-z0-9.-]+$/;
 
 export { audioDir };
+
+/** What this process holds for one simulator's audio mock: the api of its `IosAudioSession` service. */
+export interface AudioSession {
+  /** The id the tools were called with. */
+  readonly udid: string;
+  /** Control directory, named after the simulator's own UDID like the one ios-host.ts arms. */
+  readonly dir: string;
+  /** Feeds the in ring while an input source is set. */
+  feeder: InputFeeder | null;
+  /** One per app being recorded, by bundle id. */
+  readonly recorders: Map<string, OutputRecorder>;
+  /** Recordings requested from a dormant hook, not acknowledged yet: their id, by bundle id. */
+  readonly pendingIds: Map<string, string>;
+  /** This process verified the simulator's launchd environment; a reboot wipes it, which {@link armAudio} re-checks. */
+  envVerified: boolean;
+}
+
+export function createAudioSession(udid: string): AudioSession {
+  return {
+    udid,
+    dir: audioDir(externalNativeId(udid)),
+    feeder: null,
+    recorders: new Map(),
+    pendingIds: new Map(),
+    envVerified: false,
+  };
+}
 
 export function assertBundleId(bundleId: string): void {
   if (!BUNDLE_ID_PATTERN.test(bundleId)) {
@@ -88,50 +110,65 @@ async function waitFor<T>(poll: () => T | undefined, timeoutMs: number): Promise
  * apps that were already running keep their old environment and need a restart (see
  * {@link readAppStatus} for telling them apart).
  */
-export async function ensureAudioEnv(udid: string): Promise<void> {
-  const dir = audioDir(udid);
+export async function ensureAudioEnv(session: AudioSession): Promise<void> {
+  const { dir } = session;
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (envVerified.has(udid)) return;
-  const prefix = simctlPrefix(await deviceSetForUdid(udid));
+  if (session.envVerified) return;
+  // Part of native devtools' arming, so its grant covers these spawns.
+  const { nativeId, prefix } = await simctlTargetForUdid(session.udid, {
+    granted: "native-devtools",
+  });
   const options = { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL };
   const getenv = async (name: string) =>
     (
-      await execFileAsync("xcrun", [...prefix, "spawn", udid, "launchctl", "getenv", name], {
+      await execFileAsync("xcrun", [...prefix, "spawn", nativeId, "launchctl", "getenv", name], {
         encoding: "utf8",
         ...options,
       }).catch(() => ({ stdout: "" }))
     ).stdout.trim();
   const setenv = (name: string, value: string) =>
-    execFileAsync("xcrun", [...prefix, "spawn", udid, "launchctl", "setenv", name, value], options);
+    execFileAsync(
+      "xcrun",
+      [...prefix, "spawn", nativeId, "launchctl", "setenv", name, value],
+      options
+    );
 
   // launchctl, not `simctl getenv`: the latter truncates the colon-separated list past 127 bytes.
   const inserted = await getenv("DYLD_INSERT_LIBRARIES");
   const withAudio = appendDyldInsertLibrary(inserted, audioDylibPath());
   if (withAudio !== inserted) await setenv("DYLD_INSERT_LIBRARIES", withAudio);
   if ((await getenv(AUDIO_DIR_ENV)) !== dir) await setenv(AUDIO_DIR_ENV, dir);
-  envVerified.add(udid);
+  session.envVerified = true;
 }
 
 /**
  * Arms the mock in the simulator: the native-devtools service keeps the simulator's injection environment
  * healthy (it re-applies its own dylib after a reboot), and {@link ensureAudioEnv} adds the audio dylib next
- * to it. tvOS is refused: the dylib has no tvOS build.
+ * to it. A simulator whose injection a device provider armed is refused: its launchd environment is not ours.
  */
 export async function armAudio(
-  udid: string,
-  devtools: Pick<NativeDevtoolsApi, "reverifyEnv" | "getInitFailure">
+  session: AudioSession,
+  devtools: Pick<NativeDevtoolsApi, "reverifyEnv" | "getInitFailure" | "armsEnv">
 ): Promise<void> {
-  if (await isTvOsSimulator(udid)) {
-    throw new InvalidToolInputError(`The audio mock does not support tvOS simulators (${udid}).`);
+  if (!devtools.armsEnv) {
+    throw new FailureError(
+      `The provider that supplied ${session.udid} armed its injection, so Argent cannot add the audio hook to it.`,
+      {
+        error_code: FAILURE_CODES.AUDIO_INJECTION_NOT_OURS,
+        failure_stage: "audio_env_setup",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
+    );
   }
   // A reboot wipes launchd's environment; native-devtools notices (it re-applies its own entry), and the audio
   // entry has to be re-applied with it. Check cheaply through the status files: live apps prove the env.
-  if (envVerified.has(udid) && listLiveApps(udid).length === 0) envVerified.delete(udid);
+  if (session.envVerified && listLiveApps(session).length === 0) session.envVerified = false;
   await devtools.reverifyEnv().catch(() => {});
   const failure = devtools.getInitFailure();
   if (failure) {
     throw new FailureError(
-      `Could not set up the simulator's injection environment for ${udid}: ${failure.lastError}. ` +
+      `Could not set up the simulator's injection environment for ${session.udid}: ${failure.lastError}. ` +
         `Try shutting down and re-booting the simulator.`,
       {
         error_code: FAILURE_CODES.AUDIO_ENV_SETUP_FAILED,
@@ -142,7 +179,7 @@ export async function armAudio(
       }
     );
   }
-  await ensureAudioEnv(udid);
+  await ensureAudioEnv(session);
 }
 
 /** Live view of one app's hook, parsed from its `st.<bundleId>` file. */
@@ -208,10 +245,10 @@ function processAlive(pid: number): boolean {
  * (launched before {@link ensureAudioEnv}, or by something that replaced the injected libraries), or
  * the process that wrote the file is gone. Simulator apps are host processes, so a pid probe works.
  */
-export function readAppStatus(udid: string, bundleId: string): AppAudioStatus | null {
+export function readAppStatus(session: AudioSession, bundleId: string): AppAudioStatus | null {
   let text: string;
   try {
-    text = fs.readFileSync(path.join(audioDir(udid), `st.${bundleId}`), "utf8");
+    text = fs.readFileSync(path.join(session.dir, `st.${bundleId}`), "utf8");
   } catch {
     return null;
   }
@@ -242,17 +279,17 @@ export function decideHookState(
 }
 
 export async function readAppHook(
-  udid: string,
+  session: AudioSession,
   bundleId: string
 ): Promise<{ state: HookState; status: AppAudioStatus | null }> {
   let text: string;
   try {
-    text = fs.readFileSync(path.join(audioDir(udid), `st.${bundleId}`), "utf8");
+    text = fs.readFileSync(path.join(session.dir, `st.${bundleId}`), "utf8");
   } catch {
     return { state: "none", status: null };
   }
   const status = parseAppStatus(text);
-  const running = await runningAppPid(udid, bundleId).catch(() => null);
+  const running = await runningAppPid(session.udid, bundleId).catch(() => null);
   return {
     state: decideHookState(status, status.pid > 0 && processAlive(status.pid), running),
     status,
@@ -260,17 +297,17 @@ export async function readAppHook(
 }
 
 /** Bundle ids of the apps whose hook is live, for telling the caller which apps can be driven. */
-export function listLiveApps(udid: string): string[] {
+export function listLiveApps(session: AudioSession): string[] {
   let names: string[];
   try {
-    names = fs.readdirSync(audioDir(udid));
+    names = fs.readdirSync(session.dir);
   } catch {
     return [];
   }
   return names
     .filter((name) => name.startsWith("st.") && !name.endsWith(".tmp"))
     .map((name) => name.slice(3))
-    .filter((bundleId) => readAppStatus(udid, bundleId) !== null);
+    .filter((bundleId) => readAppStatus(session, bundleId) !== null);
 }
 
 type AudioInputSource =
@@ -320,10 +357,10 @@ function removeFiles(dir: string, prefix: string, keep?: string): void {
  * audio input stopped for half a second; a clip plays silence after its end unless it loops.
  */
 export async function setAudioInput(
-  udid: string,
+  session: AudioSession,
   source: AudioInputSource
 ): Promise<AudioInputResult> {
-  const dir = audioDir(udid);
+  const { dir } = session;
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   let feederSource: FeederSource;
   let clipName: string | undefined;
@@ -350,12 +387,12 @@ export async function setAudioInput(
       throw err;
     }
   }
-  let feeder = feeders.get(udid);
+  let feeder = session.feeder;
   if (feeder?.running && !fs.existsSync(feeder.ringPath)) {
     // The control directory was removed under it (a simulator reboot, a cleanup): its ring is an unlinked file
     // nobody can map any more.
     feeder.stop();
-    feeder = undefined;
+    feeder = null;
   }
   if (feeder?.running) {
     feeder.setSource(feederSource);
@@ -363,7 +400,7 @@ export async function setAudioInput(
     removeFiles(dir, "in-");
     feeder = new InputFeeder(path.join(dir, `in-${randomUUID().slice(0, 8)}.ring`), feederSource);
     feeder.start();
-    feeders.set(udid, feeder);
+    session.feeder = feeder;
   }
   const inputFile = path.join(dir, "input");
   // A new ring path is what makes the apps map it; rewriting the same one would restart nothing.
@@ -377,10 +414,10 @@ export async function setAudioInput(
 }
 
 /** Gives the microphone back to every app. */
-export function clearAudioInput(udid: string): void {
-  const dir = audioDir(udid);
-  feeders.get(udid)?.stop();
-  feeders.delete(udid);
+export function clearAudioInput(session: AudioSession): void {
+  const { dir } = session;
+  session.feeder?.stop();
+  session.feeder = null;
   if (!fs.existsSync(dir)) return;
   // Apps keep their mapping of an unlinked ring until they see the input file gone.
   fs.rmSync(path.join(dir, "input"), { force: true });
@@ -418,28 +455,24 @@ function noHookError(bundleId: string): FailureError {
   );
 }
 
-const recorderKey = (udid: string, bundleId: string) => `${udid}/${bundleId}`;
-/** Recordings requested from a dormant hook, not acknowledged yet: their id. */
-const pendingIds = new Map<string, string>();
-
 /** Starts recording the app's speaker output into `outputPath`; resolves once the app confirms. */
 export async function startRecording(
-  udid: string,
+  session: AudioSession,
   bundleId: string,
   outputPath: string,
   muteOutput: boolean
 ): Promise<void> {
   assertBundleId(bundleId);
-  const hook = await readAppHook(udid, bundleId);
+  const hook = await readAppHook(session, bundleId);
   if (hook.state === "old-proto") assertHookProto(hook.status, bundleId);
   if (hook.state === "none" || hook.state === "stale") throw noHookError(bundleId);
   const status = hook.status;
   // A dormant hook acknowledges nothing until the app opens audio; it reads the request when it does.
   const dormant = hook.state === "dormant";
-  const key = recorderKey(udid, bundleId);
-  if (status?.recording || recorders.has(key)) {
+  const { recorders, pendingIds } = session;
+  if (status?.recording || recorders.has(bundleId)) {
     throw new FailureError(
-      `${bundleId} is already being recorded${recorders.has(key) ? ` to ${recorders.get(key)!.wavPath}` : ""}. Call audio-record-stop first.`,
+      `${bundleId} is already being recorded${recorders.has(bundleId) ? ` to ${recorders.get(bundleId)!.wavPath}` : ""}. Call audio-record-stop first.`,
       {
         error_code: FAILURE_CODES.AUDIO_RECORDING_ALREADY_ACTIVE,
         failure_stage: "audio_record_start",
@@ -449,7 +482,7 @@ export async function startRecording(
     );
   }
   const id = randomUUID().slice(0, 8);
-  const dir = audioDir(udid);
+  const { dir } = session;
   // A ring of an earlier tool-server's recording of this app is nobody's now.
   removeFiles(dir, `out-${bundleId}-`);
   const recorder = new OutputRecorder(path.join(dir, `out-${bundleId}-${id}.ring`), outputPath);
@@ -457,16 +490,16 @@ export async function startRecording(
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeAtomic(recFile, `id=${id}\nring=${recorder.ringPath}\nmute=${muteOutput ? 1 : 0}\n`);
   if (dormant) {
-    pendingIds.set(key, id);
-    recorders.set(key, recorder);
+    pendingIds.set(bundleId, id);
+    recorders.set(bundleId, recorder);
     return;
   }
   const ack = await waitFor(() => {
-    const s = readAppStatus(udid, bundleId);
+    const s = readAppStatus(session, bundleId);
     return s && s.recordingId === id && (s.recording || s.error) ? s : undefined;
   }, ACK_TIMEOUT_MS);
   if (ack?.recording) {
-    recorders.set(key, recorder);
+    recorders.set(bundleId, recorder);
     return;
   }
   fs.rmSync(recFile, { force: true });
@@ -493,19 +526,22 @@ interface FinishedRecording {
 }
 
 /** Stops the app's recording and resolves once the WAV is finalized. */
-export async function stopRecording(udid: string, bundleId: string): Promise<FinishedRecording> {
+export async function stopRecording(
+  session: AudioSession,
+  bundleId: string
+): Promise<FinishedRecording> {
   assertBundleId(bundleId);
-  const key = recorderKey(udid, bundleId);
-  const recorder = recorders.get(key);
-  const status = readAppStatus(udid, bundleId);
-  const pendingId = pendingIds.get(key);
-  pendingIds.delete(key);
-  const recFile = path.join(audioDir(udid), `rec.${bundleId}`);
+  const { recorders, pendingIds } = session;
+  const recorder = recorders.get(bundleId);
+  const status = readAppStatus(session, bundleId);
+  const pendingId = pendingIds.get(bundleId);
+  pendingIds.delete(bundleId);
+  const recFile = path.join(session.dir, `rec.${bundleId}`);
   fs.rmSync(recFile, { force: true });
   if (recorder && pendingId && !(status?.recording && status.recordingId === pendingId)) {
     // Requested from a dormant hook that never opened audio (or did and already stopped): what reached the ring is
     // the recording.
-    recorders.delete(key);
+    recorders.delete(bundleId);
     const finished = recorder.finish();
     return {
       path: finished.path,
@@ -518,9 +554,9 @@ export async function stopRecording(udid: string, bundleId: string): Promise<Fin
     };
   }
   if (!status?.recording || !recorder) {
-    recorders.delete(key);
+    recorders.delete(bundleId);
     recorder?.abort();
-    removeFiles(audioDir(udid), `out-${bundleId}-`);
+    removeFiles(session.dir, `out-${bundleId}-`);
     throw new FailureError(
       status?.recording
         ? `${bundleId} was recorded by a tool-server that has since stopped, so its audio is lost. The recording has now been stopped; start a new one.`
@@ -534,10 +570,10 @@ export async function stopRecording(udid: string, bundleId: string): Promise<Fin
     );
   }
   const done = await waitFor(() => {
-    const s = readAppStatus(udid, bundleId);
+    const s = readAppStatus(session, bundleId);
     return s && s.recordingId === status.recordingId && s.recordingDone ? s : undefined;
   }, ACK_TIMEOUT_MS);
-  recorders.delete(key);
+  recorders.delete(bundleId);
   const finished = recorder.finish();
   if (!done) {
     throw new FailureError(
@@ -562,15 +598,16 @@ export async function stopRecording(udid: string, bundleId: string): Promise<Fin
 }
 
 /**
- * Gives every simulator its microphone back and drops every recording this process owns. Run when the
- * tool-server exits: a ring nobody feeds would leave the apps silent until the next tool call.
+ * Gives the simulator its microphone back and drops every recording this process owns. Run when the session
+ * is disposed (tool-server exit, stop-all-simulator-servers): a ring nobody feeds would leave the apps silent
+ * until the next tool call.
  */
-export function disposeAudio(): void {
-  for (const udid of [...feeders.keys()]) clearAudioInput(udid);
-  for (const [key, recorder] of recorders) {
-    recorders.delete(key);
-    const [udid, bundleId] = key.split("/");
-    fs.rmSync(path.join(audioDir(udid), `rec.${bundleId}`), { force: true });
+export function releaseAudio(session: AudioSession): void {
+  if (session.feeder) clearAudioInput(session);
+  for (const [bundleId, recorder] of session.recorders) {
+    fs.rmSync(path.join(session.dir, `rec.${bundleId}`), { force: true });
     recorder.abort();
   }
+  session.recorders.clear();
+  session.pendingIds.clear();
 }

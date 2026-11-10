@@ -39,11 +39,16 @@ vi.mock("@argent/native-devtools-ios", async () => {
     bootstrapDylibPath: () => "/fake/libArgentInjectionBootstrap.dylib",
     bootstrapDylibPathTcp: () => "/fake/tcp/libArgentInjectionBootstrap.dylib",
     bootstrapDylibPathTvos: () => "/fake/tvos/libArgentInjectionBootstrap.dylib",
-    audioDylibPath: () => "/fake/libArgentAudio.dylib",
+    audioDylibPath: () => {
+      if (audioDylibMissing)
+        throw new Error("Native devtools dylib not found: libArgentAudio.dylib");
+      return "/fake/libArgentAudio.dylib";
+    },
   };
 });
 
 let flagOn = true;
+let audioDylibMissing = false;
 vi.mock("@argent/configuration-core", async () => {
   const actual = await vi.importActual<typeof import("@argent/configuration-core")>(
     "@argent/configuration-core"

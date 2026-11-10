@@ -70,7 +70,7 @@ export function readClipInfo(fd: number): ClipInfo {
     });
   if (read < 12 || head.toString("ascii", 0, 4) !== "RIFF") throw bad("no RIFF header");
   let fmtOk = false;
-  for (let pos = 12; pos + 8 <= read; ) {
+  for (let pos = 12; pos + 8 <= read;) {
     const id = head.toString("ascii", pos, pos + 4);
     const len = head.readUInt32LE(pos + 4);
     if (id === "fmt ") {

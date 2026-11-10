@@ -29,7 +29,6 @@ import {
 } from "./utils/variant-proposals";
 import { shutdownOwnedDevices } from "./utils/device-shutdown";
 import { renderFlagGated } from "./utils/flag-gated-text";
-import { disposeAudio } from "./utils/ios-audio";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
@@ -335,12 +334,6 @@ export function start(): void {
     previewWindow.dispose();
     updateChecker.dispose();
     httpHandle.dispose();
-    // Apps hearing a mocked microphone get the real one back; a ring nobody feeds would leave them silent.
-    try {
-      disposeAudio();
-    } catch (err) {
-      process.stderr.write(`[tool-server] audio dispose failed: ${String(err)}\n`);
-    }
 
     // Dispose BEFORE recording toolserver:stop, so a crash escalating mid-teardown
     // is reflected in the stop event's reason instead of being lost behind an

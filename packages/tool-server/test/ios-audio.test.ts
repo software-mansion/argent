@@ -58,22 +58,35 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+/** The grant each simctl target was resolved under; an `ext:` id resolves to its native UDID, as in ios-device-sets. */
+const simctlGrants: unknown[] = [];
 vi.mock("../src/utils/ios-device-sets", () => ({
-  deviceSetForUdid: async () => null,
-  simctlPrefix: () => ["simctl"],
+  simctlTargetForUdid: async (udid: string, options?: unknown) => {
+    simctlGrants.push(options);
+    return { nativeId: udid.replace(/^ext:[^:]+:/, ""), prefix: ["simctl"] };
+  },
   simctlArgsForUdid: async (_udid: string, args: readonly string[]) => ["simctl", ...args],
 }));
 
+let audioDylibMissing = false;
 vi.mock("@argent/native-devtools-ios", () => ({
-  audioDylibPath: () => "/argent/dylibs/libArgentAudio.dylib",
+  audioDylibPath: () => {
+    if (audioDylibMissing) {
+      throw new Error("Native devtools dylib not found: /argent/dylibs/libArgentAudio.dylib");
+    }
+    return "/argent/dylibs/libArgentAudio.dylib";
+  },
 }));
 
 import {
+  armAudio,
   assertBundleId,
-  disposeAudio,
   audioDir,
   clearAudioInput,
+  createAudioSession,
   ensureAudioEnv,
+  releaseAudio,
+  type AudioSession,
   listLiveApps,
   assertHookProto,
   decideHookState,
@@ -89,6 +102,8 @@ const BUNDLE = "com.example.app";
 // Unique per run so parallel test files and leftovers never share a control directory.
 const UDID = `${Math.random().toString(16).slice(2, 10).padEnd(8, "0")}-0000-0000-0000-000000000000`;
 const dir = audioDir(UDID);
+/** A fresh one per test, as the `IosAudioSession` service is per simulator. */
+let session: AudioSession;
 
 function statusText(fields: Record<string, string | number>): string {
   const all = {
@@ -157,10 +172,11 @@ beforeEach(() => {
   execFileMock.mockReset();
   execFileMock.mockImplementation(defaultExec);
   fs.mkdirSync(dir, { recursive: true });
+  session = createAudioSession(UDID);
 });
 
 afterEach(() => {
-  clearAudioInput(UDID); // stops the feeder timer before its files go
+  releaseAudio(session); // stops the feeder timer before its files go
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -218,7 +234,7 @@ describe("hook protocol", () => {
   it("fails a recording at once, without writing a request, for an app on an older hook", async () => {
     fs.writeFileSync(path.join(dir, `st.${BUNDLE}`), statusText({}).replace(/^proto=1\n/, ""));
     const t0 = Date.now();
-    const err = await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), false).catch(
+    const err = await startRecording(session, BUNDLE, path.join(dir, "out.wav"), false).catch(
       (e: unknown) => e
     );
     expect(Date.now() - t0).toBeLessThan(500);
@@ -245,21 +261,21 @@ describe("hook state", () => {
   });
 
   it("reads none without a file and dormant/active/stale/old-proto from one", async () => {
-    expect((await readAppHook(UDID, BUNDLE)).state).toBe("none");
+    expect((await readAppHook(session, BUNDLE)).state).toBe("none");
     writeStatus({ state: "dormant" });
-    expect((await readAppHook(UDID, BUNDLE)).state).toBe("dormant");
+    expect((await readAppHook(session, BUNDLE)).state).toBe("dormant");
     writeStatus({ state: "active" });
-    expect((await readAppHook(UDID, BUNDLE)).state).toBe("active");
+    expect((await readAppHook(session, BUNDLE)).state).toBe("active");
     writeStatus({ state: "dormant", pid: 2 ** 22 + 1 }); // dead pid
-    expect((await readAppHook(UDID, BUNDLE)).state).toBe("stale");
+    expect((await readAppHook(session, BUNDLE)).state).toBe("stale");
     writeStatus({ proto: 0 });
-    expect((await readAppHook(UDID, BUNDLE)).state).toBe("old-proto");
+    expect((await readAppHook(session, BUNDLE)).state).toBe("old-proto");
     runningPid = process.pid + 1; // the app was relaunched; the file is the old process's
     try {
       writeStatus({ state: "active" });
-      expect((await readAppHook(UDID, BUNDLE)).state).toBe("stale");
+      expect((await readAppHook(session, BUNDLE)).state).toBe("stale");
       runningPid = null;
-      expect((await readAppHook(UDID, BUNDLE)).state).toBe("stale");
+      expect((await readAppHook(session, BUNDLE)).state).toBe("stale");
     } finally {
       runningPid = process.pid;
     }
@@ -269,7 +285,7 @@ describe("hook state", () => {
     writeStatus({ state: "active" });
     runningPid = process.pid + 1;
     try {
-      const err = await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), false).catch(
+      const err = await startRecording(session, BUNDLE, path.join(dir, "out.wav"), false).catch(
         (e: unknown) => e
       );
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
@@ -282,31 +298,31 @@ describe("hook state", () => {
   it("queues a recording for a dormant hook without waiting for an acknowledgement", async () => {
     writeStatus({ state: "dormant" });
     const t0 = Date.now();
-    await startRecording(UDID, BUNDLE, path.join(dir, "out.wav"), true);
+    await startRecording(session, BUNDLE, path.join(dir, "out.wav"), true);
     expect(Date.now() - t0).toBeLessThan(500);
     expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(
       /^id=\w+\nring=.*\nmute=1\n$/
     );
-    const done = await stopRecording(UDID, BUNDLE); // never opened audio: an empty recording, at once
+    const done = await stopRecording(session, BUNDLE); // never opened audio: an empty recording, at once
     expect(done.durationMs).toBe(0);
   });
 });
 
 describe("readAppStatus", () => {
   it("is null when the app never wrote a status", () => {
-    expect(readAppStatus(UDID, BUNDLE)).toBeNull();
+    expect(readAppStatus(session, BUNDLE)).toBeNull();
   });
 
   it("is null when the process that wrote it is gone", () => {
     writeStatus({ pid: 2 ** 22 + 1 }); // above the pid ceiling, so never alive
-    expect(readAppStatus(UDID, BUNDLE)).toBeNull();
+    expect(readAppStatus(session, BUNDLE)).toBeNull();
   });
 
   it("reads a live app, and lists it", () => {
     writeStatus({});
     writeStatus({ pid: 2 ** 22 + 1 }, "com.example.dead");
-    expect(readAppStatus(UDID, BUNDLE)?.pid).toBe(process.pid);
-    expect(listLiveApps(UDID)).toEqual([BUNDLE]);
+    expect(readAppStatus(session, BUNDLE)?.pid).toBe(process.pid);
+    expect(listLiveApps(session)).toEqual([BUNDLE]);
   });
 });
 
@@ -337,7 +353,7 @@ describe("ensureAudioEnv", () => {
       stderr: "",
     }));
     const udid = fresh();
-    await ensureAudioEnv(udid);
+    await ensureAudioEnv(createAudioSession(udid));
     expect(setenvCalls()).toEqual([
       ["DYLD_INSERT_LIBRARIES", `${bootstrap}:/argent/dylibs/libArgentAudio.dylib`],
       ["ARGENT_AUDIO_DIR", `/tmp/argent-audio-${udid}`],
@@ -354,7 +370,7 @@ describe("ensureAudioEnv", () => {
           : "",
       stderr: "",
     }));
-    await ensureAudioEnv(udid);
+    await ensureAudioEnv(createAudioSession(udid));
     expect(setenvCalls()).toEqual([]);
   });
 
@@ -365,7 +381,7 @@ describe("ensureAudioEnv", () => {
         : "",
       stderr: "",
     }));
-    await ensureAudioEnv(fresh());
+    await ensureAudioEnv(createAudioSession(fresh()));
     expect(setenvCalls()[0]).toEqual([
       "DYLD_INSERT_LIBRARIES",
       `/other/libSimCamLoader.dylib:${bootstrap}:/argent/dylibs/libArgentAudio.dylib`,
@@ -373,11 +389,56 @@ describe("ensureAudioEnv", () => {
   });
 
   it("remembers a verified simulator and skips the round-trips next time", async () => {
-    const udid = fresh();
-    await ensureAudioEnv(udid);
+    const verified = createAudioSession(fresh());
+    await ensureAudioEnv(verified);
     execFileMock.mockClear();
-    await ensureAudioEnv(udid);
+    await ensureAudioEnv(verified);
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves the simulator under the native-devtools grant", async () => {
+    simctlGrants.length = 0;
+    await ensureAudioEnv(createAudioSession(fresh()));
+    expect(simctlGrants).toEqual([{ granted: "native-devtools" }]);
+  });
+
+  it("spawns on the native UDID of an ext: id and names the directory after it", async () => {
+    const native = fresh();
+    const external = createAudioSession(`ext:acme:${native}`);
+    expect(external.dir).toBe(`/tmp/argent-audio-${native}`);
+    await ensureAudioEnv(external);
+    const spawned = execFileMock.mock.calls
+      .filter(([, args]) => args.includes("spawn"))
+      .map(([, args]) => args[args.indexOf("spawn") + 1]);
+    expect(spawned.length).toBeGreaterThan(0);
+    expect(new Set(spawned)).toEqual(new Set([native]));
+    expect(setenvCalls()).toContainEqual(["ARGENT_AUDIO_DIR", `/tmp/argent-audio-${native}`]);
+  });
+});
+
+describe("armAudio", () => {
+  const devtools = (armsEnv: boolean) => ({
+    armsEnv,
+    reverifyEnv: vi.fn(async () => {}),
+    getInitFailure: () => null,
+  });
+
+  it("refuses a simulator whose injection it did not arm, touching nothing", async () => {
+    const lent = devtools(false);
+    const err = await armAudio(session, lent).catch((e: unknown) => e);
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_INJECTION_NOT_OURS);
+    expect(lent.reverifyEnv).not.toHaveBeenCalled();
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("re-applies its environment once no app proves it, as after a reboot", async () => {
+    const own = devtools(true);
+    await armAudio(session, own);
+    expect(session.envVerified).toBe(true);
+    execFileMock.mockClear();
+    await armAudio(session, own); // no live app in the directory: verify again
+    expect(execFileMock.mock.calls.some(([, args]) => args.includes("getenv"))).toBe(true);
+    expect(own.reverifyEnv).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -389,7 +450,7 @@ function inputRing(): string {
 describe("setAudioInput", () => {
   it("points the guest at a ring that carries the tone", async () => {
     await expect(
-      setAudioInput(UDID, { kind: "tone", frequencyHz: 440, amplitude: 0.25 })
+      setAudioInput(session, { kind: "tone", frequencyHz: 440, amplitude: 0.25 })
     ).resolves.toEqual({ source: "tone" });
     expect(fs.readFileSync(path.join(dir, "input"), "utf8")).toMatch(
       /^source=stream\nring=.+\.ring\n$/
@@ -401,7 +462,7 @@ describe("setAudioInput", () => {
   it("converts a file to mono float32 48 kHz and streams it from the copy", async () => {
     const source = path.join(dir, "speech.mp3");
     fs.writeFileSync(source, "x");
-    const result = await setAudioInput(UDID, { kind: "file", path: source, loop: true });
+    const result = await setAudioInput(session, { kind: "file", path: source, loop: true });
 
     const [cmd, args] = execFileMock.mock.calls.find(([c]) => c === "afconvert")!;
     expect(cmd).toBe("afconvert");
@@ -414,11 +475,11 @@ describe("setAudioInput", () => {
   it("keeps one ring while the source changes, and drops the previous clip", async () => {
     const source = path.join(dir, "a.wav");
     fs.writeFileSync(source, "x");
-    await setAudioInput(UDID, { kind: "file", path: source, loop: false });
+    await setAudioInput(session, { kind: "file", path: source, loop: false });
     const ring = inputRing();
     const [first] = fs.readdirSync(dir).filter((n) => n.startsWith("clip-"));
     await new Promise((resolve) => setTimeout(resolve, 5)); // clip names carry a millisecond stamp
-    await setAudioInput(UDID, { kind: "file", path: source, loop: false });
+    await setAudioInput(session, { kind: "file", path: source, loop: false });
     expect(inputRing()).toBe(ring);
     expect(fs.existsSync(path.join(dir, first))).toBe(false);
     expect(fs.readdirSync(dir).filter((n) => n.startsWith("clip-"))).toHaveLength(1);
@@ -431,16 +492,16 @@ describe("setAudioInput", () => {
       wavFile(args[args.length - 1], 600 * 48_000 + 1);
       return { stdout: "", stderr: "" };
     });
-    await expect(setAudioInput(UDID, { kind: "file", path: source, loop: false })).rejects.toThrow(
-      "longer than 10 minutes"
-    );
+    await expect(
+      setAudioInput(session, { kind: "file", path: source, loop: false })
+    ).rejects.toThrow("longer than 10 minutes");
     expect(fs.readdirSync(dir).filter((n) => n.startsWith("clip-"))).toEqual([]);
     expect(fs.existsSync(path.join(dir, "input"))).toBe(false);
   });
 
   it("rejects a missing file before touching the control directory", async () => {
     await expect(
-      setAudioInput(UDID, { kind: "file", path: "/nonexistent/clip.wav", loop: false })
+      setAudioInput(session, { kind: "file", path: "/nonexistent/clip.wav", loop: false })
     ).rejects.toThrow("Audio file not found");
     expect(fs.existsSync(path.join(dir, "input"))).toBe(false);
   });
@@ -451,7 +512,7 @@ describe("setAudioInput", () => {
     execFileMock.mockImplementationOnce(() => {
       throw Object.assign(new Error("failed"), { stderr: "Error: AudioFileOpen failed" });
     });
-    const err = await setAudioInput(UDID, { kind: "file", path: source, loop: false }).catch(
+    const err = await setAudioInput(session, { kind: "file", path: source, loop: false }).catch(
       (e: unknown) => e
     );
     expect((err as Error).message).toContain("AudioFileOpen failed");
@@ -459,34 +520,34 @@ describe("setAudioInput", () => {
   });
 
   it("clearAudioInput gives the microphone back and removes the ring", async () => {
-    await setAudioInput(UDID, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
+    await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
     const ring = inputRing();
-    clearAudioInput(UDID);
+    clearAudioInput(session);
     expect(fs.existsSync(path.join(dir, "input"))).toBe(false);
     expect(fs.existsSync(ring)).toBe(false);
   });
 
   it("replaces a feeder whose ring was removed under it", async () => {
-    await setAudioInput(UDID, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
+    await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
     const first = inputRing();
     fs.rmSync(dir, { recursive: true, force: true }); // a reboot's cleanup
-    await setAudioInput(UDID, { kind: "tone", frequencyHz: 500, amplitude: 0.4 });
+    await setAudioInput(session, { kind: "tone", frequencyHz: 500, amplitude: 0.4 });
     expect(inputRing()).not.toBe(first);
     expect(fs.existsSync(inputRing())).toBe(true);
   });
 
-  it("disposeAudio releases every simulator", async () => {
-    await setAudioInput(UDID, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
-    disposeAudio();
+  it("releaseAudio gives the microphone back", async () => {
+    await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
+    releaseAudio(session);
     expect(fs.existsSync(path.join(dir, "input"))).toBe(false);
     expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
   });
 
   it("starts a fresh ring after the microphone was given back", async () => {
-    await setAudioInput(UDID, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
+    await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
     const first = inputRing();
-    clearAudioInput(UDID);
-    await setAudioInput(UDID, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
+    clearAudioInput(session);
+    await setAudioInput(session, { kind: "tone", frequencyHz: 1000, amplitude: 0.4 });
     expect(inputRing()).not.toBe(first);
   });
 });
@@ -507,11 +568,11 @@ describe("recording", () => {
     writeStatus({});
     const stopGuest = fakeGuest();
     try {
-      await startRecording(UDID, BUNDLE, wav(), true);
+      await startRecording(session, BUNDLE, wav(), true);
       expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(
         /^id=.+\nring=.+out-com\.example\.app-.+\.ring\nmute=1\n$/
       );
-      const finished = await stopRecording(UDID, BUNDLE);
+      const finished = await stopRecording(session, BUNDLE);
       expect(finished).toEqual({
         path: wav(),
         durationMs: 100,
@@ -530,7 +591,7 @@ describe("recording", () => {
   });
 
   it("refuses when the app has no live hook", async () => {
-    const err = await startRecording(UDID, BUNDLE, wav(), false).catch((e: unknown) => e);
+    const err = await startRecording(session, BUNDLE, wav(), false).catch((e: unknown) => e);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_HOOK_NOT_ACTIVE);
     expect((err as Error).message).toContain("restart-app");
     expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
@@ -538,7 +599,7 @@ describe("recording", () => {
 
   it("refuses a second recording of the same app", async () => {
     writeStatus({ recording: 1, recId: "x" });
-    const err = await startRecording(UDID, BUNDLE, wav(), false).catch((e: unknown) => e);
+    const err = await startRecording(session, BUNDLE, wav(), false).catch((e: unknown) => e);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_RECORDING_ALREADY_ACTIVE);
   });
 
@@ -546,7 +607,7 @@ describe("recording", () => {
     writeStatus({});
     const stopGuest = fakeGuest({ failWith: "cannot open ring: /nope" });
     try {
-      const err = await startRecording(UDID, BUNDLE, wav(), false).catch((e: unknown) => e);
+      const err = await startRecording(session, BUNDLE, wav(), false).catch((e: unknown) => e);
       expect((err as Error).message).toContain("cannot open ring: /nope");
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_RECORDING_START_FAILED);
       expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
@@ -559,7 +620,7 @@ describe("recording", () => {
   it("stop without a recording fails and leaves no request behind", async () => {
     writeStatus({});
     fs.writeFileSync(path.join(dir, `rec.${BUNDLE}`), "id=stale\nring=/tmp/x.ring\nmute=0\n");
-    const err = await stopRecording(UDID, BUNDLE).catch((e: unknown) => e);
+    const err = await stopRecording(session, BUNDLE).catch((e: unknown) => e);
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_NO_ACTIVE_RECORDING);
     expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
   });
@@ -567,18 +628,18 @@ describe("recording", () => {
   it("stops a recording this process does not know, says its audio is lost and removes its ring", async () => {
     writeStatus({ recording: 1, recId: "earlier" });
     fs.writeFileSync(path.join(dir, `out-${BUNDLE}-earlier.ring`), "");
-    const err = await stopRecording(UDID, BUNDLE).catch((e: unknown) => e);
+    const err = await stopRecording(session, BUNDLE).catch((e: unknown) => e);
     expect((err as Error).message).toContain("tool-server that has since stopped");
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_NO_ACTIVE_RECORDING);
     expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
   });
 
-  it("disposeAudio drops a recording this process owns", async () => {
+  it("releaseAudio drops a recording this process owns", async () => {
     writeStatus({});
     const stopGuest = fakeGuest();
     try {
-      await startRecording(UDID, BUNDLE, wav(), false);
-      disposeAudio();
+      await startRecording(session, BUNDLE, wav(), false);
+      releaseAudio(session);
       expect(fs.existsSync(path.join(dir, `rec.${BUNDLE}`))).toBe(false);
       expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
       expect(fs.existsSync(wav())).toBe(false);

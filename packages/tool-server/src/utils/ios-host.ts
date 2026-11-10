@@ -352,10 +352,10 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
 
   if (withAudio) {
     // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
-    fs.mkdirSync(audioDir(udid), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
     await execFileAsync(
       "xcrun",
-      [...prefix, "spawn", nativeId, "launchctl", "setenv", "ARGENT_AUDIO_DIR", audioDir(udid)],
+      [...prefix, "spawn", nativeId, "launchctl", "setenv", "ARGENT_AUDIO_DIR", audioDir(nativeId)],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }
