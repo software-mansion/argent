@@ -15,6 +15,9 @@ function stubCdp(captureBase64 = ONE_PX_PNG_BASE64) {
   return { send } as unknown as CDPClient;
 }
 
+/** The session's last window read; these tests never reach the code that uses it. */
+const getViewport = (): ViewportSize => ({ width: 1024, height: 740, devicePixelRatio: 1 });
+
 const filesToCleanup: string[] = [];
 
 beforeEach(() => {
@@ -34,7 +37,7 @@ afterEach(() => {
 describe("chromium-server/screenshot", () => {
   it("writes a PNG and returns file:// url + absolute path", async () => {
     const cdp = stubCdp();
-    const out = await captureScreenshot({ cdp, deviceId: "chromium-cdp-12345" });
+    const out = await captureScreenshot({ cdp, deviceId: "chromium-cdp-12345", getViewport });
     filesToCleanup.push(out.path);
     expect(out.path).toMatch(/argent-chromium-media/);
     expect(out.path).toMatch(/argent-screenshot-chromium-cdp-12345-/);
@@ -44,7 +47,7 @@ describe("chromium-server/screenshot", () => {
 
   it("calls Page.captureScreenshot with format png + no captureBeyondViewport", async () => {
     const cdp = stubCdp();
-    const out = await captureScreenshot({ cdp, deviceId: "test" });
+    const out = await captureScreenshot({ cdp, deviceId: "test", getViewport });
     filesToCleanup.push(out.path);
     const send = (cdp as unknown as { send: ReturnType<typeof vi.fn> }).send;
     expect(send).toHaveBeenCalledWith("Page.captureScreenshot", {
@@ -79,15 +82,15 @@ describe("chromium-server/screenshot", () => {
       return { cdp: { send } as unknown as CDPClient, send };
     }
 
+    /** Narrower than any capture here, so the window is read; a failed read means ratio 1. */
+    const ALWAYS_READ: ViewportSize = { width: 1, height: 1, devicePixelRatio: 1 };
+
     async function capture(
       cdp: CDPClient,
       opts: ScreenshotOpts = { cssPixels: true },
-      known?: ViewportSize
+      known: ViewportSize = ALWAYS_READ
     ) {
-      const out = await captureScreenshot(
-        { cdp, deviceId: "t", getViewport: known && (() => known) },
-        opts
-      );
+      const out = await captureScreenshot({ cdp, deviceId: "t", getViewport: () => known }, opts);
       filesToCleanup.push(out.path);
       return fs.readFileSync(out.path);
     }
@@ -181,10 +184,11 @@ describe("chromium-server/screenshot", () => {
       expect((await capture(cdp)).toString("base64")).toBe(shot);
     });
 
-    it("returns the capture when the window cannot be read", async () => {
+    it("returns the capture when the window cannot be read and the last ratio was 1", async () => {
       const shot = flat(2048, 1480);
       const { cdp } = cdpWith(shot, new Error("detached"));
-      expect((await capture(cdp)).toString("base64")).toBe(shot);
+      const known = { width: 1024, height: 740, devicePixelRatio: 1 };
+      expect((await capture(cdp, { cssPixels: true }, known)).toString("base64")).toBe(shot);
     });
 
     it("uses the session's last ratio when the window cannot be read", async () => {
@@ -250,10 +254,10 @@ describe("chromium-server/screenshot", () => {
       expect(read?.[2]).toBe(150);
     });
 
-    it("returns the capture when the window reports no size", async () => {
-      const shot = flat(2048, 1480);
-      const { cdp } = cdpWith(shot, { w: 0, h: 0, dpr: 2 });
-      expect((await capture(cdp)).toString("base64")).toBe(shot);
+    it("treats a window that reports no size as a failed read", async () => {
+      const { cdp } = cdpWith(flat(2048, 1480), { w: 0, h: 0, dpr: 2 });
+      const known = { width: 1024, height: 740, devicePixelRatio: 2 };
+      expect(sizeOf(await capture(cdp, { cssPixels: true }, known))).toEqual([1024, 740]);
     });
 
     it("returns the capture when it is not a readable PNG", async () => {
@@ -279,7 +283,7 @@ describe("chromium-server/screenshot", () => {
 
   it("uses the provided id in the filename", async () => {
     const cdp = stubCdp();
-    const out = await captureScreenshot({ cdp, deviceId: "test" }, { id: "demo-123" });
+    const out = await captureScreenshot({ cdp, deviceId: "test", getViewport }, { id: "demo-123" });
     filesToCleanup.push(out.path);
     expect(out.path).toMatch(/demo-123\.png$/);
   });
@@ -288,7 +292,10 @@ describe("chromium-server/screenshot", () => {
     const cdp = stubCdp();
     // Slashes and colons would break the file path; the sanitizer replaces
     // them with underscores so a malformed id can't escape the media dir.
-    const out = await captureScreenshot({ cdp, deviceId: "../../etc/passwd:bad" }, { id: "x" });
+    const out = await captureScreenshot(
+      { cdp, deviceId: "../../etc/passwd:bad", getViewport },
+      { id: "x" }
+    );
     filesToCleanup.push(out.path);
     expect(out.path).toMatch(/argent-screenshot-______etc_passwd_bad-x\.png/);
   });
@@ -310,7 +317,7 @@ describe("chromium-server/screenshot", () => {
     const cdp = stubCdp();
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
-      const out = await captureScreenshot({ cdp, deviceId: "test" }, { scale: 0.5 });
+      const out = await captureScreenshot({ cdp, deviceId: "test", getViewport }, { scale: 0.5 });
       filesToCleanup.push(out.path);
       const warnings = stderr.mock.calls
         .map((args) => String(args[0]))
@@ -327,7 +334,7 @@ describe("chromium-server/screenshot", () => {
     const cdp = stubCdp();
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
-      const out = await captureScreenshot({ cdp, deviceId: "test" });
+      const out = await captureScreenshot({ cdp, deviceId: "test", getViewport });
       filesToCleanup.push(out.path);
       const warnings = stderr.mock.calls
         .map((args) => String(args[0]))
@@ -341,6 +348,8 @@ describe("chromium-server/screenshot", () => {
   it("throws a clear error when CDP returns no data", async () => {
     const send = vi.fn().mockResolvedValue({});
     const cdp = { send } as unknown as CDPClient;
-    await expect(captureScreenshot({ cdp, deviceId: "test" })).rejects.toThrow(/returned no data/);
+    await expect(captureScreenshot({ cdp, deviceId: "test", getViewport })).rejects.toThrow(
+      /returned no data/
+    );
   });
 });

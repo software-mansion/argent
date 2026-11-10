@@ -67,8 +67,11 @@ interface CaptureContext {
   cdp: CDPClient;
   /** Used in the persisted filename. */
   deviceId: string;
-  /** The session's last window read, for when the renderer cannot answer. */
-  getViewport?: () => ViewportSize;
+  /**
+   * The session's last window read, for when the renderer cannot answer. Required,
+   * so a caller that drops it does not compile.
+   */
+  getViewport: () => ViewportSize;
 }
 
 /**
@@ -102,13 +105,13 @@ const MAX_CSS_IMAGE_LONG_SIDE = 2_000;
 async function devicePixelsPerCssPixel(
   cdp: CDPClient,
   imageWidth: number,
-  known: ViewportSize | undefined
+  known: ViewportSize
 ): Promise<number> {
   try {
     const viewport = await readViewport(cdp, VIEWPORT_READ_TIMEOUT_MS);
     return imageWidth / viewport.width;
   } catch {
-    return known?.devicePixelRatio ?? 1;
+    return known.devicePixelRatio;
   }
 }
 
@@ -123,9 +126,9 @@ async function toCssPixels(ctx: CaptureContext, capture: Buffer): Promise<Buffer
   try {
     const size = readPngSize(capture);
     if (!size) return capture;
-    const known = ctx.getViewport?.();
+    const known = ctx.getViewport();
     // One device pixel per CSS pixel as far as the session knows: no read to wait for.
-    if (known && size.width <= known.width) return capture;
+    if (size.width <= known.width) return capture;
     const ratio = await devicePixelsPerCssPixel(ctx.cdp, size.width, known);
     if (ratio <= 1 || Math.max(size.width, size.height) / ratio > MAX_CSS_IMAGE_LONG_SIDE) {
       return capture;
