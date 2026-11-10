@@ -31,12 +31,30 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, native network capture                      |
 | `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                              |
 
-`launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
+`launch-app` and `restart-app` accept `launchArgs`, a list of arguments that Argent passes to the app process at launch. For example, `["-FeatureFlag", "YES"]` overrides a UserDefaults value. `launchArgs` works on Apple simulators and physical iPhones. Other targets ignore it. If the app already runs, `launch-app` terminates it first, so that the app gets the arguments. On a local iOS simulator, the tool fails if that termination does not finish within 15 seconds. On a remote simulator, `launch-app` and `restart-app` fail if the termination fails for a reason other than the app not running, and launch nothing. On a physical iPhone, the app sees `--` before the arguments. UserDefaults overrides still apply.
 
 `reinstall-app` uninstalls the app first, so Argent checks the app at `appPath` before the uninstall. The tool fails and keeps the installed app when one of these checks fails:
 
 - `appPath` does not exist, or it is not a `.app` directory (iOS), an `.apk` file (Android), a `.vpkg` file (Vega) or a `.hap` file (HarmonyOS).
 - `bundleId` does not match the bundle id in the `.app`, the package name in the `.apk` or the bundle name in the `.hap`. On a remote simulator, Argent does not compare the bundle id.
+
+On Android, Argent also checks the device after the uninstall. If the package is still on the device, the tool fails and does not install the `.apk`. These packages stay after the uninstall:
+
+- A system app. The app data stays on the device.
+- An app that is an active device admin. The app data stays on the device.
+- An updated system app. The uninstall removes only the update. If the update has a newer version than the system app, Android also removes the app data.
+
+If Argent cannot check the device after the uninstall, the tool also fails and does not install the `.apk`. The app may already be uninstalled.
+
+On a local iOS simulator, the tool fails and does not install the `.app` if the uninstall does not finish within 30 seconds.
+
+On a local iOS simulator, `boot-device`, `launch-app`, `restart-app`, `reinstall-app` and `open-url` give `error_kind: "timeout"` when a `simctl` step does not finish within its time limit. The message names the step and the limit. On a remote simulator, `launch-app` and `restart-app` do the same for a `sim-remote` step that does not finish within 30 seconds.
+
+On a local iOS simulator, `boot-device` fails if `simctl list` does not answer within 10 seconds, because Argent cannot read the state of the simulator. In that case, `list-devices` returns a `hint` that says that the list can be incomplete.
+
+On Chromium, `open-url` fails when the URL does not load a page, start a download or run as a `javascript:` URL. Examples are a URL with no scheme, an unknown scheme, `tel:`, `mailto:`, a host that does not resolve, a response with no content and a navigation that a `beforeunload` handler on the current page cancels. An HTTP error status, for example 404, does not make the tool fail, also when Chromium shows its own error page for it. In headless Chrome, a 401 that asks for credentials makes the tool fail.
+
+`stop-metro` returns `stopped: true` when it sends SIGTERM to every listening process it finds, or the process has already exited, and `stopped: false` when it finds none. The tool fails if it cannot read the port, if it finds a listener but not the process that owns it, or if it cannot signal a listener it found, for example with EPERM. On macOS, the tool detects a listener that belongs to another user only when it sees no other listener on the port, so that listener can still hold the port after `stopped: true`.
 
 Argent drives a foldable iOS simulator, for example the iPhone Duo, and a foldable Android emulator, for example a Pixel Fold or a generic foldable AVD. `list-devices` marks a foldable device and a foldable AVD with `foldable: true`. `fold` moves the hinge to a posture (`closed`, `half-open` or `open`) or to an angle from 0 to 180 degrees.
 
