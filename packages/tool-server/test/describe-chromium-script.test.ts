@@ -64,6 +64,14 @@ function defineNative(proto: object, prop: string, field: string): void {
 }
 defineNative(MockNode.prototype, "childNodes", "__childNodes");
 defineNative(MockNode.prototype, "parentNode", "__parentNode");
+Object.defineProperty(MockNode.prototype, "previousSibling", {
+  get(this: Record<string, unknown>) {
+    const kids = (this.__parentNode as { __childNodes?: unknown[] } | undefined)?.__childNodes;
+    const i = kids ? kids.indexOf(this) : -1;
+    return i > 0 ? kids![i - 1] : null;
+  },
+  configurable: true,
+});
 // A node belongs to the page's document unless a fixture gives it another.
 Object.defineProperty(MockNode.prototype, "ownerDocument", {
   get(this: Record<string, unknown>) {
@@ -374,14 +382,18 @@ function run(
   }) as MockElement & Record<string, unknown>;
   if (rootChildren.length) (body as Record<string, unknown>).children = rootChildren;
   root.children = [body];
-  // Every element knows its parent, as in a real DOM, unless a fixture set one.
-  const linkParents = (n: Record<string, unknown>) => {
-    for (const k of (n.__children as Record<string, unknown>[]) ?? []) {
+  // Every node knows its parent, as in a real DOM, unless a fixture set one.
+  for (const stack: Record<string, unknown>[] = [root]; stack.length;) {
+    const n = stack.pop()!;
+    const kids = new Set([
+      ...((n.__children as Record<string, unknown>[]) ?? []),
+      ...((n.__childNodes as Record<string, unknown>[]) ?? []),
+    ]);
+    for (const k of kids) {
       if (k.__parentNode === undefined) k.__parentNode = n;
-      linkParents(k);
+      stack.push(k);
     }
-  };
-  linkParents(root);
+  }
 
   const g = globalThis as Record<string, unknown>;
   const saved: Record<string, unknown> = {
@@ -1934,10 +1946,11 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
 
   it("runs an inline target's capitalized text on from what is laid out before it, as Chrome does", () => {
     // The target sits in a <p> after `before`, in a <span> if wrap; the <p> follows text.
+    // If slot, the target and `before` are a host's light children, in its shadow's <slot>.
     const label = (
       before: unknown[],
       target: Record<string, string> = {},
-      { wrap = false, pseudo = "" } = {}
+      { wrap = false, pseudo = "", slot = false } = {}
     ) => {
       const span = elementNode("span", [text("bar baz")], { __attrs: { id: "lbl" } });
       Object.assign(
@@ -1945,8 +1958,24 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
         { textTransform: "capitalize" },
         target
       );
-      const inner = wrap ? elementNode("span", [span], { children: [span] }) : span;
-      const p = el({ tag: "p", rect: BOX, children: [inner] }) as MockElement &
+      let inner: unknown = wrap ? elementNode("span", [span], { children: [span] }) : span;
+      if (slot) {
+        const slotEl = elementNode("slot", [], { __assigned: [...before, span] });
+        Object.setPrototypeOf(slotEl, MockHTMLSlotElement.prototype);
+        (slotEl.__style as Record<string, string>).display = "contents";
+        span.assignedSlot = slotEl;
+        const host = el({
+          tag: "x-h",
+          rect: BOX,
+          shadow: [slotEl],
+          style: { display: "inline" },
+          children: [span],
+        });
+        host.childNodes = [...before, span];
+        inner = host;
+        before = [];
+      }
+      const p = el({ tag: "p", rect: BOX, children: [inner as MockElement] }) as MockElement &
         Record<string, unknown>;
       p.childNodes = [...before, inner];
       if (pseudo) {
@@ -1980,6 +2009,9 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     );
     expect(label([])).toBe("Bar Baz");
     expect(label([], {}, { pseudo: '"q"' })).toBe("bar Baz");
+    expect(label([text("foo")], {}, { slot: true })).toBe("bar Baz");
+    expect(label([text("foo ")], {}, { slot: true })).toBe("Bar Baz");
+    expect(label([], {}, { slot: true })).toBe("Bar Baz");
     expect(label([text("foo")], { display: "contents" })).toBe("bar Baz");
     expect(label([text("foo")], { visibility: "hidden" })).toBe("bar Baz");
     expect(label([text("foo")], { display: "inline-block" })).toBe("Bar Baz");

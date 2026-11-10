@@ -87,6 +87,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   const getShadowRoot = protoGetter(Element.prototype, "shadowRoot");
   const getAssignedSlot = protoGetter(Element.prototype, "assignedSlot");
   const getParentNode = protoGetter(Node.prototype, "parentNode");
+  const getPreviousSibling = protoGetter(Node.prototype, "previousSibling");
   const getScrollHeight = protoGetter(Element.prototype, "scrollHeight");
   const getClientHeight = protoGetter(Element.prototype, "clientHeight");
   const getScrollWidth = protoGetter(Element.prototype, "scrollWidth");
@@ -772,11 +773,8 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (!parent || getNodeType.call(parent) !== 1) return " ";
       const style = window.getComputedStyle(parent);
       const inline = isInlineBox(style);
-      const kids = flatChildNodes(parent);
-      for (let i = Array.prototype.indexOf.call(kids, node) - 1; i >= 0; i--) {
-        const end = lastLaid(kids[i], inline);
-        if (end !== null) return end;
-      }
+      let last = null;
+      if (someBefore(parent, node, (kid) => (last = lastLaid(kid, inline)) !== null)) return last;
       const before =
         getNamespaceURI.call(parent) === "http://www.w3.org/1999/xhtml" &&
         pseudoText(parent, "::before");
@@ -785,6 +783,24 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (!isFlow(parent, style)) return " ";
       node = parent;
     }
+  }
+
+  // Whether test holds for a node before another among a parent's flat children, nearest
+  // first. A childNodes list is stepped by previousSibling: indexing a long one once per
+  // target is quadratic.
+  function someBefore(parent, node, test) {
+    const kids = flatChildNodes(parent);
+    const light = getParentNode.call(node);
+    if (light && getChildNodes.call(light) === kids) {
+      for (let kid = getPreviousSibling.call(node); kid; kid = getPreviousSibling.call(kid)) {
+        if (test(kid)) return true;
+      }
+      return false;
+    }
+    for (let i = Array.prototype.indexOf.call(kids, node) - 1; i >= 0; i--) {
+      if (test(kids[i])) return true;
+    }
+    return false;
   }
 
   // Whether an element runs in inline flow, which layout reads the previous character back
