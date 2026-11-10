@@ -1011,6 +1011,11 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(vol({ "role": "slider", "aria-valuenow": "1.5e-10" })).toBe("Vol 1.50000e-10 end");
     expect(vol({ "role": "slider bogus", "aria-valuenow": "7" })).toBe("Vol 7 end");
     expect(vol({ "role": " slider", "aria-valuenow": "7" })).toBe("Vol 7 end");
+    // The first token Chrome knows: not an unknown or abstract one.
+    for (const role of ["foo slider", "WIDGET Slider", "range slider"]) {
+      expect(vol({ role, "aria-valuenow": "7" }), role).toBe("Vol 7 end");
+    }
+    expect(vol({ "role": "button slider", "aria-valuenow": "7" })).toBe("Vol s end");
     expect(vol({ role: "progressbar" })).toBe("Vol s end");
     expect(vol({ "role": "slider", "aria-valuetext": "", "aria-valuenow": "7" })).toBe("Vol end");
 
@@ -1050,6 +1055,19 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       labelledBy(kids, { display: "inline" }, { "role": "listbox", "aria-label": "Root" });
     expect(rootListbox(text("Text"), option("Opt", chosen), option("No", {}))).toBe("Opt");
     expect(rootListbox(text("Text"), option("Opt", {}))).toBe("Root");
+    const tokens = (role: string, optionRole = "option") =>
+      labelledBy(
+        [
+          option("One", { role: optionRole, ...chosen }),
+          option("Two", { role: "option", ...chosen }),
+          option("No", {}),
+        ],
+        { display: "inline" },
+        { role }
+      );
+    expect(tokens("foo listbox")).toBe("One Two");
+    expect(tokens("widget listbox", "bogus option")).toBe("One Two");
+    expect(tokens("listbox", "bogus")).toBe("Two");
   });
 
   it("leaves out a closed <details>' content, inert content and content-visibility:hidden content", () => {

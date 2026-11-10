@@ -544,10 +544,39 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     );
   }
 
-  // The first token of an element's role, lowercased. Chrome takes the first one it knows.
+  // The roles Chrome knows; it passes over any other token. It also passes over an option,
+  // listitem or treeitem outside its context, and an unnamed form or region; this takes them.
+  const ROLES = Object.create(null);
+  for (const role of (
+    "alert alertdialog application article banner blockquote button caption cell checkbox " +
+    "code columnheader combobox comment complementary contentinfo definition deletion dialog " +
+    "directory document emphasis feed figure form generic grid gridcell group heading image " +
+    "img insertion link list listbox listitem log main mark marquee math menu menubar " +
+    "menuitem menuitemcheckbox menuitemradio meter navigation none note option paragraph " +
+    "presentation progressbar radio radiogroup region row rowgroup rowheader scrollbar " +
+    "search searchbox sectionfooter sectionheader separator slider spinbutton status strong " +
+    "subscript suggestion superscript switch tab table tablist tabpanel term textbox time " +
+    "timer toolbar tooltip tree treegrid treeitem graphics-document graphics-object " +
+    "graphics-symbol " +
+    "doc-abstract doc-acknowledgments doc-afterword doc-appendix doc-backlink " +
+    "doc-biblioentry doc-bibliography doc-biblioref doc-chapter doc-colophon doc-conclusion " +
+    "doc-cover doc-credit doc-credits doc-dedication doc-endnote doc-endnotes doc-epigraph " +
+    "doc-epilogue doc-errata doc-example doc-footnote doc-foreword doc-glossary doc-glossref " +
+    "doc-index doc-introduction doc-noteref doc-notice doc-pagebreak doc-pagefooter " +
+    "doc-pageheader doc-pagelist doc-part doc-preface doc-prologue doc-pullquote doc-qna " +
+    "doc-subtitle doc-tip doc-toc"
+  ).split(" ")) {
+    ROLES[role] = true;
+  }
+
+  // The first token of an element's role that Chrome knows, lowercased, else "".
   function ariaRole(el) {
     const role = getAttr.call(el, "role");
-    return role ? role.trim().split(/\\s+/)[0].toLowerCase() : "";
+    for (const token of role ? role.trim().split(/\\s+/) : []) {
+      const r = token.toLowerCase();
+      if (ROLES[r] === true) return r;
+    }
+    return "";
   }
 
   // A range widget's value as Chrome reads it: its aria-valuetext, else its aria-valuenow
