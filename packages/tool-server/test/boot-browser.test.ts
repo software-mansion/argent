@@ -249,6 +249,12 @@ describe("bootBrowser", () => {
     expect(args).not.toContain("about:blank");
   });
 
+  it("gives the browser 60 s to answer CDP", async () => {
+    installed.set(chrome!, "exec");
+    await bootBrowser({ browser: "chrome" });
+    expect(bootElectronAppMock.mock.calls[0]![0].readyTimeoutMs).toBe(60_000);
+  });
+
   it("drops a blank argument, which Chromium would open as a second start page", async () => {
     installed.set(chrome!, "exec");
     await bootBrowser({ browser: "chrome", extraArgs: ["--headless=new", "", " \t"] });

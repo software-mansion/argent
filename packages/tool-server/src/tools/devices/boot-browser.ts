@@ -90,6 +90,9 @@ const BROWSER_PID_TAG = "browser ";
  */
 const RELAUNCH_GRACE_MS = 5000;
 
+/** Every boot is a fresh profile's first run; one on a CI runner took 30 s to answer CDP. */
+const BROWSER_READY_TIMEOUT_MS = 60_000;
+
 /** 0 and negative pids name process groups, which a kill(pid, 0) probe always reaches. */
 function holderAlive(pid: number): boolean {
   return pid > 0 && pidIsAlive(pid);
@@ -341,6 +344,7 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     port: options.port,
     kind: "browser",
     signal: options.signal,
+    readyTimeoutMs: BROWSER_READY_TIMEOUT_MS,
     extraArgs: [
       `--user-data-dir=${profileDir}`,
       "--no-first-run",
