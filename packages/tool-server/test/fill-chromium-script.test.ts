@@ -510,6 +510,40 @@ describe("fill page script", () => {
     }
   );
 
+  // What document.activeElement is for focus inside a closed shadow root: the host.
+  const closedHost = (tagName: string, props: Record<string, unknown> = {}) => ({
+    tagName,
+    isContentEditable: false,
+    hasAttribute: (name: string) => name in ((props.attributes as object) ?? {}),
+    scrollHeight: 20,
+    clientHeight: 20,
+    scrollWidth: 100,
+    clientWidth: 100,
+    ...props,
+  });
+
+  it.each(["MY-FIELD", "DIV"])(
+    "refuses focus in a closed shadow root of a %s, which it cannot read",
+    async (tagName) => {
+      const page = makePage();
+      page.doc.activeElement = closedHost(tagName);
+      await expect(runScript(page, "x")).resolves.toEqual({
+        status: "unsupported",
+        detail: "focus is in a closed shadow root, which fill cannot reach",
+      });
+    }
+  );
+
+  it.each([
+    ["a tabindex", { attributes: { tabindex: "0" } }],
+    ["scrolling down", { scrollHeight: 500 }],
+    ["scrolling sideways", { scrollWidth: 500 }],
+  ])("answers no_focus for a host that %s makes focusable itself", async (_n, props) => {
+    const page = makePage();
+    page.doc.activeElement = closedHost("MY-FIELD", props);
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "no_focus" });
+  });
+
   it("refuses focus in an <embed>, whose document it cannot read", async () => {
     const page = makePage();
     page.doc.activeElement = { tagName: "EMBED" };

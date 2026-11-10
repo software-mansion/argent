@@ -67,7 +67,17 @@ export function buildChromiumFillScript(text: string): string {
     const control =
       tag === "textarea" ||
       (tag === "input" && !/^(button|checkbox|radio|file|submit|reset|image|range|color|hidden)$/.test(type));
-    if (!control && el.isContentEditable !== true) return { status: "no_focus" };
+    if (!control && el.isContentEditable !== true) {
+      // Focus in a closed shadow root stops at its host. A host that neither a
+      // tabindex nor scrolling makes focusable can only hold focus inside.
+      const closedHost =
+        /-|^(article|aside|blockquote|div|footer|h[1-6]|header|main|nav|p|section|span)$/.test(tag) &&
+        !el.hasAttribute("tabindex") &&
+        el.scrollHeight <= el.clientHeight &&
+        el.scrollWidth <= el.clientWidth;
+      if (closedHost) return { status: "unsupported", detail: "focus is in a closed shadow root, which fill cannot reach" };
+      return { status: "no_focus" };
+    }
     if (control && el.disabled === true) return { status: "unsupported", detail: "it is disabled" };
     if (control && el.readOnly === true) return { status: "unsupported", detail: "it is read-only" };
     // An <input> holds one line and drops a newline.
