@@ -206,6 +206,16 @@ export function evaluateMatches(params: Params, matches: DescribeNode[]): boolea
   return evaluateCondition(params.condition, params.expectedText, matches, params.textMatch);
 }
 
+// A blind read judges nothing; a partial one (an Apple TV hierarchy cut at its
+// node cap) shows what it found, but its misses prove nothing.
+function cannotJudge(
+  data: DescribeTreeData,
+  matches: DescribeNode[],
+  everMatched: boolean
+): boolean {
+  return isBlindRead(data, everMatched) || (data.partial === true && !matches.some(isVisible));
+}
+
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
 // the real cause rather than a bare "no element matched".
 function appendDiagnostics(base: string, lastData: DescribeTreeData | null): string {
@@ -435,7 +445,7 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
         onSample: (data, nowMs) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
-          const blind = isBlindRead(data, everMatched);
+          const blind = cannotJudge(data, matches, everMatched);
           if (!blind && !data.stale) lastTrustedReadAt = nowMs;
           if (!blind && evaluateMatches(params, matches)) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
@@ -468,7 +478,7 @@ Returns { success: boolean, elapsed: number, note?, cause? }. If the condition d
           : poll.lastAttempt === "tree" &&
               poll.lastData !== null &&
               !poll.lastData.stale &&
-              !isBlindRead(poll.lastData, everMatched)
+              !cannotJudge(poll.lastData, findAll(poll.lastData.tree, selector), everMatched)
             ? "trusted"
             : "untrusted";
       return {

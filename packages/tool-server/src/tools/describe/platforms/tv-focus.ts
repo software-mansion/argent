@@ -106,7 +106,9 @@ function toNode(element: TvElement): DescribeNode {
 /**
  * The labelled non-focusable elements of a hierarchy read, as `TvElement`s. The
  * root is the app itself. Frames arrive in points, unlike the focus view's. The
- * cursor stays the focus view's call, so `isFocused` is dropped here.
+ * cursor stays the focus view's call, so `isFocused` is dropped here, and so are
+ * traits: Settings' disabled chevrons carry `button`, and `role: "button"` should
+ * keep meaning what the remote can reach.
  */
 function contentElements(
   hierarchy: TvHierarchyResponse | null,
@@ -122,7 +124,6 @@ function contentElements(
         out.push({
           label: child.label,
           value: child.value,
-          traits: child.traits,
           ...(f && screen?.width && screen.height
             ? {
                 frame: {
@@ -168,10 +169,19 @@ export function tvFocusTree(
   }
   const root = focusRoot();
   root.children = [...elements, ...contentElements(hierarchy, focusText)].map(toNode);
-  return root.children.length > 0
-    ? { tree: root, source: "tv-focus" }
-    : { tree: root, source: "tv-focus", hint: TV_FOCUS_WAIT_EMPTY_HINT };
+  if (root.children.length === 0) {
+    return { tree: root, source: "tv-focus", hint: TV_FOCUS_WAIT_EMPTY_HINT };
+  }
+  // The daemon stops walking past its node cap, so text beyond it is missing.
+  return (hierarchy?.nodeCount ?? 0) > TV_HIERARCHY_NODE_CAP
+    ? { tree: root, source: "tv-focus", partial: true, hint: TV_HIERARCHY_CAPPED_HINT }
+    : { tree: root, source: "tv-focus" };
 }
+
+/** `walkTree` in the tvOS ax daemon stops once it has visited this many nodes. */
+const TV_HIERARCHY_NODE_CAP = 800;
+const TV_HIERARCHY_CAPPED_HINT =
+  "The Apple TV hierarchy stopped at its 800-element cap, so text past it was not read.";
 
 /** Whether the focus engine has placed its cursor, on a tree from {@link tvFocusTree}. */
 export function hasTvCursor(tree: DescribeNode): boolean {
@@ -186,11 +196,19 @@ export function hasTvCursor(tree: DescribeNode): boolean {
  * are redundant and the respawn is destructive — it would drop the very state
  * the caller is waiting on. A wait only observes and reports.
  *
- * The hierarchy is an addition to the focus view, so losing it degrades to the
- * focus view rather than failing the read.
+ * A failed hierarchy read fails the whole read: the focus view alone would drop
+ * the screen's text for that poll, and `hidden` would pass on it. It is retried
+ * once first, because the daemon's short listen backlog refuses connections
+ * when several waits poll at once.
  */
 export async function describeTvFocus(api: TvControlApi): Promise<DescribeTreeData> {
   const res = await api.describe();
-  const hierarchy = (await api.hierarchy?.().catch(() => null)) ?? null;
+  if (!api.hierarchy) return tvFocusTree(res);
+  const hierarchy = await api.hierarchy().catch(async () => {
+    await new Promise((r) => setTimeout(r, HIERARCHY_RETRY_MS));
+    return api.hierarchy!();
+  });
   return tvFocusTree(res, hierarchy);
 }
+
+const HIERARCHY_RETRY_MS = 30;

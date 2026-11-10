@@ -226,6 +226,25 @@ describe("tvFocusTree — the rest of the screen", () => {
     expect(findAll(tree, { role: "focused" })).toHaveLength(0);
   });
 
+  it("keeps `role` to what the remote can reach", () => {
+    // Settings' disabled chevrons carry `button`; `hidden {role:"button"}` must
+    // not wait on them.
+    const { tree } = tvFocusTree(
+      FOCUS,
+      hierarchy([{ label: "chevron", traits: ["button", "notEnabled"] }])
+    );
+
+    expect(findAll(tree, { role: "button" }).map((n) => n.label)).toEqual(["Only"]);
+    expect(findAll(tree, { text: "chevron" })).toHaveLength(1);
+  });
+
+  it("marks a hierarchy cut at the daemon's node cap as partial", () => {
+    const capped = { ...hierarchy([LOADING]), nodeCount: 801 };
+
+    expect(tvFocusTree(FOCUS, capped).partial).toBe(true);
+    expect(tvFocusTree(FOCUS, { ...capped, nodeCount: 800 }).partial).toBeUndefined();
+  });
+
   it("judges a screen with text and nothing focusable, with no hint", () => {
     const res = tvFocusTree({ focused: null, focusable: [] }, hierarchy([LOADING]));
 

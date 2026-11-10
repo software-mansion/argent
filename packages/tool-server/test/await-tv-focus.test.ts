@@ -231,13 +231,36 @@ describe("await-screen-idle on an Apple TV", () => {
     expect((await runIdle(api, { timeoutMs: 700, pollIntervalMs: 100 })).settled).toBe(false);
   });
 
-  it("falls back to the focus view when the hierarchy read fails", async () => {
+  it("skips a poll whose hierarchy read fails, and reports a hierarchy that never answers", async () => {
     const api = makeTvApi([SCREEN]);
+    let calls = 0;
     api.hierarchy = async () => {
-      throw new Error("no hierarchy");
+      // Every third call fails: a refused connection under load.
+      if (++calls % 3 === 0) throw new Error("connect ECONNREFUSED");
+      return { tree: { children: [] } };
+    };
+    expect((await runIdle(api)).settled).toBe(true);
+
+    api.hierarchy = async () => {
+      throw new Error("connect ECONNREFUSED");
+    };
+    const res = await runIdle(api, { timeoutMs: 600 });
+    expect(res.settled).toBe(false);
+    expect(res.note).toMatch(/ECONNREFUSED/);
+  });
+
+  it("retries a refused hierarchy read once within the same poll", async () => {
+    const api = makeTvApi([SCREEN]);
+    let calls = 0;
+    api.hierarchy = async () => {
+      if (++calls === 1) throw new Error("connect ECONNREFUSED");
+      return { tree: { children: [] } };
     };
 
-    expect((await runIdle(api)).settled).toBe(true);
+    const res = await runIdle(api, { minStableMs: 0 });
+
+    expect(res.settled).toBe(true);
+    expect(res.polls).toBe(1);
   });
 
   it("names a reader that stopped answering", async () => {
@@ -381,6 +404,62 @@ describe("await-ui-element on an Apple TV", () => {
 
     expect(res.success).toBe(true);
     expect(res.note).toBeUndefined();
+  });
+
+  it("does not report non-focusable text hidden when the hierarchy read fails", async () => {
+    // The focus view alone still has the button, so the read would not look
+    // blind, and the label would seem gone.
+    const api = makeTvApi([SCREEN]);
+    let calls = 0;
+    api.hierarchy = async () => {
+      if (++calls > 2) throw new Error("connect ECONNREFUSED");
+      return {
+        screenFrame: { width: 1920, height: 1080 },
+        tree: {
+          children: [{ label: "Scene covered", frame: { x: 0, y: 0, width: 400, height: 80 } }],
+        },
+      };
+    };
+
+    const res = await runElement(api, {
+      condition: "hidden",
+      selector: { text: "Scene covered" },
+      timeoutMs: 400,
+      pollIntervalMs: 50,
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("does not take a miss on a hierarchy cut at its node cap as absence", async () => {
+    const api = makeTvApi([SCREEN]);
+    api.hierarchy = async () => ({
+      nodeCount: 801,
+      screenFrame: { width: 1920, height: 1080 },
+      tree: { children: [{ label: "Row 1", frame: { x: 0, y: 0, width: 400, height: 80 } }] },
+    });
+
+    const hidden = await runElement(api, {
+      condition: "hidden",
+      selector: { text: "Tail" },
+      timeoutMs: 300,
+      pollIntervalMs: 50,
+    });
+    expect(hidden.success).toBe(false);
+    expect(hidden.cause).toBe("unreadable");
+    expect(hidden.note).toMatch(/800-element cap/);
+
+    // What it did read still counts.
+    expect(
+      (await runElement(api, { condition: "exists", selector: { text: "Row 1" } })).success
+    ).toBe(true);
+    const missing = await runElement(api, {
+      condition: "exists",
+      selector: { text: "Tail" },
+      timeoutMs: 300,
+      pollIntervalMs: 50,
+    });
+    expect(missing.cause).toBe("unreadable");
   });
 
   it("matches non-focusable text, and waits for it to go", async () => {

@@ -38,6 +38,8 @@ export interface TvHierarchyNode {
 export interface TvHierarchyResponse {
   tree?: TvHierarchyNode | null;
   screenFrame?: { width: number; height: number };
+  /** Nodes visited; past the daemon's cap of 800 the tree is cut short. */
+  nodeCount?: number;
 }
 
 // Member names match `RemoteButton` (utils/vega-input) exactly, so `tv-remote`
