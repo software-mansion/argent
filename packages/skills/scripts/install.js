@@ -25,15 +25,19 @@ function gitRoot() {
   }
 }
 
-// mkdirSync fails on a dangling link, so create what its chain ends at first.
-function ensureDir(dir) {
-  let end = dir;
-  for (let hop = 0; hop < 40; hop++) {
-    if (!lstatSync(end, { throwIfNoEntry: false })?.isSymbolicLink()) break;
-    end = resolve(realpathSync(dirname(end)), readlinkSync(end));
+// mkdirSync fails on a dangling link anywhere in the path, so create what each
+// one ends at first.
+function ensureDir(dir, hops = 0) {
+  const stat = lstatSync(dir, { throwIfNoEntry: false });
+  if (stat && existsSync(dir)) return;
+  // Past the cap, let mkdirSync report the loop.
+  if (hops >= 40) return void mkdirSync(dir, { recursive: true });
+  if (stat?.isSymbolicLink()) {
+    ensureDir(resolve(realpathSync(dirname(dir)), readlinkSync(dir)), hops + 1);
+    return;
   }
-  mkdirSync(end, { recursive: true });
-  mkdirSync(dir, { recursive: true });
+  ensureDir(dirname(dir), hops);
+  mkdirSync(dir);
 }
 
 // File by file rather than cpSync, which refuses or replaces a symlink inside the

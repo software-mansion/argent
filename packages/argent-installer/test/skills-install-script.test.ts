@@ -83,6 +83,29 @@ describe("install-skills script", () => {
     );
   });
 
+  it.each([
+    [".claude", [["config/claude", ".claude"]], "config/claude/skills"],
+    [
+      "a dir in the .claude/skills link chain",
+      [
+        ["store/agents", ".agents"],
+        ["../.agents/skills", ".claude/skills"],
+      ],
+      "store/agents/skills",
+    ],
+  ])("creates the missing targets when %s is a dangling link", (_name, links, landsIn) => {
+    for (const [target, at] of links) {
+      fs.mkdirSync(path.dirname(path.join(project, at)), { recursive: true });
+      fs.symlinkSync(target, path.join(project, at));
+    }
+
+    execFileSync(process.execPath, [SCRIPT], { cwd: project, stdio: "pipe" });
+
+    expect(fs.readdirSync(path.join(project, landsIn)).sort()).toEqual(
+      fs.readdirSync(BUNDLED_SKILLS).sort()
+    );
+  });
+
   // A fresh clone runs it before any build, so it must not import a workspace package.
   it("runs from a copy outside the workspace, writing through linked skills and agents dirs", () => {
     const pkg = path.join(project, "pkg");
