@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { promises as fsPromises } from "fs";
-import { relative, isAbsolute } from "path";
 import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
@@ -48,29 +47,6 @@ async function fileArtifact(
   return p ? store.register({ hostPath: p, kind }) : null;
 }
 
-/**
- * The bundle URL in a Hermes profile names the platform that ran it, which is
- * stronger than the `platform` parameter: agents may omit that on Android.
- */
-function recordedPlatform(profile: HermesCpuProfile | null): "ios" | "android" | undefined {
-  for (const node of profile?.nodes ?? []) {
-    const match = /[?&]platform=(ios|android)\b/.exec(node.callFrame.url);
-    if (match) return match[1] as "ios" | "android";
-  }
-  return undefined;
-}
-
-async function resolvedPath(path: string): Promise<string> {
-  return fsPromises.realpath(path).catch(() => path);
-}
-
-/** True when neither path holds the other, so they are not one project (or a monorepo around it). */
-async function unrelatedPaths(a: string, b: string): Promise<boolean> {
-  const [from, to] = await Promise.all([resolvedPath(a), resolvedPath(b)]);
-  const outside = (rel: string) => rel.startsWith("..") || isAbsolute(rel);
-  return outside(relative(from, to)) && outside(relative(to, from));
-}
-
 const annotationSchema = z.object({
   offsetMs: z.coerce
     .number()
@@ -90,7 +66,7 @@ const zodSchema = z.object({
   project_root: z
     .string()
     .describe("Absolute path to the RN project root for session context detection"),
-  platform: z.enum(["ios", "android"]).optional().describe("Target platform"),
+  platform: z.enum(["ios", "android"]).default("ios").describe("Target platform"),
   rn_version: z.coerce.string().default("unknown").describe('React Native version (e.g. "0.73.4")'),
   annotations: z
     .array(annotationSchema)
@@ -150,7 +126,6 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     let commitTree: DevToolsCommitTree;
     let unattributedByCommit: Array<[number, number, number]> | undefined;
-    let metroRoot: string | undefined;
     // Null for sessions saved before stop wrote it. With no hot commit the report
     // then says commits under 16ms were not measured; with hot commits it only
     // leaves out the lines that need the summary.
@@ -161,7 +136,6 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       if (onDisk.meta?.unattributedByCommit) {
         unattributedByCommit = onDisk.meta.unattributedByCommit;
       }
-      metroRoot = onDisk.meta?.projectRoot || undefined;
       renderSummary = parseRenderSummary(onDisk.meta?.renderSummary);
     } else {
       commitTree = { commits: [], hookNames: new Map() };
@@ -170,7 +144,6 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     const { detectedArchitecture, anyCompilerOptimized, hotCommitIndices, totalReactCommits } =
       sessionPaths;
 
-    const platform = recordedPlatform(cpuProfile) ?? params.platform;
     const recordingDurationMs = cpuProfile ? (cpuProfile.endTime - cpuProfile.startTime) / 1000 : 0;
 
     const input: RawProfilingInput = {
@@ -179,7 +152,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       sessionMeta: {
         recordingDurationMs,
         deviceId: "simulator",
-        platform: platform ?? "ios",
+        platform: params.platform,
         rnVersion: params.rn_version,
         projectRoot: params.project_root,
         ...(detectedArchitecture !== null && {
@@ -222,21 +195,10 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       (renderSummary !== null &&
         selectFrequentRerenders(renderSummary, createComponentOriginClassifier(null)).length > 0);
     let sourceIndex: ComponentSourceIndex | null = null;
-    let sourceWarning: string | undefined;
-    let sourceRoot = params.project_root;
     try {
-      let astIndex = needsSourceIndex
-        ? await buildAstIndexWithDiagnostics(sourceRoot, platform)
+      const astIndex = needsSourceIndex
+        ? await buildAstIndexWithDiagnostics(params.project_root)
         : null;
-      if (astIndex && astIndex.index.size === 0 && metroRoot && metroRoot !== sourceRoot) {
-        // Over a link the caller's path is a client path, and Metro's is on this host.
-        const fromMetro = await buildAstIndexWithDiagnostics(metroRoot, platform);
-        if (fromMetro.index.size > 0) {
-          astIndex = fromMetro;
-          sourceRoot = metroRoot;
-          sourceWarning = `project_root "${params.project_root}" holds no components on the tool-server host, so the File column comes from Metro's project root "${metroRoot}".`;
-        }
-      }
       if (astIndex?.treeSitterAvailable) sourceIndex = astIndex.index;
       for (const finding of pipelineOutput.componentFindings) {
         // `finding.component` is the raw DevTools name; the AST index is keyed
@@ -254,27 +216,11 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
             isMemoized: entry.isMemoized,
             hasUseCallback: entry.hasUseCallback,
             hasUseMemo: entry.hasUseMemo,
-            ...(entry.otherMatches?.length ? { otherMatches: entry.otherMatches } : {}),
           };
         }
       }
-      const findings = pipelineOutput.componentFindings;
-      if (!astIndex) {
-        // No index was needed, so the report names no file and there is nothing to warn about.
-      } else if (!astIndex.treeSitterAvailable) {
-        sourceWarning =
-          "The tree-sitter parser could not be loaded, so the report gives no file for any component.";
-      } else if (findings.length > 0 && !findings.some((f) => f.sourceLocation)) {
-        // After the fallback sourceRoot is Metro's root, which the caller never passed.
-        const searched =
-          sourceRoot === params.project_root ? "project_root" : "Metro's project root";
-        const noFile = `No component in the report's table is defined under ${searched} "${sourceRoot}" (${astIndex.indexedFiles} source files on the tool-server host, ${astIndex.index.size} components), so the report gives no file for any of them. They may all be library components. If any of them is from the app, check project_root.`;
-        sourceWarning = sourceWarning ? `${sourceWarning} ${noFile}` : noFile;
-      } else if (metroRoot && (await unrelatedPaths(metroRoot, sourceRoot))) {
-        sourceWarning = `Metro serves this app from "${metroRoot}", but project_root is "${sourceRoot}", so the files in this report may be from another project.`;
-      }
     } catch {
-      sourceWarning = "Reading the project's source failed, so the report may lack file locations.";
+      /* best-effort */
     }
 
     const top5 = pipelineOutput.componentFindings
@@ -301,8 +247,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     const { report, reportFile, hotCommitsTotal, hotCommitsShown } = await renderProfilingReport({
       hotCommitSummaries: pipelineOutput.hotCommitSummaries,
       componentFindings: pipelineOutput.componentFindings,
-      // Paths in the report count from the root the files were read from.
-      sessionContext: { ...pipelineOutput.sessionContext, projectRoot: sourceRoot },
+      sessionContext: pipelineOutput.sessionContext,
       recordingMs: pipelineOutput.recordingMs,
       anyRuntimeCompilerDetected: pipelineOutput.anyRuntimeCompilerDetected,
       reactCommits: pipelineOutput.reactCommits,
@@ -317,7 +262,6 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     const artifacts = requireArtifacts(ctx);
     const result: Record<string, unknown> = {
-      ...(sourceWarning ? { warning: sourceWarning } : {}),
       report,
       reportFile: await fileArtifact(artifacts, reportFile, "react-profile-report"),
       hotCommitsTotal,
@@ -332,9 +276,8 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     // Only null means no commit data was recorded; [] is the valid "no hot
     // commits" outcome.
     if (hotCommitIndices === null) {
-      const noCommits =
+      result["warning"] =
         "No React commit data — the DevTools hook may not be present in this runtime, or the commit-capture script failed to inject (check react-profiler-start output for errors).";
-      result["warning"] = sourceWarning ? `${noCommits} ${sourceWarning}` : noCommits;
     }
 
     return result;

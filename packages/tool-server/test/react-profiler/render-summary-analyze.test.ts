@@ -230,7 +230,7 @@ describe("source index on a hot session with a frequent component outside its fi
 
   it("is built when the hot commit gave no finding, so the row is placed", async () => {
     buildIndex.mockResolvedValue({
-      index: new Map([["ClockRow", { file: join(scratch, "src/Clock.tsx"), line: 25 }]]),
+      index: new Map([["ClockRow", { file: "/app/src/Clock.tsx", line: 25 }]]),
       treeSitterAvailable: true,
     });
     // One render of `Slow` is under the three a finding needs.
@@ -261,7 +261,7 @@ describe("source index on a hot session with a frequent component outside its fi
   it("is built for a stored session whose hot commit cannot be shown", async () => {
     // Stop does not produce this state today; the report must still hold up.
     buildIndex.mockResolvedValue({
-      index: new Map([["ClockRow", { file: join(scratch, "src/Clock.tsx"), line: 25 }]]),
+      index: new Map([["ClockRow", { file: "/app/src/Clock.tsx", line: 25 }]]),
       treeSitterAvailable: true,
     });
     const report = await analyzeHot(0);

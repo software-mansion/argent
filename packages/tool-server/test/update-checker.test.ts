@@ -354,58 +354,10 @@ describe("update-checker — suppression persistence", () => {
     expect(second.isUpdateNoteSuppressed()).toBe(true);
   });
 
-  it("reports an unwritable file and stays quiet in this process", async () => {
+  it("throws when the suppression file cannot be written", async () => {
+    // Replace the .argent path with a regular file so mkdir/write fails.
     fs.writeFileSync(path.join(tmpHome, ".argent"), "");
-    const { suppressUpdateNote, isUpdateNoteSuppressed } =
-      await import("../src/utils/update-checker");
-    expect(suppressUpdateNote(1000).persisted).toBe(false);
-    expect(isUpdateNoteSuppressed()).toBe(true);
-    vi.advanceTimersByTime(1001);
-    expect(isUpdateNoteSuppressed()).toBe(false);
-  });
-
-  it("replaces the file instead of rewriting it, and leaves no temp file", async () => {
     const { suppressUpdateNote } = await import("../src/utils/update-checker");
-    suppressUpdateNote(1000);
-    const firstWrite = fs.statSync(suppressionFile()).ino;
-
-    expect(suppressUpdateNote(2000).persisted).toBe(true);
-
-    // A new inode means a concurrent reader sees the old file or the new one, never an empty one.
-    expect(fs.statSync(suppressionFile()).ino).not.toBe(firstWrite);
-    expect(fs.readdirSync(path.dirname(suppressionFile()))).toEqual(["update-suppression.json"]);
-  });
-
-  it("reports a failed replace and leaves no temp file", async () => {
-    // A directory at the target lets the temp file be written and fails the rename.
-    fs.mkdirSync(suppressionFile(), { recursive: true });
-    const { suppressUpdateNote, isUpdateNoteSuppressed } =
-      await import("../src/utils/update-checker");
-
-    expect(suppressUpdateNote(1000).persisted).toBe(false);
-
-    expect(isUpdateNoteSuppressed()).toBe(true);
-    expect(fs.readdirSync(path.dirname(suppressionFile()))).toEqual(["update-suppression.json"]);
-  });
-
-  it("honours a dismissal that another tool-server wrote after this one started", async () => {
-    const sibling = await import("../src/utils/update-checker");
-    vi.resetModules();
-    const local = await import("../src/utils/update-checker");
-    expect(local.isUpdateNoteSuppressed()).toBe(false);
-    sibling.suppressUpdateNote(7 * 24 * 60 * 60 * 1000);
-    expect(local.isUpdateNoteSuppressed()).toBe(true);
-    // http.ts only auto-suppresses when not suppressed, so the week survives.
-    expect(JSON.parse(fs.readFileSync(suppressionFile(), "utf8")).suppressUntil).toBe(
-      Date.now() + 7 * 24 * 60 * 60 * 1000
-    );
-  });
-
-  it("treats a cleared file as not suppressed, even after a longer local dismissal", async () => {
-    const { suppressUpdateNote, isUpdateNoteSuppressed } =
-      await import("../src/utils/update-checker");
-    suppressUpdateNote(60 * 60 * 1000);
-    suppressUpdateNote(0);
-    expect(isUpdateNoteSuppressed()).toBe(false);
+    expect(() => suppressUpdateNote(1000)).toThrow();
   });
 });

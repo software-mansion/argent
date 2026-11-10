@@ -31,16 +31,7 @@ function loadSuppressUntil(): number {
 function persistSuppressUntil(value: number): void {
   const filePath = getSuppressionFilePath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  // Every tool call of every tool-server reads this file, so replace it whole:
-  // writing in place truncates first, and a read in between would find it empty.
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(tempPath, JSON.stringify({ suppressUntil: value }));
-    fs.renameSync(tempPath, filePath);
-  } catch (error) {
-    fs.rmSync(tempPath, { force: true });
-    throw error;
-  }
+  fs.writeFileSync(filePath, JSON.stringify({ suppressUntil: value }));
 }
 
 export interface UpdateState {
@@ -77,32 +68,24 @@ let state: UpdateState = {
 };
 
 let interval: ReturnType<typeof setInterval> | null = null;
-// Only an end time the file refused. With a writable ~/.argent the file is the
-// whole state, so every tool-server on the machine honours one dismissal.
-let unpersistedUntil = 0;
+let suppressUntil = loadSuppressUntil();
 
 export function getUpdateState(): Readonly<UpdateState> {
   return { ...state };
 }
 
 export function isUpdateNoteSuppressed(): boolean {
-  return Date.now() < Math.max(loadSuppressUntil(), unpersistedUntil);
+  return Date.now() < suppressUntil;
 }
 
 /**
- * Suppress update notifications for `durationMs`. `persisted: false` means the
- * file could not be written, so it holds only in this process until it exits.
+ * Suppress update notifications for `durationMs`, persisted across restarts.
+ * @throws if the suppression file cannot be written.
  */
-export function suppressUpdateNote(durationMs: number): { until: number; persisted: boolean } {
-  const until = Date.now() + durationMs;
-  try {
-    persistSuppressUntil(until);
-    unpersistedUntil = 0;
-    return { until, persisted: true };
-  } catch {
-    unpersistedUntil = until;
-    return { until, persisted: false };
-  }
+export function suppressUpdateNote(durationMs: number): void {
+  const next = Date.now() + durationMs;
+  persistSuppressUntil(next);
+  suppressUntil = next;
 }
 
 function isNewerVersion(latest: string, current: string): boolean {

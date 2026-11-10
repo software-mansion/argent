@@ -1,5 +1,5 @@
 import { promises as fs } from "fs";
-import { basename, dirname, join, sep } from "path";
+import { join } from "path";
 
 const _require = require;
 
@@ -103,11 +103,8 @@ const EXCLUDE_DIRS = new Set([
 /** A mock defined in a test is not the app's component, though it may share its name. */
 const TEST_FILE = /\.(test|spec)\.[jt]sx?$/;
 
-async function findSourceFiles(
-  dir: string
-): Promise<{ files: string[]; nestedPackages: string[] }> {
+async function findSourceFiles(dir: string): Promise<string[]> {
   const result: string[] = [];
-  const nestedPackages: string[] = [];
 
   async function walk(current: string): Promise<void> {
     let entries;
@@ -115,10 +112,6 @@ async function findSourceFiles(
       entries = await fs.readdir(current, { withFileTypes: true });
     } catch {
       return;
-    }
-
-    if (current !== dir && entries.some((e) => e.isFile() && e.name === "package.json")) {
-      nestedPackages.push(current + sep);
     }
 
     for (const entry of entries) {
@@ -142,7 +135,7 @@ async function findSourceFiles(
   }
 
   await walk(dir);
-  return { files: result, nestedPackages };
+  return result;
 }
 
 function isCapitalized(name: string): boolean {
@@ -210,79 +203,21 @@ function collectMemoizedNames(root: TreeSitterNode): Set<string> {
 // bundling for that platform, so the base file is the general default and wins
 // as primary when one component name exists in several files.
 const PLATFORM_SUFFIX = /\.(web|ios|android|native)\.[jt]sx?$/;
-const EXTENSION = /\.[jt]sx?$/;
-const NOT_APP_CODE = /\.(test|spec|stories)\.[jt]sx?$/;
-// Metro's order for one module on a native platform. The other platform's
-// variant and .web are not in that bundle.
-const NOT_BUNDLED = 3;
 
-type Platform = "ios" | "android";
-
-function variantRank(file: string, platform?: Platform): number {
-  const suffix = PLATFORM_SUFFIX.exec(file)?.[1];
-  if (!platform) return suffix ? 1 : 0;
-  if (suffix === platform) return 0;
-  if (suffix === "native") return 1;
-  return suffix ? NOT_BUNDLED : 2;
-}
-
-/** The import path of a file: every platform variant of it is one module. */
-function moduleOf(file: string): string {
-  return file.replace(PLATFORM_SUFFIX, "").replace(EXTENSION, "");
-}
-
-/**
- * Decide from every source file which variant Metro bundles for each module.
- * Variants compete only inside a module: a helper in Other.ios.tsx says nothing
- * about Button.tsx. Inside a module a variant competes whether or not it defines
- * the name looked up, because Metro picks it over the base file either way.
- */
-function bundledFilter(files: string[], platform?: Platform): (file: string) => boolean {
-  if (!platform) return () => true;
-  const best = new Map<string, number>();
-  for (const file of files) {
-    const module = moduleOf(file);
-    best.set(module, Math.min(best.get(module) ?? NOT_BUNDLED, variantRank(file, platform)));
-  }
-  return (file) => {
-    const rank = variantRank(file, platform);
-    return rank !== NOT_BUNDLED && rank === best.get(moduleOf(file));
-  };
-}
-
-function fileNameKey(name: string): string {
-  return name.replace(/[-_]/g, "").toLowerCase();
-}
-
-/** Whether a file is named after a component: Button.tsx, button/index.tsx, button-view.tsx not. */
-function isNamedAfter(file: string, component: string): boolean {
-  const base = basename(moduleOf(file));
-  const stem = base === "index" ? basename(dirname(file)) : base;
-  return fileNameKey(stem) === fileNameKey(component);
+function isPlatformVariant(file: string): boolean {
+  return PLATFORM_SUFFIX.test(file);
 }
 
 /**
  * Split same-named candidates into a primary plus the rest, walk-order
- * independently: app code before other packages, then a file named after the
- * component, then base files before platform variants, then path, line, column.
+ * independently: base files before platform variants, then path, line, column.
  */
-function pickPrimary(
-  name: string,
-  entries: ComponentIndexEntry[],
-  platform: Platform | undefined,
-  nestedPackages: string[]
-): {
+function pickPrimary(entries: ComponentIndexEntry[]): {
   primary: ComponentIndexEntry;
   others: ComponentMatch[];
 } {
-  const foreign = (file: string): number =>
-    NOT_APP_CODE.test(file) || nestedPackages.some((dir) => file.startsWith(dir)) ? 1 : 0;
   const sorted = entries.slice().sort((a, b) => {
-    const foreignDelta = foreign(a.file) - foreign(b.file);
-    if (foreignDelta !== 0) return foreignDelta;
-    const nameDelta = Number(isNamedAfter(b.file, name)) - Number(isNamedAfter(a.file, name));
-    if (nameDelta !== 0) return nameDelta;
-    const variantDelta = variantRank(a.file, platform) - variantRank(b.file, platform);
+    const variantDelta = Number(isPlatformVariant(a.file)) - Number(isPlatformVariant(b.file));
     if (variantDelta !== 0) return variantDelta;
     if (a.file !== b.file) return a.file < b.file ? -1 : 1;
     if (a.line !== b.line) return a.line - b.line;
@@ -304,10 +239,7 @@ const MAX_JSX_FILE_CHARS = 512 * 1024;
  * Index every React component in the project. Without tree-sitter, returns an
  * empty index and treeSitterAvailable=false rather than throwing.
  */
-export async function buildAstIndexWithDiagnostics(
-  projectRoot: string,
-  platform?: Platform
-): Promise<AstIndexResult> {
+export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise<AstIndexResult> {
   const index: ComponentIndex = new Map();
 
   const ts = loadTreeSitter();
@@ -315,7 +247,7 @@ export async function buildAstIndexWithDiagnostics(
 
   const { ParserClass, ts: tsLang, tsx: tsxLang } = ts;
 
-  const { files, nestedPackages } = await findSourceFiles(projectRoot);
+  const files = await findSourceFiles(projectRoot);
 
   // Resolve the primary only once every file is walked; picking during the walk
   // would re-tie the result to directory-walk order.
@@ -417,11 +349,8 @@ export async function buildAstIndexWithDiagnostics(
     }
   }
 
-  const isBundled = bundledFilter(files, platform);
   for (const [name, entries] of candidates) {
-    const bundled = entries.filter(({ file }) => isBundled(file));
-    if (bundled.length === 0) continue;
-    const { primary, others } = pickPrimary(name, bundled, platform, nestedPackages);
+    const { primary, others } = pickPrimary(entries);
     index.set(name, others.length > 0 ? { ...primary, otherMatches: others } : primary);
   }
 

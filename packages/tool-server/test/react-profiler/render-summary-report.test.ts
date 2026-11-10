@@ -80,9 +80,9 @@ const SCROLL: RenderSummary = {
 };
 
 const FIXTURE_INDEX = new Map([
-  ["ClockRow", { file: "/tmp/fake-project/App.js", line: 25 }],
-  ["ClockScreen", { file: "/tmp/fake-project/App.js", line: 40 }],
-  ["ClockHeader", { file: "/tmp/fake-project/App.js", line: 35 }],
+  ["ClockRow", { file: "/fixture/App.js", line: 25 }],
+  ["ClockScreen", { file: "/fixture/App.js", line: 40 }],
+  ["ClockHeader", { file: "/fixture/App.js", line: 35 }],
 ]);
 
 const debugDirs: string[] = [];
@@ -135,8 +135,7 @@ describe("report with no hot commit", () => {
     expect(rows.map((r) => r.split("`")[1])).toEqual(["ClockRow", "ClockScreen", "ClockHeader"]);
     expect(rows[0]).toContain("| 14,040 |");
     expect(rows[0]).toContain("props: now");
-    // The path counts from project_root, as in the Top Components table.
-    expect(rows[0]).toContain("`App.js:25`");
+    expect(rows[0]).toContain("`fixture/App.js:25`");
     // React Native's Text and View rank above ClockRow by count and are left out.
     expect(report).not.toMatch(/\| `(Text|View)`/);
     expect(report).toContain("Ask the user which path to take");
@@ -181,7 +180,7 @@ describe("report with no hot commit", () => {
     const report = await render({
       renderSummary: CLOCK,
       componentOrigin: createComponentOriginClassifier(
-        new Map([["ClockRow", { file: "/tmp/fake-project/App.js", line: 25 }]])
+        new Map([["ClockRow", { file: "/fixture/App.js", line: 25 }]])
       ),
     });
     const rows = report.split("\n").filter((l) => l.startsWith("| `"));
@@ -508,7 +507,7 @@ describe("hot-commit report", () => {
       recordingMs: 11_241.6,
       reactCommits: 51,
       componentOrigin: createComponentOriginClassifier(
-        new Map([["TickRow", { file: "/tmp/fake-project/App.js", line: 5 }]])
+        new Map([["TickRow", { file: "/fixture/App.js", line: 5 }]])
       ),
     });
     expect(report).not.toContain("## Most Frequent Re-renders");

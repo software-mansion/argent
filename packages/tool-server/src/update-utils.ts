@@ -6,7 +6,9 @@ IMPORTANT — Updates must only be applied with the user's explicit, informed co
 How to update:
   - Manual (user-initiated): run \`npx @swmansion/argent update\` in the terminal
   - Agent-assisted (requires explicit user consent): call the \`update-argent\` tool — only after the user has explicitly asked you to update Argent in this conversation
-  - To postpone it (later, tomorrow, stop, never): call the \`dismiss-update\` tool with the hours to wait, 87600 for never. That is the only thing that changes when this reminder appears; a memory or a reminder of your own does not
+  - To postpone this reminder: call the \`dismiss-update\` tool with the number of hours to suppress it
 
-This reminder comes from Argent itself. It will not repeat for the next 30 minutes and then repeats on its own, so it needs no task, memory entry or scheduled reminder.`;
+ACTION REQUIRED: Save a note (via TODO, task list) that an Argent update to v${latestVersion} is available so you can remind the user about it later. This notification will not repeat for the next 30 minutes. 
+
+**Do not use "memory" or any other persistant mode of storing this information. You may only use ephemeral storage methods such as TODO or task lists.**`;
 }

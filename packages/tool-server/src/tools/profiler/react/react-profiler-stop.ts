@@ -196,7 +196,7 @@ export function createReactProfilerStopTool(
   return {
     id: "react-profiler-stop",
     description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
-Stores the results for react-profiler-analyze, profiler-commit-query and profiler-cpu-query.
+Stores the results for react-profiler-analyze or react-profiler-cpu-summary.
 Call react-profiler-start first, then exercise the app, then call this.
 Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices, react_render_ms, react_render_share_pct, react_render_peak_1s_pct }.
 If some fibers' display names could not be resolved (typically modals, tooltips or animations that unmounted before stop), it also returns { unattributed_ms, unattributed_fiber_count, unattributed_commit_count }: the work missing from the per-component breakdown. Per-commit durations stay correct.
