@@ -111,15 +111,32 @@ describe("a tool: step with e2e_test_path, without a link", () => {
     );
   });
 
-  it("says that nothing expands a ~ path that names no file", async () => {
+  it.each([
+    "~/frag.yaml",
+    "$HOME/frag.yaml",
+    "%HOME%/frag.yaml",
+    "`pwd`/frag.yaml",
+    "file:///frag.yaml",
+  ])("says that nothing expands %s when it names no file", async (spelling) => {
     const result = await runOuter(
-      `  - tool: e2e-execute\n    args: { e2e_test_path: ~/frag.yaml, project_root: ${root}, prerequisiteAcknowledged: true }\n`
+      `  - tool: e2e-execute\n    args: { e2e_test_path: ${JSON.stringify(spelling)}, project_root: ${root}, prerequisiteAcknowledged: true }\n`
     );
 
     expect(result.steps[0].status).toBe("error");
     expect(result.steps[0].reason).toBe(
-      `there is no file at "~/frag.yaml" (argument e2e_test_path of e2e-execute); nothing expands ` +
-        `"~" or variables in a file argument, so pass the file's absolute path`
+      `there is no file at "${spelling}" (argument e2e_test_path of e2e-execute); nothing expands ` +
+        `"~", variables, commands or URLs in a file argument, so pass the file's absolute path`
+    );
+  });
+
+  it("gives no relative-path hint for a Windows absolute path that names no file", async () => {
+    const result = await runOuter(
+      `  - tool: e2e-execute\n    args: { e2e_test_path: 'C:\\proj\\frag.yaml', project_root: ${root}, prerequisiteAcknowledged: true }\n`
+    );
+
+    expect(result.steps[0].status).toBe("error");
+    expect(result.steps[0].reason).toBe(
+      `there is no file at "C:\\proj\\frag.yaml" (argument e2e_test_path of e2e-execute)`
     );
   });
 

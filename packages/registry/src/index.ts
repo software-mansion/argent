@@ -44,6 +44,7 @@ export {
   interpolateFileInputPath,
   hasToolFileExtension,
   isClientFileArgument,
+  isUnexpandedPath,
   toolStepFiles,
 } from "./file-inputs";
 export { LAUNCH_PLATFORMS, SELECTABLE_PLATFORMS } from "./flow-platforms";

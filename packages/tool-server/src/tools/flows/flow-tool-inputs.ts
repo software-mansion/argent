@@ -4,6 +4,7 @@ import {
   canonicalToolId,
   FILE_INPUT_MARKER,
   isClientFileArgument,
+  isUnexpandedPath,
   nestedFlowTarget,
   toolStepFiles,
   type FileInputWire,
@@ -240,11 +241,12 @@ async function prepareHostFileArguments(
   for (const file of fileArgs) {
     const st = await stat(file.path).catch(() => null);
     if (!st?.isFile()) {
-      const relative = path.isAbsolute(file.path)
-        ? ""
-        : /^~|\$/.test(file.path)
-          ? `; nothing expands "~" or variables in a file argument, so pass the file's absolute path`
-          : `; a relative path is resolved against the tool server's working directory, not the e2e test's`;
+      const relative =
+        path.isAbsolute(file.path) || path.win32.isAbsolute(file.path)
+          ? ""
+          : isUnexpandedPath(file.path)
+            ? `; nothing expands "~", variables, commands or URLs in a file argument, so pass the file's absolute path`
+            : `; a relative path is resolved against the tool server's working directory, not the e2e test's`;
       throw new FileInputError(
         `there is no file at "${escapeInline(file.path)}" (argument ${file.spec.target} of ${toolId})${relative}`
       );

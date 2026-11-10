@@ -348,6 +348,17 @@ export function toolStepFiles(
 }
 
 /**
+ * An unexpanded `~`, variable, command or URL: `~/app`, `$HOME/app`, `$1/app`,
+ * `$(pwd)/app`, `` `pwd`/app ``, `%USERPROFILE%\app`, `file:///app`. A scheme has
+ * two letters or more, so `D:dir` is not one.
+ */
+const UNEXPANDED_PATH = /^~|\$[A-Za-z0-9_{(]|`|%[A-Za-z_][A-Za-z0-9_]*%|^[A-Za-z][A-Za-z0-9+.-]+:/;
+
+export function isUnexpandedPath(p: string): boolean {
+  return UNEXPANDED_PATH.test(p);
+}
+
+/**
  * A file the client sends for a `tool:` step over a link: a `file` input whose
  * path is one argument of the step as written (not a path the tool builds out
  * of several, such as `e2e_test_file`), absolute, with a

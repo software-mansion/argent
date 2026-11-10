@@ -36,6 +36,7 @@ import {
   FAILURE_CODES,
   FLOW_FILE_NAME_PATTERN,
   e2eDirProject,
+  isUnexpandedPath,
   pickE2eFile,
   type FileInputMember,
   type OnDiskSpelling,
@@ -178,23 +179,16 @@ function interpolatePath(template: string, args: Record<string, unknown>): strin
 }
 
 /**
- * An unexpanded `~`, variable, command or URL: `~/app`, `$HOME/app`, `$1/app`,
- * `$(pwd)/app`, `` `pwd`/app ``, `%USERPROFILE%\app`, `file:///app`. A scheme has
- * two letters or more, so `D:dir` is not one.
- */
-const UNEXPANDED_PATH = /^~|\$[A-Za-z0-9_{(]|`|%[A-Za-z_][A-Za-z0-9_]*%|^[A-Za-z][A-Za-z0-9+.-]+:/;
-
-/**
  * `p` as an absolute path on this machine. The tool-server works in the
  * directory of whichever client spawned it, so it cannot resolve a relative
  * path. A path with a `..` segment is prefixed with the directory it is
  * relative to (on Windows, that of its drive for `D:dir`), not normalized:
  * collapsing `..` ignores symlinks, so it can name another file than the kernel
  * opens. A Windows path on another OS, and a spelling nothing expanded
- * ({@link UNEXPANDED_PATH}), are left for the tool-server to refuse.
+ * ({@link isUnexpandedPath}), are left for the tool-server to refuse.
  */
 export function callerPath(p: string): string {
-  if (path.isAbsolute(p) || path.win32.isAbsolute(p) || UNEXPANDED_PATH.test(p)) return p;
+  if (path.isAbsolute(p) || path.win32.isAbsolute(p) || isUnexpandedPath(p)) return p;
   const { root } = path.parse(p);
   const rest = p.slice(root.length);
   if (!rest.split(/[\\/]/).includes("..")) return path.resolve(p);
