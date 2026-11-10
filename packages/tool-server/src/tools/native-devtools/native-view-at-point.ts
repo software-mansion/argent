@@ -10,7 +10,7 @@ const zodSchema = z.object({
   x: z
     .number()
     .describe(
-      "Raw X coordinate in points, on the portrait axes of the screen (the axes of native-describe-screen frames)<flag:macos-apps>; on a Mac app, points from the top-left of the area describe reports</flag:macos-apps>. NOT normalized [0,1] tap space."
+      "Raw X coordinate in points, on the portrait axes of the screen<flag:macos-apps>; on a Mac app, points from the top-left of the area describe reports</flag:macos-apps>. NOT normalized [0,1] tap space."
     ),
   y: z
     .number()
@@ -30,7 +30,7 @@ const zodSchema = z.object({
       "View fields to include. Defaults: pointer, className, tag, frame, " +
         "windowFrame, screenFrame, bounds, hidden, alpha, opaque, clipsToBounds, " +
         "userInteractionEnabled, depth, identifier, label, layerName, nativeID. " +
-        "Additional: center, transform, contentMode, backgroundColor, tintColor"
+        "Additional: center, transform, contentMode, backgroundColor, tintColor, value, firstResponder"
     ),
   skipClasses: z
     .array(z.string())
@@ -66,7 +66,8 @@ identifier, label and layer name, plus its ancestors and subviews as requested.
 view is null when nothing is drawn at that point.
 
 To get x and y from a normalized describe frame, multiply its values by the
-screen size in points, also when the UI is landscape.<flag:macos-apps> On a Mac app,
+screen size in points, also when the UI is landscape.
+native-full-hierarchy returns that size as screen (pass maxDepth: 1 and fields: ["className"] to keep it small).<flag:macos-apps> On a Mac app,
 multiply them by the size of the area describe reports instead.</flag:macos-apps>
 
 If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
