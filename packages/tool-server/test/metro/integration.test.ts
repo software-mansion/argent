@@ -299,12 +299,21 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
         },
       })
     );
-    await vi.waitFor(() => expect(readLogFile(api.logWriter)).toHaveLength(1));
-    expect(readLogFile(api.logWriter)[0]).toMatchObject({
+    cdpConn!.send(
+      JSON.stringify({
+        method: "Runtime.consoleAPICalled",
+        params: { type: "log", args: [{ type: "string", value: "ok" }], timestamp },
+      })
+    );
+    await vi.waitFor(() => expect(readLogFile(api.logWriter)).toHaveLength(2));
+    const [warning, log] = readLogFile(api.logWriter);
+    expect(warning).toMatchObject({
+      id: 0,
       timestamp: "2026-01-02T03:04:05.678Z",
       level: "WARNING",
       source: "src/App.tsx:41",
       message: "low battery",
     });
+    expect(log).toMatchObject({ id: 1, level: "LOG", message: "ok" });
   });
 });

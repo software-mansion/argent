@@ -113,8 +113,16 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
           ],
         },
       });
+      fake.events.emit("consoleAPICalled", {
+        type: "warning",
+        args: [{ type: "string", value: "careful" }],
+        timestamp: Date.now(),
+      });
       const logged = readLogFile(instance.api.logWriter);
-      expect(logged).toHaveLength(1);
+      expect(logged.map(({ id, level }) => [id, level])).toEqual([
+        [0, "LOG"],
+        [1, "WARNING"],
+      ]);
       expect(logged[0].message).toBe("hello");
       expect(logged[0].source).toBe("app.js:7");
 
