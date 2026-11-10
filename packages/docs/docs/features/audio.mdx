@@ -23,6 +23,8 @@ The agent gives the app an audio file or a generated tone in place of the microp
 
 The agent records everything that one app plays, mixed, into a WAV file. The agent starts the recording before the action that makes the app play a sound. The agent stops the recording when the sound ends. Argent gives you the file and its length.
 
+If the app stops or restarts during the recording, Argent keeps the sound that the app played until then.
+
 The agent can also mute the app on the speakers of your Mac during the recording. The recording keeps the sound.
 
 ## How it starts
@@ -46,9 +48,9 @@ Argent saves each recording in the `.argent/recordings/` directory of the projec
 
 ## Limits
 
-- Argent supports iOS simulators on the same Mac. Argent does not support tvOS simulators, physical iPhones, or remote simulators.
+- Argent supports iOS simulators on the same Mac as the tool server. Argent does not support tvOS simulators, physical iPhones, or remote simulators.
 - Argent does not cover web content in `WKWebView` such as `getUserMedia`, and does not cover `AVCaptureSession` audio.
-- The tool server feeds the microphone input and writes the recording. When the tool server stops, the app hears silence, and a recording that was running is lost.
+- The tool server feeds the microphone input and writes the recording. When the tool server stops, or when `stop-all-simulator-servers` releases the simulator, Argent gives the real microphone back and drops a recording that runs. If the tool server stops without a clean exit, the app hears silence.
 - Argent records one app at a time. When an app plays through several audio streams, the recording contains the mix that the app sends to the speaker.
 - An app that a tool starts with its own injected libraries does not get the hook. Xcode runs with the Main Thread Checker, Detox, and XCUITest do this. Start the app with Argent instead.
 - The audio hook uses private parts of the simulator audio stack that Apple can change. Argent tests it on iOS 26.5, 27.0, and 27.1.

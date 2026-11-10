@@ -127,6 +127,14 @@ Call `screenshot` or `describe` to read the screen again.
 | `audio-record-start` | Start recording the sound an app plays into a WAV file                                    |
 | `audio-record-stop`  | Stop the recording and retrieve the WAV file                                              |
 
+The audio tools need an iOS simulator on the same Mac as the tool-server. These rules apply:
+
+- Argent loads the audio hook into each app that starts after Argent arms the simulator. Restart an app that started before that.
+- The `ios-audio-always-inserted` flag is on by default. When it is off, Argent loads the hook at the first audio tool call. See [feature flags](/docs/reference/configuration#available-flags).
+- A recording covers one app. A second `audio-record-start` for the same app fails until `audio-record-stop`.
+- A remote (`remote:`) simulator, a tvOS simulator, a physical device, Android and Chromium fail before Argent starts a service.
+- Without `libArgentAudio.dylib` in the install, the audio tools fail with `AUDIO_HOOK_UNAVAILABLE`. The other tools work.
+
 ## JavaScript runtime debugging
 
 | Tool                           | Description                                                               |
