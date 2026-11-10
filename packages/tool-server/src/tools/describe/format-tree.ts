@@ -33,10 +33,15 @@ function clampFinite(n: number): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function fmtCoord(n: number): string {
+  return clampFinite(n).toFixed(3);
+}
+
+// A tree prints this on every row, so the numbers are not separated by spaces.
+// The leading zeros are needed: `.5` is not a valid JSON number, and a model
+// copying the value into a tool call would have the call rejected.
 function fmtFrame(f: DescribeFrame): string {
-  return `(${clampFinite(f.x).toFixed(3)}, ${clampFinite(f.y).toFixed(3)}, ${clampFinite(
-    f.width
-  ).toFixed(3)}, ${clampFinite(f.height).toFixed(3)})`;
+  return `(${fmtCoord(f.x)},${fmtCoord(f.y)},${fmtCoord(f.width)},${fmtCoord(f.height)})`;
 }
 
 function escapeForLine(s: string): string {
@@ -154,6 +159,7 @@ interface FormatDescribeOptions {
 }
 
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
+  const isMacos = opts.source === "macos-devtools" || opts.source === "macos-fallback";
   // The iOS providers emit a flat list of leaves under a synthetic root; the
   // sources below return a real parent/child tree, whose descendants beyond
   // depth 1 are only visible in nested mode.
@@ -164,7 +170,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
     opts.source === "vega-automation" ||
     opts.source === "harmony-uitest" ||
     // Physical iOS: the runner reports a parent/child tree. Nested mode keeps that structure.
-    opts.source === "xcuitest-runner"
+    opts.source === "xcuitest-runner" ||
+    // A Mac app: the library's accessibility tree, with web content under its web view.
+    isMacos
       ? "nested"
       : "flat";
   const isVega = opts.source === "vega-automation";
@@ -172,7 +180,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
   header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
   header.push(
-    "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels."
+    isMacos
+      ? "Coordinates are normalized [0,1] fractions of the app window, title bar included, grown to hold sheets, alerts and menus past it (x, y, width, height), not pixels."
+      : "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels."
   );
   if (isVega) {
     header.push(
@@ -183,8 +193,12 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
         'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
     );
   } else {
+    // A Mac app has no touch gestures at all.
     header.push(
-      "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
+      isMacos
+        ? "Pass them straight to gesture-tap / gesture-drag / gesture-scroll, which expect this same space. " +
+            "A Mac app takes mouse input, not touch gestures. Its menu bar is not in this tree: use menu-bar."
+        : "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space."
     );
     header.push(
       "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2."

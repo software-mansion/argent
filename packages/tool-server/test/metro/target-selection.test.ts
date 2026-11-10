@@ -24,6 +24,7 @@ describe("selectTarget", () => {
     const result = selectTarget([legacy, fusebox], 8081);
     expect(result.target.id).toBe("fusebox");
     expect(result.isNewDebugger).toBe(true);
+    expect(result.legacyInspector).toBe(false);
   });
 
   it("falls back to C++ connection", () => {
@@ -36,6 +37,7 @@ describe("selectTarget", () => {
     const result = selectTarget([legacy, cpp], 8081);
     expect(result.target.id).toBe("cpp");
     expect(result.isNewDebugger).toBe(true);
+    expect(result.legacyInspector).toBe(false);
   });
 
   it("falls back to React Native Bridge", () => {
@@ -48,6 +50,8 @@ describe("selectTarget", () => {
     const result = selectTarget([other, bridge], 8081);
     expect(result.target.id).toBe("bridge");
     expect(result.isNewDebugger).toBe(false);
+    // RN 0.74's modern CDP registry lists it; its -32601 is not the legacy one.
+    expect(result.legacyInspector).toBe(false);
   });
 
   it("falls back to first target", () => {
@@ -56,6 +60,43 @@ describe("selectTarget", () => {
 
     const result = selectTarget([t1, t2], 8081);
     expect(result.target.id).toBe("first");
+    expect(result.legacyInspector).toBe(true);
+  });
+
+  it("picks the legacy Hermes runtime over a worklet runtime listed before it", () => {
+    // /json/list of an RN 0.75 legacy-inspector app using Reanimated (#1836),
+    // minus the `don't use` page discoverMetro drops.
+    const reanimated = makeTarget({ id: "0-2", title: "Reanimated UI runtime" });
+    // A runtime from `createWorkletRuntime` carries whatever name it was given.
+    const custom = makeTarget({ id: "0-3", title: "my-worklet-runtime" });
+    const hermes = makeTarget({ id: "0-1", title: "Hermes React Native" });
+
+    const result = selectTarget([reanimated, custom, hermes], 8081);
+    expect(result.target.id).toBe("0-1");
+    expect(result.isNewDebugger).toBe(false);
+    expect(result.legacyInspector).toBe(true);
+  });
+
+  it("picks a bridgeless app's runtime over a worklet runtime listed before it", () => {
+    // New architecture without Fusebox (RN 0.73 - 0.75 default) names the app's
+    // runtime differently.
+    const reanimated = makeTarget({ id: "0-2", title: "Reanimated UI runtime" });
+    const hermes = makeTarget({ id: "0-1", title: "Hermes Bridgeless React Native" });
+
+    const result = selectTarget([reanimated, hermes], 8081);
+    expect(result.target.id).toBe("0-1");
+    expect(result.isNewDebugger).toBe(false);
+  });
+
+  it("picks the app's runtime when the C++ packager connection suffixes its title", () => {
+    // RN 0.74 with inspectorEnableCxxInspectorPackagerConnection and no modern
+    // CDP registry: legacy pages keep their names, plus " [C++ connection]".
+    const reanimated = makeTarget({ id: "0-2", title: "Reanimated UI runtime [C++ connection]" });
+    const hermes = makeTarget({ id: "0-1", title: "Hermes React Native [C++ connection]" });
+
+    const result = selectTarget([reanimated, hermes], 8081);
+    expect(result.target.id).toBe("0-1");
+    expect(result.isNewDebugger).toBe(false);
   });
 
   it("normalizes WebSocket URL to localhost with correct port", () => {
@@ -92,6 +133,26 @@ describe("selectTarget", () => {
 
     const result = selectTarget([dev1, dev2], 8081, { deviceId: "bbb" });
     expect(result.target.id).toBe("dev2");
+  });
+
+  it("picks the requested device's app runtime when two legacy devices share Metro", () => {
+    const pages = (device: number, logicalDeviceId: string) => [
+      makeTarget({
+        id: `${device}-2`,
+        title: "Reanimated UI runtime",
+        reactNative: { logicalDeviceId },
+      }),
+      makeTarget({
+        id: `${device}-1`,
+        title: "Hermes React Native",
+        reactNative: { logicalDeviceId },
+      }),
+    ];
+
+    const result = selectTarget([...pages(0, "aaa"), ...pages(1, "bbb")], 8081, {
+      deviceId: "bbb",
+    });
+    expect(result.target.id).toBe("1-1");
   });
 
   it("routes distinct deviceIds to distinct devices (no collapse)", () => {
