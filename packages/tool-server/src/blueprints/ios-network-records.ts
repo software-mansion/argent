@@ -183,7 +183,7 @@ export function createIosNetworkRecords(
     };
     if (postData.length > 0) {
       inlineBodies.set(record, {
-        text: postData.slice(0, MAX_VALUE_CHARS),
+        text: ownCopy(postData.slice(0, MAX_VALUE_CHARS)),
         chars: postData.length,
       });
     }
@@ -462,6 +462,14 @@ export function createIosNetworkRecords(
     responseBody: (id) => readBody(id, "response"),
     requestPostData: (id) => readBody(id, "post"),
   };
+}
+
+/**
+ * A copy that holds its own chars. A slice of a long string can keep the whole
+ * string in memory for as long as the slice lives.
+ */
+function ownCopy(text: string): string {
+  return Buffer.from(text, "utf16le").toString("utf16le");
 }
 
 /** A body read: `sent` settles once its request went out, `answer` with the app's answer. */

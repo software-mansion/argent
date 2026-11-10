@@ -1780,6 +1780,28 @@ describe("iOS native network records: inline request body", () => {
     expect(app.request).not.toHaveBeenCalled();
   });
 
+  it("holds only the kept start of a large inline request body in memory", () => {
+    setFlagsFromString("--expose-gc");
+    const gc = runInNewContext("gc") as () => void;
+    const usedHeap = (): number => {
+      gc();
+      return process.memoryUsage().heapUsed;
+    };
+    const { store, agent } = bodyStore();
+    const before = usedHeap();
+
+    for (let i = 0; i < 20; i++) {
+      agent.requestWillBeSent(`big-${i}`, `https://e.com/${i}`, {
+        method: "POST",
+        postData: String(i).padEnd(4 * 1024 * 1024, "p"),
+      });
+    }
+
+    // 20 bodies of 4 MiB each, of which the store keeps 20 starts of 64 KiB.
+    expect(store.records(8081)).toHaveLength(20);
+    expect(usedHeap() - before).toBeLessThan(16 * 1024 * 1024);
+  });
+
   it("counts the kept start of an inline request body toward the size budget", async () => {
     const { store, agent } = bodyStore();
     const postData = "p".repeat(2 * MAX_VALUE_CHARS);
