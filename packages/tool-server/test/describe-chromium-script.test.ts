@@ -1598,17 +1598,23 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       return findById(run([button, target]).tree, "btn")!.label;
     };
     const hidden = { visibility: "hidden" };
-    for (const style of [hidden, { display: "list-item", ...hidden }, { display: "table" }]) {
+    const parted: Record<string, string>[] = [
+      hidden,
+      { display: "list-item", ...hidden },
+      { display: "table" },
+    ];
+    for (const style of parted) {
       const attrs = style.visibility ? {} : { "aria-hidden": "true" };
       expect(label(unread("div", style, attrs)), JSON.stringify(style)).toBe("ab cd");
     }
     expect(label(unread("div", {}, { inert: "" }))).toBe("ab cd");
-    for (const style of [
+    const glued: Record<string, string>[] = [
       { display: "inline-block", ...hidden },
       { cssFloat: "left", ...hidden },
       { position: "absolute", ...hidden },
       { display: "none" },
-    ]) {
+    ];
+    for (const style of glued) {
       expect(label(unread("div", style)), JSON.stringify(style)).toBe("abcd");
     }
     expect(label(unread("br", { display: "inline" }, { "aria-hidden": "true" }))).toBe("abcd");
@@ -1871,7 +1877,11 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     const upper = letter("uppercase");
     const block = { display: "block" };
     // The target, of `style` and with an uppercase ::first-letter, holding `kids`.
-    const read = (kids: unknown[], style: Record<string, string> = block, pseudo = upper) => {
+    const read = (
+      kids: unknown[],
+      style: Record<string, string> = block,
+      pseudo: Record<string, unknown> = upper
+    ) => {
       const target = styled("div", kids, style, pseudo);
       Object.assign(target, { __attrs: { id: "lbl" }, parentNode: { nodeType: 9 } });
       const button = el({
@@ -2107,7 +2117,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
           style: { display: "inline" },
           children: [span],
         });
-        host.childNodes = [...before, span];
+        (host as MockElement & Record<string, unknown>).childNodes = [...before, span];
         inner = host;
         before = [];
       }
