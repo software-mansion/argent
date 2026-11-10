@@ -901,6 +901,12 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     const emptyTarget2 = el({ attrs: { id: "icon2" }, rect: BOX });
     const named = el({ attrs: { id: "row" }, rect: BOX }) as MockElement & Record<string, unknown>;
     named.__textContent = "Invoice 42";
+    const spaceTarget = el({ attrs: { id: "space" }, rect: BOX }) as MockElement &
+      Record<string, unknown>;
+    spaceTarget.__textContent = " ";
+    const paddedTarget = el({ attrs: { id: "padded" }, rect: BOX }) as MockElement &
+      Record<string, unknown>;
+    paddedTarget.__textContent = "\n  Email\n";
     const { tree } = run([
       inputEl({
         placeholder: "Search",
@@ -928,6 +934,14 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
         rect: BOX,
       }),
       emptyTarget,
+      inputEl({
+        placeholder: "Search",
+        attrs: { "id": "space-target", "aria-labelledby": "space" },
+        rect: BOX,
+      }),
+      spaceTarget,
+      inputEl({ attrs: { "id": "padded-target", "aria-labelledby": "padded" }, rect: BOX }),
+      paddedTarget,
       inputEl({ placeholder: "Email", attrs: { "id": "empty", "aria-label": "" }, rect: BOX }),
       img,
     ]);
@@ -935,6 +949,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(tree, "blank-typed")!.label).toBeUndefined();
     expect(findById(tree, "blank-title")!.label).toBeUndefined();
     expect(findById(tree, "empty-target")!.label).toBeUndefined();
+    expect(findById(tree, "space-target")!.label).toBeUndefined();
+    expect(findById(tree, "padded-target")).toMatchObject({ label: "Email" });
     expect(findById(tree, "two-empty-targets")).toMatchObject({ label: " " });
     expect(findById(tree, "both")).toMatchObject({ label: "Delete", value: "X" });
     expect(findById(tree, "blank-and-target")!.label).toBeUndefined();
