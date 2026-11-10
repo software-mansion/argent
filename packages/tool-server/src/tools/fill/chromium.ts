@@ -20,13 +20,13 @@ interface PageFillAnswer {
 /**
  * The page script. It finds the focused editable — through open shadow roots
  * and same-origin frames — selects its content and replaces it with the
- * page's own editing commands, so the page sees a user edit: `beforeinput`
- * and `input` fire, React's value tracker and rich-text editors update. A text
- * control whose page refused the command, so it fired no `input` and still
- * holds its old text, gets the native value setter and `input` and `change`
- * events instead. A control the browser keeps from holding the text
- * (maxlength, the value sanitization of a number or email input) is refused
- * before anything changes.
+ * page's own editing commands, so the page sees a user edit: `input` fires,
+ * React's value tracker and rich-text editors update. A text control the
+ * command did not edit, so it fired no `input` and still holds its old text
+ * (a focused field hidden by `display: none`), gets the native value setter
+ * and `input` and `change` events instead. A control the browser keeps from
+ * holding the text (maxlength, the value sanitization of a number or email
+ * input) is refused before anything changes.
  *
  * The comparison happens in the page, after a task boundary so an editor that
  * restores its model on a microtask has done so. Only a boolean comes
@@ -173,9 +173,9 @@ export function buildChromiumFillScript(text: string): string {
       win.removeEventListener("input", onInput, true);
     }
     let verified = await settle();
-    // A refused edit fires no input and leaves the old text. Anything else is
-    // the browser's or the page's own rewrite, which the setter must not
-    // override, even when the rewrite equals the old text.
+    // An edit that did not happen fires no input and leaves the old text.
+    // Anything else is the browser's or the page's own rewrite, which the
+    // setter must not override, even when the rewrite equals the old text.
     if (!verified && control && !edited && read() === before) {
       const proto = tag === "textarea" ? win.HTMLTextAreaElement.prototype : win.HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, "value").set;

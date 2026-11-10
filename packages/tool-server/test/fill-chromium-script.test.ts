@@ -22,8 +22,8 @@ interface Page {
 }
 
 interface PageOptions {
-  /** `execCommand` answers false and changes nothing, as a page that cancels it. */
-  refuseCommands?: boolean;
+  /** `execCommand` answers false and changes nothing, as for a focused field hidden by `display: none`. */
+  noEdit?: boolean;
   /** The page puts the old content back a task later, as a rich-text editor does. */
   restore?: boolean;
   /** The browser changes inserted text, as Chromium punycodes an email input's domain. */
@@ -122,7 +122,7 @@ function makePage(options: PageOptions = {}): Page {
       },
     }),
     execCommand(command: string, _ui: boolean, value?: string) {
-      if (options.refuseCommands) return false;
+      if (options.noEdit) return false;
       const el = doc.selected;
       if (!el) return false;
       const key = "_value" in el ? "_value" : "innerText";
@@ -239,8 +239,8 @@ describe("fill page script", () => {
     expect(input._value).toBe("x");
   });
 
-  it("uses the native value setter and fires input and change when the page refuses the command", async () => {
-    const page = makePage({ refuseCommands: true });
+  it("uses the native value setter and fires input and change when the command edits nothing", async () => {
+    const page = makePage({ noEdit: true });
     const input = control(page, "INPUT", { type: "number" });
     page.doc.activeElement = input;
     await expect(runScript(page, "42")).resolves.toEqual({
