@@ -40,6 +40,7 @@ import {
   PROFILING_CAPTURE_SKIPPED_NOTE,
 } from "./auto-capture.js";
 import { toMcpToolList } from "./tool-mapping.js";
+import { listDevicesText } from "./list-devices-text.js";
 import { showsSchemaKeywords } from "./keyword-facts.js";
 import { SERVER_INSTRUCTIONS } from "./instructions.js";
 import { getInstalledVersion } from "./installed-version.js";
@@ -297,8 +298,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         deviceId: getDeviceIdFromArgs(params.arguments),
       };
 
+      const devicesText =
+        canonicalToolId(params.name) === "list-devices" ? listDevicesText(result) : undefined;
       let content: ContentBlock[];
-      if (
+      if (devicesText !== undefined) {
+        content = [{ type: "text" as const, text: devicesText }];
+      } else if (
         canonicalToolId(params.name) === "e2e-execute" &&
         result &&
         typeof result === "object" &&
