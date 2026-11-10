@@ -63,6 +63,13 @@ vi.mock("../src/utils/ios-host", async (importOriginal) => {
   return { ...actual, localIosHost: { ...actual.localIosHost, listRunningBundleIds: vi.fn() } };
 });
 
+// Whether Xcode's component install is pending. The suite-wide setup answers no.
+const xcode = vi.hoisted(() => ({ pending: false }));
+vi.mock("../src/utils/xcode-first-launch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/xcode-first-launch")>()),
+  xcodeFirstLaunchPending: () => xcode.pending,
+}));
+
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
 const SERIAL = "emulator-5554";
 const APP = "com.example.shop";
@@ -413,6 +420,7 @@ beforeEach(() => {
   ios = new FakeIos();
   android.clear();
   androidFactoryCalls = 0;
+  xcode.pending = false;
   __primeDepCacheForTests(["xcrun", "adb"]);
 });
 
@@ -964,6 +972,48 @@ describe("network-capture-start", () => {
       expect(err?.cause).toBeInstanceOf(XcodeFirstLaunchPendingError);
       expect(ios.calls).toEqual([]);
     });
+
+    it("fails while Xcode's first launch is pending before the JS layer reaches the app's runtime", async () => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      xcode.pending = true;
+      // The env setup of an app that is not connected runs simctl, which refuses now.
+      ios.envError = new XcodeFirstLaunchPendingError("simctl");
+
+      const err = await start(IOS_UDID, APP).then(
+        () => undefined,
+        (e: unknown) => e as Error
+      );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.TOOL_XCODE_FIRST_LAUNCH_PENDING);
+      // A start that fails leaves nothing recording in the app.
+      expect(rt.evaluated).toEqual([]);
+      expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
+      expect(ios.calls).toEqual([]);
+    });
+
+    it.each([
+      { app: "a connected app", prepare: () => ios.connected.add(APP) },
+      {
+        app: "an app on a device provider's simulator",
+        prepare: () => {
+          ios.armsEnv = false;
+          ios.appState = "provider_attached";
+        },
+      },
+    ])(
+      "starts $app while Xcode's first launch is pending, as it needs no simctl",
+      async ({ prepare }) => {
+        serve(PORT, IOS_UDID, new FakeRuntime(APP));
+        xcode.pending = true;
+        prepare();
+
+        const result = await start(IOS_UDID, APP);
+
+        expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
+        expect(ios.calls).toEqual([`start ${APP} ${PORT} 0`]);
+      }
+    );
   });
 });
 

@@ -31,6 +31,7 @@ import { NETWORK_CAPTURE_MARK_SCRIPT } from "../../utils/debugger/scripts/networ
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
 import { XcodeFirstLaunchPendingError } from "../../utils/dependency-errors";
+import { xcodeFirstLaunchPending } from "../../utils/xcode-first-launch";
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
@@ -79,6 +80,9 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
             : ["xcrun"]
       );
       const port = metroPort({ device_id: params.udid, port: params.port });
+      if (device.platform === "ios" && isInjectableBundleId(params.bundleId)) {
+        await refuseWhileXcodeInstalls(registry, device, params.bundleId);
+      }
       const layers = await withCaptureLock(params.udid, params.bundleId, () =>
         runLayers([
           device.platform !== "android" && !isInjectableBundleId(params.bundleId)
@@ -113,6 +117,29 @@ Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
 
 function unavailable(layer: StartedLayer["layer"], reason: string): StartedLayer {
   return { layer, armed: false, reason, unavailable: true };
+}
+
+/**
+ * The iOS layer fails while Xcode's component install is pending, for an app
+ * that needs simctl to arm. The JS layer runs at the same time, so this check
+ * runs before both: a start that fails leaves nothing recording in the app.
+ */
+async function refuseWhileXcodeInstalls(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string
+): Promise<void> {
+  if (!xcodeFirstLaunchPending("simctl")) return;
+  let api: NativeDevtoolsApi;
+  try {
+    const ref = nativeDevtoolsRef(device);
+    api = await registry.resolveService<NativeDevtoolsApi>(ref.urn, ref.options);
+  } catch {
+    // The iOS layer reports this service unavailable.
+    return;
+  }
+  // A connected app, and an app that a device provider lends, arm without simctl.
+  if (api.armsEnv && !api.isConnected(bundleId)) throw new XcodeFirstLaunchPendingError("simctl");
 }
 
 /**
