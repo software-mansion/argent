@@ -21,13 +21,10 @@ test("sync-next-tag skips a successful run titled as publish-npm's dry run", () 
   assert.ok(runName, "publish-npm.yml titles a dry run through run-name");
   const guard = /^\s+if: \$\{\{ (.+) \}\}$/m.exec(workflow("sync-next-tag.yml"));
   assert.ok(guard, "sync-next-tag.yml has a job-level if");
-  assert.match(
+  assert.equal(
     guard[1],
-    new RegExp(
-      String.raw`\(github\.event\.workflow_run\.conclusion == 'success' && ` +
-        String.raw`github\.event\.workflow_run\.display_title != '` +
-        runName[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&") +
-        String.raw`'\)`
-    )
+    "github.event_name == 'workflow_dispatch' || " +
+      "(github.event.workflow_run.conclusion == 'success' && " +
+      `github.event.workflow_run.display_title != '${runName[1]}')`
   );
 });
