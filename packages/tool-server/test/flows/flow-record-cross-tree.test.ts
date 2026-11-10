@@ -902,8 +902,10 @@ describe("a recorded wait is re-probed against the runner's tree", () => {
     expect(warning).toContain("did not clip to zero area");
     expect(warning).toContain("off-viewport");
     expect(warning).toContain("`scroll-to` before the check rather than a different selector");
-    // A clip no scroll moves gets no scroll-to remedy.
-    expect(warning).toContain("one an `overflow: hidden` box clips stays hidden");
+    // A clip only the box's own script scrolls away needs `within` naming the box.
+    expect(warning).toContain(
+      "one an `overflow: hidden` box clips stays hidden unless that box scrolls it by script, with `within` naming the box."
+    );
     // Both axes. The walker clips each edge alone, so a sideways node is zero-WIDTH.
     expect(warning).toContain("zero width for one cut off left or right");
     // Not the other direction: the live `exists` passed, so the recorder saw it.
