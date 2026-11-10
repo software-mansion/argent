@@ -5,7 +5,14 @@ import { resolveDevice } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import type { AudioSession } from "../../utils/ios-audio";
 
-export const audioCapability = { apple: { simulator: true } } as const;
+/**
+ * `appleRemote` is declared only so a `remote:` id gets past the HTTP capability gate to the refusal in
+ * {@link resolveAudioDevice}, which says why, instead of a bare "not supported".
+ */
+export const audioCapability = {
+  apple: { simulator: true },
+  appleRemote: { simulator: true },
+} as const;
 
 function wrongPlatform(message: string): FailureError {
   return new FailureError(message, {
