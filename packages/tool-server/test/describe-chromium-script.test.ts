@@ -860,8 +860,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(JSON.stringify(tree)).not.toContain("Final");
   });
 
-  it("reads a checkbox, radio, range or color input's value and an img's alt", () => {
-    const img = el({ tag: "img", attrs: { id: "logo" }, rect: BOX }) as MockElement &
+  it("reads a checkbox, radio, range or color input's value and an img's alt before its title", () => {
+    const img = el({ tag: "img", attrs: { id: "logo", title: "Tip" }, rect: BOX }) as MockElement &
       Record<string, unknown>;
     Object.setPrototypeOf(img, MockHTMLImageElement.prototype);
     img.alt = "Logo";

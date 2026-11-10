@@ -273,7 +273,7 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
   });
 
   // Documented in reference/e2e-yaml.mdx.
-  it("reads an unlabelled element's value, so '^$' fails on a switch", async () => {
+  it("reads an element's value after its label, so '^$' fails on an unlabelled switch", async () => {
     const tree = await flowTree([
       node({ index: 0, depth: 0, type: "Application" }),
       node({
@@ -285,9 +285,20 @@ describe("queryIosDeviceFlowTree: flow-contract adaptation", () => {
         value: "1",
         rect: { x: 16, y: 120, width: 51, height: 31 },
       }),
+      node({
+        index: 2,
+        depth: 1,
+        parentIndex: 0,
+        type: "Switch",
+        identifier: "sounds",
+        label: "Sounds",
+        value: "0",
+        rect: { x: 16, y: 200, width: 51, height: 31 },
+      }),
     ]);
     const sw = findAll(tree, { identifier: "notifications" });
     expect(assertText(sw[0]!)).toBe("1");
+    expect(assertText(findAll(tree, { identifier: "sounds" })[0]!)).toBe("Sounds 0");
     expect(evaluateCondition("text", "^$", sw, "matches")).toBe(false);
   });
 
