@@ -24,6 +24,7 @@ describe("selectTarget", () => {
     const result = selectTarget([legacy, fusebox], 8081);
     expect(result.target.id).toBe("fusebox");
     expect(result.isNewDebugger).toBe(true);
+    expect(result.legacyInspector).toBe(false);
   });
 
   it("falls back to C++ connection", () => {
@@ -48,6 +49,8 @@ describe("selectTarget", () => {
     const result = selectTarget([other, bridge], 8081);
     expect(result.target.id).toBe("bridge");
     expect(result.isNewDebugger).toBe(false);
+    // RN 0.74's modern CDP registry lists it; its -32601 is not the legacy one.
+    expect(result.legacyInspector).toBe(false);
   });
 
   it("falls back to first target", () => {
@@ -56,6 +59,7 @@ describe("selectTarget", () => {
 
     const result = selectTarget([t1, t2], 8081);
     expect(result.target.id).toBe("first");
+    expect(result.legacyInspector).toBe(true);
   });
 
   it("picks the legacy Hermes runtime over a worklet runtime listed before it", () => {
@@ -69,6 +73,7 @@ describe("selectTarget", () => {
     const result = selectTarget([reanimated, custom, hermes], 8081);
     expect(result.target.id).toBe("0-1");
     expect(result.isNewDebugger).toBe(false);
+    expect(result.legacyInspector).toBe(true);
   });
 
   it("picks a bridgeless app's runtime over a worklet runtime listed before it", () => {
@@ -127,6 +132,26 @@ describe("selectTarget", () => {
 
     const result = selectTarget([dev1, dev2], 8081, { deviceId: "bbb" });
     expect(result.target.id).toBe("dev2");
+  });
+
+  it("picks the requested device's app runtime when two legacy devices share Metro", () => {
+    const pages = (device: number, logicalDeviceId: string) => [
+      makeTarget({
+        id: `${device}-2`,
+        title: "Reanimated UI runtime",
+        reactNative: { logicalDeviceId },
+      }),
+      makeTarget({
+        id: `${device}-1`,
+        title: "Hermes React Native",
+        reactNative: { logicalDeviceId },
+      }),
+    ];
+
+    const result = selectTarget([...pages(0, "aaa"), ...pages(1, "bbb")], 8081, {
+      deviceId: "bbb",
+    });
+    expect(result.target.id).toBe("1-1");
   });
 
   it("routes distinct deviceIds to distinct devices (no collapse)", () => {

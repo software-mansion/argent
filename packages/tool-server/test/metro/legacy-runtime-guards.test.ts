@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
@@ -26,7 +26,7 @@ let port: number;
 /** Whether the mock runtime installs the binding it ACKs. */
 let installsBinding = true;
 /** How the mock runtime answers Runtime.addBinding. */
-let addBindingReply: "ack" | "method-not-found" | "close" = "ack";
+let addBindingReply: "ack" | "method-not-found" | "close" | "silent" = "ack";
 let listBody: unknown = [];
 
 function handleCDP(ws: WebSocket, raw: string) {
@@ -43,6 +43,8 @@ function handleCDP(ws: WebSocket, raw: string) {
       );
     } else if (addBindingReply === "close") {
       ws.close();
+    } else if (addBindingReply === "silent") {
+      // A stalled runtime, e.g. Metro holding replies while it inlines a source map.
     } else {
       // Legacy Hermes ACKs this happily either way — that is the whole trap.
       ws.send(JSON.stringify({ id, result: {} }));
@@ -99,14 +101,18 @@ describe("legacy inspector guards", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await cdp?.disconnect();
   });
 
-  it("fails fast instead of hanging when the runtime never installs the binding", async () => {
+  it.each([
+    ["a modern", undefined],
+    ["a legacy", { legacyInspector: true }],
+  ])("fails fast when %s target never installs the binding it ACKs", async (_, options) => {
     installsBinding = false;
     cdp = new CDPClient(`ws://localhost:${port}/inspector/debug?device=0&page=1`);
     await cdp.connect();
-    await cdp.addBinding("__argent_callback");
+    await cdp.addBinding("__argent_callback", options);
 
     const started = Date.now();
     await expect(cdp.evaluateWithBinding("void 0", "req-1")).rejects.toThrow(
@@ -139,6 +145,21 @@ describe("legacy inspector guards", () => {
       .addBinding("__argent_callback", { legacyInspector: true })
       .catch((e: unknown) => e);
     expect(getFailureSignal(error)?.error_code).toBe(FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED);
+  });
+
+  it("still fails addBinding on a legacy target that does not answer", async () => {
+    addBindingReply = "silent";
+    cdp = new CDPClient(`ws://localhost:${port}/inspector/debug?device=0&page=1`);
+    await cdp.connect();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const pending = cdp
+      .addBinding("__argent_callback", { legacyInspector: true })
+      .catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(getFailureSignal(await pending)?.error_code).toBe(
+      FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT
+    );
   });
 
   it("fails addBinding on a rejection from a modern target", async () => {
