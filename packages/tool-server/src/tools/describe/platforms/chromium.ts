@@ -298,7 +298,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // in a block container (an anonymous block follows it).
     let laid = " ";
     const lay = (text) => {
-      if (text) laid = text[text.length - 1];
+      if (text) laid = lastChar(text);
     };
     // A ::before or ::after: its name read, and its strings laid out in its case.
     const readPseudo = (pseudo, parentStyle) => {
@@ -726,14 +726,22 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (kind === 3) return " ";
       if (kind) {
         const p = pseudoText(node, kind === 1 ? "::before" : "::after");
-        const end = !p ? null : p.block && !inl ? " " : p.strings ? p.strings.slice(-1) : p.inline ? null : " ";
+        const end = !p
+          ? null
+          : p.block && !inl
+            ? " "
+            : p.strings
+              ? lastChar(p.strings)
+              : p.inline
+                ? null
+                : " ";
         if (end) return end;
         continue;
       }
       const type = getNodeType.call(node);
       if (type === 3 || type === 4) {
         const text = getNodeValue.call(node);
-        if (text) return text.slice(-1);
+        if (text) return lastChar(text);
         continue;
       }
       if (type !== 1) continue;
@@ -743,11 +751,11 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       const tag = getLocalName.call(node);
       if (html && tag === "img") {
         const alt = !node.naturalWidth && getAttr.call(node, "alt");
-        return alt ? alt.slice(-1) : " ";
+        return alt ? lastChar(alt) : " ";
       }
       if ((html && (tag === "br" || REPLACED.test(tag))) || tag === "svg") return " ";
       const control = controlText(node);
-      if (control !== null) return control.trimEnd().slice(-1) || " ";
+      if (control !== null) return lastChar(control.trimEnd()) || " ";
       const inlineBox = isInlineBox(style);
       if (!inlineBox && style.display !== "contents") {
         if (isBlockLevel(style) && !inl) return " ";
@@ -759,6 +767,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (html) stack.push(2, node, inlineBox);
     }
     return null;
+  }
+
+  // A string's last code point.
+  function lastChar(text) {
+    const pair = text.slice(-2);
+    return pair.codePointAt(0) > 0xffff ? pair : text.slice(-1);
   }
 
   // Whether a box is block-level, not inline-level.
@@ -793,9 +807,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       let out = "";
       let at = 0;
       for (const { index } of wordSegmenter.segment(prev + text)) {
-        if (!index) continue;
-        out += text.slice(at, index - 1) + titleCase(text[index - 1]);
-        at = index;
+        if (index < prev.length) continue;
+        const i = index - prev.length;
+        out += text.slice(at, i) + titleCase(text[i]);
+        at = i + 1;
       }
       return out + text.slice(at);
     } catch {

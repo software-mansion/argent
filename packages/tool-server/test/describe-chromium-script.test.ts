@@ -1854,6 +1854,10 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(read([text("ab"), named([text("q")], "inline", "q"), text("cd")])).toBe("Ab lbl cd");
     expect(read([text("ab"), named([], "inline", ""), text("cd")])).toBe("Ab lbl cd");
     expect(read([text("ab"), named([text("q")], "block", "q"), text("cd")])).toBe("Ab lbl Cd");
+    // The previous character is a code point, not a lone surrogate.
+    expect(read([text("ab"), named([text("q𝒶")], "inline", "q𝒶"), text("cd")])).toBe("Ab lbl cd");
+    expect(read([text("x𝒶"), styled("b", [text("bc")], inline), text(" de")])).toBe("X𝒶bc De");
+    expect(read([text("x𝒶"), text(" cd ef")])).toBe("X𝒶 Cd Ef");
     const option = elementNode("option", [text("op")], { label: "op" });
     const select = styled(
       "select",
