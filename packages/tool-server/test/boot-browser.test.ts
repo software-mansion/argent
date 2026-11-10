@@ -199,6 +199,23 @@ describe("browserExecutableCandidates", () => {
   });
 });
 
+/** A launch that succeeds and a browser that reports the profile it was given. */
+function bootsAndIdentifies(): void {
+  bootElectronAppMock.mockReset();
+  bootElectronAppMock.mockResolvedValue({ platform: "chromium", port: 9333, pid: process.pid });
+  killMock.mockReset();
+  cdpSend.mockReset();
+  cdpSend.mockImplementation(async () => ({
+    commandLine: `chrome ${bootElectronAppMock.mock.lastCall![0].extraArgs.join(" ")}`,
+  }));
+  cdpDisconnect.mockReset();
+  cdpDisconnect.mockImplementation(async () => {});
+  cdpConnect.mockReset();
+  cdpConnect.mockImplementation(async () => {});
+  wsUrlMock.mockReset();
+  wsUrlMock.mockImplementation(async () => WS_URL);
+}
+
 describe("bootBrowser", () => {
   const [chrome, chromeFallback] = browserExecutableCandidates("chrome");
   const edge = browserExecutableCandidates("edge")[0]!;
@@ -206,19 +223,7 @@ describe("bootBrowser", () => {
 
   beforeEach(() => {
     installed.clear();
-    bootElectronAppMock.mockReset();
-    bootElectronAppMock.mockResolvedValue({ platform: "chromium", port: 9333, pid: process.pid });
-    killMock.mockReset();
-    cdpSend.mockReset();
-    cdpSend.mockImplementation(async () => ({
-      commandLine: `chrome ${bootElectronAppMock.mock.lastCall![0].extraArgs.join(" ")}`,
-    }));
-    cdpDisconnect.mockReset();
-    cdpDisconnect.mockImplementation(async () => {});
-    cdpConnect.mockReset();
-    cdpConnect.mockImplementation(async () => {});
-    wsUrlMock.mockReset();
-    wsUrlMock.mockImplementation(async () => WS_URL);
+    bootsAndIdentifies();
   });
   afterEach(() => {
     for (const child of holders.splice(0)) child.kill("SIGKILL");
@@ -952,11 +957,7 @@ describe("bootBrowser with a snap browser", () => {
     fs.symlinkSync(path.join(bin, "snap"), path.join(bin, "chromium"));
     Object.defineProperty(process, "platform", { value: "linux" });
     process.env = { ...env, PATH: bin };
-    bootElectronAppMock.mockReset();
-    bootElectronAppMock.mockResolvedValue({ platform: "chromium", port: 9333, pid: process.pid });
-    cdpSend.mockImplementation(async () => ({
-      commandLine: `chromium ${bootElectronAppMock.mock.lastCall![0].extraArgs.join(" ")}`,
-    }));
+    bootsAndIdentifies();
   });
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: platform });
