@@ -660,31 +660,35 @@ describe("network-capture-start", () => {
       });
     });
 
-    it.each([
+    const NOT_REACHED = [
       {
         found: "no Metro",
-        answer: undefined,
+        answer: (): FakeRuntime | FailureCode | undefined => undefined,
         reason: METRO_DOWN,
       },
       {
         found: "a Metro with no runtime of this device",
-        answer: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+        answer: (): FakeRuntime | FailureCode | undefined =>
+          FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
         reason: `no JS runtime on Metro port ${PORT} belongs to this device ([JsRuntimeDebugger:${PORT}:${IOS_UDID}] Metro on port ${PORT}: ${FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH}); give each device its own Metro port`,
       },
       {
         found: "another app's runtime",
-        answer: new FakeRuntime(OTHER),
+        answer: (): FakeRuntime | FailureCode | undefined => new FakeRuntime(OTHER),
         reason: `the JS runtime on Metro port ${PORT} is ${OTHER}'s, not ${APP}'s; pass the port of ${APP}'s Metro`,
       },
-    ])(
-      "is unavailable and keeps no mark when it finds $found, also after an earlier start there",
+    ];
+
+    it.each(NOT_REACHED)(
+      "is unavailable and keeps no mark when it finds $found, also after an earlier start there that installed nothing",
       async ({ answer, reason }) => {
-        serve(PORT, IOS_UDID, new FakeRuntime(APP));
+        // The app's JavaScript has not loaded, so the earlier start installs nothing.
+        serve(PORT, IOS_UDID, new FakeRuntime(APP, { loaded: false }));
         ios.connected.add(APP);
         await start(IOS_UDID, APP);
-        expect(findJsCapture(IOS_UDID, APP)?.mark).toEqual({ install: null });
+        expect(findJsCapture(IOS_UDID, APP)).toMatchObject({ installed: false });
 
-        await reconnect(PORT, IOS_UDID, answer);
+        await reconnect(PORT, IOS_UDID, answer());
         const result = await start(IOS_UDID, APP);
 
         expect(layer(result, "js")).toEqual({
@@ -694,6 +698,42 @@ describe("network-capture-start", () => {
           reason,
         });
         expect(findJsCapture(IOS_UDID, APP)).toBeUndefined();
+      }
+    );
+
+    it.each(NOT_REACHED)(
+      "keeps the capture an earlier start installed when it finds $found, so a stop still says the interceptor may record",
+      async ({ answer, reason }) => {
+        const rt = new FakeRuntime(APP);
+        serve(PORT, IOS_UDID, rt);
+        ios.connected.add(APP);
+        await start(IOS_UDID, APP);
+        const capture = findJsCapture(IOS_UDID, APP);
+        expect(capture).toMatchObject({ intent: "started", installed: true });
+
+        await reconnect(PORT, IOS_UDID, answer());
+        const result = await start(IOS_UDID, APP);
+
+        expect(layer(result, "js")).toEqual({
+          layer: "js",
+          armed: false,
+          unavailable: true,
+          reason,
+        });
+        expect(findJsCapture(IOS_UDID, APP)).toEqual(capture);
+
+        // The app's interceptor still records, so a stop that does not reach it is not confirmed.
+        const stopped = await stop(IOS_UDID, APP);
+        expect(layer(stopped, "js")).toMatchObject({
+          armed: true,
+          reason: expect.stringContaining("may still record"),
+        });
+        expect(rt.paused).toBe(false);
+
+        // Once the app's runtime answers again, the next stop pauses it.
+        await reconnect(PORT, IOS_UDID, rt);
+        expect(layer(await stop(IOS_UDID, APP), "js")).toMatchObject({ armed: false });
+        expect(rt.paused).toBe(true);
       }
     );
   });

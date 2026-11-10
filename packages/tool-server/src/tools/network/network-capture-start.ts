@@ -141,8 +141,9 @@ async function startJsLayer(
       return lost ? unavailable("js", text) : { layer: "js", armed: false, reason: text };
     }
     if (lost) {
-      // No mark stays for a layer that is unavailable.
-      forgetJsCapture(device, bundleId);
+      // No mark stays for a layer that is unavailable, but an interceptor an
+      // earlier start installed records until a stop pauses it, so its entry stays.
+      if (!found?.installed || found.paused) forgetJsCapture(device, bundleId);
       return unavailable("js", jsNotReached(reason, port, err));
     }
     // The app may connect, or answer, after this call; the next start arms it.
@@ -161,8 +162,9 @@ async function startJsLayer(
 
   const appId = dbg.runtimeApp?.appId;
   if (appId !== undefined && appId !== bundleId) {
-    // That app's own capture on this port stays as it is.
-    if (!other) forgetJsCapture(device, bundleId);
+    // That app's own capture on this port stays as it is, and so does an
+    // interceptor an earlier start of this app installed.
+    if (!other && (!found?.installed || found.paused)) forgetJsCapture(device, bundleId);
     return unavailable(
       "js",
       `the JS runtime on Metro port ${port} is ${appId}'s, not ${bundleId}'s; ${
