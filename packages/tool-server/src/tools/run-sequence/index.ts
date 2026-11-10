@@ -64,7 +64,7 @@ const SCROLL_TOOLS = new Set(["gesture-swipe", "gesture-scroll", "gesture-drag"]
 const SETTLE_KEYS = new Set(["enter", "return", "escape", "esc"]);
 const SETTLE_IDLE_TOOL_ID = "await-screen-idle";
 const SETTLE_TIMEOUT_MS = 1000;
-const MAX_FAILED_SETTLES_IN_A_ROW = 2;
+const MAX_FAILED_SETTLES = 2;
 
 type Step = Params["steps"][number];
 
@@ -128,6 +128,10 @@ async function settleScreen(
   }
 }
 
+function countsAsFailedSettle(step: Step, verdict: SettleVerdict): boolean {
+  return verdict.kind !== "settled" && verdict.kind !== "aborted" && !SCROLL_TOOLS.has(step.tool);
+}
+
 function settleStoppedReason(verdict: SettleVerdict): string {
   if (verdict.kind === "unreadable") {
     return verdict.error === undefined
@@ -138,7 +142,7 @@ function settleStoppedReason(verdict: SettleVerdict): string {
 }
 
 function settleStoppedNote(afterStep: number, verdict: SettleVerdict): string {
-  return `Stopped waiting for the screen to settle after step ${afterStep}: ${MAX_FAILED_SETTLES_IN_A_ROW} waits in a row did not settle, the last because ${settleStoppedReason(verdict)}. Later steps ran without the wait.`;
+  return `Stopped waiting for the screen to settle after step ${afterStep}: ${MAX_FAILED_SETTLES} waits did not settle, the last because ${settleStoppedReason(verdict)}. Later steps ran without the wait.`;
 }
 
 type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
@@ -201,7 +205,7 @@ const zodSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "Applies to the whole sequence; a step's own settle:false skips it after that step only. Default true: after a step that can start a transition (tap, swipe, button, rotate, enter/escape, a met await-ui-element) wait until two reads of the element tree match (max 1s) before the next step. This catches sheets and screens whose elements are already moving, but not motion that starts more than ~100ms after the step (a sheet opened after a fetch) or animations that leave the tree unchanged (a native iOS push or modal sheet), so keep await-ui-element gates for those. There is no wait between two consecutive swipe, scroll or drag steps. A wait can hit the 1s cap after a push or on a spinner, or when the tree cannot be read within it (a slow page, an alert, the first reads after the tool server starts). A read that outlasts the cap keeps running and can delay the next step, including the reads of a following await-ui-element, so give that step a timeout well above one tree read. The rest of the sequence skips the wait once two waits in a row end that way (two navigations in a row on Android often do), and the result's note says so; a wait after a swipe, scroll or drag is not counted, since momentum often outlasts the cap. No wait on a physical iPhone, where a read would hold up the next step's command.<flag:harmonyos> No wait on HarmonyOS, where one tree read takes longer than the cap.</flag:harmonyos> Set false for timing-critical input (games, double-taps split across steps)."
+      "Applies to the whole sequence; a step's own settle:false skips it after that step only. Default true: after a step that can start a transition (tap, swipe, button, rotate, enter/escape, a met await-ui-element) wait until two reads of the element tree match (max 1s) before the next step. This catches sheets and screens whose elements are already moving, but not motion that starts more than ~100ms after the step (a sheet opened after a fetch) or animations that leave the tree unchanged (a native iOS push or modal sheet), so keep await-ui-element gates for those. A native iOS push reports the new screen's final frames at once, so gate it with condition hidden on an element of the old screen; visible on the new one is met before the push ends. There is no wait between two consecutive swipe, scroll or drag steps. A wait can hit the 1s cap after a push or on a spinner, or when the tree cannot be read within it (a slow page, an alert, the first reads after the tool server starts). A read that outlasts the cap keeps running and can delay the next step, including the reads of a following await-ui-element, so give that step a timeout well above one tree read. The rest of the sequence skips the wait once two waits end that way (two navigations in a row on Android often do), and the result's note says so; a wait after a swipe, scroll or drag is not counted, since momentum often outlasts the cap. No wait on a physical iPhone, where a read would hold up the next step's command.<flag:harmonyos> No wait on HarmonyOS, where one tree read takes longer than the cap.</flag:harmonyos> Set false for timing-critical input (games, double-taps split across steps)."
     ),
 });
 
@@ -257,7 +261,7 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
       const settle = params.settle !== false;
-      let failedInARow = 0;
+      let failedSettles = 0;
       let stoppedNote: string | undefined;
       let waitSkipped = false;
       let note: string | undefined;
@@ -325,9 +329,8 @@ Allowed tools, their args (? = optional) and targets. Positions and distances ar
             waitSkipped = true;
           } else {
             const verdict = await settleScreen(registry, device, signal);
-            if (verdict.kind === "settled") failedInARow = 0;
-            else if (verdict.kind !== "aborted" && !SCROLL_TOOLS.has(step.tool)) failedInARow += 1;
-            if (failedInARow >= MAX_FAILED_SETTLES_IN_A_ROW) {
+            if (countsAsFailedSettle(step, verdict)) failedSettles += 1;
+            if (failedSettles >= MAX_FAILED_SETTLES) {
               stoppedNote = settleStoppedNote(results.length, verdict);
             }
           }

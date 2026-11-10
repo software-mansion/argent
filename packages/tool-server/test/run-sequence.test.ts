@@ -428,7 +428,7 @@ describe("run-sequence", () => {
       () => Promise.reject(new Error("no tree")),
       "the element tree could not be read (no tree)",
     ],
-  ])("stops settling after two waits in a row where %s", async (_label, outcome, reason) => {
+  ])("stops settling after two waits where %s", async (_label, outcome, reason) => {
     idle.mockImplementation(outcome);
     const registry = mockRegistry();
 
@@ -446,7 +446,7 @@ describe("run-sequence", () => {
       "gesture-tap",
     ]);
     expect(result.note).toBe(
-      `Stopped waiting for the screen to settle after step 2: 2 waits in a row did not settle, the last because ${reason}. Later steps ran without the wait.`
+      `Stopped waiting for the screen to settle after step 2: 2 waits did not settle, the last because ${reason}. Later steps ran without the wait.`
     );
   });
 
@@ -500,12 +500,12 @@ describe("run-sequence", () => {
     ]);
   });
 
-  it("resets the count when a wait settles", async () => {
+  it("keeps counting failed waits across a wait that settles between ticks", async () => {
     idle
       .mockResolvedValueOnce(CAPPED)
       .mockResolvedValueOnce(SETTLED)
       .mockResolvedValueOnce(CAPPED)
-      .mockResolvedValueOnce(CAPPED);
+      .mockResolvedValue(SETTLED);
     const registry = mockRegistry();
 
     const result = await createRunSequenceTool(registry).execute(
@@ -513,8 +513,8 @@ describe("run-sequence", () => {
       { udid: IOS, steps: [tap, tap, tap, tap, tap, tap] }
     );
 
-    expect(idle).toHaveBeenCalledTimes(4);
-    expect(result.note).toMatch(/after step 4:/);
+    expect(idle).toHaveBeenCalledTimes(3);
+    expect(result.note).toMatch(/after step 3:/);
   });
 
   it("does not count a wait after a swipe that hits the cap", async () => {
