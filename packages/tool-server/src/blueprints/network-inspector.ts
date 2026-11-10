@@ -117,6 +117,11 @@ export function forgetJsCapturesOf(devices?: readonly string[]): void {
   for (const payload of payloadsOf(devices)) jsCaptures.delete(payload);
 }
 
+/** Forgets the entries of these payloads. */
+export function forgetJsCaptures(payloads: Iterable<string>): void {
+  for (const payload of payloads) jsCaptures.delete(payload);
+}
+
 /** How long a pause waits for each runtime before its debugger is torn down. */
 const PAUSE_BEFORE_FORGET_TIMEOUT_MS = 1_000;
 
@@ -124,13 +129,15 @@ const PAUSE_BEFORE_FORGET_TIMEOUT_MS = 1_000;
  * Pauses the interceptor in each JS context that an entry of the devices (every
  * entry without them) names, while its debugger still runs. The interceptor
  * lives in the app, so forgetting the entry alone leaves it recording. A runtime
- * that does not answer in time is left as it is.
+ * that does not answer in time is left as it is. Returns the payloads whose
+ * runtime answered the pause.
  */
 export async function pauseJsCapturesOf(
   registry: Pick<Registry, "getSnapshot" | "resolveService">,
   devices?: readonly string[]
-): Promise<void> {
+): Promise<Set<string>> {
   const services = registry.getSnapshot().services;
+  const paused = new Set<string>();
   await Promise.all(
     payloadsOf(devices).map(async (payload) => {
       const urn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`;
@@ -141,11 +148,13 @@ export async function pauseJsCapturesOf(
         await dbg.cdp.evaluate(makeNetworkCaptureControlScript(true), {
           timeout: PAUSE_BEFORE_FORGET_TIMEOUT_MS,
         });
+        paused.add(payload);
       } catch {
         // The teardown after this closes the connection either way.
       }
     })
   );
+  return paused;
 }
 
 export type InterceptorInstall = { installed: true } | { installed: false; reason: string };

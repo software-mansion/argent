@@ -2,7 +2,11 @@ import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { isExternalDeviceUrn } from "../../utils/external-devices";
-import { forgetJsCapturesOf, pauseJsCapturesOf } from "../../blueprints/network-inspector";
+import {
+  forgetJsCaptures,
+  forgetJsCapturesOf,
+  pauseJsCapturesOf,
+} from "../../blueprints/network-inspector";
 import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
@@ -90,7 +94,7 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       const survivors: string[] = [];
       let aborted = false;
       // Before the sweep closes the debuggers it would go through.
-      await pauseJsCapturesOf(registry, scoped ? devices : undefined);
+      const paused = await pauseJsCapturesOf(registry, scoped ? devices : undefined);
       for (const [urn, entry] of snapshot.services) {
         // Checked between disposals rather than inside one: a dispose already
         // under way finishes, since abandoning a blueprint mid-teardown leaks
@@ -134,7 +138,12 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       // The rest of the snapshot was never visited, so `unmatched` would read
       // an id the sweep never reached as a typo, and `left_running` would miss
       // sessions still up. Report the partial teardown as partial.
-      if (aborted) return { stopped, aborted: true };
+      if (aborted) {
+        // The pause stopped recording in these runtimes, so their entries go,
+        // as at the end of a sweep. The sweep ended no other capture.
+        forgetJsCaptures(paused);
+        return { stopped, aborted: true };
+      }
       // The JS layer's capture intent outlives its service, and a stop that
       // reached no runtime stores one without any service, so it goes by device.
       forgetJsCapturesOf(scoped ? devices : undefined);

@@ -37,6 +37,7 @@ import type {
   StoppedLayer,
 } from "../src/tools/network/network-capture";
 import { networkLogsTool } from "../src/tools/network/network-logs";
+import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import {
   NETWORK_CAPTURE_MARK_SCRIPT,
   NETWORK_INTERCEPTOR_SCRIPT,
@@ -372,6 +373,7 @@ beforeEach(() => {
   registry.registerTool(createNetworkCaptureStartTool(registry));
   registry.registerTool(createNetworkCaptureStopTool(registry));
   registry.registerTool(networkLogsTool);
+  registry.registerTool(createStopAllSimulatorServersTool(registry));
   metro.clear();
   forgetJsCapturesOf();
   ios = new FakeIos();
@@ -400,6 +402,14 @@ function stop(udid: string, bundleId: string, port?: number) {
     bundleId,
     ...(port !== undefined ? { port } : {}),
   });
+}
+
+function stopAll(devices: string[], signal?: AbortSignal) {
+  return registry.invokeTool<{ stopped: string[]; aborted?: true }>(
+    "stop-all-simulator-servers",
+    { devices },
+    signal ? { signal } : undefined
+  );
 }
 
 function read(deviceId: string, port?: number) {
@@ -1181,6 +1191,38 @@ describe("network-capture-stop", () => {
       expect(nativeCalls().filter((call) => call.startsWith("stop"))).toHaveLength(2);
     }
   );
+});
+
+describe("stop-all-simulator-servers", () => {
+  const OTHER_PORT = 8199;
+
+  it("forgets the JS capture its pause reached when the call is aborted, and leaves the others as they are", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    // Another app's capture, whose Metro is down: the pause does not reach it.
+    serve(OTHER_PORT, IOS_UDID, new FakeRuntime(OTHER));
+    await start(IOS_UDID, OTHER, OTHER_PORT);
+    await reconnect(OTHER_PORT, IOS_UDID, undefined);
+    const otherCapture = structuredClone(jsCapture(jsCapturePayload(OTHER_PORT, IOS_UDID)));
+    const controller = new AbortController();
+    const evaluate = rt.evaluate.bind(rt);
+    rt.evaluate = (expr: string) => {
+      if (scriptName(expr) === "pause") controller.abort();
+      return evaluate(expr);
+    };
+
+    const result = await stopAll([IOS_UDID], controller.signal);
+
+    expect(result).toEqual({ stopped: [], aborted: true });
+    expect(rt.paused).toBe(true);
+    expect(jsCapture(jsCapturePayload(PORT, IOS_UDID))).toBeUndefined();
+    expect(jsCapture(jsCapturePayload(OTHER_PORT, IOS_UDID))).toEqual(otherCapture);
+    expect(await read(IOS_UDID)).toBe(
+      `Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then call view-network-logs again. This device has network capture for ${OTHER} on Metro port ${OTHER_PORT}: pass port ${OTHER_PORT} to read it.`
+    );
+  });
 });
 
 describe("a JS runtime of another app on the port", () => {
