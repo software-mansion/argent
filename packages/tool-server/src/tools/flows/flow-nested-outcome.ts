@@ -25,7 +25,7 @@ const FLOW_EXECUTE_TOOL_ID = "e2e-execute";
 const RUN_SEQUENCE_TOOL_ID = "run-sequence";
 
 interface NestedOutcome {
-  status: StepStatus;
+  status: Exclude<StepStatus, "pass">;
   reason: string;
 }
 
@@ -73,7 +73,7 @@ function flowExecuteOutcome(result: Record<string, unknown>): NestedOutcome | un
       status: "error",
       reason:
         `e2e test "${flow}" did not run — its execution prerequisite was not acknowledged${prerequisite}. ` +
-        `Add prerequisiteAcknowledged: true to the step's args, or compose with run: instead.`,
+        `Set prerequisiteAcknowledged to true once it holds; an e2e test can compose it with run: instead.`,
     };
   }
 

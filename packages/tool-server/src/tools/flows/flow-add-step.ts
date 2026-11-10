@@ -1518,8 +1518,8 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // A blocked native-devtools precheck RESOLVES its block instead of
       // throwing, and returns before the tool does any work — so recording the
       // step would write an action the device never took, and the runner scores
-      // that same result a failure at replay (isNativeDevtoolsBlockResult in
-      // flow-run.ts). Refusing here keeps the two verdicts identical.
+      // that same result a failure at replay (toolResultVerdict in
+      // utils/tool-result-verdict.ts). Refusing here keeps the two verdicts identical.
       if (isNativeDevtoolsBlockResult(params.command, toolResult)) {
         throw new FailureError(
           `${params.command} did not run (${toolResult.status}): ${toolResult.message} — nothing was recorded, so the take still matches what is on screen; clear the block and call e2e-add-step again`,

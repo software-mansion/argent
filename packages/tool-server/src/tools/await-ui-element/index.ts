@@ -60,9 +60,8 @@ const HIDDEN_UNREADABLE_NOTE =
 
 /**
  * WHY an unmet wait came back `success: false`. {@link isUnmetUiWaitResult}
- * answers "did this wait fail", which is all `run-sequence` and `flow-run`
- * need. A caller that NARRATES the failure needs more, because only one cause
- * judges the condition:
+ * answers "did this wait fail". A caller that NARRATES the failure needs more,
+ * because only one cause judges the condition:
  *
  * - `unmet` — the tree was read and the condition was false there.
  * - `unreadable` — the tree source never answered, so nothing was observed.
@@ -379,7 +378,7 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     id: AWAIT_UI_ELEMENT_TOOL_ID,
     description: `Block until a UI element reaches an expected state or the timeout elapses, so you don't have to poll screenshot/describe yourself. It polls the same tree as \`describe\`.
 Use when the next step needs an element that appears or disappears asynchronously, e.g. after a tap or navigation, or before tapping something that loads late.
-Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false instead of failing, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
+Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
     zodSchema,
     alwaysLoad: true,
     searchHint:
