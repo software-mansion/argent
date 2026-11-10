@@ -199,6 +199,13 @@ describe("directCallFailure", () => {
     ).toBeUndefined();
   });
 
+  it("judges a result that is not an object without throwing", () => {
+    for (const result of [null, undefined, "done", 0]) {
+      expect(directCallFailure("gesture-tap", result)).toBeUndefined();
+      expect(toolResultVerdict("e2e-add-step", result)).toBeUndefined();
+    }
+  });
+
   it("sends the verdict's reason for any other tool", () => {
     expect(directCallFailure("debugger-log-registry", notConnected)).toBe(
       "debugger not connected (metro_not_running): nothing on 8081 — start Metro"

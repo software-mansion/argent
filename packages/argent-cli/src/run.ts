@@ -419,8 +419,7 @@ settled=false or debugger-status's not_connected.
   }
 
   if (failure) {
-    // After stdout drains: with both streams on one pipe, a report larger than
-    // the pipe buffer would otherwise have the reason spliced into it.
+    // Drain stdout first, or a merged log splices the reason into a large report.
     await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
     console.error(failure);
     await trackRunFailure(toolName, startedAt, {
@@ -429,7 +428,7 @@ settled=false or debugger-status's not_connected.
       failure_area: "cli",
       error_kind: "unknown",
     });
-    // stdout is drained already; writing to it again after EPIPE would throw.
+    // Not stdout: a write after EPIPE throws.
     await exitAfterFlush(1, [process.stderr]);
   }
 }

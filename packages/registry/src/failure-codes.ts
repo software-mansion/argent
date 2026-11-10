@@ -22,7 +22,7 @@ export const FAILURE_CODES = {
   CLI_RUN_ARGS_JSON_INVALID: "CLI_RUN_ARGS_JSON_INVALID",
   CLI_RUN_INPUT_VALIDATION_FAILED: "CLI_RUN_INPUT_VALIDATION_FAILED",
   CLI_RUN_TOOL_CALL_FAILED: "CLI_RUN_TOOL_CALL_FAILED",
-  // The call returned, but its result reports a failure (the tool-server's `failure` field).
+  // The result carried the tool-server's `failure` field.
   CLI_RUN_TOOL_RESULT_FAILED: "CLI_RUN_TOOL_RESULT_FAILED",
   CLI_RUN_SAVE_IMAGE_FAILED: "CLI_RUN_SAVE_IMAGE_FAILED",
 
