@@ -295,15 +295,17 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     // The last laid-out character, which capitalize's first word depends on. As in Blink,
     // layout reads back through inline flow, and anything else is a space: the start of a
     // box that is not inline flow, a replaced element, and the end of a block-level box
-    // in a block container (an anonymous block follows it).
-    let laid = " ";
+    // in a block container (an anonymous block follows it). null until something is laid
+    // out in an inline-flow root, whose first character runs on from what precedes it.
+    let laid = isFlow(root, rootStyle) ? null : " ";
+    const prevLaid = () => laid ?? (laid = laidBefore(root));
     const lay = (text) => {
       if (text) laid = lastChar(text);
     };
     // A ::before or ::after: its name read, and its strings laid out in its case.
     const readPseudo = (pseudo, parentStyle) => {
       if (!pseudo.inline) laid = " ";
-      const strings = caseText(pseudo.strings, pseudo.style, laid);
+      const strings = caseText(pseudo.strings, pseudo.style, prevLaid);
       read(pseudo.alt ?? strings);
       lay(strings);
       if (pseudo.block && !isInlineBox(parentStyle)) laid = " ";
@@ -416,7 +418,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
       const type = getNodeType.call(node);
       if (type === 3 || type === 4) {
-        const text = caseText(getNodeValue.call(node), textCase, laid);
+        const text = caseText(getNodeValue.call(node), textCase, prevLaid);
         read(text);
         lay(text);
         continue;
@@ -454,12 +456,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         continue;
       }
       const rendered = !unrendered && style.display !== "none";
-      // Inline flow, which layout reads the previous character back through.
-      const flow =
-        style.display === "contents" ||
-        (isInlineBox(style) &&
-          !(ns === "http://www.w3.org/1999/xhtml" && REPLACED.test(tag)) &&
-          !(svg && tag === "svg"));
+      const flow = isFlow(node, style);
       const blockEnd = isBlockLevel(style) && !inInline;
       if (!flow) laid = " ";
       const options = chosenOptions(node);
@@ -726,15 +723,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (kind === 3) return " ";
       if (kind) {
         const p = pseudoText(node, kind === 1 ? "::before" : "::after");
-        const end = !p
-          ? null
-          : p.block && !inl
-            ? " "
-            : p.strings
-              ? lastChar(p.strings)
-              : p.inline
-                ? null
-                : " ";
+        const end = p && pseudoEnd(p, inl);
         if (end) return end;
         continue;
       }
@@ -769,6 +758,48 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return null;
   }
 
+  // The last character a ::before or ::after lays out, as lastLaid finds it, or null.
+  function pseudoEnd(pseudo, parentInline) {
+    if (pseudo.block && !parentInline) return " ";
+    return pseudo.strings ? lastChar(pseudo.strings) : pseudo.inline ? null : " ";
+  }
+
+  // The last character laid out before an inline-flow element: in what precedes it in the
+  // flat tree, up through the inline flow it runs in.
+  function laidBefore(el) {
+    for (let node = el; ; ) {
+      const parent = flatParent(node);
+      if (!parent || getNodeType.call(parent) !== 1) return " ";
+      const style = window.getComputedStyle(parent);
+      const inline = isInlineBox(style);
+      const kids = flatChildNodes(parent);
+      for (let i = Array.prototype.indexOf.call(kids, node) - 1; i >= 0; i--) {
+        const end = lastLaid(kids[i], inline);
+        if (end !== null) return end;
+      }
+      const before =
+        getNamespaceURI.call(parent) === "http://www.w3.org/1999/xhtml" &&
+        pseudoText(parent, "::before");
+      const end = before && pseudoEnd(before, inline);
+      if (end) return end;
+      if (!isFlow(parent, style)) return " ";
+      node = parent;
+    }
+  }
+
+  // Whether an element runs in inline flow, which layout reads the previous character back
+  // through: display:contents, or an inline box that is not replaced.
+  function isFlow(el, style) {
+    if (style.display === "contents") return true;
+    const tag = getLocalName.call(el);
+    const ns = getNamespaceURI.call(el);
+    return (
+      isInlineBox(style) &&
+      !(ns === "http://www.w3.org/1999/xhtml" && REPLACED.test(tag)) &&
+      !(ns === "http://www.w3.org/2000/svg" && tag === "svg")
+    );
+  }
+
   // A string's last code point.
   function lastChar(text) {
     const pair = text.slice(-2);
@@ -781,12 +812,12 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   }
 
   const CASED = /^(uppercase|lowercase|capitalize)/;
-  // Text as a style's text-transform cases it under its lang; prev is the character before
-  // it, which decides whether capitalize starts a word there.
+  // Text as a style's text-transform cases it under its lang; prev gives the character
+  // before it, which decides whether capitalize starts a word there.
   function caseText(text, style, prev) {
     const mode = style && CASED.exec(style.textTransform);
     if (!mode) return text;
-    if (mode[1] === "capitalize") return capitalize(text, prev);
+    if (mode[1] === "capitalize") return capitalize(text, prev());
     const lang = /^"(.*)"$/.exec(style.webkitLocale || "");
     const upper = mode[1] === "uppercase";
     try {

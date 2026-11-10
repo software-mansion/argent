@@ -1932,6 +1932,59 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(read([text("ab"), hiddenBr, text("cd")])).toBe("AbCd");
   });
 
+  it("runs an inline target's capitalized text on from what is laid out before it, as Chrome does", () => {
+    // The target sits in a <p> after `before`, in a <span> if wrap; the <p> follows text.
+    const label = (
+      before: unknown[],
+      target: Record<string, string> = {},
+      { wrap = false, pseudo = "" } = {}
+    ) => {
+      const span = elementNode("span", [text("bar baz")], { __attrs: { id: "lbl" } });
+      Object.assign(
+        span.__style as Record<string, string>,
+        { textTransform: "capitalize" },
+        target
+      );
+      const inner = wrap ? elementNode("span", [span], { children: [span] }) : span;
+      const p = el({ tag: "p", rect: BOX, children: [inner] }) as MockElement &
+        Record<string, unknown>;
+      p.childNodes = [...before, inner];
+      if (pseudo) {
+        p.__pseudo = { "::before": { display: "inline", visibility: "visible", content: pseudo } };
+      }
+      const div = el({ rect: BOX, children: [p] }) as MockElement & Record<string, unknown>;
+      div.childNodes = [text("zz"), p];
+      const button = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "btn", "aria-labelledby": "lbl" },
+      });
+      return findById(run([button, div]).tree, "btn")!.label;
+    };
+    const styled = (kids: unknown[], style: Record<string, string>) => {
+      const node = elementNode("span", kids);
+      Object.assign(node.__style as Record<string, string>, style);
+      return node;
+    };
+    expect(label([text("foo")])).toBe("bar Baz");
+    expect(label([text("foo ")])).toBe("Bar Baz");
+    expect(label([text("x𝒶")])).toBe("bar Baz");
+    expect(label([styled([text("foo")], {})], {}, { wrap: true })).toBe("bar Baz");
+    expect(label([styled([text("foo")], { display: "inline-block" })])).toBe("bar Baz");
+    expect(label([text("foo"), styled([text("q ")], { display: "none" })])).toBe("bar Baz");
+    expect(label([text("foo"), styled([text("q")], { visibility: "hidden" })])).toBe("bar Baz");
+    expect(label([text("foo"), { nodeType: 8, nodeValue: " " }])).toBe("bar Baz");
+    expect(label([text("foo"), styled([text("q")], { display: "block" })])).toBe("Bar Baz");
+    expect(label([text("foo"), el({ tag: "br", rect: ZERO, style: { display: "inline" } })])).toBe(
+      "Bar Baz"
+    );
+    expect(label([])).toBe("Bar Baz");
+    expect(label([], {}, { pseudo: '"q"' })).toBe("bar Baz");
+    expect(label([text("foo")], { display: "contents" })).toBe("bar Baz");
+    expect(label([text("foo")], { visibility: "hidden" })).toBe("bar Baz");
+    expect(label([text("foo")], { display: "inline-block" })).toBe("Bar Baz");
+  });
+
   it("leaves capitalized text as is when a page's Intl.Segmenter misbehaves", () => {
     const pages = [{ segment: () => null }, { segment: () => [{ index: 99 }] }];
     for (const page of pages) {
