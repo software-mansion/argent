@@ -562,9 +562,10 @@ function withinWait(
 }
 
 /**
- * One native-devtools service's view of its device: the apps capture is on
- * for, and the records of every app that connected. Both are live, owned by
- * the service.
+ * One native-devtools service's view of its device: the apps argent turned
+ * capture on for (none on a device whose provider lent its agent, where the
+ * capture is the provider's), and the records of every app that connected.
+ * Both are live, owned by the service.
  */
 interface IosNetworkCaptures {
   readonly udid: string;
@@ -608,7 +609,10 @@ function capturing(captures: IosNetworkCaptures, bundleId: string): boolean {
   return captures.bundleIds.has(bundleId) && captures.stores.has(bundleId);
 }
 
-/** Bundle ids with native network capture on for the device. */
+/**
+ * Bundle ids with native network capture on for the device, of the apps that
+ * connected at least once ({@link capturing}).
+ */
 export function liveIosNetworkCaptures(deviceId: string): string[] {
   const key = deviceKeyOf(deviceId);
   const bundleIds = new Set<string>();
@@ -621,7 +625,10 @@ export function liveIosNetworkCaptures(deviceId: string): string[] {
   return [...bundleIds].sort();
 }
 
-/** Udids of the devices with native network capture on for the app. */
+/**
+ * Udids of the devices with native network capture on for the app, where it
+ * connected at least once ({@link capturing}).
+ */
 export function liveIosNetworkCaptureDevices(bundleId: string): string[] {
   const udids = [...liveCaptures]
     .filter((captures) => capturing(captures, bundleId))

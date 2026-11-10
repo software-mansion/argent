@@ -798,9 +798,20 @@ function isFoldPosture(value: unknown): value is FoldPosture {
   return typeof value === "string" && (FOLD_POSTURES as readonly string[]).includes(value);
 }
 
+export const RUNTIME_KINDS = ["mobile", "tv"] as const;
+export type FlowRuntimeKind = (typeof RUNTIME_KINDS)[number];
+
+/** The targets a flow supports. The keys are ANDed; `ios` covers a remote simulator. */
+export type FlowRequires = {
+  platform?: WhenPlatform[];
+  runtimeKind?: FlowRuntimeKind;
+};
+
 export type FlowFile = {
   /** Fragments only: documented entry-state contract. "" when unset. */
   executionPrerequisite: string;
+  /** Absent when the flow runs on any target. */
+  requires?: FlowRequires;
   steps: FlowStep[];
 };
 
@@ -1076,6 +1087,8 @@ type YamlStep =
 type YamlFoldBody = FoldPosture | number | { posture?: FoldPosture; angle?: number };
 
 type YamlFlowFile = {
+  version?: number;
+  requires?: { platform?: WhenPlatform | WhenPlatform[]; runtimeKind?: FlowRuntimeKind };
   executionPrerequisite?: string;
   steps: YamlStep[];
 };
@@ -1729,14 +1742,14 @@ function toYamlStep(step: FlowStep): YamlStep {
 // 200 chars still shows a genuine flow entry in full.
 const MAX_ENTRY_RENDER_CHARS = 200;
 
-function badEntry(raw: unknown, detail: string): never {
+function renderEntry(raw: unknown): string {
   // A cyclic YAML alias materializes as a cyclic object — JSON.stringify would
   // throw and mask the validation message. It also returns the *value*
   // `undefined` for an omitted key (an absent `in:`/`into:`), a case its
-  // declared `string` return type hides.
+  // declared `string` return type hides, and renders `.inf`/`.nan` as `null`.
   let rendered: string;
   try {
-    rendered = JSON.stringify(raw) ?? String(raw);
+    rendered = typeof raw === "number" ? String(raw) : (JSON.stringify(raw) ?? String(raw));
   } catch {
     rendered = "[cyclic entry]";
   }
@@ -1744,7 +1757,11 @@ function badEntry(raw: unknown, detail: string): never {
     const elided = rendered.length - MAX_ENTRY_RENDER_CHARS;
     rendered = `${rendered.slice(0, MAX_ENTRY_RENDER_CHARS)}…(+${elided} chars)`;
   }
-  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${rendered}`, {
+  return rendered;
+}
+
+function badEntry(raw: unknown, detail: string): never {
+  throw new FailureError(`Unrecognized e2e test entry (${detail}): ${renderEntry(raw)}`, {
     error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
     failure_stage: "flow_file_parse_step",
     failure_area: "tool_server",
@@ -2310,7 +2327,7 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
  * The platforms an AUTHOR can name in a flow file: launch-map keys and
  * `when: { platform }` guards ({@link WhenPlatform}).
  */
-const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
 
 /**
  * The platforms a RUN can be pointed at — flow-device's `FlowPlatform` and
@@ -2340,6 +2357,46 @@ export function authoringPlatform(platform: string): string {
 
 // Keys a launch map accepts: the platforms plus the `native` shared-id shorthand.
 const LAUNCH_MAP_KEYS = ["native", ...LAUNCH_PLATFORMS] as const;
+
+const REQUIRES_KEYS = ["platform", "runtimeKind"] as const;
+
+export function parseRequires(raw: unknown): FlowRequires {
+  const bad = (detail: string): never => badEntry({ requires: raw }, detail);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    bad(`requires must be a map of ${REQUIRES_KEYS.join(" / ")}`);
+  }
+  const b = raw as Record<string, unknown>;
+  rejectUnknownKeys({ requires: raw }, b, REQUIRES_KEYS, "requires");
+
+  const out: FlowRequires = {};
+  if (b.platform !== undefined) {
+    const list: unknown[] = Array.isArray(b.platform) ? b.platform : [b.platform];
+    const oneOf = `one of ${LAUNCH_PLATFORMS.join(", ")}`;
+    if (list.length === 0) bad(`requires.platform must name at least ${oneOf}`);
+    const platforms: WhenPlatform[] = [];
+    for (const p of list) {
+      if (typeof p !== "string" || !(LAUNCH_PLATFORMS as readonly string[]).includes(p)) {
+        bad(`requires.platform must be ${oneOf} (or a list of them)`);
+      }
+      platforms.push(p as WhenPlatform);
+    }
+    out.platform = platforms;
+  }
+  if (b.runtimeKind !== undefined) {
+    const kind = b.runtimeKind;
+    if (typeof kind !== "string" || !(RUNTIME_KINDS as readonly string[]).includes(kind)) {
+      bad(`requires.runtimeKind must be one of ${RUNTIME_KINDS.join(", ")}`);
+    }
+    out.runtimeKind = kind as FlowRuntimeKind;
+  }
+  if (out.platform === undefined && out.runtimeKind === undefined) {
+    bad(
+      `requires must declare at least one of ${REQUIRES_KEYS.join(", ")} ` +
+        `(omit the block for a flow that runs on any target)`
+    );
+  }
+  return out;
+}
 
 /**
  * YAML reads an unquoted `5` or `true` as a number or boolean, not a string.
@@ -3705,7 +3762,15 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
       // The runner compares the diff against `maxMismatch` — a NaN here
       // (e.g. from "5%") would make every comparison false, failing the snapshot
       // even on byte-identical frames.
-      const m = Number(b.maxMismatch);
+      // Only real numbers and plain decimal strings count: `Number()` alone would
+      // turn null/false/[]/blank into 0, true into 1 and "0x10" into 16.
+      const rawMax: unknown = b.maxMismatch;
+      const m =
+        typeof rawMax === "number"
+          ? rawMax
+          : typeof rawMax === "string" && /^\s*[-+]?(\d+\.?\d*|\.\d+)\s*$/.test(rawMax)
+            ? Number(rawMax)
+            : NaN;
       if (!Number.isFinite(m) || m < 0 || m > 100) {
         badEntry(
           raw,
@@ -3741,9 +3806,26 @@ function fromYamlStep(raw: YamlStep, blockDepth = 0): FlowStep {
   return badEntry(raw, "unrecognized step kind");
 }
 
-/** Serialize a full flow file to YAML, omitting empty/defaulted fields. */
+/**
+ * The e2e file format version this build writes and the newest it reads. A file
+ * without `version` is version 1.
+ */
+const FLOW_FILE_VERSION = 1;
+
+function requiresToYaml({ platform, runtimeKind }: FlowRequires): YamlFlowFile["requires"] {
+  return {
+    ...(platform ? { platform: platform.length === 1 ? platform[0] : platform } : {}),
+    ...(runtimeKind ? { runtimeKind } : {}),
+  };
+}
+
+/** Serialize a full flow file to YAML: `version` always, other fields only when not empty or defaulted. */
 export function serializeFlow(flow: FlowFile): string {
-  const doc: YamlFlowFile = { steps: flow.steps.map(toYamlStep) };
+  const doc: YamlFlowFile = {
+    version: FLOW_FILE_VERSION,
+    ...(flow.requires ? { requires: requiresToYaml(flow.requires) } : {}),
+    steps: flow.steps.map(toYamlStep),
+  };
   if (flow.executionPrerequisite) doc.executionPrerequisite = flow.executionPrerequisite;
   // blockQuote: false — a block scalar is not round-trip-safe for our free-text
   // fields: whitespace-only lines inside a multi-line value are silently
@@ -3796,23 +3878,44 @@ export function parseFlow(content: string): FlowFile {
     );
   }
 
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("steps" in parsed) ||
-    !Array.isArray(parsed.steps)
-  ) {
-    throw new FailureError("Invalid e2e test file: expected an object with a steps array", {
+  const notAFlow = () =>
+    new FailureError("Invalid e2e test file: expected an object with a steps array", {
       error_code: FAILURE_CODES.FLOW_FILE_INVALID,
       failure_stage: "flow_file_parse",
       failure_area: "tool_server",
       error_kind: "validation",
     });
+  if (typeof parsed !== "object" || parsed === null) throw notAFlow();
+
+  // Before the shape checks: a newer version may change the shape.
+  const version: unknown = parsed.version ?? 1;
+  if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
+    throw new FailureError(
+      `Invalid e2e test file: version must be a positive integer, got ${renderEntry(version)}`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
+  if (version > FLOW_FILE_VERSION) {
+    throw new FailureError(
+      `The e2e test file is version ${version}, but this Argent reads up to version ${FLOW_FILE_VERSION}. Update Argent to run it.`,
+      {
+        error_code: FAILURE_CODES.FLOW_FILE_NEWER_VERSION,
+        failure_stage: "flow_file_parse",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
-  // Same strictness as step bodies: the file has exactly two top-level keys, so
-  // a misspelled `executionPrerequisite` must not silently become "".
-  const topKeys: readonly string[] = ["executionPrerequisite", "steps"];
+  if (!("steps" in parsed) || !Array.isArray(parsed.steps)) throw notAFlow();
+
+  // Same strictness as step bodies: a misspelled top-level key must not be silently dropped.
+  const topKeys: readonly string[] = ["version", "executionPrerequisite", "requires", "steps"];
   const unknownTop = Object.keys(parsed).filter((k) => !topKeys.includes(k));
   if (unknownTop.length > 0) {
     throw new FailureError(
@@ -3834,6 +3937,7 @@ export function parseFlow(content: string): FlowFile {
 
   const flow: FlowFile = {
     executionPrerequisite: parsed.executionPrerequisite ?? "",
+    ...(parsed.requires === undefined ? {} : { requires: parseRequires(parsed.requires) }),
     steps,
   };
   validateFlow(flow);

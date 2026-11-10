@@ -42,6 +42,8 @@ const sim = vi.hoisted(() => ({
   launchctlFails: false,
   /** What `ps` prints for the app's process. */
   psOutput: "",
+  /** While set, `ps` answers only once it resolves, as a slow read of a process does. */
+  psHeld: null as Promise<void> | null,
   /** Runs when the app is launched: the new process starting up. */
   onLaunch: null as (() => void) | null,
 }));
@@ -55,7 +57,9 @@ vi.mock("node:child_process", async () => {
       const argv = args.join(" ");
       sim.calls.push(`${cmd} ${argv}`);
       if (/\bps$/.test(cmd)) {
-        callback(null, { stdout: sim.psOutput, stderr: "" });
+        const answer = () => callback(null, { stdout: sim.psOutput, stderr: "" });
+        if (sim.psHeld) void sim.psHeld.then(answer);
+        else answer();
         return;
       }
       if (argv.includes("launchctl list")) {
@@ -221,6 +225,7 @@ function resetSimulator(): void {
   sim.launchctlList = runningRow(PID);
   sim.launchctlFails = false;
   sim.psOutput = psLine();
+  sim.psHeld = null;
   sim.onLaunch = null;
 }
 
@@ -652,6 +657,24 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
     });
   });
 
+  /**
+   * A process that started before this service's listener dialed one that is
+   * gone, as after a tool-server restart, and never dials again.
+   */
+  it("says at once, without waiting, that a running process older than the listener cannot be armed", async () => {
+    await withService(async (api) => {
+      await api.activateNetworkInspection(APP);
+      sim.psOutput = psLine("10:00");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+      const note = await api.networkCaptureAfterLaunch(APP);
+
+      expect(note).toBe(
+        `native network capture is on for ${APP}, but its running process (pid ${PID}) started before this tool-server's native-devtools listener, so it never connects and capture cannot be armed in it; call restart-app to start a process that is armed`
+      );
+    });
+  });
+
   it("answers nothing, at once, when the service is disposed while it waits for the app", async () => {
     await withService(async (api, dispose) => {
       await api.activateNetworkInspection(APP);
@@ -668,6 +691,36 @@ describe("networkCaptureAfterLaunch on a local iOS simulator", () => {
         new Promise((resolve) => setImmediate(() => resolve("still waiting"))),
       ]);
       expect(settled).toEqual({ note: undefined });
+    });
+  });
+
+  /**
+   * A new process can acknowledge Network.enable before the host has read its
+   * pid. Until that read lands, the wait cannot tell the connection is the
+   * launch's, so the read itself has to end the wait.
+   */
+  it("says capture is armed once the host reads the pid of a process that acknowledged first", async () => {
+    await withService(async (api) => {
+      await expect(api.activateNetworkInspection(APP)).resolves.toBe(false);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const note = api.networkCaptureAfterLaunch(APP);
+      await launchWaitStarted();
+      let readPid!: () => void;
+      sim.psHeld = new Promise((resolve) => (readPid = resolve));
+      const settled = () =>
+        Promise.race([
+          note.then((value) => ({ note: value })),
+          new Promise((resolve) => setImmediate(() => resolve("still waiting"))),
+        ]);
+
+      const app = await connectApp(api.socketPath);
+      await vi.waitFor(() => expect(api.networkRecords(APP)?.state()).toEqual({ armed: true }));
+      expect(await settled()).toBe("still waiting");
+      readPid();
+
+      // The fake clock never reaches the 5 s, so only the pid read can end the wait.
+      expect(await settled()).toEqual({ note: ARMED_NOTE });
+      app.close();
     });
   });
 

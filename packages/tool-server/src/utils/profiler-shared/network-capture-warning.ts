@@ -30,9 +30,11 @@ function agentSentence(platform: CapturePlatform, one: boolean, where = ""): str
  * native network capture on for an app: the capture follows the app across
  * launches, and nothing else in a profile says the app may run instrumented.
  * "On" is the capture's setting, not a live attachment: the app may not be
- * running, or its current process may not have the agent yet. Undefined when
- * capture is on for no app on the device. Never throws: a warning must not
- * fail the start it annotates.
+ * running, or its current process may not have the agent yet. On iOS an app
+ * counts only after it has connected, because an app that never connected,
+ * such as a mistyped bundle id, has no process to capture. Undefined when no
+ * app counts on the device. Never throws: a warning must not fail the start it
+ * annotates.
  *
  * `runtimeApp` is what the profiled JS runtime said about itself, for a
  * `deviceId` that names no device (see {@link logicalDeviceWarning}).

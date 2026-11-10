@@ -57,7 +57,7 @@ const zodSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them.'
+      'Apple simulators and physical iPhones: arguments passed to the app process at launch, e.g. `["-FeatureFlag", "YES"]` to override UserDefaults. A running app is relaunched to apply them. The call fails, launching nothing, if terminating it does not finish within 15s on a local iOS simulator, or fails for a reason other than the app not running on a remote one.'
     ),
 });
 
@@ -72,9 +72,11 @@ type Params = z.infer<typeof zodSchema>;
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
+    // Android's device probes plus `am start -W` can outlast the 30s MCP fetch timeout.
+    longRunning: true,
     description: `Open an installed app, or confirm the running renderer (Chromium).
 Use when starting any app; prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (iOS and Apple TV).
-Returns { launched, bundleId, note?, networkCapture? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready. networkCapture (Android, local iOS simulators) says whether native network capture followed the launch.
+Returns { launched, bundleId, note?, networkCapture? }. Fails if the app is not installed on the target device (iOS / Android<flag:harmonyos> / HarmonyOS</flag:harmonyos>). On a physical iPhone this registers the app every other tool acts on; com.apple.springboard and com.apple.Spotlight register without launching. note warns when runner signing is not ready. networkCapture (Android, and local iOS simulators where capture stays on for later processes) says whether native network capture followed the launch.
 For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.mobileslideshow (Photos), com.apple.MobileAddressBook
