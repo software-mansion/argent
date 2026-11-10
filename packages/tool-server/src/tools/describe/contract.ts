@@ -19,7 +19,8 @@ export interface DescribeNode {
   // Descendant text hoisted onto container leaves by the flow adapters'
   // flatten (`flow-tree-flatten`): the flat shape drops the child that renders
   // the text, so a flow `text` condition reads this for a testID container.
-  // The describe path leaves it unset.
+  // The describe tool leaves it unset; the tree the await tools judge on a Mac
+  // app carries the flow tree's value.
   subtreeText?: string;
   clickable?: boolean;
   longClickable?: boolean;
@@ -34,6 +35,10 @@ export interface DescribeNode {
   // Distinct on D-pad UIs: input focus vs. the visually highlighted item.
   focused?: boolean;
   selected?: boolean;
+  // A Mac app's stacking: 1 in a sheet, alert or popover, one more in each one
+  // attached over it, highest in an open menu, absent in a window. Of a
+  // selector's matches, the frontmost layer wins.
+  layer?: number;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -56,6 +61,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       scrollHidden: z.number().int().nonnegative().optional(),
       focused: z.boolean().optional(),
       selected: z.boolean().optional(),
+      layer: z.number().int().nonnegative().optional(),
     })
     .passthrough()
 );
@@ -77,7 +83,11 @@ export type DescribeSource =
   | "harmony-uitest"
   | "tv-focus"
   // Physical iOS: the XCUITest runner accessibility snapshot.
-  | "xcuitest-runner";
+  | "xcuitest-runner"
+  // A native Mac app: the in-app library's tree, and the one it reads while the
+  // Mac is locked.
+  | "macos-devtools"
+  | "macos-fallback";
 
 // Adapter-internal: `tree` is rendered by `format-tree.ts` and then dropped —
 // callers get `DescribeResult` below, i.e. only the rendered text.

@@ -1,0 +1,957 @@
+{
+  "source": "accessibility",
+  "truncated": false,
+  "nodeCount": 71,
+  "extraViews": [
+    {
+      "class": "NSTableRowView",
+      "identifier": "NSTableViewRowViewKey",
+      "text": "",
+      "visibleNormalizedFrame": {
+        "y": 0.2626582278481013,
+        "x": 0.008888888888888889,
+        "width": 0.2,
+        "height": 0.0379746835443038
+      },
+      "subtreeText": ""
+    },
+    {
+      "class": "NSTableRowView",
+      "identifier": "NSTableViewRowViewKey",
+      "text": "",
+      "visibleNormalizedFrame": {
+        "y": 0.30063291139240506,
+        "x": 0.008888888888888889,
+        "width": 0.2,
+        "height": 0.0379746835443038
+      },
+      "subtreeText": ""
+    },
+    {
+      "class": "NSTableRowView",
+      "identifier": "NSTableViewRowViewKey",
+      "text": "",
+      "visibleNormalizedFrame": {
+        "y": 0.33860759493670883,
+        "x": 0.008888888888888889,
+        "width": 0.2,
+        "height": 0.0379746835443038
+      },
+      "subtreeText": ""
+    }
+  ],
+  "windows": [
+    {
+      "number": 18348,
+      "kind": "window",
+      "root": {
+        "role": "AXWindow",
+        "title": "Argent fixture",
+        "subrole": "AXStandardWindow",
+        "normalizedFrame": {
+          "y": 0,
+          "x": 0,
+          "width": 1,
+          "height": 1
+        },
+        "children": [
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "AppKit button",
+            "identifier": "appkit.button",
+            "normalizedFrame": {
+              "y": 0.07753164556962025,
+              "x": 0.021111111111111112,
+              "width": 0.18,
+              "height": 0.05379746835443038
+            },
+            "focused": true
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Activate app",
+            "identifier": "appkit.activate",
+            "normalizedFrame": {
+              "y": 0.07753164556962025,
+              "x": 0.21,
+              "width": 0.12444444444444444,
+              "height": 0.05379746835443038
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXTextField",
+            "identifier": "appkit.field",
+            "value": "",
+            "normalizedFrame": {
+              "y": 0.15031645569620253,
+              "x": 0.021111111111111112,
+              "width": 0.2911111111111111,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXCheckBox",
+            "title": "AppKit checkbox",
+            "identifier": "appkit.checkbox",
+            "value": "0",
+            "normalizedFrame": {
+              "y": 0.20411392405063292,
+              "x": 0.021111111111111112,
+              "width": 0.22444444444444445,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXPopUpButton",
+            "children": [
+              {
+                "enabled": true,
+                "role": "AXMenu",
+                "children": [
+                  {
+                    "enabled": true,
+                    "role": "AXMenuItem",
+                    "title": "One",
+                    "selected": true,
+                    "identifier": "_popUpItemAction:",
+                    "normalizedFrame": {
+                      "y": 0.2626582278481013,
+                      "x": 0.008888888888888889,
+                      "width": 0.2,
+                      "height": 0.0379746835443038
+                    },
+                    "focused": false
+                  },
+                  {
+                    "enabled": true,
+                    "role": "AXMenuItem",
+                    "title": "Two",
+                    "selected": false,
+                    "identifier": "_popUpItemAction:",
+                    "normalizedFrame": {
+                      "y": 0.30063291139240506,
+                      "x": 0.008888888888888889,
+                      "width": 0.2,
+                      "height": 0.0379746835443038
+                    },
+                    "focused": false
+                  },
+                  {
+                    "enabled": true,
+                    "role": "AXMenuItem",
+                    "title": "Three",
+                    "selected": false,
+                    "identifier": "_popUpItemAction:",
+                    "normalizedFrame": {
+                      "y": 0.33860759493670883,
+                      "x": 0.008888888888888889,
+                      "width": 0.2,
+                      "height": 0.0379746835443038
+                    },
+                    "focused": false
+                  }
+                ],
+                "selected": false,
+                "normalizedFrame": {
+                  "y": 0.254746835443038,
+                  "x": 0.008888888888888889,
+                  "width": 0.2,
+                  "height": 0.12974683544303797
+                },
+                "focused": false
+              }
+            ],
+            "identifier": "appkit.popup",
+            "value": "One",
+            "normalizedFrame": {
+              "y": 0.2610759493670886,
+              "x": 0.021111111111111112,
+              "width": 0.20222222222222222,
+              "height": 0.04746835443037975
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXSlider",
+            "children": [
+              {
+                "normalizedFrame": {
+                  "y": 0.33860759493670883,
+                  "x": 0.022222222222222223,
+                  "width": 0.022222222222222223,
+                  "height": 0.02531645569620253
+                },
+                "value": "0",
+                "focused": false,
+                "role": "AXValueIndicator"
+              }
+            ],
+            "identifier": "appkit.slider",
+            "value": "0",
+            "normalizedFrame": {
+              "y": 0.33069620253164556,
+              "x": 0.021111111111111112,
+              "width": 0.2911111111111111,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "normalizedFrame": {
+              "y": 0.43037974683544306,
+              "x": 0.022222222222222223,
+              "width": 0.13333333333333333,
+              "height": 0.0949367088607595
+            },
+            "description": "box.hover",
+            "focused": false,
+            "identifier": "box.hover",
+            "role": "AXGroup"
+          },
+          {
+            "role": "AXGroup",
+            "normalizedFrame": {
+              "y": 0.43037974683544306,
+              "x": 0.17777777777777778,
+              "width": 0.13333333333333333,
+              "height": 0.0949367088607595
+            },
+            "identifier": "box.context",
+            "description": "box.context",
+            "focused": false
+          },
+          {
+            "normalizedFrame": {
+              "y": 0.43037974683544306,
+              "x": 0.3333333333333333,
+              "width": 0.13333333333333333,
+              "height": 0.0949367088607595
+            },
+            "description": "box.double",
+            "focused": false,
+            "identifier": "box.double",
+            "role": "AXGroup"
+          },
+          {
+            "children": [
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 3.704113924050633,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 0",
+                "identifier": "appkit.row.0",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 3.545886075949367,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 1",
+                "identifier": "appkit.row.1",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 3.3876582278481013,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 2",
+                "identifier": "appkit.row.2",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 3.2294303797468356,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 3",
+                "identifier": "appkit.row.3",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 3.0712025316455698,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 4",
+                "identifier": "appkit.row.4",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 2.912974683544304,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 5",
+                "identifier": "appkit.row.5",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 2.7547468354430378,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 6",
+                "identifier": "appkit.row.6",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 2.596518987341772,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 7",
+                "identifier": "appkit.row.7",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 2.4382911392405062,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 8",
+                "identifier": "appkit.row.8",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 2.2800632911392404,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 9",
+                "identifier": "appkit.row.9",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 2.1218354430379747,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 10",
+                "identifier": "appkit.row.10",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 1.9636075949367089,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 11",
+                "identifier": "appkit.row.11",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 1.8053797468354431,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 12",
+                "identifier": "appkit.row.12",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 1.6471518987341771,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 13",
+                "identifier": "appkit.row.13",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 1.4889240506329113,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 14",
+                "identifier": "appkit.row.14",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 1.3306962025316456,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 15",
+                "identifier": "appkit.row.15",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 1.1724683544303798,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 16",
+                "identifier": "appkit.row.16",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 1.014240506329114,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 17",
+                "identifier": "appkit.row.17",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 0.8560126582278481,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 18",
+                "identifier": "appkit.row.18",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXStaticText",
+                "normalizedFrame": {
+                  "y": 0.6977848101265823,
+                  "x": 0.034444444444444444,
+                  "width": 0.22,
+                  "height": 0.03481012658227848
+                },
+                "value": "row 19",
+                "identifier": "appkit.row.19",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXScrollBar",
+                "children": [
+                  {
+                    "normalizedFrame": {
+                      "y": 0.5775316455696202,
+                      "x": 0.3011111111111111,
+                      "width": 0.006666666666666667,
+                      "height": 0.048259493670886076
+                    },
+                    "value": "0",
+                    "role": "AXValueIndicator"
+                  },
+                  {
+                    "normalizedFrame": {
+                      "y": 0.5727848101265823,
+                      "x": 0.2922222222222222,
+                      "width": 0,
+                      "height": 0
+                    },
+                    "role": "AXButton",
+                    "subrole": "AXIncrementArrow"
+                  },
+                  {
+                    "normalizedFrame": {
+                      "y": 0.5727848101265823,
+                      "x": 0.2922222222222222,
+                      "width": 0,
+                      "height": 0
+                    },
+                    "role": "AXButton",
+                    "subrole": "AXDecrementArrow"
+                  },
+                  {
+                    "normalizedFrame": {
+                      "y": 0.6257911392405063,
+                      "x": 0.3011111111111111,
+                      "width": 0.006666666666666667,
+                      "height": 0.33781645569620256
+                    },
+                    "role": "AXButton",
+                    "subrole": "AXIncrementPage"
+                  },
+                  {
+                    "normalizedFrame": {
+                      "y": 0.5775316455696202,
+                      "x": 0.3011111111111111,
+                      "width": 0.006666666666666667,
+                      "height": 0
+                    },
+                    "role": "AXButton",
+                    "subrole": "AXDecrementPage"
+                  }
+                ],
+                "normalizedFrame": {
+                  "y": 0.5712025316455697,
+                  "x": 0.2911111111111111,
+                  "width": 0.021111111111111112,
+                  "height": 0.3987341772151899
+                },
+                "value": "0",
+                "focused": false
+              }
+            ],
+            "role": "AXScrollArea",
+            "normalizedFrame": {
+              "y": 0.5727848101265823,
+              "x": 0.022222222222222223,
+              "width": 0.28888888888888886,
+              "height": 0.39556962025316456
+            },
+            "identifier": "appkit.scroll",
+            "focused": false
+          },
+          {
+            "normalizedFrame": {
+              "y": 0.06645569620253164,
+              "x": 0.34444444444444444,
+              "width": 0.3,
+              "height": 0.3322784810126582
+            },
+            "subrole": "AXHostingView",
+            "focused": false,
+            "children": [
+              {
+                "enabled": true,
+                "role": "AXButton",
+                "identifier": "swift.button",
+                "normalizedFrame": {
+                  "y": 0.15031645569620253,
+                  "x": 0.3611111111111111,
+                  "width": 0.12333333333333334,
+                  "height": 0.0379746835443038
+                },
+                "description": "SwiftUI button",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXTextField",
+                "identifier": "swift.field",
+                "value": "",
+                "normalizedFrame": {
+                  "y": 0.20094936708860758,
+                  "x": 0.3611111111111111,
+                  "width": 0.26666666666666666,
+                  "height": 0.0379746835443038
+                },
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXCheckBox",
+                "identifier": "swift.toggle",
+                "value": "0",
+                "description": "SwiftUI toggle",
+                "normalizedFrame": {
+                  "y": 0.2512498686585245,
+                  "x": 0.3611111111111111,
+                  "width": 0.11888888888888889,
+                  "height": 0.025648865518690663
+                },
+                "focused": false
+              },
+              {
+                "normalizedFrame": {
+                  "y": 0.2898893718478046,
+                  "x": 0.3611111111111111,
+                  "width": 0.042777777777777776,
+                  "height": 0.02531645569620253
+                },
+                "value": "taps 0",
+                "enabled": true,
+                "identifier": "swift.taps",
+                "role": "AXStaticText"
+              }
+            ],
+            "role": "AXGroup"
+          },
+          {
+            "webView": 0,
+            "enabled": true,
+            "role": "AXGroup",
+            "normalizedFrame": {
+              "y": 0.08227848101265822,
+              "x": 0.6666666666666666,
+              "width": 0.3111111111111111,
+              "height": 0.8860759493670886
+            },
+            "identifier": "web.view",
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Open (modal)",
+            "identifier": "panel.open.modal",
+            "normalizedFrame": {
+              "y": 0.5458860759493671,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Open (sheet)",
+            "identifier": "panel.open.sheet",
+            "normalizedFrame": {
+              "y": 0.5854430379746836,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Save (modal)",
+            "identifier": "panel.save.modal",
+            "normalizedFrame": {
+              "y": 0.625,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Save (sheet)",
+            "identifier": "panel.save.sheet",
+            "normalizedFrame": {
+              "y": 0.6645569620253164,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Alert (sheet)",
+            "identifier": "panel.alert.sheet",
+            "normalizedFrame": {
+              "y": 0.7041139240506329,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Custom sheet",
+            "identifier": "panel.custom.sheet",
+            "normalizedFrame": {
+              "y": 0.7436708860759493,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Popover",
+            "identifier": "panel.popover",
+            "normalizedFrame": {
+              "y": 0.7832278481012658,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Color panel",
+            "identifier": "panel.color",
+            "normalizedFrame": {
+              "y": 0.8227848101265823,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Print panel",
+            "identifier": "panel.print",
+            "normalizedFrame": {
+              "y": 0.8623417721518988,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "title": "Share",
+            "identifier": "panel.share",
+            "normalizedFrame": {
+              "y": 0.9018987341772152,
+              "x": 0.3322222222222222,
+              "width": 0.15777777777777777,
+              "height": 0.04113924050632911
+            },
+            "focused": false
+          },
+          {
+            "normalizedFrame": {
+              "y": 0.5411392405063291,
+              "x": 0.49444444444444446,
+              "width": 0.16666666666666666,
+              "height": 0.4272151898734177
+            },
+            "subrole": "AXHostingView",
+            "focused": false,
+            "children": [
+              {
+                "enabled": true,
+                "role": "AXButton",
+                "identifier": "swift.import",
+                "normalizedFrame": {
+                  "y": 0.625,
+                  "x": 0.5105555555555555,
+                  "width": 0.12333333333333334,
+                  "height": 0.0379746835443038
+                },
+                "description": "SwiftUI import",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXButton",
+                "identifier": "swift.export",
+                "normalizedFrame": {
+                  "y": 0.6693037974683544,
+                  "x": 0.5105555555555555,
+                  "width": 0.12277777777777778,
+                  "height": 0.0379746835443038
+                },
+                "description": "SwiftUI export",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXButton",
+                "identifier": "swift.alertbtn",
+                "normalizedFrame": {
+                  "y": 0.7136075949367089,
+                  "x": 0.5105555555555555,
+                  "width": 0.10944444444444444,
+                  "height": 0.0379746835443038
+                },
+                "description": "SwiftUI alert",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXButton",
+                "identifier": "swift.sheetbtn",
+                "normalizedFrame": {
+                  "y": 0.7579113924050633,
+                  "x": 0.5105555555555555,
+                  "width": 0.11666666666666667,
+                  "height": 0.0379746835443038
+                },
+                "description": "SwiftUI sheet",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXButton",
+                "identifier": "swift.confirmbtn",
+                "normalizedFrame": {
+                  "y": 0.8022151898734177,
+                  "x": 0.5105555555555555,
+                  "width": 0.13055555555555556,
+                  "height": 0.0379746835443038
+                },
+                "description": "SwiftUI confirm",
+                "focused": false
+              },
+              {
+                "enabled": true,
+                "role": "AXButton",
+                "identifier": "swift.popoverbtn",
+                "normalizedFrame": {
+                  "y": 0.8465189873417721,
+                  "x": 0.5105555555555555,
+                  "width": 0.13444444444444445,
+                  "height": 0.0379746835443038
+                },
+                "description": "SwiftUI popover",
+                "focused": false
+              }
+            ],
+            "role": "AXGroup"
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "subrole": "AXCloseButton",
+            "normalizedFrame": {
+              "y": 0.012658227848101266,
+              "x": 0.008888888888888889,
+              "width": 0.017777777777777778,
+              "height": 0.02531645569620253
+            },
+            "focused": false
+          },
+          {
+            "help": "this button also has an action to zoom the window",
+            "enabled": true,
+            "role": "AXButton",
+            "subrole": "AXFullScreenButton",
+            "children": [
+              {
+                "normalizedFrame": {
+                  "y": 0.014240506329113924,
+                  "x": 0.06111111111111111,
+                  "width": 0.015555555555555555,
+                  "height": 0.022151898734177215
+                },
+                "focused": false,
+                "role": "AXGroup",
+                "children": [
+                  {
+                    "normalizedFrame": {
+                      "y": -0.3639240506329114,
+                      "x": -0.13333333333333333,
+                      "width": 0,
+                      "height": 0
+                    }
+                  }
+                ]
+              }
+            ],
+            "normalizedFrame": {
+              "y": 0.012658227848101266,
+              "x": 0.06,
+              "width": 0.017777777777777778,
+              "height": 0.02531645569620253
+            },
+            "focused": false
+          },
+          {
+            "enabled": true,
+            "role": "AXButton",
+            "subrole": "AXMinimizeButton",
+            "normalizedFrame": {
+              "y": 0.012658227848101266,
+              "x": 0.034444444444444444,
+              "width": 0.017777777777777778,
+              "height": 0.02531645569620253
+            },
+            "focused": false
+          },
+          {
+            "normalizedFrame": {
+              "y": 0.012658227848101266,
+              "x": 0.09111111111111111,
+              "width": 0.10555555555555556,
+              "height": 0.02531645569620253
+            },
+            "value": "Argent fixture",
+            "enabled": true,
+            "focused": false,
+            "role": "AXStaticText"
+          }
+        ],
+        "focused": false
+      }
+    }
+  ],
+  "unreachableCount": 0
+}

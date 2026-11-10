@@ -21,6 +21,7 @@ export const PLATFORMS = [
   "harmony",
   "tvos",
   "android-tv",
+  "macos",
 ] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
