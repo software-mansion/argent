@@ -27,6 +27,7 @@ const bootElectronApp = vi.fn(defaultBoot);
 const killChromiumByPort = vi.fn();
 const killChromiumByPortAndWait = vi.fn(async () => {});
 const forgetElectronLaunchSpec = vi.fn();
+const electronLaunchSpec = vi.fn((_port: number): { pid?: number } | undefined => undefined);
 const withPortLock = vi.fn((_port: number, task: () => Promise<unknown>) => task());
 vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
@@ -38,6 +39,7 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
   forgetElectronLaunchSpec: (...args: unknown[]) =>
     (forgetElectronLaunchSpec as (...a: unknown[]) => unknown)(...args),
   withPortLock: (port: number, task: () => Promise<unknown>) => withPortLock(port, task),
+  electronLaunchSpec: (port: number) => electronLaunchSpec(port),
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 
@@ -188,6 +190,7 @@ beforeEach(() => {
   killChromiumByPortAndWait.mockReset();
   forgetElectronLaunchSpec.mockReset();
   withPortLock.mockClear();
+  electronLaunchSpec.mockReset().mockReturnValue(undefined);
   ensureCdpReachable.mockReset().mockImplementation(async () => ({ Browser: "TestApp/1.0" }));
 });
 
@@ -243,6 +246,22 @@ describe("flow-execute chromium boot", () => {
     expect(killChromiumByPortAndWait.mock.invocationCallOrder[0]).toBeGreaterThan(
       withPortLock.mock.invocationCallOrder[0]!
     );
+  });
+
+  it.each([
+    ["a restart-app replaced the booted process", { pid: 777 }, 777],
+    ["the replacement process already exited", { pid: undefined }, undefined],
+  ])("tears down the current process when %s", async (_name, spec, pid) => {
+    electronLaunchSpec.mockReturnValue(spec);
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");
+
+    await runFlow(makeRegistry(), {
+      name: "chromium-e2e",
+      project_root: PROJECT_ROOT,
+      e2e_test_file: flowFile,
+    });
+
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, pid);
   });
 
   it("counts the hoisted boot in the launch that settles it, as a later launch counts its own", async () => {

@@ -32,6 +32,7 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
   killChromiumByPortAndWait: vi.fn(async () => {}),
   forgetElectronLaunchSpec: vi.fn(),
   withPortLock: (_port: number, task: () => Promise<unknown>) => task(),
+  electronLaunchSpec: () => undefined,
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 

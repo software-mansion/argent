@@ -39,6 +39,7 @@ import { pickFreePort } from "../src/utils/free-port";
 import { createRestartAppTool } from "../src/tools/restart-app";
 import { createFlowAddStepTool } from "../src/tools/flows/flow-add-step";
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
+import { flowInsertEchoTool } from "../src/tools/flows/flow-insert-echo";
 import { __resetRecordingsForTesting, parseFlow } from "../src/tools/flows/flow-utils";
 
 interface FakeChild extends EventEmitter {
@@ -226,6 +227,7 @@ describe("restart-app on Chromium", () => {
       );
 
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE);
+      expect((err as Error).message).toContain("restart-app did not relaunch the app: port");
       expect(Date.now() - started).toBeLessThan(2000);
       expect(children).toHaveLength(1);
 
@@ -283,6 +285,42 @@ describe("restart-app on Chromium", () => {
     expect(children).toHaveLength(4);
     for (const child of children.slice(0, 3)) expect(child.kill).toHaveBeenCalledTimes(1);
     expect(children[3]!.kill).not.toHaveBeenCalled();
+  });
+
+  it("says it stopped the app when the port is still held after the kill", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    // Beside the app's loopback listener, so it outlives the app on the port.
+    const foreign = await holdPort(cdpServer(), "0.0.0.0");
+
+    const err = await registryWithRestartApp()
+      .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE);
+    expect((err as Error).message).toContain("restart-app stopped the app but did not relaunch it");
+    expect(children[0]!.kill).toHaveBeenCalled();
+    await releasePort(foreign);
+  });
+
+  it("does not claim to have stopped a crashed app whose relaunch fails", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    await exitChild(children[0]!, 1, null);
+    spawnMock.mockImplementationOnce(() => {
+      throw new Error("spawn EAGAIN");
+    });
+
+    const err = await registryWithRestartApp()
+      .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
+      .then(
+        () => undefined,
+        (e: unknown) => e
+      );
+
+    expect((err as Error).message).toContain("restart-app could not relaunch the app: ");
+    expect((err as Error).message).not.toContain("stopped");
   });
 
   it("runs a restart queued behind a failed one", async () => {
@@ -568,6 +606,7 @@ describe("restart-app on Chromium", () => {
     ["two restarts", undefined, [{}, {}], 0],
     ["a restart behind a step that is not a launch", undefined, [{ delayMs: 1 }, {}], -1],
     ["a restart in a fragment", "the app shows its home screen", [{}], -1],
+    ["a restart behind an echo", undefined, ["echo", {}], 1],
   ])(
     "records a Chromium restart as the launch only when it leads a standalone test: %s",
     async (_name, executionPrerequisite, restarts, launchAt) => {
@@ -582,6 +621,13 @@ describe("restart-app on Chromium", () => {
           { name: "restarts", project_root: projectRoot, executionPrerequisite }
         );
         for (const extra of restarts) {
+          if (extra === "echo") {
+            await flowInsertEchoTool.execute(
+              {},
+              { name: "restarts", project_root: projectRoot, message: "start" }
+            );
+            continue;
+          }
           await createFlowAddStepTool(registry).execute(
             {},
             {
@@ -602,9 +648,11 @@ describe("restart-app on Chromium", () => {
         expect(steps).toHaveLength(restarts.length);
         steps.forEach((step, i) =>
           expect(step).toMatchObject(
-            i === launchAt
-              ? { kind: "launch", app: { chromium: appDir } }
-              : { kind: "tool", name: "restart-app", args: { bundleId: "tag" } }
+            restarts[i] === "echo"
+              ? { kind: "echo" }
+              : i === launchAt
+                ? { kind: "launch", app: { chromium: appDir } }
+                : { kind: "tool", name: "restart-app", args: { bundleId: "tag" } }
           )
         );
       } finally {

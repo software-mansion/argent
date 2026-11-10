@@ -113,6 +113,7 @@ import {
 } from "../../blueprints/chromium-cdp";
 import {
   bootElectronApp,
+  electronLaunchSpec,
   forgetElectronLaunchSpec,
   killChromiumByPortAndWait,
   withPortLock,
@@ -2220,7 +2221,9 @@ async function teardownBootedChromium(registry: Registry, booted: BootedChromium
       /* the kill below frees the real resource regardless */
     }
     try {
-      await killChromiumByPortAndWait(booted.port, booted.pid);
+      // A restart-app may have replaced the booted process; the spec tracks the live pid.
+      const spec = electronLaunchSpec(booted.port);
+      await killChromiumByPortAndWait(booted.port, spec ? spec.pid : booted.pid);
       forgetElectronLaunchSpec(booted.port);
       untrackChromiumPort(booted.port);
     } catch {
