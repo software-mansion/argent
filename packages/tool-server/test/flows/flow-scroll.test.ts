@@ -1047,15 +1047,44 @@ describe("scroll-to directive", () => {
     expect(swipes[0].fromY).toBeCloseTo(0.1);
   });
 
-  it("scrolls a cut target with no wheel anchor on the axis like an uncut one", async () => {
+  // A card in a horizontal carousel that ends at x 0.8: cut across a vertical
+  // scroll only, so the walker spans the screen height and anchors x alone.
+  const carouselCard = (scrolled: boolean, cutAt: { y: number; height: number }) =>
+    n({
+      identifier: "card",
+      frame: scrolled
+        ? { x: 0.64, y: 0.3, width: 0.16, height: 0.14 }
+        : { x: 0.64, ...cutAt, width: 0.16 },
+      clipBounds: scrolled ? undefined : { x: 0, y: 0, width: 0.8, height: 1 },
+      clipAnchors: scrolled ? undefined : { x: { x: 0.08, y: cutAt.y + 0.01 } },
+    });
+
+  it("scrolls a target cut only across the axis like an uncut one", async () => {
     const swipes = await scrollTo(
-      "unanchored-cut",
-      (scrolled) => [n({ ...cutRow(scrolled), clipAnchors: undefined })],
-      { target: { identifier: "row" } }
+      "cross-cut",
+      (scrolled) => [carouselCard(scrolled, { y: 0.95, height: 0.05 })],
+      { target: { identifier: "card" } }
     );
     expect(swipes).toHaveLength(1);
     expect(swipes[0].fromX).toBeCloseTo(0.5);
     expect(swipes[0].fromY).toBeCloseTo(0.5);
+  });
+
+  it("scrolls a target cut only across the axis until the `within` container's frame holds it", async () => {
+    // The pane clips its content at y 0.561 without scrolling natively; the
+    // card is cut flush there.
+    const pane = n({
+      identifier: "pane",
+      frame: { x: 0, y: 0.14025, width: 0.8, height: 0.42076 },
+    });
+    const swipes = await scrollTo(
+      "cross-cut-within",
+      (scrolled) => [pane, carouselCard(scrolled, { y: 0.49509, height: 0.06592 })],
+      { target: { identifier: "card" }, within: { identifier: "pane" } }
+    );
+    expect(swipes).toHaveLength(1);
+    expect(swipes[0].fromX).toBeCloseTo(0.4);
+    expect(swipes[0].fromY).toBeCloseTo(0.35063);
   });
 
   it("anchors a horizontal scroll where the walker found a wheel reaches the cutter", async () => {

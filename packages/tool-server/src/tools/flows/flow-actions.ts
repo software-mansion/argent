@@ -861,8 +861,8 @@ async function scrollToVisible(
     // along. Any other gesture is anchored inside the
     // container (so the right nested scroller moves), or spans the whole screen
     // when none is named. The axis check measures the target against the window
-    // that cuts it, else the one the container clips its content to, else the
-    // container's frame.
+    // that cuts it along the axis, else the one the container clips its content
+    // to, else the container's frame.
     const container = within ? flowSelectorToNode(tree, within, orientation) : undefined;
     if (within && !container) {
       return { reason: `scroll container ${describeSelector(within)} is not visible` };
@@ -879,7 +879,7 @@ async function scrollToVisible(
           ? { x: frame.x, y: axisCut.y, width: frame.width, height: axisCut.height }
           : { x: axisCut.x, y: frame.y, width: axisCut.width, height: frame.height }
         : (container?.frame ?? FULL_SCREEN);
-    if (frame && axisFullyInside(frame, axisDirection, cut ?? container?.clipFrame ?? region)) {
+    if (frame && axisFullyInside(frame, axisDirection, axisCut ?? container?.clipFrame ?? region)) {
       return { frame, ...warnedBy(warning) };
     }
     // How far the target reaches into its window from the cutting edge changes only
