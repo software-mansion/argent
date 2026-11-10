@@ -15,9 +15,16 @@
  *   npm run capture:tool-output -- --call 'list-devices {}'
  *   npm run capture:tool-output -- --call 'describe {"udid":"<id>"}' --call 'screenshot {"udid":"<id>"}'
  *   npm run capture:tool-output -- --steps steps.json [--var udid=<id>]... [--out <dir>]
+ *   npm run capture:tool-output -- --client claude-code --call '...'
  *
  * steps.json is a list of { "tool": "...", "args": {...}, "id"?: "...", "timeoutMs"?: n }
- * or { "sleep": ms }. An arg value "$name" is replaced by --var name=value.
+ * or { "sleep": ms }. An arg value "$name" is replaced by --var name=value. Every value is
+ * replaced before the first call, so a missing --var stops the run before it acts on a device.
+ *
+ * Some results depend on the client: how a screenshot is sent, for one. By default the
+ * capture connects as `argent-capture-tool-output`, a name Argent does not know, so it shows
+ * what an unknown client gets. --client <name> connects with that MCP clientInfo.name
+ * instead, such as `claude-code` or `Q DEV CLI` (see packages/argent-mcp/src/CLIENTS.md).
  *
  * Output (default: a new folder in the temp directory), per call:
  *   NN-<id>.txt   the result as the model reads it, each image shown as [image WxH]
@@ -40,7 +47,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } f
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -51,6 +58,7 @@ const { values } = parseArgs({
     steps: { type: "string" },
     var: { type: "string", multiple: true, default: [] },
     out: { type: "string" },
+    client: { type: "string", default: "argent-capture-tool-output" },
     help: { type: "boolean", short: "h", default: false },
   },
 });
@@ -60,14 +68,6 @@ if (values.help || (values.call.length === 0 && !values.steps)) {
   process.stdout.write(header.replace(/^#!.*\n\/\*\*\n/, "").replace(/^ \* ?/gm, "") + "\n");
   process.exit(values.help ? 0 : 1);
 }
-
-// Workspace packages load from dist/, so stale output would capture old results.
-const tsc = createRequire(import.meta.url).resolve("typescript/bin/tsc");
-const projects = ["packages/tool-server", "packages/argent-tools-client", "packages/argent-mcp"];
-execFileSync(process.execPath, [tsc, "--build", ...projects], { cwd: REPO, stdio: "inherit" });
-// tsc skips the .mjs runner files and the Instruments template. stdout is the result table.
-const copyAssets = path.join(REPO, "packages/tool-server/scripts/copy-build-assets.mjs");
-execFileSync(process.execPath, [copyAssets], { cwd: REPO, stdio: ["inherit", 2, "inherit"] });
 
 function parseCall(spec) {
   const space = spec.indexOf(" ");
@@ -92,6 +92,23 @@ function fill(v) {
   }
   return v;
 }
+for (const [i, step] of steps.entries()) {
+  if (step.sleep) continue;
+  try {
+    step.args = fill(step.args ?? {});
+  } catch (e) {
+    process.stderr.write(`step ${i + 1} (${step.tool}): ${e.message}\n`);
+    process.exit(1);
+  }
+}
+
+// Workspace packages load from dist/, so stale output would capture old results.
+const tsc = createRequire(import.meta.url).resolve("typescript/bin/tsc");
+const projects = ["packages/tool-server", "packages/argent-tools-client", "packages/argent-mcp"];
+execFileSync(process.execPath, [tsc, "--build", ...projects], { cwd: REPO, stdio: "inherit" });
+// tsc skips the .mjs runner files and the Instruments template. stdout is the result table.
+const copyAssets = path.join(REPO, "packages/tool-server/scripts/copy-build-assets.mjs");
+execFileSync(process.execPath, [copyAssets], { cwd: REPO, stdio: ["inherit", 2, "inherit"] });
 
 const out = values.out ?? mkdtempSync(path.join(os.tmpdir(), "argent-tool-output-"));
 mkdirSync(out, { recursive: true });
@@ -108,21 +125,8 @@ const { createRegistry } = require(
   path.join(REPO, "packages/tool-server/dist/utils/setup-registry.js")
 );
 const { createHttpApp } = require(path.join(REPO, "packages/tool-server/dist/http.js"));
-const { app } = createHttpApp(createRegistry());
-const httpServer = await new Promise((resolve) => {
-  const s = app.listen(0, "127.0.0.1", () => resolve(s));
-});
-process.env.ARGENT_TOOLS_URL = `http://127.0.0.1:${httpServer.address().port}`;
-process.env.ARGENT_TOOLS_TOKEN = token;
-
-const sdk = (p) => import(require.resolve(`@modelcontextprotocol/sdk/${p}`));
-const { startMcpServer } = await import(path.join(REPO, "packages/argent-mcp/dist/mcp-server.js"));
-const { InMemoryTransport } = await sdk("inMemory.js");
-const { Client } = await sdk("client/index.js");
-const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-await startMcpServer({ paths: {}, transport: serverSide });
-const client = new Client({ name: "argent-capture-tool-output", version: "1" });
-await client.connect(clientSide);
+// The ESM loader takes a file URL; a bare Windows path reads as a URL scheme.
+const load = (file) => import(pathToFileURL(file).href);
 
 function pngSize(buf) {
   if (buf.length > 24 && buf.toString("ascii", 12, 16) === "IHDR") {
@@ -131,17 +135,18 @@ function pngSize(buf) {
   return [null, null];
 }
 
+let client;
 const rows = [];
 let n = 0;
-for (const step of steps) {
+async function capture(step) {
   if (step.sleep) {
     await new Promise((r) => setTimeout(r, step.sleep));
-    continue;
+    return;
   }
   n++;
   const nn = String(n).padStart(2, "0");
   const id = (step.id ?? step.tool).replace(/[^\w.-]+/g, "_");
-  const args = fill(step.args ?? {});
+  const { args } = step;
   const started = Date.now();
   let res;
   try {
@@ -192,8 +197,38 @@ for (const step of steps) {
   appendFileSync(path.join(out, "index.jsonl"), JSON.stringify(row) + "\n");
 }
 
-await client.close();
-httpServer.close();
+const registry = createRegistry();
+const http = createHttpApp(registry);
+let httpServer;
+try {
+  httpServer = await new Promise((resolve) => {
+    const s = http.app.listen(0, "127.0.0.1", () => resolve(s));
+  });
+  process.env.ARGENT_TOOLS_URL = `http://127.0.0.1:${httpServer.address().port}`;
+  process.env.ARGENT_TOOLS_TOKEN = token;
+
+  const sdk = (p) => load(require.resolve(`@modelcontextprotocol/sdk/${p}`));
+  const { startMcpServer } = await load(path.join(REPO, "packages/argent-mcp/dist/mcp-server.js"));
+  const { InMemoryTransport } = await sdk("inMemory.js");
+  const { Client } = await sdk("client/index.js");
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  await startMcpServer({ paths: {}, transport: serverSide });
+  client = new Client({ name: values.client, version: "1" });
+  await client.connect(clientSide);
+
+  for (const step of steps) await capture(step);
+} finally {
+  await client?.close().catch(() => {});
+  httpServer?.close();
+  http.dispose();
+  // As the tool-server's own shutdown does: services that started host processes (the
+  // Android devtools helper, the physical-iPhone runner) stop them here.
+  try {
+    await registry.dispose();
+  } catch (err) {
+    process.stderr.write(`registry dispose failed: ${String(err)}\n`);
+  }
+}
 
 const cols = ["n", "tool", "ms", "error", "textBlocks", "textChars", "images"];
 const width = Object.fromEntries(

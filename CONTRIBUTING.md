@@ -198,7 +198,9 @@ descriptions, tool schemas or the server instructions. See
 
 `npm run capture:tool-output -- --call '<tool> <json args>'` calls tools through the same
 server against real devices and saves what each result puts in front of the agent: text,
-screenshots and element trees. Run it when you change what a tool returns.
+screenshots and element trees. Run it when you change what a tool returns. It connects as an
+unknown MCP client; add `--client <name>`, such as `--client claude-code`, to see what that
+client gets.
 
 ---
 
