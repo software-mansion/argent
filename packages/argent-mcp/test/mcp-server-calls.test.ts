@@ -421,13 +421,18 @@ describe("startMcpServer tool listing per client", () => {
 describe("startMcpServer screen capture after an interaction", () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
   const CAPTURE_LISTING = {
-    tools: ["gesture-tap", "await-ui-element", "await-screen-idle", "screenshot", "describe"].map(
-      (name) => ({
-        name,
-        description: name,
-        inputSchema: { type: "object", properties: {} },
-      })
-    ),
+    tools: [
+      "gesture-tap",
+      "tv-remote",
+      "await-ui-element",
+      "await-screen-idle",
+      "screenshot",
+      "describe",
+    ].map((name) => ({
+      name,
+      description: name,
+      inputSchema: { type: "object", properties: {} },
+    })),
   };
   // Short, so a capture call that never answers ends the test in about a second.
   const CAPTURE_MS = 1_000;
@@ -469,6 +474,7 @@ describe("startMcpServer screen capture after an interaction", () => {
     stub = await startStub({
       routes: {
         "/tools/gesture-tap": (res) => send(res, 200, { data: { tapped: true } }),
+        "/tools/tv-remote": (res) => send(res, 200, { data: { pressed: ["down"], count: 1 } }),
         "/tools/await-ui-element": (res) => send(res, 200, { data: waitResult }),
         "/tools/await-screen-idle": (res) => {
           if (idleHangs) return;
@@ -530,6 +536,21 @@ describe("startMcpServer screen capture after an interaction", () => {
     ]);
     expect(content[0]!.text).toContain('"tapped": true');
     expect(content.at(-1)!.text).toContain("button Done");
+  });
+
+  it("appends the screenshot and the focus view after a TV remote press", async () => {
+    const result = await client.callTool({
+      name: "tv-remote",
+      arguments: { udid: "u", button: "down" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const idle = stub.requests.find((r) => r.url === "/tools/await-screen-idle");
+    expect(JSON.parse(idle!.body)).toEqual({ udid: "u", timeoutMs: 1500 });
+    const text = textOf(result);
+    expect(text).toContain('"pressed"');
+    expect(text).toContain("--- Screen after action ---");
+    expect(text).toContain(AUTO_DESCRIBE_HEADER);
   });
 
   it("captures the screenshot and the tree at the same time once the screen settled", async () => {
