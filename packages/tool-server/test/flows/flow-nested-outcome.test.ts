@@ -249,14 +249,14 @@ describe("the check is deliberately scoped to the two orchestrator tools", () =>
 });
 
 describe("a failure carrying no message still says something after the colon", () => {
-  it("keeps a composed flow's fragment readable", () => {
+  it.each(["", " \n "])("keeps a composed flow's fragment readable (reason %j)", (reason) => {
     const out = nestedOrchestratorOutcome("flow-execute", {
       flow: "login",
       ok: false,
       passed: 0,
       failed: 1,
       errored: 0,
-      steps: [{ index: 0, kind: "tool", tool: "gesture-tap", status: "fail", reason: "" }],
+      steps: [{ index: 0, kind: "tool", tool: "gesture-tap", status: "fail", reason }],
     });
 
     expect(out?.status).toBe("fail");

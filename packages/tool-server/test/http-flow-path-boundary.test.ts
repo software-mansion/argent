@@ -14,6 +14,7 @@ import { flowReadPrerequisiteTool } from "../src/tools/flows/flow-read-prerequis
 import { flowStartRecordingTool } from "../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../src/tools/flows/flow-insert-echo";
 import { flowFinishRecordingTool } from "../src/tools/flows/flow-finish-recording";
+import { flowAddScriptTool } from "../src/tools/flows/flow-add-script";
 import { parseFlow, serializeFlow } from "../src/tools/flows/flow-utils";
 import { redirectTmpdir } from "./helpers/tmpdir-env";
 
@@ -85,6 +86,7 @@ function httpRegistry(steps: Registry): Registry {
     | typeof flowStartRecordingTool
     | typeof flowInsertEchoTool
     | typeof flowFinishRecordingTool
+    | typeof flowAddScriptTool
   > = {
     "flow-execute": createRunFlowTool(steps),
     "flow-read-prerequisite": flowReadPrerequisiteTool,
@@ -92,6 +94,7 @@ function httpRegistry(steps: Registry): Registry {
     "flow-add-step": createFlowAddStepTool(steps),
     "flow-add-echo": flowInsertEchoTool,
     "flow-finish-recording": flowFinishRecordingTool,
+    "flow-add-script": flowAddScriptTool,
   };
   return {
     // GET /tools lists the step tools too, as one real registry does.
@@ -1269,6 +1272,29 @@ describe("flow-execute over a link, from the real argent client", () => {
       }
     }
   );
+
+  it("records a script step into a recording started with a relative project_root", async () => {
+    await write("scripts/seed.mjs", "output.ok = true;\n");
+    const client = await toolsClient(false, "flow-finish-recording");
+    const recording = { name: "rel", project_root: "." };
+    const originalCwd = process.cwd();
+    process.chdir(projectRoot);
+    try {
+      await client.callTool("flow-start-recording", recording);
+      const { data: added } = await client.callTool("flow-add-script", {
+        ...recording,
+        path: "../../scripts/seed.mjs",
+      });
+      const { data } = await client.callTool("flow-finish-recording", recording);
+
+      expect((added as { status: string }).status).toBe("pass");
+      expect(parseFlow((data as { flowFile: string }).flowFile).steps).toEqual([
+        { kind: "script", path: "../../scripts/seed.mjs" },
+      ]);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
 
   it.each([false, true])(
     "replays a saved test by name with a relative project_root, warning of the legacy test it hides (remote: %s)",

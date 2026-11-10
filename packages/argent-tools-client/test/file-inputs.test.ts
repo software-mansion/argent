@@ -357,6 +357,13 @@ describe("prepareFileInputs — collect: flow", () => {
     );
   });
 
+  it("finds the run: targets of a flow whose first line is indented deeper than the rest", async () => {
+    await fs.writeFile(path.join(flows, "main.yaml"), "\n    steps:\n  - run: frag.yaml\n");
+    await fs.writeFile(path.join(flows, "frag.yaml"), flowYaml("echo: frag"));
+
+    expect(names(await membersOf("main.yaml"))).toEqual(["frag.yaml"]);
+  });
+
   it("sends each resolution once, so a cycle ends", { timeout: 5_000 }, async () => {
     // Each file names the other two, so a walk that repeats a resolution
     // doubles at every hop and does not end in time.
@@ -607,6 +614,9 @@ describe("prepareFileInputs — relative paths", () => {
     "`pwd`/app",
     "%USERPROFILE%\\app",
     "file:///work/app",
+    "proj/$APP/x",
+    "proj/%APPDIR%/x",
+    "file:/work/app",
   ])("sends %s as written, for the tool-server to refuse", async (projectRoot) => {
     const specs: FileInputSpec[] = [
       { target: "project_root", path: "${project_root}", kind: "probe" },
