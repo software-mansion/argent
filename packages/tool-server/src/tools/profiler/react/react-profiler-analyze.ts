@@ -234,7 +234,11 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
         sourceWarning =
           "The tree-sitter parser could not be loaded, so the report gives no file for any component.";
       } else if (findings.length > 0 && !findings.some((f) => f.sourceLocation)) {
-        sourceWarning = `No component in this report is defined under project_root "${sourceRoot}" (${astIndex.indexedFiles} source files on the tool-server host, ${astIndex.index.size} components), so the report gives no file for any of them. This does not mean they are library components: check project_root.`;
+        // After the fallback sourceRoot is Metro's root, which the caller never passed.
+        const searched =
+          sourceRoot === params.project_root ? "project_root" : "Metro's project root";
+        const noFile = `No component in the report's table is defined under ${searched} "${sourceRoot}" (${astIndex.indexedFiles} source files on the tool-server host, ${astIndex.index.size} components), so the report gives no file for any of them. They may all be library components. If any of them is from the app, check project_root.`;
+        sourceWarning = sourceWarning ? `${sourceWarning} ${noFile}` : noFile;
       } else if (metroRoot && (await unrelatedPaths(metroRoot, sourceRoot))) {
         sourceWarning = `Metro serves this app from "${metroRoot}", but project_root is "${sourceRoot}", so the files in this report may be from another project.`;
       }

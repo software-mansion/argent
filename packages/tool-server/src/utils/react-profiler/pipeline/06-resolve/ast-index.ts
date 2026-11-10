@@ -214,20 +214,22 @@ function moduleOf(file: string): string {
 }
 
 /**
- * Keep the one variant Metro bundles for each module. Variants compete only
- * inside a module: a helper in Other.ios.tsx says nothing about Button.tsx.
+ * Decide from every source file which variant Metro bundles for each module.
+ * Variants compete only inside a module: a helper in Other.ios.tsx says nothing
+ * about Button.tsx. Inside a module a variant competes whether or not it defines
+ * the name looked up, because Metro picks it over the base file either way.
  */
-function keepBundled(entries: ComponentIndexEntry[], platform?: Platform): ComponentIndexEntry[] {
-  if (!platform) return entries;
+function bundledFilter(files: string[], platform?: Platform): (file: string) => boolean {
+  if (!platform) return () => true;
   const best = new Map<string, number>();
-  for (const { file } of entries) {
+  for (const file of files) {
     const module = moduleOf(file);
     best.set(module, Math.min(best.get(module) ?? NOT_BUNDLED, variantRank(file, platform)));
   }
-  return entries.filter(({ file }) => {
+  return (file) => {
     const rank = variantRank(file, platform);
     return rank !== NOT_BUNDLED && rank === best.get(moduleOf(file));
-  });
+  };
 }
 
 function fileNameKey(name: string): string {
@@ -374,8 +376,9 @@ export async function buildAstIndexWithDiagnostics(
     }
   }
 
+  const isBundled = bundledFilter(files, platform);
   for (const [name, entries] of candidates) {
-    const bundled = keepBundled(entries, platform);
+    const bundled = entries.filter(({ file }) => isBundled(file));
     if (bundled.length === 0) continue;
     const { primary, others } = pickPrimary(name, bundled, platform, nestedPackages);
     index.set(name, others.length > 0 ? { ...primary, otherMatches: others } : primary);

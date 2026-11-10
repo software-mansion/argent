@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { reactProfilerAnalyzeTool } from "../../src/tools/profiler/react/react-profiler-analyze";
@@ -241,6 +241,55 @@ describe("the warning analyze gives when it cannot locate source", () => {
     expect(result.warning).toContain(`Metro's project root "${metroRoot}"`);
   });
 
+  it("gives no warning when one row is located and another is a library component", async () => {
+    const root = project({ "src/List.tsx": component("List", "BASE") });
+
+    const result = await analyze(["List", "View"], { project_root: root });
+
+    expect(fileCell(result.report, "List")).toBe("`src/List.tsx:1`");
+    expect(fileCell(result.report, "View")).toBe("—");
+    expect(result.warning).toBeUndefined();
+  });
+
+  it("allows both causes when every row is a library component", async () => {
+    const root = project({ "src/List.tsx": component("List", "BASE") });
+
+    const result = await analyze(["View", "Text"], { project_root: root });
+
+    expect(result.warning).toContain(`project_root "${root}"`);
+    expect(result.warning).toContain("They may all be library components.");
+    expect(result.warning).toContain("If any of them is from the app, check project_root.");
+    expect(result.warning).not.toContain("does not mean");
+  });
+
+  it("keeps the fallback notice and names Metro's root as Metro's when no row is located", async () => {
+    const metroRoot = project({ "src/List.tsx": component("List", "BASE") });
+
+    const result = await analyze(["View"], { project_root: "/client/only/path" }, { metroRoot });
+
+    expect(result.warning).toContain(`project_root "/client/only/path" holds no components`);
+    expect(result.warning).toContain(`under Metro's project root "${metroRoot}"`);
+    expect(result.warning).not.toContain(`project_root "${metroRoot}"`);
+  });
+
+  it("gives no warning for a report with no components", async () => {
+    const root = project({ "src/List.tsx": component("List", "BASE") });
+
+    const result = await analyze([], { project_root: root }, { hotCommitIndices: [] });
+
+    expect(result.warning).toBeUndefined();
+  });
+
+  it("accepts a symlink to Metro's root as the same project", async () => {
+    const metroRoot = project({ "src/List.tsx": component("List", "BASE") });
+    const link = join(makeTempDir("analyze-link-"), "app");
+    symlinkSync(metroRoot, link);
+
+    const result = await analyze(["List"], { project_root: link }, { metroRoot });
+
+    expect(result.warning).toBeUndefined();
+  });
+
   it("warns when project_root is a real project but not the one Metro serves", async () => {
     const metroRoot = project({ "src/List.tsx": component("List", "REAL") });
     const other = project({ "src/List.tsx": component("List", "OTHER") });
@@ -385,6 +434,52 @@ describe("buildAstIndexWithDiagnostics with a platform", () => {
     ).toBe("src/List.native.tsx");
   });
 
+  it("ranks .native above the base file where path order says the opposite", async () => {
+    const body = "export function List() {\n  return null;\n}\n";
+    const root = project({ "src/List.js": body, "src/List.native.js": body });
+
+    const { index } = await buildAstIndexWithDiagnostics(root, "ios");
+
+    expect(index.get("List")?.file).toBe(join(root, "src/List.native.js"));
+    expect(index.get("List")?.otherMatches).toBeUndefined();
+  });
+
+  it("drops a base file that a variant shadows without defining the name", async () => {
+    const root = project({
+      "src/KYCWall/index.tsx": component("KYCWall", "WEB"),
+      "src/KYCWall/index.native.ts": 'export { default } from "./BaseKYCWall";\n',
+      "src/KYCWall/BaseKYCWall.tsx": component("KYCWall", "BASE"),
+    });
+
+    for (const platform of ["ios", "android"] as const) {
+      const { index } = await buildAstIndexWithDiagnostics(root, platform);
+      expect(index.get("KYCWall")?.file).toBe(join(root, "src/KYCWall/BaseKYCWall.tsx"));
+      expect(index.get("KYCWall")?.otherMatches).toBeUndefined();
+    }
+  });
+
+  it("gives no entry to a name defined only in a shadowed base file", async () => {
+    const files = {
+      "src/List/index.tsx": list("WEB"),
+      "src/List/index.native.ts": "export default null;\n",
+    };
+    expect(await primary(files, "ios")).toBeUndefined();
+    expect(await primary(files, "android")).toBeUndefined();
+  });
+
+  it("filters nothing with no platform, whichever variant defines the name", async () => {
+    const onlyInBase = {
+      "src/List/index.tsx": list("BASE"),
+      "src/List/index.native.ts": "export default null;\n",
+    };
+    expect(await primary(onlyInBase)).toBe("src/List/index.tsx");
+    const onlyInVariant = {
+      "src/List/index.tsx": "export default null;\n",
+      "src/List/index.native.tsx": list("NATIVE"),
+    };
+    expect(await primary(onlyInVariant)).toBe("src/List/index.native.tsx");
+  });
+
   it("puts the base file above the other platform's variant", async () => {
     const files = { "src/List.tsx": list("BASE"), "src/List.ios.tsx": list("IOS") };
     expect(await primary(files, "android")).toBe("src/List.tsx");
@@ -440,6 +535,16 @@ describe("buildAstIndexWithDiagnostics with a platform", () => {
       "embed/package.json": "{}",
       "embed/src/List.tsx": list("OTHER_PACKAGE"),
       "src/List.stories.tsx": list("STORY"),
+      "src/screens/Feed.tsx": list("APP"),
+    };
+    expect(await primary(files, "ios")).toBe("src/screens/Feed.tsx");
+  });
+
+  it("does not count the project's own package.json as a nested package", async () => {
+    const files = {
+      "package.json": "{}",
+      "embed/package.json": "{}",
+      "embed/src/List.tsx": list("OTHER_PACKAGE"),
       "src/screens/Feed.tsx": list("APP"),
     };
     expect(await primary(files, "ios")).toBe("src/screens/Feed.tsx");
