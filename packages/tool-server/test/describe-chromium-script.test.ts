@@ -971,6 +971,8 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       return findById(run([button, target]).tree, "btn")!.label;
     };
     expect(label("select", { selectedOptions: [{ label: "Large" }] })).toBe("Large");
+    expect(label("progress", { value: 3 }, { value: "3" })).toBe("3");
+    expect(label("meter", { value: 0.4, min: 0, max: 1 })).toBe("0.4");
     expect(label("textarea", { value: "typed", placeholder: "" })).toBe("typed");
     expect(label("textarea", { value: "typed", placeholder: "" }, { "aria-label": "Named" })).toBe(
       "typed"
@@ -1018,6 +1020,40 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(vol({ "role": "button slider", "aria-valuenow": "7" })).toBe("Vol s end");
     expect(vol({ role: "progressbar" })).toBe("Vol s end");
     expect(vol({ "role": "slider", "aria-valuetext": "", "aria-valuenow": "7" })).toBe("Vol end");
+    // A rendered <progress> or <meter> is one too, and never reads its content.
+    const native = (
+      tag: string,
+      attrs: Record<string, string>,
+      fields: Record<string, unknown>,
+      target: Record<string, string> = { display: "inline" }
+    ) => {
+      const node = widget(attrs, [text("fallback")]);
+      Object.assign(node, { localName: tag, ...fields });
+      return labelledBy([text("a"), node, text("b")], target);
+    };
+    const progress = (attrs: Record<string, string>, value = 0) =>
+      native("progress", attrs, { value });
+    expect(progress({ value: "3" }, 3)).toBe("a 3 b");
+    expect(progress({})).toBe("a b");
+    expect(progress({ "aria-valuetext": "hm" })).toBe("a hm b");
+    expect(progress({ "aria-valuenow": "80", "aria-valuemax": "50", "value": "3" }, 3)).toBe(
+      "a 80 b"
+    );
+    expect(progress({ role: "bogus", value: "3" }, 3)).toBe("a 3 b");
+    expect(progress({ role: "slider", value: "3" }, 3)).toBe("a 3 b");
+    expect(progress({ role: "none", value: "3" }, 3)).toBe("a b");
+    expect(progress({ "role": "img", "aria-label": "pic", "value": "3" }, 3)).toBe("a pic b");
+    const meter = (attrs: Record<string, string>) =>
+      native("meter", attrs, { value: 2.5, min: 1, max: 10 });
+    expect(meter({})).toBe("a 2.5 b");
+    expect(meter({ "aria-valuenow": "80" })).toBe("a 10 b");
+    expect(meter({ "aria-valuenow": "80", "aria-valuemax": "50" })).toBe("a 50 b");
+    expect(meter({ "aria-valuenow": "-5" })).toBe("a 1 b");
+    expect(meter({ role: "progressbar" })).toBe("a 2.5 b");
+    // An undisplayed one has no native value and reads its content.
+    expect(native("progress", { value: "3" }, { value: 3 }, { display: "none" })).toBe(
+      "a fallback b"
+    );
 
     const option = (name: string, attrs: Record<string, string>, style = {}) => {
       const node = widget({ role: "option", ...attrs }, [text(name)]);

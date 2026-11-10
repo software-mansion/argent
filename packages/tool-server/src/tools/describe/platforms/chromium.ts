@@ -252,16 +252,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // never renders (one it does not know, <metadata>, <script>); a hidden one reads them
   // all, and there any <svg> parts words, as does every element under display:none, which
   // has no layout to run inline in. Neither reads what layout skips: a closed <details>
-  // past its first <summary>, a content-visibility:hidden box's content, a hidden chosen
-  // option, or a hidden ::before or ::after (or any in an aria-hidden target). An
+  // past its first <summary>, a rendered <progress> or <meter>'s content, a
+  // content-visibility:hidden box's content, a hidden chosen option, or a hidden ::before
+  // or ::after (or any in an aria-hidden target). An
   // <input>'s value is not read. Laid-out text and ::before/::after strings take their
   // text-transform case.
   // Iterative: the target's depth has no MAX_DEPTH bound. The walk stops once more than
   // NAME_MAX non-whitespace characters are in, which settles the name accessibleName cuts.
   function labelText(root) {
-    const rootOptions = chosenOptions(root);
-    const own = controlText(root) ?? rangeText(root) ?? (rootOptions ? null : altText(root));
-    if (own !== null) return own;
     const rootStyle = window.getComputedStyle(root);
     let shown = rootStyle.visibility !== "hidden";
     let ariaHidden = false;
@@ -278,6 +276,10 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         ariaHidden = true;
       }
     }
+    const rootOptions = chosenOptions(root);
+    const own =
+      controlText(root) ?? rangeText(root, !unrendered) ?? (rootOptions ? null : altText(root));
+    if (own !== null) return own;
     if (shown && inert) return "";
     let s = "";
     // Characters read into s that trim() keeps; a lower bound, as s only gains them.
@@ -338,6 +340,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       }
       if (
         empty ||
+        (rendered && html && /^(progress|meter)$/.test(tag)) ||
         (rendered &&
           style.contentVisibility === "hidden" &&
           !isInlineBox(style) &&
@@ -452,7 +455,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (!flow) laid = " ";
       const options = chosenOptions(node);
       const control = controlText(node);
-      const content = control ?? rangeText(node) ?? (options ? null : altText(node));
+      const content = control ?? rangeText(node, rendered) ?? (options ? null : altText(node));
       if (content !== null) {
         read(" " + content + " ");
         if (rendered) laid = blockEnd ? " " : laidEnd(node, control, laid);
@@ -582,9 +585,19 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
   // A range widget's value as Chrome reads it: its aria-valuetext, else its aria-valuenow
   // held to aria-valuemin and aria-valuemax, to 6 significant digits. A value that does
   // not parse reads as 0, and a missing aria-valuenow as Chrome's default for the role.
-  // null for other roles, and for a progressbar without a value.
-  function rangeText(el) {
-    const role = ariaRole(el);
+  // A rendered <progress> or <meter> is one unless its role is another: a <progress> reads
+  // its aria-valuenow unheld, else its value if it has one, and a <meter>'s min, max and
+  // value stand in for the missing attributes. null for other roles, and for a progressbar
+  // without a value.
+  function rangeText(el, rendered) {
+    const tag = getLocalName.call(el);
+    const native =
+      rendered &&
+      getNamespaceURI.call(el) === "http://www.w3.org/1999/xhtml" &&
+      /^(progress|meter)$/.test(tag)
+        ? tag
+        : "";
+    const role = ariaRole(el) || (native === "progress" ? "progressbar" : native);
     if (!/^(slider|scrollbar|spinbutton|meter|progressbar)$/.test(role)) return null;
     const text = getAttr.call(el, "aria-valuetext");
     if (text !== null) return text;
@@ -593,13 +606,21 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (v === null) return missing;
       return /^[+-]?(\\d+\\.?\\d*|\\.\\d+)(e[+-]?\\d+)?$/i.test(v) ? Number(v) : 0;
     };
-    const spin = role === "spinbutton";
-    const min = num("aria-valuemin", spin ? -Infinity : 0);
-    const max = num("aria-valuemax", spin ? Infinity : 100);
     let v = num("aria-valuenow", null);
-    if (v !== null) v = Math.max(min, Math.min(max, v));
-    else if (role === "progressbar") return null;
-    else v = role === "meter" ? min : spin ? 0 : (min + max) / 2;
+    if (native === "progress") {
+      if (v === null) {
+        if (!hasAttr.call(el, "value")) return null;
+        v = el.value;
+      }
+    } else {
+      const spin = role === "spinbutton";
+      const min = num("aria-valuemin", native ? el.min : spin ? -Infinity : 0);
+      const max = num("aria-valuemax", native ? el.max : spin ? Infinity : 100);
+      if (v !== null) v = Math.max(min, Math.min(max, v));
+      else if (native) v = el.value;
+      else if (role === "progressbar") return null;
+      else v = role === "meter" ? min : spin ? 0 : (min + max) / 2;
+    }
     const p = v.toPrecision(6);
     return /^[^e]*\\.[^e]*$/.test(p) ? p.replace(/\\.?0+$/, "") : p;
   }
