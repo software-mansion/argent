@@ -1506,6 +1506,45 @@ describe("iOS native network records: bodies kept", () => {
     );
   });
 
+  it(`keeps the ${MAX_CACHED_BODIES} bodies read most recently past a read that ends with a reason or stays open`, async () => {
+    vi.useFakeTimers();
+    const { app, store, agent } = bodyStore();
+    app.request.mockImplementation(async (_connection, method, params) => {
+      if (params.requestId === "fails") throw agentError(method, "internal error");
+      if (params.requestId === "upload") return new Promise(() => {});
+      return { body: `body of ${String(params.requestId)}`, base64Encoded: false };
+    });
+    const ids: string[] = [];
+    for (let i = 0; i <= MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      ids.push(idOf(store, `r${i}`));
+    }
+    agent.complete("fails", "https://e.com/fails");
+    agent.requestWillBeSent("upload", "https://e.com/upload", {
+      method: "POST",
+      hasPostData: true,
+    });
+    for (let i = 0; i < MAX_CACHED_BODIES; i++) await store.responseBody(ids[i]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES);
+
+    // A read that ends with a reason keeps nothing, so it pushes out nothing.
+    expect(await store.responseBody(idOf(store, "fails"))).toEqual(
+      refused("the agent did not return the body: internal error")
+    );
+    expect(await store.responseBody(ids[0]!)).toEqual(body("body of r0"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 1);
+
+    // A read still open holds no body, so the next body pushes out only the oldest one.
+    const upload = track(store.requestPostData(idOf(store, "upload")));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(upload.value).toEqual(refused(STILL_SENDING));
+    await store.responseBody(ids[MAX_CACHED_BODIES]!);
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 3);
+    expect(await store.responseBody(ids[2]!)).toEqual(body("body of r2"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 3);
+  });
+
   it("counts a read of a kept body as a read, so the body read longest ago goes first", async () => {
     const { app, store, agent } = answering();
     const ids: string[] = [];

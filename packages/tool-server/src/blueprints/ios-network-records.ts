@@ -295,7 +295,6 @@ export function createIosNetworkRecords(
     });
     const read: BodyRead = { sent, answer, settled: false };
     bodies.set(cacheKey, read);
-    dropOldBodies();
     // Only a body is kept: every reason may change at the next read.
     void answer.then((body) => {
       read.settled = true;
@@ -313,13 +312,19 @@ export function createIosNetworkRecords(
   }
 
   /**
-   * Drops the bodies read longest ago past the bound. A read still open stays,
-   * because dropping it would send it to the app again.
+   * Drops the bodies read longest ago past the bound. Only a body takes a
+   * place: a read still open stays, because dropping it would send it to the
+   * app again, and a read that ends with a reason keeps nothing.
    */
   function dropOldBodies(): void {
+    let kept = 0;
+    for (const read of bodies.values()) if (read.settled) kept++;
     for (const [key, read] of bodies) {
-      if (bodies.size <= MAX_CACHED_BODIES) return;
-      if (read.settled) bodies.delete(key);
+      if (kept <= MAX_CACHED_BODIES) return;
+      if (read.settled) {
+        bodies.delete(key);
+        kept--;
+      }
     }
   }
 
