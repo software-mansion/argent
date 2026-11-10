@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DESCRIBE_DOM_SCRIPT } from "../src/tools/describe/platforms/chromium";
+import { formatDescribeTree } from "../src/tools/describe/format-tree";
+import type { DescribeNode } from "../src/tools/describe/contract";
 
 /**
  * `DESCRIBE_DOM_SCRIPT` is an IIFE injected via Runtime.evaluate that walks the live
@@ -887,5 +889,37 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     } finally {
       Object.defineProperty(MockElement.prototype, "scrollHeight", saved!);
     }
+  });
+});
+
+// The side names in `[scrollHidden=N(side)]` are read from the edge a frame was clamped
+// to, so these cases run the real walker's frames through the real text renderer.
+describe("DESCRIBE_DOM_SCRIPT frames behind the off-window fold", () => {
+  const textOf = (children: MockElement[]) =>
+    formatDescribeTree(run(children).tree as DescribeNode, { source: "cdp-dom" });
+  const onScreen = () => el({ tag: "button", attrs: { id: "here" }, rect: BOX });
+  const far = (id: string, rect: Rect) => el({ tag: "li", attrs: { id }, rect });
+  const ABOVE = { x: 100, y: -500, w: 300, h: 40 };
+
+  it.each([
+    ["above", ABOVE],
+    ["below", { x: 100, y: 2000, w: 300, h: 40 }],
+    ["left", { x: -500, y: 100, w: 300, h: 40 }],
+    ["right", { x: 2000, y: 100, w: 300, h: 40 }],
+  ])("names %s for a box on that side of the window", (side, rect) => {
+    const out = textOf([onScreen(), far("far", rect)]);
+    expect(out).toContain(`scrollHidden=1(${side})`);
+    expect(out).toContain('id="here"');
+    expect(out).not.toContain('id="far"');
+  });
+
+  it("reads a box-less wrapper of rows above the window as above", () => {
+    const wrapper = el({
+      tag: "section",
+      style: { display: "contents" },
+      rect: { x: 0, y: 0, w: 0, h: 0 },
+      children: [far("a", ABOVE), far("b", ABOVE)],
+    });
+    expect(textOf([onScreen(), wrapper])).toContain("scrollHidden=1(above)");
   });
 });

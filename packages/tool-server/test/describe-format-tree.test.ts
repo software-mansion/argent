@@ -798,7 +798,15 @@ describe("formatDescribeTree", () => {
     });
 
     it("leaves zero-area rows of other sources in the text", () => {
-      for (const source of ["uiautomator", "android-devtools", "vega-automation"] as const) {
+      const nested = [
+        "uiautomator",
+        "android-devtools",
+        "vega-automation",
+        "harmony-uitest",
+        // The physical iPhone source clamps off-screen rows to zero area, as Chromium does.
+        "xcuitest-runner",
+      ] as const;
+      for (const source of nested) {
         const out = formatDescribeTree(page([row(1)]), { source });
         expect(out).toContain("item-1");
         expect(out).not.toContain("scrollHidden");
@@ -808,7 +816,11 @@ describe("formatDescribeTree", () => {
         frame: { x: 0, y: 0, width: 1, height: 1 },
         children: [leaf({ role: "AXButton", label: "add address", frame: offFrame })],
       };
-      expect(formatDescribeTree(flat, { source: "ax-service" })).toContain('"add address"');
+      for (const source of ["ax-service", "native-devtools", "tv-focus"] as const) {
+        const out = formatDescribeTree(flat, { source });
+        expect(out).toContain('"add address"');
+        expect(out).not.toContain("scrollHidden");
+      }
     });
   });
 
