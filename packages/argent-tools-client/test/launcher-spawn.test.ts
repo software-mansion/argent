@@ -99,7 +99,7 @@ describe("spawnToolsServer", () => {
     process.env.PATH = TEST_HOME;
     try {
       await expect(trackedSpawn()).rejects.toThrow(
-        "Could not start the argent tool-server: `node` was not found on PATH."
+        "Could not start the argent tool-server: `node` was not found on PATH. Install Node.js 22.15+ or add it to PATH."
       );
     } finally {
       process.env.PATH = savedPath;
