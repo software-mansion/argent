@@ -556,7 +556,7 @@ describe("frequent rows past the cap", () => {
       ]),
     });
     expect(report).not.toContain("## Most Frequent Re-renders");
-    expect(report).toContain("past the 5-row cut: `ClockBadge`");
+    expect(report).toContain("not listed above: `ClockBadge`");
   });
 
   it("says nothing when every cut component is already in Top Components", async () => {
@@ -567,7 +567,7 @@ describe("frequent rows past the cap", () => {
       renderSummary: summaryOf(six.map((n, i) => app(n, 900 - i * 100))),
     });
     expect(report).not.toContain("## Most Frequent Re-renders");
-    expect(report).not.toContain("-row cut");
+    expect(report).not.toContain("not listed above");
   });
 
   it("counts what a report with no hot commit leaves out", async () => {
@@ -581,6 +581,6 @@ describe("frequent rows past the cap", () => {
       renderSummary: summaryOf(seven.map((n, i) => app(n, 900 - i * 100))),
     });
     expect(report).toContain("## Most Frequent Re-renders");
-    expect(report).toContain("past the 5-row cut: `A6`, `A7`");
+    expect(report).toContain("not listed above: `A6`, `A7`");
   });
 });

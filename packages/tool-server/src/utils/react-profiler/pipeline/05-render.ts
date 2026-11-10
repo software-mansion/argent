@@ -272,7 +272,7 @@ function renderCutNote(cut: FrequentRerenderRow[]): string {
     cut.length > MAX_OUTSIDE_SOURCE_NAMES
       ? ` and ${cut.length - MAX_OUTSIDE_SOURCE_NAMES} more`
       : "";
-  return `Also met these limits, past the ${MAX_FREQUENT_ROWS}-row cut: ${shown}${more}. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
+  return `Also re-rendered often (in at least 10 commits, with at least 1 ms of self time per second) but not listed above: ${shown}${more}. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
 }
 
 function renderOutsideSourceNote(names: string[]): string {
