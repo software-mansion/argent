@@ -18,6 +18,7 @@ import {
   formatRenderSummaryReason,
   formatRenderTime,
   hasUnnamedSlowCommit,
+  MAX_FREQUENT_ROWS,
   selectFrequentOutsideSource,
   selectFrequentRerenders,
   type FrequentRerenderRow,
@@ -183,8 +184,8 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
     lines.push(``, `No component in this session could be named, so there is nothing to list.`);
   }
 
-  const rows = frequentRerenderRows(input);
-  lines.push(...renderFrequentRerenders(summary, rows, frequentOutsideSource(input)));
+  const { rows, cut } = frequentRerenderRows(input);
+  lines.push(...renderFrequentRerenders(summary, rows, frequentOutsideSource(input), cut));
 
   lines.push(``, `---`, `## Next Steps`, ``);
   if (rows.length > 0) {
@@ -209,13 +210,19 @@ function renderNoHotCommits(input: RenderInput, maxMs: number): string {
   return lines.join("\n");
 }
 
-function frequentRerenderRows(input: RenderInput): FrequentRerenderRow[] {
-  return input.renderSummary
+/** The table's rows, and the components that qualified but ranked below the cap. */
+function frequentRerenderRows(input: RenderInput): {
+  rows: FrequentRerenderRow[];
+  cut: FrequentRerenderRow[];
+} {
+  const all = input.renderSummary
     ? selectFrequentRerenders(
         input.renderSummary,
-        input.componentOrigin ?? createComponentOriginClassifier(null)
+        input.componentOrigin ?? createComponentOriginClassifier(null),
+        Infinity
       )
     : [];
+  return { rows: all.slice(0, MAX_FREQUENT_ROWS), cut: all.slice(MAX_FREQUENT_ROWS) };
 }
 
 function frequentOutsideSource(input: RenderInput): string[] {
@@ -231,12 +238,14 @@ function frequentOutsideSource(input: RenderInput): string[] {
 function renderFrequentRerenders(
   summary: RenderSummary | null,
   rows: FrequentRerenderRow[],
-  outsideSource: string[]
+  outsideSource: string[],
+  cut: FrequentRerenderRow[] = []
 ): string[] {
   if (!summary) return [];
   // Printed with no table too: when the source is not the app's, this is all that is left of it.
   const outsideNote = outsideSource.length > 0 ? [``, renderOutsideSourceNote(outsideSource)] : [];
-  if (rows.length === 0) return outsideNote;
+  const cutNote = cut.length > 0 ? [``, renderCutNote(cut)] : [];
+  if (rows.length === 0) return [...cutNote, ...outsideNote];
   // With no source index, names alone cannot tell the app's components from a library's.
   const unplaced = rows.some((row) => row.origin.origin === "unknown");
   return [
@@ -249,8 +258,21 @@ function renderFrequentRerenders(
     `| Component | Re-renders | Per second | Self ms/s | Self total | Reason | File |`,
     `|---|---|---|---|---|---|---|`,
     ...rows.map(renderFrequentRow),
+    ...cutNote,
     ...outsideNote,
   ];
+}
+
+function renderCutNote(cut: FrequentRerenderRow[]): string {
+  const shown = cut
+    .slice(0, MAX_OUTSIDE_SOURCE_NAMES)
+    .map((row) => `\`${row.component.name}\``)
+    .join(", ");
+  const more =
+    cut.length > MAX_OUTSIDE_SOURCE_NAMES
+      ? ` and ${cut.length - MAX_OUTSIDE_SOURCE_NAMES} more`
+      : "";
+  return `Also met these limits, past the ${MAX_FREQUENT_ROWS}-row cut: ${shown}${more}. \`profiler-commit-query\` mode=\`render_counts\` has the counts.`;
 }
 
 function renderOutsideSourceNote(names: string[]): string {
@@ -363,16 +385,19 @@ function buildFullMarkdown(
   // drops some names, such as rows of a recycled list, so a frequent component
   // can be missing from all of them. The list is added only then: a component in
   // the table above already shows its count over all commits there.
-  const frequent = frequentRerenderRows(input);
+  const { rows: frequent, cut } = frequentRerenderRows(input);
   const inTopComponents = new Set(input.componentFindings.map((f) => f.component));
+  // Past the cap and absent from the table above: the cap must not be what hides it.
+  const cutNew = cut.filter((row) => !inTopComponents.has(row.component.name));
   const outsideSource = frequentOutsideSource(input).filter((name) => !inTopComponents.has(name));
   const tableAddsRow = frequent.some((row) => !inTopComponents.has(row.component.name));
-  if (tableAddsRow || outsideSource.length > 0) {
+  if (tableAddsRow || outsideSource.length > 0 || cutNew.length > 0) {
     lines.push(
       ...renderFrequentRerenders(
         input.renderSummary ?? null,
         tableAddsRow ? frequent : [],
-        outsideSource
+        outsideSource,
+        cutNew
       )
     );
   }

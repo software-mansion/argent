@@ -528,3 +528,59 @@ describe("hot-commit report", () => {
     expect(row).toContain("| 6 | 9.6ms |");
   });
 });
+
+describe("frequent rows past the cap", () => {
+  const hotBase = {
+    noHotCommits: false,
+    hotCommitSummaries: [HOT],
+    recordingMs: 10_000,
+    reactCommits: 300,
+  };
+  const app = (n: string, ms: number) => component(n, 300, ms);
+  const summaryOf = (components: RenderSummaryComponent[]): RenderSummary => ({
+    ...TYPING,
+    recordingMs: 10_000,
+    totalCommits: 300,
+    components,
+  });
+  const finding = (name: string) => ({ ...SEARCH_SHELL, component: name });
+  const five = ["Header", "Avatar", "Badge", "Title", "Footer"];
+
+  it("names a sixth component the table cannot show when no table prints", async () => {
+    const report = await render({
+      ...hotBase,
+      componentFindings: five.map(finding),
+      renderSummary: summaryOf([
+        ...five.map((n, i) => app(n, 900 - i * 100)),
+        component("ClockBadge", 25, 12.5),
+      ]),
+    });
+    expect(report).not.toContain("## Most Frequent Re-renders");
+    expect(report).toContain("past the 5-row cut: `ClockBadge`");
+  });
+
+  it("says nothing when every cut component is already in Top Components", async () => {
+    const six = [...five, "Stat"];
+    const report = await render({
+      ...hotBase,
+      componentFindings: six.map(finding),
+      renderSummary: summaryOf(six.map((n, i) => app(n, 900 - i * 100))),
+    });
+    expect(report).not.toContain("## Most Frequent Re-renders");
+    expect(report).not.toContain("-row cut");
+  });
+
+  it("counts what a report with no hot commit leaves out", async () => {
+    const seven = ["A1", "A2", "A3", "A4", "A5", "A6", "A7"];
+    const report = await render({
+      noHotCommits: true,
+      hotCommitSummaries: [],
+      componentFindings: [],
+      recordingMs: 10_000,
+      reactCommits: 300,
+      renderSummary: summaryOf(seven.map((n, i) => app(n, 900 - i * 100))),
+    });
+    expect(report).toContain("## Most Frequent Re-renders");
+    expect(report).toContain("past the 5-row cut: `A6`, `A7`");
+  });
+});

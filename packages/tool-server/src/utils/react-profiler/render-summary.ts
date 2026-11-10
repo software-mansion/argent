@@ -37,7 +37,7 @@ export const RENDER_SUMMARY_VERSION = 1;
 const MIN_FREQUENT_RERENDER_COMMITS = 10;
 /** Summed self time per second of recording below which a row is left out. */
 const MIN_FREQUENT_SELF_MS_PER_S = 1;
-const MAX_FREQUENT_ROWS = 5;
+export const MAX_FREQUENT_ROWS = 5;
 const MAX_TOP_PROPS = 3;
 const MAX_TOP_HOOKS = 3;
 const PEAK_WINDOW_MS = 1000;
