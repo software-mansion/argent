@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Both uiautomator dump sites shell out through adbExecOutBinary; record how
 // many run at once per serial.
@@ -6,6 +6,7 @@ const inFlight = new Map<string, number>();
 const peak = new Map<string, number>();
 let totalInFlight = 0;
 let totalPeak = 0;
+let dumpOutput: string | undefined;
 vi.mock("../src/utils/adb", async () => {
   const actual = await vi.importActual<typeof import("../src/utils/adb")>("../src/utils/adb");
   return {
@@ -20,6 +21,7 @@ vi.mock("../src/utils/adb", async () => {
       await new Promise((r) => setTimeout(r, 20));
       totalInFlight -= 1;
       inFlight.set(serial, (inFlight.get(serial) ?? 1) - 1);
+      if (dumpOutput !== undefined) return Buffer.from(dumpOutput);
       return Buffer.from(
         `<?xml version='1.0'?><hierarchy rotation="0"><node class="android.widget.Button" content-desc="Play" text="" bounds="[0,0][100,50]" focusable="true" focused="true" enabled="true" package="com.example.tv" /></hierarchy>`
       );
@@ -27,6 +29,7 @@ vi.mock("../src/utils/adb", async () => {
   };
 });
 
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
 import { describeAndroid } from "../src/tools/describe/platforms/android";
 import { androidTvControlBlueprint } from "../src/blueprints/android-tv-control";
 
@@ -41,6 +44,7 @@ describe("uiautomator dumps on one device", () => {
     peak.clear();
     totalInFlight = 0;
     totalPeak = 0;
+    dumpOutput = undefined;
   });
 
   it("never overlap across the describe and Android TV dump sites", async () => {
@@ -62,5 +66,36 @@ describe("uiautomator dumps on one device", () => {
     await Promise.all([a.describe(), b.describe()]);
 
     expect(totalPeak).toBe(2);
+  });
+});
+
+describe("a dump the system killed", () => {
+  beforeEach(() => {
+    dumpOutput = "Killed\n";
+  });
+  afterEach(() => {
+    dumpOutput = undefined;
+  });
+
+  const remedy =
+    /Killed\. Another UiAutomation client .*am force-stop com\.argent\.androiddevtools/;
+
+  it("names the UiAutomation holder on a phone describe", async () => {
+    const err = await describeAndroid(undefined, "emulator-5554", undefined, false).catch(
+      (e: unknown) => e
+    );
+
+    expect(err).toBeInstanceOf(FailureError);
+    expect((err as FailureError).message).toMatch(remedy);
+    expect((err as FailureError).message).not.toMatch(/locked|parse/i);
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED
+    );
+  });
+
+  it("names the UiAutomation holder on an Android TV describe", async () => {
+    const api = await tvApi("emulator-5554");
+
+    await expect(api.describe()).rejects.toThrow(remedy);
   });
 });

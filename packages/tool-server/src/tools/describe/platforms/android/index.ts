@@ -2,7 +2,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../../contract";
 import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
-import { withUiautomatorLock } from "../../../../utils/uiautomator-lock";
+import { uiautomatorKilledMessage, withUiautomatorLock } from "../../../../utils/uiautomator-lock";
 import { resolveDevice } from "../../../../utils/device-info";
 import {
   getAndroidScreenSize,
@@ -118,6 +118,17 @@ async function uiautomatorDump(serial: string): Promise<string> {
   );
   const raw = rawBuf.toString("utf-8");
   const trimmed = raw.trim();
+  const killed = trimmed.includes("<hierarchy")
+    ? undefined
+    : uiautomatorKilledMessage(trimmed.slice(0, 200));
+  if (killed) {
+    throw new FailureError(killed, {
+      error_code: FAILURE_CODES.ANDROID_UIAUTOMATOR_CAPTURE_FAILED,
+      failure_stage: "android_uiautomator_capture",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+    });
+  }
   if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
     throw new FailureError(
       `uiautomator could not capture the screen: ${trimmed}. ` +

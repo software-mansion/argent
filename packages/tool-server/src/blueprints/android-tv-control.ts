@@ -7,10 +7,9 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { adbExecOutBinary, adbShell, getAndroidRuntimeKind } from "../utils/adb";
-import { adbCommandPrefix } from "../utils/adb-server";
 import { assertTypeableAndroidText, injectAndroidText } from "../utils/android-input";
 import { UnsupportedOperationError } from "../utils/capability";
-import { withUiautomatorLock } from "../utils/uiautomator-lock";
+import { uiautomatorKilledMessage, withUiautomatorLock } from "../utils/uiautomator-lock";
 import {
   parseUiAutomatorXml,
   attrIsTrue,
@@ -249,17 +248,8 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
       ).toString("utf-8");
       if (!raw.includes("<hierarchy")) {
         const output = raw.trim().slice(0, 200);
-        // `uiautomator` can't register its UiAutomation connection while another
-        // client holds one, and the system kills it.
-        if (/\bKilled\b/.test(output)) {
-          throw new Error(
-            `uiautomator could not capture the screen: ${output}. Another UiAutomation client ` +
-              `(the argent devtools helper, or a test runner such as Espresso or Appium) holds ` +
-              `the accessibility connection. Stop it, for the helper with ` +
-              `\`${adbCommandPrefix(process.env)}adb shell am force-stop com.argent.androiddevtools\`, ` +
-              `and try again.`
-          );
-        }
+        const killed = uiautomatorKilledMessage(output);
+        if (killed) throw new Error(killed);
         throw new Error(
           `uiautomator could not capture the screen: ${output}. ` +
             `The device may be locked or showing a secure overlay — take a screenshot to confirm.`
