@@ -773,6 +773,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const activatedBundleIds = new Set<string>();
     /** Stopped by network-capture-stop: no handshake arms them, and no new request is recorded. */
     const stoppedBundleIds = new Set<string>();
+    /**
+     * Stopped apps whose connected process did not acknowledge Network.disable.
+     * That process intercepts until the agent handles it, so the app stays here
+     * until its connection closes, a later Network.disable is acknowledged or a
+     * start. New processes are not armed.
+     */
+    const unconfirmedStopBundleIds = new Set<string>();
     const captureMarks = new Map<string, { lastRecord: number; metroPort: number }>();
     const captureGaps = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
@@ -1031,7 +1038,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const closeConnection = (bundleId: string, conn: AppConnection): void => {
       conn.cdp.close();
       conn.armed = false;
-      if (connections.get(bundleId) === conn) connections.delete(bundleId);
+      if (connections.get(bundleId) === conn) {
+        connections.delete(bundleId);
+        unconfirmedStopBundleIds.delete(bundleId);
+      }
       wakeConnectionWaiters();
       void settleClosedConnection(bundleId, conn);
     };
@@ -1357,6 +1367,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
       startNetworkCapture(bundleId, metroPort, waitForConnectionMs = 0) {
         stoppedBundleIds.delete(bundleId);
+        unconfirmedStopBundleIds.delete(bundleId);
         // Before the enable, so a request during the arming counts.
         captureMarks.set(bundleId, { lastRecord: lastIosRecordNumber(), metroPort });
         const startedNow = !activatedBundleIds.has(bundleId);
@@ -1393,10 +1404,13 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         }
         try {
           await conn.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_DISABLE_TIMEOUT_MS });
+          unconfirmedStopBundleIds.delete(bundleId);
           return { confirmed: true };
         } catch (err) {
           // A process whose connection closed sends nothing more, and its next one is not armed.
           if (conn.socket.destroyed || disposed) return { confirmed: true };
+          // Not when a start during the wait turned capture on again.
+          if (stoppedBundleIds.has(bundleId)) unconfirmedStopBundleIds.add(bundleId);
           const timedOut = getFailureSignal(err)?.error_kind === "timeout";
           const detail = err instanceof Error ? err.message : String(err);
           return {
@@ -1427,16 +1441,29 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       async networkCaptureAfterLaunch(bundleId) {
         if (lentSocketPath) return undefined;
         const stoppedNote = `native network capture is stopped for ${bundleId} (network-capture-stop); this process runs without it until network-capture-start`;
-        if (stoppedBundleIds.has(bundleId)) return stoppedNote;
-        if (!activatedBundleIds.has(bundleId)) return undefined;
-        // Without a pid, as when the probe failed, any armed connection of
-        // the app counts.
+        if (stoppedBundleIds.has(bundleId) && !unconfirmedStopBundleIds.has(bundleId)) {
+          return stoppedNote;
+        }
+        if (!activatedBundleIds.has(bundleId) && !unconfirmedStopBundleIds.has(bundleId)) {
+          return undefined;
+        }
+        // Without a pid, as when the probe failed, any connection of the app
+        // counts.
         const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
         const pid = inspection?.process?.pid;
         const ofLaunch = (): AppConnection | undefined => {
           const conn = connections.get(bundleId);
           return conn && (pid === undefined || conn.pid === pid) ? conn : undefined;
         };
+        // A launch that only brought to the front the process which did not
+        // acknowledge the stop leaves that process to intercept.
+        const noteWhenStopped = (): string => {
+          const conn = unconfirmedStopBundleIds.has(bundleId) ? ofLaunch() : undefined;
+          if (!conn) return stoppedNote;
+          const pidText = conn.pid !== undefined ? ` (pid ${conn.pid})` : "";
+          return `native network capture is stopped for ${bundleId} (network-capture-stop), but its running process${pidText} has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`;
+        };
+        if (stoppedBundleIds.has(bundleId)) return noteWhenStopped();
         // A launch of an app that already runs only brings it to the front.
         // When that process lacks this simulator's injection, or plainly
         // started before this listener and so dialed one we no longer hold,
@@ -1453,7 +1480,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         const armed = await waitForConnection(() => ofLaunch()?.armed === true, LAUNCH_ARM_WAIT_MS);
         if (disposed) return undefined;
         // A stop during the wait.
-        if (stoppedBundleIds.has(bundleId)) return stoppedNote;
+        if (stoppedBundleIds.has(bundleId)) return noteWhenStopped();
         const shownPid = pid ?? ofLaunch()?.pid;
         const pidText = shownPid !== undefined ? ` (pid ${shownPid})` : "";
         if (armed) {
@@ -1526,6 +1553,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       // A lent agent's capture is its provider's, so argent has none on there.
       bundleIds: lentSocketPath ? new Set() : activatedBundleIds,
       stoppedBundleIds,
+      unconfirmedStopBundleIds,
       stores: networkStores,
     });
 
@@ -1559,6 +1587,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         connections.clear();
         activatedBundleIds.clear();
         stoppedBundleIds.clear();
+        unconfirmedStopBundleIds.clear();
         captureMarks.clear();
         captureGaps.clear();
         networkStores.clear();

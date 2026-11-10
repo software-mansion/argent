@@ -724,6 +724,67 @@ describe("native-devtools network capture stop", () => {
       `native network capture is stopped for ${BUNDLE} (network-capture-stop); this process runs without it until network-capture-start`
     );
   });
+
+  const STOPPED_NOTE = `native network capture is stopped for ${BUNDLE} (network-capture-stop); this process runs without it until network-capture-start`;
+
+  /** Arms the app as pid 200, then stops its capture with a Network.disable the app does not answer. */
+  async function stopUnacknowledged(api: NativeDevtoolsApi): Promise<FakeApp> {
+    appRunsAs(200);
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const app = await connectApp(api.socketPath, { holdDisable: true });
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)?.state()).toMatchObject({ armed: true, pid: 200 })
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stopping = api.stopNetworkCapture(BUNDLE);
+    await vi.waitFor(() => expect(disableRequests(app)).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(stopping).resolves.toMatchObject({ confirmed: false });
+    vi.useRealTimers();
+    return app;
+  }
+
+  it("says at a launch that the process which did not acknowledge the stop may still capture, and names the app to profiles until its connection closes", async () => {
+    const api = await startService();
+    const app = await stopUnacknowledged(api);
+
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(
+      `native network capture is stopped for ${BUNDLE} (network-capture-stop), but its running process (pid 200) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`
+    );
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    expect(api.isNetworkCaptureStarted(BUNDLE)).toBe(false);
+    // A launch that started a new process before the old connection closed.
+    appRunsAs(201);
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(STOPPED_NOTE);
+
+    app.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(STOPPED_NOTE);
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
+
+    // A relaunch: its handshake is not asked to capture.
+    const relaunched = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+    await sleep(50);
+    expect(enableRequests(relaunched)).toHaveLength(0);
+  });
+
+  it("forgets a stop the process did not acknowledge once the process acknowledges a later Network.disable", async () => {
+    const api = await startService();
+    const app = await stopUnacknowledged(api);
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+
+    const again = api.stopNetworkCapture(BUNDLE);
+    await vi.waitFor(() => expect(disableRequests(app)).toHaveLength(2));
+    app.reply(disableRequests(app)[1]!.payload.id!);
+    await expect(again).resolves.toEqual({ confirmed: true });
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(STOPPED_NOTE);
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
+
+    // So the dispose after the test has no app to wait for.
+    app.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+  });
 });
 
 describe("native-devtools dispose with network capture", () => {

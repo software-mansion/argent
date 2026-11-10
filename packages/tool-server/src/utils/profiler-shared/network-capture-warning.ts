@@ -29,7 +29,8 @@ function agentSentence(platform: CapturePlatform, one: boolean, where = ""): str
  * Warning for a profiler start on a device where `network-capture-start` turned
  * native network capture on for an app: the capture follows the app across
  * launches, and nothing else in a profile says the app may run instrumented.
- * After `network-capture-stop` the app is no longer named.
+ * After `network-capture-stop` the app is no longer named, except on iOS
+ * while its connected process has not acknowledged the stop.
  * "On" is the capture's setting, not a live attachment: the app may not be
  * running, or its current process may not have the agent yet. On iOS an app
  * counts only after it has connected, because an app that never connected,

@@ -579,6 +579,11 @@ interface IosNetworkCaptures {
   readonly bundleIds: ReadonlySet<string>;
   /** The apps whose capture network-capture-stop stopped. */
   readonly stoppedBundleIds: ReadonlySet<string>;
+  /**
+   * The stopped apps whose connected process did not acknowledge
+   * Network.disable, so it can still intercept requests.
+   */
+  readonly unconfirmedStopBundleIds?: ReadonlySet<string>;
   readonly stores: ReadonlyMap<string, IosNetworkRecords>;
 }
 
@@ -619,10 +624,15 @@ export function hasIosNetworkCapture(): boolean {
 /**
  * Capture is on for the app and the app connected at least once. An app that
  * never connected, such as a mistyped or uninstalled bundle id, has no process
- * that capture runs in.
+ * that capture runs in. A stop that the connected process did not acknowledge
+ * counts as on, because that process can still intercept.
  */
 function capturing(captures: IosNetworkCaptures, bundleId: string): boolean {
-  return captures.bundleIds.has(bundleId) && captures.stores.has(bundleId);
+  return (
+    (captures.bundleIds.has(bundleId) ||
+      captures.unconfirmedStopBundleIds?.has(bundleId) === true) &&
+    captures.stores.has(bundleId)
+  );
 }
 
 /**
@@ -634,7 +644,7 @@ export function liveIosNetworkCaptures(deviceId: string): string[] {
   const bundleIds = new Set<string>();
   for (const captures of liveCaptures) {
     if (deviceKeyOf(captures.udid) !== key) continue;
-    for (const bundleId of captures.bundleIds) {
+    for (const bundleId of [...captures.bundleIds, ...(captures.unconfirmedStopBundleIds ?? [])]) {
       if (capturing(captures, bundleId)) bundleIds.add(bundleId);
     }
   }
