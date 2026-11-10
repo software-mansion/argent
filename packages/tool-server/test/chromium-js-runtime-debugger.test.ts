@@ -107,10 +107,16 @@ describe("ChromiumJsRuntimeDebugger blueprint", () => {
         type: "log",
         args: [{ type: "string", value: "hello" }],
         timestamp: Date.now(),
+        stackTrace: {
+          callFrames: [
+            { functionName: "f", url: "http://localhost/app.js", lineNumber: 7, columnNumber: 0 },
+          ],
+        },
       });
       const logged = readLogFile(instance.api.logWriter);
       expect(logged).toHaveLength(1);
       expect(logged[0].message).toBe("hello");
+      expect(logged[0].source).toBe("app.js:7");
 
       // Binding is registered best-effort so future tools using
       // evaluateWithBinding don't need their own setup.
