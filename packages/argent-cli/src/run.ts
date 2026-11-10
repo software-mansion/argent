@@ -191,8 +191,13 @@ Examples:
   argent run run-sequence --udid <UDID> --steps-json '[{"tool":"button","args":{"button":"home"}}]'
   argent run gesture-tap --args '{"udid":"<UDID>","x":0.5,"y":0.5}'
 
-Exits 1 when the tool fails, including a failure its result reports, such as
-an e2e test that does not pass or an await-ui-element condition that is not met.
+Exits 1 when the tool fails. Also exits 1 when the result reports that the
+call did not do its job: an e2e test that does not pass, an await-ui-element
+condition that is not met, a run-sequence that a step stopped, a debugger or
+native-devtools precheck that stopped the tool, an e2e recording call that
+recorded nothing, or a baseline that was not written on this client.
+Other results exit 0, also a negative answer such as await-screen-idle's
+settled=false.
 `);
     return;
   }
@@ -413,8 +418,17 @@ an e2e test that does not pass or an await-ui-element condition that is not met.
   }
 
   if (failure) {
+    // After stdout drains: with both streams on one pipe, a report larger than
+    // the pipe buffer would otherwise have the reason spliced into it.
+    await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
     console.error(failure);
-    // Flushed first: a failed e2e test's report can outgrow the pipe buffer.
-    await exitAfterFlush(1);
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_TOOL_RESULT_FAILED,
+      failure_stage: "cli_run_tool_result",
+      failure_area: "cli",
+      error_kind: "unknown",
+    });
+    // stdout is drained already; writing to it again after EPIPE would throw.
+    await exitAfterFlush(1, [process.stderr]);
   }
 }

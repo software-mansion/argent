@@ -86,7 +86,25 @@ describe("argent run — a failure the tool reports in its result", () => {
     await expect(run(["e2e-execute"], opts)).rejects.toThrow("process.exit(1)");
 
     expect(flush).toHaveBeenCalledTimes(1);
-    expect(flush).toHaveBeenCalledWith(1);
+    expect(flush).toHaveBeenCalledWith(1, [process.stderr]);
+  });
+
+  it("writes the reason only after stdout drains, so a merged log ends with it", async () => {
+    envelope = { data: REPORT, failure: REASON };
+    const order: string[] = [];
+    vi.spyOn(console, "log").mockImplementation(() => void order.push("report"));
+    vi.spyOn(console, "error").mockImplementation(() => void order.push("reason"));
+    vi.spyOn(process.stdout, "write").mockImplementation(((_chunk: unknown, cb?: () => void) => {
+      setTimeout(() => {
+        order.push("stdout drained");
+        cb?.();
+      }, 20);
+      return false;
+    }) as never);
+
+    await expect(run(["e2e-execute"], opts)).rejects.toThrow("process.exit(1)");
+
+    expect(order).toEqual(["report", "stdout drained", "reason"]);
   });
 
   it("keeps the --json report on stdout and still exits 1", async () => {

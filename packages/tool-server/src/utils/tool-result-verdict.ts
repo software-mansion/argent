@@ -6,11 +6,11 @@ import { isNativeDevtoolsBlockResult } from "../blueprints/native-devtools";
 
 /** Why an `await-ui-element` came back `success: false`. */
 export function unmetWaitReason(result: unknown): string {
-  const note = (result as { note?: unknown }).note;
+  const { note } = result as { note?: string };
   const cause = unmetUiWaitCause(result);
   // Only an `unmet` wait judged the condition; the other causes observed nothing.
   const what = cause === "unmet" ? "condition not met" : `condition not judged (${cause})`;
-  return `await-ui-element ${what}${typeof note === "string" && note ? `: ${note}` : ""}`;
+  return `await-ui-element ${what}${note ? `: ${note}` : ""}`;
 }
 
 export interface ToolResultVerdict {
