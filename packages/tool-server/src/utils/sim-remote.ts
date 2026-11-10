@@ -261,25 +261,25 @@ export async function setSimulatorEnv(udid: string, key: string, value: string):
 
 // Pauses before the second and third `reverse start` attempt.
 const REVERSE_START_RETRY_DELAYS_MS = [500, 2_000];
-// No retry starts later than this after the first attempt, so retrying adds
-// only a few seconds to a start that keeps failing.
+// No retry starts later than this after the first attempt. Retries share the
+// first attempt's timeout, so retrying never ends a start later than one
+// attempt could.
 const REVERSE_START_RETRY_WINDOW_MS = 5_000;
 
 /**
- * Whether a failed `reverse start` is worth repeating: only when the request
- * never left the daemon (`tunnel-mux control send:`), so the orchestrator
- * holds nothing for it.
- *
- * Not retried, among others:
+ * Whether a failed `reverse start` is worth repeating: only when the
+ * connection was lost before the request was sent, so the orchestrator holds
+ * nothing for it and the next call redials. Not retried, among others:
+ * - `sending stopped by peer`: the daemon reuses the stopped stream.
  * - `tunnel-mux connection closed`: the orchestrator may still complete that
  *   registration, and the dead session's cleanup then deletes every rule on
  *   the port, including the retry's.
- * - a forwarder 504: its push timed out after 5 s, and a retry pays two more
- *   (the pre-clean DELETE removes the rule the 504 saved), so a forwarder that
- *   stays slow makes each retried start 10 s or more slower.
+ * - a forwarder 504: a retry pays two more 5 s pushes (the pre-clean DELETE
+ *   removes the rule the 504 saved), so a forwarder that stays slow makes
+ *   each start 10 s or more slower.
  */
 function isTransientReverseStartError(message: string): boolean {
-  return /tunnel-mux control send:/.test(message);
+  return /tunnel-mux control send: connection lost/.test(message);
 }
 
 /**
@@ -294,13 +294,17 @@ function isTransientReverseStartError(message: string): boolean {
 export async function reverseStart(udid: string, port: number): Promise<void> {
   const args = ["reverse", "start", stripRemotePrefix(udid), String(port)];
   const startedAt = Date.now();
+  let prompt: unknown;
   for (let attempt = 0; ; attempt++) {
     try {
-      await run(args);
+      const timeoutMs = startedAt + DEFAULT_TIMEOUT_MS - Date.now();
+      await run(args, attempt === 0 ? undefined : { timeoutMs });
       return;
     } catch (err) {
       const message = (err as Error).message ?? "";
       if (/tunnel already active/.test(message)) return;
+      // A retry cut off by the timeout says nothing new; report what prompted it.
+      if (attempt > 0 && ((err as Error).cause as { killed?: boolean })?.killed) throw prompt;
       const delay = REVERSE_START_RETRY_DELAYS_MS[attempt];
       if (
         delay === undefined ||
@@ -309,6 +313,7 @@ export async function reverseStart(udid: string, port: number): Promise<void> {
       ) {
         throw err;
       }
+      prompt = err;
       await sleep(delay);
     }
   }

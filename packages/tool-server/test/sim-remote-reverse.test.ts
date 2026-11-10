@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Each scripted outcome answers one `sim-remote` call, in order: a string is the
-// stderr of a failed (exit 1) call, `null` a success. `latencyMs` delays the answer.
+// stderr of a failed (exit 1) call, `null` a success. `latencyMs` delays the
+// answer, or `latencies[i]` that of call i; a call slower than its timeout is
+// killed the way execFile kills it.
 let outcomes: Array<string | null> = [];
 let latencyMs = 0;
+let latencies: number[] = [];
 const calls: string[][] = [];
 const callTimes: number[] = [];
+const callTimeouts: number[] = [];
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -14,16 +18,24 @@ vi.mock("node:child_process", async () => {
     execFile: (
       _cmd: string,
       args: readonly string[],
-      _opts: unknown,
+      opts: { timeout: number },
       cb: (err: Error | null, out?: { stdout: string; stderr: string }) => void
     ) => {
+      const latency = latencies[calls.length] ?? latencyMs;
       calls.push([...args]);
       callTimes.push(Date.now());
+      callTimeouts.push(opts.timeout);
       const stderr = outcomes.shift() ?? null;
+      if (latency > opts.timeout) {
+        setTimeout(() => {
+          cb(Object.assign(new Error("Command failed"), { killed: true, signal: "SIGTERM" }));
+        }, opts.timeout);
+        return;
+      }
       setTimeout(() => {
         if (stderr === null) return cb(null, { stdout: "", stderr: "" });
         cb(Object.assign(new Error("Command failed"), { code: 1, stderr, stdout: "" }));
-      }, latencyMs);
+      }, latency);
     },
   };
 });
@@ -47,8 +59,10 @@ beforeEach(() => {
   vi.useFakeTimers();
   outcomes = [];
   latencyMs = 0;
+  latencies = [];
   calls.length = 0;
   callTimes.length = 0;
+  callTimeouts.length = 0;
 });
 
 afterEach(() => {
@@ -79,7 +93,6 @@ describe("reverseStart / reverseStop", () => {
     "error: the host's port forwarder has lost its proxy tunnel (HTTP 503); reverse tunnels cannot be set up on this machine until it reconnects",
     "error: the host's port forwarder is unreachable (no answer within 10s); reverse tunnels cannot be set up on this machine",
     "error: the host's port forwarder is unreachable (connection failed); reverse tunnels cannot be set up on this machine",
-    // A retry pays two more pushes, each timing out again if the forwarder stays slow.
     "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout",
     "error: port forwarder: POST /rules answered HTTP 502 Bad Gateway",
     "error: port forwarder: POST /rules answered HTTP 400 Bad Request",
@@ -87,8 +100,9 @@ describe("reverseStart / reverseStop", () => {
     "error: port forwarder: POST /rules answered HTTP 408 Request Timeout",
     "error: the request to sim-router timed out",
     "error: bind ephemeral TCP listener on both loopback families: no port free on each after 10 attempts (last: Address already in use (os error 48))",
-    // The orchestrator may still finish this registration, then delete the retry's rule.
     "error: tunnel-mux connection closed",
+    "error: tunnel-mux control send: sending stopped by peer: error 0",
+    "error: tunnel-mux control send: closed stream",
   ])("does not retry a failure that may persist or race a retry (%s)", async (stderr) => {
     outcomes = [stderr, null];
     const err = await start();
@@ -100,11 +114,11 @@ describe("reverseStart / reverseStop", () => {
     outcomes = [
       "error: tunnel-mux control send: connection lost",
       "error: tunnel-mux control send: connection lost",
-      "error: tunnel-mux control send: stream reset",
+      "error: tunnel-mux control send: connection lost",
       null,
     ];
     const err = await start();
-    expect((err as Error).message).toMatch(/control send: stream reset$/);
+    expect((err as Error).message).toMatch(/control send: connection lost$/);
     expect(calls).toHaveLength(3);
   });
 
@@ -143,6 +157,26 @@ describe("reverseStart / reverseStop", () => {
     outcomes = ["error: tunnel-mux control send: connection lost", null];
     await start();
     expect(calls).toHaveLength(n);
+  });
+
+  it("gives a retry what is left of the first attempt's timeout, then reports what prompted it", async () => {
+    const stderr = "error: tunnel-mux control send: connection lost";
+    latencies = [1_000, 60_000];
+    outcomes = [stderr, null];
+    const err = await start();
+    expect((err as Error).message).toBe(`sim-remote reverse start ${UDID} 37223 failed: ${stderr}`);
+    expect(callTimeouts).toEqual([30_000, 28_500]);
+    expect(Date.now() - callTimes[0]!).toBe(30_000);
+  });
+
+  it("reports a first attempt's own timeout", async () => {
+    latencies = [60_000];
+    outcomes = [null];
+    const err = await start();
+    expect((err as Error).message).toBe(
+      `sim-remote reverse start ${UDID} 37223 failed: Command failed`
+    );
+    expect(calls).toHaveLength(1);
   });
 
   it("swallows a failed stop", async () => {
