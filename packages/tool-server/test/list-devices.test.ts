@@ -284,7 +284,7 @@ describe("list-devices", () => {
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
   });
 
-  it("tags each remote iOS and tvOS simulator with the runtime kind of its runtime", async () => {
+  it("tags remote iOS and tvOS simulators with their runtime kind and skips any other runtime, like the local listing", async () => {
     const devices = {
       "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [
         { udid: "TV-1", name: "Apple TV", state: "Booted" },
@@ -293,7 +293,10 @@ describe("list-devices", () => {
         { udid: "PHONE-1", name: "iPhone 16", state: "Booted" },
       ],
       "com.apple.CoreSimulator.SimRuntime.watchOS-11-0": [
-        { udid: "WATCH-1", name: "Apple Watch", state: "Booted" },
+        { udid: "WATCH-1", name: "Apple Watch", state: "Shutdown" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.xrOS-2-0": [
+        { udid: "VISION-1", name: "Apple Vision Pro", state: "Shutdown" },
       ],
     };
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
@@ -309,7 +312,6 @@ describe("list-devices", () => {
     expect(remote.map((d) => [d.name, "runtimeKind" in d ? d.runtimeKind : "missing"])).toEqual([
       ["Apple TV", "tv"],
       ["iPhone 16", "mobile"],
-      ["Apple Watch", undefined],
     ]);
   });
 
