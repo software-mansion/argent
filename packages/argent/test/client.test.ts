@@ -70,6 +70,7 @@ describe("createArgentClient", () => {
     const result = await createArgentClient().callTool("screenshot", { udid: "U1" });
 
     expect(result).toEqual({ data: { image: "/tmp/shot.png" }, note: "n" });
+    expect(result).not.toHaveProperty("failure");
     expect(materializeArtifacts).toHaveBeenCalledWith(
       { image: "handle" },
       { toolsUrl: "http://127.0.0.1:1", authToken: "t", deviceId: "U1", signal: undefined }

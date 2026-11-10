@@ -52,6 +52,30 @@ describe("a tool: step that runs a recording tool", () => {
     expect(step.reason).toBe("The script did not pass; nothing was recorded (seeded failure)");
   });
 
+  it("errors when e2e-add-script's script threw", async () => {
+    const step = await runStep("e2e-add-script", {
+      message: "The script errored; nothing was recorded",
+      status: "error",
+      reason: "boom",
+    });
+
+    expect(step.status).toBe("error");
+    expect(step.reason).toBe("The script errored; nothing was recorded (boom)");
+  });
+
+  it("errors when e2e-add-step recorded no step", async () => {
+    const step = await runStep("e2e-add-step", { message: "No recording is in progress" });
+
+    expect(step.status).toBe("error");
+    expect(step.reason).toBe("No recording is in progress");
+  });
+
+  it("passes when e2e-add-step recorded a step", async () => {
+    const step = await runStep("e2e-add-step", { message: "Recorded", recorded: "step 1: tap" });
+
+    expect(step.status).toBe("pass");
+  });
+
   it("passes when e2e-add-script recorded the script", async () => {
     const step = await runStep("e2e-add-script", { message: "Recorded", status: "pass" });
 

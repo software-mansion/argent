@@ -79,7 +79,7 @@ describe("argent run — a failure the tool reports in its result", () => {
     expect(errs).toEqual([REASON]);
   });
 
-  it("exits through exitAfterFlush, so a piped report is not cut short", async () => {
+  it("exits through exitAfterFlush on stderr, so the reason is not cut short", async () => {
     envelope = { data: REPORT, failure: REASON };
     const flush = vi.spyOn(e2e, "exitAfterFlush");
 

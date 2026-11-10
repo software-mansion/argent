@@ -181,6 +181,12 @@ describe("directCallFailure", () => {
         "[device: iPhone | app: Demo]\nView (tap: 0.50,0.50)"
       )
     ).toBeUndefined();
+    expect(
+      directCallFailure(
+        "debugger-component-tree",
+        '[device: iPhone | app: Demo]\nText "Error: invalid email" (tap: 0.50,0.40)'
+      )
+    ).toBeUndefined();
     expect(directCallFailure("describe", "Error: x")).toBeUndefined();
   });
 
