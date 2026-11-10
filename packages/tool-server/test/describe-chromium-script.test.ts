@@ -3461,15 +3461,43 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       for (let i = 0; i < rowCount; i++) expect(pxFrame(tree, `r${i}`).h).toBe(0);
       return n;
     };
-    // Twice per wrapper: its own walk, and the clips the rows' hit tests cross.
-    expect(reads(1)).toBe(40);
-    expect(reads(30)).toBe(40);
+    // Three times per wrapper: its own walk, the clips the rows' hit tests cross, and
+    // whether it escapes them.
+    expect(reads(1)).toBe(60);
+    expect(reads(30)).toBe(60);
+  });
+
+  it("hit-tests each probe point once however many stacked rows probe it", () => {
+    const hitTests = (rowCount: number) => {
+      const rows = Array.from({ length: rowCount }, (_, i) =>
+        row(`r${i}`, { x: 1, y: 150, w: 285, h: 20 })
+      );
+      const stack = Array.from({ length: rowCount }, () =>
+        el({ rect: { x: 0, y: 0, w: W, h: H }, painted: { x: 0, y: 0, w: W, h: H } })
+      );
+      const proto = MockDocument.prototype;
+      const hitTest = proto.elementsFromPoint;
+      let n = 0;
+      proto.elementsFromPoint = function (this: { documentElement: unknown }, x, y) {
+        n++;
+        return hitTest.call(this, x, y);
+      };
+      try {
+        const { tree } = run([scroller(rows), ...stack]);
+        for (let i = 0; i < rowCount; i++) expect(pxFrame(tree, `r${i}`).h).toBe(0);
+      } finally {
+        proto.elementsFromPoint = hitTest;
+      }
+      return n;
+    };
+    expect(hitTests(1)).toBe(1);
+    expect(hitTests(50)).toBe(1);
   });
 
   it("reads each box of an overlay the rows' hit tests walk through a bounded number of times", () => {
     // A 30-deep overlay whose leaf covers the viewport: every point probed past the
-    // scroller hits that leaf, walked up to the probed row's depth. Each box's position
-    // is read once past its own walk, and its depth looked up once.
+    // scroller hits that leaf, walked up to the root. Each box's position is read once
+    // past its own walk.
     const full = { x: 0, y: 0, w: W, h: H };
     const reads = (rowCount: number) => {
       const rows = Array.from({ length: rowCount }, (_, i) =>
@@ -3493,8 +3521,8 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
       for (let i = 0; i < rowCount; i++) expect(pxFrame(tree, `r${i}`).h).toBe(0);
       return { styles, parents };
     };
-    expect(reads(1)).toEqual({ styles: 60, parents: 2 });
-    expect(reads(30)).toEqual({ styles: 60, parents: 2 });
+    expect(reads(1)).toEqual({ styles: 62, parents: 2 });
+    expect(reads(30)).toEqual({ styles: 62, parents: 2 });
   });
 
   it("walks a hit up through thousands of display:contents boxes", () => {

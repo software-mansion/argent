@@ -1474,7 +1474,7 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         y >= v.top &&
         y < v.bottom &&
         (x < e.left || x >= e.right || y < e.top || y >= e.bottom) &&
-        hitsAt(document, x, y).some((hit) => carried(el, hit))
+        carriesHit(el, x, y)
     );
   }
 
@@ -1530,34 +1530,34 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return hits;
   }
 
-  // Memoized: every probe point can hit a page's whole ancestor stack. A loop, not
-  // recursion: a hit can sit under thousands of display:contents boxes.
-  const flatDepths = nodeMap();
-  function flatDepth(n) {
-    const chain = [];
-    let a = n;
-    for (; a && getNodeType.call(a) === 1 && !flatDepths.has(a); a = flatParent(a)) chain.push(a);
-    let d = a && getNodeType.call(a) === 1 ? flatDepths.get(a) : -1;
-    for (let i = chain.length - 1; i >= 0; i--) flatDepths.set(chain[i], ++d);
-    return d;
-  }
-  const outOfFlow = nodeMap();
-  function escapesClips(n) {
-    if (outOfFlow.has(n)) return outOfFlow.get(n);
-    const position = window.getComputedStyle(n).position;
-    const out = position === "fixed" || position === "absolute";
-    outOfFlow.set(n, out);
-    return out;
+  // Whether an element hit at (x, y) is in el's flat tree and el's own painting puts it
+  // there: no box between them is fixed or absolute, which would paint by its own
+  // containing block, escaping el's clips. Each point's carriers are found once: a point
+  // can hit a page's whole stack of boxes, and stacked content probes the same points.
+  const carriersAt = Object.create(null);
+  function carriesHit(el, x, y) {
+    const key = x + "," + y;
+    let carriers = carriersAt[key];
+    if (!carriers) {
+      carriers = carriersAt[key] = nodeMap();
+      // A loop, not recursion: a hit can sit under thousands of display:contents boxes.
+      for (const hit of hitsAt(document, x, y)) {
+        for (let n = hit; n && !carriers.has(n); n = carrierParent(n)) carriers.set(n, true);
+      }
+    }
+    return carriers.has(el);
   }
 
-  // Whether hit is in el's flat tree and el's own painting puts it where it is: no box
-  // between them is fixed or absolute, which would paint by its own containing block,
-  // escaping el's clips.
-  function carried(el, hit) {
-    const depth = flatDepth(el);
-    let n = hit;
-    for (; flatDepth(n) > depth; n = flatParent(n)) if (escapesClips(n)) return false;
-    return n === el;
+  // The element that carries whatever n carries: its flat parent, unless n is fixed or
+  // absolute. Memoized: every probe point can hit a page's whole ancestor stack.
+  const carrierParents = nodeMap();
+  function carrierParent(n) {
+    if (carrierParents.has(n)) return carrierParents.get(n);
+    const position = window.getComputedStyle(n).position;
+    const p = position === "fixed" || position === "absolute" ? null : flatParent(n);
+    const carrier = p && getNodeType.call(p) === 1 ? p : null;
+    carrierParents.set(n, carrier);
+    return carrier;
   }
 
   // Smallest normalized box covering every surviving child frame — the frame we give
