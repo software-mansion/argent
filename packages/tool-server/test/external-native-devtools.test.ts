@@ -437,37 +437,44 @@ describe("a provider that lends its native-devtools agent", () => {
    * asks for capture. The note must not say a request it lists was missed.
    */
   it("says the requests before argent connected were missed, and lists the ones after", async () => {
-    const agent = await startLentAgent();
-    publishDescriptor({ socketPath: agent.socketPath });
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      // The tool-server has run for a while, so the window must count from argent's connect.
+      vi.advanceTimersByTime(60_000);
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
 
-    const instance = await instantiate();
-    await waitForConnectedBundle(instance.api);
-    agent.sendEvent("Network.requestWillBeSent", {
-      requestId: "r1",
-      request: { url: "https://example.com/before-the-first-call", method: "GET", headers: {} },
-    });
-    agent.sendEvent("Network.loadingFinished", { requestId: "r1" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+      agent.sendEvent("Network.requestWillBeSent", {
+        requestId: "r1",
+        request: { url: "https://example.com/before-the-first-call", method: "GET", headers: {} },
+      });
+      agent.sendEvent("Network.loadingFinished", { requestId: "r1" });
+      await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const { createNativeNetworkLogsTool } =
-      await import("../src/tools/native-devtools/native-network-logs");
-    const { Registry } = await import("@argent/registry");
-    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
-    const listing = (await nativeNetworkLogsTool.execute(
-      { nativeDevtools: instance.api },
-      { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
-    )) as { header: string; requests: Array<{ url: string }> };
+      const { createNativeNetworkLogsTool } =
+        await import("../src/tools/native-devtools/native-network-logs");
+      const { Registry } = await import("@argent/registry");
+      const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+      const listing = (await nativeNetworkLogsTool.execute(
+        { nativeDevtools: instance.api },
+        { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+      )) as { header: string; requests: Array<{ url: string }> };
 
-    expect(listing.requests.map((request) => request.url)).toEqual([
-      "https://example.com/before-the-first-call",
-    ]);
-    expect(listing.header).toMatch(
-      /argent connected to the app's agent while the app was running, so the requests before that, its launch among them, were not recorded/
-    );
-    expect(listing.header).not.toMatch(/capture started/);
+      expect(listing.requests.map((request) => request.url)).toEqual([
+        "https://example.com/before-the-first-call",
+      ]);
+      expect(listing.header).toMatch(
+        /argent connected to the app's agent while the app was running, so the requests before that, its launch among them, were not recorded/
+      );
+      expect(listing.header).not.toMatch(/capture started/);
 
-    await instance.dispose();
-    await agent.close();
+      await instance.dispose();
+      await agent.close();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /**
