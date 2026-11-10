@@ -302,14 +302,14 @@ export async function reverseStart(udid: string, port: number): Promise<void> {
   let prompt: unknown;
   for (let attempt = 0; ; attempt++) {
     try {
-      const timeoutMs = startedAt + DEFAULT_TIMEOUT_MS - Date.now();
+      const timeoutMs = startedAt + SIM_REMOTE_TIMEOUT_MS - Date.now();
       await run(args, attempt === 0 ? undefined : { timeoutMs });
       return;
     } catch (err) {
       const message = (err as Error).message ?? "";
       if (/tunnel already active/.test(message)) return;
       // A retry cut off by the timeout says nothing new; report what prompted it.
-      if (attempt > 0 && ((err as Error).cause as { killed?: boolean })?.killed) throw prompt;
+      if (attempt > 0 && simRemoteExecError(err).killed) throw prompt;
       const delay = REVERSE_START_RETRY_DELAYS_MS[attempt];
       if (
         delay === undefined ||
