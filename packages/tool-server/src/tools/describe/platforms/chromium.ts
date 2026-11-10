@@ -1450,13 +1450,15 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
     return hits;
   }
 
-  // Memoized: every probe point can hit a page's whole ancestor stack.
+  // Memoized: every probe point can hit a page's whole ancestor stack. A loop, not
+  // recursion: a hit can sit under thousands of display:contents boxes.
   const flatDepths = nodeMap();
   function flatDepth(n) {
-    if (flatDepths.has(n)) return flatDepths.get(n);
-    const p = flatParent(n);
-    const d = p && getNodeType.call(p) === 1 ? flatDepth(p) + 1 : 0;
-    flatDepths.set(n, d);
+    const chain = [];
+    let a = n;
+    for (; a && getNodeType.call(a) === 1 && !flatDepths.has(a); a = flatParent(a)) chain.push(a);
+    let d = a && getNodeType.call(a) === 1 ? flatDepths.get(a) : -1;
+    for (let i = chain.length - 1; i >= 0; i--) flatDepths.set(chain[i], ++d);
     return d;
   }
   const outOfFlow = nodeMap();

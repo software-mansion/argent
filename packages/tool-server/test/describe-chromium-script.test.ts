@@ -3380,6 +3380,55 @@ describe("DESCRIBE_DOM_SCRIPT overflow clipping", () => {
     expect(reads(30)).toBe(40);
   });
 
+  it("reads each box of an overlay the rows' hit tests walk through a bounded number of times", () => {
+    // A 30-deep overlay whose leaf covers the viewport: every point probed past the
+    // scroller hits that leaf, walked up to the probed row's depth. Each box's position
+    // is read once past its own walk, and its depth looked up once.
+    const full = { x: 0, y: 0, w: W, h: H };
+    const reads = (rowCount: number) => {
+      const rows = Array.from({ length: rowCount }, (_, i) =>
+        row(`r${i}`, { x: 1, y: 101 + i * 8, w: 285, h: 8 })
+      );
+      let styles = 0;
+      let parents = 0;
+      let top = el({ rect: full, painted: full });
+      const overlay = [top];
+      for (let i = 0; i < 30; i++) overlay.push((top = el({ rect: full, children: [top] })));
+      for (const n of overlay as unknown as Record<string, unknown>[]) {
+        const style = n.__style;
+        Object.defineProperty(n, "__style", { get: () => (styles++, style) });
+      }
+      let parent: unknown;
+      Object.defineProperty(top, "__parentNode", {
+        get: () => (parents++, parent),
+        set: (v) => void (parent = v),
+      });
+      const { tree } = run([scroller(rows), top]);
+      for (let i = 0; i < rowCount; i++) expect(pxFrame(tree, `r${i}`).h).toBe(0);
+      return { styles, parents };
+    };
+    expect(reads(1)).toEqual({ styles: 60, parents: 2 });
+    expect(reads(30)).toEqual({ styles: 60, parents: 2 });
+  });
+
+  it("walks a hit up through thousands of display:contents boxes", () => {
+    // The leaf's ancestors exist only as its parent chain, which the walk never reaches.
+    const body = el({ tag: "body", rect: { x: 0, y: 0, w: W, h: H } });
+    const leaf = el({
+      rect: { x: 0, y: 100, w: W, h: 400 },
+      painted: { x: 0, y: 100, w: W, h: 400 },
+    });
+    let parent: MockElement = body;
+    for (let i = 0; i < 50_000; i++) {
+      const box = el({ rect: ZERO, style: { display: "contents" } });
+      (box as unknown as Record<string, unknown>).parentNode = parent;
+      parent = box;
+    }
+    (leaf as unknown as Record<string, unknown>).parentNode = parent;
+    const { tree } = run([scroller([row("cut", { x: 1, y: 1, w: 285, h: 300 })]), leaf], body);
+    expect(pxFrame(tree, "cut")).toEqual({ x: 1, y: 1, w: 285, h: 98 });
+  });
+
   it("clips a custom element's light child that hit-tests only across its clipper's border", () => {
     // A 12px-bordered clipper: the row overflows its padding box (y 12..112) to 127,
     // and Chrome hit-tests the overflow up to the border box's bottom (124).
