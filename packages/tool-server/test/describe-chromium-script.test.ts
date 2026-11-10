@@ -1531,11 +1531,12 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(findById(viaAncestor.tree, "btn")!.label).toBe("Save my draft");
   });
 
-  it("reads a visibility:hidden <br> as a space, since it still breaks the line", () => {
+  it("reads a visibility:hidden <br> as a space in own text, but in a shown target's name as nothing, as Chrome does", () => {
     const br = () =>
-      Object.assign(el({ tag: "br", rect: ZERO, style: { visibility: "hidden" } }), {
-        nodeType: 1,
-      });
+      Object.assign(
+        el({ tag: "br", rect: ZERO, style: { display: "inline", visibility: "hidden" } }),
+        { nodeType: 1 }
+      );
     const text = () => [
       { nodeType: 3, nodeValue: "alpha" },
       br(),
@@ -1553,7 +1554,43 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     });
     const { tree } = run([div, button, label]);
     expect(findById(tree, "own")!.value).toBe("alpha beta");
-    expect(findById(tree, "btn")!.label).toBe("alpha beta");
+    expect(findById(tree, "btn")!.label).toBe("alphabeta");
+  });
+
+  it("parts words at a laid-out but unread block-level box in a shown target, as Chrome does", () => {
+    const text = (nodeValue: string) => ({ nodeType: 3, nodeValue });
+    const unread = (tag: string, style: Record<string, string>, attrs = {}) =>
+      Object.assign(el({ tag, rect: BOX, style, attrs }), {
+        nodeType: 1,
+        childNodes: tag === "br" ? [] : [text("zz")],
+      });
+    const label = (child: unknown) => {
+      const target = el({ tag: "div", rect: BOX, attrs: { id: "lbl" } }) as MockElement &
+        Record<string, unknown>;
+      Object.assign(target, { nodeType: 1, parentNode: { nodeType: 9 } });
+      target.childNodes = [text("ab"), child, text("cd")];
+      const button = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "btn", "aria-labelledby": "lbl" },
+      });
+      return findById(run([button, target]).tree, "btn")!.label;
+    };
+    const hidden = { visibility: "hidden" };
+    for (const style of [hidden, { display: "list-item", ...hidden }, { display: "table" }]) {
+      const attrs = style.visibility ? {} : { "aria-hidden": "true" };
+      expect(label(unread("div", style, attrs)), JSON.stringify(style)).toBe("ab cd");
+    }
+    expect(label(unread("div", {}, { inert: "" }))).toBe("ab cd");
+    for (const style of [
+      { display: "inline-block", ...hidden },
+      { cssFloat: "left", ...hidden },
+      { position: "absolute", ...hidden },
+      { display: "none" },
+    ]) {
+      expect(label(unread("div", style)), JSON.stringify(style)).toBe("abcd");
+    }
+    expect(label(unread("br", { display: "inline" }, { "aria-hidden": "true" }))).toBe("abcd");
   });
 
   it("keeps a U+FEFF, and folds other whitespace to a space, in own and aria-labelledby text", () => {
@@ -1833,6 +1870,12 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(read([text("ab"), img("", 5), text("cd")])).toBe("AbCd");
     expect(read([text("ab"), img("pic", 5), text("cd")])).toBe("Ab pic Cd");
     expect(read([text("ab"), img("pic", 0), text("cd")])).toBe("Ab pic cd");
+    const svgTitle = elementNode("title", [text("q")], {
+      namespaceURI: "http://www.w3.org/2000/svg",
+      textContent: "q",
+    });
+    const svg = styled("svg", [svgTitle], inline, { namespaceURI: "http://www.w3.org/2000/svg" });
+    expect(read([text("ab"), svg, text("cd")])).toBe("Ab q Cd");
     // An atomic inline starts as a new box, and what follows runs on from its text.
     const box = (display: string, kids: unknown[]) => styled("span", kids, { display });
     expect(read([text("ab"), box("inline-block", [text("cd")]), text("ef")])).toBe("Ab Cd ef");
@@ -1855,6 +1898,34 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(read([pseudo("::after", "inline", [text("ab")])])).toBe("Abcd");
     expect(read([text("x"), pseudo("::before", "block", [text("ab")], "block")])).toBe("X Cd Ab");
     expect(read([text("x"), pseudo("::before", "block", [text("ab")])])).toBe("XCd ab");
+    // Laid-out content left out of the name still runs capitalize's words on.
+    const unread = (kids: unknown[], style: Record<string, string>, attrs = {}) =>
+      styled("span", kids, style, { __attrs: attrs });
+    expect(
+      read([unread([text("delete")], inline, { "aria-hidden": "true" }), text("remove item")])
+    ).toBe("remove Item");
+    for (const [style, attrs] of [
+      [inline, { "aria-hidden": "true" }],
+      [{ display: "inline", visibility: "hidden" }, {}],
+      [inline, { inert: "" }],
+    ]) {
+      expect(read([text("a "), unread([text("xy")], style, attrs), text("bar")])).toBe("A bar");
+    }
+    expect(read([text("a "), unread([text("xy")], { display: "none" }), text("bar")])).toBe(
+      "A Bar"
+    );
+    expect(
+      read([
+        text("ab"),
+        unread([text("xy")], { display: "inline-block", visibility: "hidden" }),
+        text("cd"),
+      ])
+    ).toBe("Abcd");
+    const hiddenBr = Object.assign(el({ tag: "br", rect: ZERO, style: inline }), {
+      nodeType: 1,
+      __attrs: { "aria-hidden": "true" },
+    });
+    expect(read([text("ab"), hiddenBr, text("cd")])).toBe("AbCd");
   });
 
   it("leaves capitalized text as is when a page's Intl.Segmenter misbehaves", () => {

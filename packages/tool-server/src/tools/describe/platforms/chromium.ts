@@ -422,11 +422,6 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         continue;
       }
       if (type !== 1) continue;
-      if (isRenderedBr(node)) {
-        s += " ";
-        laid = " ";
-        continue;
-      }
       const style = window.getComputedStyle(node);
       const ns = getNamespaceURI.call(node);
       const tag = getLocalName.call(node);
@@ -434,14 +429,28 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
       if (
         shown &&
         (style.display === "none" ||
-          style.visibility === "hidden" ||
-          isAriaHidden(node) ||
-          isInert(node) ||
           (svg &&
             (tag === "metadata" ||
               tag === "script" ||
               Object.prototype.toString.call(node) === "[object SVGElement]")))
       ) {
+        continue;
+      }
+      if (shown && (style.visibility === "hidden" || isAriaHidden(node) || isInert(node))) {
+        // Laid out but not read: an in-flow block-level box still parts the words around it.
+        if (
+          isBlockLevel(style) &&
+          style.cssFloat === "none" &&
+          !/^(absolute|fixed)$/.test(style.position)
+        ) {
+          s += " ";
+        }
+        laid = lastLaid(node, inInline) ?? laid;
+        continue;
+      }
+      if (isRenderedBr(node)) {
+        s += " ";
+        laid = " ";
         continue;
       }
       const rendered = !unrendered && style.display !== "none";
@@ -451,14 +460,14 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
         (isInlineBox(style) &&
           !(ns === "http://www.w3.org/1999/xhtml" && REPLACED.test(tag)) &&
           !(svg && tag === "svg"));
-      const blockEnd = !/^(inline|ruby|contents|math)/.test(style.display) && !inInline;
+      const blockEnd = isBlockLevel(style) && !inInline;
       if (!flow) laid = " ";
       const options = chosenOptions(node);
       const control = controlText(node);
       const content = control ?? rangeText(node, rendered) ?? (options ? null : altText(node));
       if (content !== null) {
         read(" " + content + " ");
-        if (rendered) laid = blockEnd ? " " : laidEnd(node, control, laid);
+        if (rendered) laid = lastLaid(node, inInline) ?? laid;
         continue;
       }
       if (options) {
@@ -702,19 +711,59 @@ const buildDescribeDomScript = ({ maxDepth, maxNodes }: ChromiumWalkLimits) => `
 
   const REPLACED = /^(img|input|video|audio|canvas|iframe|object|embed|progress|meter)$/;
 
-  // The last character an element read by its name lays out: a space for an <svg> or an
-  // <img> (a broken one shows its alt), else the end of what a <select> or <textarea>
-  // shows or of its text, else prev.
-  function laidEnd(el, control, prev) {
-    const tag = getLocalName.call(el);
-    if (tag === "svg") return " ";
-    const text =
-      tag === "img"
-        ? (!el.naturalWidth && getAttr.call(el, "alt")) || " "
-        : control === null
-          ? getTextContent.call(el)
-          : control.trimEnd();
-    return text ? text[text.length - 1] : prev;
+  // The last character a node lays out, or null if it lays out nothing. A <br>, a replaced
+  // element or <svg> (but a broken <img> with an alt), the start of a box and the end of a
+  // block-level box in a block container (inline false: the node's parent does not run
+  // inline) are a space.
+  function lastLaid(start, inline) {
+    // Triples: a kind (a node, its ::before or ::after, or the start of a box), the node,
+    // and whether the node's or the pseudo-element's parent runs inline.
+    const stack = [0, start, inline];
+    while (stack.length) {
+      const inl = stack.pop();
+      const node = stack.pop();
+      const kind = stack.pop();
+      if (kind === 3) return " ";
+      if (kind) {
+        const p = pseudoText(node, kind === 1 ? "::before" : "::after");
+        const end = !p ? null : p.block && !inl ? " " : p.strings ? p.strings.slice(-1) : p.inline ? null : " ";
+        if (end) return end;
+        continue;
+      }
+      const type = getNodeType.call(node);
+      if (type === 3 || type === 4) {
+        const text = getNodeValue.call(node);
+        if (text) return text.slice(-1);
+        continue;
+      }
+      if (type !== 1) continue;
+      const style = window.getComputedStyle(node);
+      if (style.display === "none") continue;
+      const html = getNamespaceURI.call(node) === "http://www.w3.org/1999/xhtml";
+      const tag = getLocalName.call(node);
+      if (html && tag === "img") {
+        const alt = !node.naturalWidth && getAttr.call(node, "alt");
+        return alt ? alt.slice(-1) : " ";
+      }
+      if ((html && (tag === "br" || REPLACED.test(tag))) || tag === "svg") return " ";
+      const control = controlText(node);
+      if (control !== null) return control.trimEnd().slice(-1) || " ";
+      const inlineBox = isInlineBox(style);
+      if (!inlineBox && style.display !== "contents") {
+        if (isBlockLevel(style) && !inl) return " ";
+        stack.push(3, null, false);
+      }
+      const kidsInline = style.display === "contents" ? inl : inlineBox;
+      if (html) stack.push(1, node, inlineBox);
+      for (const child of flatChildNodes(node)) stack.push(0, child, kidsInline);
+      if (html) stack.push(2, node, inlineBox);
+    }
+    return null;
+  }
+
+  // Whether a box is block-level, not inline-level.
+  function isBlockLevel(style) {
+    return !/^(inline|ruby|contents|math)/.test(style.display);
   }
 
   const CASED = /^(uppercase|lowercase|capitalize)/;
