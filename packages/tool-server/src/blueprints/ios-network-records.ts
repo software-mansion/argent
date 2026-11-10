@@ -48,7 +48,7 @@ const POST_DATA_WAIT_MS = 5_000;
 const POST_DATA_TIMEOUT_MS = 2 ** 31 - 1;
 const RESPONSE_BODY_TIMEOUT_MS = 10_000;
 /**
- * The chars of every body kept, together. The body kept most recently stays
+ * The chars of every body kept, together. The body read most recently stays
  * even when it alone is larger.
  */
 export const KEPT_BODY_CHARS_BUDGET = 64 * 1024 * 1024;
