@@ -100,6 +100,11 @@ describe("flow script executor — output validation", () => {
       `output.x = Object.create({});`,
       "output.x is an object with an unusual prototype; output must be JSON-compatible data",
     ],
+    [
+      "an instance whose class inherits its constructor",
+      `function Base() {}; function Order() {}; Order.prototype = Object.create(Base.prototype); output.order = new Order();`,
+      "output.order is a Base; output must be JSON-compatible data",
+    ],
   ])("rejects %s, naming its exact path", async (_label, source, expected) => {
     const result = await run(source);
     expect(result.ok).toBe(false);

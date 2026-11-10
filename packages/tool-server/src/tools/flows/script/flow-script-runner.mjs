@@ -576,7 +576,10 @@ function describeValue(value) {
   // class such a value is not.
   const ctor = value.constructor;
   const name =
-    typeof ctor === "function" && ctor.prototype === Object.getPrototypeOf(value) ? ctor.name : "";
+    typeof ctor === "function" &&
+    (ctor !== Object || Object.getPrototypeOf(value) === Object.prototype)
+      ? ctor.name
+      : "";
   if (!name) return "an object with an unusual prototype";
   // `U` takes "a": Uint8Array, URL, User.
   return `${/^[aeio]/i.test(name) ? "an" : "a"} ${name}`;
