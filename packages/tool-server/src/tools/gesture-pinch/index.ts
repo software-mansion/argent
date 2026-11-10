@@ -4,7 +4,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { harmonyConnectKey, isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { ensureDep } from "../../utils/check-deps";
-import { pinchContacts, sendTouchEvent } from "../../utils/gesture-utils";
+import { createTouchSender, pinchContacts } from "../../utils/gesture-utils";
 import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
 import { getViewport, touchPaths } from "../../utils/ios-device/runner-commands";
 import { pinchPaths } from "../../utils/ios-device/touch-paths";
@@ -169,6 +169,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       return { pinched: true, timestampMs, ...(fronted ? { reactivated: true as const } : {}) };
     }
     const api = services.simulatorServer as SimulatorServerApi;
+    const sendTouch = await createTouchSender(api, resolveDevice(params.udid));
     const steps = Math.max(1, Math.round(duration / 16));
 
     let timestampMs = 0;
@@ -181,7 +182,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      const sent = await sendTouchEvent(api, type, first.x, first.y, second.x, second.y);
+      const sent = await sendTouch(type, first.x, first.y, second.x, second.y);
       // Only the Down resolves the panel; the rest of the sequence keeps it.
       if (type === "Down") warning = sent.warning;
       if (i < steps) await sleep(16);

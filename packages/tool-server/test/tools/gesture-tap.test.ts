@@ -9,6 +9,9 @@ interface TouchCmd {
   y: number;
 }
 const sent: TouchCmd[] = [];
+vi.mock("../../src/utils/device-orientation", () => ({
+  readAndroidSurfaceRotation: vi.fn(async () => 0),
+}));
 vi.mock("../../src/utils/simulator-client", () => ({
   sendCommand: async (_api: unknown, cmd: TouchCmd) => {
     sent.push(cmd);

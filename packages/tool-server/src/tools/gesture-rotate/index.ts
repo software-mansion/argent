@@ -8,7 +8,7 @@ import {
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { iosDeviceRunnerRef, type IosDeviceRunnerApi } from "../../blueprints/ios-device-runner";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
-import { rotateContacts, sendTouchEvent } from "../../utils/gesture-utils";
+import { createTouchSender, rotateContacts } from "../../utils/gesture-utils";
 import { requireCurrentIosDeviceApp } from "../../utils/ios-device/app-session";
 import { getViewport, touchPaths } from "../../utils/ios-device/runner-commands";
 import { rotatePaths } from "../../utils/ios-device/touch-paths";
@@ -121,6 +121,7 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
     }
 
     const api = services.simulatorServer as SimulatorServerApi;
+    const sendTouch = await createTouchSender(api, device);
 
     let timestampMs = 0;
     let warning: string | undefined;
@@ -141,7 +142,7 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
         // refused lift rides along as `cause` instead of masking the abort.
         if (i > 0) {
           try {
-            await sendTouchEvent(api, "Up", lastX1, lastY1, lastX2, lastY2);
+            await sendTouch("Up", lastX1, lastY1, lastX2, lastY2);
           } catch (liftErr) {
             err.cause = liftErr;
           }
@@ -157,7 +158,7 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
       if (i === 0) timestampMs = Date.now();
 
-      const sent = await sendTouchEvent(api, type, x1, y1, x2, y2);
+      const sent = await sendTouch(type, x1, y1, x2, y2);
       // Only the Down resolves the panel; the rest of the sequence keeps it.
       if (type === "Down") warning = sent.warning;
       lastX1 = x1;
