@@ -14,7 +14,7 @@ Physical iPhone: not supported; every `debugger-*` tool rejects `kind: "device"`
 
 ## 2. Tools
 
-Pass the same `device_id`, the id from `list-devices`, to every call except `restart-app`, which takes that id as `udid`. With two or more devices on one Metro, `debugger-connect` refuses a udid or serial and returns a `logicalDeviceId`: use that as `device_id` from then on, and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours.
+Pass the same `device_id`, the id from `list-devices`, to every tool in the table except `restart-app`, which takes the `list-devices` id as `udid`, never a `logicalDeviceId`. With two or more devices on one Metro, `debugger-connect` refuses a udid or serial and returns a `logicalDeviceId`: use that as `device_id` from then on, and include it in `stop-all-simulator-servers`' `devices` at teardown, or the debugger session outlives yours.
 
 | Tool                                                 | Use for                                                                                                                |
 | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |

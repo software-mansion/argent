@@ -31,11 +31,11 @@ const OVERVIEW_TOOLS: ToolDefinition<any, any>[] = [
 ];
 
 function schemaOf(tool: ToolDefinition<any, any>): {
-  properties: Record<string, unknown>;
+  properties: Record<string, { description?: string }>;
   required: string[];
 } {
   const json = zodObjectToJsonSchema(tool.zodSchema!) as {
-    properties?: Record<string, unknown>;
+    properties?: Record<string, { description?: string }>;
     required?: string[];
   };
   return { properties: json.properties ?? {}, required: json.required ?? [] };
@@ -49,29 +49,29 @@ const overviewSection = (() => {
   return section;
 })();
 
-/** Tool id -> the table row that documents it; one row can name several tools. */
-const rows = new Map(
-  [...overviewSection.matchAll(/^\| (`[a-z-]+`(?: → `[a-z-]+`)*) +\|.*$/gm)].flatMap((m) =>
-    [...m[1]!.matchAll(/`([a-z-]+)`/g)].map((id) => [id[1]!, m[0]!] as const)
-  )
-);
+/** [tool id, the table row that documents it]; one row can name several tools. */
+const rowEntries = [
+  ...overviewSection.matchAll(/^\| (`[a-z-]+`(?: → `[a-z-]+`)*) +\|.*$/gm),
+].flatMap((m) => [...m[1]!.matchAll(/`([a-z-]+)`/g)].map((id) => [id[1]!, m[0]!] as const));
+const rows = new Map(rowEntries);
 
 const targetingClaim = (() => {
   const line = overviewSection
     .split("\n")
-    .find((l) => l.includes("`device_id`") && l.includes(" to every call"));
-  expect(line, "no sentence in the overview passes `device_id` to every call").toBeDefined();
+    .find((l) => l.includes("`device_id`") && l.includes(" to every tool in the table"));
+  expect(line, "no sentence passes `device_id` to every tool in the table").toBeDefined();
   return line!;
 })();
 
 describe("argent-metro-debugger tool overview", () => {
   it("documents exactly the tools whose schemas this test reads", () => {
-    expect([...rows.keys()].sort()).toEqual(OVERVIEW_TOOLS.map((t) => t.id).sort());
+    expect(rowEntries.map(([id]) => id).sort()).toEqual(OVERVIEW_TOOLS.map((t) => t.id).sort());
   });
 
   it("exempts from the device_id claim exactly the tools without a device_id parameter", () => {
     const outliers = OVERVIEW_TOOLS.filter((tool) => !("device_id" in schemaOf(tool).properties));
-    const exemptions = targetingClaim.match(/ to every call except (.*?), which /)?.[1] ?? "";
+    const [, exemptions = "", whichClause = ""] =
+      targetingClaim.match(/ to every tool in the table except (.*?), which ([^.]*)\./) ?? [];
     const exempted = [...exemptions.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]!);
     expect(exempted.sort(), "tools named in the claim's `except ..., which` clause").toEqual(
       outliers.map((t) => t.id).sort()
@@ -79,7 +79,21 @@ describe("argent-metro-debugger tool overview", () => {
 
     for (const tool of outliers) {
       const { properties, required } = schemaOf(tool);
-      const [takes, rejects = ""] = rows.get(tool.id)!.split(" not ");
+      const idParams = Object.keys(properties).filter((param) =>
+        properties[param]!.description?.includes("list-devices")
+      );
+      expect(idParams, `${tool.id}'s parameters described as the \`list-devices\` id`).toHaveLength(
+        1
+      );
+      expect(
+        whichClause,
+        `the claim does not say ${tool.id} takes the id as \`${idParams[0]}\``
+      ).toContain(`as \`${idParams[0]}\``);
+
+      const row = rows.get(tool.id)!;
+      const cut = row.lastIndexOf(" not ");
+      const takes = cut < 0 ? row : row.slice(0, cut);
+      const rejects = cut < 0 ? "" : row.slice(cut);
       for (const param of required) {
         expect(takes, `${tool.id}'s row does not name its \`${param}\` parameter`).toContain(
           `\`${param}\``
