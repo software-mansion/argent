@@ -735,6 +735,22 @@ describe("network-capture-start", () => {
       expect(await read(IOS_UDID)).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
     });
 
+    it("lets view-network-request-details say that capture stopped recording at a reload, in the runtime the reload left without the interceptor", async () => {
+      serve(PORT, IOS_UDID, new FakeRuntime(APP));
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+      await reconnect(PORT, IOS_UDID, new FakeRuntime(APP));
+
+      const text = await registry.invokeTool<string>("view-network-request-details", {
+        device_id: IOS_UDID,
+        requestId: "rn-net-1",
+      });
+
+      expect(text).toBe(
+        "Request rn-net-1 not found. Network capture for this app stopped recording at a JavaScript reload; requests since the reload are not recorded. Call network-capture-start again, repeat the action, then read again."
+      );
+    });
+
     it.each([
       {
         start2: "does not reach the runtime",
