@@ -8,6 +8,9 @@ import type { CpuCommitHotspot } from "../types/output";
 /** Prefix on argent's injected profiler functions, which are kept out of hotspots. */
 const ARGENT_PROFILER_PREFIX = "__argent_";
 
+/** Shortest first delta that can be a stale clock rather than a sampling interval. */
+const MIN_STALE_GAP_US = 1_000_000;
+
 export function isArgentProfilerFunction(name: string): boolean {
   return name.startsWith(ARGENT_PROFILER_PREFIX);
 }
@@ -37,10 +40,12 @@ export interface CpuSampleIndex {
  * sample, not an interval: one profile here reads as 27,954 s instead of 11 s.
  *
  * A stamp does not say whether it is stale, so this goes by size: the first
- * positive delta is a jump when it is longer than everything after it. On 154
- * recorded profiles it is at most 1.5% of the recording, except in the one
- * with the stale stamp. A stale jump shorter than the recording after it is
- * missed, which leaves the recording under twice its real length.
+ * positive delta is a jump when it is at least 1 s and longer than everything
+ * after it. An ordinary first interval is about 21 ms at most on the recorded
+ * profiles, but that can be most of a very short recording and is all of a
+ * 2-sample one, so the length comparison alone is not enough. A stale jump
+ * under either limit is missed, which leaves the recording under 1 s too long
+ * or under twice its real length.
  */
 export function dropStaleLeadingGap(profile: HermesCpuProfile): void {
   const { timeDeltas } = profile;
@@ -48,7 +53,7 @@ export function dropStaleLeadingGap(profile: HermesCpuProfile): void {
   const first = timeDeltas.findIndex((delta, i) => i > 0 && delta > 0);
   if (first < 0) return;
   const gap = timeDeltas[first]!;
-  if (gap <= profile.endTime - profile.startTime - gap) return;
+  if (gap < MIN_STALE_GAP_US || gap <= profile.endTime - profile.startTime - gap) return;
   timeDeltas[first] = 0;
   profile.startTime += gap;
 }

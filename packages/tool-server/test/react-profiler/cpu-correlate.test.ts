@@ -297,6 +297,26 @@ describe("dropStaleLeadingGap", () => {
     expect(profile.timeDeltas.slice(0, 5)).toEqual([0, 0, 0, 0, 10_000]);
   });
 
+  it("keeps the first interval of a very short recording, however much of it that is", () => {
+    for (const deltas of [
+      [0, 20_000],
+      [0, 20_000, 15_000],
+      [0, 999_999, 10_000],
+    ]) {
+      const profile = makeProfile(deltas, new Array(deltas.length).fill(2));
+      const before = JSON.stringify(profile);
+      dropStaleLeadingGap(profile);
+      expect(JSON.stringify(profile), JSON.stringify(deltas)).toBe(before);
+    }
+  });
+
+  it("repairs a jump of exactly 1 s", () => {
+    const profile = makeProfile([0, 1_000_000, 10_000], [2, 2, 2]);
+    dropStaleLeadingGap(profile);
+    expect(profile.timeDeltas).toEqual([0, 0, 10_000]);
+    expect(profile.endTime - profile.startTime).toBe(10_000);
+  });
+
   it("keeps a long first interval that is still shorter than the rest", () => {
     // A stall right after start is real time: 4 s, then 5 s of samples.
     const profile = makeProfile(
