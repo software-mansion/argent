@@ -145,6 +145,7 @@ describe("flow script executor — output validation", () => {
     ["0", "a number"],
     ["new Error('e')", "an Error"],
     ["new ArrayBuffer(1)", "an ArrayBuffer"],
+    ["new Int8Array(1)", "an Int8Array"],
     ["Object.create({})", "an object with an unusual prototype"],
   ])("names a non-plain output (%s) as %s", async (value, named) => {
     const result = await run(`output = ${value};`);
