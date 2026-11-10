@@ -189,6 +189,11 @@ export interface ElectronLaunchSpec {
    * {@link killChromiumByPort}. Cleared on exit, as the pid may be recycled.
    */
   pid?: number;
+  /**
+   * That boot's process group, kept after the leader exits: a run's teardown
+   * still reaps processes that outlived their launcher.
+   */
+  pgid?: number;
 }
 
 /**
@@ -256,13 +261,16 @@ export function assertElectronAppLaunchable(appPath: string): void {
   );
 }
 
-/** Whether spawn() would find `command` on PATH (libuv also tries .com/.exe on Windows). */
+/**
+ * Whether spawn() would find `command` on PATH, which searches an empty entry
+ * as the cwd (libuv also tries .com/.exe on Windows).
+ */
 function isOnPath(command: string): boolean {
   const exts = process.platform === "win32" ? ["", ".com", ".exe"] : [""];
-  return (process.env.PATH ?? "")
-    .split(path.delimiter)
-    .filter(Boolean)
-    .some((dir) => exts.some((ext) => isExecutableFile(path.join(dir, command + ext))));
+  const dirs = process.env.PATH ? process.env.PATH.split(path.delimiter) : [];
+  return dirs.some((dir) =>
+    exts.some((ext) => isExecutableFile(path.join(dir || process.cwd(), command + ext)))
+  );
 }
 
 function isExecutableFile(file: string): boolean {
@@ -547,7 +555,7 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // inert; the identity check keeps a stale child's exit from evicting a newer
   // boot that reused the same fixed port.
   const appPath = path.resolve(options.appPath);
-  const spec: ElectronLaunchSpec = { appPath, extraArgs: extra, pid: child.pid };
+  const spec: ElectronLaunchSpec = { appPath, extraArgs: extra, pid: child.pid, pgid: child.pid };
   launchSpecs.set(port, spec);
   liveChildren.set(port, child);
   child.once("exit", () => {

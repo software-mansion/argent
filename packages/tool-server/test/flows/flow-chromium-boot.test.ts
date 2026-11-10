@@ -27,7 +27,9 @@ const bootElectronApp = vi.fn(defaultBoot);
 const killChromiumByPort = vi.fn();
 const killChromiumByPortAndWait = vi.fn(async () => {});
 const forgetElectronLaunchSpec = vi.fn();
-const electronLaunchSpec = vi.fn((_port: number): { pid?: number } | undefined => undefined);
+const electronLaunchSpec = vi.fn(
+  (_port: number): { pid?: number; pgid?: number } | undefined => undefined
+);
 const withPortLock = vi.fn((_port: number, task: () => Promise<unknown>) => task());
 vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
@@ -249,9 +251,10 @@ describe("flow-execute chromium boot", () => {
   });
 
   it.each([
-    ["a restart-app replaced the booted process", { pid: 777 }, 777],
-    ["the replacement process already exited", { pid: undefined }, undefined],
-  ])("tears down the current process when %s", async (_name, spec, pid) => {
+    ["a restart-app replaced the booted process", { pid: 777, pgid: 777 }, 777],
+    // The group can outlive its launcher, still holding the port.
+    ["the replacement's launcher already exited", { pid: undefined, pgid: 777 }, 777],
+  ])("tears down the current process group when %s", async (_name, spec, pid) => {
     electronLaunchSpec.mockReturnValue(spec);
     const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");
 

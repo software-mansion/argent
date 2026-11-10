@@ -100,8 +100,11 @@ describe("guidance platform-correctness", () => {
     }
     expect(metro.guidance).toContain("restart-app");
     expect(chromium.guidance).toContain("restart-app if boot-device started it");
-    expect(chromium.guidance).toContain("an Electron app with boot-device and electronAppPath");
-    expect(chromium.guidance).toContain("--remote-debugging-port");
+    // The frozen copy holds the app's single-instance lock, which a new copy quits on.
+    expect(chromium.guidance).toContain(
+      "otherwise quit it and relaunch it: an Electron app with boot-device and electronAppPath, " +
+        "any other with --remote-debugging-port"
+    );
     // boot-device ignores `force` on the Electron path.
     expect(chromium.guidance).not.toContain("force");
   });

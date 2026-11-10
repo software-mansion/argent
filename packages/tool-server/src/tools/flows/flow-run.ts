@@ -2221,9 +2221,9 @@ async function teardownBootedChromium(registry: Registry, booted: BootedChromium
       /* the kill below frees the real resource regardless */
     }
     try {
-      // A restart-app may have replaced the booted process; the spec tracks the live pid.
+      // A restart-app may have replaced the booted process; the spec tracks its group.
       const spec = electronLaunchSpec(booted.port);
-      await killChromiumByPortAndWait(booted.port, spec ? spec.pid : booted.pid);
+      await killChromiumByPortAndWait(booted.port, spec ? spec.pgid : booted.pid);
       forgetElectronLaunchSpec(booted.port);
       untrackChromiumPort(booted.port);
     } catch {

@@ -92,14 +92,15 @@ export function makeChromiumImpl(
  * still holding it (another runtime on the freed port, or a kill that did not
  * land) would pass for the relaunch while the new copy fails to bind. Probing
  * by binding asks what the relaunch needs, including of a holder that accepts
- * connections but never answers CDP. The wildcard binds catch a holder on
- * 0.0.0.0 or ::, beside which a loopback bind succeeds while connections to
- * the loopback still reach that holder.
+ * connections but never answers CDP. Chromium listens on 127.0.0.1; on Windows
+ * it binds with SO_EXCLUSIVEADDRUSE, which fails beside a holder of 0.0.0.0 or
+ * ::, so only there are those probed too. Linux refuses the loopback bind
+ * beside such a holder, and macOS grants it and routes loopback to Chromium.
  */
 async function assertPortReleased(port: number, lead: string): Promise<void> {
-  // One at a time: a dual-stack :: bind collides with a concurrent 0.0.0.0 one.
   let held = await bindError(port, "127.0.0.1");
-  for (const host of ["0.0.0.0", "::"]) {
+  // One at a time: a dual-stack :: bind collides with a concurrent 0.0.0.0 one.
+  for (const host of process.platform === "win32" ? ["0.0.0.0", "::"] : []) {
     if (held) break;
     const err = await bindError(port, host);
     if (err?.code === "EADDRINUSE") held = err;
@@ -108,8 +109,8 @@ async function assertPortReleased(port: number, lead: string): Promise<void> {
   throw new FailureError(
     `${lead}: port ${port} is still held ` +
       `(${held.code ?? held.message}), so a new copy could not bind it. Quit the ` +
-      `process listening on port ${port} (it can be a leftover process of the app), then ` +
-      `retry restart-app.`,
+      `process listening on port ${port}, then retry restart-app. It can be a process of the ` +
+      `app that outlived the one Argent started, or a copy the app relaunched itself.`,
     {
       error_code: FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE,
       failure_stage: "chromium_restart_port_check",

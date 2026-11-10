@@ -209,9 +209,11 @@ describe("restart-app on Chromium", () => {
     ["answers CDP", () => cdpServer(), "127.0.0.1"],
     // Accepts the connection and never replies, so a CDP probe only times out.
     ["accepts connections but never answers", () => net.createServer(() => {}), "127.0.0.1"],
-    // A loopback bind succeeds beside it, but loopback connections still reach it.
-    ["listens on the wildcard address", () => cdpServer(), "0.0.0.0"],
-  ])(
+    // Linux refuses the loopback bind beside it; for macOS see the test below.
+    ...(process.platform === "darwin"
+      ? []
+      : [["listens on the wildcard address", () => cdpServer(), "0.0.0.0"] as const]),
+  ] as const)(
     "refuses to relaunch while another process that %s holds the freed port",
     async (_n, make, host) => {
       await bootElectronApp({ appPath: appDir, port });
@@ -236,6 +238,57 @@ describe("restart-app on Chromium", () => {
       expect(children).toHaveLength(2);
     }
   );
+
+  it("refuses a wildcard holder of the freed port on Windows, where Chromium binds exclusively", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    await exitChild(children[0]!, 1, null);
+    const foreign = await holdPort(cdpServer(), "0.0.0.0");
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try {
+      const err = await registryWithRestartApp()
+        .invokeTool("restart-app", { udid: `chromium-cdp-${port}`, bundleId: "tag" })
+        .then(
+          () => undefined,
+          (e: unknown) => e
+        );
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_RESTART_PORT_IN_USE);
+      expect(children).toHaveLength(1);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      await releasePort(foreign);
+    }
+  });
+
+  // Chromium's 127.0.0.1 listener binds beside it and takes the loopback connections.
+  it.runIf(process.platform === "darwin")(
+    "relaunches while another process holds the port on the wildcard address (macOS)",
+    async () => {
+      await bootElectronApp({ appPath: appDir, port });
+      await exitChild(children[0]!, 1, null);
+      const foreign = await holdPort(cdpServer(), "0.0.0.0");
+
+      const result = await registryWithRestartApp().invokeTool("restart-app", {
+        udid: `chromium-cdp-${port}`,
+        bundleId: "tag",
+      });
+
+      expect(result).toEqual({ restarted: true, bundleId: "tag" });
+      expect(children).toHaveLength(2);
+      await releasePort(foreign);
+    }
+  );
+
+  it("keeps the boot's process group in the launch spec after its launcher exits", async () => {
+    await bootElectronApp({ appPath: appDir, port });
+    const leader = children[0]!;
+    // The launcher exits on its own; the rest of its group lives on.
+    leader.exitCode = 0;
+    leader.emit("exit", 0, null);
+
+    expect(electronLaunchSpec(port)).toMatchObject({ pid: undefined, pgid: leader.pid });
+  });
 
   it("runs overlapping restarts of one port one after the other", async () => {
     await bootElectronApp({ appPath: appDir, port });
@@ -393,6 +446,29 @@ describe("restart-app on Chromium", () => {
     } finally {
       fs.rmSync(bare, { recursive: true, force: true });
       fs.rmSync(emptyBin, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the fallback electron in the cwd through an empty PATH entry, as spawn does", async () => {
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-bare-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-cwd-"));
+    const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), "argent-restart-app-chromium-path-"));
+    try {
+      fs.writeFileSync(path.join(bare, "package.json"), JSON.stringify({ main: "main.js" }));
+      fs.writeFileSync(path.join(cwd, "electron"), "", { mode: 0o755 });
+      await bootElectronApp({ appPath: bare, port });
+      vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      vi.stubEnv("PATH", `${path.delimiter}${emptyBin}`);
+
+      const result = await registryWithRestartApp().invokeTool("restart-app", {
+        udid: `chromium-cdp-${port}`,
+        bundleId: "tag",
+      });
+
+      expect(result).toEqual({ restarted: true, bundleId: "tag" });
+      expect(children).toHaveLength(2);
+    } finally {
+      for (const dir of [bare, cwd, emptyBin]) fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
