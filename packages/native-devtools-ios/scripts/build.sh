@@ -198,6 +198,7 @@ xcrun --sdk iphonesimulator clang \
 # where audio is never mocked does not load it. Local iOS only: no tvOS or tcp variant.
 if [[ "$TRANSPORT" == "unix" ]]; then
   echo "Building libArgentAudio.dylib..."
+  # CoreAudio is not linked: the hook binds to it by flat lookup, so a process that never loads it stays clean.
   xcrun --sdk iphonesimulator clang \
     -dynamiclib \
     ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
@@ -205,7 +206,9 @@ if [[ "$TRANSPORT" == "unix" ]]; then
     -mios-simulator-version-min=13.0 \
     -arch arm64 \
     -arch x86_64 \
-    -framework CoreAudio \
+    -Wl,-U,_AudioDeviceCreateIOProcID \
+    -Wl,-U,_AudioObjectGetPropertyData \
+    -Wl,-U,_AudioObjectGetPropertyDataSize \
     "${SRC_DIR}/ArgentAudio.c" \
     -o "${DEST_FILE_AU}"
 fi

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { promisify } from "node:util";
 import type { DeviceInfo } from "@argent/registry";
 import {
+  audioDylibPath,
   axServiceBinaryPath,
   axServiceBinaryPathTcp,
   bootstrapDylibPath,
@@ -165,6 +166,22 @@ function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: st
   return fs.existsSync(entry);
 }
 
+/** Control directory of the audio mock; set in every armed simulator, created by the host on first use. */
+export function audioDir(udid: string): string {
+  // The full UDID: unlike the native-devtools socket there is no unix path length to stay under, and two simulators
+  // must never share a control directory.
+  return `/tmp/argent-audio-${udid}`;
+}
+
+/**
+ * PROTOTYPE: insert the audio hook with the bootstrap whenever the simulator is armed, so audio tools work on any app
+ * launched after arming without a restart. The hook stays dormant (no thread, no CoreAudio load) until the app opens
+ * audio. ARGENT_AUDIO_ALWAYS_INSERTED=0 restores insert-on-first-audio-tool.
+ */
+export function audioAlwaysInserted(): boolean {
+  return process.env.ARGENT_AUDIO_ALWAYS_INSERTED !== "0";
+}
+
 export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
   const preserved = splitDyldInsertLibraries(currentValue).filter((entry) =>
     shouldPreserveDyldInsertLibrariesEntry(entry, bootstrapPath)
@@ -215,7 +232,8 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
 async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint): Promise<void> {
   // tvOS simulators require a TVOSSIMULATOR-platform dylib — dyld silently skips
   // the IOSSIMULATOR slice and native injection never connects.
-  const bootstrapPath = (await isTvOsSimulator(udid))
+  const tvOs = await isTvOsSimulator(udid);
+  const bootstrapPath = tvOs
     ? bootstrapDylibPathTvos()
     : endpoint.transport === "tcp"
       ? bootstrapDylibPathTcp()
@@ -233,7 +251,9 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
-  const updated = buildDyldInsertLibraries(existing, bootstrapPath);
+  let updated = buildDyldInsertLibraries(existing, bootstrapPath);
+  const withAudio = !tvOs && endpoint.transport === "unix" && audioAlwaysInserted();
+  if (withAudio) updated = appendDyldInsertLibrary(updated, audioDylibPath());
 
   if (updated !== existing) {
     await execFileAsync(
@@ -272,6 +292,14 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
         "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
         endpoint.socketPath,
       ],
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
+    );
+  }
+
+  if (withAudio) {
+    await execFileAsync(
+      "xcrun",
+      [...prefix, "spawn", udid, "launchctl", "setenv", "ARGENT_AUDIO_DIR", audioDir(udid)],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS, killSignal: SIMCTL_KILL_SIGNAL }
     );
   }

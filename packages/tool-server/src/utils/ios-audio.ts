@@ -7,7 +7,7 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { deviceSetForUdid, simctlPrefix } from "./ios-device-sets";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { InvalidToolInputError } from "./capability";
-import { appendDyldInsertLibrary } from "./ios-host";
+import { appendDyldInsertLibrary, audioDir, localIosHost } from "./ios-host";
 import { audioDylibPath } from "@argent/native-devtools-ios";
 import { isTvOsSimulator } from "./ios-devices";
 import type { NativeDevtoolsApi } from "../blueprints/native-devtools";
@@ -50,11 +50,7 @@ const recorders = new Map<string, OutputRecorder>();
 const envVerified = new Set<string>();
 const BUNDLE_ID_PATTERN = /^[A-Za-z0-9.-]+$/;
 
-export function audioDir(udid: string): string {
-  // The full UDID: unlike the native-devtools socket there is no unix path length to stay under, and two simulators
-  // must never share a control directory.
-  return `/tmp/argent-audio-${udid}`;
-}
+export { audioDir };
 
 export function assertBundleId(bundleId: string): void {
   if (!BUNDLE_ID_PATTERN.test(bundleId)) {
@@ -211,6 +207,17 @@ export function readAppStatus(udid: string, bundleId: string): AppAudioStatus | 
   return status.pid > 0 && processAlive(status.pid) ? status : null;
 }
 
+/**
+ * PROTOTYPE: whether the app carries the hook even though it has not written a status yet. With the hook inserted at
+ * arming time it stays dormant (no helper thread, so no `st.` file) until the app opens audio; its launch environment
+ * still shows the control directory.
+ */
+export async function isAppArmed(udid: string, bundleId: string): Promise<boolean> {
+  if (readAppStatus(udid, bundleId)) return true;
+  const app = await localIosHost.inspectRunningApp(udid, bundleId).catch(() => null);
+  return !!app?.process?.env.includes(`${AUDIO_DIR_ENV}=${audioDir(udid)}`);
+}
+
 /** Bundle ids of the apps whose hook is live, for telling the caller which apps can be driven. */
 export function listLiveApps(udid: string): string[] {
   let names: string[];
@@ -356,6 +363,8 @@ function noHookError(bundleId: string): FailureError {
 }
 
 const recorderKey = (udid: string, bundleId: string) => `${udid}/${bundleId}`;
+/** Recordings requested from a dormant hook, not acknowledged yet: their id. */
+const pendingIds = new Map<string, string>();
 
 /** Starts recording the app's speaker output into `outputPath`; resolves once the app confirms. */
 export async function startRecording(
@@ -366,9 +375,11 @@ export async function startRecording(
 ): Promise<void> {
   assertBundleId(bundleId);
   const status = readAppStatus(udid, bundleId);
-  if (!status) throw noHookError(bundleId);
+  // A dormant hook acknowledges nothing until the app opens audio; it reads the request when it does.
+  const dormant = !status && (await isAppArmed(udid, bundleId));
+  if (!status && !dormant) throw noHookError(bundleId);
   const key = recorderKey(udid, bundleId);
-  if (status.recording || recorders.has(key)) {
+  if (status?.recording || recorders.has(key)) {
     throw new FailureError(
       `${bundleId} is already being recorded${recorders.has(key) ? ` to ${recorders.get(key)!.wavPath}` : ""}. Call audio-record-stop first.`,
       {
@@ -385,7 +396,13 @@ export async function startRecording(
   removeFiles(dir, `out-${bundleId}-`);
   const recorder = new OutputRecorder(path.join(dir, `out-${bundleId}-${id}.ring`), outputPath);
   const recFile = path.join(dir, `rec.${bundleId}`);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeAtomic(recFile, `id=${id}\nring=${recorder.ringPath}\nmute=${muteOutput ? 1 : 0}\n`);
+  if (dormant) {
+    pendingIds.set(key, id);
+    recorders.set(key, recorder);
+    return;
+  }
   const ack = await waitFor(() => {
     const s = readAppStatus(udid, bundleId);
     return s && s.recordingId === id && (s.recording || s.error) ? s : undefined;
@@ -423,8 +440,23 @@ export async function stopRecording(udid: string, bundleId: string): Promise<Fin
   const key = recorderKey(udid, bundleId);
   const recorder = recorders.get(key);
   const status = readAppStatus(udid, bundleId);
+  const pendingId = pendingIds.get(key);
+  pendingIds.delete(key);
   const recFile = path.join(audioDir(udid), `rec.${bundleId}`);
   fs.rmSync(recFile, { force: true });
+  if (recorder && pendingId && !(status?.recording && status.recordingId === pendingId)) {
+    // Requested from a dormant hook that never opened audio (or did and already stopped): what reached the ring is
+    // the recording.
+    recorders.delete(key);
+    const finished = recorder.finish();
+    return {
+      path: finished.path,
+      durationMs: finished.sampleRate ? Math.round((finished.frames * 1000) / finished.sampleRate) : 0,
+      sampleRate: finished.sampleRate,
+      channels: finished.channels,
+      droppedFrames: finished.droppedFrames,
+    };
+  }
   if (!status?.recording || !recorder) {
     recorders.delete(key);
     recorder?.abort();

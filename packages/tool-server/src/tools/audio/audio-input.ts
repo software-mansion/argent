@@ -7,7 +7,7 @@ import {
   armAudio,
   clearAudioInput,
   listLiveApps,
-  readAppStatus,
+  isAppArmed,
   setAudioInput,
 } from "../../utils/ios-audio";
 
@@ -111,13 +111,13 @@ Fails if the file cannot be decoded, the simulator is not booted, or the target 
   },
 };
 
-function withApps(
+async function withApps(
   params: Params,
   result: Pick<AudioInputResult, "source" | "durationMs">
-): AudioInputResult {
+): Promise<AudioInputResult> {
   const out: AudioInputResult = { ...result, liveApps: listLiveApps(params.udid) };
   if (params.bundleId) {
-    out.appReady = readAppStatus(params.udid, params.bundleId) !== null;
+    out.appReady = await isAppArmed(params.udid, params.bundleId);
     if (!out.appReady) {
       out.message =
         `The audio hook is not live in ${params.bundleId}: it was launched before the simulator was armed. ` +
