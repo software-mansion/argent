@@ -4287,6 +4287,20 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(api.records(8081)[0]).toMatchObject({ state: "pending" });
   });
 
+  it("a stop is confirmed when the agent's connection closes before it answers Network.disable", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    // The app exits: its agent sends nothing more.
+    await agent.close();
+
+    expect(await stopping).toEqual({ confirmed: true });
+    expect(api.state()).toEqual({ armed: false, stopped: true });
+  });
+
   it("an agent that connects while stopped gets Network.enable, then Network.disable, is never armed, and fails the open requests it resumes on the reply", async () => {
     const api = await armedInspector();
     const first = agents[0]!;

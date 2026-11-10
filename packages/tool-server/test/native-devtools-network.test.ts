@@ -585,6 +585,21 @@ describe("native-devtools network capture stop", () => {
     await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
   });
 
+  it("confirms a stop when the app's connection closes before it acknowledges Network.disable", async () => {
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const app = await connectApp(api.socketPath, { holdDisable: true });
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+
+    const stopping = api.stopNetworkCapture(BUNDLE);
+    await vi.waitFor(() => expect(disableRequests(app)).toHaveLength(1));
+    // The app exits: its process sends nothing more.
+    app.close();
+
+    await expect(stopping).resolves.toEqual({ confirmed: true });
+    expect(api.isNetworkCaptureStopped(BUNDLE)).toBe(true);
+  });
+
   it("records no new request of a stopped app, and completes the one in flight at the stop", async () => {
     const api = await startService();
     const app = await connectArmedApp(api);
