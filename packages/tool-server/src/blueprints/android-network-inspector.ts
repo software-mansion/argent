@@ -147,8 +147,6 @@ const LOST_WHILE_DISCONNECTED =
 const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
 const STOPPED_NOTE =
   "capture stopped by network-capture-stop; network-capture-start turns it on again";
-const JS_LAYER_FALLBACK =
-  "Use view-network-logs: the JS layer still records the app's JavaScript requests while Metro serves the app.";
 
 /**
  * The status events whose detail goes into the log with the event. The
@@ -169,7 +167,6 @@ export const ANDROID_NATIVE_REQUEST_ID = /^android-[0-9a-f]{4}-\d+$/;
 interface AndroidNetworkNotAttachable {
   status: "not_attachable";
   reason: string;
-  fallback: string;
 }
 
 export type AndroidCaptureState = "active" | "waiting" | "unavailable";
@@ -195,8 +192,6 @@ export interface AndroidCaptureStart {
   reason?: string;
   /** Nothing arms the layer without a change the caller must make, such as a debuggable build. */
   unavailable?: true;
-  /** Set with `unavailable` when the app is not attachable at all. */
-  fallback?: string;
 }
 
 export interface AndroidNetworkInspectorApi {
@@ -503,7 +498,6 @@ function createInspector(
   const notAttachable = (reason: string): AndroidNetworkNotAttachable => ({
     status: "not_attachable",
     reason,
-    fallback: JS_LAYER_FALLBACK,
   });
 
   function sessionLine(port: number): string {
@@ -1821,7 +1815,6 @@ function createInspector(
                 armed: false,
                 unavailable: true,
                 reason: outcome.blocked.reason,
-                fallback: outcome.blocked.fallback,
               },
             };
           }

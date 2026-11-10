@@ -296,14 +296,8 @@ async function startAndroidLayer(
     return unavailable("android-native", errorMessage(err));
   }
   const started = await api.startCapture(port);
-  if (started.unavailable) {
-    return unavailable(
-      "android-native",
-      started.fallback
-        ? `${started.reason}. ${started.fallback}`
-        : (started.reason ?? "unavailable")
-    );
-  }
+  // The start's js layer tells whether the app's JavaScript requests are still recorded.
+  if (started.unavailable) return unavailable("android-native", started.reason ?? "unavailable");
   return {
     layer: "android-native",
     armed: started.armed,

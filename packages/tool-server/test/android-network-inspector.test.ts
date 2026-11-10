@@ -2016,7 +2016,6 @@ describe("the gates before an attach", () => {
       armed: false,
       unavailable: true,
       reason: expect.stringContaining(`package not debuggable: ${PKG}`),
-      fallback: expect.stringContaining("view-network-logs"),
     });
     expect(device.commands.some((c) => c.includes(" push "))).toBe(false);
     expect(attachCommands()).toEqual([]);
@@ -2144,7 +2143,6 @@ describe("the gates before an attach", () => {
       armed: false,
       unavailable: true,
       reason: AGENT_BINARIES_MISSING_REASON,
-      fallback: expect.stringContaining("view-network-logs"),
     });
     expect(device.commands).toEqual([]);
   });

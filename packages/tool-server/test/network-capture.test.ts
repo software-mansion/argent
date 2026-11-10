@@ -480,13 +480,12 @@ describe("network-capture-start", () => {
     expect(androidFor(APP).calls).toEqual([`start ${PORT}`]);
   });
 
-  it("reports an Android app that cannot be attached unavailable, with what to use instead", async () => {
+  it("reports an Android app that cannot be attached unavailable, beside the JS layer that still records", async () => {
     serve(PORT, SERIAL, new FakeRuntime(APP));
     androidFor(APP).startAnswer = () => ({
       armed: false,
       unavailable: true,
       reason: `${APP} is not debuggable`,
-      fallback: "Use view-network-logs.",
     });
 
     const result = await start(SERIAL, APP);
@@ -495,7 +494,7 @@ describe("network-capture-start", () => {
       layer: "android-native",
       armed: false,
       unavailable: true,
-      reason: `${APP} is not debuggable. Use view-network-logs.`,
+      reason: `${APP} is not debuggable`,
     });
     expect(layer(result, "js")).toEqual({ layer: "js", armed: true });
   });
@@ -524,7 +523,6 @@ describe("network-capture-start", () => {
         armed: false,
         unavailable: true,
         reason: `${APP} is not debuggable`,
-        fallback: "Use view-network-logs.",
       });
 
       const err = await start(SERIAL, APP).then(
@@ -533,9 +531,9 @@ describe("network-capture-start", () => {
       );
 
       expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NETWORK_CAPTURE_UNAVAILABLE);
-      expect(err?.message).toContain(
-        `js: ${METRO_DOWN}; android-native: ${APP} is not debuggable. Use view-network-logs.`
-      );
+      expect(err?.message).toContain(`js: ${METRO_DOWN}; android-native: ${APP} is not debuggable`);
+      // view-network-logs only reads, so a start with no JS layer must not send the caller there.
+      expect(err?.message).not.toContain("view-network-logs");
       // An unavailable start leaves no mark to count from.
       expect(androidFor(APP).captureMark()).toBeUndefined();
     });
@@ -1014,7 +1012,6 @@ describe("network-capture-stop", () => {
       armed: false,
       unavailable: true,
       reason: `${APP} is not debuggable`,
-      fallback: "Use view-network-logs.",
     });
     const started = await start(SERIAL, APP);
     expect(layer(started, "android-native")).toMatchObject({ armed: false, unavailable: true });
