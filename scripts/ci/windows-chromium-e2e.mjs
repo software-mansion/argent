@@ -12,6 +12,8 @@ const BASE = process.env.ARGENT_E2E_URL ?? "http://127.0.0.1:3033";
 const OUT = process.env.ARGENT_E2E_OUT ?? tmpdir();
 mkdirSync(OUT, { recursive: true });
 
+const PAGE_URL = new URL("./e2e-chromium-page.html", import.meta.url).href;
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function fail(msg, extra) {
@@ -61,7 +63,7 @@ async function waitForServer() {
 async function main() {
   await waitForServer();
 
-  // 1) list-devices discovers Chromium by probing CDP ports.
+  // list-devices discovers Chromium by probing CDP ports.
   const devices = await callTool("list-devices");
   const list = devices.devices ?? [];
   console.log(
@@ -73,19 +75,36 @@ async function main() {
       "no chromium device discovered — is Chrome running with --remote-debugging-port?",
       devices
     );
-  const udid = chromium.id;
-  console.log(`✓ discovered chromium device: ${udid}`);
+  console.log(`✓ discovered chromium device: ${chromium.id}`);
+  await drive(chromium.id, "chromium");
 
-  // 2) Screenshot must return real pixels.
+  // boot-device finds the installed Chrome and launches it on a profile and port of its own.
+  const booted = await callTool("boot-device", {
+    browser: "chrome",
+    electronArgs: ["--headless=new", "--disable-gpu", PAGE_URL],
+  });
+  if (booted?.platform !== "chromium" || booted.booted !== true || booted.id === chromium.id)
+    fail("boot-device with browser did not return a new chromium device", booted);
+  console.log(`✓ boot-device launched ${booted.appPath} as ${booted.id}`);
+  await drive(booted.id, "booted");
+
+  console.log(
+    "\n✅ Chromium E2E passed on this host — discover, boot, screenshot, describe, and tap all work."
+  );
+}
+
+/** Screenshot, describe and tap the e2e page on `udid`; `tag` names its screenshots. */
+async function drive(udid, tag) {
+  // Screenshot must return real pixels.
   const shot = await callTool("screenshot", { udid });
   const hostPath = shot?.image?.hostPath;
   if (!hostPath || !existsSync(hostPath)) fail("screenshot returned no readable hostPath", shot);
   const size = statSync(hostPath).size;
   console.log(`✓ screenshot: ${hostPath} (${size} bytes)`);
   if (size < 1000) fail(`screenshot suspiciously small (${size} bytes) — likely a blank frame`);
-  copyFileSync(hostPath, join(OUT, "chromium-before.png"));
+  copyFileSync(hostPath, join(OUT, `${tag}-before.png`));
 
-  // 3) describe surfaces the DOM.
+  // describe surfaces the DOM.
   const before = await callTool("describe", { udid });
   const beforeText =
     typeof before === "string" ? before : (before.description ?? JSON.stringify(before));
@@ -97,12 +116,12 @@ async function main() {
   }
   console.log("✓ describe surfaced the DOM (found ArgentTapTarget)");
 
-  // 4) gesture-tap dispatches a real click.
+  // gesture-tap dispatches a real click.
   const tap = await callTool("gesture-tap", { udid, x: 0.5, y: 0.5 });
   if (!(tap?.tapped === true)) fail("gesture-tap did not report tapped:true", tap);
   console.log("✓ gesture-tap reported tapped:true");
 
-  // 5) e2e-chromium-page.html's click handler rewrites the button to TAPPED-OK.
+  // e2e-chromium-page.html's click handler rewrites the button to TAPPED-OK.
   let observed = false;
   for (let i = 0; i < 10; i++) {
     const after = await callTool("describe", { udid });
@@ -116,14 +135,10 @@ async function main() {
   }
   const finalShot = await callTool("screenshot", { udid });
   if (finalShot?.image?.hostPath && existsSync(finalShot.image.hostPath)) {
-    copyFileSync(finalShot.image.hostPath, join(OUT, "chromium-after.png"));
+    copyFileSync(finalShot.image.hostPath, join(OUT, `${tag}-after.png`));
   }
   if (!observed) fail("tap did not mutate the DOM (TAPPED-OK never appeared in describe)");
-  console.log("✓ tap mutated the DOM (TAPPED-OK observed) — real interaction confirmed");
-
-  console.log(
-    "\n✅ Chromium E2E passed on this host — discover, screenshot, describe, and tap all work."
-  );
+  console.log(`✓ tap mutated the DOM of ${udid} (TAPPED-OK observed)`);
 }
 
 main().catch((err) => fail(err.message ?? String(err), err.stack));
