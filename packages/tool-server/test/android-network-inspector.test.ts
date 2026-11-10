@@ -4352,6 +4352,33 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect(api.records(8081)).toHaveLength(1);
   });
 
+  it("a stop fails with the stop reason a request whose final events the agent lost while it was disconnected", async () => {
+    const api = await armedInspector();
+    const first = agents[0]!;
+    first.started(first.rid(1), "https://example.com/lost");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    await first.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    // The agent that resumes the connection no longer has the request in flight.
+    await FakeAgent.fromSession(dirFor(), proc(), {
+      instance: first.instance,
+      lastSeq: 1,
+      inFlight: [],
+    });
+    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: "the agent lost this request's final events while it was disconnected",
+    });
+
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+  });
+
   it("an enable reply that comes after a stop does not arm, gets Network.disable, and does not bring back what the stop failed", async () => {
     const api = await armedInspector();
     const first = agents[0]!;
