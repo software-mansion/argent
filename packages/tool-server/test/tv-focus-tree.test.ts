@@ -204,6 +204,26 @@ describe("tvFocusTree — the rest of the screen", () => {
     expect(isVisible(node!)).toBe(true);
   });
 
+  it("hides the text inside a scrolled-away row, whatever frame the daemon gives it", () => {
+    // Captured from Settings > General: an off-screen cell's children are reported
+    // at y=154, on screen.
+    const { tree } = tvFocusTree(
+      FOCUS,
+      hierarchy([
+        {
+          label: "Time Zone",
+          frame: { x: 1060, y: 2187, width: 780, height: 66 },
+          children: [{ label: "Warsaw", frame: { x: 1060, y: 154, width: 130, height: 46 } }],
+        },
+      ])
+    );
+
+    const matches = findAll(tree, { text: "Warsaw" });
+    expect(matches).toHaveLength(1);
+    expect(evaluateCondition("visible", undefined, matches)).toBe(false);
+    expect(evaluateCondition("hidden", undefined, matches)).toBe(true);
+  });
+
   it("does not make the app itself matchable, or duplicate a focusable", () => {
     const { tree } = tvFocusTree(
       FOCUS,

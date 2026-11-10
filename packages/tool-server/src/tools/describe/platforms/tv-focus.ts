@@ -61,8 +61,11 @@ export function splitTvLabel(label: string | undefined): { name?: string; contex
 function frameOf(element: TvElement): DescribeNode["frame"] {
   const f = element.frame;
   if (!f) return { x: 0, y: 0, width: 0, height: 0 };
-  const onScreen = f.x < 1 && f.y < 1 && f.x + f.width > 0 && f.y + f.height > 0;
-  return onScreen ? f : { x: f.x, y: f.y, width: 0, height: 0 };
+  return isOnScreen(f) ? f : { x: f.x, y: f.y, width: 0, height: 0 };
+}
+
+function isOnScreen(f: NonNullable<TvElement["frame"]>): boolean {
+  return f.x < 1 && f.y < 1 && f.x + f.width > 0 && f.y + f.height > 0;
 }
 
 /**
@@ -116,27 +119,27 @@ function contentElements(
 ): TvElement[] {
   const out: TvElement[] = [];
   const screen = hierarchy?.screenFrame;
-  const walk = (node: TvHierarchyNode): void => {
+  // `offScreen` is the frame of a scrolled-away ancestor. The daemon reports the
+  // children of an off-screen cell at a made-up on-screen spot (Settings: y=154),
+  // so they take the ancestor's frame instead, which `frameOf` reads as hidden.
+  const walk = (node: TvHierarchyNode, offScreen?: TvElement["frame"]): void => {
     for (const child of node.children ?? []) {
+      const f = child.frame;
+      const frame =
+        offScreen ??
+        (f && screen?.width && screen.height
+          ? {
+              x: f.x / screen.width,
+              y: f.y / screen.height,
+              width: f.width / screen.width,
+              height: f.height / screen.height,
+            }
+          : undefined);
       const text = child.label || child.value;
       if (text && !focusText.has(text)) {
-        const f = child.frame;
-        out.push({
-          label: child.label,
-          value: child.value,
-          ...(f && screen?.width && screen.height
-            ? {
-                frame: {
-                  x: f.x / screen.width,
-                  y: f.y / screen.height,
-                  width: f.width / screen.width,
-                  height: f.height / screen.height,
-                },
-              }
-            : {}),
-        });
+        out.push({ label: child.label, value: child.value, ...(frame ? { frame } : {}) });
       }
-      walk(child);
+      walk(child, offScreen ?? (frame && !isOnScreen(frame) ? frame : undefined));
     }
   };
   if (hierarchy?.tree) walk(hierarchy.tree);
