@@ -14,7 +14,12 @@ const execFileAsync = promisify(execFile);
 import { stripRemotePrefix } from "./device-info";
 import { simulatorRuntimeKind } from "./ios-devices";
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+export const SIM_REMOTE_TIMEOUT_MS = 30_000;
+
+/** The `execFile` rejection behind a `run()` failure, which holds `killed`, `code` and `signal`. */
+export function simRemoteExecError(err: unknown): { killed?: boolean } {
+  return ((err as { cause?: unknown }).cause ?? err) as { killed?: boolean };
+}
 
 interface SimRemoteOptions {
   timeoutMs?: number;
@@ -24,7 +29,7 @@ interface SimRemoteOptions {
 async function run(args: string[], options?: SimRemoteOptions): Promise<{ stdout: string }> {
   try {
     const { stdout } = await execFileAsync("sim-remote", args, {
-      timeout: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeout: options?.timeoutMs ?? SIM_REMOTE_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
       encoding: "utf8",
       input: options?.stdin,

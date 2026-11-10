@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const execFileMock = vi.fn();
+/** Returned from execFileMock: the call never answers. */
+const HANG = Symbol("hang");
 
 // Production spawns `ps` by absolute path (PS_BIN); match on basename so the mock
 // fires regardless.
@@ -20,6 +22,7 @@ vi.mock("node:child_process", async () => {
       const callback = typeof opts === "function" ? opts : cb!;
       const options = typeof opts === "function" ? undefined : opts;
       const result = execFileMock(cmd, args, options);
+      if (result === HANG) return;
       if (result instanceof Error) callback(result, { stdout: "", stderr: "" });
       else callback(null, result ?? { stdout: "", stderr: "" });
     },
@@ -114,9 +117,9 @@ import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
-import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { BRANCH_DEADLINE_MS, listDevicesTool } from "../src/tools/devices/list-devices";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
-import { xcodeFirstLaunchHint } from "../src/utils/xcode-first-launch";
+import { xcodeFirstLaunchHint, xcodeInstallInstruction } from "../src/utils/xcode-first-launch";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -251,7 +254,7 @@ describe("list-devices", () => {
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
   });
 
-  it("tags each remote iOS and tvOS simulator with the runtime kind of its runtime", async () => {
+  it("tags remote iOS and tvOS simulators with their runtime kind and skips any other runtime, like the local listing", async () => {
     const devices = {
       "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [
         { udid: "TV-1", name: "Apple TV", state: "Booted" },
@@ -260,7 +263,10 @@ describe("list-devices", () => {
         { udid: "PHONE-1", name: "iPhone 16", state: "Booted" },
       ],
       "com.apple.CoreSimulator.SimRuntime.watchOS-11-0": [
-        { udid: "WATCH-1", name: "Apple Watch", state: "Booted" },
+        { udid: "WATCH-1", name: "Apple Watch", state: "Shutdown" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.xrOS-2-0": [
+        { udid: "VISION-1", name: "Apple Vision Pro", state: "Shutdown" },
       ],
     };
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
@@ -276,7 +282,6 @@ describe("list-devices", () => {
     expect(remote.map((d) => [d.name, "runtimeKind" in d ? d.runtimeKind : "missing"])).toEqual([
       ["Apple TV", "tv"],
       ["iPhone 16", "mobile"],
-      ["Apple Watch", undefined],
     ]);
   });
 
@@ -300,6 +305,76 @@ describe("list-devices", () => {
     const result = await listDevicesTool.execute!({}, {});
 
     expect(result.devices.length).toBeGreaterThan(0);
+    expect(result).not.toHaveProperty("hint");
+  });
+
+  /**
+   * A cold CoreSimulatorService holds `simctl list` past its timeout, and the
+   * tool-server can be serving by then, so an empty iOS list must not read as
+   * "no simulators".
+   */
+  it("says the iOS list may be incomplete when simctl list is killed at its timeout", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error("Command failed: xcrun simctl list devices --json"), {
+          killed: true,
+          signal: "SIGKILL",
+        });
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
+    expect(result.hint).toContain("did not answer within 10s");
+    // Xcode 27.1's simctl wrapper hangs in a pending first launch, which no retry fixes.
+    expect(result.hint).toContain(`ask the user to ${xcodeInstallInstruction()};`);
+  });
+
+  it("kills simctl list with SIGKILL after 10s", async () => {
+    execFileMock.mockImplementation(() => ({ stderr: "", stdout: "" }));
+
+    await listDevicesTool.execute!({}, {});
+
+    const list = execFileMock.mock.calls.find(
+      ([cmd, args]) => cmd === "xcrun" && args.includes("list") && args.includes("devices")
+    );
+    expect(list?.[2]).toMatchObject({ timeout: 10_000, killSignal: "SIGKILL" });
+  });
+
+  it("counts an iOS branch cut off by the deadline as timed out", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      execFileMock.mockImplementation((cmd: string, args: string[]) =>
+        cmd === "xcrun" && args[0] === "simctl" ? HANG : { stderr: "", stdout: "" }
+      );
+
+      const pending = listDevicesTool.execute!({}, {});
+      await vi.advanceTimersByTimeAsync(BRANCH_DEADLINE_MS);
+      const result = await pending;
+
+      expect(result.hint).toContain("did not answer within 10s");
+    } finally {
+      stderr.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("adds no hint when simctl fails without timing out", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error('xcrun: error: unable to find utility "simctl"'), {
+          code: 72,
+          killed: false,
+        });
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
     expect(result).not.toHaveProperty("hint");
   });
 
@@ -954,5 +1029,28 @@ describe("list-devices — external provider shadows", () => {
 
     expect(result.hint).toContain("provider.workspace.path");
     expect(result.hint).toContain("`ANDROID_ADB_SERVER_PORT=5038 adb -s <serial> ...`");
+  });
+
+  it("keeps the provider rules alongside the iOS timeout notice", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error("Command failed: xcrun simctl list devices --json"), {
+          killed: true,
+        });
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const hints = result.hint!.split("\n\n");
+    expect(hints).toHaveLength(2);
+    expect(hints[0]).toContain("did not answer within 10s");
+    expect(hints[1]).toContain("provider.workspace.path");
   });
 });

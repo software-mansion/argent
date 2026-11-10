@@ -21,12 +21,13 @@ import {
   appIdForPlatform,
   authoringPlatform,
   chromiumLaunchSpec,
-  iosLaunchArgs,
+  appLaunchArgs,
   writeNewFlowFile,
   blockSteps,
   BLOCK_DIRECTIVE_KEYS,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
+import { scopeTempFlags } from "../helpers/macos-apps-flag";
 
 // ── serializeFlow ────────────────────────────────────────────────────
 
@@ -1288,6 +1289,9 @@ describe("output references", () => {
     expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 2 }\n')).toBe(
       "`tap.on.id`"
     );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, button: right }\n')).toBe(
+      "`tap.on.id`"
+    );
     expect(
       locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" }, duration: 900 }\n')
     ).toBe("`long-press.on.id`");
@@ -1319,6 +1323,9 @@ describe("output references", () => {
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, times: 1 }\n')).toBe(
+      "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
+    );
+    expect(locatorNamed('steps:\n  - tap: { on: { id: "{{output:row}}" }, button: left }\n')).toBe(
       "`tap.id` (spelled `tap.on.id` if the target sits under `on:`)"
     );
     expect(locatorNamed('steps:\n  - long-press: { on: { id: "{{output:row}}" } }\n')).toBe(
@@ -1673,11 +1680,13 @@ describe("ios launch args", () => {
     expect(appIdForPlatform(app, "android")).toBe("com.acme.native");
   });
 
-  it("iosLaunchArgs reads only an ios { app, args } entry", async () => {
-    expect(iosLaunchArgs({ ios: { app: "com.acme.app", args: ["-Flag"] } })).toEqual(["-Flag"]);
-    expect(iosLaunchArgs({ ios: "com.acme.app" })).toBeUndefined();
-    expect(iosLaunchArgs("com.acme.app")).toBeUndefined();
-    expect(iosLaunchArgs(undefined)).toBeUndefined();
+  it("appLaunchArgs reads only an { app, args } entry", async () => {
+    expect(appLaunchArgs({ ios: { app: "com.acme.app", args: ["-Flag"] } }, "ios")).toEqual([
+      "-Flag",
+    ]);
+    expect(appLaunchArgs({ ios: "com.acme.app" }, "ios")).toBeUndefined();
+    expect(appLaunchArgs("com.acme.app", "ios")).toBeUndefined();
+    expect(appLaunchArgs(undefined, "ios")).toBeUndefined();
   });
 });
 
@@ -1724,6 +1733,10 @@ describe("native launch shorthand", () => {
 // ── the authoring platform fold ──────────────────────────────────────
 
 describe("the authoring platform fold", () => {
+  // The allowed launch keys include macos while the macos-apps flag is on, so
+  // the developer's own flags must not reach the message.
+  scopeTempFlags();
+
   it("folds only ios-remote, and leaves every writable platform alone", async () => {
     expect(authoringPlatform("ios-remote")).toBe("ios");
     for (const p of ["ios", "android", "chromium", "vega"]) {
@@ -1757,7 +1770,7 @@ describe("the authoring platform fold", () => {
     // The fold exists so no flow file needs a remote key. Accepting one would
     // let a flow name the host, which is the thing a flow deliberately cannot do.
     expect(() => parseFlow('steps:\n  - launch: { "ios-remote": com.acme.app }\n')).toThrow(
-      /allowed keys: native, ios, android, chromium, vega/
+      /allowed keys: native, ios, android, chromium, vega\)/
     );
   });
 });

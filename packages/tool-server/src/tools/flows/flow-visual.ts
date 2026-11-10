@@ -452,8 +452,9 @@ export async function runSnapshot(
         // sits. Masking a crop's overlap with the screen's top status-bar band
         // would degenerate into comparing nothing for an element inside the
         // band (a vacuous pass); a crop overlapping the band leans on the run's
-        // best-effort pinStatusBar instead.
-        topMask: cropFrame === undefined ? "status-bar" : "none",
+        // best-effort pinStatusBar instead. A Mac window has no status bar: its
+        // top band is the title bar and toolbar, compared like the rest.
+        topMask: cropFrame === undefined && env.device.platform !== "macos" ? "status-bar" : "none",
         // Crop dimensions track the element — size drift must hard-fail below
         // instead of being resampled away like a full-screen scale difference.
         ...(cropFrame !== undefined && { normalizeSizes: false }),
