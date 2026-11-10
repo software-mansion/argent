@@ -18,7 +18,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 ## Requirements
 
 - **macOS** with Xcode installed for iOS simulator work (`xcrun simctl`). On Linux `npm run dev` skips the iOS dylibs.
-- **Node.js 22.22.2+ or 24.15+** (the workspace dependencies' floor; the published package needs 22.15+)
+- **Node.js 22 (22.22.2+), 24 (24.15+) or 26+** (what the workspace dependencies accept; the published package needs 22.15+, excluding 23.0-23.7)
 - The [GitHub CLI](https://cli.github.com/) (`gh`), logged in with `gh auth login`, to download the prebuilt native binaries
 
 ---
