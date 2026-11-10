@@ -77,6 +77,7 @@ describe("bootElectronApp onProcessGone / label", () => {
     }).catch((e: unknown) => e);
 
     expect((err as Error).message).toMatch(/^Browser CDP never became reachable on port 1/);
+    expect(getFailureSignal(err)?.failure_stage).toBe("browser_cdp_ready");
     expect(gone).not.toHaveBeenCalled();
     child.emit("exit", 0, null);
     expect(gone).toHaveBeenCalledTimes(1);
@@ -95,9 +96,12 @@ describe("bootElectronApp onProcessGone / label", () => {
       }).catch((e: unknown) => e);
       await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
       await vi.advanceTimersByTimeAsync(1000);
-      expect(((await settled) as Error).message).toMatch(
-        /^Browser boot: spawn returned without a pid/
-      );
+      const err = await settled;
+      expect((err as Error).message).toMatch(/^Browser boot: spawn returned without a pid/);
+      expect(getFailureSignal(err)).toMatchObject({
+        failure_stage: "browser_spawn_no_pid",
+        failure_command: "browser",
+      });
       expect(gone).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
@@ -162,6 +166,10 @@ describe("bootElectronApp onProcessGone / label", () => {
     expect(((await spawnErr) as Error).message).toMatch(
       /^Browser boot: failed to launch .* \(EACCES\)/
     );
+    expect(getFailureSignal(await spawnErr)).toMatchObject({
+      failure_stage: "browser_spawn_error",
+      failure_command: "browser",
+    });
 
     const exited = makeFakeChild(12346);
     spawnMock.mockReturnValue(exited);
@@ -193,7 +201,12 @@ describe("bootElectronApp onProcessGone / label", () => {
       onProcessGone: gone,
     }).catch((e: unknown) => e);
 
-    expect(getFailureSignal(second)?.error_code).toBe(FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE);
+    expect(getFailureSignal(second)).toMatchObject({
+      error_code: FAILURE_CODES.CHROMIUM_ELECTRON_PORT_IN_USE,
+      failure_stage: "browser_port_in_use",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
     expect((second as Error).message).toMatch(
       /^Browser boot: another boot on port 1 is still starting/
     );
@@ -243,7 +256,7 @@ describe("bootElectronApp onProcessGone / label", () => {
     spawnMock.mockReturnValue(child);
     const boot = bootElectronApp({ appPath: appBinary, kind: "browser" }).catch((e: unknown) => e);
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
-    child.stderr.emit("data", Buffer.from("line 1\nline 2\n\nline 3\n"));
+    child.stderr.emit("data", Buffer.from("line 1\r\n  line 2\r\n \r\nline 3\r\n"));
     child.emit("exit", 13, null);
     // Lands after 'exit', as stdio may.
     await new Promise((r) => setTimeout(r, 20));

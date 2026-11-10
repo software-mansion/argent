@@ -906,7 +906,7 @@ function singleInstanceLockHint(suspects: LockSuspects): string {
 async function chromiumBootFailureReason(state: ExecState, err: unknown): Promise<string> {
   const base = `could not boot the chromium app: ${errMsg(err)}`;
   if (!singleInstanceLockSignal(err)) return base;
-  return `${base} ${singleInstanceLockHint(await liveLockSuspects(state))}`;
+  return `${base}\n${singleInstanceLockHint(await liveLockSuspects(state))}`;
 }
 
 /**
@@ -1965,7 +1965,7 @@ function resolveOpts(params: Params): { device?: string; platform?: FlowPlatform
 function hoistedBootFailure(err: unknown): unknown {
   const signal = singleInstanceLockSignal(err);
   if (!signal) return err;
-  return wrapFailure(err, signal, `${errMsg(err)} ${singleInstanceLockHint(NO_LOCK_SUSPECTS)}`);
+  return wrapFailure(err, signal, `${errMsg(err)}\n${singleInstanceLockHint(NO_LOCK_SUSPECTS)}`);
 }
 
 /**

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { EventEmitter } from "node:events";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter, getEventListeners } from "node:events";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -22,7 +22,7 @@ vi.mock("../src/blueprints/chromium-cdp", () => ({
   ensureCdpReachable: (port: number) => readyMock(port),
 }));
 
-import { bootElectronApp, chromiumSwitchName } from "../src/tools/devices/boot-electron";
+import { bootElectronApp, chromiumSwitchNames } from "../src/tools/devices/boot-electron";
 
 interface FakeChild extends EventEmitter {
   pid: number;
@@ -46,6 +46,7 @@ function makeFakeChild(): FakeChild {
 
 const appBinary = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "argent-abort-retry-")), "app");
 fs.writeFileSync(appBinary, "");
+afterAll(() => fs.rmSync(path.dirname(appBinary), { recursive: true, force: true }));
 
 // Failure paths run killChildEscalating's group sweep on a stand-in pid.
 vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -63,7 +64,7 @@ beforeEach(() => {
   readyMock.mockRejectedValue(new Error("ECONNREFUSED"));
 });
 
-describe("chromiumSwitchName", () => {
+describe("chromiumSwitchNames", () => {
   it.each([
     ["--user-data-dir=/p", "linux", "user-data-dir"],
     ["--user-data-dir", "darwin", "user-data-dir"],
@@ -83,7 +84,13 @@ describe("chromiumSwitchName", () => {
     ["/", "win32", undefined],
     ["--", "linux", ""],
   ] as const)("%j on %s -> %s", (arg, platform, expected) => {
-    expect(chromiumSwitchName(arg, platform)).toBe(expected);
+    expect(chromiumSwitchNames([arg], platform)).toEqual([expected]);
+  });
+
+  it("reads everything after a bare -- as an argument", () => {
+    expect(
+      chromiumSwitchNames(["--headless=new", " -- ", "--user-data-dir=/p", "-", "--"], "linux")
+    ).toEqual(["headless", "", undefined, undefined, undefined]);
   });
 });
 
@@ -99,6 +106,58 @@ describe("bootElectronApp", () => {
     const args: string[] = spawnMock.mock.calls[0]![1];
     expect(args).not.toContain("-remote-debugging-port=9");
     expect(args).toContain("--headless=new");
+  });
+
+  it("keeps a --remote-debugging-port that follows a bare --, where Chromium reads a URL", async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+    await bootElectronApp({
+      appPath: appBinary,
+      readyTimeoutMs: 50,
+      extraArgs: ["--", "--remote-debugging-port=9"],
+    }).catch(() => {});
+    expect(spawnMock.mock.calls[0]![1].slice(-2)).toEqual(["--", "--remote-debugging-port=9"]);
+  });
+
+  it("stops probing the port once the boot has failed", async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+    const boot = bootElectronApp({ appPath: appBinary }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(readyMock).toHaveBeenCalled());
+    child.emit("exit", 1, null);
+    child.stderr.emit("end");
+    await boot;
+    const probes = readyMock.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 600));
+    expect(readyMock.mock.calls.length).toBe(probes);
+  });
+
+  it("leaves no listener on the call's signal, whether the boot succeeds or fails", async () => {
+    const controller = new AbortController();
+    spawnMock.mockReturnValue(makeFakeChild());
+    readyMock.mockResolvedValue(undefined);
+    await bootElectronApp({ appPath: appBinary, signal: controller.signal });
+    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
+
+    spawnMock.mockReturnValue(makeFakeChild());
+    readyMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    await bootElectronApp({
+      appPath: appBinary,
+      readyTimeoutMs: 50,
+      signal: controller.signal,
+    }).catch(() => {});
+    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
+  });
+
+  it("runs onProcessGone when a child that booted exits later", async () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+    readyMock.mockResolvedValue(undefined);
+    const gone = vi.fn();
+    await bootElectronApp({ appPath: appBinary, kind: "browser", onProcessGone: gone });
+    expect(gone).not.toHaveBeenCalled();
+    child.emit("exit", 0, null);
+    expect(gone).toHaveBeenCalledTimes(1);
   });
 
   it("kills the child and fails when the call is aborted inside the confirm window", async () => {
@@ -163,6 +222,47 @@ describe("bootElectronApp", () => {
       FAILURE_CODES.CHROMIUM_ELECTRON_CDP_TIMEOUT
     );
     expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("spawns nothing when the call is aborted while it waits for a dying child", async () => {
+    const port = await pickFreePort();
+    const first = makeFakeChild();
+    spawnMock.mockReturnValueOnce(first);
+    await bootElectronApp({ appPath: appBinary, port, readyTimeoutMs: 50 }).catch(() => {});
+
+    const controller = new AbortController();
+    const retry = bootElectronApp({ appPath: appBinary, port, signal: controller.signal }).catch(
+      (e: unknown) => e
+    );
+    await new Promise((r) => setTimeout(r, 100));
+    controller.abort();
+    first.signalCode = "SIGTERM";
+
+    expect(((await retry) as Error).name).toBe("AbortError");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops waiting for a dying child that has not exited after 5 s", async () => {
+    const port = await pickFreePort();
+    spawnMock.mockReturnValueOnce(makeFakeChild());
+    await bootElectronApp({ appPath: appBinary, port, readyTimeoutMs: 50 }).catch(() => {});
+
+    spawnMock.mockReturnValueOnce(makeFakeChild());
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const retry = bootElectronApp({ appPath: appBinary, port, readyTimeoutMs: 50 }).catch(
+        () => {}
+      );
+      vi.setSystemTime(Date.now() + 4800);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + 200);
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(2));
+      vi.setSystemTime(Date.now() + 1000);
+      await retry;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses the fixed port when it is still held once the dying child has exited", async () => {

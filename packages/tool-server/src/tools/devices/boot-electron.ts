@@ -120,7 +120,8 @@ function resolveLauncher(appPath: string): { command: string; args: string[] } {
 async function waitForCdpReady(
   port: number,
   deadlineMs: number,
-  kind: LauncherKind
+  kind: LauncherKind,
+  stop: AbortSignal
 ): Promise<void> {
   const deadline = Date.now() + deadlineMs;
   let lastErr: unknown = null;
@@ -132,6 +133,7 @@ async function waitForCdpReady(
       lastErr = err;
       await new Promise((r) => setTimeout(r, 250));
     }
+    if (stop.aborted) return;
   }
   const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
   throw new FailureError(
@@ -147,19 +149,24 @@ async function waitForCdpReady(
 }
 
 /**
- * The switch name `arg` sets, or undefined for an argument. Chromium trims each
- * argument and takes `--` and `-` as switch prefixes, and on Windows `/` too,
- * case-insensitively. A bare `-` (or `/`) is an argument.
+ * The switch name each of `args` sets, or undefined for an argument. Chromium
+ * trims each one and takes `--` and `-` as switch prefixes, and on Windows `/`
+ * too, case-insensitively. A bare `-` (or `/`) is an argument, and so is
+ * everything after a bare `--`, which itself is neither (its name is "").
  */
-export function chromiumSwitchName(
-  arg: string,
+export function chromiumSwitchNames(
+  args: string[],
   platform: NodeJS.Platform = process.platform
-): string | undefined {
+): (string | undefined)[] {
   const win = platform === "win32";
-  const trimmed = arg.trim();
-  if (trimmed === "-" || (win && trimmed === "/")) return undefined;
-  const key = (win ? /^(?:--|-|\/)([^=]*)/ : /^(?:--|-)([^=]*)/).exec(trimmed)?.[1];
-  return win ? key?.toLowerCase() : key;
+  let terminated = false;
+  return args.map((arg) => {
+    const trimmed = arg.trim();
+    if (terminated || trimmed === "-" || (win && trimmed === "/")) return undefined;
+    terminated = trimmed === "--";
+    const key = (win ? /^(?:--|-|\/)([^=]*)/ : /^(?:--|-)([^=]*)/).exec(trimmed)?.[1];
+    return win ? key?.toLowerCase() : key;
+  });
 }
 
 /**
@@ -168,8 +175,9 @@ export function chromiumSwitchName(
  * than the port we tracked and reported to the caller.
  */
 function sanitizeExtraArgs(extra: string[]): string[] {
-  return extra.filter((a) => {
-    if (chromiumSwitchName(a) === "remote-debugging-port") {
+  const names = chromiumSwitchNames(extra);
+  return extra.filter((a, i) => {
+    if (names[i] === "remote-debugging-port") {
       process.stderr.write(
         `[electron-boot] dropping user-supplied "${a}" — Argent manages the CDP port.\n`
       );
@@ -535,9 +543,15 @@ async function bootOnce(
     abortReject = null;
   };
 
+  const readyPoll = new AbortController();
   try {
     await Promise.race([
-      waitForCdpReady(port, options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS, kind),
+      waitForCdpReady(
+        port,
+        options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS,
+        kind,
+        readyPoll.signal
+      ),
       earlyExit,
       spawnError,
       aborted,
@@ -555,6 +569,7 @@ async function bootOnce(
     // no awaits before it, or the boot-time listeners keep firing during
     // cleanup and reject the orphan promises.
     detachBootListeners();
+    readyPoll.abort();
     killChildEscalating(child);
     if (options.port !== undefined) dyingChildren.set(options.port, child);
     if (!exitStatus) throw err;

@@ -263,10 +263,11 @@ function extractInvocationMeta(
 }
 
 /**
- * Telemetry platform and device kind from a tool call's device arg, or null when
- * it carries none. A device id refines to `tvos` / `android-tv` once the
- * runtime-kind cache is warm (coarse `ios` / `android` until then); the
- * `avdName`-only fallback is always coarse and carries no kind.
+ * Telemetry platform and device kind from a tool call's device arg, else from
+ * the boot target it names (`avdName`, `harmonyInstance`, `electronAppPath`,
+ * `browser`, `vvdImage`), or null when it carries neither. A device id refines
+ * to `tvos` / `android-tv` once the runtime-kind cache is warm (coarse `ios` /
+ * `android` until then); a boot target is always coarse and carries no kind.
  * Exported for tests (http-platform-alias.test.ts).
  */
 export function deviceAttributionFromArgs(data: unknown): DeviceAttribution | null {

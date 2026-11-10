@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { FAILURE_CODES, FailureError } from "@argent/registry";
+import { FAILURE_CODES, FailureError, wrapFailure, type FailureSignal } from "@argent/registry";
 import { browserWebSocketUrl } from "../../chromium-server/cdp-session";
 import { CDPClient } from "../../utils/debugger/cdp-client";
 import { pidIsAlive } from "../../utils/process-kill";
@@ -10,7 +10,7 @@ import { PS_BIN } from "../../utils/vega-process";
 import {
   abortedBootError,
   bootElectronApp,
-  chromiumSwitchName,
+  chromiumSwitchNames,
   killChromiumByPortAndWait,
   type ElectronBootResult,
 } from "./boot-electron";
@@ -53,8 +53,14 @@ export function browserExecutableCandidates(
     );
   }
   if (platform === "win32") {
-    const roots = [env["PROGRAMFILES"], env["PROGRAMFILES(X86)"], env["LOCALAPPDATA"]];
-    return roots
+    // A 32-bit Node sees the x86 dir as PROGRAMFILES; PROGRAMW6432 is the 64-bit one there.
+    const roots = [
+      env["PROGRAMW6432"],
+      env["PROGRAMFILES"],
+      env["PROGRAMFILES(X86)"],
+      env["LOCALAPPDATA"],
+    ];
+    return [...new Set(roots)]
       .filter((root): root is string => Boolean(root))
       .map((root) => path.win32.join(root, WINDOWS_RELATIVE_PATHS[browser]));
   }
@@ -100,9 +106,8 @@ function holderAlive(pid: number): boolean {
 
 /** Whether `pid` is a browser on `dir`; a dead browser's pid can pass to an unrelated process. */
 function browserOnProfile(pid: number, dir: string): boolean {
-  if (!holderAlive(pid)) return false;
-  // Windows has no ps of its own; Git Bash's numbers its own pids.
-  if (process.platform === "win32") return true;
+  // Windows has no ps of its own (Git Bash's numbers its own pids); its lockfile tells instead.
+  if (process.platform === "win32" || !holderAlive(pid)) return false;
   const ps = spawnSync(PS_BIN, ["-ww", "-o", "command=", "-p", String(pid)], {
     encoding: "utf8",
     timeout: 2000,
@@ -114,13 +119,17 @@ function browserOnProfile(pid: number, dir: string): boolean {
 /**
  * Whether a browser holds `dir`, by Chromium's own profile lock: on POSIX a
  * `SingletonLock` symlink to `<host>-<pid>`, which a crash leaves behind; on
- * Windows a `lockfile` deleted when its holder exits.
+ * Windows a `lockfile` deleted when its holder exits. A lock from another host
+ * counts as held, as it does for Chromium: its pid cannot be probed from here.
  */
 function profileLocked(dir: string): boolean {
   if (process.platform === "win32") return fs.existsSync(path.join(dir, "lockfile"));
   try {
     const owner = fs.readlinkSync(path.join(dir, "SingletonLock"));
-    return browserOnProfile(Number(owner.slice(owner.lastIndexOf("-") + 1)), dir);
+    const dash = owner.lastIndexOf("-");
+    return (
+      owner.slice(0, dash) !== os.hostname() || browserOnProfile(Number(owner.slice(dash + 1)), dir)
+    );
   } catch {
     return false;
   }
@@ -211,6 +220,14 @@ function removeStaleProfiles(): void {
  */
 const IDENTITY_CHECK_TIMEOUT_MS = 20_000;
 
+const IDENTITY_CHECK_FAILURE: FailureSignal = {
+  error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
+  failure_stage: "browser_identity_check",
+  failure_area: "tool_server",
+  error_kind: "network",
+  failure_command: "cdp",
+};
+
 /**
  * Whether the browser answering on 127.0.0.1:`port` runs on `profileDir`. A
  * browser that loses 127.0.0.1 to one booting at the same moment in another
@@ -218,6 +235,7 @@ const IDENTITY_CHECK_TIMEOUT_MS = 20_000;
  */
 async function answersOnProfile(
   port: number,
+  pid: number,
   profileDir: string,
   signal?: AbortSignal
 ): Promise<boolean> {
@@ -227,7 +245,7 @@ async function answersOnProfile(
     browser = new CDPClient(await browserWebSocketUrl(port, deadline.signal), {
       sendOrigin: false,
     });
-    await browser.connect();
+    await browser.connect(IDENTITY_CHECK_TIMEOUT_MS);
     const { commandLine } = (await browser.send(
       "SystemInfo.getInfo",
       undefined,
@@ -235,7 +253,15 @@ async function answersOnProfile(
     )) as { commandLine?: string };
     // The random dir name is matched rather than the path, which Windows may quote.
     return commandLine?.includes(path.basename(profileDir)) ?? false;
-  })();
+  })().catch((err: unknown) => {
+    throw wrapFailure(
+      err,
+      IDENTITY_CHECK_FAILURE,
+      `Browser boot: the browser on port ${port} ` +
+        `${holderAlive(pid) ? "could not be identified" : "exited"} right after it started: ` +
+        (err instanceof Error ? err.message : String(err))
+    );
+  });
   let timer: NodeJS.Timeout | undefined;
   let onAbort: (() => void) | undefined;
   const timedOut = new Promise<never>((_, reject) => {
@@ -248,16 +274,9 @@ async function answersOnProfile(
       deadline.abort();
       reject(
         new FailureError(
-          `Browser boot: the browser on port ${port} stopped answering CDP for ` +
-            `${IDENTITY_CHECK_TIMEOUT_MS} ms right after it started.`,
-          {
-            error_code: FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE,
-            failure_stage: "browser_identity_check",
-            failure_area: "tool_server",
-            error_kind: "network",
-            failure_command: "cdp",
-            network_failure: "timeout",
-          }
+          `Browser boot: the browser on port ${port} did not identify itself over CDP within ` +
+            `${IDENTITY_CHECK_TIMEOUT_MS} ms of starting.`,
+          { ...IDENTITY_CHECK_FAILURE, network_failure: "timeout" }
         )
       );
     }, IDENTITY_CHECK_TIMEOUT_MS);
@@ -288,7 +307,8 @@ interface BootBrowserOptions {
  */
 export async function bootBrowser(options: BootBrowserOptions): Promise<ElectronBootResult> {
   // Chromium takes the last --user-data-dir, so one here would replace the throwaway profile.
-  const userDataDir = options.extraArgs?.find((a) => chromiumSwitchName(a) === "user-data-dir");
+  const given = options.extraArgs ?? [];
+  const userDataDir = given[chromiumSwitchNames(given).indexOf("user-data-dir")];
   if (userDataDir) {
     throw new FailureError(
       `Browser boot: \`electronArgs\` cannot set ${userDataDir}: a browser boot always runs ` +
@@ -325,8 +345,8 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
 
   // Chromium reads every non-flag argument, a blank one too, as a start URL,
   // and headless mode exits on more than one, so about:blank is only the default.
-  const extraArgs = (options.extraArgs ?? []).filter((a) => a.trim() !== "");
-  const hasStartUrl = extraArgs.some((a) => chromiumSwitchName(a) === undefined);
+  const extraArgs = given.filter((a) => a.trim() !== "");
+  const hasStartUrl = chromiumSwitchNames(extraArgs).includes(undefined);
   const snap = snapName(executable);
   const root = snap ? path.join(os.homedir(), "snap", snap, "common") : os.tmpdir();
   fs.mkdirSync(root, { recursive: true });
@@ -366,7 +386,7 @@ export async function bootBrowser(options: BootBrowserOptions): Promise<Electron
     // The tool-server's pid it already holds keeps the profile until that exits.
   }
 
-  const ours = await answersOnProfile(result.port, profileDir, options.signal).catch(
+  const ours = await answersOnProfile(result.port, result.pid, profileDir, options.signal).catch(
     async (err: unknown) => {
       await killChromiumByPortAndWait(result.port);
       throw err;
