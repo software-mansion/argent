@@ -261,9 +261,12 @@ export async function setSimulatorEnv(udid: string, key: string, value: string):
 
 // Pauses before the second and third `reverse start` attempt.
 const REVERSE_START_RETRY_DELAYS_MS = [500, 2_000];
-// No retry starts later than this after the first attempt, so a forwarder 504
-// (5-10 s each) is retried at most once.
-const REVERSE_START_RETRY_WINDOW_MS = 15_000;
+// Retries share this budget, counted from the first attempt: each runs with
+// the rest of it as its timeout, so retrying never ends a start later than
+// this. The first attempt keeps the default timeout.
+const REVERSE_START_RETRY_BUDGET_MS = 20_000;
+// Room for one forwarder push to time out (5 s) and answer 504.
+const REVERSE_START_MIN_RETRY_MS = 5_000;
 
 /**
  * Whether a failed `reverse start` is worth repeating: the request never left
@@ -291,22 +294,26 @@ function isTransientReverseStartError(message: string): boolean {
  */
 export async function reverseStart(udid: string, port: number): Promise<void> {
   const args = ["reverse", "start", stripRemotePrefix(udid), String(port)];
-  const startedAt = Date.now();
+  const deadline = Date.now() + REVERSE_START_RETRY_BUDGET_MS;
+  let prompt: unknown;
   for (let attempt = 0; ; attempt++) {
     try {
-      await run(args);
+      await run(args, attempt === 0 ? undefined : { timeoutMs: deadline - Date.now() });
       return;
     } catch (err) {
       const message = (err as Error).message ?? "";
       if (/tunnel already active/.test(message)) return;
+      // A retry cut off by the budget says nothing new; report what prompted it.
+      if (attempt > 0 && ((err as Error).cause as { killed?: boolean })?.killed) throw prompt;
       const delay = REVERSE_START_RETRY_DELAYS_MS[attempt];
       if (
         delay === undefined ||
         !isTransientReverseStartError(message) ||
-        Date.now() + delay - startedAt > REVERSE_START_RETRY_WINDOW_MS
+        deadline - Date.now() - delay < REVERSE_START_MIN_RETRY_MS
       ) {
         throw err;
       }
+      prompt = err;
       await sleep(delay);
     }
   }
