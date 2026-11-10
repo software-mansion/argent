@@ -4060,6 +4060,20 @@ describe("the tools on the Android native layer", () => {
     );
   });
 
+  it("view-network-request-details names only native-network-logs for an unknown android- id once the app's capture was stopped: its ids are still listed", async () => {
+    const api = await armedInspector();
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(
+      await networkRequestTool.execute!(
+        {},
+        { device_id: SERIAL, requestId: "android-0000-999999", includeBody: true }
+      )
+    ).toBe(
+      "Request android-0000-999999 not found. Use native-network-logs to list the requests the Android native layer recorded."
+    );
+  });
+
   it("view-network-request-details decodes a native body by its Content-Encoding, and reads one that does not decode as it came", async () => {
     const api = await armedInspector();
     const agent = agents[0]!;
@@ -4167,6 +4181,8 @@ describe("network-capture-start and network-capture-stop on the Android layer", 
     expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
     expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([]);
+    // A stopped app's records are still listed, so its ids still have a source.
+    expect(hasAndroidNetworkCapture()).toBe(true);
     // The agent stays connected, and the device keeps the session and the tunnel.
     expect(agent.socket.destroyed).toBe(false);
     expect(device.files.has(dirFor())).toBe(true);
