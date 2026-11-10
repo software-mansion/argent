@@ -1627,7 +1627,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(node.value).toBeUndefined();
   });
 
-  it("falls through a blank aria-labelledby name or aria-label to the next name source, as Chrome does", () => {
+  it("falls through a blank aria-labelledby name or aria-label to the placeholder, alt, title or value", () => {
     const span = (id: string, opts: Opts = {}) =>
       el({ tag: "span", rect: BOX, ...opts, attrs: { id, ...opts.attrs } });
     const hiddenOnly = span("hidden-only", {
@@ -1670,6 +1670,7 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(read("inert")).toEqual({ label: "Search", value: undefined });
     expect(read("hidden")).toEqual({ label: "Search", value: undefined });
     expect(read("blank-aria")).toEqual({ label: "Search", value: undefined });
+    // Chrome names this field "": the value is describe's own label for an unnamed field.
     expect(read("blank-aria-typed")).toEqual({ label: "abc", value: undefined });
     expect(read("blank-aria-ids")).toEqual({ label: "Lab", value: undefined });
     expect(read("blank-title")).toEqual({ label: "T", value: undefined });
@@ -1705,6 +1706,10 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     );
     expect(labelledBy([text("ab"), cased("span", [text("cd ef")], capital)])).toBe("abcd Ef");
     expect(labelledBy([text("a\u00a0b")], capital)).toBe("A B");
+    // Single-character title case, not uppercase.
+    expect(labelledBy([text("ǆemal ǉubav ǌoj ǳin გამარჯობა ᾳa ᾀa ﬀa")], capital)).toBe(
+      "ǅemal ǈubav ǋoj ǲin გამარჯობა ᾼa ᾈa ﬀa"
+    );
     // The element's lang, as its -webkit-locale; one that is no locale tag cases as none.
     const locale = (webkitLocale: string) =>
       labelledBy([text("istanbul")], { display: "inline", ...upper, webkitLocale });
@@ -1720,6 +1725,84 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
     expect(labelledBy([pseudo("::before", '"pre "')])).toBe("PRE b");
     expect(labelledBy([pseudo("::after", '" post"')])).toBe("b POST");
     expect(labelledBy([pseudo("::before", '"x" / "alt "')])).toBe("alt b");
+  });
+
+  it("takes capitalize's previous character from laid-out text, as Chrome does", () => {
+    const capital = { textTransform: "capitalize" };
+    const styled = (tag: string, kids: unknown[], style: Record<string, string>, fields = {}) => {
+      const node = elementNode(tag, kids, fields);
+      Object.assign(node.__style as Record<string, string>, capital, style);
+      return node;
+    };
+    const inline = { display: "inline" };
+    const read = (kids: unknown[], display = "block") => labelledBy(kids, { display, ...capital });
+    // An element named by its aria-label lays out its own text; an empty inline one none.
+    const named = (kids: unknown[], display: string, textContent: string) =>
+      styled("span", kids, { display }, { __attrs: { "aria-label": "lbl" }, textContent });
+    expect(read([text("ab"), named([text("q")], "inline", "q"), text("cd")])).toBe("Ab lbl cd");
+    expect(read([text("ab"), named([], "inline", ""), text("cd")])).toBe("Ab lbl cd");
+    expect(read([text("ab"), named([text("q")], "block", "q"), text("cd")])).toBe("Ab lbl Cd");
+    const option = elementNode("option", [text("op")], { label: "op" });
+    const select = styled(
+      "select",
+      [option],
+      { display: "inline-block" },
+      {
+        selectedOptions: [option],
+      }
+    );
+    expect(read([text("ab"), select, text("cd")])).toBe("Ab op cd");
+    // A replaced element is a space, and a broken image shows its alt.
+    const img = (alt: string, naturalWidth: number) =>
+      styled("img", [], inline, { __attrs: { alt }, naturalWidth });
+    expect(read([text("ab"), img("", 5), text("cd")])).toBe("AbCd");
+    expect(read([text("ab"), img("pic", 5), text("cd")])).toBe("Ab pic Cd");
+    expect(read([text("ab"), img("pic", 0), text("cd")])).toBe("Ab pic cd");
+    // An atomic inline starts as a new box, and what follows runs on from its text.
+    const box = (display: string, kids: unknown[]) => styled("span", kids, { display });
+    expect(read([text("ab"), box("inline-block", [text("cd")]), text("ef")])).toBe("Ab Cd ef");
+    expect(read([text("ab"), box("contents", [text("cd")]), text("ef")])).toBe("Ab cd ef");
+    // A block-level box ends in an anonymous block in a block container, not in an inline.
+    expect(read([text("ab"), box("block", [text("cd")]), text("ef")])).toBe("Ab Cd Ef");
+    expect(read([text("ab"), box("block", [text("cd")]), text("ef")], "inline")).toBe("Ab Cd ef");
+    const blockInContents = box("contents", [box("block", [text("cd")])]);
+    expect(read([text("ab"), blockInContents, text("ef")], "inline")).toBe("Ab Cd ef");
+    expect(read([text("ab"), el({ tag: "br", rect: ZERO }), text("cd")])).toBe("Ab Cd");
+    const pseudo = (which: string, display: string, kids: unknown[], parent = "inline") => {
+      const node = box(parent, kids);
+      node.__pseudo = {
+        [which]: { display, visibility: "visible", content: '"cd"', ...capital },
+      };
+      return node;
+    };
+    expect(read([text("x"), pseudo("::before", "inline-block", [text("ab")])])).toBe("XCd ab");
+    expect(read([pseudo("::after", "inline-block", [text("ab")])])).toBe("Ab Cd");
+    expect(read([pseudo("::after", "inline", [text("ab")])])).toBe("Abcd");
+    expect(read([text("x"), pseudo("::before", "block", [text("ab")], "block")])).toBe("X Cd Ab");
+    expect(read([text("x"), pseudo("::before", "block", [text("ab")])])).toBe("XCd ab");
+  });
+
+  it("leaves capitalized text as is when a page's Intl.Segmenter misbehaves", () => {
+    const pages = [{ segment: () => null }, { segment: () => [{ index: 99 }] }];
+    for (const page of pages) {
+      const Segmenter = function () {
+        return page;
+      };
+      const label = el({
+        tag: "span",
+        text: "ab cd",
+        rect: BOX,
+        attrs: { id: "lbl" },
+        style: { display: "inline", textTransform: "capitalize" },
+      });
+      const button = el({
+        tag: "button",
+        rect: BOX,
+        attrs: { "id": "btn", "aria-labelledby": "lbl" },
+      });
+      const { tree } = run([button, label], undefined, {}, "CSS1Compat", { Intl: { Segmenter } });
+      expect(findById(tree, "btn")!.label).toBe("ab cd");
+    }
   });
 
   it("stops reading an aria-labelledby target once its name is past the cut, naming it the same", () => {
@@ -1785,6 +1868,9 @@ describe("DESCRIBE_DOM_SCRIPT visibility rules", () => {
       Array(1000).fill("abcde").join(" ").slice(0, 200)
     );
     expect(labelReads).toBe(41);
+
+    // trim() strips U+FEFF, so it does not count toward the cut.
+    expect(labelledBy([...Array(250).fill(text("\ufeff")), text("Real label")])).toBe("Real label");
   });
 
   it("leaves an ordinary visible element unchanged", () => {
