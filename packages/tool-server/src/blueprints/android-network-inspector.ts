@@ -393,7 +393,7 @@ interface AgentConnection {
   closed: boolean;
   capture?: { state: AndroidCaptureState; detail?: string };
   droppedEvents: number;
-  /** A Network.enable is on its way on this connection. */
+  /** A Network.enable sent since the last stop is on its way on this connection. */
   enabling: boolean;
   byLayerId: Map<string, NativeNetworkRecord>;
   resumes?: AgentConnection;
@@ -439,6 +439,8 @@ function createInspector(
   let live = false;
   /** Set by a stop until the next start: nothing attaches, arms or records a new request. */
   let stopped = false;
+  /** The number of stops so far: a Network.enable sent before the last one is stale. */
+  let stops = 0;
   /** The app's last agent process ended and none runs in its current one. */
   let notAttached = false;
   let mark: { lastRecord: number; metroPort: number } | undefined;
@@ -1248,6 +1250,10 @@ function createInspector(
    */
   function enableNetwork(conn: AgentConnection): void {
     conn.enabling = true;
+    // A stop after this request sent Network.disable after it, so the agent
+    // no longer captures. Only the next start's own request arms again.
+    const stopsBefore = stops;
+    const stale = (): boolean => stops !== stopsBefore;
     conn.cdp
       .request(
         "Network.enable",
@@ -1255,17 +1261,19 @@ function createInspector(
         {
           timeoutMs: ENABLE_TIMEOUT_MS,
           onResult: (result) => {
+            // While capture stays stopped, onEnabled sends Network.disable once more.
+            if (stale() && !stopped) return;
             conn.enabling = false;
             onEnabled(conn, result);
           },
         }
       )
       .catch((err: unknown) => {
-        conn.enabling = false;
-        if (conn.closed || disposed) {
+        if (conn.closed || disposed || stale()) {
           log(`Network.enable on connection ${conn.index} failed: ${errorMessage(err)}`);
           return;
         }
+        conn.enabling = false;
         if (getFailureSignal(err)?.error_kind === "timeout") {
           connectionClosed(
             conn,
@@ -1894,7 +1902,13 @@ function createInspector(
     live = false;
     notAttached = false;
     unavailableReason = undefined;
-    for (const conn of connections) conn.armed = false;
+    // The Network.disable below follows any Network.enable on its way, so the
+    // next start enables each connection again.
+    stops++;
+    for (const conn of connections) {
+      conn.armed = false;
+      conn.enabling = false;
+    }
     for (const wake of armWaiters) wake();
     return withKeyedLock(attachLock, "attach", async () => {
       if (disposed) return { confirmed: true };

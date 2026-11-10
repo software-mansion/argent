@@ -3431,6 +3431,61 @@ describe("a slow Network.enable reply, with the clock under test control", () =>
     );
     expect(next.received.slice(0, 2)).toEqual(["Control", "Network.enable"]);
   });
+
+  it("does not arm on an enable reply from before a stop, and the next start sends Network.enable again", async () => {
+    const { api, agent } = await enablePending();
+    // The agent answers in order, so the stop's Network.disable waits behind the enable.
+    agent.options.unanswered!.push("Network.disable");
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+
+    const start = api.startCapture(8081);
+    await vi.waitFor(() =>
+      expect(agent.received).toEqual([
+        "Control",
+        "Network.enable",
+        "Network.disable",
+        "Network.enable",
+      ])
+    );
+    agent.answer("Network.enable");
+    agent.answer("Network.disable");
+    agent.send({ type: "Status", payload: { event: "capture", state: "waiting" } });
+    await vi.waitFor(() => expect(stderrText()).toContain("] capture waiting"));
+    expect(api.state().armed).toBe(false);
+    expect(agent.socket.destroyed).toBe(false);
+
+    const fresh = agent.requests.filter((r) => r.method === "Network.enable")[1]!;
+    agent.send({
+      type: "CDP",
+      payload: { id: fresh.id, result: { capture: { state: "active" } } },
+    });
+    expect(await start).toEqual({ armed: true });
+    expect(api.state()).toMatchObject({ armed: true, capture: { state: "active" } });
+  });
+
+  it("keeps the connection when an enable from before a stop times out, and arms on the next start's enable", async () => {
+    const { api, agent } = await enablePending();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    const start = api.startCapture(8081);
+    await vi.waitFor(() => expect(agent.received.at(-1)).toBe("Network.enable"));
+
+    // The first enable passes its 60 s, the second one does not.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(stderrText()).toContain("Network.enable on connection 1 failed: ");
+    expect(agent.socket.destroyed).toBe(false);
+    expect(api.state().armed).toBe(false);
+
+    const fresh = agent.requests.filter((r) => r.method === "Network.enable")[1]!;
+    agent.send({
+      type: "CDP",
+      payload: { id: fresh.id, result: { capture: { state: "active" } } },
+    });
+    expect(await start).toEqual({ armed: true });
+  });
 });
 
 describe("timing and filtering", () => {
