@@ -174,6 +174,31 @@ describe("http dependency gate", () => {
     );
   });
 
+  it("records the issue codes of every rejected parameter", async () => {
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "two-param-thing",
+      zodSchema: z.object({ timeoutMs: z.number().max(10), count: z.number() }),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app)
+      .post("/tools/two-param-thing")
+      .send({ timeoutMs: 99, count: "x" });
+    expect(res.status).toBe(400);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "two-param-thing",
+      { invalid_params: ["timeoutMs", "count"], invalid_param_issues: ["invalid_type", "too_big"] },
+      expect.objectContaining({ error_code: "HTTP_ZOD_VALIDATION_FAILED" }),
+      expect.any(Number)
+    );
+  });
+
   it("invokes the tool normally when declared deps are present", async () => {
     stubProbe([]);
     const registry = new Registry();

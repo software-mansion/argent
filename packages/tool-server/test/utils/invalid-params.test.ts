@@ -150,6 +150,18 @@ describe("deriveInvalidParamIssues", () => {
     ]);
   });
 
+  it("reports the codes of a union nested in a union branch", () => {
+    const schema = z.union([
+      z.object({ k: z.literal("x"), a: z.union([z.number(), z.boolean()]) }),
+      z.object({ k: z.literal("y") }),
+    ]);
+    expect(deriveInvalidParamIssues(issuesFor(schema, { k: "z", a: "s" }))).toEqual([
+      "invalid_type",
+      "invalid_union",
+      "invalid_value",
+    ]);
+  });
+
   it("knows exactly the issue codes the installed zod can raise", () => {
     expectTypeOf<ZodIssueCode>().toEqualTypeOf<z.core.$ZodIssueCode>();
   });
