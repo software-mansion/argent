@@ -438,7 +438,7 @@ describe("boot-device — iOS path", () => {
     });
     expect((err as Error).message).toContain("call boot-device again shortly");
     expect(mockExecFile).not.toHaveBeenCalled();
-    expect(clearAutomationEnabledMock).not.toHaveBeenCalled();
+    expect(clearAutomationEnabledOrWarnMock).not.toHaveBeenCalled();
     expect(resolveService).not.toHaveBeenCalled();
   });
 
@@ -454,7 +454,8 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111" });
 
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
-      "11111111-1111-1111-1111-111111111111"
+      "11111111-1111-1111-1111-111111111111",
+      { isTvOs: false }
     );
   });
 
@@ -717,7 +718,7 @@ describe("boot-device — iOS path", () => {
   });
 
   it("writes AutomationEnabled on a tvOS sim instead of clearing it", async () => {
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
     ]);
     const resolveService = vi.fn(async () => ({
@@ -734,7 +735,7 @@ describe("boot-device — iOS path", () => {
   });
 
   it("still reports a tvOS sim booted when the post-boot AutomationEnabled write fails", async () => {
-    listIosSimulatorsMock.mockResolvedValueOnce([
+    scannedSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
     ]);
     ensureAutomationEnabledMock.mockRejectedValueOnce(new Error("simctl spawn failed"));
@@ -807,7 +808,7 @@ describe("boot-device — iOS path", () => {
       .filter(([file, args]) => file === "xcrun" && args[0] === "simctl")
       .map(([, args]) => args[1]);
     expect(simctl).toEqual(["bootstatus", "shutdown", "boot", "bootstatus"]);
-    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(udid);
+    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(udid, { isTvOs: false });
   });
 
   it("does NOT dispose TvControl for an iOS (non-tv) sim boot — that daemon self-heals", async () => {
@@ -1146,7 +1147,7 @@ describe("boot-device — non-iOS device id passed as `udid`", () => {
     scanTimedOut = false;
     scannedSimulatorsMock.mockReset().mockResolvedValue([]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
-    clearAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    clearAutomationEnabledOrWarnMock.mockReset().mockResolvedValue(undefined);
     isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 

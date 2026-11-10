@@ -106,6 +106,8 @@ On an iOS simulator, a line of `describe` can show:
 - `[selected]` for a selected control.
 - `hint="..."` for an element that has a VoiceOver hint. `describe` omits a hint that is identical to the label. A physical iPhone does not report the VoiceOver hint.
 
+On an iOS simulator, `describe` can show the placeholder of an empty text field as its value, with no label. Thus an empty text field looks like a text field that contains that text. `describe` can also omit a text field that has no accessibility label or identifier, such as the Settings search field. This can also occur when the text field contains text. In both cases, take a screenshot to examine the text field.
+
 ## Interacting
 
 | Tool                     | Description                                                                        |
