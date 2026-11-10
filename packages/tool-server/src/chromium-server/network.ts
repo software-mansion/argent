@@ -1,7 +1,7 @@
 import type { CDPClient } from "../utils/debugger/cdp-client";
 
 /** One earlier hop of a redirected request, from CDP `redirectResponse`. */
-export interface NetworkRedirectHop {
+interface NetworkRedirectHop {
   method: string;
   url: string;
   status: number;
