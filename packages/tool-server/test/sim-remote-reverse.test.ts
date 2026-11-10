@@ -68,12 +68,6 @@ describe("reverseStart / reverseStop", () => {
     ]);
   });
 
-  it("succeeds on the second attempt after a closed tunnel-mux connection", async () => {
-    outcomes = ["error: tunnel-mux connection closed", null];
-    expect(await start()).toBeUndefined();
-    expect(calls).toHaveLength(2);
-  });
-
   it("retries a control send that failed because the connection closed", async () => {
     outcomes = ["error: tunnel-mux control send: connection lost", null];
     expect(await start()).toBeUndefined();
@@ -99,7 +93,9 @@ describe("reverseStart / reverseStop", () => {
     "error: port forwarder: POST /rules answered HTTP 408 Request Timeout",
     "error: the request to sim-router timed out",
     "error: bind ephemeral TCP listener on both loopback families: no port free on each after 10 attempts (last: Address already in use (os error 48))",
-  ])("does not retry a forwarder that stays down or refuses (%s)", async (stderr) => {
+    // The orchestrator may still finish this registration, then delete the retry's rule.
+    "error: tunnel-mux connection closed",
+  ])("does not retry a failure that may persist or race a retry (%s)", async (stderr) => {
     outcomes = [stderr, null];
     const err = await start();
     expect((err as Error).message).toBe(`sim-remote reverse start ${UDID} 37223 failed: ${stderr}`);
@@ -108,8 +104,8 @@ describe("reverseStart / reverseStop", () => {
 
   it("stops after three attempts and throws the last error", async () => {
     outcomes = [
-      "error: tunnel-mux connection closed",
-      "error: tunnel-mux connection closed",
+      "error: tunnel-mux control send: connection lost",
+      "error: tunnel-mux control send: connection lost",
       "error: port forwarder: POST /rules answered HTTP 504 Gateway Timeout",
       null,
     ];
@@ -136,7 +132,11 @@ describe("reverseStart / reverseStop", () => {
   });
 
   it("pauses 0.5 s, then 2 s, between attempts", async () => {
-    outcomes = ["error: tunnel-mux connection closed", "error: tunnel-mux connection closed", null];
+    outcomes = [
+      "error: tunnel-mux control send: connection lost",
+      "error: tunnel-mux control send: connection lost",
+      null,
+    ];
     expect(await start()).toBeUndefined();
     expect(callTimes.map((t) => t - callTimes[0]!)).toEqual([0, 500, 2_500]);
   });
@@ -159,7 +159,7 @@ describe("reverseStart / reverseStop", () => {
   });
 
   it("treats an already-active tunnel as started after a retry", async () => {
-    outcomes = ["error: tunnel-mux connection closed", "error: tunnel already active"];
+    outcomes = ["error: tunnel-mux control send: connection lost", "error: tunnel already active"];
     expect(await start()).toBeUndefined();
     expect(calls).toHaveLength(2);
   });

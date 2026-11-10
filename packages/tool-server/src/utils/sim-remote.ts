@@ -262,21 +262,22 @@ export async function setSimulatorEnv(udid: string, key: string, value: string):
 // Pauses before the second and third `reverse start` attempt.
 const REVERSE_START_RETRY_DELAYS_MS = [500, 2_000];
 // No retry starts later than this after the first attempt, so a forwarder 504
-// (~9 s) is retried once and the start ends well inside the MCP client's 30 s
-// tool-call cap.
+// (5-10 s each) is retried at most once.
 const REVERSE_START_RETRY_WINDOW_MS = 15_000;
 
 /**
- * Whether a failed `reverse start` is worth repeating: the daemon's connection
- * to the orchestrator closed under the request (the next call redials), or the
- * host's port forwarder answered 502/504. An unreachable forwarder, or one that
- * lost its proxy tunnel (503), is reported without the `port forwarder:` prefix
- * and stays down on that machine.
+ * Whether a failed `reverse start` is worth repeating: the request never left
+ * the daemon (`tunnel-mux control send:`), or the host's port forwarder
+ * answered 502/504, which leaves the orchestrator holding no rule. An
+ * unreachable forwarder, or one that lost its proxy tunnel (503), is reported
+ * without the `port forwarder:` prefix and stays down on that machine.
+ *
+ * `tunnel-mux connection closed` is not retried: the orchestrator may still
+ * complete that registration, and the dead session's cleanup then deletes
+ * every rule on the port, including the retry's.
  */
 function isTransientReverseStartError(message: string): boolean {
-  return /tunnel-mux (connection closed|control send:)|port forwarder: .* answered HTTP 50[24]\b/.test(
-    message
-  );
+  return /tunnel-mux control send:|port forwarder: .* answered HTTP 50[24]\b/.test(message);
 }
 
 /**
