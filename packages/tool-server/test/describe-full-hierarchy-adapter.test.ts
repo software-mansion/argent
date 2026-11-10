@@ -134,16 +134,17 @@ describe("describe full-hierarchy adapter", () => {
 
   // Documented in reference/e2e-yaml.mdx.
   it("reads a container whose only text is off screen as empty, so '^$' passes", () => {
-    const container = (
-      identifier: string,
-      y: number,
-      label: { width: number; height: number }
-    ) => ({
+    const container = (identifier: string, y: number, labelY: number) => ({
       className: "UIView",
       identifier,
       windowFrame: { x: 0, y, width: 400, height: 40 },
       children: [
-        { className: "UILabel", label: "Hello", windowFrame: { x: 0, y, ...label }, children: [] },
+        {
+          className: "UILabel",
+          label: "Hello",
+          windowFrame: { x: 0, y: labelY, width: 400, height: 40 },
+          children: [],
+        },
       ],
     });
     const tree = adaptFullHierarchyToDescribeResult({
@@ -152,10 +153,7 @@ describe("describe full-hierarchy adapter", () => {
           className: "UIWindow",
           frame: SCREEN,
           windowFrame: SCREEN,
-          children: [
-            container("offscreen", 100, { width: 0, height: 0 }),
-            container("plain", 200, { width: 400, height: 40 }),
-          ],
+          children: [container("offscreen", 100, 900), container("plain", 200, 200)],
         },
       ],
     });
