@@ -104,4 +104,19 @@ describe("arming inserts the audio hook per the ios-audio-always-inserted flag",
     expect(inserted()).toBe("/fake/tcp/libArgentInjectionBootstrap.dylib");
     expect(setenvCalls.some((a) => a[0] === "ARGENT_AUDIO_DIR")).toBe(false);
   });
+
+  it("goes on without the audio hook when this install has no audio dylib", async () => {
+    flagOn = true;
+    audioDylibMissing = true;
+    try {
+      await localIosHost.setupNativeDevtoolsEnv(UDID, {
+        transport: "unix",
+        socketPath: "/tmp/x.sock",
+      });
+    } finally {
+      audioDylibMissing = false;
+    }
+    expect(inserted()).toBe("/fake/libArgentInjectionBootstrap.dylib");
+    expect(setenvCalls.some((a) => a[0] === "ARGENT_AUDIO_DIR")).toBe(false);
+  });
 });

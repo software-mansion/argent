@@ -248,7 +248,7 @@ function wavHeader(channels: number, rate: number, frames: number): Buffer {
   return h;
 }
 
-interface FinishedWav {
+export interface FinishedWav {
   path: string;
   frames: number;
   droppedFrames: number;

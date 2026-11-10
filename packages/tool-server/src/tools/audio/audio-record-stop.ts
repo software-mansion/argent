@@ -33,8 +33,8 @@ export function createAudioRecordStopTool(
     id: "audio-record-stop",
     description: `Stop the recording started by \`audio-record-start\` and retrieve the WAV file of what the app played.
 Use when the sound you wanted to capture has finished playing.
-Returns { audio, durationMs, sampleRate, channels, droppedFrames?, warning? }; audio is a downloadable artifact materialized to a local path. The WAV is 16-bit PCM at the sample rate of the device. A warning says when the recording is empty.
-Fails if the app is not being recorded, or did not finish the file in time.`,
+Returns { audio, durationMs, sampleRate, channels, droppedFrames?, warning? }; audio is a downloadable artifact materialized to a local path. The WAV is 16-bit PCM at the sample rate of the device. A warning says when the recording is empty or may be incomplete.
+Fails if the app is not being recorded.`,
     zodSchema,
     searchHint: "audio record stop finish save wav output speaker sound",
     interaction: {
@@ -66,7 +66,9 @@ Fails if the app is not being recorded, or did not finish the file in time.`,
         channels: recording.channels,
       };
       if (recording.droppedFrames > 0) result.droppedFrames = recording.droppedFrames;
-      if (recording.durationMs === 0) {
+      if (recording.warning) {
+        result.warning = recording.warning;
+      } else if (recording.durationMs === 0) {
         result.warning =
           `${params.bundleId} played nothing while it was recorded. Start the recording before the sound plays; ` +
           `sound played by web content or another process is not covered.`;

@@ -211,6 +211,18 @@ export function audioAlwaysInserted(): boolean {
 }
 
 /**
+ * The audio hook's dylib, or null when this install has none (it ships separately from the other dylibs).
+ * Arming goes on without it: only the audio tools need it, and they say how to get it.
+ */
+function installedAudioDylib(): string | null {
+  try {
+    return audioDylibPath();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Everything in `currentValue` that is not ours, in order. What both arming and
  * withdrawing agree on. Arming appends our bootstrap to it, withdrawing keeps
  * only it.
@@ -306,8 +318,9 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
 
   const existing = (result.stdout ?? "").trim();
   let updated = buildDyldInsertLibraries(existing, bootstrapPath);
-  const withAudio = !tvOs && endpoint.transport === "unix" && audioAlwaysInserted();
-  if (withAudio) updated = appendDyldInsertLibrary(updated, audioDylibPath());
+  const audioDylib =
+    !tvOs && endpoint.transport === "unix" && audioAlwaysInserted() ? installedAudioDylib() : null;
+  if (audioDylib) updated = appendDyldInsertLibrary(updated, audioDylib);
 
   if (updated !== existing) {
     await execFileAsync(
@@ -350,7 +363,7 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
     );
   }
 
-  if (withAudio) {
+  if (audioDylib) {
     // Created here, before any app can be launched armed: a dormant hook announces itself in it (st.<bundleId>).
     fs.mkdirSync(audioDir(nativeId), { recursive: true, mode: 0o700 });
     await execFileAsync(

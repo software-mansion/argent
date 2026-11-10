@@ -97,6 +97,8 @@ Fails if the file cannot be decoded, the simulator is not booted, or the target 
     capability: audioCapability,
     requires: ["xcrun"],
     fileInputs,
+    // afconvert decodes a long file for up to a minute, past the 30s MCP fetch timeout.
+    longRunning: true,
     // Resolved inside execute, after the platform checks: an eager native-devtools service would start
     // for a device the audio tools refuse.
     services: () => ({}),

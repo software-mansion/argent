@@ -15,6 +15,7 @@ import {
   InputFeeder,
   OutputRecorder,
   readClipInfo,
+  type FinishedWav,
   STREAM_RATE,
   type FeederSource,
 } from "./ios-audio-rings";
@@ -114,6 +115,7 @@ export async function ensureAudioEnv(session: AudioSession): Promise<void> {
   const { dir } = session;
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (session.envVerified) return;
+  const dylib = requireAudioDylib();
   // Part of native devtools' arming, so its grant covers these spawns.
   const { nativeId, prefix } = await simctlTargetForUdid(session.udid, {
     granted: "native-devtools",
@@ -135,10 +137,28 @@ export async function ensureAudioEnv(session: AudioSession): Promise<void> {
 
   // launchctl, not `simctl getenv`: the latter truncates the colon-separated list past 127 bytes.
   const inserted = await getenv("DYLD_INSERT_LIBRARIES");
-  const withAudio = appendDyldInsertLibrary(inserted, audioDylibPath());
+  const withAudio = appendDyldInsertLibrary(inserted, dylib);
   if (withAudio !== inserted) await setenv("DYLD_INSERT_LIBRARIES", withAudio);
   if ((await getenv(AUDIO_DIR_ENV)) !== dir) await setenv(AUDIO_DIR_ENV, dir);
   session.envVerified = true;
+}
+
+/** The audio hook's dylib, or a failure that says how to get it. */
+function requireAudioDylib(): string {
+  try {
+    return audioDylibPath();
+  } catch (err) {
+    throw new FailureError(
+      `The audio hook (libArgentAudio.dylib) is not installed: ${(err as Error).message}. ` +
+        "Build it with `npm run build:ios-binaries`, or download it with `scripts/download-native-binaries.sh`.",
+      {
+        error_code: FAILURE_CODES.AUDIO_HOOK_UNAVAILABLE,
+        failure_stage: "audio_env_setup",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+      }
+    );
+  }
 }
 
 /**
@@ -523,6 +543,21 @@ interface FinishedRecording {
   sampleRate: number;
   channels: number;
   droppedFrames: number;
+  /** The file is complete as far as the host can tell, but the app did not end it cleanly. */
+  warning?: string;
+}
+
+function finishedRecording(finished: FinishedWav, warning?: string): FinishedRecording {
+  return {
+    path: finished.path,
+    durationMs: finished.sampleRate
+      ? Math.round((finished.frames * 1000) / finished.sampleRate)
+      : 0,
+    sampleRate: finished.sampleRate,
+    channels: finished.channels,
+    droppedFrames: finished.droppedFrames,
+    ...(warning ? { warning } : {}),
+  };
 }
 
 /** Stops the app's recording and resolves once the WAV is finalized. */
@@ -542,20 +577,17 @@ export async function stopRecording(
     // Requested from a dormant hook that never opened audio (or did and already stopped): what reached the ring is
     // the recording.
     recorders.delete(bundleId);
-    const finished = recorder.finish();
-    return {
-      path: finished.path,
-      durationMs: finished.sampleRate
-        ? Math.round((finished.frames * 1000) / finished.sampleRate)
-        : 0,
-      sampleRate: finished.sampleRate,
-      channels: finished.channels,
-      droppedFrames: finished.droppedFrames,
-    };
+    return finishedRecording(recorder.finish());
   }
-  if (!status?.recording || !recorder) {
+  if (recorder && !status?.recording) {
+    // The app quit or was relaunched while it was recorded: what it played until then reached the ring.
     recorders.delete(bundleId);
-    recorder?.abort();
+    return finishedRecording(
+      recorder.finish(),
+      `${bundleId} quit or was relaunched while it was recorded. The file holds what it played until then.`
+    );
+  }
+  if (!recorder || !status) {
     removeFiles(session.dir, `out-${bundleId}-`);
     throw new FailureError(
       status?.recording
@@ -574,27 +606,12 @@ export async function stopRecording(
     return s && s.recordingId === status.recordingId && s.recordingDone ? s : undefined;
   }, ACK_TIMEOUT_MS);
   recorders.delete(bundleId);
-  const finished = recorder.finish();
-  if (!done) {
-    throw new FailureError(
-      `${bundleId} did not confirm the end of the recording within ${ACK_TIMEOUT_MS / 1000}s; ${finished.path} may miss its last moments.`,
-      {
-        error_code: FAILURE_CODES.AUDIO_RECORDING_STOP_TIMEOUT,
-        failure_stage: "audio_record_stop",
-        failure_area: "tool_server",
-        error_kind: "timeout",
-      }
-    );
-  }
-  return {
-    path: finished.path,
-    durationMs: finished.sampleRate
-      ? Math.round((finished.frames * 1000) / finished.sampleRate)
-      : 0,
-    sampleRate: finished.sampleRate,
-    channels: finished.channels,
-    droppedFrames: finished.droppedFrames,
-  };
+  return finishedRecording(
+    recorder.finish(),
+    done
+      ? undefined
+      : `${bundleId} did not confirm the end of the recording within ${ACK_TIMEOUT_MS / 1000}s. The file may miss its last moments.`
+  );
 }
 
 /**

@@ -414,6 +414,22 @@ describe("ensureAudioEnv", () => {
     expect(new Set(spawned)).toEqual(new Set([native]));
     expect(setenvCalls()).toContainEqual(["ARGENT_AUDIO_DIR", `/tmp/argent-audio-${native}`]);
   });
+
+  it("fails with AUDIO_HOOK_UNAVAILABLE and how to get the dylib when it is not installed", async () => {
+    audioDylibMissing = true;
+    try {
+      const err = await ensureAudioEnv(createAudioSession(fresh())).catch((e: unknown) => e);
+      expect(getFailureSignal(err)).toMatchObject({
+        error_code: FAILURE_CODES.AUDIO_HOOK_UNAVAILABLE,
+        error_kind: "dependency_missing",
+      });
+      expect((err as Error).message).toContain("npm run build:ios-binaries");
+      expect((err as Error).message).toContain("download-native-binaries.sh");
+      expect(setenvCalls()).toEqual([]);
+    } finally {
+      audioDylibMissing = false;
+    }
+  });
 });
 
 describe("armAudio", () => {
@@ -632,6 +648,43 @@ describe("recording", () => {
     expect((err as Error).message).toContain("tool-server that has since stopped");
     expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.AUDIO_NO_ACTIVE_RECORDING);
     expect(fs.readdirSync(dir).filter((n) => n.endsWith(".ring"))).toEqual([]);
+  });
+
+  it("keeps what an app played before it was relaunched mid-recording, with a warning", async () => {
+    writeStatus({});
+    const stopGuest = fakeGuest();
+    try {
+      await startRecording(session, BUNDLE, wav(), false);
+      await new Promise((resolve) => setTimeout(resolve, 50)); // the guest fills the ring
+      stopGuest();
+      writeStatus({ recording: 0, recId: "" }); // the relaunched process, not recording
+      const finished = await stopRecording(session, BUNDLE);
+      expect(finished).toMatchObject({ path: wav(), durationMs: 100, channels: 2 });
+      expect(finished.warning).toContain("relaunched");
+      expect(fs.statSync(wav()).size).toBe(44 + 4_800 * 2 * 2);
+    } finally {
+      stopGuest();
+    }
+  });
+
+  it("returns the file with a warning when the app does not confirm the end in time", async () => {
+    writeStatus({});
+    const stopGuest = fakeGuest();
+    try {
+      await startRecording(session, BUNDLE, wav(), false);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      stopGuest(); // the guest hangs: recDone never comes
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
+      const stopping = stopRecording(session, BUNDLE);
+      await vi.advanceTimersByTimeAsync(5_000);
+      const finished = await stopping;
+      expect(finished.path).toBe(wav());
+      expect(finished.warning).toContain("did not confirm the end");
+      expect(fs.existsSync(wav())).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      stopGuest();
+    }
   });
 
   it("releaseAudio drops a recording this process owns", async () => {
