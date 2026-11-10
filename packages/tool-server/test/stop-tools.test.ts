@@ -1619,6 +1619,10 @@ describe("stop-all-simulator-servers and JS network capture", () => {
     return { bundleId, intent: "started", mark: { install: null }, installed: true };
   }
 
+  function stopped(bundleId: string): JsCapture {
+    return { ...started(bundleId), intent: "stopped" };
+  }
+
   afterEach(() => {
     forgetJsCapturesOf();
   });
@@ -1657,7 +1661,11 @@ describe("stop-all-simulator-servers and JS network capture", () => {
     setJsCapture(`8190:${MINE}`, started(OTHER_APP));
     setJsCapture(`8081:${THEIRS}`, started(APP));
     const { registry } = registryWithRuntimes(
-      new Map([[`SimulatorServer:${MINE}`, { ...running }]])
+      new Map([
+        [`SimulatorServer:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8081:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8190:${MINE}`, { ...running }],
+      ])
     );
 
     // Matched case-insensitively, as every other id here is.
@@ -1673,7 +1681,12 @@ describe("stop-all-simulator-servers and JS network capture", () => {
   it("forgets every JS capture entry on an unscoped call", async () => {
     setJsCapture(`8081:${MINE}`, started(APP));
     setJsCapture(`8081:${THEIRS}`, started(APP));
-    const { registry } = registryWithRuntimes(new Map());
+    const { registry } = registryWithRuntimes(
+      new Map([
+        [`JsRuntimeDebugger:8081:${MINE}`, { ...running }],
+        [`JsRuntimeDebugger:8081:${THEIRS}`, { ...running }],
+      ])
+    );
 
     await createStopAllSimulatorServersTool(registry).execute!({}, {});
 
@@ -1765,7 +1778,8 @@ describe("stop-all-simulator-servers and JS network capture", () => {
       `pause JsRuntimeDebugger:8081:${MINE}`,
       `dispose JsRuntimeDebugger:8081:${MINE}`,
     ]);
-    expect(jsCapturesOn(MINE)).toEqual([]);
+    // The interceptor can still record, so its capture stays, stopped.
+    expect(jsCapturesOn(MINE)).toEqual([{ ...stopped(APP), port: 8081 }]);
   });
 
   it("reaches no JS runtime for an entry whose debugger is not live", async () => {
@@ -1787,6 +1801,23 @@ describe("stop-all-simulator-servers and JS network capture", () => {
 
     expect(result).toEqual({ stopped: [`SimulatorServer:${MINE}`] });
     expect(resolveService).not.toHaveBeenCalled();
+    // Each interceptor can still record, so its capture stays, stopped.
+    expect(jsCapturesOn(MINE)).toEqual([
+      { ...stopped(APP), port: 8081 },
+      { ...stopped(OTHER_APP), port: 8190 },
+      { ...stopped("com.example.third"), port: 8191 },
+    ]);
+  });
+
+  it("forgets an entry the pause did not reach when the app has no unpaused interceptor", async () => {
+    setJsCapture(`8081:${MINE}`, { ...started(APP), installed: false });
+    setJsCapture(`8190:${MINE}`, { ...stopped(OTHER_APP), paused: true });
+    const { registry } = registryWithRuntimes(
+      new Map([[`SimulatorServer:${MINE}`, { ...running }]])
+    );
+
+    await createStopAllSimulatorServersTool(registry).execute!({}, { devices: [MINE] });
+
     expect(jsCapturesOn(MINE)).toEqual([]);
   });
 });

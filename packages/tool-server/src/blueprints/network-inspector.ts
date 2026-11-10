@@ -112,9 +112,30 @@ function payloadsOf(devices?: readonly string[]): string[] {
   });
 }
 
-/** Forgets every entry of the devices, or every entry at all without them. */
-export function forgetJsCapturesOf(devices?: readonly string[]): void {
-  for (const payload of payloadsOf(devices)) jsCaptures.delete(payload);
+/**
+ * Forgets every entry of the devices, or every entry at all without them.
+ * `paused` holds the payloads whose runtime a teardown's pause reached. An
+ * interceptor that a start installed and that pause did not reach still records
+ * in the app, so its entry stays as a stopped capture: the reads then say
+ * capture is stopped, and a later network-capture-stop pauses the interceptor.
+ */
+export function forgetJsCapturesOf(
+  devices?: readonly string[],
+  paused?: ReadonlySet<string>
+): void {
+  for (const payload of payloadsOf(devices)) {
+    const capture = jsCaptures.get(payload)!;
+    if (paused && !paused.has(payload) && capture.installed && !capture.paused) {
+      jsCaptures.set(payload, {
+        bundleId: capture.bundleId,
+        intent: "stopped",
+        ...(capture.mark ? { mark: capture.mark } : {}),
+        installed: true,
+      });
+    } else {
+      jsCaptures.delete(payload);
+    }
+  }
 }
 
 /** Forgets the entries of these payloads. */

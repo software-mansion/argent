@@ -5,6 +5,7 @@ import {
   FAILURE_CODES,
   FailureError,
   Registry,
+  ServiceState,
   TypedEventEmitter,
   getFailureSignal,
   type ServiceBlueprint,
@@ -1223,6 +1224,64 @@ describe("stop-all-simulator-servers", () => {
       `Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then call view-network-logs again. This device has network capture for ${OTHER} on Metro port ${OTHER_PORT}: pass port ${OTHER_PORT} to read it.`
     );
   });
+
+  it.each([
+    {
+      pause: "skips a debugger that is not live",
+      /** Returns what makes the runtime answer again. */
+      prepare: async (rt: FakeRuntime) => {
+        // Another debugger took the app's page, and the app runs on.
+        await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED);
+        const urn = `JsRuntimeDebugger:${jsCapturePayload(PORT, IOS_UDID)}`;
+        await registry.resolveService(urn).catch(() => {});
+        expect(registry.getSnapshot().services.get(urn)?.state).toBe(ServiceState.ERROR);
+        return () => serve(PORT, IOS_UDID, rt);
+      },
+    },
+    {
+      pause: "gets no answer in time",
+      prepare: async (rt: FakeRuntime) => {
+        const evaluate = rt.evaluate.bind(rt);
+        rt.evaluate = (expr: string) => {
+          if (scriptName(expr) === "pause") throw new Error("CDP request timed out");
+          return evaluate(expr);
+        };
+        return () => {
+          rt.evaluate = evaluate;
+        };
+      },
+    },
+  ])(
+    "keeps the JS capture stopped when its pause $pause, and a later network-capture-stop pauses the interceptor",
+    async ({ prepare }) => {
+      const rt = new FakeRuntime(APP);
+      serve(PORT, IOS_UDID, rt);
+      ios.connected.add(APP);
+      await start(IOS_UDID, APP);
+      rt.send("/a");
+      const { mark } = findJsCapture(IOS_UDID, APP)!;
+      const answer = await prepare(rt);
+
+      await stopAll([IOS_UDID]);
+
+      expect(jsCapture(jsCapturePayload(PORT, IOS_UDID))).toEqual({
+        bundleId: APP,
+        intent: "stopped",
+        mark,
+        installed: true,
+      });
+      expect(rt.paused).toBe(false);
+
+      answer();
+      expect(await read(IOS_UDID)).toContain("1 total; capture stopped");
+      expect(layer(await stop(IOS_UDID, APP), "js")).toEqual({
+        layer: "js",
+        armed: false,
+        total: 1,
+      });
+      expect(rt.paused).toBe(true);
+    }
+  );
 });
 
 describe("a JS runtime of another app on the port", () => {
