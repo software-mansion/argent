@@ -14,6 +14,7 @@ import {
   type RuntimeAppMetadata,
 } from "./js-runtime-debugger";
 import {
+  NETWORK_CAPTURE_END_SCRIPT,
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkCaptureControlScript,
 } from "../utils/debugger/scripts/network-interceptor";
@@ -148,8 +149,9 @@ const PAUSE_BEFORE_FORGET_TIMEOUT_MS = 1_000;
 
 /**
  * Pauses the interceptor in each JS context that an entry of the devices (every
- * entry without them) names, while its debugger still runs. The interceptor
- * lives in the app, so forgetting the entry alone leaves it recording. A runtime
+ * entry without them) names, while its debugger still runs, and empties its
+ * log. The interceptor lives in the app, so forgetting the entry alone leaves it
+ * recording, and the next start would list the old requests again. A runtime
  * that does not answer in time is left as it is. Returns the payloads whose
  * runtime answered the pause.
  */
@@ -166,7 +168,7 @@ export async function pauseJsCapturesOf(
       if (state === undefined || !isLiveServiceState(state)) return;
       try {
         const dbg = await registry.resolveService<JsRuntimeDebuggerApi>(urn);
-        await dbg.cdp.evaluate(makeNetworkCaptureControlScript(true), {
+        await dbg.cdp.evaluate(NETWORK_CAPTURE_END_SCRIPT, {
           timeout: PAUSE_BEFORE_FORGET_TIMEOUT_MS,
         });
         paused.add(payload);

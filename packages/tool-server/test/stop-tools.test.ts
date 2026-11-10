@@ -15,7 +15,7 @@ import {
   setJsCapture,
   type JsCapture,
 } from "../src/blueprints/network-inspector";
-import { makeNetworkCaptureControlScript } from "../src/utils/debugger/scripts/network-interceptor";
+import { NETWORK_CAPTURE_END_SCRIPT } from "../src/utils/debugger/scripts/network-interceptor";
 
 function createMockRegistry(services: Map<string, { state: ServiceState; dependents: string[] }>) {
   return {
@@ -1613,7 +1613,7 @@ describe("stop-all-simulator-servers interaction messages", () => {
 describe("stop-all-simulator-servers and JS network capture", () => {
   const APP = "com.example.shop";
   const OTHER_APP = "com.example.other";
-  const PAUSE = makeNetworkCaptureControlScript(true);
+  const PAUSE = NETWORK_CAPTURE_END_SCRIPT;
 
   function started(bundleId: string): JsCapture {
     return { bundleId, intent: "started", mark: { install: null }, installed: true };

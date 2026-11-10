@@ -38,8 +38,10 @@ import type {
   StoppedLayer,
 } from "../src/tools/network/network-capture";
 import { networkLogsTool } from "../src/tools/network/network-logs";
+import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import {
+  NETWORK_CAPTURE_END_SCRIPT,
   NETWORK_CAPTURE_MARK_SCRIPT,
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkCaptureControlScript,
@@ -70,12 +72,13 @@ const XHR_BUNDLE = `
   XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ''; };
 `;
 
-type ScriptName = "mark" | "resume" | "pause" | "install" | "read" | "other";
+type ScriptName = "mark" | "resume" | "pause" | "end" | "install" | "read" | "other";
 
 function scriptName(expr: string): ScriptName {
   if (expr === NETWORK_CAPTURE_MARK_SCRIPT) return "mark";
   if (expr === makeNetworkCaptureControlScript(false)) return "resume";
   if (expr === makeNetworkCaptureControlScript(true)) return "pause";
+  if (expr === NETWORK_CAPTURE_END_SCRIPT) return "end";
   if (expr === NETWORK_INTERCEPTOR_SCRIPT) return "install";
   if (expr.includes("__argent_network_log")) return "read";
   return "other";
@@ -374,6 +377,7 @@ beforeEach(() => {
   registry.registerTool(createNetworkCaptureStartTool(registry));
   registry.registerTool(createNetworkCaptureStopTool(registry));
   registry.registerTool(networkLogsTool);
+  registry.registerTool(networkRequestTool);
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   metro.clear();
   forgetJsCapturesOf();
@@ -417,6 +421,13 @@ function read(deviceId: string, port?: number) {
   return registry.invokeTool<string>("view-network-logs", {
     device_id: deviceId,
     ...(port !== undefined ? { port } : {}),
+  });
+}
+
+function details(deviceId: string, requestId: string) {
+  return registry.invokeTool<unknown>("view-network-request-details", {
+    device_id: deviceId,
+    requestId,
   });
 }
 
@@ -1210,7 +1221,7 @@ describe("stop-all-simulator-servers", () => {
     const controller = new AbortController();
     const evaluate = rt.evaluate.bind(rt);
     rt.evaluate = (expr: string) => {
-      if (scriptName(expr) === "pause") controller.abort();
+      if (scriptName(expr) === "end") controller.abort();
       return evaluate(expr);
     };
 
@@ -1223,6 +1234,28 @@ describe("stop-all-simulator-servers", () => {
     expect(await read(IOS_UDID)).toBe(
       `Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then call view-network-logs again. This device has network capture for ${OTHER} on Metro port ${OTHER_PORT}: pass port ${OTHER_PORT} to read it.`
     );
+  });
+
+  it("removes the app's JS requests, so a list after the next start shows only the new ones", async () => {
+    const rt = new FakeRuntime(APP);
+    serve(PORT, IOS_UDID, rt);
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    rt.send("/before");
+    expect(await read(IOS_UDID)).toContain("{id: rn-net-1}");
+
+    await stopAll([IOS_UDID]);
+    await start(IOS_UDID, APP);
+    rt.send("/after");
+    const text = await read(IOS_UDID);
+
+    expect(text).toContain("=== NETWORK LOGS (page 1/1, 1 total) ===");
+    expect(text).toContain("{id: rn-net-2}");
+    expect(text).not.toContain("rn-net-1");
+    expect(await details(IOS_UDID, "rn-net-1")).toBe(
+      "Request not found. Use view-network-logs to list available requests."
+    );
+    expect(await details(IOS_UDID, "rn-net-2")).toMatchObject({ requestId: "rn-net-2" });
   });
 
   it.each([
@@ -1243,7 +1276,7 @@ describe("stop-all-simulator-servers", () => {
       prepare: async (rt: FakeRuntime) => {
         const evaluate = rt.evaluate.bind(rt);
         rt.evaluate = (expr: string) => {
-          if (scriptName(expr) === "pause") throw new Error("CDP request timed out");
+          if (scriptName(expr) === "end") throw new Error("CDP request timed out");
           return evaluate(expr);
         };
         return () => {

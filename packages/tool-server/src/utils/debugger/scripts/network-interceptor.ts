@@ -16,6 +16,8 @@
  *   its record and completes it. The patches stay in place, since nothing can take them out.
  * - `__argent_network_mark()` says where the log stands: the install's token, which a new JS
  *   context changes, and the last id it gave.
+ * - `__argent_network_clear()` empties the log. The ids go on, so an id from before it names no
+ *   later request.
  *
  * The script never modifies a request. Idempotent per JS context.
  */
@@ -88,6 +90,13 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
       delete byId[removed.requestId];
     }
   }
+
+  // A request in flight keeps its record object, but adds to the buffer only while byId has it.
+  g.__argent_network_clear = function() {
+    log.length = 0;
+    for (var key in byId) delete byId[key];
+    bufferedChars = 0;
+  };
 
   // Runs on the app's JS thread for every text response. The loop costs about 200 ms per MiB in
   // Hermes with a debugger attached, so the native checks go first.
@@ -1099,6 +1108,16 @@ export function makeNetworkCaptureControlScript(paused: boolean): string {
   return JSON.stringify({ installed: typeof g.__argent_network_mark === 'function' });
 })()`;
 }
+
+/**
+ * Pauses recording in the app's JS context and empties its log: stop-all-simulator-servers ends
+ * the capture and its requests, as it does on the native layers. A stop keeps the log.
+ */
+export const NETWORK_CAPTURE_END_SCRIPT = `(function() {
+  var g = globalThis;
+  g.__argent_network_paused = true;
+  if (typeof g.__argent_network_clear === 'function') g.__argent_network_clear();
+})()`;
 
 /** Reads a page of captured network logs, minus Metro's own traffic on `metroPort`. */
 export function makeNetworkLogReadScript(start: number, limit: number, metroPort: number): string {
