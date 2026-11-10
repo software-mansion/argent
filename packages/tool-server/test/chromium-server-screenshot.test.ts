@@ -205,6 +205,14 @@ describe("chromium-server/screenshot", () => {
       expect(send.mock.calls.map(([method]) => method)).toEqual(["Page.captureScreenshot"]);
     });
 
+    it("reads the window when the session last saw it above 1x, however wide", async () => {
+      // A 2x window read at 1600 wide and since resized to 800: the capture is 1600 wide.
+      const { cdp, send } = cdpWith(flat(1600, 1200), { w: 800, h: 600, dpr: 2 });
+      const known = { width: 1600, height: 600, devicePixelRatio: 2 };
+      expect(sizeOf(await capture(cdp, { cssPixels: true }, known))).toEqual([800, 600]);
+      expect(send.mock.calls.map(([method]) => method)).toContain("Runtime.evaluate");
+    });
+
     it.each([
       ["wide", 4002, 2, { w: 2001, h: 1, dpr: 2 }],
       ["tall", 2, 4002, { w: 1, h: 2001, dpr: 2 }],

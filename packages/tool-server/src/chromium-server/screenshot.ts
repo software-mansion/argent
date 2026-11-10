@@ -128,7 +128,9 @@ async function toCssPixels(ctx: CaptureContext, capture: Buffer): Promise<Buffer
     if (!size) return capture;
     const known = ctx.getViewport();
     // One device pixel per CSS pixel as far as the session knows: no read to wait for.
-    if (size.width <= known.width) return capture;
+    // A last read above 1x proves nothing about a narrower capture: the window may
+    // have been resized since.
+    if (known.devicePixelRatio <= 1 && size.width <= known.width) return capture;
     const ratio = await devicePixelsPerCssPixel(ctx.cdp, size.width, known);
     if (ratio <= 1 || Math.max(size.width, size.height) / ratio > MAX_CSS_IMAGE_LONG_SIDE) {
       return capture;
