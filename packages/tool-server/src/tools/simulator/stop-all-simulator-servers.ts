@@ -1,13 +1,13 @@
 import { z } from "zod";
 import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { isExternalDeviceUrn, isExternalId } from "../../utils/external-devices";
+import { isExternalDeviceUrn } from "../../utils/external-devices";
 import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
   deviceIdOwningUrn,
+  isAttachedSimulatorServerUrn,
   isDeviceServiceUrn,
-  isPlainDeviceUrn,
   unnameableSessionUrns,
 } from "./device-services";
 
@@ -122,12 +122,10 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
            * cached handle) but never reported as stopped. Its `dispose()` is a
            * no-op by design, so nothing was actually shut down and claiming
            * otherwise would tell the agent it had cleaned up a server it does
-           * not own. That holds whether the URN is keyed by the `ext:` id or
-           * by the raw udid / serial an `ext:` id matched.
+           * not own. Under the raw udid / serial only the attached
+           * simulator-server is such a handle.
            */
-          const external =
-            isExternalDeviceUrn(urn) ||
-            (isPlainDeviceUrn(urn) && owners.some((id) => isExternalId(id)));
+          const external = isExternalDeviceUrn(urn) || isAttachedSimulatorServerUrn(urn);
           if (wasLive && !external) stopped.push(urn);
         } else if (
           scoped &&

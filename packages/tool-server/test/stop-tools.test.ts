@@ -10,6 +10,14 @@ import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simul
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../src/tools/simulator/stop-metro";
 
+/** Ids a provider claims, as the mocked `externalClaimForAnyId` reports them. */
+const claimed = vi.hoisted(() => new Set<string>());
+vi.mock("../src/utils/external-devices", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/external-devices")>()),
+  externalClaimForAnyId: (id: string) => (claimed.has(id) ? { nativeId: id } : undefined),
+}));
+afterEach(() => claimed.clear());
+
 function createMockRegistry(services: Map<string, { state: ServiceState; dependents: string[] }>) {
   return {
     // The real `getSnapshot` COPIES each node into a fresh map
@@ -60,6 +68,20 @@ describe("stop-simulator-server", () => {
 
     expect(result).toEqual({ stopped: true, udid: "AAAA-BBBB" });
     expect(registry.disposeService).toHaveBeenCalledWith("SimulatorServer:AAAA-BBBB");
+  });
+
+  it("disposes a claimed device's attached server under its raw udid but reports stopped: false, by either id", async () => {
+    const raw = "AAAAAAAA-1111-2222-3333-444444444444";
+    claimed.add(raw);
+    for (const udid of [`ext:prov:${raw}`, raw]) {
+      const registry = createMockRegistry(
+        new Map([[`SimulatorServer:${raw}`, { state: ServiceState.RUNNING, dependents: [] }]])
+      );
+      const result = await createStopSimulatorServerTool(registry).execute!({}, { udid });
+
+      expect(result).toEqual({ stopped: false, udid });
+      expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${raw}`);
+    }
   });
 
   it("returns stopped: false for a UDID with no running server", async () => {
@@ -1168,29 +1190,41 @@ describe("stop-all-simulator-servers unmatched ids", () => {
     });
   });
 
-  it("disposes a provider device's services opened under its raw udid when named by its ext: id, reporting only the debugger stopped", async () => {
+  it("stops a claimed device's raw-udid services by either id, leaving only its attached server out of stopped", async () => {
     const raw = "AAAAAAAA-1111-2222-3333-444444444444";
+    claimed.add(raw);
     const services = () =>
       new Map([
         [`SimulatorServer:${raw}`, { state: ServiceState.RUNNING, dependents: [] }],
+        [`AXService:${raw}`, { state: ServiceState.RUNNING, dependents: [] }],
+        [`NativeProfilerSession:${raw}`, { state: ServiceState.RUNNING, dependents: [] }],
         [`JsRuntimeDebugger:8081:${raw}`, { state: ServiceState.RUNNING, dependents: [] }],
         [`SimulatorServer:${THEIRS}`, { state: ServiceState.RUNNING, dependents: [] }],
       ]);
-    const registry = createMockRegistry(services());
+    const ours = [
+      `AXService:${raw}`,
+      `NativeProfilerSession:${raw}`,
+      `JsRuntimeDebugger:8081:${raw}`,
+    ];
+
+    for (const devices of [[`ext:prov:${raw}`], [`ext:prov:${raw}`, raw], [raw]]) {
+      const registry = createMockRegistry(services());
+      const tool = createStopAllSimulatorServersTool(registry);
+
+      expect(await tool.execute!({}, { devices })).toEqual({ stopped: ours });
+      expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${raw}`);
+      expect(registry.disposeService).not.toHaveBeenCalledWith(`SimulatorServer:${THEIRS}`);
+    }
+  });
+
+  it("reports a raw-serial simulator-server stopped when an ext: id names a device no provider claims", async () => {
+    const registry = createMockRegistry(
+      new Map([[`SimulatorServer:emulator-5554`, { state: ServiceState.RUNNING, dependents: [] }]])
+    );
     const tool = createStopAllSimulatorServersTool(registry);
 
-    // The attached simulator-server's dispose is a no-op; the debugger's is not.
-    expect(await tool.execute!({}, { devices: [`ext:prov:${raw}`] })).toEqual({
-      stopped: [`JsRuntimeDebugger:8081:${raw}`],
-    });
-    expect(registry.disposeService).toHaveBeenCalledWith(`SimulatorServer:${raw}`);
-    expect(registry.disposeService).toHaveBeenCalledWith(`JsRuntimeDebugger:8081:${raw}`);
-    expect(registry.disposeService).not.toHaveBeenCalledWith(`SimulatorServer:${THEIRS}`);
-
-    // Both spellings of one device, the ext: id first: neither is unmatched.
-    const both = createStopAllSimulatorServersTool(createMockRegistry(services()));
-    expect(await both.execute!({}, { devices: [`ext:prov:${raw}`, raw] })).toEqual({
-      stopped: [`JsRuntimeDebugger:8081:${raw}`],
+    expect(await tool.execute!({}, { devices: ["ext:prov:emulator-5554"] })).toEqual({
+      stopped: ["SimulatorServer:emulator-5554"],
     });
   });
 

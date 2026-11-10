@@ -15,7 +15,7 @@ import { REACT_PROFILER_SESSION_NAMESPACE } from "../../blueprints/react-profile
 import { ANDROID_NETWORK_INSPECTOR_NAMESPACE } from "../../blueprints/android-network-inspector";
 import type { ServiceSnapshot } from "@argent/registry";
 import { isLogicalKeyedDevice } from "../../utils/debugger/device-alias";
-import { externalNativeId } from "../../utils/external-devices";
+import { externalClaimForAnyId, externalNativeId } from "../../utils/external-devices";
 
 /**
  * The one URN matcher both `stop-simulator-server` and
@@ -178,9 +178,13 @@ export function deviceIdOwningUrn(
   return undefined;
 }
 
-/** Whether `urn` has the plain `<Namespace>:<deviceId>` shape. */
-export function isPlainDeviceUrn(urn: string): boolean {
-  return !isDeviceServiceUrn(urn, [...PORT_KEYED_NAMESPACES, ...APP_KEYED_NAMESPACES]);
+/**
+ * Whether `urn` is a simulator-server attached to a provider's own server (a
+ * claimed device, under either of its ids), whose `dispose()` is a no-op.
+ */
+export function isAttachedSimulatorServerUrn(urn: string): boolean {
+  const deviceId = deviceIdPortion(urn, SIMULATOR_SERVER_NAMESPACE);
+  return deviceId !== undefined && externalClaimForAnyId(deviceId) !== undefined;
 }
 
 /** Whether `urn` belongs to any of `namespaces`, regardless of which device. */
