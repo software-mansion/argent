@@ -229,6 +229,33 @@ describe("run-sequence", () => {
     expect(result.total).toBe(3);
   });
 
+  it("says a wait that stopped the sequence without judging its condition was not judged", async () => {
+    const registry = mockRegistry((id: string) =>
+      id === "await-ui-element"
+        ? { success: false, elapsed: 5000, cause: "unreadable", note: "tree source down" }
+        : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+        ],
+      }
+    );
+
+    expect(result.steps[0]).toEqual({
+      tool: "await-ui-element",
+      error: "await-ui-element condition not judged (unreadable): tree source down",
+    });
+  });
+
   it("continues past an await-ui-element step whose condition is met", async () => {
     const registry = mockRegistry((id: string) => {
       if (id === "await-ui-element") return { success: true, elapsed: 120 };

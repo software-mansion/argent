@@ -333,7 +333,7 @@ describe("formatDescribeTree", () => {
         "Pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space.\n" +
         "To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n" +
         "\n" +
-        "ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n"
+        "ROOT  AXGroup (0.000,0.000,1.000,1.000)\n"
     );
   });
 
@@ -470,7 +470,23 @@ describe("formatDescribeTree", () => {
       ],
     };
     const out = formatDescribeTree(root, { source: "ax-service" });
-    expect(out).toMatch(/\(0\.123, 0\.500, 0\.100, 0\.050\)/);
+    expect(out).toMatch(/\(0\.123,0\.500,0\.100,0\.050\)/);
+  });
+
+  it("keeps the sign and the leading zero of a negative coordinate", () => {
+    const root: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        leaf({
+          role: "AXButton",
+          label: "X",
+          frame: { x: -0.125, y: 0.5, width: 1, height: 0.05 },
+        }),
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "ax-service" });
+    expect(out).toContain("(-0.125,0.500,1.000,0.050)");
   });
 
   // Long Compose / RN trees can stack 200+ wrapper layers. The renderer uses
