@@ -826,6 +826,46 @@ describe("network-capture-start", () => {
       });
     });
 
+    it.each([
+      {
+        logged: "nothing",
+        before: 0,
+        says: "No network traffic captured. The app's JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since. Call network-capture-start, then repeat the action.",
+      },
+      {
+        logged: "a request",
+        before: 1,
+        says: "=== NETWORK LOGS (page 1/1, 1 total; the app's JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since, so call network-capture-start, then repeat the action) ===",
+      },
+    ])(
+      "says a read of a started capture with $logged logged that the app's runtime does not record while a stop's pause stays there",
+      async ({ before, says }) => {
+        const rt = new FakeRuntime(APP);
+        serve(PORT, IOS_UDID, rt);
+        ios.connected.add(APP);
+        await start(IOS_UDID, APP);
+        if (before) rt.send("/before");
+        await stop(IOS_UDID, APP);
+        await reconnect(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
+        await start(IOS_UDID, APP);
+
+        // The app connects again with the JS context that the stop paused.
+        await reconnect(PORT, IOS_UDID, rt);
+        rt.send("/dropped");
+        const paused = await read(IOS_UDID);
+
+        expect(paused.split("\n")[0]).toBe(says);
+        expect(paused).not.toContain("/dropped");
+
+        await start(IOS_UDID, APP);
+        rt.send("/after");
+        const listed = await read(IOS_UDID);
+
+        expect(listed.split("\n")[0]).toBe(`=== NETWORK LOGS (page 1/1, ${before + 1} total) ===`);
+        expect(listed).toContain('"GET /after"');
+      }
+    );
+
     it("stores a started capture with an empty mark when Metro has no app connected yet", async () => {
       serve(PORT, IOS_UDID, FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS);
       ios.connected.add(APP);

@@ -37,6 +37,9 @@ function notInstalled(installError: string | undefined): string {
 const NOT_STARTED =
   "Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then";
 
+const PAUSED_BY_STOP =
+  "JS runtime does not record new requests: network-capture-stop paused it, and no network-capture-start reached it since";
+
 /**
  * The JS capture a read of `payload` reads, or undefined before any start. A runtime of another
  * app than the capture's has no capture of its own.
@@ -322,6 +325,13 @@ Fails if the app is not connected (RN) or the device is not reachable (Chromium)
         ? `No network traffic captured: network capture is stopped for ${capture.bundleId} (network-capture-stop). Call network-capture-start to capture again, then repeat the action.`
         : "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active: it records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module, but not requests sent before network-capture-start.",
       headerNote: stopped ? "capture stopped" : undefined,
+      // A start that does not reach the app's JS context keeps the pause of an earlier stop there.
+      paused: stopped
+        ? undefined
+        : {
+            empty: `No network traffic captured. The app's ${PAUSED_BY_STOP}. Call network-capture-start, then repeat the action.`,
+            headerNote: `the app's ${PAUSED_BY_STOP}, so call network-capture-start, then repeat the action`,
+          },
     });
   },
 };
@@ -330,17 +340,25 @@ async function renderJsLog(
   cdp: CDPClient,
   port: number,
   pageIndexParam: number | "latest",
-  texts: { noLog: () => string; empty: string; headerNote?: string }
+  texts: {
+    noLog: () => string;
+    empty: string;
+    headerNote?: string;
+    /** The texts to show instead while a stop's pause stays in the app's JS context. */
+    paused?: { empty: string; headerNote: string };
+  }
 ): Promise<string> {
   // Zero-length slice: reuses the read script's Metro filtering just to get the total.
   const countRaw = await cdp.evaluate(makeNetworkLogReadScript(0, 0, port));
-  const { total, interceptorInstalled } = JSON.parse(countRaw as string) as {
+  const { total, interceptorInstalled, paused } = JSON.parse(countRaw as string) as {
     total: number;
     interceptorInstalled: boolean;
+    paused?: boolean;
   };
 
   if (!interceptorInstalled) return texts.noLog();
-  if (total === 0) return texts.empty;
+  const shown = (paused === true && texts.paused) || texts;
+  if (total === 0) return shown.empty;
 
   const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
   const pageIndex = pageIndexParam === "latest" ? pageCount - 1 : pageIndexParam;
@@ -370,6 +388,6 @@ async function renderJsLog(
     )
   );
 
-  const note = texts.headerNote ? `; ${texts.headerNote}` : "";
+  const note = shown.headerNote ? `; ${shown.headerNote}` : "";
   return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${data.total} total${note}) ===\n\n${lines.join("\n")}`;
 }

@@ -1119,7 +1119,10 @@ export const NETWORK_CAPTURE_END_SCRIPT = `(function() {
   if (typeof g.__argent_network_clear === 'function') g.__argent_network_clear();
 })()`;
 
-/** Reads a page of captured network logs, minus Metro's own traffic on `metroPort`. */
+/**
+ * Reads a page of captured network logs, minus Metro's own traffic on `metroPort`, and whether a
+ * stop paused recording in the app's JS context.
+ */
 export function makeNetworkLogReadScript(start: number, limit: number, metroPort: number): string {
   return `(function() {
   var log = globalThis.__argent_network_log;
@@ -1162,7 +1165,12 @@ export function makeNetworkLogReadScript(start: number, limit: number, metroPort
     });
   }
 
-  return JSON.stringify({ entries: entries, total: total, interceptorInstalled: true });
+  return JSON.stringify({
+    entries: entries,
+    total: total,
+    interceptorInstalled: true,
+    paused: globalThis.__argent_network_paused === true
+  });
 })()`;
 }
 
