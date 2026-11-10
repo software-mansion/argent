@@ -315,10 +315,18 @@ describe("startMcpServer tool calls", () => {
     const result = await client.callTool({ name: "list-devices", arguments: {} });
 
     expect(result.isError).toBeFalsy();
-    expect(textOf(result)).toContain(
-      '{"platform":"ios","udid":"BOOTED","name":"iPhone 17","state":"Booted"}'
+    // One block: the short text replaces the JSON, it does not go out beside it.
+    expect(result.content).toHaveLength(1);
+    expect(textOf(result)).toBe(
+      [
+        '{"devices":[',
+        '{"platform":"ios","udid":"BOOTED","name":"iPhone 17","state":"Booted"}',
+        "],",
+        '"avds":[]}',
+        "iOS simulators that are shut down, one per line (platform, udid, name, runtime, state, tags); start one with boot-device:",
+        'ios STOPPED "iPad" iOS 27.0 Shutdown',
+      ].join("\n")
     );
-    expect(textOf(result).split("\n").at(-1)).toBe('ios STOPPED "iPad" iOS 27.0 Shutdown');
   });
 
   it("uploads a tar-upload input and returns the tool result", async () => {
