@@ -112,6 +112,9 @@ export interface DescribeTreeData {
   hint?: string;
   // Possibly not the live screen (a suspended HarmonyOS panel); `hint` says why.
   stale?: boolean;
+  // Part of the screen was not read (an Apple TV hierarchy cut at its node cap),
+  // so an element's absence proves nothing; `hint` says why.
+  partial?: boolean;
   // Size the frames were normalized against, in the source's native units
   // (Android px, iOS pt), so only the aspect ratio compares across sources —
   // which is what the rotate directive's circle geometry reads it for. Set
