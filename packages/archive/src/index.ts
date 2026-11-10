@@ -172,7 +172,8 @@ interface Archive {
 
 /** A pipe `tar` closed because it stopped reading, which isn't a failure by itself. */
 function isClosedPipe(err: NodeJS.ErrnoException): boolean {
-  return err.code === "EPIPE" || err.code === "ERR_STREAM_PREMATURE_CLOSE";
+  // GNU tar on macOS can make the write fail with ENOTCONN instead of EPIPE.
+  return ["EPIPE", "ENOTCONN", "ERR_STREAM_PREMATURE_CLOSE"].includes(err.code ?? "");
 }
 
 /**

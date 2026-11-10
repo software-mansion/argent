@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import zlib from "node:zlib";
 import {
@@ -18,6 +18,21 @@ import {
 } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
+
+// Absolute, so a `tar` shim on PATH can exec it without finding itself.
+const gnuTar = ["gtar", "tar"]
+  .map((bin) => {
+    try {
+      const resolved = execFileSync("sh", ["-c", `command -v ${bin}`], { encoding: "utf8" }).trim();
+      return execFileSync(resolved, ["--version"], { encoding: "utf8" }).includes("GNU tar")
+        ? resolved
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  })
+  .find(Boolean);
+
 let tmpDir: string;
 
 beforeEach(async () => {
@@ -266,6 +281,49 @@ describe("safeExtractArchive zstd framing", () => {
     const tar = Buffer.concat([await plainTar(), Buffer.alloc(20 << 20)]);
     const member = await extract(zlib.zstdCompressSync(tar));
     expect((await fs.readFile(path.join(member, "zeros.bin"))).length).toBe(300 * 1024);
+  });
+
+  describe("when tar closes its stdin before the data ends", () => {
+    const realPath = process.env.PATH;
+    afterEach(() => {
+      process.env.PATH = realPath;
+    });
+
+    async function tarOnPath(script: string): Promise<void> {
+      const bin = await fs.mkdtemp(path.join(tmpDir, "bin-"));
+      await fs.writeFile(path.join(bin, "tar"), script, { mode: 0o755 });
+      process.env.PATH = `${bin}${path.delimiter}${realPath}`;
+    }
+
+    async function longArchive(): Promise<Buffer> {
+      return zlib.zstdCompressSync(Buffer.concat([await plainTar(), Buffer.alloc(20 << 20)]));
+    }
+
+    it("extracts when tar exits without reading", async () => {
+      const bytes = await longArchive();
+      await tarOnPath(
+        [
+          "#!/bin/sh",
+          'case "$1" in',
+          "  -t) echo Bundle.app/ ;;",
+          '  -tv) echo "drwxr-xr-x  0 u g 0 Jan  1 00:00 Bundle.app/" ;;',
+          '  -x) mkdir "$3/Bundle.app" ;;',
+          "esac",
+        ].join("\n")
+      );
+      expect(path.basename(await extract(bytes))).toBe("Bundle.app");
+    });
+
+    it.runIf(gnuTar)(
+      "extracts with GNU tar, which reads only up to the marker",
+      async () => {
+        const bytes = await longArchive();
+        await tarOnPath(`#!/bin/sh\nexec "${gnuTar}" "$@"\n`);
+        // Whether the closed pipe surfaces as EPIPE or ENOTCONN (macOS) is a race.
+        for (let i = 0; i < 30; i++) await extract(bytes);
+      },
+      60_000
+    );
   });
 });
 
