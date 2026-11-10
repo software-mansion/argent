@@ -3,7 +3,7 @@ import supertest from "supertest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -15,6 +15,17 @@ import type { Registry } from "@argent/registry";
 
 const isFlagEnabledMock = vi.hoisted(() => vi.fn(() => false));
 const compressors = vi.hoisted(() => [] as Transform[]);
+const tarChildren = vi.hoisted(() => [] as ChildProcess[]);
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const spawn = (...args: Parameters<typeof actual.spawn>) => {
+    const child = (actual.spawn as (...a: typeof args) => ChildProcess)(...args);
+    if (args[0] === "tar") tarChildren.push(child);
+    return child;
+  };
+  return { ...actual, spawn };
+});
 
 vi.mock("@argent/archive", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/archive")>();
@@ -367,7 +378,7 @@ describe("GET /artifacts/:id", () => {
     });
   });
 
-  it("destroys the compressor when the client aborts mid-download", async () => {
+  it("stops tar and the compressor when the client aborts mid-download", async () => {
     const root = await mkdtemp(join(tmpdir(), "artifact-abort-"));
     const server = createServer();
     try {
@@ -391,6 +402,7 @@ describe("GET /artifacts/:id", () => {
       await res.body!.getReader().read();
       abort.abort();
       await vi.waitFor(() => expect(compressors.at(-1)?.destroyed).toBe(true));
+      await vi.waitFor(() => expect(tarChildren.at(-1)?.signalCode).toBe("SIGTERM"));
     } finally {
       server.closeAllConnections();
       server.close();
