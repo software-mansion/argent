@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import {
   IOS_NATIVE_REQUEST_ID,
+  KEPT_BODY_CHARS_BUDGET,
   createIosNetworkRecords,
   findIosNativeRecord,
   liveIosNetworkCaptureDevices,
@@ -1543,6 +1544,51 @@ describe("iOS native network records: bodies kept", () => {
     expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 3);
     expect(await store.responseBody(ids[2]!)).toEqual(body("body of r2"));
     expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 3);
+  });
+
+  it(`keeps the bodies read most recently only up to ${KEPT_BODY_CHARS_BUDGET} chars in all`, async () => {
+    const { app, store, agent } = bodyStore();
+    const quarter = "q".repeat(KEPT_BODY_CHARS_BUDGET / 4);
+    const whole = "w".repeat(KEPT_BODY_CHARS_BUDGET + 1);
+    app.request.mockImplementation(async (_connection, _method, params) => ({
+      postData: params.requestId === "huge" ? whole : quarter,
+      base64Encoded: false,
+    }));
+    const ids: string[] = [];
+    for (const name of ["u0", "u1", "u2", "u3", "u4", "huge", "small"]) {
+      agent.requestWillBeSent(name, `https://e.com/${name}`, { method: "POST", hasPostData: true });
+      agent.responseReceived(name, `https://e.com/${name}`);
+      agent.loadingFinished(name, 2);
+      ids.push(idOf(store, name));
+    }
+    const [u0, u1, u2, u3, u4, huge, small] = ids as [
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+
+    // Four quarters fill the budget; a fifth pushes out the one read longest ago.
+    for (const id of [u0, u1, u2, u3, u4]) await store.requestPostData(id);
+    expect(app.request).toHaveBeenCalledTimes(5);
+    for (const id of [u1, u2, u3, u4]) await store.requestPostData(id);
+    expect(app.request).toHaveBeenCalledTimes(5);
+    await store.requestPostData(u0);
+    expect(app.request).toHaveBeenCalledTimes(6);
+
+    // A body past the budget alone stays until the next body comes.
+    expect((await store.requestPostData(huge)).body).toBe(whole);
+    expect(app.request).toHaveBeenCalledTimes(7);
+    expect((await store.requestPostData(huge)).body).toBe(whole);
+    expect(app.request).toHaveBeenCalledTimes(7);
+    await store.requestPostData(small);
+    await store.requestPostData(small);
+    expect(app.request).toHaveBeenCalledTimes(8);
+    await store.requestPostData(huge);
+    expect(app.request).toHaveBeenCalledTimes(9);
   });
 
   it("counts a read of a kept body as a read, so the body read longest ago goes first", async () => {

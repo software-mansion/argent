@@ -46,6 +46,11 @@ const POST_DATA_WAIT_MS = 5_000;
  */
 const POST_DATA_TIMEOUT_MS = 2 ** 31 - 1;
 const RESPONSE_BODY_TIMEOUT_MS = 10_000;
+/**
+ * The chars of every body kept, together. The body kept most recently stays
+ * even when it alone is larger.
+ */
+export const KEPT_BODY_CHARS_BUDGET = 64 * 1024 * 1024;
 
 const STILL_SENDING = "the app is still sending this request body; read it again later";
 /** A request body read of a request that has ended, which the app did not answer in time. */
@@ -293,11 +298,12 @@ export function createIosNetworkRecords(
     const sent = new Promise<void>((resolve) => {
       markSent = resolve;
     });
-    const read: BodyRead = { sent, answer, settled: false };
+    const read: BodyRead = { sent, answer, settled: false, chars: 0 };
     bodies.set(cacheKey, read);
     // Only a body is kept: every reason may change at the next read.
     void answer.then((body) => {
       read.settled = true;
+      read.chars = body.body.length;
       if (!body.available && bodies.get(cacheKey) === read) bodies.delete(cacheKey);
       dropOldBodies();
     });
@@ -312,18 +318,25 @@ export function createIosNetworkRecords(
   }
 
   /**
-   * Drops the bodies read longest ago past the bound. Only a body takes a
-   * place: a read still open stays, because dropping it would send it to the
-   * app again, and a read that ends with a reason keeps nothing.
+   * Drops the bodies read longest ago past either bound: their count, or their
+   * chars together. Only a body counts: a read still open stays, because
+   * dropping it would send it to the app again, and a read that ends with a
+   * reason keeps nothing.
    */
   function dropOldBodies(): void {
     let kept = 0;
-    for (const read of bodies.values()) if (read.settled) kept++;
+    let chars = 0;
+    for (const read of bodies.values()) {
+      if (!read.settled) continue;
+      kept++;
+      chars += read.chars;
+    }
     for (const [key, read] of bodies) {
-      if (kept <= MAX_CACHED_BODIES) return;
+      if (kept <= MAX_CACHED_BODIES && (kept <= 1 || chars <= KEPT_BODY_CHARS_BUDGET)) return;
       if (read.settled) {
         bodies.delete(key);
         kept--;
+        chars -= read.chars;
       }
     }
   }
@@ -483,6 +496,8 @@ interface BodyRead {
   answer: Promise<NativeNetworkBody>;
   /** The app answered, or the read failed. */
   settled: boolean;
+  /** The length of the body kept, once the app answered with one. */
+  chars: number;
 }
 
 /**
