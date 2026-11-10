@@ -1161,6 +1161,25 @@ describe("network-capture-stop", () => {
     });
   });
 
+  it("says an iOS layer that did not confirm the stop is still armed", async () => {
+    serve(PORT, IOS_UDID, new FakeRuntime(APP));
+    ios.connected.add(APP);
+    await start(IOS_UDID, APP);
+    ios.record(APP);
+    const reason =
+      "the app did not acknowledge Network.disable within 5 s; argent records none of its new requests, and its next process starts without capture";
+    ios.stopAnswer = { confirmed: false, reason };
+
+    const result = await stop(IOS_UDID, APP);
+
+    expect(layer(result, "ios-native")).toEqual({
+      layer: "ios-native",
+      armed: true,
+      total: 1,
+      reason,
+    });
+  });
+
   it("keeps the JS layer stopped, and says the installed interceptor may still record, when the app's runtime cannot be reached", async () => {
     serve(PORT, SERIAL, new FakeRuntime(APP));
     await start(SERIAL, APP);
