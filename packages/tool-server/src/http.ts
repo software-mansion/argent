@@ -177,16 +177,18 @@ function extractDeviceArg(data: unknown): string | null {
 }
 
 /**
- * Whether the call names a physical iPhone as the device it acts on. Reads
+ * The physical iPhone the call names as the device it acts on, if any. Reads
  * `device` as well as the three spellings above: `flow-execute` names its
  * target that way, and a session that only replays flows on the phone must
  * still be handed the signing note.
  */
-function targetsIosPhysicalDevice(data: unknown): boolean {
+function targetedIosPhysicalDevice(data: unknown): string | null {
   const record = data && typeof data === "object" ? (data as Record<string, unknown>) : null;
   const flowDevice = typeof record?.device === "string" ? record.device : null;
   const deviceArg = extractDeviceArg(data) ?? flowDevice;
-  return deviceArg !== null && isIosPhysicalDevice(resolveDevice(deviceArg));
+  if (deviceArg === null) return null;
+  const device = resolveDevice(deviceArg);
+  return isIosPhysicalDevice(device) ? device.id : null;
 }
 
 type InvocationMeta = {
@@ -1097,13 +1099,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (activeRecordings.length > 0) {
           notes.push(buildScreenRecordingNote(activeRecordings, Date.now()));
         }
-        // Staged once when keychain team detection first signs the on-device
-        // runner (utils/ios-device/team-detect); drained here into the first
-        // completed call that targets a physical iPhone, so the agent driving
-        // the hardware learns which team was picked and how to override, and a
-        // caller on another platform sharing this tool-server never does.
-        const signingNote = targetsIosPhysicalDevice(parsedData)
-          ? consumePendingSigningDetectionNote()
+        // Staged once per phone and team when keychain team detection signs the
+        // on-device runner (utils/ios-device/team-detect); drained here into the
+        // first completed call that targets that phone, so the agent driving it
+        // learns which team was picked and how to override, and a caller on
+        // another phone or platform sharing this tool-server never does.
+        const targetedPhone = targetedIosPhysicalDevice(parsedData);
+        const signingNote = targetedPhone
+          ? consumePendingSigningDetectionNote(targetedPhone)
           : null;
         if (signingNote) {
           notes.push(signingNote);

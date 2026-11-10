@@ -20,6 +20,7 @@ import {
   FailureError,
   ServiceNotFoundError,
   getFailureSignal,
+  subprocessFailureMetadata,
   type Registry,
   type ToolCapability,
   type ToolDefinition,
@@ -48,8 +49,10 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { listEmulatorPidsForAvd } from "../../utils/emulator-process";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
-import { listIosSimulators } from "../../utils/ios-devices";
+import { scanIosSimulators, simctlListTimeoutAdvice } from "../../utils/ios-devices";
+import { launchSimulatorApp } from "../../utils/simulator-app-launch";
 import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
+import { SIMCTL_KILL_SIGNAL } from "../../utils/simctl-config";
 import {
   androidGuestVulkanFromEnv,
   androidHeadlessFromEnv,
@@ -59,11 +62,17 @@ import {
   assertHarmonyEnabled,
   classifyDevice,
   harmonyInstanceName,
+  isAndroidEmulatorSerial,
   stripRemotePrefix,
   harmonyDeviceId,
   harmonyEmulatorId,
 } from "../../utils/device-info";
-import { externalClaimForNativeId, isExternalId } from "../../utils/external-devices";
+import {
+  externalClaimForNativeId,
+  isExternalId,
+  isIosPhysicalUdid,
+  nativeIdPlatform,
+} from "../../utils/external-devices";
 import { InvalidToolInputError } from "../../utils/capability";
 import {
   simctlBoot as simRemoteBoot,
@@ -96,92 +105,6 @@ import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 
 const execFileAsync = promisify(execFile);
 
-// The exactly-one check over `udid`/`avdName`/`vvdImage`/`harmonyInstance`/`electronAppPath`
-// lives in `execute`, so each field's `.describe()` restates the constraint for MCP clients.
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .optional()
-    .describe(
-      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
-    ),
-  avdName: z
-    .string()
-    .optional()
-    .describe(
-      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
-    ),
-  vvdImage: z
-    .string()
-    .optional()
-    .describe(
-      "Vega (Fire TV): VVD image to boot: the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`). Starts the single SDK-managed Vega Virtual Device. Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
-    ),
-  harmonyInstance: z
-    .string()
-    .optional()
-    .describe(
-      'HarmonyOS: emulator instance to start: the `name` of a `kind: "emulator"` device from `list-devices` (e.g. `Phone_1`); the `harmony-emulator-<name>` id that entry reports as its `udid` is accepted too. Provide exactly one of `udid`, `avdName`, `vvdImage`, `harmonyInstance`, or `electronAppPath`.'
-    )
-    .meta({ [FLAG_META_KEY]: HARMONY_FLAG }),
-  bootTimeoutMs: z
-    .number()
-    .int()
-    .min(30_000)
-    .max(900_000)
-    .optional()
-    .describe(
-      "Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega<flag:harmonyos>, 180000 (3 min) on HarmonyOS, where with `force` it spans the shutdown as well as the boot</flag:harmonyos>. Clamped to [30s, 15min]. Ignored on iOS."
-    ),
-  force: z
-    .boolean()
-    .optional()
-    .describe(
-      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to the `hdc` connect key it registered under, since the emulator manager never reports one: without it the instance is left alone and the payload names the instance rather than a key (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos> Ignored for Electron, which always spawns a fresh process."
-    ),
-  sound: z
-    .boolean()
-    .optional()
-    .describe(
-      "Android only: boot the emulator with audio output enabled. Defaults to false: argent boots emulators MUTED so several agent-driven devices don't all play sound on the host machine; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true` to reboot it with sound. A boot snapshot saved in the other audio mode can't be reused, so the first boot after toggling is a slower cold boot. The `boot-sound` argent flag flips this default to true. Ignored on iOS/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which argent never mutes."
-    ),
-  guestVulkan: z
-    .boolean()
-    .optional()
-    .describe(
-      "Android on a macOS host only: boot the emulator with guest Vulkan. Defaults to false: guest Vulkan crashes Chrome's GPU process, which breaks Chrome and Custom Tab sign-in flows. Without it apps find no Vulkan device, although the guest still lists the Vulkan features, so a Vulkan-only renderer such as WebGPU (react-native-wgpu) draws nothing; pass `true` to test one. Takes effect at boot: an emulator already running in the other mode is reused with a `note`, and `force: true` reboots it. A boot snapshot saved in the other mode can't be reused, so the first boot after toggling is a slower cold boot. The `ARGENT_EMULATOR_GUEST_VULKAN` env var flips this default to true. Ignored on other hosts and platforms."
-    ),
-  headless: z
-    .boolean()
-    .optional()
-    .describe(
-      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server; used by Argent Lens. Set the `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) to force this host-wide without passing the flag per call (the iOS analog of `ARGENT_EMULATOR_NO_WINDOW`). Ignored on Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>/Electron, which have no equivalent GUI step."
-    ),
-  electronAppPath: z
-    .string()
-    .optional()
-    .describe(
-      "Electron: path to the Electron app to launch. Either a packaged .app bundle / executable, or a project directory whose package.json points the Electron binary at the entry script. Provide exactly one of `udid`, `avdName`, `vvdImage`, <flag:harmonyos>`harmonyInstance`, </flag:harmonyos>or `electronAppPath`."
-    ),
-  electronPort: z
-    .number()
-    .int()
-    .min(1024)
-    .max(65535)
-    .optional()
-    .describe(
-      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `chromium-cdp-<port>`."
-    ),
-  electronArgs: z
-    .array(z.string())
-    .optional()
-    .describe(
-      "Electron-only: extra CLI arguments forwarded to the Electron binary after the app path."
-    ),
-});
-
-type BootDeviceParams = z.infer<typeof zodSchema>;
-
 type AndroidBootResult = {
   platform: "android";
   serial: string;
@@ -191,7 +114,7 @@ type AndroidBootResult = {
 };
 
 type BootDeviceResult =
-  | { platform: "ios"; udid: string; booted: true }
+  | { platform: "ios"; udid: string; booted: true; note?: string }
   | { platform: "ios-remote"; udid: string; booted: true }
   | AndroidBootResult
   | VegaBootResult
@@ -620,12 +543,40 @@ async function pickOwnSerial(avdName: string, newSerials: string[]): Promise<str
   return findSerialByAvdName(avdName, Date.now() + 3_000);
 }
 
+async function bootSimctl(
+  prefix: string[],
+  [sub, udid, ...rest]: ["shutdown" | "boot" | "bootstatus", string, ...string[]],
+  timeoutMs: number
+): Promise<void> {
+  try {
+    await execFileAsync("xcrun", [...prefix, sub, udid, ...rest], {
+      timeout: timeoutMs,
+      killSignal: SIMCTL_KILL_SIGNAL,
+    });
+  } catch (err) {
+    if (!(err as { killed?: boolean }).killed) throw err;
+    throw new FailureError(
+      `simctl ${sub} of iOS simulator ${udid} did not finish within ${timeoutMs / 1000}s.`,
+      {
+        error_code: FAILURE_CODES.BOOT_IOS_SIMCTL_TIMEOUT,
+        failure_stage: `boot_ios_simctl_${sub}`,
+        failure_area: "tool_server",
+        error_kind: "timeout",
+        ...subprocessFailureMetadata(err, "xcrun_simctl"),
+      },
+      { cause: err as Error }
+    );
+  }
+}
+
 async function bootIos(
   udid: string,
   registry: Registry,
   force?: boolean,
   headless?: boolean
-): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
+): Promise<
+  { platform: "ios"; udid: string; booted: true; note?: string } | NativeDevtoolsInitFailedResult
+> {
   // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
   // gets "iOS requires macOS" rather than a misleading "install xcode-select".
   if (process.platform !== "darwin") {
@@ -642,22 +593,40 @@ async function bootIos(
   }
   await ensureDep("xcrun");
 
-  const simMatch = await listIosSimulators()
-    .then((sims) => sims.find((s) => s.udid === udid))
-    .catch(() => undefined);
+  const scan = await scanIosSimulators().catch(() => undefined);
+  const simMatch = scan?.simulators.find((s) => s.udid === udid);
+  // Booting without the state would skip the pre-boot AX prefs below, leaving
+  // describe degraded until the next reboot.
+  if (!simMatch && scan?.timedOut) {
+    throw new FailureError(
+      `Could not read the state of iOS simulator ${udid}: ${simctlListTimeoutAdvice("boot-device")}`,
+      {
+        error_code: FAILURE_CODES.BOOT_IOS_SIMCTL_LIST_TIMEOUT,
+        failure_stage: "boot_ios_state_probe",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+      }
+    );
+  }
   const simState = simMatch?.state;
   const isTvOs = simMatch?.runtimeKind === "tv";
-  // listIosSimulators above already learned which device set owns this UDID,
+  // The scan above already learned which device set owns this UDID,
   // so this resolves from cache; every simctl below targets that set.
   const deviceSet = await deviceSetForUdid(udid);
   const prefix = simctlPrefix(deviceSet);
 
+  // Booting: e.g. the boot of a call whose `simctl boot` timed out, which CoreSimulator still finishes.
+  const booting = simState === "Booting";
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
-  if (force && simState === "Booted") {
-    await execFileAsync("xcrun", [...prefix, "shutdown", udid]);
+  // A booting one is waited for first, so the shutdown sees it Booted.
+  if (force && booting) {
+    await bootSimctl(prefix, ["bootstatus", udid, "-b"], 480_000);
+  }
+  if (force && (simState === "Booted" || booting)) {
+    await bootSimctl(prefix, ["shutdown", udid], 30_000);
   }
 
-  const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
+  const needsPreBoot = simState === "Shutdown" || (force && (simState === "Booted" || booting));
   if (needsPreBoot) {
     await setAccessibilityPrefsPreBoot(udid).catch((err: unknown) => {
       process.stderr.write(
@@ -668,13 +637,14 @@ async function bootIos(
     });
   }
 
-  await execFileAsync("xcrun", [...prefix, "boot", udid]).catch((err: unknown) => {
+  await bootSimctl(prefix, ["boot", udid], 120_000).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
-    if (!message.includes("Unable to boot device in current state: Booted")) {
+    // bootstatus below waits for a Booting one.
+    if (!/Unable to boot device in current state: Boot(ed|ing)\b/.test(message)) {
       throw err;
     }
   });
-  await execFileAsync("xcrun", [...prefix, "bootstatus", udid, "-b"]);
+  await bootSimctl(prefix, ["bootstatus", udid, "-b"], 480_000);
 
   // tvOS only: a boot transition orphans the host-side tvos-hid-daemon, which
   // holds a SimDeviceLegacyClient bound to the previous boot for its whole
@@ -683,7 +653,7 @@ async function bootIos(
   // fire-and-forget, so TV button presses silently no-op. Dropping the cached
   // TvControl service forces the next TV call to rebuild it against the new
   // boot. ServiceNotFoundError just means nothing was cached.
-  if (isTvOs && needsPreBoot) {
+  if (isTvOs && (needsPreBoot || booting)) {
     await registry.disposeService(`${TV_CONTROL_NAMESPACE}:${udid}`).catch((err: unknown) => {
       if (err instanceof ServiceNotFoundError) return;
       process.stderr.write(
@@ -741,11 +711,12 @@ async function bootIos(
   // Simulator.app only attaches the GUI window, which surfaces streaming through
   // simulator-server don't need. ARGENT_SIMULATOR_NO_WINDOW forces the same skip
   // host-wide.
+  let note: string | undefined;
   if (!headless && !iosHeadlessFromEnv() && !deviceSet) {
     // Best-effort: a missing GUI app never fails a boot whose core is already up.
-    await openSimulatorWindow(udid).catch(() => {});
+    note = await openSimulatorWindow(udid).catch(() => undefined);
   }
-  return { platform: "ios", udid, booted: true };
+  return { platform: "ios", udid, booted: true, ...(note ? { note } : {}) };
 }
 
 /**
@@ -755,16 +726,22 @@ async function bootIos(
  * Xcode 27 replaces Simulator.app with Device Hub, which opens the device's
  * own window from a `devices://device/open?id=<udid>` URL; it reports success
  * even when it cannot show the device, so a missing window goes unnoticed.
- * Without either app nothing is opened.
+ * Without either app, or with a Simulator.app on record as crashing at launch,
+ * nothing is opened. Returns a note once the Simulator.app is on record so,
+ * including from the launch that records it.
  */
-async function openSimulatorWindow(udid: string): Promise<void> {
+async function openSimulatorWindow(udid: string): Promise<string | undefined> {
   const timeout = 5_000;
   const { stdout } = await execFileAsync("xcode-select", ["-p"], { timeout });
   const developerDir = realpathSync(stdout.trim());
   const simulatorApp = join(developerDir, "Applications", "Simulator.app");
   if (existsSync(simulatorApp)) {
-    await execFileAsync("open", ["-a", simulatorApp], { timeout });
-    return;
+    const launched = await launchSimulatorApp(simulatorApp, () =>
+      execFileAsync("open", ["-a", simulatorApp], { timeout })
+    );
+    return launched
+      ? undefined
+      : `${simulatorApp} exits right after launch on this host, so Argent no longer opens it and the device runs without a window. Delete ~/.argent/simulator-app-launch.json to try opening it again.`;
   }
   const deviceHubApp = join(developerDir, "..", "Applications", "DeviceHub.app");
   if (existsSync(deviceHubApp)) {
@@ -810,14 +787,19 @@ async function bootIosRemote(
     simState = undefined;
   }
 
-  if (force && simState === "Booted") {
+  const booting = simState === "Booting";
+  // A booting one is waited for first, so the shutdown sees it Booted.
+  if (force && booting) {
+    await simRemoteBootstatus(id, { boot: true });
+  }
+  if (force && (simState === "Booted" || booting)) {
     await simRemoteShutdown(id).catch(() => undefined);
   }
 
-  // A `Booted` error from sim-remote just means it is already up; bootstatus
-  // below normalizes the state either way.
+  // A `Booted` or `Booting` error from sim-remote just means it is up or on its
+  // way; bootstatus below waits for it either way.
   await simRemoteBoot(id).catch((err: Error) => {
-    if (!/Booted/i.test(err.message)) throw err;
+    if (!/Booted|current state: Booting\b/i.test(err.message)) throw err;
   });
   await simRemoteBootstatus(id, { boot: true });
 
@@ -2190,6 +2172,31 @@ function bootHarmony(params: {
   return tracked;
 }
 
+/** The capability gate admits these ids for the other parameters, so they can arrive as a `udid`. */
+const NON_IOS_UDID_HINT: Record<"android" | "chromium" | "vega", string> = {
+  android: "Boot an Android emulator by passing `avdName` (an AVD name from `list-devices`).",
+  chromium:
+    "A Chromium app listed by `list-devices` is already running and needs no boot; to start an Electron app, pass `electronAppPath`.",
+  vega: "Boot a Vega (Fire TV) Virtual Device by passing `vvdImage`.",
+};
+
+/**
+ * `classifyDevice` calls every unrecognised id `android`; only an `emulator-`
+ * serial is known to be one. Off macOS, `undefined` leaves `bootIos` to say
+ * that no simulator can boot there.
+ */
+function nonIosUdidHint(
+  udid: string,
+  platform: "android" | "chromium" | "vega"
+): string | undefined {
+  if (platform !== "android" || isAndroidEmulatorSerial(udid)) return NON_IOS_UDID_HINT[platform];
+  if (process.platform !== "darwin") return undefined;
+  return (
+    "Copy it exactly. " +
+    "An Android emulator boots through `avdName`; a connected Android phone needs no boot."
+  );
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true },
   appleRemote: { simulator: true },
@@ -2199,27 +2206,110 @@ const capability: ToolCapability = {
   harmony: { emulator: true },
 };
 
+// The exactly-one check over `udid`/`avdName`/`vvdImage`/`harmonyInstance`/`electronAppPath`
+// lives in `execute`; the tool description states the constraint for MCP clients.
+const zodSchema = z.object({
+  udid: z.string().optional().describe("iOS: simulator UDID to boot (from `list-devices`)."),
+  avdName: z
+    .string()
+    .optional()
+    .describe(
+      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`)."
+    ),
+  vvdImage: z
+    .string()
+    .optional()
+    .describe(
+      "Vega (Fire TV): VVD image to boot: the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`)."
+    ),
+  harmonyInstance: z
+    .string()
+    .optional()
+    .describe(
+      'HarmonyOS: emulator instance to start: the `name` of a `kind: "emulator"` device from `list-devices` (e.g. `Phone_1`); the `harmony-emulator-<name>` id that entry reports as its `udid` is accepted too.'
+    )
+    .meta({ [FLAG_META_KEY]: HARMONY_FLAG }),
+  bootTimeoutMs: z
+    .number()
+    .int()
+    .min(30_000)
+    .max(900_000)
+    .optional()
+    .describe(
+      "Android/Vega<flag:harmonyos>/HarmonyOS</flag:harmonyos>: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega<flag:harmonyos>, 180000 (3 min) on HarmonyOS, where with `force` it spans the shutdown as well as the boot</flag:harmonyos>."
+    ),
+  force: z
+    .boolean()
+    .optional()
+    .describe(
+      "Shut down and re-boot the device even if already running.<flag:harmonyos> On HarmonyOS it is also what ties an already-running instance to its `hdc` connect key: without it the instance is left alone and its key stays unresolved (`list-devices` lists the keys, but not which instance each belongs to).</flag:harmonyos> Ignored for Electron, which always spawns a fresh process."
+    ),
+  sound: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android only (argent never mutes other platforms): boot the emulator with audio output enabled. Defaults to false, so several agent-driven emulators don't all play sound on the host; pass `true` when the task involves playing, hearing, or testing audio. Takes effect at boot: if the emulator is already running muted, add `force: true`. The first boot after toggling is a slower cold boot (the snapshot was saved in the other audio mode). The `boot-sound` argent flag flips this default to true."
+    ),
+  guestVulkan: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android on a macOS host only: boot the emulator with guest Vulkan. Defaults to false: guest Vulkan crashes Chrome's GPU process, which breaks Chrome and Custom Tab sign-in flows. Without it apps find no Vulkan device, although the guest still lists the Vulkan features, so a Vulkan-only renderer such as WebGPU (react-native-wgpu) draws nothing; pass `true` to test one. Takes effect at boot: an emulator already running in the other mode is reused with a `note`, and `force: true` reboots it. A boot snapshot saved in the other mode can't be reused, so the first boot after toggling is a slower cold boot. The `ARGENT_EMULATOR_GUEST_VULKAN` env var flips this default to true. Ignored on other hosts and platforms."
+    ),
+  headless: z
+    .boolean()
+    .optional()
+    .describe(
+      "iOS only: boot the simulator core WITHOUT opening its GUI window (Simulator.app, or Device Hub on Xcode 27+). The device still streams via simulator-server. The `ARGENT_SIMULATOR_NO_WINDOW` env var (1/true/yes) forces this host-wide."
+    ),
+  electronAppPath: z
+    .string()
+    .optional()
+    .describe(
+      "Electron: path to the Electron app to launch. Either a packaged .app bundle / executable, or a project directory whose package.json points the Electron binary at the entry script."
+    ),
+  electronPort: z
+    .number()
+    .int()
+    .min(1024)
+    .max(65535)
+    .optional()
+    .describe(
+      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `chromium-cdp-<port>`."
+    ),
+  electronArgs: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "Electron-only: extra CLI arguments forwarded to the Electron binary after the app path."
+    ),
+});
+
+type BootDeviceParams = z.infer<typeof zodSchema>;
+
 export function createBootDeviceTool(
   registry: Registry
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
+    // Boots routinely run past the 30s MCP fetch timeout.
+    longRunning: true,
+    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, <flag:harmonyos>start a HarmonyOS emulator, </flag:harmonyos>or spawn an Electron app and wait until it is ready to accept interactions.
+Pass exactly one of 'udid', 'avdName', 'vvdImage', <flag:harmonyos>'harmonyInstance', </flag:harmonyos>or 'electronAppPath'; it picks the platform.
+Use when starting a session, once you have picked a target.
+Returns a tagged payload: { platform: 'ios', udid, booted, note? } or { platform: 'android', serial, avdName, booted, note? } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
+On Android the tool hot-boots from the AVD's default_boot snapshot when usable and falls back to a slower cold boot otherwise. Vega starts the single SDK-managed VVD (~10s). If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.<flag:harmonyos>
+HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for it to register with 'hdc' and returns its connect key as 'udid', the id the interaction tools drive. The manager reports no readiness signal and never names a port. When the key could not be resolved, the payload names the instance instead, and a 'note' is present whenever the boot left something unproven: no key and why, or a key that is not yet answering or could not be checked against the instance. Huawei serves the emulator images only within mainland China, so a host outside it usually has no instance to start; one that already has an image is started like any other.</flag:harmonyos>`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot",
     interaction: {
       startedMsg: ({ params }) => `Starting ${bootTarget(params)}`,
       completedMsg: ({ params }) => `Started ${bootTarget(params)}`,
       failedMsg: ({ params, failureSignal }) =>
         `Failed to start ${bootTarget(params)}: ${failureSignal.error_code}`,
     },
-    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, <flag:harmonyos>start a HarmonyOS emulator, </flag:harmonyos>or spawn an Electron app and wait until it is ready to accept interactions.
-Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), <flag:harmonyos>'harmonyInstance' for a HarmonyOS emulator instance (the 'name' of a harmony device from list-devices), </flag:harmonyos>or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
-Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, note? } or { platform: 'vega', serial, vvdImage, booted } or <flag:harmonyos>{ platform: 'harmony', udid, instanceName, booted, note? } or </flag:harmonyos>{ platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
-Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.<flag:harmonyos>
-HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for it to register with 'hdc' and returns its connect key as 'udid', the id the interaction tools drive. The manager itself reports no readiness signal and never names a port, so an instance that is already running is left alone unless you pass 'force: true'; when the key could not be resolved the payload names the instance instead, and a 'note' is present whenever the boot left something unproven: no key and why, or a key that is not yet answering or could not be checked against the instance. Huawei serves the emulator images only within mainland China, so a host outside it usually has no instance to start; one that already has an image is started like any other.</flag:harmonyos>`,
-    alwaysLoad: true,
-    searchHint:
-      "boot start launch simulator emulator avd device session ios android vega vvd firetv <flag:harmonyos>harmony harmonyos deveco </flag:harmonyos>cold hot",
-    zodSchema,
     capability,
     services: () => ({}),
     async execute(_services, params) {
@@ -2230,7 +2320,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
       const hasElectron = Boolean(params.electronAppPath);
       const provided = [hasUdid, hasAvd, hasVega, hasHarmony, hasElectron].filter(Boolean).length;
       if (provided !== 1) {
-        throw new FailureError(
+        throw new InvalidToolInputError(
           renderFlagGated(
             "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), <flag:harmonyos>`harmonyInstance` (HarmonyOS), </flag:harmonyos>or `electronAppPath` (Electron).",
             isFlagEnabled
@@ -2238,8 +2328,6 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
           {
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
             failure_stage: "boot_device_target_selection",
-            failure_area: "tool_server",
-            error_kind: "validation",
           }
         );
       }
@@ -2274,6 +2362,16 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
         }
         const platform = classifyDevice(params.udid!);
         if (platform === "ios-remote") {
+          const simUdid = stripRemotePrefix(params.udid!);
+          if (nativeIdPlatform(simUdid) !== "ios" || isIosPhysicalUdid(simUdid)) {
+            throw new InvalidToolInputError(
+              `'${params.udid}' is not \`remote:<simulator udid>\`.`,
+              {
+                error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+                failure_stage: "boot_device_target_selection",
+              }
+            );
+          }
           return bootIosRemote(params.udid!, registry, params.force);
         }
         // The capability gate admits only HarmonyOS emulator instances here.
@@ -2283,6 +2381,17 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
             bootTimeoutMs: params.bootTimeoutMs ?? HARMONY_BOOT_TIMEOUT_MS,
             force: params.force,
           });
+        }
+        const hint = platform === "ios" ? undefined : nonIosUdidHint(params.udid!, platform);
+        if (hint) {
+          throw new InvalidToolInputError(
+            `\`udid\` takes an iOS simulator UDID from \`list-devices\`; \`${params.udid}\` is not one. ` +
+              hint,
+            {
+              error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+              failure_stage: "boot_device_target_selection",
+            }
+          );
         }
         return bootIos(params.udid!, registry, params.force, params.headless);
       }

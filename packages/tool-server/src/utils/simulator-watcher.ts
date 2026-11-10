@@ -13,10 +13,32 @@ import {
   type DeviceSetPath,
 } from "./ios-device-sets";
 import { execSimctl, SimctlTimeoutError } from "./simctl-exec";
+import { xcodeFirstLaunchPending, xcodeInstallInstruction } from "./xcode-first-launch";
 
 const POLL_INTERVAL_MS = 10_000;
 /** Ceiling, in ticks, on the polls skipped while `simctl` keeps timing out (5 min). */
 const MAX_BACKOFF_TICKS = 29;
+
+/**
+ * Cap on {@link firstSimulatorPoll}, from startup, so a tool call never waits on
+ * the watcher for longer.
+ */
+const FIRST_POLL_WAIT_MS = 15_000;
+
+let firstPollSettled: Promise<void> = Promise.resolve();
+
+/**
+ * Settles once a poll has read the booted simulators and attempted injection for
+ * each, once a tick finds Xcode's component install pending (no poll runs and
+ * `simctl` launches nothing), or {@link FIRST_POLL_WAIT_MS} after startup.
+ * Settled when no watcher runs. Awaited by whatever can start an app without
+ * arming injection itself, so the app does not start uninjected: open-url, the
+ * native profiler's malloc relaunch, and the simulator-server and tv-control
+ * services every input to a local iOS or Apple TV simulator goes through.
+ */
+export function firstSimulatorPoll(): Promise<void> {
+  return firstPollSettled;
+}
 
 async function getBootedUdidsInSet(
   deviceSet: DeviceSetPath,
@@ -99,6 +121,38 @@ export function startSimulatorWatcher(registry: Registry): {
    */
   let consecutiveTimeouts = 0;
   let ticksToSkip = 0;
+  let markArmed!: () => void;
+  const armed = new Promise<void>((resolve) => (markArmed = resolve));
+  firstPollSettled = Promise.race([
+    armed,
+    new Promise<void>((resolve) => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
+  ]);
+  /** Whether the current wait for Xcode's component install has been logged. */
+  let firstLaunchReported = false;
+
+  /**
+   * True while `simctl` would start Xcode's component install, so this tick must
+   * not call it. A tick like that calls no `simctl` and restarts no `xcodebuild`, so
+   * it is no timeout: it also drops any backoff, or the first poll after the
+   * install would wait out what is left of it.
+   */
+  function simctlWouldStartInstall(): boolean {
+    if (!xcodeFirstLaunchPending("simctl")) {
+      firstLaunchReported = false;
+      return false;
+    }
+    consecutiveTimeouts = 0;
+    ticksToSkip = 0;
+    markArmed();
+    if (!firstLaunchReported) {
+      firstLaunchReported = true;
+      process.stderr.write(
+        `[simulator-watcher] Xcode has not finished installing its system components, so ` +
+          `simulators are not polled until it has. To install them, ${xcodeInstallInstruction()}.\n`
+      );
+    }
+    return true;
+  }
 
   /**
    * Split the booted set into the simulators the watcher may drive and the ones
@@ -211,7 +265,7 @@ export function startSimulatorWatcher(registry: Registry): {
         if (consecutiveTimeouts === 1) {
           process.stderr.write(
             `[simulator-watcher] ${err.message}; retrying with backoff until it does. ` +
-              `If Xcode was just updated, open Xcode once or run \`sudo xcodebuild -runFirstLaunch\`.\n`
+              `If Xcode was just updated, ${xcodeInstallInstruction()}.\n`
           );
         }
       }
@@ -233,14 +287,19 @@ export function startSimulatorWatcher(registry: Registry): {
 
     for (const [udid, service] of trackedServices) {
       if (!booted.has(udid)) continue;
-      const failure = service.getInitFailure();
-      if (failure && !failure.givenUp) {
+      /**
+       * Not only after a recorded failure: a setup refused while Xcode's install
+       * was pending records none, and nothing else arms the simulator for an app
+       * launched outside argent.
+       */
+      if (!service.isEnvSetup() && !service.getInitFailure()?.givenUp) {
         pendingAttempts.push(service.ensureEnvReady().catch(() => {}));
       }
     }
 
-    if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
-    else pendingAttempts.forEach((p) => p.catch(() => {}));
+    // Neither attempt kind rejects: initUdid and the ensureEnvReady retry catch.
+    const attempted = Promise.all(pendingAttempts).then(markArmed);
+    if (shouldBlockUntilSettled) await attempted;
 
     /**
      * Shut down, so there is no environment left to hand anywhere, launchd took
@@ -254,10 +313,10 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // Awaited: the server does not bind until ensureEnv has been attempted for
-  // every booted simulator, so launch-app cannot race it.
-  // The simctl call is bounded, so this resolves even when simctl hangs.
-  const ready = poll(true);
+  // Settles once ensureEnv has been attempted for every simulator booted at
+  // start, once the bounded simctl call fails, or at once while Xcode's install
+  // is pending, when nothing is attempted.
+  const ready = simctlWouldStartInstall() ? Promise.resolve() : poll(true);
 
   // A tick that lands while the previous poll is still running, or inside the
   // backoff after a timeout, is skipped, so a slow simctl never has more than one
@@ -265,6 +324,7 @@ export function startSimulatorWatcher(registry: Registry): {
   let inFlight: Promise<void> | null = ready.catch(() => {}).finally(() => (inFlight = null));
   const interval = setInterval(() => {
     if (inFlight) return;
+    if (simctlWouldStartInstall()) return;
     if (ticksToSkip > 0) {
       ticksToSkip -= 1;
       return;

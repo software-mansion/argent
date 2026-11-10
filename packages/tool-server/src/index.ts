@@ -203,7 +203,7 @@ export function start(): void {
   const serverStartedAt = Date.now();
   const updateChecker = startUpdateChecker();
 
-  const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
+  const { stop: stopWatcher } = startSimulatorWatcher(registry);
 
   let server: ReturnType<typeof httpHandle.app.listen> | null = null;
 
@@ -408,12 +408,14 @@ export function start(): void {
     },
   });
 
-  // Do not bind until the first watcher poll has attempted dylib injection for
-  // every booted simulator (so launch-app cannot race it) and the identity
-  // warm-up has settled (so the accept path never pays for it).
-  Promise.all([watcherReady, identityWarm])
+  // Bind once the identity warm-up settles, so the accept path never pays for it.
+  // Not on the watcher's first poll: on a cold CoreSimulatorService its
+  // `simctl list` runs to its 10s timeout, which with process startup can pass
+  // the launcher's 15s ready timeout. What can start an iOS app either arms
+  // injection itself (launch-app, restart-app) or waits for that poll
+  // (firstSimulatorPoll).
+  identityWarm
     .then(() => {
-      // A shutdown during startup aborts the first poll, which settles ready.
       if (shuttingDown) return;
       server = httpHandle.app.listen(PORT, HOST, () => {
         // Past this point a crash is a serving-time fault, not a startup fault.
@@ -517,8 +519,8 @@ export function start(): void {
           },
         });
         shutdownReason = "crash";
-        // The readiness gate rejected before the listener bound, so this is always
-        // a startup crash. Best-effort: fall back to phase-only if describeCrash
+        // Only a throw before the listener bound lands here, so this is always a
+        // startup crash. Best-effort: fall back to phase-only if describeCrash
         // itself throws.
         try {
           shutdownCrashDiagnostics = describeCrash(err, "startup");
