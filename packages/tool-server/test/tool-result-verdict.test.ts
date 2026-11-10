@@ -171,6 +171,34 @@ describe("directCallFailure", () => {
     expect(directCallFailure("gesture-tap", { error: "x" })).toBeUndefined();
   });
 
+  it("fails a debugger-component-tree error string, and passes a tree", () => {
+    expect(directCallFailure("debugger-component-tree", "Error: No fiber roots")).toBe(
+      "debugger-component-tree failed: No fiber roots"
+    );
+    expect(
+      directCallFailure(
+        "debugger-component-tree",
+        "[device: iPhone | app: Demo]\nView (tap: 0.50,0.50)"
+      )
+    ).toBeUndefined();
+    expect(directCallFailure("describe", "Error: x")).toBeUndefined();
+  });
+
+  it("fails a native-profiler-analyze that could not analyze the trace", () => {
+    expect(
+      directCallFailure("native-profiler-analyze", {
+        status: "analysis_failed",
+        exportErrors: { leaks: "export timed out" },
+      })
+    ).toBe("native-profiler-analyze could not analyze the whole trace (leaks: export timed out)");
+    expect(
+      directCallFailure("native-profiler-analyze", { status: "analysis_failed", exportErrors: {} })
+    ).toBe("native-profiler-analyze could not analyze the whole trace");
+    expect(
+      directCallFailure("native-profiler-analyze", { status: "ok", exportErrors: {} })
+    ).toBeUndefined();
+  });
+
   it("sends the verdict's reason for any other tool", () => {
     expect(directCallFailure("debugger-log-registry", notConnected)).toBe(
       "debugger not connected (metro_not_running): nothing on 8081 — start Metro"

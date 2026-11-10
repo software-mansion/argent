@@ -79,13 +79,26 @@ const STATUS_TOOLS: ReadonlySet<string> = new Set(["debugger-status", "native-de
 
 /**
  * The reason a direct call of `tool` failed though it returned, for the HTTP
- * `failure` field. Also a `debugger-inspect-element` `{ error }`, which the e2e
- * runner and recorder take as a step's result.
+ * `failure` field. Also a `debugger-inspect-element` `{ error }`, a
+ * `debugger-component-tree` `Error: ...` and a `native-profiler-analyze`
+ * `analysis_failed`, which the e2e runner and recorder take as a step's result.
  */
 export function directCallFailure(tool: string, result: unknown): string | undefined {
   if (STATUS_TOOLS.has(tool)) return undefined;
   if (tool === "debugger-inspect-element" && isRecord(result) && typeof result.error === "string") {
     return `debugger-inspect-element failed: ${result.error}`;
+  }
+  // A tree always starts with its `[device: ...]` line.
+  if (tool === "debugger-component-tree" && typeof result === "string") {
+    return result.startsWith("Error: ")
+      ? `debugger-component-tree failed: ${result.slice("Error: ".length)}`
+      : undefined;
+  }
+  if (tool === "native-profiler-analyze" && isRecord(result)) {
+    if (result.status !== "analysis_failed") return undefined;
+    const errors = isRecord(result.exportErrors) ? Object.entries(result.exportErrors) : [];
+    const detail = errors.map(([name, error]) => `${name}: ${String(error)}`).join("; ");
+    return `native-profiler-analyze could not analyze the whole trace${detail ? ` (${detail})` : ""}`;
   }
   return toolResultVerdict(tool, result)?.reason;
 }

@@ -216,7 +216,9 @@ The tool-server adds a `failure` field beside `data` when the result of a call r
 | `run-sequence`                                                                                                    | A step stops the sequence, or the sequence is aborted                                                |
 | `debugger-log-registry`                                                                                           | The debugger is not connected                                                                        |
 | `debugger-inspect-element`                                                                                        | The result has an `error`                                                                            |
+| `debugger-component-tree`                                                                                         | The result starts with `Error: `                                                                     |
 | `launch-app`, `restart-app`, and the `native-*` tools other than `native-devtools-status` and `native-profiler-*` | The native-devtools precheck stops the tool                                                          |
+| `native-profiler-analyze`                                                                                         | `status` is `analysis_failed`                                                                        |
 | `e2e-add-script`                                                                                                  | The script does not pass                                                                             |
 | `e2e-add-step`                                                                                                    | The call records no step                                                                             |
 
