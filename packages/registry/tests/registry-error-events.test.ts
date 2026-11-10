@@ -237,6 +237,34 @@ describe("Registry — failure signals", () => {
     });
   });
 
+  it("hands the cancelled signal to the tool's failedMsg", async () => {
+    const registry = new Registry();
+    const controller = new AbortController();
+    registry.registerTool({
+      id: "drag-tool",
+      services: () => ({}),
+      execute: async () => {
+        controller.abort();
+        throw new Error("lift refused");
+      },
+      interaction: {
+        failedMsg: ({ failureSignal }: { failureSignal: { error_code: string } }) =>
+          `Failed to drag: ${failureSignal.error_code}`,
+      },
+    } as never);
+
+    let failedMsg: string | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, _error, _duration, msg) => {
+      failedMsg = msg;
+    });
+
+    await expect(
+      registry.invokeTool("drag-tool", {}, { signal: controller.signal })
+    ).rejects.toThrow("lift refused");
+
+    expect(failedMsg).toBe(`Failed to drag: ${FAILURE_CODES.REGISTRY_TOOL_CALL_CANCELLED}`);
+  });
+
   it("classifies an unclassified failure after its caller's abort as cancelled", async () => {
     const registry = new Registry();
     const controller = new AbortController();
