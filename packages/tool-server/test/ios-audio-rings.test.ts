@@ -321,3 +321,62 @@ describe("OutputRecorder", () => {
     expect(fs.existsSync(path.join(dir, "out.wav"))).toBe(false);
   });
 });
+
+/**
+ * The hook in the app maps these files with its own copy of the layout (ArgentAudio.c in argent-private:
+ * `InRing`, `OutRing`, `RING_HDR`, `MAGIC_IN`, `MAGIC_OUT`, `OUT_MAX_CH`). Neither side can see the other's
+ * constants, so they are pinned here.
+ */
+describe("ring layout shared with the hook", () => {
+  const header = (ringPath: string) => {
+    const app = new FakeApp(ringPath);
+    const fields = Array.from({ length: 19 }, (_, i) => app.u32(i * 4));
+    app.close();
+    return fields;
+  };
+
+  it("in ring: magic, version, rate, cap, then the host counters at 16/20/24 and the app's at 64/68/72", () => {
+    const feeder = new InputFeeder(path.join(dir, "in.ring"), {
+      kind: "tone",
+      frequencyHz: 1000,
+      amplitude: 0.5,
+    });
+    feeder.step();
+    expect(fs.statSync(feeder.ringPath).size).toBe(HDR + CAP * 4);
+    const h = header(feeder.ringPath);
+    expect(h.slice(0, 4)).toEqual([0x49475241, 1, STREAM_RATE, 65_536]);
+    expect(h[4]).toBeGreaterThan(0); // 16 writeFrame
+    expect(h[5]).toBe(1); // 20 streamGen
+    expect(h[6]).toBe(0); // 24 streamStart
+    expect(h.slice(7, 16)).toEqual(Array(9).fill(0)); // 28..63 padding
+    expect(h.slice(16, 19)).toEqual([0, 0, 0]); // 64 readFrame, 68 requestGen, 72 owner: the app's
+    feeder.stop();
+  });
+
+  it("out ring: magic, version, cap, max channels 8, then the app's counters at 16/20/24", () => {
+    const rec = new OutputRecorder(path.join(dir, "out.ring"), path.join(dir, "out.wav"));
+    expect(fs.statSync(rec.ringPath).size).toBe(HDR + CAP * 8 * 4);
+    const h = header(rec.ringPath);
+    expect(h.slice(0, 4)).toEqual([0x4f475241, 1, 65_536, 8]);
+    expect(h.slice(4, 7)).toEqual([0, 0, 0]); // channels, rate, writeFrame
+    rec.abort();
+  });
+
+  const source = path.resolve(
+    __dirname,
+    "../../argent-private/packages/native-devtools-ios/Sources/NativeDevtoolsIos/ArgentAudio.c"
+  );
+  it.skipIf(!fs.existsSync(source))("matches the constants of ArgentAudio.c", async () => {
+    const c = fs.readFileSync(source, "utf8");
+    const define = (name: string) => new RegExp(`#define ${name} ([^\\s/]+)`).exec(c)?.[1];
+    expect(define("RING_HDR")).toBe(String(HDR));
+    expect(define("MAGIC_IN")).toBe("0x49475241u");
+    expect(define("MAGIC_OUT")).toBe("0x4F475241u");
+    expect(define("OUT_MAX_CH")).toBe("8u");
+    const { AUDIO_HOOK_PROTO } = await import("../src/utils/ios-audio");
+    expect(define("PROTO")).toBe(String(AUDIO_HOOK_PROTO));
+    // The hook refuses a ring larger than this.
+    expect(c).toMatch(/#define RING_MAX_CAP \(1u << 20\)/);
+    expect(CAP).toBeLessThanOrEqual(1 << 20);
+  });
+});
