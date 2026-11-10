@@ -114,7 +114,7 @@ async function main() {
   }
   const rowLine = beforeText.split("\n").find((line) => line.includes("ArgentVisibleRow"));
   const rowFrame = rowLine
-    ?.match(/\(([\d.]+), ([\d.]+), ([\d.]+), ([\d.]+)\)\s*$/)
+    ?.match(/\(([\d.]+),([\d.]+),([\d.]+),([\d.]+)\)\s*$/)
     ?.slice(1)
     .map(Number);
   if (!rowFrame) fail("describe printed no frame for ArgentVisibleRow", rowLine);
