@@ -70,16 +70,30 @@ export function buildChromiumFillScript(text: string): string {
     if (!control) {
       // Focus in a closed shadow root stops at its host. An element that can
       // host one is focusable itself only as a tab stop, an editing host or a
-      // box the user can scroll; one with focus that is none of these holds it
-      // in a closed shadow root.
+      // box the user can scroll; one with focus that is none of these, or whose
+      // selection is in its shadow tree, holds it in a closed shadow root. The
+      // browser shows such a selection collapsed before the host, or in place
+      // when the page set it there.
       const scrolls = (style) =>
         (/^(auto|scroll)$/.test(style.overflowY) && el.scrollHeight > el.clientHeight) ||
         (/^(auto|scroll)$/.test(style.overflowX) && el.scrollWidth > el.clientWidth);
+      const inShadow = (node, offset) => {
+        if (node == null) return false;
+        if (node === el.parentNode && node.childNodes[offset] === el) return true;
+        for (let root = node.getRootNode(); root.host; root = root.host.getRootNode()) if (root.host === el) return true;
+        return false;
+      };
+      const selectionInShadow = () => {
+        if (el.shadowRoot) return false;
+        const sel = el.getRootNode().getSelection();
+        return inShadow(sel.anchorNode, sel.anchorOffset) && inShadow(sel.focusNode, sel.focusOffset);
+      };
       const closedHost =
         /-|^(article|aside|blockquote|div|footer|h[1-6]|header|main|nav|p|section|span)$/.test(tag) &&
-        !el.hasAttribute("tabindex") &&
-        (el.isContentEditable !== true || (el.parentElement !== null && el.parentElement.isContentEditable === true)) &&
-        !scrolls(win.getComputedStyle(el));
+        ((!el.hasAttribute("tabindex") &&
+          (el.isContentEditable !== true || (el.parentElement !== null && el.parentElement.isContentEditable === true)) &&
+          !scrolls(win.getComputedStyle(el))) ||
+          selectionInShadow());
       if (closedHost) return { status: "unsupported", detail: "focus is in a closed shadow root, which fill cannot reach" };
       if (el.isContentEditable !== true) return { status: "no_focus" };
     }

@@ -83,7 +83,12 @@ function makePage(options: PageOptions = {}): Page {
     defaultView: win,
     activeElement: body,
     selected: null as unknown,
+    // A test sets `caret` to place the selection: anchorNode, anchorOffset, focusNode, focusOffset.
+    caret: {},
     getSelection: () => ({
+      anchorNode: null,
+      focusNode: null,
+      ...doc.caret,
       removeAllRanges: () => (doc.selected = null),
       addRange: (range: { node: unknown }) => (doc.selected = range.node),
     }),
@@ -177,6 +182,7 @@ function editable(page: Page, props: Record<string, unknown> = {}) {
     innerText: "old text",
     parentElement: page.doc.body,
     ownerDocument: page.doc,
+    getRootNode: () => page.doc,
     ...props,
   };
 }
@@ -524,6 +530,7 @@ describe("fill page script", () => {
     clientHeight: 20,
     scrollWidth: 100,
     clientWidth: 100,
+    getRootNode: () => (globalThis as any).document,
     ...props,
   });
   const CLOSED = {
@@ -596,6 +603,129 @@ describe("fill page script", () => {
     page.doc.activeElement = child;
     await expect(runScript(page, "x")).resolves.toEqual({ status: "ok", verified: true });
     expect(child.innerText).toBe("x");
+  });
+
+  // A host that can hold focus itself, second in its parent, with the selection placed at `at`.
+  const selfFocusableHost = (
+    page: Page,
+    at: (
+      host: any,
+      parent: any
+    ) => [anchorNode: unknown, anchorOffset: number, focusNode?: unknown, focusOffset?: number],
+    props: Record<string, unknown> = {}
+  ) => {
+    const parent: any = { childNodes: [{}], getRootNode: () => page.doc };
+    const host: any = closedHost("MY-FIELD", {
+      attributes: { tabindex: "-1" },
+      parentNode: parent,
+      ...props,
+    });
+    parent.childNodes.push(host);
+    const [anchorNode, anchorOffset, focusNode = anchorNode, focusOffset = anchorOffset] = at(
+      host,
+      parent
+    );
+    page.doc.caret = { anchorNode, anchorOffset, focusNode, focusOffset };
+    page.doc.activeElement = host;
+    return host;
+  };
+  const beforeHost = (_host: any, parent: any): [unknown, number] => [parent, 1];
+
+  // How the browser shows a selection inside a closed shadow root: collapsed before its host.
+  it.each([
+    ["a tabindex", {}],
+    ["scrolling", { attributes: {}, scrollHeight: 500, overflow: "auto" }],
+  ])(
+    "refuses focus in a closed shadow root of a host that %s makes focusable, whose selection sits there",
+    async (_n, props) => {
+      const page = makePage();
+      selfFocusableHost(page, beforeHost, props);
+      await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+    }
+  );
+
+  it("refuses focus in a closed shadow root of an editing host, leaving its text as it was", async () => {
+    const page = makePage();
+    const host = selfFocusableHost(page, beforeHost, {
+      attributes: {},
+      isContentEditable: true,
+      parentElement: page.doc.body,
+      innerText: "old text",
+    });
+    await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+    expect(host.innerText).toBe("old text");
+    expect(page.doc.selected).toBeNull();
+  });
+
+  it.each([
+    ["its closed shadow root", (host: any) => ({ getRootNode: () => ({ host }) })],
+    [
+      "a shadow root nested in it",
+      (host: any) => ({ getRootNode: () => ({ host: { getRootNode: () => ({ host }) } }) }),
+    ],
+  ])(
+    "refuses focus in a closed shadow root whose page set the selection in %s",
+    async (_n, node) => {
+      const page = makePage();
+      selfFocusableHost(page, (host) => [node(host), 1]);
+      await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+    }
+  );
+
+  it("reads the selection of the host's own tree, a shadow root showing a closed one as before the host", async () => {
+    const page = makePage();
+    const parent: any = { childNodes: [{}] };
+    // The document shows the selection before the open host the shadow root belongs to.
+    page.doc.caret = {
+      anchorNode: page.doc.body,
+      anchorOffset: 0,
+      focusNode: page.doc.body,
+      focusOffset: 0,
+    };
+    const root = {
+      host: {},
+      getRootNode: () => page.doc,
+      getSelection: () => ({
+        anchorNode: parent,
+        anchorOffset: 1,
+        focusNode: parent,
+        focusOffset: 1,
+      }),
+    };
+    const host = closedHost("MY-FIELD", {
+      attributes: { tabindex: "0" },
+      parentNode: parent,
+      getRootNode: () => root,
+    });
+    parent.childNodes.push(host);
+    page.doc.activeElement = { tagName: "X-OUTER", shadowRoot: { activeElement: host } };
+    await expect(runScript(page, "x")).resolves.toEqual(CLOSED);
+  });
+
+  it.each([
+    ["after the host", (_h: any, parent: any): [unknown, number] => [parent, 2]],
+    [
+      "reaching out of the host",
+      (_h: any, parent: any): [unknown, number, unknown, number] => [parent, 1, parent, 0],
+    ],
+    [
+      "in an unrelated shadow root",
+      (): [unknown, number] => [
+        { getRootNode: () => ({ host: { getRootNode: () => (globalThis as any).document } }) },
+        0,
+      ],
+    ],
+    ["nowhere", (): [unknown, number] => [null, 0]],
+  ])("answers no_focus for a host focused itself with the selection %s", async (_n, at) => {
+    const page = makePage();
+    selfFocusableHost(page, at);
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "no_focus" });
+  });
+
+  it("answers no_focus for an open shadow root's host focused itself with the selection in its shadow root", async () => {
+    const page = makePage();
+    selfFocusableHost(page, beforeHost, { shadowRoot: { activeElement: null } });
+    await expect(runScript(page, "x")).resolves.toEqual({ status: "no_focus" });
   });
 
   it("refuses focus in an <embed>, whose document it cannot read", async () => {
