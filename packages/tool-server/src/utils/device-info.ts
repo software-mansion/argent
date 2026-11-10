@@ -54,6 +54,12 @@ export function withRemotePrefix(udid: string): string {
 export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
 
 /**
+ * A native Mac app is a device of its own: `macos-app-<bundle id>`. The bundle
+ * id names one app, so the id stays the same across restarts of the process.
+ */
+export const MACOS_APP_ID_PREFIX = "macos-app-";
+
+/**
  * `vega device list` reports VVD / Fire-TV serials as `amazon-<id>` (e.g.
  * `amazon-4a27df03c9777152`). No known Android adb serial starts with it, but
  * `ro.serialno` is vendor-defined, so a colliding Android serial would be
@@ -137,6 +143,9 @@ export function classifyDevice(udid: string): Platform {
   if (udid.startsWith(VEGA_SERIAL_PREFIX)) return "vega";
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
   if (udid.startsWith(HARMONY_ID_PREFIX)) return "harmony";
+  // By the prefix alone, never by the flag: the capability gate refuses an
+  // unflagged Mac id with a message that names the flag.
+  if (udid.startsWith(MACOS_APP_ID_PREFIX)) return "macos";
   return nativeIdPlatform(udid);
 }
 
@@ -218,4 +227,27 @@ export function parseChromiumCdpPort(udid: string): number | null {
 
 export function chromiumIdFromPort(port: number): string {
   return `${CHROMIUM_ID_PREFIX}${port}`;
+}
+
+/**
+ * A bundle id as macOS accepts it in `CFBundleIdentifier`: letters, digits,
+ * `.` and `-`, starting with a letter or digit. Narrower than the iOS
+ * `BUNDLE_ID_PATTERN`, so a device id never carries `_`, `/` or a shell
+ * metacharacter into a path or an `mdfind` query.
+ */
+const MACOS_BUNDLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9.-]*$/;
+
+export function isMacosBundleId(bundleId: string): boolean {
+  return MACOS_BUNDLE_ID_PATTERN.test(bundleId);
+}
+
+/** The bundle id in a `macos-app-<bundle id>` device id, or null for any other id. */
+export function parseMacosAppBundleId(udid: string): string | null {
+  if (!udid.startsWith(MACOS_APP_ID_PREFIX)) return null;
+  const bundleId = udid.slice(MACOS_APP_ID_PREFIX.length);
+  return isMacosBundleId(bundleId) ? bundleId : null;
+}
+
+export function macosAppIdFromBundleId(bundleId: string): string {
+  return `${MACOS_APP_ID_PREFIX}${bundleId}`;
 }

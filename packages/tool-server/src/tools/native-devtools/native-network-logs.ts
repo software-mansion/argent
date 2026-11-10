@@ -27,10 +27,20 @@ import {
 import { resolveDevice } from "../../utils/device-info";
 import { ensureDeps } from "../../utils/check-deps";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
+import { macosAppServices } from "../../utils/macos-input";
+import { requireMacosAppOfBundle } from "./macos-view-hierarchy";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Device ID from list-devices: an iOS simulator UDID or Android serial"),
-  bundleId: z.string().describe("App bundle ID on iOS or package name on Android"),
+  udid: z
+    .string()
+    .describe(
+      "Device ID from list-devices: an iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id (macos-app-<bundle id>)</flag:macos-apps>"
+    ),
+  bundleId: z
+    .string()
+    .describe(
+      "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
+    ),
   port: metroPortField.describe(
     "Android only: the app's Metro port, whose requests are left out of the listing. Omit it to use this device's port, 8081 by default."
   ),
@@ -119,12 +129,14 @@ export function createNativeNetworkLogsTool(
       apple: { simulator: true },
       appleRemote: { simulator: true },
       android: { emulator: true, device: true },
+      macos: { app: true },
     },
     description: `Retrieve network requests captured at the native level: NSURLProtocol on iOS, OkHttp on Android.
 Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.
 On iOS it sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing. Capture starts at the first call, so the first call is usually empty: repeat the action, then call again.
 On iOS: returns { status, count, events } where each event contains URL, method, status code, headers, and timing.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+<flag:macos-apps>On a Mac app it records NSURLSession requests, react-native-macos fetch included, with the same event fields. The first call turns capture on and earlier requests are not logged: call it once, then repeat the action. Capture stays on across restart-app with an empty log per process, and requests sent while the app starts can be missing. The statuses below are iOS only.
+</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
 On Android: needs a debuggable build. The first call starts capture and usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need: earlier requests are not captured.
 Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
@@ -137,6 +149,7 @@ When status is not_attachable, use view-network-logs and do not retry.`,
       // Stopping must not create the inspector it is asked to stop, and iOS
       // has nothing to stop.
       if (params.stop) return {};
+      if (device.platform === "macos") return macosAppServices(device);
       if (device.platform === "android") {
         const port = metroPort({ device_id: params.udid, port: params.port });
         return { androidNetwork: androidNetworkInspectorRef(device, params.bundleId, port) };
@@ -152,6 +165,18 @@ When status is not_attachable, use view-network-logs and do not retry.`,
       }
 
       const device = resolveDevice(params.udid);
+      if (device.platform === "macos") {
+        const app = requireMacosAppOfBundle(
+          services,
+          device,
+          "native-network-logs",
+          params.bundleId
+        );
+        await app.activateNetworkInspection();
+        const events = app.networkLog().slice(-params.limit);
+        if (params.clear) app.clearNetworkLog();
+        return { status: "ok", count: events.length, events };
+      }
       await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
 
       const api = services.nativeDevtools as NativeDevtoolsApi;
@@ -197,9 +222,11 @@ async function stopAndroidNative(
 ): Promise<AndroidNativeStopped> {
   const device = resolveDevice(params.udid);
   if (device.platform !== "android") {
-    // The iOS devtools can turn network inspection on for an app, never off.
+    // The iOS devtools and the Mac library can turn network inspection on for an app, never off.
     throw new FailureError(
-      "stop applies to Android only. On iOS, network capture stays on for the app until stop-all-simulator-servers stops this device's services and the app restarts.",
+      device.platform === "macos"
+        ? "stop applies to Android only. On a Mac app, network capture stays on until stop-all-simulator-servers stops this device's services or the tool-server stops."
+        : "stop applies to Android only. On iOS, network capture stays on for the app until stop-all-simulator-servers stops this device's services and the app restarts.",
       {
         error_code: FAILURE_CODES.NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED,
         failure_stage: "native_network_logs_stop",

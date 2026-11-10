@@ -1,19 +1,12 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import {
-  nativeDevtoolsRef,
-  precheckNativeDevtools,
-  type NativeDevtoolsApi,
-  type NativeDevtoolsPrecheckBlock,
-} from "../../blueprints/native-devtools";
-import { resolveDevice } from "../../utils/device-info";
-import { ensureDeps } from "../../utils/check-deps";
+import type { NativeDevtoolsPrecheckBlock } from "../../blueprints/native-devtools";
+import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./macos-view-hierarchy";
 
 type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; windows: unknown[]; screen?: unknown };
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("Bundle ID of the app"),
+  ...nativeAppTarget,
   fields: z
     .array(z.string())
     .optional()
@@ -58,7 +51,8 @@ WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especi
 Reduce the output with skipClasses / skipClassPrefixes, fields and maxDepth.
 Use when you need deep layout debugging, finding views with no accessibility labels, or verifying view structure not exposed through the accessibility tree.
 Returns { status: "ok", windows, screen } with the full view hierarchy. screen gives the screen size in points on its portrait axes, and the interfaceOrientation of the UI (portrait, portraitUpsideDown, landscapeLeft, landscapeRight). Each screenFrame uses the portrait axes of the screen. Each windowFrame uses the axes of its window, which turn with the UI.
-If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+<flag:macos-apps>On a Mac app it returns the AppKit view tree of the app's windows, each screenFrame in points from the top-left of the area describe reports. The statuses below are iOS only.
+</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
   readOnly: true,
@@ -68,39 +62,26 @@ An Apple system app is rejected outright (terminal: never retry it).`,
     failedMsg: ({ params, failureSignal }) =>
       `Failed to read native view hierarchy for ${params.bundleId}: ${failureSignal.error_code}`,
   },
-  capability: { apple: { simulator: true }, appleRemote: { simulator: true } },
-  services: (params) => ({
-    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
-  }),
-  async execute(services, params) {
-    const device = resolveDevice(params.udid);
-    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
-
-    const api = services.nativeDevtools as NativeDevtoolsApi;
-
-    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
-    if (blocked) return blocked;
-
-    const rpcParams: Record<string, unknown> = {};
-    if (params.fields !== undefined) rpcParams.fields = params.fields;
-    if (params.skipClasses !== undefined) rpcParams.skipClasses = params.skipClasses;
-    if (params.skipClassPrefixes !== undefined)
-      rpcParams.skipClassPrefixes = params.skipClassPrefixes;
-    if (params.maxDepth !== undefined) rpcParams.maxDepth = params.maxDepth;
-
-    const result = (await api.queryViewHierarchy(
-      params.bundleId,
-      "ViewHierarchy.getFullHierarchy",
-      rpcParams
-    )) as { windows?: unknown[]; screen?: unknown };
-
-    // `screen` is the screen's point size in its portrait-native space, the
-    // space every `screenFrame` is in, and the interface orientation on it;
-    // an older injected build reports none.
-    return {
-      status: "ok",
-      windows: result.windows ?? [],
-      ...(result.screen !== undefined ? { screen: result.screen } : {}),
-    };
+  capability: {
+    apple: { simulator: true },
+    appleRemote: { simulator: true },
+    macos: { app: true },
   },
+  services: nativeAppServices,
+  execute: (services, params) =>
+    queryViewHierarchyFor(
+      services,
+      params,
+      "native-full-hierarchy",
+      "ViewHierarchy.getFullHierarchy",
+      null,
+      (result: { windows?: unknown[]; screen?: unknown }) => ({
+        status: "ok" as const,
+        windows: result.windows ?? [],
+        // `screen` is the screen's point size in its portrait-native space, the
+        // space every `screenFrame` is in, and the interface orientation on it;
+        // an older injected build reports none.
+        ...(result.screen !== undefined ? { screen: result.screen } : {}),
+      })
+    ),
 };
