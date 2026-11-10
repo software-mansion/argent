@@ -98,15 +98,20 @@ async function stopJsLayer(
   const kept = prior?.port === port ? prior : undefined;
   // A capture on another port moves here only once the app's runtime answers here.
   const other = prior && !kept ? prior : undefined;
-  // An app never started here leaves the capture of the port's app as it is.
+  // The port's capture of another app stays as it is: a runtime that names no
+  // app can be that app's, so a stop here could pause or replace it.
   const here = jsCapture(payload);
-  if (!prior && here && here.bundleId !== bundleId) {
-    return {
-      layer: "js",
-      armed: false,
-      total: 0,
-      reason: `${NOT_STARTED}; the capture of ${here.bundleId} on Metro port ${port} stays as it is`,
-    };
+  if (here && here.bundleId !== bundleId) {
+    const stays = `the capture of ${here.bundleId} on Metro port ${port} stays as it is`;
+    if (other) {
+      return {
+        layer: "js",
+        armed: other.intent === "started",
+        total: 0,
+        reason: `${stays}; ${otherPortHint(bundleId, other.port)}`,
+      };
+    }
+    return { layer: "js", armed: false, total: 0, reason: `${NOT_STARTED}; ${stays}` };
   }
   const storeStopped = (paused: boolean): JsCapture => {
     const capture: JsCapture = {

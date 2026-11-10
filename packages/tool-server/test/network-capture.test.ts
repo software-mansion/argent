@@ -1500,6 +1500,35 @@ describe("a JS capture on another Metro port", () => {
     expect(otherRuntime.evaluated).toEqual([]);
   });
 
+  it("stays as it is, with another app's capture on the port, through a stop there on runtimes that name no app", async () => {
+    const rt = new FakeRuntime(undefined);
+    serve(NEW_PORT, IOS_UDID, rt);
+    await start(IOS_UDID, APP, NEW_PORT);
+    const otherRuntime = new FakeRuntime(undefined);
+    serve(PORT, IOS_UDID, otherRuntime);
+    await start(IOS_UDID, OTHER);
+    const captures = structuredClone(jsCapturesOn(IOS_UDID));
+    expect(captures).toEqual([
+      expect.objectContaining({ bundleId: APP, port: NEW_PORT, intent: "started" }),
+      expect.objectContaining({ bundleId: OTHER, port: PORT, intent: "started" }),
+    ]);
+    const evaluated = otherRuntime.evaluated.length;
+
+    const stopped = await stop(IOS_UDID, APP);
+
+    // Capture is still on where it was, so the JS layer is not stopped.
+    expect(layer(stopped, "js")).toEqual({
+      layer: "js",
+      armed: true,
+      total: 0,
+      reason: `the capture of ${OTHER} on Metro port ${PORT} stays as it is; ${hint}`,
+    });
+    expect(jsCapturesOn(IOS_UDID)).toEqual(captures);
+    expect(otherRuntime.evaluated).toHaveLength(evaluated);
+    expect(otherRuntime.paused).toBe(false);
+    expect(rt.paused).toBe(false);
+  });
+
   it("moves to a new port once the app's own runtime answers there", async () => {
     await startedOnNewPort();
     serve(PORT, IOS_UDID, new FakeRuntime(APP));
