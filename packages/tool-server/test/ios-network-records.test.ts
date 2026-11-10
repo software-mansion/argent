@@ -1263,6 +1263,129 @@ describe("iOS native network records: request body still being sent", () => {
     expect(app.request).toHaveBeenCalledTimes(1);
   });
 
+  it("asks the app again once a read it held open during the upload is unanswered 5 s after the upload ended", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    // Within 5 s of the end, a read still waits on the open one.
+    await vi.advanceTimersByTimeAsync(4_000);
+    const soon = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(soon.value).toEqual(refused(NO_ANSWER));
+
+    // Later, the app no longer holds the open read, so the next read asks again.
+    const again = store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    app.sent[1]!.reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+    expect(await store.requestPostData(id)).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the body a read asked again for as read last, past newer bodies read while the first read was open", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = track(store.requestPostData(id));
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(during.value).toEqual(refused(STILL_SENDING));
+    const lastSent = (): SentRead => app.sent[app.sent.length - 1]!;
+    for (let i = 0; i < MAX_CACHED_BODIES; i++) {
+      agent.complete(`r${i}`, `https://e.com/${i}`);
+      const read = store.responseBody(idOf(store, `r${i}`));
+      await settle();
+      lastSent().reply({ body: `body ${i}`, base64Encoded: false, wasTruncated: false });
+      await read;
+    }
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const again = store.requestPostData(id);
+    await settle();
+    lastSent().reply({ postData: "done", base64Encoded: false });
+    expect(await again).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+    const later = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(MAX_CACHED_BODIES + 2);
+    expect(later.value).toEqual(body("done"));
+  });
+
+  it("asks nothing again for a read the app held open and answered", async () => {
+    const { app, store, agent, id } = uploading();
+    const during = store.requestPostData(id);
+    await settle();
+    app.sent[0]!.reply({ postData: "done", base64Encoded: false });
+    expect(await during).toEqual(body("done"));
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await store.requestPostData(id)).toEqual(body("done"));
+    expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("never asks again for a read that waited its turn and went out after the upload ended", async () => {
+    const { app, store, agent, id } = uploading();
+    agent.complete("other", "https://e.com/other");
+    const other = store.responseBody(idOf(store, "other"));
+    await settle();
+    const queued = track(store.requestPostData(id));
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(1);
+
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+    app.sent[0]!.reply({ body: "other", base64Encoded: false, wasTruncated: false });
+    await other;
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(queued.value).toEqual(refused(NO_ANSWER));
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    void store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts the 5 s from the response of the upload, not from its later end", async () => {
+    const { app, store, agent, id } = uploading();
+    void store.requestPostData(id);
+    await settle();
+    await vi.advanceTimersByTimeAsync(5_000);
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    await vi.advanceTimersByTimeAsync(4_000);
+    agent.loadingFinished("upload", 2);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    void store.requestPostData(id);
+    await settle();
+    expect(app.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("never asks again for a read sent after the upload ended, however late the app answers", async () => {
+    const { app, store, agent, id } = uploading();
+    agent.responseReceived("upload", "https://api.example.com/upload");
+    agent.loadingFinished("upload", 2);
+
+    for (let i = 0; i < 4; i++) {
+      const read = track(store.requestPostData(id));
+      await settle();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(read.value).toEqual(refused(NO_ANSWER));
+    }
+    expect(app.request).toHaveBeenCalledTimes(1);
+  });
+
   it("gives the reason by the request's state when the wait ends, not when the read went out", async () => {
     const { store, agent, id } = uploading();
 
