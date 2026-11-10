@@ -117,6 +117,12 @@ describe("native-devtools-status tool", () => {
     expect(mentions.map((file) => path.relative(srcRoot, file))).toEqual([]);
   });
 
+  // Agents get the same status from every native-* tool; the SDK still calls it
+  // directly.
+  it("is hidden from MCP", () => {
+    expect(nativeDevtoolsStatusTool.hideFromMcp).toBe(true);
+  });
+
   it("reports a running uninjected app as needing restart", async () => {
     const { api, ensureEnvReady } = makeNativeApi({ appRunning: true, connected: false });
 

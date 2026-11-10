@@ -105,9 +105,7 @@ describe("flow-start-recording", () => {
     expect(result.message).toContain("test-flow");
 
     const content = await readFlowFile("test-flow");
-    const flow = parseFlow(content);
-    expect(flow.executionPrerequisite).toBe(PREREQ);
-    expect(flow.steps).toEqual([]);
+    expect(content).toBe(`version: 1\nsteps: []\nexecutionPrerequisite: ${PREREQ}\n`);
   });
 
   it("opens a recording addressable by name + project_root", async () => {
@@ -2564,6 +2562,9 @@ describe("flow-execute", () => {
     });
     // Should NOT have a steps array — it's a notice, not a run result
     expect(result).not.toHaveProperty("steps");
+    // Nor any device work: this answer stands in for e2e-read-prerequisite,
+    // which is hidden from MCP.
+    expect(registry.invokeTool).not.toHaveBeenCalled();
   });
 
   it("runs normally when prerequisite exists and is acknowledged", async () => {

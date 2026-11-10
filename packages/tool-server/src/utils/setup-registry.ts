@@ -9,6 +9,7 @@ import { chromiumCdpBlueprint } from "../blueprints/chromium-cdp";
 import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-runtime-debugger";
 import { tvControlBlueprint } from "../blueprints/tv-control";
 import { androidTvControlBlueprint } from "../blueprints/android-tv-control";
+import { macosAppBlueprint } from "../blueprints/macos-app";
 import { androidNetworkInspectorBlueprint } from "../blueprints/android-network-inspector";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { createNativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
@@ -98,6 +99,8 @@ import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
+import { filePanelTool } from "../tools/file-panel";
+import { menuBarTool } from "../tools/menu-bar";
 import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
 import { resolveDevice } from "./device-info";
 import { setLivePanelSourceProvider } from "./foldable";
@@ -129,6 +132,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(chromiumJsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(tvControlBlueprint);
   registry.registerBlueprint(androidTvControlBlueprint);
+  registry.registerBlueprint(macosAppBlueprint);
   registry.registerBlueprint(androidNetworkInspectorBlueprint);
 
   registry.registerTool(listDevicesTool);
@@ -156,6 +160,8 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(createKeyboardTool(registry));
   registry.registerTool(createPasteTool(registry));
+  registry.registerTool(filePanelTool);
+  registry.registerTool(menuBarTool);
   registry.registerTool(createRotateTool(registry));
   registry.registerTool(shakeTool);
   registry.registerTool(foldTool);

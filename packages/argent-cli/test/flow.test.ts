@@ -2190,6 +2190,7 @@ describe("argent e2e run", () => {
   // resolution included, and cannot license a claim about the YAML.
   it.each([
     ["FLOW_FILE_INVALID", "not run (invalid e2e test)"],
+    ["FLOW_FILE_NEWER_VERSION", "not run (needs a newer Argent)"],
     ["FLOW_DEVICE_RESOLUTION", "not run (no device resolved)"],
     ["FLOW_REQUIREMENTS_UNMET", "not run (requires not met)"],
     ["A_CODE_THIS_CLI_DOES_NOT_MAP", "not run (rejected)"],
@@ -2652,6 +2653,7 @@ describe("argent e2e run <dir>", () => {
     ["FLOW_FILE_INVALID", "not run (invalid e2e test)"],
     ["FLOW_ENTRY_UNRECOGNIZED", "not run (invalid e2e test)"],
     ["FLOW_E2E_HAS_PREREQUISITE", "not run (invalid e2e test)"],
+    ["FLOW_FILE_NEWER_VERSION", "not run (needs a newer Argent)"],
     ["FLOW_DEVICE_RESOLUTION", "not run (no device resolved)"],
     ["A_CODE_THIS_CLI_DOES_NOT_MAP", "not run (rejected)"],
   ])("renders a %s rejection as %j", async (errorCode, verdict) => {
