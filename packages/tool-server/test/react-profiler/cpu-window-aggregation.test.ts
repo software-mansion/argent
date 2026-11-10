@@ -210,15 +210,17 @@ describe("renderComponentCpu — which same-name frames count as outermost", () 
   });
 
   it("follows the parent each node's time is attributed to when a profile lists a child twice", () => {
-    // walk (5) is listed under both `a` and `b`; its time goes up through `b`,
-    // the later parent, so `a`'s walk does not enclose it. 99 is listed but absent.
+    // walk (5) is listed under both walk (2) and `b`; its time goes up through
+    // `b`, the later parent, so walk (2) does not enclose it and both count:
+    // 2ms + 2ms. `step` lifts Total above Self, past the Self clamp. 99 is listed but absent.
     const nodeMap = new Map<number, HermesProfileNode>();
     nodeMap.set(1, mk(1, "(root)", [2, 3, 99]));
-    nodeMap.set(2, mk(2, "walk", [5]));
+    nodeMap.set(2, mk(2, "walk", [5, 4]));
     nodeMap.set(3, mk(3, "b", [5]));
+    nodeMap.set(4, mk(4, "step", []));
     nodeMap.set(5, mk(5, "walk", []));
-    const md = run(nodeMap, [2, 5, 5]);
-    expect(readRow(md, "walk")).toEqual({ self: 3, total: 3 });
+    const md = run(nodeMap, [2, 4, 5, 5]);
+    expect(readRow(md, "walk")).toEqual({ self: 3, total: 4 });
   });
 
   it("looks up each parent link a bounded number of times on a deep recursion", () => {
