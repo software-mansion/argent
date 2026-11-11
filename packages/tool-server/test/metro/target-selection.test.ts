@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
-import { selectTarget } from "../../src/utils/debugger/target-selection";
+import { describe, it, expect, beforeEach } from "vitest";
+import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
+import { selectTarget, resetSeenLogicalDeviceIds } from "../../src/utils/debugger/target-selection";
 import type { CDPTarget } from "../../src/utils/debugger/discovery";
 
 function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
@@ -14,6 +14,10 @@ function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
 }
 
 describe("selectTarget", () => {
+  beforeEach(() => {
+    resetSeenLogicalDeviceIds();
+  });
+
   it("prefers Fusebox target", () => {
     const fusebox = makeTarget({
       id: "fusebox",
@@ -265,5 +269,103 @@ describe("selectTarget", () => {
 
     const result = selectTarget([t1, t2], 8081, { deviceId: "anything" });
     expect(result.target.id).toBe("second");
+  });
+
+  describe("when a previously attached device has left Metro", () => {
+    // Real repro: an iOS simulator and an Android emulator share Metro 8081.
+    // The Android app dies, so its target disappears. A call still naming the
+    // Android logicalDeviceId must not fall back to the iPhone.
+    const IPHONE_ID = "f8e3d987f6b3e9268503fc0fcb3d5d9f1da875d9";
+    const ANDROID_ID = "904f32cb7611d7a43b99a5276e18506a3505b892";
+
+    const iphone = () =>
+      makeTarget({
+        id: "iphone",
+        deviceName: "iPhone 17 Pro",
+        webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=0&page=1",
+        reactNative: { logicalDeviceId: IPHONE_ID, capabilities: { prefersFuseboxFrontend: true } },
+      });
+    const android = () =>
+      makeTarget({
+        id: "android",
+        deviceName: "sdk_gphone64_arm64 - 16 - API 36",
+        webSocketDebuggerUrl: "ws://10.0.2.2:8081/inspector/debug?device=1&page=1",
+        reactNative: {
+          logicalDeviceId: ANDROID_ID,
+          capabilities: { prefersFuseboxFrontend: true },
+        },
+      });
+
+    function selectGoneAndroid(): unknown {
+      selectTarget([iphone(), android()], 8081, { deviceId: IPHONE_ID });
+      try {
+        selectTarget([iphone()], 8081, { deviceId: ANDROID_ID });
+      } catch (err) {
+        return err;
+      }
+      return undefined;
+    }
+
+    it("throws a FailureError instead of routing to the remaining device", () => {
+      const thrown = selectGoneAndroid();
+
+      expect(thrown).toBeInstanceOf(FailureError);
+    });
+
+    it("carries the DEBUGGER_METRO_NO_TARGETS signal", () => {
+      const thrown = selectGoneAndroid();
+
+      expect(getFailureSignal(thrown)).toMatchObject({
+        error_code: FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
+        failure_stage: "debugger_select_target",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      });
+    });
+
+    it("names the requested id and says the device is no longer attached", () => {
+      const thrown = selectGoneAndroid();
+
+      expect((thrown as Error | undefined)?.message).toMatch(
+        new RegExp(`${ANDROID_ID}[\\s\\S]*no longer attached`)
+      );
+    });
+
+    it("names the device still on Metro so the caller is not misled", () => {
+      const thrown = selectGoneAndroid();
+
+      expect((thrown as Error | undefined)?.message).toContain(`iPhone 17 Pro (${IPHONE_ID})`);
+    });
+
+    it("still falls back for an id never seen as a logicalDeviceId", () => {
+      // Earlier pools saw two logical ids; a simulator UDID is neither, so the
+      // single-device convenience must still apply.
+      selectTarget(
+        [
+          makeTarget({ id: "a", reactNative: { logicalDeviceId: "seen-a-1111" } }),
+          makeTarget({
+            id: "b",
+            webSocketDebuggerUrl: "ws://localhost:8081/inspector/debug?device=1&page=1",
+            reactNative: { logicalDeviceId: "seen-b-2222" },
+          }),
+        ],
+        8081,
+        { deviceId: "seen-a-1111" }
+      );
+      const only = makeTarget({ id: "only", reactNative: { logicalDeviceId: "seen-a-1111" } });
+
+      const result = selectTarget([only], 8081, { deviceId: "B1C2D3E4-SIM-UDID" });
+
+      expect(result.target.id).toBe("only");
+    });
+
+    it("routes to the device again once it re-attaches with the same logicalDeviceId", () => {
+      selectTarget([iphone(), android()], 8081, { deviceId: IPHONE_ID });
+      expect(() => selectTarget([iphone()], 8081, { deviceId: ANDROID_ID })).toThrow();
+
+      const result = selectTarget([iphone(), android()], 8081, { deviceId: ANDROID_ID });
+
+      expect(result.target.id).toBe("android");
+    });
   });
 });

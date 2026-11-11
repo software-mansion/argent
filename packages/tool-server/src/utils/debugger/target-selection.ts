@@ -35,6 +35,29 @@ function deviceKey(target: CDPTarget): string | undefined {
   return target.deviceName;
 }
 
+/** logicalDeviceIds Metro has ever listed in this process. */
+const seenLogicalDeviceIds = new Set<string>();
+
+/** Clears the seen-device memory. For test isolation only. */
+export function resetSeenLogicalDeviceIds(): void {
+  seenLogicalDeviceIds.clear();
+}
+
+/**
+ * Formats devices for an error message. Only a logicalDeviceId is a usable
+ * device_id, so a legacy device is labelled instead of showing its internal
+ * key, which would read like one without being one.
+ */
+function listDevices(devices: Iterable<{ name?: string; logicalId?: string }>): string {
+  return [...devices]
+    .map((d) =>
+      d.logicalId
+        ? `${d.name ?? "unknown"} (${d.logicalId})`
+        : `${d.name ?? "unknown"} (legacy inspector — no logicalDeviceId)`
+    )
+    .join(", ");
+}
+
 export function selectTarget(
   targets: CDPTarget[],
   port: number,
@@ -43,6 +66,10 @@ export function selectTarget(
   // discoverMetro already dropped the legacy proxy's `vm: "don't use"` decoy,
   // so every target here is a real runtime.
   const pool = targets;
+  for (const t of pool) {
+    const id = t.reactNative?.logicalDeviceId;
+    if (id) seenLogicalDeviceIds.add(id);
+  }
   let candidates = pool;
 
   if (typeof options?.deviceId === "string" && options.deviceId) {
@@ -69,15 +96,7 @@ export function selectTarget(
         }
       }
       if (distinctDevices.size > 1) {
-        // Only a logicalDeviceId is a usable device_id; a legacy device's
-        // internal key would read like one without being one.
-        const listed = [...distinctDevices.values()]
-          .map((d) =>
-            d.logicalId
-              ? `${d.name ?? "unknown"} (${d.logicalId})`
-              : `${d.name ?? "unknown"} (legacy inspector — no logicalDeviceId)`
-          )
-          .join(", ");
+        const listed = listDevices(distinctDevices.values());
         throw new FailureError(
           `No debugger target matches device_id "${deviceId}". ` +
             `${distinctDevices.size} devices are connected to Metro on port ${port}: ` +
@@ -87,6 +106,24 @@ export function selectTarget(
             `out of a shared Metro: give it its own Metro port.`,
           {
             error_code: FAILURE_CODES.DEBUGGER_TARGET_DEVICE_MISMATCH,
+            failure_stage: "debugger_select_target",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
+        );
+      }
+      // The single-device fallback exists for UDIDs/serials Metro never echoes.
+      // A logicalDeviceId we have seen before that has vanished is a device that
+      // left; falling back would silently drive another device while reporting
+      // success.
+      if (seenLogicalDeviceIds.has(deviceId)) {
+        throw new FailureError(
+          `Device with logicalDeviceId "${deviceId}" is no longer attached to Metro on port ${port} — ` +
+            `its app likely exited or reloaded onto another Metro. ` +
+            `Not falling back to the remaining device: ${listDevices(distinctDevices.values())}. ` +
+            `Relaunch the app on the target device (launch-app / restart-app), then retry.`,
+          {
+            error_code: FAILURE_CODES.DEBUGGER_METRO_NO_TARGETS,
             failure_stage: "debugger_select_target",
             failure_area: "tool_server",
             error_kind: "not_found",
