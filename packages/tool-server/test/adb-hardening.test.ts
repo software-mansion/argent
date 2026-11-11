@@ -30,7 +30,14 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { checkSnapshotLoadable, listAndroidDevices, listAvds } from "../src/utils/adb";
+import {
+  adbExecOutBinary,
+  adbShellInput,
+  checkSnapshotLoadable,
+  listAndroidDevices,
+  listAvds,
+  runAdb,
+} from "../src/utils/adb";
 
 beforeEach(() => {
   execFileMock.mockReset();
@@ -175,6 +182,58 @@ describe("listAvds noise filter (review #9)", () => {
     });
     const avds = await listAvds();
     expect(avds.map((a) => a.name)).toEqual(["Pixel_7_API_34", "Pixel_3a_API_29"]);
+  });
+});
+
+describe("windowsHide (Windows console-popup fix)", () => {
+  it("runAdb passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+    await runAdb(["devices"]);
+    expect(execFileMock).toHaveBeenCalledWith(
+      "adb",
+      ["devices"],
+      expect.objectContaining({ windowsHide: true })
+    );
+  });
+
+  it("adbExecOutBinary passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: Buffer.from(""), stderr: "" });
+    await adbExecOutBinary("emulator-5554", "screencap -p");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "adb",
+      ["-s", "emulator-5554", "exec-out", "screencap -p"],
+      expect.objectContaining({ windowsHide: true })
+    );
+  });
+
+  it("adbShellInput passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+    await adbShellInput("emulator-5554", "date", "");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "adb",
+      ["-s", "emulator-5554", "shell", "date"],
+      expect.objectContaining({ windowsHide: true })
+    );
+  });
+
+  it("listAvds passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: "", stderr: "" });
+    await listAvds();
+    expect(execFileMock).toHaveBeenCalledWith(
+      "emulator",
+      ["-list-avds"],
+      expect.objectContaining({ windowsHide: true })
+    );
+  });
+
+  it("checkSnapshotLoadable passes windowsHide: true", async () => {
+    execFileMock.mockReturnValue({ stdout: "Loadable\n", stderr: "" });
+    await checkSnapshotLoadable("Pixel_7_API_34");
+    expect(execFileMock).toHaveBeenCalledWith(
+      "emulator",
+      expect.arrayContaining(["-check-snapshot-loadable"]),
+      expect.objectContaining({ windowsHide: true })
+    );
   });
 });
 
