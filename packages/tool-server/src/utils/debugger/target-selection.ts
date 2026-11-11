@@ -38,11 +38,6 @@ function deviceKey(target: CDPTarget): string | undefined {
 /** logicalDeviceIds Metro has ever listed in this process. */
 const seenLogicalDeviceIds = new Set<string>();
 
-/** Clears the seen-device memory. For test isolation only. */
-export function resetSeenLogicalDeviceIds(): void {
-  seenLogicalDeviceIds.clear();
-}
-
 /**
  * Formats devices for an error message. Only a logicalDeviceId is a usable
  * device_id, so a legacy device is labelled instead of showing its internal

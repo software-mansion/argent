@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { FAILURE_CODES, FailureError, getFailureSignal } from "@argent/registry";
-import { selectTarget, resetSeenLogicalDeviceIds } from "../../src/utils/debugger/target-selection";
 import type { CDPTarget } from "../../src/utils/debugger/discovery";
+
+type TargetSelection = typeof import("../../src/utils/debugger/target-selection");
+let selectTarget: TargetSelection["selectTarget"];
 
 function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
   return {
@@ -14,8 +16,11 @@ function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
 }
 
 describe("selectTarget", () => {
-  beforeEach(() => {
-    resetSeenLogicalDeviceIds();
+  // selectTarget remembers every logicalDeviceId it has seen for the life of
+  // the module. A fresh module per test keeps one test's ids out of the next.
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ selectTarget } = await import("../../src/utils/debugger/target-selection"));
   });
 
   it("prefers Fusebox target", () => {
