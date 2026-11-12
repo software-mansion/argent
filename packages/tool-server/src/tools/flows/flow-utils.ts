@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { MIN_SCRIPT_TIMEOUT_MS, isFeatureEnabled } from "@argent/configuration-core";
+import { MIN_SCRIPT_TIMEOUT_MS } from "@argent/configuration-core";
 import {
   canonicalToolArgs,
   E2E_DIRS,
@@ -36,7 +36,7 @@ import {
 // match engine defines it.
 export { SELECTOR_RELATIONS };
 import { SECRET_PLACEHOLDER_MARKER } from "../../utils/secrets";
-import { MACOS_APPS_FLAG } from "../../utils/capability";
+import { MACOS_APPS_FLAG, isFlagOffered } from "../../utils/capability";
 import { withKeyedLock } from "../../utils/keyed-lock";
 import { MAX_ROTATE_BY_DEG } from "./flow-rotate-geometry";
 
@@ -2353,9 +2353,14 @@ function isIdleCondition(raw: unknown, kind: "await" | "assert"): boolean {
  */
 export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega", "macos"] as const;
 
-/** {@link LAUNCH_PLATFORMS} as an error names them: `macos` only with its flag on. */
+/**
+ * {@link LAUNCH_PLATFORMS} as an error names them: `macos` only where this
+ * host can drive a Mac app (the flag is on and the host is macOS). This is
+ * text only. The parser accepts `macos` on every host, checked against
+ * {@link LAUNCH_PLATFORMS}, because e2e files are shared between hosts.
+ */
 function namedLaunchPlatforms(): string[] {
-  return LAUNCH_PLATFORMS.filter((p) => p !== "macos" || isFeatureEnabled(MACOS_APPS_FLAG));
+  return LAUNCH_PLATFORMS.filter((p) => p !== "macos" || isFlagOffered(MACOS_APPS_FLAG));
 }
 
 /**
@@ -2532,7 +2537,7 @@ function parseLaunch(raw: unknown): Launch {
       `({ native | ${namedLaunchPlatforms()
         .filter((p) => p !== "chromium")
         .join(" | ")}: <app id>, ` +
-      `ios${isFeatureEnabled(MACOS_APPS_FLAG) ? " | macos" : ""}: { app, args }, ` +
+      `ios${isFlagOffered(MACOS_APPS_FLAG) ? " | macos" : ""}: { app, args }, ` +
       `chromium: <app path> | { path, args } })`
   );
 }

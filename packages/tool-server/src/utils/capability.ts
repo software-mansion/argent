@@ -142,7 +142,11 @@ export function macosAppsUnavailableReason(): string | null {
  * `<flag:...>` spans and properties in tool text and in errors. Mac apps run
  * only on macOS, so elsewhere the macos-apps flag adds nothing, and no text
  * points the agent at a Mac app the host refuses. Every `renderFlagGated` call
- * that an agent reads passes this, not the bare flag read.
+ * that an agent reads passes this, not the bare flag read, and the e2e parse
+ * errors that list the platforms name `macos` only when this is true.
+ *
+ * This decides what text offers, not what a parser accepts: an e2e file can
+ * name `macos` on every host, because the files are shared between hosts.
  */
 export function isFlagOffered(flag: string): boolean {
   if (flag === MACOS_APPS_FLAG) return macosAppsUnavailableReason() === null;

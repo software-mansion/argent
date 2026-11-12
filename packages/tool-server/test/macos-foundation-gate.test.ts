@@ -22,6 +22,7 @@ import { macosAppBlueprint } from "../src/blueprints/macos-app";
 import { createRegistry } from "../src/utils/setup-registry";
 import { directiveCommandHint } from "../src/tools/flows/flow-add-step";
 import { runDirective } from "../src/tools/flows/flow-actions";
+import { parseFlow, parseRequires } from "../src/tools/flows/flow-utils";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 
@@ -125,6 +126,46 @@ describe("with no stored macos-apps value", () => {
 
     onLinux();
     for (const text of await texts()) expect(text).not.toMatch(MAC_TEXT);
+  });
+
+  it("off macOS, an e2e parse error does not name macos, and the parser still accepts it", () => {
+    const failure = (run: () => unknown): string => {
+      try {
+        run();
+      } catch (err) {
+        return String(err);
+      }
+      throw new Error("expected a parse error");
+    };
+    const steps = (step: string) => `steps:\n  - ${step}\n`;
+    // Every parse error that lists the platforms.
+    const texts = () => [
+      failure(() => parseRequires({ platform: "windows" })),
+      failure(() => parseRequires({ platform: [] })),
+      failure(() => parseFlow(steps("when: { platform: windows }\n    steps:\n      - echo: x"))),
+      failure(() => parseFlow(steps("launch: { amdroid: com.example.app }"))),
+      failure(() => parseFlow(steps("launch: { android: 5 }"))),
+    ];
+    const accepted = () => {
+      expect(parseRequires({ platform: ["ios", "macos"] }).platform).toEqual(["ios", "macos"]);
+      const flow = parseFlow(
+        steps('launch: { macos: { app: com.example.app, args: ["-x"] } }') +
+          "  - when: { platform: macos }\n    steps:\n      - echo: x\n"
+      );
+      expect(JSON.stringify(flow.steps)).toContain("macos");
+    };
+    for (const text of texts()) expect(text).toMatch(/\bmacos\b/);
+    accepted();
+
+    onLinux();
+    for (const text of texts()) expect(text).not.toMatch(/\bmacos\b/);
+    accepted();
+
+    // With the flag off the text was already without `macos`; that holds on a Mac.
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    flag.off();
+    for (const text of texts()) expect(text).not.toMatch(/\bmacos\b/);
+    accepted();
   });
 });
 
