@@ -33,6 +33,7 @@ import {
   type LivePanel,
 } from "../../utils/foldable";
 import { androidImpl, type AndroidFoldResult } from "./platforms/android";
+import { iosRemoteImpl, type RemoteFoldResult } from "./platforms/ios-remote";
 
 const POSTURES = ["closed", "half-open", "open"] as const;
 type Posture = (typeof POSTURES)[number];
@@ -68,13 +69,14 @@ interface IosResult {
   warning?: string;
 }
 
-type Result = IosResult | AndroidFoldResult;
+type Result = IosResult | RemoteFoldResult | AndroidFoldResult;
 
 const capability: ToolCapability = {
-  // Local simulators only. A remote (MoQ) simulator is driven on its main
-  // screen and carries no hinge message; the server itself rejects a device
-  // that is not foldable, with its own reason.
+  // The server itself rejects a device that is not foldable, with its own
+  // reason.
   apple: { simulator: true },
+  // Folded by the runner, through `sim-remote fold`.
+  appleRemote: { simulator: true },
   // Emulators only: the hinge is moved through the emulator console. `unknown`
   // is let through and the handler rejects a serial with no console; it also
   // rejects a profile with no hinge, which the capability cannot see.
@@ -326,7 +328,8 @@ All tools use the active panel (the panel that shows the UI), also after a fold 
 iOS: unfolded, the UI is landscape, as on a rotated iPhone. A fold between two angles that are not closed or open can keep the current panel. To change panels, fold to closed or open.
 iOS returns { activeScreen, screen: { id, panel, width, height }, posture?, hingeAngle, warning? }. screen names the active panel and gives its size in pixels. posture is set only at 0°, 120° and 180°. warning is set when argent cannot find the active panel, or when the device did not change to the expected panel.
 Android returns { posture?, deviceState, hingeAngle?, warning? }. deviceState is the state Android committed (CLOSED, HALF_OPENED, OPENED), and posture is the matching preset. A lock screen the fold raises is dismissed; warning is set when it cannot be, or when a lock screen is showing or the screen is off after the fold. On a generic foldable AVD, closed shows only the left part of the display and describe frames do not match tap coordinates; use a Pixel Fold AVD to test the cover panel.
-Fails if the device is not foldable, is a remote simulator or a physical Android device.`,
+A remote iOS simulator returns the iOS result without the panel size.
+Fails if the device is not foldable or is a physical Android device.`,
   zodSchema,
   searchHint: "fold unfold hinge foldable duo posture open closed half-open panel screen",
   interaction: {
@@ -339,16 +342,18 @@ Fails if the device is not foldable, is a remote simulator or a physical Android
       `Failed to fold device to ${targetLabel(params)}: ${failureSignal.error_code}`,
   },
   capability,
-  // The Android hinge is moved through `adb`, so no simulator-server is
-  // spawned for it; the server follows the new panel on its own.
+  // The Android hinge is moved through `adb` and a remote one by its runner,
+  // so no simulator-server is spawned for either; the server follows the new
+  // panel on its own.
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
-    return device.platform === "android" ? {} : { simulatorServer: simulatorServerRef(device) };
+    return device.platform === "ios" ? { simulatorServer: simulatorServerRef(device) } : {};
   },
   execute: dispatchByPlatform<{ simulatorServer: SimulatorServerApi }, unknown, Params, Result>({
     toolId: "fold",
     capability,
     ios: iosImpl,
+    iosRemote: iosRemoteImpl,
     android: androidImpl,
   }),
 };
