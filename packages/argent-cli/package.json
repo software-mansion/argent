@@ -17,13 +17,13 @@
     "@argent/registry": "file:../registry",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
-    "@clack/prompts": "^1.8.1",
+    "@clack/prompts": "^1.9.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.6",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.5",
+    "vitest": "^5.1.0",
     "zod": "^4.6.5"
   }
 }

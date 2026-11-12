@@ -17,18 +17,18 @@
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
     "@argent/update-core": "file:../update-core",
-    "@clack/prompts": "^1.8.1",
+    "@clack/prompts": "^1.9.0",
     "escape-string-regexp": "^5.0.0",
     "jsonc-parser": "^3.3.1",
     "picocolors": "^1.1.1",
-    "semver": "^7.8.5",
+    "semver": "^7.8.6",
     "smol-toml": "^1.9.0",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.6",
     "@types/semver": "^7.8.0",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   }
 }
