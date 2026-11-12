@@ -10,7 +10,7 @@ final class ArgentLaunchPerformanceTests: XCTestCase {
         }
 
         let options = XCTMeasureOptions()
-        // Must match LAUNCH_ITERATIONS in ios-launch-time-measure.ts.
+        // Must match LAUNCH_ITERATIONS in native-profiler/launch-analysis/measure.ts.
         options.iterationCount = 5
         let app = XCUIApplication(bundleIdentifier: bundleID)
 

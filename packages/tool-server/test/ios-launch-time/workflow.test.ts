@@ -28,10 +28,9 @@ afterEach(async () => {
   directory = null;
 });
 
-it("advertises both launch commands as long running", () => {
+it("advertises the launch analysis tool as long running", () => {
   const definitions = definitionsById(createRegistry());
-  expect(definitions.get("ios-launch-time-measure")?.longRunning).toBe(true);
-  expect(definitions.get("ios-launch-time-profile")?.longRunning).toBe(true);
+  expect(definitions.get("native-profiler-launch-analysis")?.longRunning).toBe(true);
 });
 
 it("stops a logged subprocess when its tool request is cancelled", async () => {
@@ -204,15 +203,6 @@ it("reports the free-profile cap from a failed logged command, not a signing hin
   }).catch((e: Error) => e);
   expect((error as Error).message).toContain("free developer profile");
   expect((error as Error).message).not.toContain("Provisioning failed");
-});
-
-it("defaults the app configuration to Release in both tool schemas", () => {
-  const definitions = definitionsById(createRegistry());
-  for (const id of ["ios-launch-time-measure", "ios-launch-time-profile"]) {
-    const schema = definitions.get(id)!.zodSchema as import("zod").ZodType;
-    const parsed = schema.parse({ workspace_path: "/x" }) as { configuration: string };
-    expect(parsed.configuration).toBe("Release");
-  }
 });
 
 it("picks the app scheme among the schemes CocoaPods adds", () => {

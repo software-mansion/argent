@@ -506,7 +506,7 @@ Fails if the session_id is not found or the session's trace files are missing fr
   },
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
-  // Physical iPhones load the xctrace sessions ios-launch-time-profile writes.
+  // Physical iPhones load the xctrace sessions native-profiler-launch-analysis writes.
   capability: {
     apple: { simulator: true, device: true },
     appleRemote: { simulator: true },

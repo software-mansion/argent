@@ -50,7 +50,7 @@ Navigate every screen and UI flow within scope (the entire app if no scope was g
 
 TTI is made of two parts. Measure both; neither alone is TTI.
 
-1. **Native launch (iOS)**: process start to the first native frame. Runtime creation and early JS work can fall inside this window and show up in the launch profile. Measure and profile it with `ios-launch-time-measure` and `ios-launch-time-profile`; follow §4 of `argent-native-profiler`.
+1. **Native launch (iOS)**: process start to the first native frame. Runtime creation and early JS work can fall inside this window and show up in the launch profile. Measure it with `native-profiler-launch-analysis` `mode: "measure"` and profile it with `mode: "profile"`; follow §4 of `argent-native-profiler`.
 2. **React Native startup**: runtime creation, bundle load and evaluation, first meaningful render. Measure with `argent-react-native-profiler` (`react-profiler-start` before reload, CPU profile of bundle evaluation, commits up to the first usable screen).
 
 Report each part separately and their sum as the TTI estimate. Re-measure the part you changed and confirm the other did not regress.

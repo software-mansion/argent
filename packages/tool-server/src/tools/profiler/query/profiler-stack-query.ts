@@ -438,7 +438,7 @@ Fails if neither native-profiler-analyze nor profiler-load with load_native has 
     failedMsg: ({ failureSignal }) => `Failed to query native stacks: ${failureSignal.error_code}`,
   },
   // No chromium entry: it has no native trace capture. Physical iPhones only
-  // reach it through profiler-load of an ios-launch-time-profile session.
+  // reach it through profiler-load of a native-profiler-launch-analysis session.
   capability: {
     apple: { simulator: true, device: true },
     android: { emulator: true, device: true, unknown: true },
