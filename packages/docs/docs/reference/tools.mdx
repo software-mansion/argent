@@ -152,6 +152,8 @@ On a Mac app, these tools read the app through the Argent library:
 
 - `native-describe-screen` reads the accessibility tree of the app, plus the views with an identifier that the tree does not contain. It does not take `skipClasses` or `skipClassPrefixes`.
 - `native-full-hierarchy`, `native-find-views`, `native-view-at-point` and `native-user-interactable-view-at-point` read the AppKit views of the app.
+  - SwiftUI puts the identifier and the label of a control on an accessibility element, not on a view. Thus a `native-find-views` search by `identifier` or `label` does not find SwiftUI controls. `describe` shows them.
+  - When a search by `identifier` or `label` finds no view, its result has a `note` that refers to `describe`.
 - `native-network-logs` reads the requests that the app sends through `NSURLSession`. With `stop: true`, it fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`. The capture stops when the tool-server disconnects from the app.
 
 The [Mac apps](#mac-apps) section contains the details.
