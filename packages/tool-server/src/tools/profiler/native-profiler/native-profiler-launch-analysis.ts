@@ -27,11 +27,15 @@ const zodSchema = z
       .describe(
         "measure: time five launches with XCTest. profile: record one Instruments App Launch trace. See Modes in the tool description."
       ),
-    workspace_path: z.string().describe("Absolute path to the iOS app project root."),
+    workspace_path: z
+      .string()
+      .describe("Absolute path to the iOS app project root; a relative path is rejected."),
     device_id: z
       .string()
       .optional()
-      .describe("Connected iPhone UDID; required for a physical-device run."),
+      .describe(
+        "Connected iPhone UDID; required for a physical-device run. With allow_simulator, a booted simulator UDID also works."
+      ),
     scheme: z
       .string()
       .optional()
@@ -94,8 +98,8 @@ export function createNativeProfilerLaunchAnalysisTool(
 Both modes build the app in \`configuration\` (default Release) and run it once first, so the measured launch is usually warm; iOS can still evict the app from memory. They do not edit the app project. Set \`allow_simulator\` only when timings from the host machine are acceptable.
 Modes:
 - measure: five launches measured with XCTApplicationLaunchMetric by Argent's UI test runner. Use to set a baseline before an optimization and to verify a fix. The metric ends at the first frame, or later if the app registers extended launch tasks. On iOS 18 iPhones XCTest can drop some of the five measurements; the result then has fewer samples and a warning, and a run that loses the first one fails with no samples, so rerun. Returns { metric, averageMs, medianMs, samplesMs, samplesCollected, samplesExpected, device, bundleId, resultPath, metricsPath, logPath, warning }.
-- profile: one launch recorded with the Instruments App Launch template. Use to find which phases and functions run before the first frame, e.g. static initializers, dylib loading or didFinishLaunching work. \`duration_seconds\` applies to this mode only. On an iPhone, launchMs runs from the start of dyld to the end of the first frame (from the first lifecycle phase after Process Creation when the dyld export failed); phases keeps Process Creation, which under xctrace includes the recording's attach time, and warning says so. On a simulator there are no phases or launchMs, the first frame comes from a system signpost, and simulatorLaunchEstimateMs is a rough estimate. cpuSamples counts differ between runs because the sampling period varies from 1 to 5 ms. Returns { launchMs, simulatorLaunchEstimateMs (simulator only), device, bundleId, firstFrameEndMs, phases, tracePath, exports, profilerSession: { sessionId, cpuXml, cpuSamples, next }, exportErrors (when an optional lifecycle, dyld or signpost export failed), warning (null when there is nothing to note) }. profilerSession holds the CPU samples up to the first frame; follow its \`next\` to profiler-load and profiler-stack-query.
-Results, traces and logs go to <workspace>/.argent/traces/<datetime>.
+- profile: one launch recorded with the Instruments App Launch template. Use to find which phases and functions run before the first frame, e.g. static initializers, dylib loading or didFinishLaunching work. \`duration_seconds\` applies to this mode only. On an iPhone, launchMs runs from the first lifecycle phase after Process Creation to the end of the first frame; phases keeps Process Creation, which under xctrace includes the recording's attach time, and warning says so. On a simulator there are no phases or launchMs, the first frame comes from a system signpost, and simulatorLaunchEstimateMs is a rough estimate. cpuSamples counts the samples of running threads in the session and differs between runs because the sampling period varies from 1 to 5 ms. Returns { launchMs, simulatorLaunchEstimateMs (simulator only), device, bundleId, firstFrameEndMs, phases, tracePath, exports, profilerSession: { sessionId, cpuXml, cpuSamples, next }, exportErrors (when an optional lifecycle, dyld or signpost export failed), warning (null when there is nothing to note) }. profilerSession holds the CPU samples up to the first frame (the whole recording when firstFrameEndMs is null); follow its \`next\` to profiler-load and profiler-stack-query.
+Results, traces, exports and logs go to <workspace>/.argent/traces/<datetime>; the CPU samples go to the session file profilerSession.cpuXml instead.
 Fails if no iPhone is connected by USB cable, the scheme cannot be resolved or the build fails. measure also fails if Argent's device runner is active on the iPhone. profile also fails if xctrace cannot record the launch, or cannot export the trace table of contents, the CPU samples or, on an iPhone, the lifecycle phases; that error names the recorded tracePath, which opens in Instruments. Argent runs each xctrace export up to 3 times when xctrace crashes, as Xcode 26.4.1 xctrace does in most attempts; a crashed dyld or signpost export is named in warning. With Xcode 26.4.x on a simulator, profile fails before the build, because that Xcode stalls recording launches on simulators.`,
     zodSchema,
     fileInputs,

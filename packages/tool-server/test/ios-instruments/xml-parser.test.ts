@@ -102,7 +102,7 @@ describe("stack shapes", () => {
     expect(stackNames(xml)).toEqual([["leaf", "root"], ["other", "root"], ["leaf", "root"], []]);
   });
 
-  it("keeps a row with a <sample-time ref> and resolves a later ref to its stack", () => {
+  it("resolves a ref to a stack defined in a row skipped for its <sample-time ref>", () => {
     const xml = [
       row('<sample-time id="1">1</sample-time>', "<sentinel/>"),
       row(
@@ -115,7 +115,7 @@ describe("stack shapes", () => {
       ),
       row("<sample-time>3</sample-time>", '<tagged-backtrace ref="10"/>'),
     ].join("");
-    expect(stackNames(xml)).toEqual([[], ["leaf"], ["leaf", "root"], ["leaf"]]);
+    expect(stackNames(xml)).toEqual([[], ["leaf", "root"], ["leaf"]]);
   });
 });
 
@@ -148,14 +148,13 @@ describe("real xctrace time-profile exports", () => {
     expect(samples[3]!.stack).toEqual(samples[0]!.stack);
   });
 
-  it("Xcode 26.6: every app sample has its stack, including a row with a sample-time ref", () => {
+  it("Xcode 26.6: every app sample has its stack, including ones defined in a skipped row", () => {
     const samples = appStacks(load("26.6"));
     expect(samples.map((s) => [s.thread, s.stack.length])).toEqual([
       ["CpuProbeWorker", 9],
       ["Main", 15],
       ["CpuProbeWorker", 9],
       ["Main", 15],
-      ["CpuProbeWorker", 9],
       ["CpuProbeWorker", 9],
     ]);
     expect(samples[0]!.stack).toContain("cpuProbeHashLoop(_:)");
@@ -164,23 +163,5 @@ describe("real xctrace time-profile exports", () => {
     expect(samples[3]!.stack).toEqual(samples[1]!.stack);
     expect(samples[4]!.stack[0]).toBe("DYLD-STUB$$_platform_bzero");
     expect(samples[4]!.stack).toContain("cpuProbeHashLoop(_:)");
-    expect(samples[5]!.stack).toEqual(samples[4]!.stack);
-  });
-});
-
-describe("sample-time refs", () => {
-  it("keeps a row whose sample-time is a ref, and the backtrace it defines", () => {
-    // Two threads sampled at the same instant: the second row references the first
-    // row's sample-time and defines a backtrace that a later row reuses.
-    const xml = `
-<row><sample-time id="1">1000</sample-time><thread id="2" fmt="Main Thread"/><weight id="3">1000000</weight><tagged-backtrace id="4"><frame id="5" name="mainWork"/></tagged-backtrace></row>
-<row><sample-time ref="1"/><thread id="6" fmt="Worker"/><weight ref="3"/><tagged-backtrace id="7"><frame id="8" name="workerWork"/></tagged-backtrace></row>
-<row><sample-time id="9">2000</sample-time><thread ref="6"/><weight ref="3"/><tagged-backtrace ref="7"/></row>`;
-    const samples = parseCpuXml(xml);
-    expect(samples.map((s) => [s.timestampNs, s.threadFmt, s.stack[0]?.name])).toEqual([
-      [1000, "Main Thread", "mainWork"],
-      [1000, "Worker", "workerWork"],
-      [2000, "Worker", "workerWork"],
-    ]);
   });
 });

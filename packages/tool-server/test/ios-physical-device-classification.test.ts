@@ -95,4 +95,14 @@ describe("apple.device capability ratchet", () => {
       .filter((id) => !PHYSICAL_IOS_PORTED_TOOLS.includes(id));
     expect(offenders).toEqual([]);
   });
+
+  it("every ported tool keeps apple.device", () => {
+    // The other direction: dropping apple.device from a listed tool must fail too,
+    // or e.g. the profiler-load step after a launch profile on an iPhone breaks unnoticed.
+    const registry = createRegistry();
+    const lost = PHYSICAL_IOS_PORTED_TOOLS.filter(
+      (id) => registry.getTool(id) && registry.getTool(id)?.capability?.apple?.device !== true
+    );
+    expect(lost).toEqual([]);
+  });
 });

@@ -427,7 +427,7 @@ Modes:
 - function_callers: Who calls function_name and what it calls.
 - thread_breakdown: CPU time split by thread, optionally filtered.
 - leak_stacks: Memory leak details (iOS only), optionally filtered by object_type.
-Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze.
+Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze, or after profiler-load with load_native (for example a native-profiler-launch-analysis session).
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
 Fails if neither native-profiler-analyze nor profiler-load with load_native has run, or no parsed trace data is in memory.`,
   zodSchema,
@@ -461,7 +461,8 @@ Fails if neither native-profiler-analyze nor profiler-load with load_native has 
       throw new FailureError(
         `No native profiler capture is loaded for device \`${params.device_id}\`. Run ` +
           "native-profiler-start → native-profiler-stop → native-profiler-analyze on this device " +
-          "first. (If that id came from debugger-connect, pass the id from list-devices instead — " +
+          "first, or load a saved session with profiler-load mode=load_native (the only path on a " +
+          "physical iPhone, for a native-profiler-launch-analysis session). (If that id came from debugger-connect, pass the id from list-devices instead — " +
           "the simulator UDID or adb serial — since profiler sessions are keyed by that one.)",
         {
           error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,

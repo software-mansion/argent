@@ -142,11 +142,21 @@ export function earliestDyldStartNs(xml: string): number | null {
 }
 
 /**
+ * A row the CPU parser counts as a sample. It skips a row whose `<sample-time>`
+ * is a ref (a second sample at the same instant), so these counts match the
+ * session that profiler-load reports.
+ */
+function isParsedSample(row: string): boolean {
+  return !/<sample-time\s+ref="\d+"\s*\/>/.test(row);
+}
+
+/**
  * Keeps `time-profile` rows up to the last sample inside the launch. Refs only
  * point back to earlier rows, so cutting the tail keeps every remaining ref
  * resolvable. Cutting after the LAST in-window row, not before the first
  * out-of-window one, drops no launch sample even if rows are out of time order;
- * `laterRows` counts post-launch rows kept before the cut in that case.
+ * `laterRows` counts post-launch samples kept before the cut in that case.
+ * Pass `Infinity` to keep every row and only count the samples.
  */
 export function truncateCpuXml(
   xml: string,
@@ -159,19 +169,86 @@ export function truncateCpuXml(
   let cutAt: number | null = null;
   for (const match of xml.matchAll(/<row>.*?<\/row>/gs)) {
     cutAt ??= match.index!;
+    const counted = isParsedSample(match[0]) ? 1 : 0;
     const time = rowValue(match[0], "sample-time", registry);
     if (time !== null && Number(time) > endNs) {
-      laterSinceLastKept++;
+      laterSinceLastKept += counted;
       continue;
     }
-    keptRows++;
+    keptRows += counted;
     laterRows += laterSinceLastKept;
     laterSinceLastKept = 0;
     cutAt = match.index! + match[0].length;
   }
-  if (cutAt === null || laterSinceLastKept === 0) return { xml, keptRows, laterRows };
+  if (cutAt === null || xml.indexOf("<row>", cutAt) === -1) return { xml, keptRows, laterRows };
   const tail = xml.slice(xml.lastIndexOf("</row>") + "</row>".length);
   return { xml: xml.slice(0, cutAt) + tail, keptRows, laterRows };
+}
+
+/**
+ * Every element in `text` that defines an id, with its full text. A nested
+ * definition (a frame in a backtrace) is listed as well as its parent.
+ */
+function definitions(text: string): Map<string, string> {
+  const found = new Map<string, string>();
+  const open = /<([\w-]+)\s[^>]*?\bid="(\d+)"[^>]*?(\/?)>/g;
+  for (const match of text.matchAll(open)) {
+    const [element, tag, id, selfClosing] = match;
+    if (selfClosing) {
+      found.set(id!, element);
+      continue;
+    }
+    // Same-tag nesting is counted so the matching close tag is found.
+    const tags = new RegExp(`<${tag}[\\s>/]|</${tag}>`, "g");
+    tags.lastIndex = match.index! + element.length;
+    let depth = 1;
+    for (let next = tags.exec(text); next; next = tags.exec(text)) {
+      if (next[0].startsWith("</")) depth--;
+      else if (!/\/>/.test(text.slice(next.index, text.indexOf(">", next.index) + 1))) depth++;
+      if (depth === 0) {
+        found.set(id!, text.slice(match.index, next.index + next[0].length));
+        break;
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Keeps only the `time-profile` rows of running threads. The App Launch
+ * template on a simulator records only a table with waiting threads, whose
+ * Blocked and Runnable rows carry the time a thread waited as weight, so the
+ * profiler tools would rank idle waits as CPU work. A later ref to an element a
+ * dropped row defined gets that definition in its place, so every ref stays
+ * resolvable. Rows without a thread state are kept. Also removes the
+ * thread-state cells, which the CPU parser could read as a thread name.
+ */
+export function keepRunningRows(xml: string): { xml: string; droppedRows: number } {
+  const states = valueRegistry(xml, ["thread-state"]);
+  const pending = new Map<string, string>();
+  const rehome = (text: string): string =>
+    pending.size === 0
+      ? text
+      : text.replace(/<[\w-]+\s+ref="(\d+)"\s*\/>/g, (ref, id: string) => {
+          const definition = pending.get(id);
+          if (definition === undefined) return ref;
+          for (const nested of definitions(definition).keys()) pending.delete(nested);
+          return rehome(definition);
+        });
+  let droppedRows = 0;
+  const kept = xml.replace(/<row>.*?<\/row>/gs, (row) => {
+    const state = rowValue(row, "thread-state", states);
+    if (state === null || state === "Running") return rehome(row);
+    droppedRows++;
+    for (const [id, definition] of definitions(rehome(row))) {
+      if (!pending.has(id)) pending.set(id, definition);
+    }
+    return "";
+  });
+  return {
+    xml: kept.replace(/<thread-state\b[^>]*\/>|<thread-state\b[^>]*>[^<]*<\/thread-state>/g, ""),
+    droppedRows,
+  };
 }
 
 /**

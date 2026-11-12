@@ -5,6 +5,7 @@ import {
   launchEndNs,
   parseFirstFrameSignpostNs,
   parseLifecyclePhases,
+  keepRunningRows,
   truncateCpuXml,
 } from "../../src/utils/ios-launch-time/trace-exports";
 import { parseCpuXml } from "../../src/utils/ios-profiler/pipeline/xml-parser";
@@ -102,10 +103,87 @@ describe("truncateCpuXml", () => {
     ]);
   });
 
+  it("counts only the post-launch samples kept before the last in-window row", () => {
+    const row = (id: number, ns: number) =>
+      `<row><sample-time id="${id}">${ns}</sample-time><thread ref="2"/><weight ref="3"/><tagged-backtrace ref="4"/></row>\n`;
+    const xml = CPU.replace(
+      /<row><sample-time id="7">.*<\/node>/s,
+      row(20, 900) + row(21, 200) + row(22, 950) + row(23, 300) + "</node>"
+    ).replace(">100000000<", ">100<");
+    // Rows at 100, 900, 200, 950, 300 ns: the cut keeps all, 900 and 950 are after the launch.
+    expect(truncateCpuXml(xml, 500)).toMatchObject({ keptRows: 3, laterRows: 2 });
+  });
+
+  it("counts the samples the CPU parser reads, not rows with a sample-time ref", () => {
+    // A second sample at the same instant refs the first one's sample-time; the
+    // parser skips it as a sample but still reads the stack it defines.
+    const xml = CPU.replace(
+      "</node>",
+      `<row><sample-time ref="7"/><thread id="11" fmt="Worker"/><weight ref="3"/><tagged-backtrace id="12"><frame id="13" name="work()"/></tagged-backtrace></row>\n` +
+        `<row><sample-time id="14">250000000</sample-time><thread ref="11"/><weight ref="3"/><tagged-backtrace ref="12"/></row>\n</node>`
+    );
+    const cut = truncateCpuXml(xml, 305_000_000);
+    // 100, 200 and 250 ms; the 400 ms row stays because it comes before the 250 ms one.
+    expect(cut).toMatchObject({ keptRows: 3, laterRows: 1 });
+    expect(parseCpuXml(cut.xml)).toHaveLength(cut.keptRows + cut.laterRows);
+    expect(
+      parseCpuXml(cut.xml)
+        .at(-1)!
+        .stack.map((f) => f.name)
+    ).toEqual(["work()"]);
+  });
+
+  it("only counts with an endless window", () => {
+    expect(truncateCpuXml(CPU, Infinity)).toEqual({ xml: CPU, keptRows: 3, laterRows: 0 });
+  });
+
   it("keeps no rows when every sample is after the launch", () => {
     const { xml, keptRows } = truncateCpuXml(CPU, 50_000_000);
     expect(keptRows).toBe(0);
     expect(parseCpuXml(xml)).toEqual([]);
+  });
+});
+
+// Shape of a simulator App Launch export with waiting threads: Blocked and
+// Runnable rows define elements that later Running rows reference.
+const WAITING = `<?xml version="1.0"?>
+<trace-query-result>
+<node><schema name="time-profile"/>
+<row><sample-time id="1">100</sample-time><thread id="2" fmt="Main Thread"/><thread-state id="3" fmt="Running">Running</thread-state><weight id="4">1000000</weight><tagged-backtrace id="5"><frame id="6" name="main"/></tagged-backtrace></row>
+<row><sample-time id="7">200</sample-time><thread id="8" fmt="Worker"/><thread-state id="9" fmt="Blocked">Blocked</thread-state><weight id="10">300000000</weight><tagged-backtrace id="11"><frame id="12" name="__ulock_wait2"/><frame id="13" name="start_wqthread"/></tagged-backtrace></row>
+<row><sample-time ref="7"/><thread ref="8"/><thread-state id="14" fmt="Runnable">Runnable</thread-state><weight ref="10"/><tagged-backtrace ref="11"/></row>
+<row><sample-time id="15">300</sample-time><thread ref="8"/><thread-state ref="3"/><weight ref="4"/><tagged-backtrace id="16"><frame id="17" name="work()"/><frame ref="13"/></tagged-backtrace></row>
+<row><sample-time id="18">400</sample-time><thread ref="2"/><thread-state ref="9"/><weight ref="10"/><tagged-backtrace ref="5"/></row>
+<row><sample-time ref="7"/><thread ref="2"/><thread-state ref="3"/><weight ref="10"/><tagged-backtrace ref="11"/></row>
+</node></trace-query-result>`;
+
+describe("keepRunningRows", () => {
+  it("drops waiting rows and keeps every ref of the remaining rows resolvable", () => {
+    const { xml, droppedRows } = keepRunningRows(WAITING);
+    expect(droppedRows).toBe(3);
+    expect(xml).not.toContain("thread-state");
+    const samples = parseCpuXml(xml);
+    expect(samples.map((s) => [s.threadFmt, s.weightNs, s.stack.map((f) => f.name)])).toEqual([
+      ["Main Thread", 1_000_000, ["main"]],
+      ["Worker", 1_000_000, ["work()", "start_wqthread"]],
+      // Its sample-time and stack were defined in dropped rows and moved here.
+      ["Main Thread", 300_000_000, ["__ulock_wait2", "start_wqthread"]],
+    ]);
+    expect(truncateCpuXml(xml, Infinity).keptRows).toBe(samples.length);
+  });
+
+  it("does not read a thread-state as the thread name", () => {
+    // Without the thread-state cells removed, the parser would name this thread "Running".
+    const xml = WAITING.replace(
+      '<thread-state ref="3"/><weight ref="4"/>',
+      '<thread-state id="99" fmt="Running">Running</thread-state><weight ref="4"/>'
+    );
+    const samples = parseCpuXml(keepRunningRows(xml).xml);
+    expect(samples.map((s) => s.threadFmt)).not.toContain("Running");
+  });
+
+  it("leaves rows without a thread state and running-only exports as they are", () => {
+    expect(keepRunningRows(CPU)).toEqual({ xml: CPU, droppedRows: 0 });
   });
 });
 
@@ -189,5 +267,22 @@ describe("earliestDyldStartNs", () => {
     const xml = `<node><row><start-time id="1">250000000</start-time></row><row><start-time id="2">120000000</start-time></row><row><start-time ref="1"/></row></node>`;
     expect(earliestDyldStartNs(xml)).toBe(120_000_000);
     expect(earliestDyldStartNs("<node/>")).toBeNull();
+  });
+});
+
+describe("system frames of an iPhone trace", () => {
+  it("flags frames whose binary is in Xcode's iOS DeviceSupport cache as system", () => {
+    const xml = CPU.replace(
+      '<frame id="6" name="main"/>',
+      '<frame id="6" name="dyld4::start" addr="0x1"><binary id="30" name="dyld" UUID="u" arch="arm64e" load-addr="0x1" path="/Users/dev/Library/Developer/Xcode/iOS DeviceSupport/iPhone14,4 26.4 (23E246)/Symbols/usr/lib/dyld"/></frame>'
+    ).replace(
+      '<frame id="5" name="AppDelegate.setUp()"/>',
+      '<frame id="5" name="AppDelegate.setUp()" addr="0x2"><binary id="31" name="App" UUID="v" arch="arm64" load-addr="0x2" path="/private/var/containers/Bundle/Application/X/App.app/App"/></frame>'
+    );
+    const [sample] = parseCpuXml(xml);
+    expect(sample!.stack.map((f) => [f.name, f.isSystemLibrary])).toEqual([
+      ["AppDelegate.setUp()", false],
+      ["dyld4::start", true],
+    ]);
   });
 });

@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { argentHomeDir } from "@argent/configuration-core";
 import {
+  GENERIC_DEVICECTL_HINT,
   listIosPhysicalDevices,
   ensureDeviceReady,
   installApp,
@@ -18,14 +19,15 @@ import { resolveRunnerSigningConfig, resolveSigningHint } from "../ios-device/ru
 import { detectSigningTeams } from "../ios-device/team-detect";
 import { xcodebuildFailureSummary } from "../ios-device/runner-artifact";
 import { scheduleGroupSigkill, signalGroup } from "../process-kill";
+import { withKeyedLock } from "../keyed-lock";
 
 const execFileAsync = promisify(execFile);
 // A clean Release build of a large app (many pods, Hermes bytecode) can pass
 // 15 minutes. The tools are long running and cancel through the abort signal,
 // so this only catches a hung xcodebuild.
 const BUILD_TIMEOUT_MS = 60 * 60_000;
-// `simctl bootstatus -b` boots the simulator if it is not booted, then waits
-// until it has finished booting.
+// `simctl bootstatus -b` waits until the selected (booted) simulator has
+// finished booting.
 const BOOTSTATUS_TIMEOUT_MS = 180_000;
 
 /**
@@ -39,6 +41,37 @@ export function launchBuildCacheDir(kind: "app" | "runner", key: string): string
     kind === "app" ? "ios-launch-time" : "ios-launch-time-runner",
     key
   );
+}
+
+/**
+ * The build platform in a build cache key. Builds for two simulators, or two
+ * iPhones, are the same build, so the key does not name the device.
+ */
+export function launchBuildPlatform(simulator: boolean): string {
+  return simulator ? "iOS Simulator" : "iOS";
+}
+
+// Two launch builds into one DerivedData at the same time fail with "database is
+// locked", so builds that share a DerivedData directory run one at a time.
+const launchBuildLocks = new Map<string, Promise<unknown>>();
+
+export function withLaunchBuildLock<T>(derivedDataPath: string, fn: () => Promise<T>): Promise<T> {
+  return withKeyedLock(launchBuildLocks, derivedDataPath, fn);
+}
+
+/**
+ * A new `<workspace>/.argent/traces/<datetime>` directory. The traces directory
+ * gets a `.gitignore`, so the large .trace bundles stay out of git status.
+ */
+async function createRunDir(root: string): Promise<string> {
+  const traces = path.join(root, ".argent", "traces");
+  await fsp.mkdir(traces, { recursive: true });
+  await fsp.writeFile(path.join(traces, ".gitignore"), "*\n", { flag: "wx" }).catch((error) => {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  });
+  const runDir = path.join(traces, new Date().toISOString().replace(/[-:.]/g, ""));
+  await fsp.mkdir(runDir);
+  return runDir;
 }
 
 interface LaunchRequest {
@@ -219,6 +252,22 @@ export async function withXctraceCrashRetry<T>(
 // How long an aborted command gets to exit on SIGTERM before SIGKILL.
 const ABORT_KILL_GRACE_MS = 5_000;
 
+// Process groups of the logged commands that run now. They run detached, so
+// without this a tool-server that exits mid-call would leave a build or a
+// recording running with no owner. An exit handler cannot wait, so it kills.
+const runningGroups = new Set<number>();
+let exitHookInstalled = false;
+
+function trackGroup(pid: number): void {
+  if (!exitHookInstalled) {
+    exitHookInstalled = true;
+    process.once("exit", () => {
+      for (const group of runningGroups) signalGroup(group, "SIGKILL");
+    });
+  }
+  runningGroups.add(pid);
+}
+
 export async function runLogged(
   command: string,
   args: string[],
@@ -240,6 +289,8 @@ export async function runLogged(
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
+  const pid = child.pid;
+  if (pid) trackGroup(pid);
   let tail = "";
   const collect = (chunk: Buffer) => {
     const value = chunk.toString();
@@ -286,6 +337,7 @@ export async function runLogged(
       );
     }
   } finally {
+    if (pid) runningGroups.delete(pid);
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", stop);
     await new Promise<void>((resolve) => log.end(resolve));
@@ -320,8 +372,14 @@ async function waitForDeviceAction<T>(
       return await action();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      // The fallback hint names unlock and trust for any devicectl failure, so
+      // only the error itself says whether waiting can help. The free-profile
+      // cap never clears by waiting.
+      const generic = (error as { hint?: unknown }).hint === GENERIC_DEVICECTL_HINT;
+      const cause = generic ? message.replace(GENERIC_DEVICECTL_HINT, "") : message;
       if (
-        !/unlock|locked|trust|developer mode|tunnel is still connecting/i.test(message) ||
+        !/unlock|locked|trust|developer mode|tunnel is still connecting/i.test(cause) ||
+        isFreeProfileLimit(deviceErrorText(error)) ||
         Date.now() >= deadline
       )
         throw error;
@@ -377,7 +435,10 @@ async function selectDevice(
   }
   if (physical.length > 0 && !request.deviceId) {
     throw new Error(
-      `Connected iPhones: ${physical.map((d) => d.udid).join(", ")}. Pass device_id to select one.`
+      `Connected iPhones: ${physical.map((d) => d.udid).join(", ")}. Pass device_id to select one.` +
+        (request.allowSimulator
+          ? " To use a booted simulator while an iPhone is connected, pass the simulator's UDID as device_id."
+          : "")
     );
   }
   if (!request.allowSimulator) {
@@ -386,16 +447,35 @@ async function selectDevice(
         "Simulator launch timings reflect Mac hardware rather than a physical iPhone."
     );
   }
-  const simulators = (await listIosSimulators()).filter(
-    (device) => device.state === "Booted" && device.runtimeKind !== "tv"
-  );
+  const all = (await listIosSimulators()).filter((device) => device.runtimeKind !== "tv");
+  const requested = request.deviceId
+    ? all.find((device) => device.udid === request.deviceId)
+    : undefined;
+  if (requested && requested.state !== "Booted") {
+    throw new Error(
+      `Simulator ${requested.udid} is not booted (state: ${requested.state}). Boot it with boot-device, then retry.`
+    );
+  }
+  // xcodebuild and xctrace see only the default device set, so a simulator from
+  // an additional set (ios.additionalDeviceSets) cannot be built for or recorded.
+  if (requested?.deviceSet) {
+    throw new Error(
+      `Simulator ${requested.udid} is in the device set ${requested.deviceSet}. xcodebuild and xctrace ` +
+        "see only Xcode's default device set; use a simulator from that set."
+    );
+  }
+  const simulators = all.filter((device) => device.state === "Booted" && !device.deviceSet);
   const simulator = request.deviceId
     ? simulators.find((device) => device.udid === request.deviceId)
     : simulators.length === 1
       ? simulators[0]
       : undefined;
   if (!simulator) {
-    throw new Error("Boot a single iOS simulator or select one with device_id.");
+    throw new Error(
+      request.deviceId
+        ? `No connected iPhone or booted simulator has the UDID ${request.deviceId}.`
+        : "Boot a single iOS simulator or select one with device_id."
+    );
   }
   return {
     id: simulator.udid,
@@ -659,6 +739,10 @@ export async function prepareLaunch(
   signal?: AbortSignal
 ): Promise<LaunchContext> {
   signal?.throwIfAborted();
+  // A relative path would resolve against the shared tool-server's cwd.
+  if (!path.isAbsolute(request.workspacePath)) {
+    throw new Error(`workspace_path must be an absolute path: ${request.workspacePath}`);
+  }
   if (process.platform !== "darwin")
     throw new Error("iOS launch measurement requires macOS and Xcode.");
   const root = path.resolve(request.workspacePath);
@@ -669,15 +753,11 @@ export async function prepareLaunch(
   await request.checkDevice?.(device);
   const container = await findContainer(root, request.xcodeContainer);
   const scheme = await selectScheme(container, root, request.scheme, signal);
-  const timestamp = new Date().toISOString().replace(/[-:.]/g, "");
-  const runDir = path.join(root, ".argent", "traces", timestamp);
-  await fsp.mkdir(path.dirname(runDir), { recursive: true });
-  await fsp.mkdir(runDir);
   const configuration = request.configuration ?? "Release";
   const buildKey = appBuildKey(
     container,
     scheme,
-    device.destination,
+    launchBuildPlatform(device.simulator),
     configuration,
     await xcodeVersion()
   );
@@ -691,6 +771,8 @@ export async function prepareLaunch(
     derivedDataPath,
     signal
   );
+  // Created only once the project resolves, so an early failure leaves no empty run dir.
+  const runDir = await createRunDir(root);
   const configuredTeamId = settings.DEVELOPMENT_TEAM?.trim() || null;
   const manuallySigned = settings.CODE_SIGN_STYLE === "Manual";
   const detectedTeam =
@@ -705,16 +787,21 @@ export async function prepareLaunch(
         : []),
   ]);
   try {
-    await runLogged("xcodebuild", args, {
-      cwd: root,
-      logPath: path.join(runDir, "app-build.log"),
-      signal,
-    });
+    await withLaunchBuildLock(derivedDataPath, () =>
+      runLogged("xcodebuild", args, {
+        cwd: root,
+        logPath: path.join(runDir, "app-build.log"),
+        signal,
+      })
+    );
   } catch (error) {
     signal?.throwIfAborted();
     throw new Error(
       `${configuration} build failed for the app's original bundle ID ${settings.PRODUCT_BUNDLE_IDENTIFIER}. ` +
-        `If signing failed, set up this exact bundle ID for your Apple team in Xcode and retry. ` +
+        // Simulator builds are unsigned.
+        (device.simulator
+          ? ""
+          : "If signing failed, set up this exact bundle ID for your Apple team in Xcode and retry. ") +
         (error instanceof Error ? error.message : String(error)),
       { cause: error }
     );
@@ -799,6 +886,24 @@ export async function prepareLaunch(
   return context;
 }
 
+/**
+ * True when a devicectl process `executable` is the app's executable. devicectl
+ * reports it as a file URL, which percent-encodes spaces and non-ASCII names.
+ */
+export function isAppExecutable(
+  executable: string,
+  appPath: string,
+  executableName: string
+): boolean {
+  let decoded = executable;
+  try {
+    decoded = decodeURI(executable);
+  } catch {
+    // Not a valid URI escape sequence: compare the raw text.
+  }
+  return decoded.endsWith(`/${path.basename(appPath)}/${executableName}`);
+}
+
 /** Terminate a prelaunched app so the next activation starts a new, recently used process. */
 export async function terminateForWarmLaunch(
   context: LaunchContext,
@@ -838,9 +943,10 @@ export async function terminateForWarmLaunch(
   const payload = JSON.parse(stdout.slice(jsonStart)) as {
     result?: { runningProcesses?: Array<{ executable?: string; processIdentifier?: number }> };
   };
-  const suffix = `/${path.basename(context.appPath)}/${context.executableName}`;
-  const process = payload.result?.runningProcesses?.find((entry) =>
-    entry.executable?.endsWith(suffix)
+  const process = payload.result?.runningProcesses?.find(
+    (entry) =>
+      entry.executable !== undefined &&
+      isAppExecutable(entry.executable, context.appPath, context.executableName)
   );
   if (!process?.processIdentifier) {
     throw new Error(

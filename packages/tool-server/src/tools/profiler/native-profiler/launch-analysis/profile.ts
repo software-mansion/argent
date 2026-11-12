@@ -21,6 +21,7 @@ import {
   launchEndNs,
   parseFirstFrameSignpostNs,
   parseLifecyclePhases,
+  keepRunningRows,
   truncateCpuXml,
 } from "../../../../utils/ios-launch-time/trace-exports";
 import {
@@ -148,9 +149,9 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     ) {
       throw new Error(
         context.simulator
-          ? `xctrace stalled at "Starting recording" with ${await xcodeVersion()}. ` +
-              "Recording an app launch on a simulator is a known issue with Xcode 26.4.x. " +
-              "Use Xcode 27, or record on a physical iPhone. " +
+          ? // Xcode 26.4.x never gets here: checkDevice stops it before the build.
+            `xctrace stalled at "Starting recording" with ${await xcodeVersion()} and was stopped after ${RECORD_TIMEOUT_MS / 1000} s. ` +
+              "It can stall on the first recording after the simulator boots; run the tool again, or record on a physical iPhone. " +
               `Record log: ${recordLog}`
           : `xctrace stalled after "Starting recording" and was stopped after ${RECORD_TIMEOUT_MS / 1000} s. ` +
               `Record log: ${recordLog}`,
@@ -253,7 +254,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   const phases = exported.lifecycle
     ? parseLifecyclePhases(await fsp.readFile(exported.lifecycle, "utf8"))
     : [];
-  // Optional on both targets: without it a device launch starts at the lifecycle phases.
+  // Optional on both targets: the simulator estimate starts at dyld; a device launch uses it only without a later lifecycle phase.
   const dyldStartNs = exported.dyld
     ? earliestDyldStartNs(await fsp.readFile(exported.dyld, "utf8"))
     : null;
@@ -290,20 +291,21 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
   let cpuSamples: number | null = null;
   let laterRows = 0;
   if (exported.cpu) {
-    const cpuXml = await fsp.readFile(exported.cpu, "utf8");
-    const cut = endNs === null ? null : truncateCpuXml(cpuXml, endNs);
-    ({ sessionId, cpuXmlPath } = await writeProfilerSession(cut?.xml ?? cpuXml));
+    const running = keepRunningRows(await fsp.readFile(exported.cpu, "utf8"));
+    // Without a first-frame end the session keeps the whole recording.
+    const cut = truncateCpuXml(running.xml, endNs ?? Infinity);
+    ({ sessionId, cpuXmlPath } = await writeProfilerSession(cut.xml));
     // The launch-window copy is the one to analyze; drop the full export.
     await fsp.rm(exported.cpu, { force: true });
     delete exported.cpu;
-    cpuSamples = cut?.keptRows ?? null;
-    laterRows = cut?.laterRows ?? 0;
+    cpuSamples = cut.keptRows;
+    laterRows = cut.laterRows;
   }
 
   const launchPhases = phases.filter((phase) => endNs === null || phase.startNs < endNs);
   ctx?.emitProgress?.({ type: "artifact", tracePath });
   return {
-    // Start of dyld (else the first phase after Process Creation) to the end of the first frame. Null on simulators.
+    // First lifecycle phase after Process Creation (else the start of dyld) to the end of the first frame. Null on simulators.
     launchMs: launch?.launchMs ?? null,
     // Simulator only: earliest dyld activity to the first-frame signpost.
     ...(context.simulator && { simulatorLaunchEstimateMs }),

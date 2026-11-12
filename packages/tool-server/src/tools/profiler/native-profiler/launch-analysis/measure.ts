@@ -9,8 +9,10 @@ import {
   ensureLaunchDeviceReady,
   freeProfileLimitMessage,
   launchBuildCacheDir,
+  launchBuildPlatform,
   prepareLaunch,
   runLogged,
+  withLaunchBuildLock,
   xcodeVersion,
 } from "../../../../utils/ios-launch-time/workflow";
 import { launchSampleStats } from "../../../../utils/ios-launch-time/results";
@@ -79,12 +81,17 @@ export async function measureLaunch(
   const testBundleId = runnerSigning?.testBundleId ?? `${runnerBundleId}.uitests`;
   const runnerBuildKey = createHash("sha256")
     .update(
-      [context.destination, runnerBundleId, testBundleId, "Release", await xcodeVersion()].join(
-        "\n"
-      )
+      [
+        launchBuildPlatform(context.simulator),
+        runnerBundleId,
+        testBundleId,
+        "Release",
+        await xcodeVersion(),
+      ].join("\n")
     )
     .digest("hex")
     .slice(0, 16);
+  const runnerDerivedData = launchBuildCacheDir("runner", runnerBuildKey);
   const resultPath = path.join(context.runDir, "launch.xcresult");
   const runnerLog = path.join(context.runDir, "xctest.log");
   const args = [
@@ -98,7 +105,7 @@ export async function measureLaunch(
     "-destination",
     context.destination,
     "-derivedDataPath",
-    launchBuildCacheDir("runner", runnerBuildKey),
+    runnerDerivedData,
     "-resultBundlePath",
     resultPath,
     "-parallel-testing-enabled",
@@ -120,15 +127,18 @@ export async function measureLaunch(
       : ["CODE_SIGNING_ALLOWED=NO"]),
   ];
   try {
-    await runLogged("xcodebuild", args, {
-      cwd: params.workspace_path,
-      logPath: runnerLog,
-      signal: ctx?.signal,
-      env: {
-        ...process.env,
-        TEST_RUNNER_ARGENT_LAUNCH_BUNDLE_ID: context.bundleId,
-      },
-    });
+    // The build and the five launches hold the runner's DerivedData.
+    await withLaunchBuildLock(runnerDerivedData, () =>
+      runLogged("xcodebuild", args, {
+        cwd: params.workspace_path,
+        logPath: runnerLog,
+        signal: ctx?.signal,
+        env: {
+          ...process.env,
+          TEST_RUNNER_ARGENT_LAUNCH_BUNDLE_ID: context.bundleId,
+        },
+      })
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // The message keeps only the cap line; the installed bundle IDs follow it in the log.

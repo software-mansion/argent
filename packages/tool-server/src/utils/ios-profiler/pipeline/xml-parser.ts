@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import type { CpuSample, RawHang, RawLeak, StackFrame } from "../types";
-import { SYSTEM_LIBRARY_PATH_PREFIXES } from "../config";
+import { DEVICE_SUPPORT_PATH_SEGMENT, SYSTEM_LIBRARY_PATH_PREFIXES } from "../config";
 
 function decodeXml(str: string): string {
   return str
@@ -28,7 +28,10 @@ function extractRows(xml: string): string[] {
 }
 
 function isSystemLibraryPath(path: string): boolean {
-  return SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return (
+    SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path.includes(DEVICE_SUPPORT_PATH_SEGMENT)
+  );
 }
 
 /**
@@ -67,15 +70,6 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     }
   }
 
-  // Rows sampled at the same instant as an earlier row (another thread) reference
-  // its sample-time. They are real samples, so resolve the time and keep them.
-  const sampleTimeRegistry = new Map<string, number>();
-  const sampleTimeDefRe = /<sample-time\s+id="(\d+)"[^>]*>(\d+)<\/sample-time>/g;
-  let sm;
-  while ((sm = sampleTimeDefRe.exec(xml)) !== null) {
-    sampleTimeRegistry.set(sm[1], parseInt(sm[2], 10));
-  }
-
   const rows = extractRows(xml);
 
   for (const row of rows) {
@@ -85,7 +79,10 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
     if (sampleTimeMatch) {
       timestampNs = parseInt(sampleTimeMatch[1], 10);
     } else if (sampleTimeRef) {
-      timestampNs = sampleTimeRegistry.get(sampleTimeRef[1]) ?? 0;
+      // No sample-time ref registry; the second pass skips these rows too. Their
+      // stack still registers its ids, which later rows refer back to.
+      resolveBacktrace(row, frameRegistry, backtraceRegistry, binaryRegistry);
+      continue;
     }
 
     const threadMatch = row.match(/<thread[^>]*\sfmt="([^"]*)"[^>]*>/);
@@ -133,6 +130,10 @@ export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSa
   let sampleIdx = 0;
   for (const row of rows) {
     if (sampleIdx >= samples.length) break;
+
+    // Skip rows that were skipped in the first pass
+    const sampleTimeRef = row.match(/<sample-time\s+ref="(\d+)"\s*\/>/);
+    if (sampleTimeRef) continue;
 
     const sample = samples[sampleIdx]!;
 

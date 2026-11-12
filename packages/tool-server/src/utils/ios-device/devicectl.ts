@@ -58,6 +58,10 @@ class IosDeviceControlError extends Error {
   }
 }
 
+/** The hint for a devicectl failure that matches no specific cause. */
+export const GENERIC_DEVICECTL_HINT =
+  "Ensure the device is unlocked, trusted, and visible in Xcode > Devices, then retry.";
+
 /**
  * Map devicectl failure output to an actionable hint. `bundleId` is the app a
  * `process launch` targeted, when the command targeted one; it enables the
@@ -108,7 +112,7 @@ function resolveDevicectlHint(output: string, bundleId?: string): string {
     return "Reconnect the cable, unlock the device, and retry; restarting Xcode's device services can help.";
   }
 
-  return "Ensure the device is unlocked, trusted, and visible in Xcode > Devices, then retry.";
+  return GENERIC_DEVICECTL_HINT;
 }
 
 interface RunDevicectlOptions {

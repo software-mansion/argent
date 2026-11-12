@@ -13,11 +13,15 @@ import {
   deviceErrorText,
   freeProfileLimitMessage,
   iosAppTargets,
+  isAppExecutable,
   isCrash,
   launchBuildCacheDir,
+  launchBuildPlatform,
   pickScheme,
+  prepareLaunch,
   runLogged,
   showBuildSettingsArgs,
+  withLaunchBuildLock,
   withXctraceCrashRetry,
 } from "../../src/utils/ios-launch-time/workflow";
 
@@ -215,6 +219,74 @@ it("picks the app scheme among the schemes CocoaPods adds", () => {
     "Runner"
   );
   expect(pickScheme(["Dev", "Prod"], "/r/ios/App.xcworkspace", new Set())).toBeNull();
+});
+
+it("picks the only app scheme when it is not named after the workspace", () => {
+  const pods = new Set(["Pods-Foo", "React"]);
+  expect(pickScheme(["MyApp", "Pods-Foo", "React"], "/w/ios/Foo.xcworkspace", pods)).toBe("MyApp");
+});
+
+it("matches the app executable in devicectl's percent-encoded file URL", () => {
+  const appPath = "/dd/Build/Products/Release-iphoneos/My App.app";
+  expect(
+    isAppExecutable(
+      "file:///private/var/containers/Bundle/Application/X/My%20App.app/My%20App",
+      appPath,
+      "My App"
+    )
+  ).toBe(true);
+  expect(
+    isAppExecutable(
+      "file:///private/var/containers/Bundle/Application/X/App.app/App",
+      "/dd/App.app",
+      "App"
+    )
+  ).toBe(true);
+  expect(
+    isAppExecutable(
+      "file:///private/var/containers/Bundle/Application/X/Other.app/App",
+      "/dd/App.app",
+      "App"
+    )
+  ).toBe(false);
+  // An invalid escape still compares the raw text.
+  expect(isAppExecutable("file:///X/100%.app/100%", "/dd/100%.app", "100%")).toBe(true);
+});
+
+it("keys launch builds by platform, not by device", () => {
+  expect(launchBuildPlatform(true)).toBe("iOS Simulator");
+  expect(launchBuildPlatform(false)).toBe("iOS");
+});
+
+it("runs launch builds that share a DerivedData one at a time", async () => {
+  const order: string[] = [];
+  let release!: () => void;
+  const first = withLaunchBuildLock("/dd/a", async () => {
+    order.push("first start");
+    await new Promise<void>((resolve) => (release = resolve));
+    order.push("first end");
+  });
+  const second = withLaunchBuildLock("/dd/a", async () => {
+    order.push("second");
+  });
+  const other = withLaunchBuildLock("/dd/b", async () => {
+    order.push("other");
+  });
+  await other;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  expect(order).toEqual(["first start", "other"]);
+  release();
+  await Promise.all([first, second]);
+  expect(order).toEqual(["first start", "other", "first end", "second"]);
+});
+
+it("rejects a relative workspace_path before it touches a device", async () => {
+  await expect(prepareLaunch({ workspacePath: "." })).rejects.toThrow(
+    "workspace_path must be an absolute path"
+  );
+  await expect(prepareLaunch({ workspacePath: "~/dev" })).rejects.toThrow(
+    "workspace_path must be an absolute path"
+  );
 });
 
 it("selects the iOS app target over embedded watch apps and App Clips", () => {
