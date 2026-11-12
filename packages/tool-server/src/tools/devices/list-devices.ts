@@ -12,6 +12,7 @@ import {
 import { adbCommandPrefix } from "../../utils/adb-server";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import {
+  isFoldableDeviceType,
   scanIosSimulators,
   simctlListTimeoutAdvice,
   simulatorRuntimeKind,
@@ -78,6 +79,8 @@ type IosRemoteDevice = {
   state: string;
   runtime: string;
   runtimeKind?: "mobile" | "tv";
+  /** Present, and true, for a foldable simulator. */
+  foldable?: true;
 };
 
 type AndroidDevice = {
@@ -293,6 +296,19 @@ function readinessRank(d: ListedDevice): number {
 }
 
 /**
+ * The device types known to be foldable, for a remote simulator. Its profile
+ * is on the runner, and the runner's listing does not say whether the type is
+ * foldable. This machine's Xcode is asked first, and may not know the type or
+ * not be there at all.
+ */
+const REMOTE_FOLDABLE_DEVICE_TYPES = new Set(["com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"]);
+
+async function isRemoteFoldable(deviceType: string | undefined): Promise<boolean> {
+  if (deviceType === undefined) return false;
+  return (await isFoldableDeviceType(deviceType)) || REMOTE_FOLDABLE_DEVICE_TYPES.has(deviceType);
+}
+
+/**
  * Remote iOS simulators via `sim-remote`, with the CLI's state. A missing CLI or
  * a logged-out session lists nothing and is reported through a note, not as an
  * error; any other failure lists nothing and says nothing.
@@ -317,6 +333,9 @@ async function listRemoteIosSimulators(): Promise<{
           state: d.state,
           runtime,
           runtimeKind,
+          ...(runtimeKind === "mobile" && (await isRemoteFoldable(d.deviceTypeIdentifier))
+            ? { foldable: true as const }
+            : {}),
         });
       }
     }
