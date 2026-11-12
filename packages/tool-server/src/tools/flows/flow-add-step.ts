@@ -62,8 +62,7 @@ import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
-import { assertSupported } from "../../utils/capability";
-import { isFeatureEnabled } from "@argent/configuration-core";
+import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import {
   MACOS_DESCRIBE_LIMITS,
@@ -955,7 +954,7 @@ export function directiveCommandHint(command: string): string | undefined {
         `gesture-swipe is not supported) through e2e-add-step. ` +
         `It is stored as the raw \`tool:\` step for whichever one you called; converting it to ` +
         `\`swipe:\` is part of the polish pass.`,
-      isFeatureEnabled
+      isFlagOffered
     );
   }
   if (command === "echo") {
@@ -990,7 +989,7 @@ export function directiveCommandHint(command: string): string | undefined {
         `<flag:macos-apps> and macOS</flag:macos-apps>) if the path ` +
         `needs it, then add the \`scroll-to:\` step by hand during polish and prove it with the ` +
         `replay.`,
-      isFeatureEnabled
+      isFlagOffered
     );
   }
   if (command === "snapshot") {

@@ -4,7 +4,7 @@ import { createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeClientSecrets, isFeatureEnabled, isFlagEnabled } from "@argent/configuration-core";
+import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
@@ -44,8 +44,7 @@ import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inpu
 import {
   assertSupported,
   InvalidToolInputError,
-  MACOS_APPS_FLAG,
-  macosAppsUnavailableReason,
+  isFlagOffered,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
@@ -109,14 +108,6 @@ function isToolExposed(
   if (def.featureFlag && !isFlagOffered(def.featureFlag)) return false;
   if (def.hideWhen?.()) return false;
   return true;
-}
-
-// Whether the tool list carries what a flag adds: its tools, text spans and
-// properties. Mac apps run only on macOS, so elsewhere the macos-apps flag adds
-// nothing, and agents are not offered tools that the host refuses.
-export function isFlagOffered(flag: string): boolean {
-  if (flag === MACOS_APPS_FLAG) return macosAppsUnavailableReason() === null;
-  return isFeatureEnabled(flag);
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {

@@ -16,9 +16,8 @@ import {
   remainingBudget,
   toDevicePoint,
 } from "../../utils/harmony-uitest";
-import { isFeatureEnabled } from "@argent/configuration-core";
 import { ensureDep } from "../../utils/check-deps";
-import { InvalidToolInputError, MACOS_APPS_FLAG } from "../../utils/capability";
+import { InvalidToolInputError, isFlagOffered, MACOS_APPS_FLAG } from "../../utils/capability";
 import { FLAG_META_KEY, renderFlagGated } from "../../utils/flag-gated-text";
 import { macosAppServices, macosClick, requireMacosApp } from "../../utils/macos-input";
 import { sendCommand } from "../../utils/simulator-client";
@@ -224,7 +223,7 @@ Before tapping, take the coordinates from \`describe\` on every platform (on Chr
       throw new InvalidToolInputError(
         renderFlagGated(
           `gesture-tap button "right" is a mouse right-click${refusal}`,
-          isFeatureEnabled
+          isFlagOffered
         )
       );
     }
