@@ -18,6 +18,12 @@ import { summarizeHangBlocking } from "../profiler-shared/native-frame-class";
 const MAX_INLINE_HOTSPOTS = 5;
 const MAX_INLINE_HANGS = 3;
 
+/** A function of a hang as the report shows it, marked when a tool's library holds it. */
+function hangFunctionName(hang: UiHang, fn: string): string {
+  const label = hang.toolingLabels?.[fn];
+  return label ? `${demangleSymbol(fn)} (${label})` : demangleSymbol(fn);
+}
+
 /**
  * Said where an iOS capture with no Leaks table would otherwise read as "0 leaks":
  * the analyze report (with a warning not to report the app as leak-free) and
@@ -182,9 +188,9 @@ export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableEr
 }
 
 function reportTitle(payload: ProfilerPayload): string {
-  return payload.metadata.platform.toLowerCase() === "android"
-    ? "Android Perfetto Analysis"
-    : "iOS Instruments Analysis";
+  const platform = payload.metadata.platform.toLowerCase();
+  if (platform === "android") return "Android Perfetto Analysis";
+  return platform === "macos" ? "macOS Instruments Analysis" : "iOS Instruments Analysis";
 }
 
 function renderAllClear(
@@ -402,7 +408,7 @@ function renderFullReport(
           lines.push(`App call chains during this hang:`);
           hang.appCallChains.forEach((entry, i) => {
             lines.push(
-              `${i + 1}. \`${entry.chain.map(demangleSymbol).join(" > ")}\` (${entry.sampleCount} samples)`
+              `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
             );
           });
         }
@@ -411,14 +417,14 @@ function renderFullReport(
         lines.push(`${header} — app call chains during this hang:`);
         hang.appCallChains.forEach((entry, i) => {
           lines.push(
-            `${i + 1}. \`${entry.chain.map(demangleSymbol).join(" > ")}\` (${entry.sampleCount} samples)`
+            `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
           );
         });
       } else if (hang.suspectedFunctions.length > 0) {
         lines.push(``);
         lines.push(`${header} — during this hang, the most active functions were:`);
         for (const fn of hang.suspectedFunctions) {
-          lines.push(`- \`${demangleSymbol(fn)}\``);
+          lines.push(`- \`${hangFunctionName(hang, fn)}\``);
         }
       } else {
         lines.push(``);
@@ -460,7 +466,12 @@ function renderFullReport(
     if (unattributedLeaks.length > 0) {
       lines.push(
         ``,
-        renderUnattributedLeaksNote(unattributedLeaks, attributedLeaks.length, mallocStackLogging)
+        renderUnattributedLeaksNote(
+          unattributedLeaks,
+          attributedLeaks.length,
+          mallocStackLogging,
+          payload.metadata.platform.toLowerCase() === "macos"
+        )
       );
     }
   }
@@ -502,7 +513,7 @@ function renderFullReport(
     for (const b of uiHangs) {
       const funcNote =
         b.suspectedFunctions.length > 0
-          ? ` Likely caused by: \`${demangleSymbol(b.suspectedFunctions[0]!)}\`.`
+          ? ` Likely caused by: \`${hangFunctionName(b, b.suspectedFunctions[0]!)}\`.`
           : "";
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
@@ -561,6 +572,13 @@ function renderFullReport(
   return lines.join("\n");
 }
 
+/** Why a leak of a Mac app has no allocation backtrace without malloc stack logging. */
+export const MAC_UNATTRIBUTED_LEAKS =
+  "On a Mac app without malloc stack logging, only an object allocated after the start of the " +
+  "recording has an allocation backtrace. These are most likely older objects or benign system " +
+  "allocations, not confirmed app leaks. To attribute them, record again with " +
+  "`malloc_stack_logging: true`.";
+
 function renderLeaksNotRecordedNote(): string {
   return `> ⚠️ **Memory leaks:** ${LEAKS_NOT_RECORDED} Do not report the app as leak-free.`;
 }
@@ -573,14 +591,25 @@ function renderLeaksNotRecordedNote(): string {
  * into parsedData); null/undefined when unknown. It only disambiguates the
  * zero-attributed case: explicit `true` names the malloc capture that recorded
  * nothing, anything else gets the `--attach` framing.
+ *
+ * On a Mac app, attributed leaks do not prove malloc stack logging: without it,
+ * Instruments still records a backtrace for each object allocated after the start.
  */
 export function renderUnattributedLeaksNote(
   unattributedLeaks: MemoryLeak[],
   attributedCount: number,
-  mallocStackLogging?: boolean | null
+  mallocStackLogging?: boolean | null,
+  macApp = false
 ): string {
   const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
   const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+  if (macApp && mallocStackLogging !== true) {
+    return (
+      `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
+      `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
+      MAC_UNATTRIBUTED_LEAKS
+    );
+  }
   // Attribution evidence decides first: a responsible frame exists only if the
   // target ran under malloc stack logging — possible even under `--attach`, if
   // the app was launched with the diagnostic externally — so an explicit

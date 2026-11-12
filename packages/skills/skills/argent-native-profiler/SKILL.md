@@ -1,6 +1,6 @@
 ---
 name: argent-native-profiler
-description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via xctrace; Android via Perfetto. Use when diagnosing native-level performance issues.
+description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS and Mac apps via xctrace; Android via Perfetto. Use when diagnosing native-level performance issues.
 ---
 
 ## 1. Tools and platforms
@@ -13,6 +13,8 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via
 
 **Android** (Perfetto): emulator or physical device. Reports CPU hotspots and UI hangs (with jank reasons and the main thread's blocking function), plus an RSS-growth signal for memory pressure: treat it as a hint to confirm, not a confirmed leak. The app must be debuggable or declare `<profileable android:shell="true"/>` in its manifest, or no `perf_sample` callstacks are captured.
 
+**Mac app** (`platform: "macos"`, Instruments via `xctrace`): read the Profiling section of `argent-macos-app-interact` first.
+
 `argent-react-native-profiler` starts native profiling alongside React profiling by default; this skill's workflow and investigation patterns apply in both cases.
 
 ## 2. Workflow
@@ -20,7 +22,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via
 **Complete all steps in order; do not break mid-flow.**
 
 1. **Start.** Make sure the app is running (`launch-app` if not); `native-profiler-start` detects it. Pass `app_process` only if it reports several running user apps (e.g. dev and prod flavors) or picks the wrong one. Then let the user interact, or drive the app yourself (`argent-device-interact` skill). While a profiler records, interaction tools return no automatic screenshot or element tree, so the capture does not load the app. Call `screenshot` or `describe` when you need to see the screen; interaction tools still wait for the screen to settle before they return, so add no wait of your own; on an Android emulator each screenshot during a profile takes one frame in about 100 ms and does not wake the screen capture; on a physical Android device it takes about 150–200 ms and briefly wakes the device screen capture, so take them sparingly there.
-2. **Stop.** `native-profiler-stop`. On iOS, check `exportDiagnostics` for export warnings.
+2. **Stop.** `native-profiler-stop`. On iOS and Mac apps, check `exportDiagnostics` and `warning`: a skipped export means a new recording.
 3. **Analyze.** `native-profiler-analyze`. Findings are 🔴 RED (act on it) or 🟡 YELLOW (worth investigating, may be acceptable).
 4. **Present and ask.** Summarize the key findings, then ask the user whether to investigate further, implement fixes, or stop. Do not move on silently.
 5. **Drill down** with `profiler-stack-query` (patterns below).
@@ -30,7 +32,7 @@ description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via
 
 - **Hang** → mode `hang_stacks` for the native call chain → `function_callers` for the suspected function → read the native source.
 - **CPU hotspot** → `thread_breakdown` for the per-thread split → `function_callers` for the dominant function.
-- **Memory leak** (iOS) → `leak_stacks`, filtered by `object_type`, for the responsible frames and libraries. To attribute leaks shown as `<Call stack limit reached>`, re-run `native-profiler-start` with `malloc_stack_logging: true`; it restarts the app and adds overhead, so not for CPU or hang passes.
+- **Memory leak** (iOS, Mac app) → `leak_stacks`, filtered by `object_type`, for the responsible frames and libraries. A leak is in the trace only after a leak check that began after it has ended (about every 11 s): keep recording about 25 s after the action that leaks, then stop. To attribute leaks shown as `<Call stack limit reached>`, re-run `native-profiler-start` with `malloc_stack_logging: true`; it restarts the app and adds overhead, so not for CPU or hang passes.
 
 ## 3. Caveats
 

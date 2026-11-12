@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
+  recordsWithXctrace,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
@@ -16,6 +17,7 @@ import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 const capability = {
   apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  macos: { app: true },
 } as const;
 
 /**
@@ -28,7 +30,7 @@ type NativeProfilerAnalyzeToolResult = Omit<NativeProfilerAnalyzeResult, "report
 
 const zodSchema = z.object({
   device_id: metroDeviceIdParam(
-    "Target device id from `list-devices` (iOS UDID or Android serial)."
+    "Target device id from `list-devices` (iOS UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
   ),
 });
 
@@ -38,7 +40,7 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
 > = {
   id: "native-profiler-analyze",
   description: `Analyze exported native trace data and return a markdown report with severity indicators, tables, and actionable suggestions.
-iOS: CPU time profile, UI hangs, and memory leaks from the exported XML files.
+iOS<flag:macos-apps> and Mac apps</flag:macos-apps>: CPU time profile, UI hangs, and memory leaks from the exported XML files.
 Android: CPU hotspots, UI hangs with jank reason + main-thread state breakdown, GC annotation, and an RSS-growth weak signal from the Perfetto .pftrace.
 After presenting the report, ask the user whether to investigate further (drill-down with
 profiler-stack-query for hang stacks, CPU context, leak details) or implement fixes and re-profile.
@@ -64,7 +66,7 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
     assertSupported("native-profiler-analyze", capability, device);
 
     let result: NativeProfilerAnalyzeResult;
-    if (api.platform === "ios") {
+    if (recordsWithXctrace(api.platform)) {
       await ensureDeps(["xcrun"]);
       result = await analyzeNativeProfilerIos(api);
     } else {

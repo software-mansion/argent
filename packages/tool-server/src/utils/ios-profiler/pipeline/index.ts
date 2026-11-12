@@ -1,7 +1,7 @@
 import type { Bottleneck, CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../types";
 import { parseCpuFile, parseHangsFile, parseLeaksFile } from "./xml-parser";
 import { correlateHangsWithCpu, aggregateLeaks } from "./01-correlate";
-import { aggregateCpuHotspots } from "./02-aggregate";
+import { aggregateCpuHotspots, toolingWeightNs } from "./02-aggregate";
 
 interface PipelineOutput {
   bottlenecks: Bottleneck[];
@@ -9,6 +9,10 @@ interface PipelineOutput {
   uiHangs: UiHang[];
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
+  /** CPU time of the libraries argent and Instruments load into the app, which the hotspots leave out. */
+  toolingCpuMs: { argent: number; instruments: number };
+  /** CPU time of the samples with a stack, the tools' included: what the hotspot shares are of. */
+  totalCpuMs: number;
 }
 
 interface PipelineOptions {
@@ -36,5 +40,18 @@ export async function runIosProfilerPipeline(
 
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...memoryLeaks];
 
-  return { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
+  const totalNs = cpuSamples.reduce((sum, s) => sum + (s.stack.length > 0 ? s.weightNs : 0), 0);
+  const tooling = toolingWeightNs(cpuSamples);
+  return {
+    bottlenecks,
+    cpuSamples,
+    uiHangs,
+    cpuHotspots,
+    memoryLeaks,
+    toolingCpuMs: {
+      argent: Math.round(tooling.argent / 1_000_000),
+      instruments: Math.round(tooling.instruments / 1_000_000),
+    },
+    totalCpuMs: Math.round(totalNs / 1_000_000),
+  };
 }

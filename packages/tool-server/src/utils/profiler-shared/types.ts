@@ -59,6 +59,11 @@ export interface UiHang {
   suspectedFunctions: string[];
   /** Top app call chains in the hang window, with sample counts. Empty on Android. */
   appCallChains: { chain: string[]; sampleCount: number }[];
+  /**
+   * xctrace only: the functions above that are in a library argent or Instruments
+   * loads into the app, with the label the report adds to their names.
+   */
+  toolingLabels?: Record<string, string>;
   severity: "RED" | "YELLOW";
   /** Android-only: Perfetto jank_type, e.g. "App Deadline Missed". */
   jankReason?: string;

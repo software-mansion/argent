@@ -92,6 +92,12 @@ interface MacosLaunchOptions {
   args?: string[];
   /** Omitted `args` start the app with no arguments. */
   noLastArgs?: boolean;
+  /**
+   * Extra environment variables for this start only, such as
+   * `MallocStackLogging` for a profile. A later start does not repeat them,
+   * and they cannot replace the variables of the argent library.
+   */
+  env?: Readonly<Record<string, string>>;
   /** How long the library gets to answer after the spawn. Default 20 s. */
   handshakeTimeoutMs?: number;
   /** How long a new process gets to show its first window. Default 10 s. */
@@ -553,11 +559,16 @@ const FINDER_ENV_KEYS = [
  * the app, even a sandboxed one, drive the tool-server. The bootstrap travels
  * as `--insert-library`.
  */
-function macosLaunchEnv(bundleId: string, listenSocketEnv: string | undefined): NodeJS.ProcessEnv {
+function macosLaunchEnv(
+  bundleId: string,
+  listenSocketEnv: string | undefined,
+  extra: Readonly<Record<string, string>> = {}
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of FINDER_ENV_KEYS) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
+  Object.assign(env, extra);
   env.ARGENT_INJECT_BUNDLE_ID = bundleId;
   env.NATIVE_DEVTOOLS_FD = "3";
   if (listenSocketEnv) env.NATIVE_DEVTOOLS_LISTEN_SOCKET = listenSocketEnv;
@@ -1077,7 +1088,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       // The app inherits the working directory, which a Finder launch sets to /.
       {
         stdio: ["ignore", "pipe", "pipe", "pipe"],
-        env: macosLaunchEnv(bundleId, listen?.env),
+        env: macosLaunchEnv(bundleId, listen?.env, opts.env),
         cwd: "/",
       }
     );

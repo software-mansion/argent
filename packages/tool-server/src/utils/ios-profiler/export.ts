@@ -1,5 +1,5 @@
 import * as path from "path";
-import { execFileAsyncWithTimeout } from "./run-with-timeout";
+import { DEFAULT_EXEC_TIMEOUT_MS, execFileAsyncWithTimeout } from "./run-with-timeout";
 
 /** Which of these a trace actually contains depends on its `.tracetemplate`. */
 const CPU_SCHEMA_CANDIDATES = ["time-profile", "cpu-profile", "time-sample"];
@@ -31,12 +31,19 @@ export interface ExportDiagnostics {
   tocSchemas: string[];
   cpuSchemaUsed: string | null;
   errors: Record<string, string>;
+  /** Why the stop exported no table, when it skipped them all. */
+  skipped?: string;
+}
+
+/** execFile killed the command when its timeout ran out. */
+function timedOut(err: unknown): boolean {
+  return (err as { killed?: boolean } | null)?.killed === true;
 }
 
 async function discoverTraceSchemas(
   traceFile: string,
   diagnostics?: ExportDiagnostics
-): Promise<string[]> {
+): Promise<string[] | "timed-out"> {
   try {
     const { stdout: toc } = await execFileAsyncWithTimeout("xctrace", [
       "export",
@@ -57,15 +64,17 @@ async function discoverTraceSchemas(
     if (diagnostics) {
       diagnostics.errors.toc = err instanceof Error ? err.message : String(err);
     }
-    return [];
+    return timedOut(err) ? "timed-out" : [];
   }
 }
 
 async function resolveCpuXpath(
   traceFile: string,
   diagnostics: ExportDiagnostics
-): Promise<string | null> {
-  const tocSchemas = await discoverTraceSchemas(traceFile, diagnostics);
+): Promise<string | null | "toc-timed-out"> {
+  const discovered = await discoverTraceSchemas(traceFile, diagnostics);
+  if (discovered === "timed-out") return "toc-timed-out";
+  const tocSchemas = discovered;
   diagnostics.tocSchemas = tocSchemas;
 
   if (tocSchemas.length > 0) {
@@ -114,6 +123,23 @@ async function tryCpuExportFallback(
   return false;
 }
 
+function skipAll(diagnostics: ExportDiagnostics, reason: string): void {
+  diagnostics.skipped = reason;
+  for (const key of Object.keys(EXPORTS) as IosExportKey[]) {
+    diagnostics.errors[key] = `Not exported: ${reason}`;
+  }
+}
+
+/** The result of a stop that exports no table, with `reason` for each one. */
+export function skippedTraceExport(reason: string): {
+  files: Record<IosExportKey, string | null>;
+  diagnostics: ExportDiagnostics;
+} {
+  const diagnostics: ExportDiagnostics = { tocSchemas: [], cpuSchemaUsed: null, errors: {} };
+  skipAll(diagnostics, reason);
+  return { files: { cpu: null, hangs: null, leaks: null }, diagnostics };
+}
+
 export async function exportIosTraceData(traceFile: string): Promise<{
   files: Record<IosExportKey, string | null>;
   diagnostics: ExportDiagnostics;
@@ -137,6 +163,17 @@ export async function exportIosTraceData(traceFile: string): Promise<{
 
     if (key === "cpu") {
       const resolvedXpath = await resolveCpuXpath(traceFile, diagnostics);
+      if (resolvedXpath === "toc-timed-out") {
+        // Listing the tables is the lightest export. A trace that holds next to
+        // no data (the app crashed or quit early) takes minutes for each one, so
+        // the CPU fallbacks, hangs and leaks would wait 60 s each for nothing.
+        skipAll(
+          diagnostics,
+          `xctrace could not list the trace's tables within ${DEFAULT_EXEC_TIMEOUT_MS / 1000} s, ` +
+            `for example because the trace holds next to no data.`
+        );
+        return { files: exportedFiles, diagnostics };
+      }
 
       if (resolvedXpath) {
         try {

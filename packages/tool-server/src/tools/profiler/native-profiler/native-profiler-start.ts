@@ -4,11 +4,13 @@ import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
+import { macosAppRef, type MacosAppApi } from "../../../blueprints/macos-app";
 import { resolveDevice } from "../../../utils/device-info";
 import { assertSupported } from "../../../utils/capability";
 import { ensureDeps } from "../../../utils/check-deps";
 import { startNativeProfilerIos } from "./platforms/ios";
 import { startNativeProfilerAndroid } from "./platforms/android";
+import { startNativeProfilerMacos } from "./platforms/macos";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 import { nativeNetworkCaptureWarning } from "../../../utils/profiler-shared/network-capture-warning";
 import { trackProfilingRun } from "../../../utils/profiling-devices";
@@ -16,38 +18,43 @@ import { trackProfilingRun } from "../../../utils/profiling-devices";
 const capability = {
   apple: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
+  macos: { app: true },
 } as const;
 
-export { handleXctraceExit } from "./platforms/ios";
+export { handleXctraceExit } from "./platforms/xctrace";
 
 const zodSchema = z.object({
   device_id: metroDeviceIdParam(
-    "Target device id from `list-devices` (iOS UDID or Android serial)."
+    "Target device id from `list-devices` (iOS UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial)."
   ),
   app_process: z
     .string()
     .optional()
     .describe(
       "iOS: the CFBundleExecutable or display name of the app to profile. Android: the app's package name. " +
-        "If omitted, auto-detects the foreground app; set it only if auto-detection picks the wrong app."
+        "If omitted, auto-detects the foreground app; set it only if auto-detection picks the wrong app." +
+        "<flag:macos-apps> Not used for a Mac app: its device id names the app.</flag:macos-apps>"
     ),
   template_path: z
     .string()
     .optional()
     .describe(
-      "iOS only. Path to an Instruments .tracetemplate file (defaults to the bundled Argent template)."
+      "iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. Path to an Instruments .tracetemplate file (defaults to the bundled Argent template)."
     ),
   malloc_stack_logging: z
     .boolean()
     .optional()
     .describe(
-      "iOS only. When true, cold-launches the app under the profiler with Malloc Stack Logging enabled so " +
+      "iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. When true, cold-launches the app under the profiler with Malloc Stack Logging enabled so " +
         "memory leaks carry an allocation backtrace (responsible frame + library). Without it, leaks " +
         "carry no backtrace (Instruments reports '<Call stack limit reached>'). Trade-offs: this " +
         "RESTARTS the app (current state is lost), adds memory/CPU overhead, and makes the app " +
         "noticeably slow to launch, so leave it off for pure CPU/hang profiling. Rejected up front " +
         "under the all-processes capture (used where Xcode's `--device` recording is broken, or " +
-        "forced with ARGENT_IOS_CAPTURE=all-processes), which cannot cold-launch and records no leaks."
+        "forced with ARGENT_IOS_CAPTURE=all-processes), which cannot cold-launch and records no leaks." +
+        "<flag:macos-apps> On a Mac app, argent restarts the app with MallocStackLogging=1 and then attaches, " +
+        "on any Xcode; the app keeps the logging until restart-app. Leaks of objects allocated after " +
+        "the start carry a backtrace also without it, so use it only for older objects.</flag:macos-apps>"
     ),
 });
 
@@ -58,10 +65,10 @@ export const nativeProfilerStartTool: ToolDefinition<
   id: "native-profiler-start",
   // iOS can outlast the 30s MCP fetch timeout, whose replay would start a second xctrace.
   longRunning: true,
-  description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory leaks). Android: Perfetto (CPU, jank, RSS-growth weak signal).
+  description: `Start native profiling on a booted device. iOS<flag:macos-apps> and Mac apps</flag:macos-apps>: Instruments via xctrace (CPU, hangs, memory leaks). Android: Perfetto (CPU, jank, RSS-growth weak signal).
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
-Returns { status, pid, traceFile } confirming the recording has started. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ.
+Returns { status, pid, traceFile } confirming the recording has started. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ.<flag:macos-apps> On a Mac app, a warning says when the app runs with malloc stack logging.</flag:macos-apps>
 Fails if no app is running on the device, or the profiler cannot attach to the process.`,
   zodSchema,
   interaction: {
@@ -71,9 +78,13 @@ Fails if no app is running on the device, or the profiler cannot attach to the p
       `Failed to start native profiler: ${failureSignal.error_code}`,
   },
   capability,
-  services: (params) => ({
-    session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
-  }),
+  services: (params) => {
+    const device = resolveDevice(params.device_id);
+    return {
+      session: nativeProfilerSessionRef(device),
+      ...(device.platform === "macos" ? { macosApp: macosAppRef(device) } : {}),
+    };
+  },
   async execute(services, params) {
     const api = services.session as NativeProfilerSessionApi;
     const device = resolveDevice(params.device_id);
@@ -86,6 +97,13 @@ Fails if no app is running on the device, or the profiler cannot attach to the p
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
       started = await startNativeProfilerIos(api, params);
+    } else if (api.platform === "macos") {
+      await ensureDeps(["xcrun"]);
+      ({ warning, ...started } = await startNativeProfilerMacos(
+        api,
+        services.macosApp as MacosAppApi,
+        params
+      ));
     } else {
       await ensureDeps(["adb"]);
       started = await startNativeProfilerAndroid(api, params);

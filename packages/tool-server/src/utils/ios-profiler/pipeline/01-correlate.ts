@@ -1,5 +1,5 @@
 import type { CpuSample, RawHang, RawLeak, UiHang, MemoryLeak } from "../types";
-import { findDominantFunction, extractAppCallChain } from "./02-aggregate";
+import { TOOLING_LABEL, findDominantFunction, extractAppCallChain } from "./02-aggregate";
 
 const TOP_N_FUNCTIONS = 5;
 const TOP_N_CHAINS = 3;
@@ -31,11 +31,16 @@ export function correlateHangsWithCpu(
 
     const funcCounts = new Map<string, number>();
     const chainCounts = new Map<string, { chain: string[]; count: number }>();
+    // Only the report shows the labels: profiler-stack-query matches the plain names.
+    const toolingLabels: Record<string, string> = {};
 
     for (const sample of windowSamples) {
       const dominant = findDominantFunction(sample.stack);
       if (dominant) {
         funcCounts.set(dominant, (funcCounts.get(dominant) ?? 0) + 1);
+      }
+      for (const frame of sample.stack) {
+        if (frame.tooling) toolingLabels[frame.name] = TOOLING_LABEL[frame.tooling];
       }
 
       const chain = extractAppCallChain(sample.stack);
@@ -79,6 +84,7 @@ export function correlateHangsWithCpu(
       endNs: hang.startNs + hang.durationNs,
       suspectedFunctions,
       appCallChains,
+      ...(Object.keys(toolingLabels).length > 0 ? { toolingLabels } : {}),
       severity,
     };
   });

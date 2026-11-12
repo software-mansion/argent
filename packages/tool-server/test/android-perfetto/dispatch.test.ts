@@ -29,7 +29,6 @@ vi.mock("../../src/tools/profiler/native-profiler/platforms/ios", () => ({
     status: "ok",
     exportErrors: {},
   })),
-  handleXctraceExit: vi.fn(),
 }));
 vi.mock("../../src/tools/profiler/native-profiler/platforms/android", () => ({
   startNativeProfilerAndroid: vi.fn(async () => ({

@@ -733,6 +733,26 @@ export function parseCodesignDisplay(
 }
 
 /**
+ * The code signature of a running process (by pid), which can differ from its
+ * bundle's after a rebuild, or of an app bundle (by path). Null when `codesign`
+ * cannot read it, for example because the process has quit.
+ */
+export async function readCodeSignature(
+  target: number | string
+): Promise<ReturnType<typeof parseCodesignDisplay> | null> {
+  try {
+    return parseCodesignDisplay(
+      await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", String(target)], {
+        timeout: 10_000,
+        maxBuffer: 4 * 1024 * 1024,
+      })
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Reads what a launch needs from the bundle: `Info.plist` (bundle id,
  * executable, name) and the code signature. An unsigned app is neither
  * hardened nor sandboxed.
@@ -780,17 +800,9 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     throw badBundle(`The executable ${executable} named by ${plist} does not exist.`);
   }
 
-  let codesign: { stdout: string; stderr: string } | null;
-  try {
-    codesign = await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", resolved], {
-      timeout: 10_000,
-      maxBuffer: 4 * 1024 * 1024,
-    });
-  } catch {
-    // Not signed at all, or a signature codesign cannot read: neither carries
-    // the runtime flag nor entitlements that dyld would honour.
-    codesign = null;
-  }
+  // Not signed at all, or a signature codesign cannot read: neither carries the
+  // runtime flag nor entitlements that dyld would honour.
+  const signature = (await readCodeSignature(resolved)) ?? parseCodesignDisplay(null);
 
   const chromium = chromiumKind(resolved);
   return {
@@ -798,7 +810,7 @@ export async function inspectMacosApp(appPath: string): Promise<MacosAppInfo> {
     bundleId,
     name: bundleName ?? path.basename(resolved, ".app"),
     executable,
-    ...parseCodesignDisplay(codesign),
+    ...signature,
     ...(chromium ? { chromium } : {}),
     catalyst: isCatalystExecutable(executable),
     uiElement: [uiElement, backgroundOnly].some((v) => v !== null && /^(true|yes|1)$/i.test(v)),
