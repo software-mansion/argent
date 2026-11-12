@@ -2,7 +2,7 @@
  * The platforms an AUTHOR can name in a flow file: launch-map keys and
  * `when: { platform }` guards.
  */
-export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega"] as const;
+export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega", "macos"] as const;
 
 /**
  * The platforms a RUN can be pointed at — e2e-execute's `platform` param and

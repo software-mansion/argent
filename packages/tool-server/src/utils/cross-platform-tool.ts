@@ -1,9 +1,11 @@
 import type {
   DeviceInfo,
   InvokeToolOptions,
+  Platform,
   ToolCapability,
   ToolDependency,
 } from "@argent/registry";
+import type { MacosAppApi } from "../blueprints/macos-app";
 import { isIosPhysicalDevice, resolveDevice } from "./device-info";
 import { assertSupported, NotImplementedOnPlatformError } from "./capability";
 import { ensureDeps } from "./check-deps";
@@ -63,6 +65,8 @@ export function dispatchByPlatform<
   vega?: PlatformImpl<VegaServices, Params, Result>;
   /** Optional like `vega`: a declared but unwired `harmony` throws 501. */
   harmony?: PlatformImpl<HarmonyServices, Params, Result>;
+  /** Native Mac app branch (`macos-app-<bundle id>`); optional like `vega`. */
+  macos?: PlatformImpl<{ macosApp: MacosAppApi }, Params, Result>;
 }): (
   services: Record<string, unknown>,
   params: Params,
@@ -128,45 +132,18 @@ export function dispatchByPlatform<
         invokeOptions
       );
     }
-    if (device.platform === "vega") {
-      if (!opts.vega) {
-        throw new NotImplementedOnPlatformError({ toolId: opts.toolId, platform: "vega" });
-      }
-      if (opts.vega.requires?.length) {
-        await ensureDeps(opts.vega.requires);
-      }
-      return opts.vega.handler(services as unknown as VegaServices, params, device, invokeOptions);
-    }
-    if (device.platform === "harmony") {
-      // Explicit: chromium is the fallthrough below.
-      if (!opts.harmony) {
-        throw new NotImplementedOnPlatformError({ toolId: opts.toolId, platform: "harmony" });
-      }
-      if (opts.harmony.requires?.length) {
-        await ensureDeps(opts.harmony.requires);
-      }
-      return opts.harmony.handler(
-        services as unknown as HarmonyServices,
-        params,
-        device,
-        invokeOptions
-      );
-    }
-    // chromium
-    if (!opts.chromium) {
-      throw new NotImplementedOnPlatformError({
-        toolId: opts.toolId,
-        platform: "chromium",
-      });
-    }
-    if (opts.chromium.requires?.length) {
-      await ensureDeps(opts.chromium.requires);
-    }
-    return opts.chromium.handler(
-      services as unknown as ChromiumServices,
-      params,
-      device,
-      invokeOptions
-    );
+    // Declared but unwired, these throw 501 rather than fall through to another platform.
+    const run = async <S>(
+      impl: PlatformImpl<S, Params, Result> | undefined,
+      platform: Platform
+    ) => {
+      if (!impl) throw new NotImplementedOnPlatformError({ toolId: opts.toolId, platform });
+      if (impl.requires?.length) await ensureDeps(impl.requires);
+      return impl.handler(services as unknown as S, params, device, invokeOptions);
+    };
+    if (device.platform === "vega") return run(opts.vega, "vega");
+    if (device.platform === "harmony") return run(opts.harmony, "harmony");
+    if (device.platform === "macos") return run(opts.macos, "macos");
+    return run(opts.chromium, "chromium");
   };
 }

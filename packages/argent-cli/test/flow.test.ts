@@ -35,6 +35,17 @@ vi.mock("@argent/tools-client", async (importOriginal) => ({
   materializeArtifacts: materializeArtifactsMock,
 }));
 
+// The help lists `macos` from this flag, the host and the link, and reads the
+// link only with the flag on, off macOS. Off here, so no test depends on the
+// host or on the developer's flags files: test/e2e-help-platform.test.ts covers
+// that line. Every other flag reads as it does in production.
+vi.mock("@argent/configuration-core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/configuration-core")>();
+  const isFeatureEnabled: typeof actual.isFeatureEnabled = (name, ...rest) =>
+    name === "macos-apps" ? false : actual.isFeatureEnabled(name, ...rest);
+  return { ...actual, isFeatureEnabled };
+});
+
 interface StepFixture {
   index: number;
   kind: string;
@@ -192,17 +203,19 @@ describe("parseRunArgs", () => {
     );
   });
 
-  it("throws on a --platform value outside the platforms the help lists", () => {
-    for (const bad of ["iOS", "macos", "web", "android-tv"]) {
+  it("throws on a --platform value that is not a selectable platform", () => {
+    for (const bad of ["iOS", "macOS", "web", "android-tv"]) {
       expect(() => parseRunArgs(["checkout.yaml", "--platform", bad])).toThrow(FlagParseException);
       expect(() => parseRunArgs(["checkout.yaml", "--platform", bad])).toThrow(
-        `--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got "${bad}"`
+        `--platform must be "ios", "android", "chromium", "vega", "macos" or "ios-remote", got "${bad}"`
       );
       expect(() => parseRunArgs(["checkout.yaml", `--platform=${bad}`])).toThrow(
         FlagParseException
       );
     }
-    for (const good of ["ios", "android", "chromium", "vega", "ios-remote"]) {
+    // macos passes with the macos-apps flag off, where the help does not list
+    // it: the tool-server answers with why no Mac app is listed.
+    for (const good of ["ios", "android", "chromium", "vega", "macos", "ios-remote"]) {
       expect(parseRunArgs(["checkout.yaml", "--platform", good]).platform).toBe(good);
     }
   });
@@ -222,7 +235,7 @@ describe("parseRunArgs", () => {
       expect(() => parseRunArgs(["checkout.yaml", flag, ""])).toThrow(`${flag} requires a value`);
     }
     expect(() => parseRunArgs(["checkout.yaml", "--platform", ""])).toThrow(
-      '--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got ""'
+      '--platform must be "ios", "android", "chromium", "vega", "macos" or "ios-remote", got ""'
     );
   });
 
@@ -2591,7 +2604,7 @@ describe("argent e2e run <dir>", () => {
 
     expect(toolsClientMock.callTool).not.toHaveBeenCalled();
     expect(errs.join("\n")).toContain(
-      '--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got "iOS"'
+      '--platform must be "ios", "android", "chromium", "vega", "macos" or "ios-remote", got "iOS"'
     );
   });
 
@@ -2605,7 +2618,8 @@ describe("argent e2e run <dir>", () => {
     expect(errs.join("\n").split("\n")).toHaveLength(1);
     expect(JSON.parse(errs[0]!)).toEqual({
       event: "error",
-      error: '--platform must be "ios", "android", "chromium", "vega" or "ios-remote", got "iOS"',
+      error:
+        '--platform must be "ios", "android", "chromium", "vega", "macos" or "ios-remote", got "iOS"',
     });
   });
 

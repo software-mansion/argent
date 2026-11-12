@@ -21,6 +21,7 @@ import {
   type ToolsClient,
   type ToolsServerPaths,
 } from "@argent/tools-client";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import { FlagParseException } from "./flag-parser.js";
 import { parseCommandArgs, UsageError, type OptionSpecs } from "./command-args.js";
 
@@ -116,8 +117,27 @@ function durationSuffix(ms: unknown): string {
   return ` (${Math.floor(seconds / 60)}m ${seconds % 60}s)`;
 }
 
-function printHelp(toStderr = false): void {
+/**
+ * Whether the help lists `macos` under --platform: the flag is on, and a Mac
+ * can run the test. That is this host, or the tool-server that `argent link`
+ * or ARGENT_TOOLS_URL names, which can be a Mac when this host is not. Help
+ * reads the link (one local file, no network) and does not contact that
+ * tool-server, so a linked CLI lists `macos` whatever the remote host is.
+ */
+async function offersMacosPlatform(): Promise<boolean> {
+  if (!isFeatureEnabled("macos-apps")) return false;
+  if (process.platform === "darwin") return true;
+  try {
+    return (await getResolvedToolsUrl()).url !== null;
+  } catch {
+    return false;
+  }
+}
+
+async function printHelp(toStderr = false): Promise<void> {
   const print = toStderr ? console.error : console.log;
+  const offersMacos = await offersMacosPlatform();
+  const platforms = SELECTABLE_PLATFORMS.filter((p) => p !== "macos" || offersMacos);
   print(`Usage: argent e2e <subcommand> [options]
 
 Run a YAML e2e test without an LLM in the loop. \`run\` takes any of these forms:
@@ -188,7 +208,7 @@ Subcommands:
 
 Options (run):
   --device <id>          Device id to run against (auto-detected when omitted)
-  --platform <p>         ${SELECTABLE_PLATFORMS.join(" | ")} — narrow
+  --platform <p>         ${platforms.join(" | ")} — narrow
                          auto-detection (ios never picks a remote simulator)
   --update-baselines     Write/refresh screenshot baselines instead of diffing,
                          also those of tests that tool: e2e-execute steps run,
@@ -1552,7 +1572,7 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   const [sub, ...rest] = argv;
 
   if (!sub || sub === "--help" || sub === "-h") {
-    printHelp();
+    await printHelp();
     return;
   }
 
@@ -1623,17 +1643,17 @@ export async function e2e(argv: string[], options: E2eCommandOptions): Promise<v
   // value-taking flag (`--device --help` would otherwise throw "requires a
   // value" instead of printing help).
   if (rest.includes("--help") || rest.includes("-h")) {
-    printHelp(jsonStream);
+    await printHelp(jsonStream);
     return;
   }
-  const usageError = (message: string, prose: string): Promise<never> => {
+  const usageError = async (message: string, prose: string): Promise<never> => {
     if (json) {
       console.error(JSON.stringify(errorRecord(message)));
       return exitAfterFlush(2);
     }
     if (jsonStream) writeJsonStreamError(message);
     console.error(prose);
-    printHelp(jsonStream);
+    await printHelp(jsonStream);
     return exitAfterFlush(2);
   };
   let args: ReturnType<typeof parseRunArgs>;
