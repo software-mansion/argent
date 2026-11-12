@@ -11,6 +11,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { DeviceInfo } from "@argent/registry";
 
+// No notifyutil off macOS (CI runs on Linux): the start waits for the stub's
+// "Ctrl-C to stop" line instead, as it does when notifyutil is missing.
+vi.mock("../src/utils/ios-profiler/notify", () => ({
+  listenForDarwinNotification: vi.fn(() => {
+    throw new Error("notifyutil unavailable in this test");
+  }),
+}));
+
 vi.mock("../src/utils/ios-profiler/export", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-profiler/export")>()),
   exportIosTraceData: vi.fn(async () => ({
