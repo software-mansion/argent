@@ -18,6 +18,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `boot-device`                | Boot a simulator, emulator, Vega Virtual Device, or HarmonyOS emulator, spawn an Electron app, or start a Mac app                       |
 | `launch-app`                 | Open an app by bundle id (iOS) or package name (Android)                                                                                |
 | `restart-app`                | Terminate then relaunch an app                                                                                                          |
+| `terminate-app` (SDK only)   | Stop an app without relaunching it                                                                                                      |
 | `reinstall-app`              | Install or reinstall an app, clearing app data and runtime permissions                                                                  |
 | `open-url`                   | Open a URL or URL scheme on the device                                                                                                  |
 | `settings-permissions`       | Grant, deny, or reset a runtime permission without navigating the Settings UI                                                           |
@@ -92,19 +93,15 @@ With the `macos-apps` flag on, `list-devices` shows each native Mac app that Arg
 
 ## Inspecting the screen
 
-| Tool                | Description                                                                      |
-| ------------------- | -------------------------------------------------------------------------------- |
-| `screenshot`        | Capture the device screen                                                        |
-| `describe`          | Get the accessibility / DOM element tree for the current screen                  |
-| `screenshot-diff`   | Compare two PNG screenshots and return a visual-diff summary                     |
-| `await-screen-idle` | Block until the screen has rendered content and stopped changing                 |
-| `await-ui-element`  | Block until a UI element reaches an expected state, instead of polling in a loop |
-
-On an iOS simulator, a line of `describe` can show:
-
-- `[disabled]` for a control that is not enabled.
-- `[selected]` for a selected control.
-- `hint="..."` for an element that has a VoiceOver hint. `describe` omits a hint that is identical to the label. A physical iPhone does not report the VoiceOver hint.
+| Tool                        | Description                                                                      |
+| --------------------------- | -------------------------------------------------------------------------------- |
+| `screenshot`                | Capture the device screen                                                        |
+| `describe`                  | Get the accessibility / DOM element tree for the current screen                  |
+| `screenshot-diff`           | Compare two PNG screenshots and return a visual-diff summary                     |
+| `await-screen-idle`         | Block until the screen has rendered content and stopped changing                 |
+| `await-ui-element`          | Block until a UI element reaches an expected state, instead of polling in a loop |
+| `ui-tree` (SDK only)        | Get the raw accessibility tree as nested JSON, iOS simulator and Android         |
+| `foreground-app` (SDK only) | Get the app in front, iOS simulator and Android                                  |
 
 ## Interacting
 
@@ -119,6 +116,7 @@ On an iOS simulator, a line of `describe` can show:
 | `gesture-custom`         | Send an arbitrary sequence of touch events for complex gestures                    |
 | `keyboard`               | Type text or press special keys                                                    |
 | `paste`                  | Put text on the device clipboard and paste it (sim/emu), or insert it in a Mac app |
+| `fill` (SDK only)        | Set the text of the focused text field                                             |
 | `run-sequence`           | Execute several interaction steps in a single call                                 |
 | `screen-recording-start` | Start recording the screen to an h264 mp4                                          |
 | `screen-recording-stop`  | Stop the recording and retrieve the video                                          |
@@ -158,6 +156,8 @@ The [Mac apps](#mac-apps) section contains the details.
 
 | Tool                                     | Description                                                                                       |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `native-devtools-status`                 | Check whether native devtools are connected and injection is prepared (iOS)                       |
+| `native-describe-screen`                 | Read the app's native accessibility screen description                                            |
 | `native-full-hierarchy`                  | Get the complete UIKit view tree                                                                  |
 | `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`                                |
 | `native-view-at-point`                   | Inspect the deepest visible view at a native window point                                         |
@@ -226,10 +226,11 @@ On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`
 
 ## Chromium and Electron
 
-| Tool               | Description                                            |
-| ------------------ | ------------------------------------------------------ |
-| `chromium-tabs`    | List, switch, open, and close tabs or `BrowserWindow`s |
-| `chromium-cookies` | Read and write cookies, including `HttpOnly` ones      |
+| Tool               | Description                                                           |
+| ------------------ | --------------------------------------------------------------------- |
+| `chromium-tabs`    | List, switch, open, and close tabs or `BrowserWindow`s                |
+| `chromium-cookies` | Read and write cookies, including `HttpOnly` ones                     |
+| `chromium-storage` | Read and write `localStorage` and `sessionStorage` of the active page |
 
 ## Mac apps
 
@@ -506,35 +507,24 @@ Each window in the Window menu has an identifier. Use it to choose one of two wi
 
 ## Profiling
 
-| Tool                        | Description                                                                  |
-| --------------------------- | ---------------------------------------------------------------------------- |
-| `react-profiler-start`      | Start CPU profiling and React commit capture on the connected Hermes runtime |
-| `react-profiler-stop`       | Stop profiling and collect the CPU profile and commit tree                   |
-| `react-profiler-status`     | Check if a React profiler run records, was saved, was lost or taken over     |
-| `react-profiler-analyze`    | Analyze stored profiling data into a markdown performance report             |
-| `react-profiler-fiber-tree` | Inspect the React fiber tree as JSON                                         |
-| `native-profiler-start`     | Start native profiling: Instruments on iOS, Perfetto on Android              |
-| `native-profiler-stop`      | Stop native profiling and export the trace                                   |
-| `native-profiler-analyze`   | Analyze an exported native trace into a markdown report                      |
-| `profiler-combined-report`  | Cross-correlate React Profiler and native profiler data                      |
-| `profiler-load`             | Restore a previously captured session from disk so query tools can use it    |
-| `profiler-commit-query`     | Query React commit data, or the render counts of each component              |
-| `profiler-cpu-query`        | Query Hermes CPU profile data with targeted modes                            |
-| `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
-
-In the `top_functions` and `time_window` modes, `profiler-cpu-query` gives the self time of each call-tree node as a share of the sampled time. A function that runs on several call paths has one row for each path, and `top_n` counts rows. With `react_only`, `profiler-cpu-query` lists only the functions with a PascalCase name, which is the name format of a React component.
-
-`react-profiler-stop` stores the data of each component only for the hot commits and the commits next to them. A commit is hot when it takes 16 ms or more. `react-profiler-stop` also stores the render count and the render time of each component over all commits. `profiler-commit-query` with `mode: "render_counts"` returns these counts. A session that an older version of Argent stored does not have them.
-
-The report of `react-profiler-analyze` contains these items:
-
-- The `React render time` line: total render time, session length, share of the session, largest share in one second, and number of commits. These values are approximate. React DevTools gives only the largest rendered subtree of each commit as the commit duration. Argent uses the sum of the component render times of a commit when that sum is larger. The values do not include effects or native work. A development build is slower than a production build.
-- "No commit reached 16ms" when no commit takes 16 ms or more. The report does not say that the session is good or bad.
-- A warning when no commit is hot but a commit takes 16 ms or more. Argent can name no component of this commit, so Argent does not store it.
-- A "Most Frequent Re-renders" table. A report with no hot commit contains the table only when a component meets the conditions below. A report with hot commits contains the table only when a component in it is not in the Top Components table. The table lists up to 5 app components, sorted by render time per second. Other components that meet the conditions are named in one line. In a report with hot commits, that line leaves out components already in the Top Components table. A component must re-render in 10 or more commits and use 1 ms or more of render time per second. A row shows what re-rendered. It does not show a problem. React Native components, list internals, animation wrappers, providers and development components are not in the table. When Argent cannot index the source in `project_root`, the table can also contain library components, and the text above the table says so.
-- In the Top Components table, `Renders` shows two counts: the re-renders in the stored commits and the re-renders in all commits. An example is `6 / 50`.
-
-When a session has no hot commits, the other modes of `profiler-commit-query` return a message that tells the agent to use `render_counts`.
+| Tool                              | Description                                                                  |
+| --------------------------------- | ---------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU profiling and React commit capture on the connected Hermes runtime |
+| `react-profiler-stop`             | Stop profiling and collect the CPU profile and commit tree                   |
+| `react-profiler-status`           | Check the profiler session state without side effects                        |
+| `react-profiler-analyze`          | Analyze stored profiling data into a markdown performance report             |
+| `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree             |
+| `react-profiler-fiber-tree`       | Inspect the React fiber tree as JSON                                         |
+| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                              |
+| `react-profiler-component-source` | Find a component's source file, line, and memoization status                 |
+| `native-profiler-start`           | Start native profiling: Instruments on iOS, Perfetto on Android              |
+| `native-profiler-stop`            | Stop native profiling and export the trace                                   |
+| `native-profiler-analyze`         | Analyze an exported native trace into a markdown report                      |
+| `profiler-combined-report`        | Cross-correlate React Profiler and native profiler data                      |
+| `profiler-load`                   | Restore a previously captured session from disk so query tools can use it    |
+| `profiler-commit-query`           | Query React commit data for iterative render investigation                   |
+| `profiler-cpu-query`              | Query Hermes CPU profile data with targeted modes                            |
+| `profiler-stack-query`            | Query native trace data for iterative native investigation                   |
 
 While a profiler that `react-profiler-start` or `native-profiler-start` started records on a device, interaction tools on that device return no automatic screenshot or element tree. The tool-server sets `profiling: true` on the tool-call response, and the MCP server returns a note in place of the capture. An explicit `describe` call returns its tree and no note. Call `screenshot` or `describe` to see the screen. Through the MCP server, an interaction tool still waits until the screen stops changing before it returns, so a `screenshot` or `describe` called next shows the screen after the interaction. The skip ends when the profiler stops, when the 10-minute recording cap ends the capture, when the app reloads its JavaScript during a React profile, or when the profiler session ends. On an Android emulator or device, Argent also sets the simulator-server of the device to on-demand screenshots while a profiler records. On an emulator, a `screenshot` then takes one frame in about 100 ms. On a physical device, a `screenshot` takes about 150 ms to 200 ms. It starts the screen capture for a short time. Interaction tools do not start the screen capture. When the last profiler on the device stops, Argent sets the simulator-server back to the default mode. An older simulator-server ignores the setting and keeps the default mode.
 
@@ -546,61 +536,21 @@ When two or more devices use one Metro, `react-profiler-start` takes the `logica
 
 When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
 
-One React profiler run at a time can record in an app. `react-profiler-status` returns one of these `session_status` values:
-
-| Value              | Meaning                                                                                               |
-| ------------------ | ----------------------------------------------------------------------------------------------------- |
-| `active`           | A run that this tool-server started records, or `react-profiler-stop` collects the run                |
-| `saved`            | No run records. `saved_session` names the files of the last run, or of a session from `profiler-load` |
-| `lost`             | Argent did not save the last run of this tool-server. `lost_run.cause` gives the reason               |
-| `taken_over`       | Another session records, or another session replaced the run of this tool-server                      |
-| `not_started`      | No run records, and this tool-server has no run on record for the device                              |
-| `no_react_runtime` | Argent cannot read the React runtime of the app                                                       |
-
-The `lost_run.cause` values are `js_reload`, `cdp_disconnected`, `session_torn_down`, `taken_over`, `stop_failed` and `ended_in_app`. After `ended_in_app`, the data stays in the app. Call `react-profiler-stop` to collect the data. A `react-profiler-start` discards the data.
-
-The tool-server keeps this record in memory only. The shutdown of the tool-server ends the run in the app first. `react-profiler-status` then returns `not_started`. The idle shutdown, SIGTERM, an update and an uncaught exception start this shutdown. The tool-server waits a short time for the app to answer. If the app does not answer, or if the shutdown does not run, the run continues in the app. The new tool-server then shows the run as `taken_over`.
-
-Examples of an exit without the shutdown:
-
-- A `kill -9`, or a native abort such as an out-of-memory kill.
-- A SIGHUP. Closing the terminal of a foreground `argent server start` sends a SIGHUP.
-- `argent server stop` or an update on Windows. On Windows, SIGTERM ends the process immediately.
-
-A run is stale when its heartbeat is older than 5 minutes, also while you use the app during a long recording. `react-profiler-status`, `react-profiler-renders` and `react-profiler-fiber-tree` refresh the heartbeat of a run that their tool-server records. They do not refresh the heartbeat of a session that replaced this run.
-
-For an `active` run, `react-profiler-status` returns `stale` and `heartbeat_age_seconds`. It reads these values before it refreshes the heartbeat. Only the first call after the heartbeat goes stale returns `stale: true`.
-
-`react-profiler-start` handles a run that records:
-
-- A run that this tool-server records: `react-profiler-start` returns `already_running` with `mine: true`, `stale` and `heartbeat_age_seconds`. The value of `mine` identifies the tool-server, not the agent. The run can belong to another agent on the same tool-server. Call `react-profiler-stop` to collect your run. If `stale` is `true` and you did not start the run, ask the user before you pass `force: true`.
-- A fresh run of another session: `react-profiler-start` returns `already_running` with `mine: false`. Ask the user before you pass `force: true`.
-- A stale run of another tool-server, a run without an owner record, or a lost run of this tool-server: `react-profiler-start` stops the run and starts a new one. It does the same for any run when you pass `force: true`. The result has `took_over` with the replaced session and the reason.
-
-When another session replaced the run, `react-profiler-stop` fails with `REACT_PROFILER_SESSION_TAKEN_OVER`, also after that session stopped. It does not stop the other recording. If profiling stopped outside Argent and no session replaced the run, `react-profiler-stop` collects the data of the run.
-
-On React Native 0.84 and older, Metro allows one debugger for each app. Any connection from a second tool-server, also a read-only `react-profiler-status`, disconnects the first tool-server. This happens before the second agent can ask the user. Argent records the run of the first tool-server as `cdp_disconnected`, and its `react-profiler-stop` fails with `REACT_PROFILER_NO_ACTIVE_SESSION`, not `REACT_PROFILER_SESSION_TAKEN_OVER`. On 0.85 and newer, Metro disconnects the earlier debugger only for a page without the `supportsMultipleDebuggers` capability.
-
-While `react-profiler-stop` collects a run, wait for its result:
-
-- `react-profiler-status` returns `active`.
-- `react-profiler-start` returns `already_running` with `mine: true`, also when you pass `force: true`.
-- A second `react-profiler-stop` fails with `REACT_PROFILER_STOP_IN_PROGRESS`.
-
 <a id="flows" />
 
 ## E2E
 
 The old `flow-*` names, for example `flow-execute`, still call these tools. See [Record and replay e2e tests](/docs/features/e2e).
 
-| Tool                   | Description                                                         |
-| ---------------------- | ------------------------------------------------------------------- |
-| `e2e-start-recording`  | Start recording a new e2e test, resetting `.argent/e2e/<name>.yaml` |
-| `e2e-add-step`         | Execute a tool call and record it as a step in the open recording   |
-| `e2e-add-echo`         | Record an echo step that prints a message during replay             |
-| `e2e-add-script`       | Run a local `.mjs` file and add it to the open recording            |
-| `e2e-finish-recording` | Finish the recording and write the e2e test to disk                 |
-| `e2e-execute`          | Run a saved e2e test                                                |
+| Tool                    | Description                                                         |
+| ----------------------- | ------------------------------------------------------------------- |
+| `e2e-start-recording`   | Start recording a new e2e test, resetting `.argent/e2e/<name>.yaml` |
+| `e2e-add-step`          | Execute a tool call and record it as a step in the open recording   |
+| `e2e-add-echo`          | Record an echo step that prints a message during replay             |
+| `e2e-add-script`        | Run a local `.mjs` file and add it to the open recording            |
+| `e2e-finish-recording`  | Finish the recording and write the e2e test to disk                 |
+| `e2e-execute`           | Run a saved e2e test                                                |
+| `e2e-read-prerequisite` | Read the execution prerequisite of an e2e test without running it   |
 
 ## Design variants
 
@@ -613,48 +563,18 @@ Staged through [Argent Lens](/docs/features/lens) so you can compare proposals a
 
 ## Workspace and maintenance
 
-| Tool             | Description                                        |
-| ---------------- | -------------------------------------------------- |
-| `update-argent`  | Apply a pending Argent update                      |
-| `dismiss-update` | Postpone the update reminder for a number of hours |
-
-## SDK-only tools
-
-Argent hides these tools from MCP, so the agent does not see them. Call them with the [Argent SDK](./node-client.mdx), `argent run <name>`, or a `tool:` step in an e2e test. The SDK exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
-
-| Tool                              | Description                                                              | Tool for the agent                               |
-| --------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------ |
-| `terminate-app`                   | Stop an app without relaunching it                                       | `restart-app`                                    |
-| `ui-tree`                         | Get the raw accessibility tree as nested JSON, iOS simulator and Android | `describe`                                       |
-| `foreground-app`                  | Get the app in front, iOS simulator and Android                          | None                                             |
-| `fill`                            | Set the text of the focused text field                                   | `keyboard`                                       |
-| `native-devtools-status`          | Check whether native devtools are connected and injection is prepared    | Any other `native-*` tool                        |
-| `native-describe-screen`          | Read the app's native accessibility screen description                   | `describe`                                       |
-| `chromium-storage`                | Read and write `localStorage` and `sessionStorage` of the active page    | `debugger-evaluate`                              |
-| `react-profiler-cpu-summary`      | Return the top Hermes CPU hotspots by self-time                          | `profiler-cpu-query`, mode `top_functions`       |
-| `react-profiler-component-source` | Find a component's source file, line, and memoization status             | `react-profiler-analyze`                         |
-| `react-profiler-renders`          | Count mounted instances of each component in the live fiber tree         | `profiler-commit-query`, mode `render_counts`    |
-| `e2e-read-prerequisite`           | Read the execution prerequisite of an e2e test without running it        | `e2e-execute` without `prerequisiteAcknowledged` |
-| `gather-workspace-data`           | Fetch a structured snapshot of the app project's workspace               | None                                             |
-
-Some agent tools do not always give the same result as the hidden tool:
-
-- `restart-app` always relaunches the app. No agent tool leaves an app stopped. When the app is not installed, `restart-app` fails and `terminate-app` succeeds.
-- `describe` returns pruned text with one line for each element, not the raw tree. On an iOS simulator, the text does not show which element contains which. `describe` does not give the `hidden`, `covered`, `alertVisible`, `keyboardVisible` or `foregroundApp` fields.
-- `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` does not.
-- `native-describe-screen`, `native-find-views`, `native-full-hierarchy`, `native-view-at-point`, `native-user-interactable-view-at-point` and, on iOS, `native-network-logs` return the same `message` as `native-devtools-status` when native devtools are not connected. Their `status` names the remedy, where `native-devtools-status` gives `state`. They fail instead for an Apple system app and for an app that a device provider did not lend. `native-profiler-*` do not use native devtools.
-- `describe` shows the disabled and selected states and the VoiceOver hint on an iOS simulator. `describe` does not show the frames in points, the view class or some traits, such as `toggleButton`. `native-describe-screen` returns them.
-- `chromium-storage` with no key returns every entry. Through `debugger-evaluate`, a bare `localStorage` returns `{}`, so use `Object.fromEntries(Object.entries(localStorage))`.
-- `profiler-cpu-query` measures each CPU sample with its own interval and does not list idle time as a function. Thus its times can be different from the times of `react-profiler-cpu-summary`. `react-profiler-cpu-summary` lists anonymous functions as `(anonymous)`. `profiler-cpu-query` counts them as idle.
-- `react-profiler-analyze` gives the file and the line of the components in its table that it finds in the project. A library component has no file, and a component that is only in a commit cascade has no file. The report shows the source of the five components with the highest total render time. It can show fewer than five, because it needs the file of each component. For other components, the agent searches the source files. When several files define a name, the report selects one file for the platform of the recording and names up to three other files. The report can select the wrong file for a name that many components share, for example `Content`. The report marks a component that React DevTools records as `Memo(...)` with `[React.memo]`. It does not give `hasUseCallback` or `hasUseMemo`.
-- `react-profiler-component-source` fails when `project_root` is not on the computer of the tool-server. `react-profiler-analyze` returns the report with a `warning`. When no component in the report table is in `project_root`, the `warning` says so. This can mean that all components in the table are library components, or that `project_root` is wrong. When `project_root` holds no components, `react-profiler-analyze` uses the project root that Metro reports, and the `warning` says so.
-- `react-profiler-renders` reads only the top 30 levels of the React fiber tree and counts the mounted components, not the re-renders. For render counts, use `profiler-commit-query` with `mode: "render_counts"` after a profiling session.
-- `e2e-execute` without `prerequisiteAcknowledged` returns the execution prerequisite and runs no step only when the e2e test has a prerequisite. When the e2e test has no prerequisite, `e2e-execute` runs the e2e test.
-
-`terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones and Mac apps are not supported yet.
-
-In `ui-tree`, fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset. `foreground-app` returns the same `foregroundApp` and `alertVisible` without reading the tree, plus the app's `name` on iOS.
+| Tool                               | Description                                                |
+| ---------------------------------- | ---------------------------------------------------------- |
+| `gather-workspace-data` (SDK only) | Fetch a structured snapshot of the app project's workspace |
+| `update-argent`                    | Apply a pending Argent update                              |
+| `dismiss-update`                   | Silence update reminders for a number of hours             |
 
 ## Footnotes
 
 Argent marks the tools that only read state with the MCP `readOnlyHint` annotation. Examples are `screenshot`, `describe`, `debugger-component-tree`, `list-devices` and the profiler query tools. In plan mode, Claude Code runs these tools without a permission prompt. Tools that change the device, the app or files, and `debugger-evaluate`, do not have the annotation.
+
+`terminate-app`, `ui-tree`, `foreground-app`, `fill` and `gather-workspace-data` are hidden from MCP. Call them with the [Argent SDK](./node-client.mdx), which exports the `UiTree`, `ForegroundApp` and `FillResult` result types.
+
+`terminate-app` works on iOS and tvOS simulators, Android emulators and devices, and Vega Virtual Devices. On an iOS simulator it succeeds with `terminated: false` when the app is not running or not installed. Android and Vega always report `terminated: true`. Physical iPhones and Mac apps are not supported yet.
+
+In `ui-tree`, fields a platform cannot report yet are listed in `unsupportedFields`. A node is `hidden` when no part of it is on screen inside its ancestors. On iOS, while a system alert shows, `roots` holds the system app first and the app it covers second. On Android, `roots` holds one root per window, topmost first. A system dialog, such as a runtime permission prompt or a crash dialog, sets `alertVisible`, and every node of the app it covers is `covered`. When Android hides the app's window under the dialog, `foregroundApp` is unset. `foreground-app` returns the same `foregroundApp` and `alertVisible` without reading the tree, plus the app's `name` on iOS.

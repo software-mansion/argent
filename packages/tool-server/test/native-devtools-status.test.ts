@@ -1,6 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
-import * as path from "node:path";
 import { FailureError, FAILURE_CODES, Registry, getFailureSignal } from "@argent/registry";
 import {
   buildAppStateMessage,
@@ -95,34 +93,6 @@ function makeNativeApi(options: {
 }
 
 describe("native-devtools-status tool", () => {
-  // Agents get the disabled and selected states and the VoiceOver hint from
-  // describe; the SDK still calls the tool directly.
-  it("hides native-describe-screen from MCP", () => {
-    expect(nativeDescribeScreenTool.hideFromMcp).toBe(true);
-  });
-
-  // An MCP agent does not have the tool, so no description, warning or error may
-  // send it there. Its own file and the two references that are code are exempt.
-  it("names native-describe-screen nowhere an MCP agent can read it", () => {
-    const srcRoot = path.resolve(__dirname, "../src");
-    const sources = readdirSync(srcRoot, { recursive: true, encoding: "utf8" })
-      .filter((file) => file.endsWith(".ts") && !file.endsWith("/native-describe-screen.ts"))
-      .map((file) => path.join(srcRoot, file));
-    const mentions = sources.filter((file) =>
-      readFileSync(file, "utf8")
-        .replace(/^ +"native-describe-screen",$/m, "") // NATIVE_DEVTOOLS_PRECHECK_TOOLS
-        .replace(/from "[^"]*\/native-describe-screen";/, "") // setup-registry.ts
-        .includes("native-describe-screen")
-    );
-    expect(mentions.map((file) => path.relative(srcRoot, file))).toEqual([]);
-  });
-
-  // Agents get the same status from every native-* tool; the SDK still calls it
-  // directly.
-  it("is hidden from MCP", () => {
-    expect(nativeDevtoolsStatusTool.hideFromMcp).toBe(true);
-  });
-
   it("reports a running uninjected app as needing restart", async () => {
     const { api, ensureEnvReady } = makeNativeApi({ appRunning: true, connected: false });
 

@@ -90,8 +90,8 @@ export interface RawProfilingInput {
     detectedArchitecture?: "bridge" | "bridgeless";
     anyCompilerOptimized?: boolean; // pre-scanned in react-profiler-stop before hot filtering
     hotCommitIndices?: number[]; // commits whose heat reached the 16ms floor
-    noHotCommits?: boolean; // no named commit reached the 16ms floor
-    maxCommitMs?: number; // slowest commit when noHotCommits=true
+    allClear?: boolean; // every commit stayed under the 16ms floor
+    maxCommitMs?: number; // max commit heat when allClear=true
     totalReactCommits?: number; // all commit batches, including ones hot filtering dropped
     unattributedByCommit?: Array<[number, number, number]>;
   };

@@ -72,10 +72,10 @@ export async function runPipeline(
     componentFindings,
     sessionContext: tagOutput.sessionContext,
     recordingMs: tagOutput.recordingMs,
-    noHotCommits: input.sessionMeta.noHotCommits ?? false,
+    allClear: input.sessionMeta.allClear ?? false,
     maxCommitMs: input.sessionMeta.maxCommitMs,
     anyRuntimeCompilerDetected: tagOutput.anyRuntimeCompilerDetected,
-    // With no hot commit no commits are kept, so tagOutput.reactCommits is 0
+    // The all-clear path keeps no commits, so tagOutput.reactCommits is 0
     reactCommits: input.sessionMeta.totalReactCommits ?? tagOutput.reactCommits,
     fiberRenders: tagOutput.fiberRenders,
     totalFirstMounts: tagOutput.totalFirstMounts,

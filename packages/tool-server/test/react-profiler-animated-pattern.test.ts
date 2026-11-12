@@ -8,6 +8,7 @@ import type {
 } from "../src/utils/react-profiler/types/pipeline";
 const sessionContext: SessionContext = {
   reactCompilerEnabled: false,
+  strictModeEnabled: false,
   buildMode: "dev",
   rnArchitecture: "bridge",
   projectRoot: "/proj",
@@ -17,6 +18,7 @@ function slow(name: string): EnrichedComponent {
   return {
     name,
     n: 10,
+    normalizedRenderCount: 10,
     mean: 20,
     min: 5,
     max: 40,

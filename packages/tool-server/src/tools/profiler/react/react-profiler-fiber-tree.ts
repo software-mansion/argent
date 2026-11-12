@@ -5,12 +5,8 @@ import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
-import {
-  buildHeartbeatScript,
-  FIBER_ROOT_TRACKER_SCRIPT,
-} from "../../../utils/react-profiler/scripts";
+import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
 import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
-import { canonicalDeviceId } from "../../../utils/debugger/device-alias";
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 
 const HOOK_MISSING_ERROR = "no __REACT_DEVTOOLS_GLOBAL_HOOK__";
@@ -130,15 +126,14 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
   // RN-only: walks the fiber tree via the React DevTools backend hook.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
-    // Same key as react-profiler-start, so a forwarded logicalDeviceId reads its run.
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${metroPort(params)}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
 
-    if (api.profilingActive && api.sessionId && api.ownerToolServerPid === process.pid) {
-      await cdp.evaluate(buildHeartbeatScript(api.sessionId)).catch(() => {});
+    if (api.profilingActive && api.ownerToolServerPid === process.pid) {
+      await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
     }
 
     const script = buildFiberTreeScript(params.max_depth, params.filter ?? "");

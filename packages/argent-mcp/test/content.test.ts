@@ -38,19 +38,6 @@ describe("toMcpContent", () => {
     expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) }]);
   });
 
-  it("keeps a warning that sits beside a long report in the text an agent reads", async () => {
-    const warning = "No source files found under project_root";
-    const result = await toMcpContent({ report: "x".repeat(50_000), warning });
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ type: "text" });
-    expect((result[0] as { text: string }).text).toContain(warning);
-  });
-
-  it("keeps the order of the result's keys, so a warning placed first is read first", async () => {
-    const result = await toMcpContent({ warning: "first", report: "x".repeat(50_000) });
-    expect((result[0] as { text: string }).text.indexOf('"warning"')).toBeLessThan(10);
-  });
-
   it("returns JSON text block when outputHint is not image", async () => {
     const result = await toMcpContent({ url: "http://x" }, "other");
     expect(result).toEqual([

@@ -167,7 +167,8 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
   description: `Press the device screen (iOS simulator or physical device, Android emulator, <flag:harmonyos>HarmonyOS device, </flag:harmonyos><flag:macos-apps>Mac app, </flag:macos-apps>or Chromium app) at a point given as fractions of the screen width and height (not pixels): a Down event followed by an Up event at the same spot.<flag:macos-apps> On a Mac app it is a click, and x/y are fractions of the area describe reports, not of the window.</flag:macos-apps>
 Use when tapping a button, link, or any tappable element on the screen.
 Returns { tapped: true, timestampMs }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if the device backend (simulator-server / emulator / Chromium CDP<flag:harmonyos> / \`hdc\`</flag:harmonyos>) is unreachable.
-Before tapping, take the coordinates from \`describe\` on every platform (on Chromium it walks the DOM<flag:harmonyos>, on HarmonyOS it reads the \`uitest\` layout dump</flag:harmonyos>). More information in \`argent-device-interact\` skill`,
+On a physical iPhone use \`describe\`; \`native-describe-screen\` is simulator-only.
+Before tapping, determine the correct coordinates by using discovery tools. Pick by platform: iOS / Android use \`describe\` (on an iOS simulator, also \`native-describe-screen\`); Chromium uses \`describe\` (the DOM walker)<flag:harmonyos> and HarmonyOS uses \`describe\` (the \`uitest\` layout dump)</flag:harmonyos>, since the native discovery tools don't apply<flag:harmonyos> to either</flag:harmonyos><flag:macos-apps>; a Mac app uses \`describe\`</flag:macos-apps>. More information in \`argent-device-interact\` skill`,
   zodSchema,
   alwaysLoad: true,
   // A physical iPhone's first call waits out the runner build, past the MCP fetch timeout,

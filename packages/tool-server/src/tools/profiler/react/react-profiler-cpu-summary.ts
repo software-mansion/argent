@@ -125,11 +125,6 @@ Use when you specifically need to investigate JS CPU hotspots that are NOT tied 
 Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   zodSchema,
   readOnly: true,
-  // Agents use profiler-cpu-query mode top_functions, which reads the same
-  // profile with per-sample intervals and idle filtered out, and has the same
-  // react_only filter and Self % column. The SDK and the e2e-full suite still
-  // call it.
-  hideFromMcp: true,
   interaction: {
     startedMsg: () => "Summarizing React CPU profile",
     completedMsg: () => "Summarized React CPU profile",

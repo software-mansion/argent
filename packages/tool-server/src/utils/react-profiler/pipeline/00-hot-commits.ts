@@ -59,8 +59,6 @@ export function buildHotCommitSummaries(
       return !(cd === null || cd.isFirstMount === true);
     });
 
-    const rerenderNames = new Set(rerenderEntries.map((e) => e.componentName));
-
     // All entries, first mounts included, so navigation mount cost stays visible
     const componentMap = new Map<
       string,
@@ -73,9 +71,8 @@ export function buildHotCommitSummaries(
       }
     >();
     for (const e of entries) {
-      // No change data is not a mount: DevTools records none for a context
-      // fiber on any render, and `render_counts` counts those apart too.
-      const isFirstMount = e.changeDescription?.isFirstMount === true;
+      const cd = e.changeDescription;
+      const isFirstMount = cd === null || cd.isFirstMount === true;
       const existing = componentMap.get(e.componentName);
       if (existing) {
         existing.totalSelf += e.selfDuration ?? 0;
@@ -100,12 +97,10 @@ export function buildHotCommitSummaries(
       .slice(0, MAX_COMPONENT_ENTRIES)
       .map(([name, { totalSelf, totalActual, count, firstEntry, isFirstMount }]) => {
         const cd = firstEntry.changeDescription;
-        // A reason needs a re-render: mounts and fibers with no change data have none.
-        const rerendered = rerenderNames.has(name);
-        const reason = rerendered && cd ? deriveReason(cd, firstEntry.hookTypes) : undefined;
+        const reason = !isFirstMount && cd ? deriveReason(cd, firstEntry.hookTypes) : undefined;
 
         let topChangedHookNames: string[] | undefined;
-        if (rerendered && cd?.hooks && cd.hooks.length > 0 && firstEntry.hookTypes) {
+        if (!isFirstMount && cd?.hooks && cd.hooks.length > 0 && firstEntry.hookTypes) {
           const seen = new Set<string>();
           topChangedHookNames = [];
           for (const idx of cd.hooks.slice(0, 3)) {
@@ -125,7 +120,7 @@ export function buildHotCommitSummaries(
           count,
           ...(isFirstMount && { isFirstMount: true }),
           ...(reason !== undefined && { reason }),
-          ...(rerendered &&
+          ...(!isFirstMount &&
             cd?.props &&
             cd.props.length > 0 && { topChangedProps: cd.props.slice(0, 3) }),
           ...(topChangedHookNames && { topChangedHookNames }),

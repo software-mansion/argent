@@ -1555,7 +1555,7 @@ const zodSchema = z
       .boolean()
       .optional()
       .describe(
-        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite: without it, the call runs no step and returns the prerequisite text. Not a dry run: an e2e test with no prerequisite runs in full. To read a prerequisite without running, read executionPrerequisite in the YAML file."
+        "Set to true to confirm the execution prerequisite has been met. Required when a fragment defines an executionPrerequisite."
       ),
   })
   .superRefine((params, ctx) => {
