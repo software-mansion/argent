@@ -478,7 +478,7 @@ describe("setAudioInput", () => {
   it("converts a file to mono float32 48 kHz and streams it from the copy", async () => {
     const source = path.join(dir, "speech.mp3");
     fs.writeFileSync(source, "x");
-    const result = await setAudioInput(session, { kind: "file", path: source, loop: true });
+    const result = await setAudioInput(session, { kind: "file", path: source, plays: 3 });
 
     const [cmd, args] = execFileMock.mock.calls.find(([c]) => c === "afconvert")!;
     expect(cmd).toBe("afconvert");
@@ -491,11 +491,11 @@ describe("setAudioInput", () => {
   it("keeps one ring while the source changes, and drops the previous clip", async () => {
     const source = path.join(dir, "a.wav");
     fs.writeFileSync(source, "x");
-    await setAudioInput(session, { kind: "file", path: source, loop: false });
+    await setAudioInput(session, { kind: "file", path: source, plays: 1 });
     const ring = inputRing();
     const [first] = fs.readdirSync(dir).filter((n) => n.startsWith("clip-"));
     await new Promise((resolve) => setTimeout(resolve, 5)); // clip names carry a millisecond stamp
-    await setAudioInput(session, { kind: "file", path: source, loop: false });
+    await setAudioInput(session, { kind: "file", path: source, plays: 1 });
     expect(inputRing()).toBe(ring);
     expect(fs.existsSync(path.join(dir, first))).toBe(false);
     expect(fs.readdirSync(dir).filter((n) => n.startsWith("clip-"))).toHaveLength(1);
@@ -508,16 +508,16 @@ describe("setAudioInput", () => {
       wavFile(args[args.length - 1], 600 * 48_000 + 1);
       return { stdout: "", stderr: "" };
     });
-    await expect(
-      setAudioInput(session, { kind: "file", path: source, loop: false })
-    ).rejects.toThrow("longer than 10 minutes");
+    await expect(setAudioInput(session, { kind: "file", path: source, plays: 1 })).rejects.toThrow(
+      "longer than 10 minutes"
+    );
     expect(fs.readdirSync(dir).filter((n) => n.startsWith("clip-"))).toEqual([]);
     expect(fs.existsSync(path.join(dir, "input"))).toBe(false);
   });
 
   it("rejects a missing file before touching the control directory", async () => {
     await expect(
-      setAudioInput(session, { kind: "file", path: "/nonexistent/clip.wav", loop: false })
+      setAudioInput(session, { kind: "file", path: "/nonexistent/clip.wav", plays: 1 })
     ).rejects.toThrow("Audio file not found");
     expect(fs.existsSync(path.join(dir, "input"))).toBe(false);
   });
@@ -528,7 +528,7 @@ describe("setAudioInput", () => {
     execFileMock.mockImplementationOnce(() => {
       throw Object.assign(new Error("failed"), { stderr: "Error: AudioFileOpen failed" });
     });
-    const err = await setAudioInput(session, { kind: "file", path: source, loop: false }).catch(
+    const err = await setAudioInput(session, { kind: "file", path: source, plays: 1 }).catch(
       (e: unknown) => e
     );
     expect((err as Error).message).toContain("AudioFileOpen failed");

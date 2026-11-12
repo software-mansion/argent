@@ -14,7 +14,7 @@ Use this to test features that depend on sound without a person who speaks or li
 
 The agent gives the app an audio file or a generated tone in place of the microphone. The app uses its normal audio APIs and does not change. The app does not hear the real microphone of your Mac.
 
-- A file plays from the moment the agent sets it, and again each time the app opens a new audio input. An app that keeps its audio session open between recordings does not open a new input, so the agent sets the file again right before the app records. After the end, the app hears silence. The agent can also loop the file.
+- A file plays from the moment the agent sets it. The agent sets how many times the file plays. By default, the file plays one time. After the last play, the app hears silence. Each time the app opens a new audio input, the file starts again from the first play. An app that keeps its audio session open between recordings does not open a new input, so the agent sets the file again right before the app records.
 - A tone has a frequency and a level.
 - The agent can change the input while the app records. A new source starts from its beginning.
 - The agent releases the input to give the real microphone back.

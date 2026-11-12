@@ -79,6 +79,32 @@ describe("audio-input params", () => {
     expect(resolveService).not.toHaveBeenCalled();
   });
 
+  it.each([0, -1, 1.5])("rejects plays=%s before resolving services", async (plays) => {
+    const { registry, resolveService } = registryRig();
+    await expect(
+      registry.invokeTool("audio-input", {
+        udid: "0000CCCC-0000-0000-0000-000000000000",
+        source: "file",
+        path: "/tmp/clip.wav",
+        plays,
+      })
+    ).rejects.toThrow(/`plays`: (Too small|Must be a whole number)/);
+    expect(resolveService).not.toHaveBeenCalled();
+  });
+
+  it("accepts any whole plays count, past 2^53 too, and advertises an integer with no ceiling", () => {
+    const { registry } = registryRig();
+    const tool = registry.getTool("audio-input")!;
+    for (const plays of [1, 3, 2 ** 53 + 2, JSON.parse("3291419284712089740912384") as number]) {
+      expect(
+        tool.zodSchema!.safeParse({ udid: "x", source: "file", path: "/a.wav", plays }).success
+      ).toBe(true);
+    }
+    const plays = (tool.inputSchema!.properties as Record<string, Record<string, unknown>>).plays;
+    expect(plays).toMatchObject({ type: "integer", minimum: 1 });
+    expect(plays).not.toHaveProperty("maximum");
+  });
+
   it("keeps the rule out of the advertised schema's top level", () => {
     const { registry } = registryRig();
     const schema = registry.getTool("audio-input")!.inputSchema!;

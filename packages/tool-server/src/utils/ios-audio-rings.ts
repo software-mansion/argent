@@ -91,7 +91,8 @@ export function readClipInfo(fd: number): ClipInfo {
 }
 
 export type FeederSource =
-  | { kind: "clip"; fd: number; info: ClipInfo; loop: boolean }
+  /** `plays` is the number of times the clip plays before silence; any count works, up to practically forever. */
+  | { kind: "clip"; fd: number; info: ClipInfo; plays: number }
   | { kind: "tone"; frequencyHz: number; amplitude: number };
 
 function closeSource(source: FeederSource): void {
@@ -112,6 +113,11 @@ export class InputFeeder {
   private streamStart = 0;
   private lastRequest: number;
   private clipPos = 0;
+  /**
+   * Times the clip started again since the stream started. A count past 2^53 stops growing (x + 1 === x), so a
+   * larger `plays` never ends; reaching 2^53 plays takes thousands of years even for a one-frame clip.
+   */
+  private replays = 0;
   private phase = 0;
   private timer: NodeJS.Timeout | undefined;
   running = true;
@@ -160,10 +166,11 @@ export class InputFeeder {
     }
     // Right after a rewind the app's cursor still points into the old stream: count from the new start. The
     // comparison is a signed 32-bit difference, so an app that listened for 2^30 frames (6 h) since the last rewind
-    // is rewound here before the difference could flip; a looping clip or tone is unaffected by a rewind.
+    // is rewound here before the difference could flip. That rewind keeps the source where it is: a clip that
+    // played its count stays silent.
     const since = (readFrame - this.streamStart) >>> 0;
     if (since >= 2 ** 30 && since < 2 ** 31) {
-      this.restart();
+      this.rewind();
       return;
     }
     const base = ((readFrame - this.streamStart) | 0) < 0 ? this.streamStart : readFrame;
@@ -184,10 +191,16 @@ export class InputFeeder {
     return { readFrame: this.guest.readUInt32LE(0), requestGen: this.guest.readUInt32LE(4) };
   }
 
-  /** The stream starts again from its beginning at the next frame written; the app picks that up through the header. */
+  /** The source starts again from its beginning, with its full play count, at the next frame written. */
   private restart(): void {
     this.clipPos = 0;
+    this.replays = 0;
     this.phase = 0;
+    this.rewind();
+  }
+
+  /** The app's stream continues from the next frame written; the app picks that up through the header. */
+  private rewind(): void {
     this.streamStart = this.writeFrame;
     putU32(this.fd, 24, this.streamStart);
     this.streamGen = (this.streamGen + 1) >>> 0 || 1;
@@ -207,7 +220,8 @@ export class InputFeeder {
     let off = 0;
     while (off < n) {
       if (this.clipPos >= s.info.frames) {
-        if (!s.loop || s.info.frames === 0) break;
+        if (s.info.frames === 0 || this.replays + 1 >= s.plays) break;
+        this.replays++;
         this.clipPos = 0;
       }
       const take = Math.min(s.info.frames - this.clipPos, n - off);
@@ -226,7 +240,7 @@ export class InputFeeder {
       this.clipPos += frames;
       off += frames;
     }
-    this.samples.fill(0, off, n); // past the end of a clip that does not loop: silence
+    this.samples.fill(0, off, n); // past the last play of the clip: silence
   }
 }
 

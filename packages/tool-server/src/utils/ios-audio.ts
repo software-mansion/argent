@@ -326,7 +326,7 @@ export function listLiveApps(session: AudioSession): string[] {
 }
 
 type AudioInputSource =
-  | { kind: "file"; path: string; loop: boolean }
+  | { kind: "file"; path: string; plays: number }
   | { kind: "tone"; frequencyHz: number; amplitude: number };
 
 interface AudioInputResult {
@@ -369,7 +369,7 @@ function removeFiles(dir: string, prefix: string, keep?: string): void {
 /**
  * Makes every app that carries the hook (see {@link armAudio}) hear `source` instead of the
  * microphone. Each app hears it from its beginning from the moment it is set, and again after its
- * audio input stopped for half a second; a clip plays silence after its end unless it loops.
+ * audio input stopped for half a second; a clip plays `plays` times, then silence.
  */
 export async function setAudioInput(
   session: AudioSession,
@@ -394,7 +394,7 @@ export async function setAudioInput(
           `${source.path} is longer than ${MAX_CLIP_SECONDS / 60} minutes. Cut it shorter.`
         );
       }
-      feederSource = { kind: "clip", fd, info, loop: source.loop };
+      feederSource = { kind: "clip", fd, info, plays: source.plays };
       durationMs = Math.round((info.frames * 1000) / STREAM_RATE);
     } catch (err) {
       fs.closeSync(fd);

@@ -46,9 +46,14 @@ function clipFile(samples: number[]): string {
   return file;
 }
 
-function clipSource(samples: number[], loop = false): FeederSource {
+function clipSource(samples: number[], plays = 1): FeederSource {
   const fd = fs.openSync(clipFile(samples), "r");
-  return { kind: "clip", fd, info: readClipInfo(fd), loop };
+  return { kind: "clip", fd, info: readClipInfo(fd), plays };
+}
+
+/** A clip whose frame i holds a distinct value, so a misplaced frame shows. */
+function ramp(frames: number): number[] {
+  return Array.from({ length: frames }, (_, i) => (i + 1) / frames);
 }
 
 class FakeApp {
@@ -154,30 +159,67 @@ describe("InputFeeder", () => {
     feeder.stop();
   });
 
-  it("loops a clip", () => {
-    const feeder = new InputFeeder(path.join(dir, "in.ring"), clipSource([0.1, 0.2, 0.3], true));
+  it("plays a clip exactly `plays` times, across chunk boundaries, and then silence", () => {
+    // 3 x 2000 frames cross the 4800-frame chunk a tick writes.
+    const samples = ramp(2000);
+    const feeder = new InputFeeder(path.join(dir, "in.ring"), clipSource(samples, 3));
     for (let i = 0; i < 4; i++) feeder.step();
     const app = new FakeApp(feeder.ringPath);
-    app.frames(0, 8).forEach((v, i) => expect(v).toBeCloseTo([0.1, 0.2, 0.3][i % 3], 6));
+    const heard = app.frames(0, 6000).map((v) => Math.round(v * 2000));
+    const once = samples.map((v) => Math.round(v * 2000));
+    expect(heard).toEqual([...once, ...once, ...once]);
+    // Later reads stay silent: the count does not start over by itself.
+    app.set(64, 20_000);
+    for (let i = 0; i < 8; i++) feeder.step();
+    expect(app.u32(16)).toBe(20_000 + LEAD);
+    expect(app.frames(6000, 20_000 + LEAD - 6000).every((v) => v === 0)).toBe(true);
     app.close();
     feeder.stop();
   });
 
-  it("rewinds the stream when the app asks, so it plays from its start again", () => {
-    const samples = Array.from({ length: 2000 }, (_, i) => (i + 1) / 2000);
-    const feeder = new InputFeeder(path.join(dir, "in.ring"), clipSource(samples));
+  it("keeps playing a clip whose count is past 2^53", () => {
+    const clip = [0.1, 0.2, 0.3];
+    const feeder = new InputFeeder(
+      path.join(dir, "in.ring"),
+      clipSource(clip, JSON.parse("3291419284712089740912384") as number)
+    );
+    const app = new FakeApp(feeder.ringPath);
+    // 100 000 plays of the 3-frame clip, through many wraps of the ring.
+    for (let read = 0; read <= 300_000; read += 4_800) {
+      app.set(64, read);
+      for (let i = 0; i < 4; i++) feeder.step();
+    }
+    const write = app.u32(16);
+    expect(write).toBe(297_600 + LEAD);
+    app.frames(write - 9, 9).forEach((v, i) => expect(v).toBeCloseTo(clip[(write - 9 + i) % 3], 6));
+    // Where the counter can no longer count, it still never reaches the count.
+    (feeder as unknown as { replays: number }).replays = 2 ** 53;
+    app.set(64, 302_400);
+    feeder.step();
+    expect(app.frames(write, 6).every((v) => v !== 0)).toBe(true);
+    app.close();
+    feeder.stop();
+  });
+
+  it("rewinds the stream when the app asks, so it plays from its start again with its full count", () => {
+    const samples = ramp(2000);
+    const feeder = new InputFeeder(path.join(dir, "in.ring"), clipSource(samples, 2));
     const app = new FakeApp(feeder.ringPath);
     for (let i = 0; i < 4; i++) feeder.step();
-    app.set(64, 3_000); // the app consumed past the end of the clip
+    app.set(64, 5_000); // the app consumed past the end of both plays
     for (let i = 0; i < 4; i++) feeder.step();
     const before = app.u32(16);
+    expect(app.frames(before - 3, 3)).toEqual([0, 0, 0]);
 
     app.set(68, 1); // requestGen: the app stopped and started capturing again
     feeder.step();
     expect(app.u32(20)).toBe(2); // streamGen
     expect(app.u32(24)).toBe(before); // streamStart is where the host had written up to
+    app.set(64, before);
     for (let i = 0; i < 4; i++) feeder.step();
-    expect(app.frames(before, 3).map((v) => Math.round(v * 2000))).toEqual([1, 2, 3]);
+    const heard = app.frames(before, 4004).map((v) => Math.round(v * 2000));
+    const once = samples.map((v) => Math.round(v * 2000));
+    expect(heard).toEqual([...once, ...once, 0, 0, 0, 0]);
     app.close();
     feeder.stop();
   });
@@ -195,6 +237,21 @@ describe("InputFeeder", () => {
     feeder.step();
     expect(app.u32(20)).toBe(2); // rewound
     expect(app.u32(24)).toBe(app.u32(16)); // the new start is where the host had written up to
+    app.close();
+    feeder.stop();
+  });
+
+  it("keeps a clip that played its count silent across that rewind", () => {
+    const feeder = new InputFeeder(path.join(dir, "in.ring"), clipSource(ramp(1000)));
+    const app = new FakeApp(feeder.ringPath);
+    for (let i = 0; i < 4; i++) feeder.step();
+    app.set(64, 2 ** 30);
+    feeder.step();
+    expect(app.u32(20)).toBe(2); // rewound
+    const start = app.u32(24);
+    app.set(64, start);
+    for (let i = 0; i < 4; i++) feeder.step();
+    expect(app.frames(start, 1000).every((v) => v === 0)).toBe(true);
     app.close();
     feeder.stop();
   });

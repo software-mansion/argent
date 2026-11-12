@@ -26,10 +26,14 @@ const zodSchema = z
       .string()
       .optional()
       .describe("Audio file to play as the microphone: wav, mp3, m4a, caf, aiff, flac."),
-    loop: z
-      .boolean()
+    // Not .int(): zod's int stops at 2^53, and any count must work. Advertised as an integer all the same.
+    plays: z
+      .number()
+      .min(1)
+      .refine(Number.isInteger, { message: "Must be a whole number." })
+      .meta({ type: "integer" })
       .optional()
-      .describe("source=file only. Default false: silence after the end of the file."),
+      .describe("source=file only. Times the file plays, then silence. Default 1."),
     frequencyHz: z
       .number()
       .min(20)
@@ -83,7 +87,7 @@ export function createAudioInputTool(registry: Registry): ToolDefinition<Params,
     description: `Choose what apps in an iOS Simulator hear as microphone input: an audio file, a generated tone, or the real host microphone.
 Use when testing recording, voice, speech recognition or call features without speaking into the host microphone. The app needs no change.
 Apps launched after Argent armed the simulator carry the audio hook; pass bundleId to check (appReady). Call restart-app for an app launched before that. The setting applies to every armed app and survives app restarts.
-A file plays from its beginning when you call this tool, and again each time an app opens a new audio input. An app that keeps its audio session open does not restart the file: call this tool again right before the action that makes the app record. source=file requires path.
+A file starts over, with its full play count, when you call this tool and each time an app opens a new audio input. An app that keeps its audio session open does not restart the file: call this tool again right before the action that makes the app record. source=file requires path.
 Returns { source, durationMs?, liveApps, appReady?, message? }.
 Fails if the file cannot be decoded, the simulator is not booted, or the target is not a local iOS Simulator. Does not cover web content or AVCaptureSession audio.`,
     zodSchema,
@@ -121,7 +125,7 @@ Fails if the file cannot be decoded, the simulator is not booted, or the target 
           ? await setAudioInput(session, {
               kind: "file",
               path: params.path!,
-              loop: params.loop ?? false,
+              plays: params.plays ?? 1,
             })
           : await setAudioInput(session, {
               kind: "tone",
