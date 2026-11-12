@@ -16,6 +16,7 @@ import { openUrlTool } from "../src/tools/open-url";
 import { reinstallAppTool } from "../src/tools/reinstall-app";
 import { buttonTool } from "../src/tools/button";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
+import { menuBarTool } from "../src/tools/menu-bar";
 import { macosAppBlueprint } from "../src/blueprints/macos-app";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 
@@ -23,6 +24,12 @@ const flag = useMacosAppsFlag();
 
 const MAC = "macos-app-com.example.app";
 const FLAG_MESSAGE = "the macos-apps flag is off. Run: argent enable macos-apps";
+const HOST_MESSAGE = "native Mac apps can only be driven on macOS";
+
+/** For the rest of the test; `useMacosAppsFlag` puts the real platform back after it. */
+function onLinux(): void {
+  Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+}
 
 const MAC_CAPABLE: ToolCapability = { apple: { simulator: true }, macos: { app: true } };
 const NOT_MAC_CAPABLE: ToolCapability = { apple: { simulator: true }, chromium: { app: true } };
@@ -48,6 +55,19 @@ describe("the macos-apps flag gate", () => {
     );
     expect(() => assertSupported("button", NOT_MAC_CAPABLE, device)).toThrow("use keyboard");
     expect(() => assertMacosAppsEnabled("boot-device")).not.toThrow();
+  });
+
+  it("off macOS, refuses a Mac id with the host message with the flag on, and with the flag message without it", () => {
+    onLinux();
+    const device = resolveDevice(MAC);
+    for (const capability of [MAC_CAPABLE, NOT_MAC_CAPABLE]) {
+      expect(() => assertSupported("some-tool", capability, device)).toThrow(HOST_MESSAGE);
+    }
+    expect(() => assertMacosAppsEnabled("boot-device")).toThrow(HOST_MESSAGE);
+
+    flag.off();
+    expect(() => assertSupported("launch-app", MAC_CAPABLE, device)).toThrow(FLAG_MESSAGE);
+    expect(() => assertMacosAppsEnabled("boot-device")).toThrow(FLAG_MESSAGE);
   });
 });
 
@@ -82,6 +102,12 @@ describe("dispatchByPlatform on a Mac id", () => {
     flag.off();
     macos.handler.mockClear();
     await expect(execute({}, { udid: MAC })).rejects.toThrow(FLAG_MESSAGE);
+    expect(macos.handler).not.toHaveBeenCalled();
+
+    // And the host.
+    flag.on();
+    onLinux();
+    await expect(execute({}, { udid: MAC })).rejects.toThrow(HOST_MESSAGE);
     expect(macos.handler).not.toHaveBeenCalled();
   });
 
@@ -118,6 +144,8 @@ describe("over HTTP", () => {
     registry.registerTool(createBootDeviceTool(registry));
     registry.registerTool(reinstallAppTool);
     registry.registerTool(buttonTool);
+    registry.registerTool(openUrlTool);
+    registry.registerTool(menuBarTool);
     return createHttpApp(registry).app;
   }
 
@@ -135,6 +163,42 @@ describe("over HTTP", () => {
       expect({ tool, status: res.status }).toEqual({ tool, status: 400 });
       expect(res.body.error).toContain(FLAG_MESSAGE);
     }
+  });
+
+  it("off macOS, refuses every Mac call with the host message, before reading the bundle", async () => {
+    onLinux();
+    const http = app();
+    for (const [tool, body] of [
+      ["launch-app", { udid: MAC, bundleId: "com.example.app" }],
+      ["open-url", { udid: MAC, url: "myapp://x" }],
+      ["boot-device", { udid: MAC }],
+      ["boot-device", { macosAppPath: "/nowhere/Example.app" }],
+    ] as const) {
+      const res = await request(http).post(`/tools/${tool}`).send(body);
+      expect({ tool, status: res.status }).toEqual({ tool, status: 400 });
+      expect(res.body.error).toContain(HOST_MESSAGE);
+    }
+  });
+
+  it("lists the Mac app tools and text on macOS only", async () => {
+    const listed = async () => {
+      const { tools } = (await request(app()).get("/tools")).body as {
+        tools: { name: string; description: string; inputSchema: { properties: object } }[];
+      };
+      const boot = tools.find((t) => t.name === "boot-device")!;
+      return {
+        menuBar: tools.some((t) => t.name === "menu-bar"),
+        macosAppPath: "macosAppPath" in boot.inputSchema.properties,
+        text: boot.description.includes("macosAppPath"),
+      };
+    };
+    expect(await listed()).toEqual({ menuBar: true, macosAppPath: true, text: true });
+    onLinux();
+    expect(await listed()).toEqual({ menuBar: false, macosAppPath: false, text: false });
+    const menuBar = await request(app())
+      .post("/tools/menu-bar")
+      .send({ udid: MAC, action: "list" });
+    expect(menuBar.status).toBe(404);
   });
 
   it("with the flag on, names restart-app instead of reinstall-app", async () => {

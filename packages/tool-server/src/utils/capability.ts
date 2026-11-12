@@ -126,6 +126,17 @@ export const MACOS_APPS_FLAG = "macos-apps";
 export const MACOS_APPS_FLAG_OFF_REASON =
   "the macos-apps flag is off. Run: argent enable macos-apps";
 
+/**
+ * Why a Mac app cannot be driven here, or null when it can: the flag is off,
+ * or, with the flag on, the host is not a Mac. Read per call, so enabling the
+ * flag needs no restart.
+ */
+export function macosAppsUnavailableReason(): string | null {
+  if (!isFlagEnabled(MACOS_APPS_FLAG)) return MACOS_APPS_FLAG_OFF_REASON;
+  if (process.platform !== "darwin") return "native Mac apps can only be driven on macOS";
+  return null;
+}
+
 const MACOS_POINTER_ONLY =
   "a Mac app takes mouse input: use gesture-drag to drag and gesture-scroll to scroll";
 const MACOS_NO_TRACKPAD_GESTURES =
@@ -161,10 +172,9 @@ export function assertSupported(
   if (device.platform === "harmony" && !isHarmonyEnabled()) {
     throw new UnsupportedOperationError(toolId, device, HARMONY_DISABLED_REASON);
   }
-  // Before the matrix, so every tool names the flag; read per call, so enabling needs no restart.
-  if (device.platform === "macos" && !isFlagEnabled(MACOS_APPS_FLAG)) {
-    throw new UnsupportedOperationError(toolId, device, MACOS_APPS_FLAG_OFF_REASON);
-  }
+  // Before the matrix, so every tool names the flag or the host.
+  const macosRefusal = device.platform === "macos" ? macosAppsUnavailableReason() : null;
+  if (macosRefusal) throw new UnsupportedOperationError(toolId, device, macosRefusal);
   const matrix = platformMatrix(device.platform, capability);
   if (!matrix) {
     const reason =
