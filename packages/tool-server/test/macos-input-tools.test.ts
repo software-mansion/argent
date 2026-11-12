@@ -582,9 +582,33 @@ describe("native-find-views with no match", () => {
     });
   });
 
+  it("on a Mac app, notes the same for a label search", async () => {
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ matches: [] }) });
+    await expect(
+      invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, label: "Increment" })
+    ).resolves.toEqual({
+      status: "ok",
+      matches: [],
+      note: expect.stringMatching(/^No NSView matched\. SwiftUI /),
+    });
+  });
+
+  // A className search can match the NSView that backs a SwiftUI control, and
+  // SwiftUI sets no tag or nativeID, so the SwiftUI note does not apply there.
+  it("on a Mac app, adds no note to an empty className, tag or nativeID search", async () => {
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ matches: [] }) });
+    for (const search of [{ className: "NoSuchClass" }, { tag: 4242 }, { nativeID: "none" }]) {
+      await expect(
+        invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, ...search })
+      ).resolves.toEqual({ status: "ok", matches: [] });
+    }
+  });
+
   it("is described, for Mac apps, as not finding SwiftUI controls, with describe to use instead", () => {
     const text = (on: boolean) => renderFlagGated(nativeFindViewsTool.description, () => on);
-    expect(text(true)).toMatch(/does not find SwiftUI controls: describe lists them/);
+    expect(text(true)).toMatch(
+      /an identifier or label search does not find SwiftUI controls: describe lists them/
+    );
     expect(text(false)).not.toMatch(/SwiftUI/);
   });
 

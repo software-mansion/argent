@@ -7,9 +7,11 @@ import { nativeAppServices, nativeAppTarget, queryViewHierarchyFor } from "./mac
 type Result = NativeDevtoolsPrecheckBlock | { status: "ok"; matches: unknown[]; note?: string };
 
 /**
- * The `note` of an empty Mac app result. A SwiftUI control has no NSView that
- * carries its identifier or label, so the library's NSView search cannot find
- * it, while describe, which reads the accessibility tree, lists it.
+ * The `note` of an empty Mac app result to an identifier or label search. A
+ * SwiftUI control has no NSView that carries its identifier or label, so the
+ * library's NSView search cannot find it, while describe, which reads the
+ * accessibility tree, lists it. A className search can match the NSView that
+ * backs a SwiftUI control, so a className, tag or nativeID miss gets no note.
  */
 const MACOS_NO_MATCH_NOTE =
   "No NSView matched. SwiftUI sets a control's identifier and label on an accessibility element, " +
@@ -49,7 +51,7 @@ export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, accessibility label, tag or React Native nativeID; at least one of these params is required.
 Use when you need to locate a specific view by its properties without dumping the entire native-full-hierarchy.
 Returns { status: "ok", matches }: the matching views with their frames, properties, optional ancestors and optional children. Frames are in points. frame and center are relative to the superview, and windowFrame turns with the UI. To tap a view, divide the centre of its screenFrame by the screen size in points, which native-full-hierarchy returns as screen (maxDepth: 1 is enough), and pass the result to gesture-tap. Matches are not filtered for visibility. Before tapping, call native-user-interactable-view-at-point at that centre with skipClasses ["UITextEffectsWindow"]. If it does not return the match or a descendant, check a screenshot.
-<flag:macos-apps>On a Mac app it searches the NSViews of every visible window: className is the NSView class, and identifier matches the accessibility identifier or the view identifier. SwiftUI sets a control's identifier and label on an accessibility element, not on an NSView, so it does not find SwiftUI controls: describe lists them with their identifiers and frames. The tap recipe above and the statuses below are iOS only.
+<flag:macos-apps>On a Mac app it searches the NSViews of every visible window: className is the NSView class, and identifier matches the accessibility identifier or the view identifier. SwiftUI sets a control's identifier and label on an accessibility element, not on an NSView, so an identifier or label search does not find SwiftUI controls: describe lists them with their identifiers and frames. The tap recipe above and the statuses below are iOS only.
 </flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 An Apple system app is rejected outright (terminal: never retry it).`,
   zodSchema,
@@ -70,7 +72,9 @@ An Apple system app is rejected outright (terminal: never retry it).`,
   },
   services: nativeAppServices,
   execute: (services, params) => {
-    const onMac = resolveDevice(params.udid).platform === "macos";
+    const noteOnEmpty =
+      resolveDevice(params.udid).platform === "macos" &&
+      (params.identifier !== undefined || params.label !== undefined);
     return queryViewHierarchyFor(
       services,
       params,
@@ -82,7 +86,7 @@ An Apple system app is rejected outright (terminal: never retry it).`,
         return {
           status: "ok" as const,
           matches,
-          ...(onMac && matches.length === 0 ? { note: MACOS_NO_MATCH_NOTE } : {}),
+          ...(noteOnEmpty && matches.length === 0 ? { note: MACOS_NO_MATCH_NOTE } : {}),
         };
       }
     );
