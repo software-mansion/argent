@@ -12,6 +12,7 @@ vi.mock("../src/utils/check-deps", async (importOriginal) => ({
 }));
 
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
+import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { ensureDeps } from "../src/utils/check-deps";
 import { MACOS_CLICK_SETTLE_MS } from "../src/utils/macos-input";
 import { RESULT_NOTE_KEY } from "../src/tools/screenshot/dropped-geometry";
@@ -36,6 +37,7 @@ import { nativeFullHierarchyTool } from "../src/tools/native-devtools/native-ful
 import { nativeViewAtPointTool } from "../src/tools/native-devtools/native-view-at-point";
 import { nativeUserInteractableViewAtPointTool } from "../src/tools/native-devtools/native-user-interactable-view-at-point";
 import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
+import { renderFlagGated } from "../src/utils/flag-gated-text";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 import {
   MAC_BUNDLE_ID,
@@ -564,4 +566,52 @@ describe("native-* view tools on a Mac app", () => {
       expect(calls).toEqual([]);
     }
   );
+});
+
+describe("native-find-views with no match", () => {
+  // SwiftUI controls are accessibility elements, which the library's NSView
+  // search cannot see. An empty list alone reads as "the control is gone".
+  it("on a Mac app, notes that SwiftUI controls are not NSViews and points to describe", async () => {
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ matches: [] }) });
+    await expect(
+      invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, identifier: "suiIncrement" })
+    ).resolves.toEqual({
+      status: "ok",
+      matches: [],
+      note: expect.stringMatching(/^No NSView matched\. SwiftUI .*: describe lists them/),
+    });
+  });
+
+  it("is described, for Mac apps, as not finding SwiftUI controls, with describe to use instead", () => {
+    const text = (on: boolean) => renderFlagGated(nativeFindViewsTool.description, () => on);
+    expect(text(true)).toMatch(/does not find SwiftUI controls: describe lists them/);
+    expect(text(false)).not.toMatch(/SwiftUI/);
+  });
+
+  it("on a Mac app, adds no note to a search that found a view", async () => {
+    const matches = [{ className: "NSButton", identifier: "tapButton" }];
+    const { invoke } = harness({ "ViewHierarchy.findViews": () => ({ matches }) });
+    await expect(
+      invoke("native-find-views", { bundleId: MAC_BUNDLE_ID, identifier: "tapButton" })
+    ).resolves.toEqual({ status: "ok", matches });
+  });
+
+  it("on a simulator, returns the empty result with no note", async () => {
+    const api = {
+      getInitFailure: () => null,
+      ensureEnvReady: async () => {},
+      appConnectionState: async () => "connected",
+      queryViewHierarchy: async () => ({ matches: [] }),
+    } as unknown as NativeDevtoolsApi;
+    await expect(
+      nativeFindViewsTool.execute(
+        { nativeDevtools: api },
+        {
+          udid: "AAAAAAAA-1111-2222-3333-444444444444",
+          bundleId: "com.example.app",
+          identifier: "x",
+        }
+      )
+    ).resolves.toEqual({ status: "ok", matches: [] });
+  });
 });
