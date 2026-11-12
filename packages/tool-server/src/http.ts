@@ -4,7 +4,7 @@ import { createWriteStream } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeClientSecrets, isFlagEnabled } from "@argent/configuration-core";
+import { decodeClientSecrets, isFeatureEnabled, isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID, createHash } from "node:crypto";
 import {
   FAILURE_CODES,
@@ -114,9 +114,9 @@ function isToolExposed(
 // Whether the tool list carries what a flag adds: its tools, text spans and
 // properties. Mac apps run only on macOS, so elsewhere the macos-apps flag adds
 // nothing, and agents are not offered tools that the host refuses.
-function isFlagOffered(flag: string): boolean {
+export function isFlagOffered(flag: string): boolean {
   if (flag === MACOS_APPS_FLAG) return macosAppsUnavailableReason() === null;
-  return isFlagEnabled(flag);
+  return isFeatureEnabled(flag);
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {

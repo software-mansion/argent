@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { Registry, type ToolCapability } from "@argent/registry";
+import { unsetFlag } from "@argent/configuration-core";
+import { Registry, ToolNotFoundError, type ToolCapability } from "@argent/registry";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
@@ -18,6 +19,7 @@ import { buttonTool } from "../src/tools/button";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { menuBarTool } from "../src/tools/menu-bar";
 import { macosAppBlueprint } from "../src/blueprints/macos-app";
+import { createRegistry } from "../src/utils/setup-registry";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 
 const flag = useMacosAppsFlag();
@@ -68,6 +70,32 @@ describe("the macos-apps flag gate", () => {
     flag.off();
     expect(() => assertSupported("launch-app", MAC_CAPABLE, device)).toThrow(FLAG_MESSAGE);
     expect(() => assertMacosAppsEnabled("boot-device")).toThrow(FLAG_MESSAGE);
+  });
+});
+
+describe("with no stored macos-apps value", () => {
+  beforeEach(() => {
+    unsetFlag("macos-apps", "global");
+  });
+
+  it("is on: admits a Mac id and a macosAppPath start", () => {
+    expect(() => assertSupported("launch-app", MAC_CAPABLE, resolveDevice(MAC))).not.toThrow();
+    expect(() => assertMacosAppsEnabled("boot-device")).not.toThrow();
+  });
+
+  it("lists the Mac app tools and text, and the production registry dispatches them", async () => {
+    const registry = createRegistry();
+    const { tools } = (await request(createHttpApp(registry).app).get("/tools")).body as {
+      tools: { name: string; description: string }[];
+    };
+    expect(tools.map((t) => t.name)).toEqual(expect.arrayContaining(["menu-bar", "file-panel"]));
+    expect(tools.find((t) => t.name === "boot-device")!.description).toContain("macosAppPath");
+    // Past the registry's flag gate, which reads a gated tool as not found.
+    const err = await registry
+      .invokeTool("menu-bar", { udid: MAC, action: "list" })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ToolNotFoundError);
   });
 });
 

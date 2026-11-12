@@ -1,4 +1,4 @@
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   withFailureSignal,
@@ -132,7 +132,7 @@ export const MACOS_APPS_FLAG_OFF_REASON =
  * flag needs no restart.
  */
 export function macosAppsUnavailableReason(): string | null {
-  if (!isFlagEnabled(MACOS_APPS_FLAG)) return MACOS_APPS_FLAG_OFF_REASON;
+  if (!isFeatureEnabled(MACOS_APPS_FLAG)) return MACOS_APPS_FLAG_OFF_REASON;
   if (process.platform !== "darwin") return "native Mac apps can only be driven on macOS";
   return null;
 }

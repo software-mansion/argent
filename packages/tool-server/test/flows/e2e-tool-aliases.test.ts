@@ -5,8 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { FILE_INPUT_MARKER, Registry, TOOL_ID_ALIASES } from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
-import { createHttpApp } from "../../src/http";
+import { createHttpApp, isFlagOffered } from "../../src/http";
 import { createRegistry } from "../../src/utils/setup-registry";
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
@@ -110,7 +109,7 @@ describe("the former flow-* tool ids", () => {
     // A tool behind a flag that is off is hidden, so count only the exposed ones.
     const exposed = registry.getSnapshot().tools.filter((id) => {
       const flag = registry.getTool(id)!.featureFlag;
-      return !flag || isFlagEnabled(flag);
+      return !flag || isFlagOffered(flag);
     });
     expect(tools.filter((t) => t.aliasOf === undefined)).toHaveLength(exposed.length);
   });

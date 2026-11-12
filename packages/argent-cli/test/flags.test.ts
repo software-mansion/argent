@@ -296,7 +296,7 @@ describe("enable / disable CLI", () => {
 
 describe("flags (list) CLI", () => {
   it("ships the argent-lens flag in the production registry", () => {
-    // Guards the gate: setup-registry.ts reads isFlagEnabled("argent-lens"),
+    // Guards the gate: setup-registry.ts reads isFeatureEnabled("argent-lens"),
     // so that exact name must stay registered (and discoverable via `argent flags`).
     const out = captureConsole(() => flagsCmd([]));
     expect(out.stdout).toContain("argent-lens");

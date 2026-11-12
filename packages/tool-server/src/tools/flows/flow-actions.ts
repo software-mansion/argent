@@ -1,5 +1,5 @@
 import type { DeviceInfo, Registry, ToolContext } from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import {
   getDescribeTapPoint,
   type DescribeFrame,
@@ -971,7 +971,7 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
               (platform === "harmony"
                 ? ""
                 : ". On a touch screen, open a context menu with long-press"),
-        isFlagEnabled
+        isFeatureEnabled
       ),
     };
   }

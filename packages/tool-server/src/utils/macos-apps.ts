@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   FailureError,
@@ -30,7 +30,7 @@ import { PS_BIN } from "./vega-process";
 const execFileAsync = promisify(execFile);
 
 export function isMacosAppsEnabled(): boolean {
-  return isFlagEnabled(MACOS_APPS_FLAG);
+  return isFeatureEnabled(MACOS_APPS_FLAG);
 }
 
 /**

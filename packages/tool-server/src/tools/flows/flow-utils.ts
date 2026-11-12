@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { MIN_SCRIPT_TIMEOUT_MS, isFlagEnabled } from "@argent/configuration-core";
+import { MIN_SCRIPT_TIMEOUT_MS, isFeatureEnabled } from "@argent/configuration-core";
 import {
   canonicalToolArgs,
   E2E_DIRS,
@@ -2355,7 +2355,7 @@ export const LAUNCH_PLATFORMS = ["ios", "android", "chromium", "vega", "macos"] 
 
 /** {@link LAUNCH_PLATFORMS} as an error names them: `macos` only with its flag on. */
 function namedLaunchPlatforms(): string[] {
-  return LAUNCH_PLATFORMS.filter((p) => p !== "macos" || isFlagEnabled(MACOS_APPS_FLAG));
+  return LAUNCH_PLATFORMS.filter((p) => p !== "macos" || isFeatureEnabled(MACOS_APPS_FLAG));
 }
 
 /**
@@ -2532,7 +2532,7 @@ function parseLaunch(raw: unknown): Launch {
       `({ native | ${namedLaunchPlatforms()
         .filter((p) => p !== "chromium")
         .join(" | ")}: <app id>, ` +
-      `ios${isFlagEnabled(MACOS_APPS_FLAG) ? " | macos" : ""}: { app, args }, ` +
+      `ios${isFeatureEnabled(MACOS_APPS_FLAG) ? " | macos" : ""}: { app, args }, ` +
       `chromium: <app path> | { path, args } })`
   );
 }
