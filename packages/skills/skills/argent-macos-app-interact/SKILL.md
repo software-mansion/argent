@@ -7,7 +7,7 @@ description: Drive a native Mac app (AppKit, SwiftUI, react-native-macos) throug
 
 ## Contract
 
-- Needs the `macos-apps` flag. When a tool says it is off, tell the user to run the command it names. Do not change the flag yourself.
+- Needs the `macos-apps` flag, which is on by default. When a tool says it is off, tell the user to run the command it names. Do not change the flag yourself.
 - One app is one device. `list-devices` shows only apps argent started that still run, also those of other sessions: never pick one unless the user named that app or this session started it.
 - Start an app with `boot-device {macosAppPath: "<abs path>.app"}`, never with `open` or Xcode. Use `launch-app` only for an app argent already started: with no recorded path it takes whichever copy Spotlight finds.
 - Build the `.app` without starting it: `xcodebuild ... build`, then take the bundle from `BUILT_PRODUCTS_DIR` (`xcodebuild -showBuildSettings`). Xcode Run and `react-native run-macos` start a copy without the argent library: `boot-device` then fails with `already running ... without the argent library`. Retry with `force: true`, but ask the user first when they may have work open in that copy.

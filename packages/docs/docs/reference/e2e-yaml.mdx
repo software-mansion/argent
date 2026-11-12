@@ -232,7 +232,7 @@ A run on a remote simulator uses the `ios` entry. If the map has no `ios` entry,
 
 When the agent records `restart-app` with `launchArgs` on iOS, Argent saves a `launch` step with a `native` id and an `ios: { app, args }` entry. On a Mac app, Argent saves a `macos: { app, args }` entry when the restarted app got arguments. Otherwise Argent saves `launch: <bundle id>`. A run then selects the Mac app only with `--platform macos` or `--device`.
 
-A Mac app is the device, and the device id is `macos-app-<bundle id>`. The `macos-apps` flag must be on. The runner selects the Mac app in this order:
+A Mac app is the device, and the device id is `macos-app-<bundle id>`. The `macos-apps` flag must be on, which is the default. The runner selects the Mac app in this order:
 
 | Run                                                                                                                                          | Device                                                                                                             |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |

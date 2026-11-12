@@ -44,8 +44,7 @@ import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inpu
 import {
   assertSupported,
   InvalidToolInputError,
-  MACOS_APPS_FLAG,
-  macosAppsUnavailableReason,
+  isFlagOffered,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
@@ -109,14 +108,6 @@ function isToolExposed(
   if (def.featureFlag && !isFlagOffered(def.featureFlag)) return false;
   if (def.hideWhen?.()) return false;
   return true;
-}
-
-// Whether the tool list carries what a flag adds: its tools, text spans and
-// properties. Mac apps run only on macOS, so elsewhere the macos-apps flag adds
-// nothing, and agents are not offered tools that the host refuses.
-function isFlagOffered(flag: string): boolean {
-  if (flag === MACOS_APPS_FLAG) return macosAppsUnavailableReason() === null;
-  return isFlagEnabled(flag);
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {

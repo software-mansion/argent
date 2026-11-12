@@ -1,11 +1,10 @@
 import type { DeviceInfo, FailureCode, Platform, Registry, ToolContext } from "@argent/registry";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { getAndroidRuntimeKind } from "../../utils/adb";
-import { MACOS_APPS_FLAG_OFF_REASON } from "../../utils/capability";
+import { MACOS_APPS_FLAG_OFF_REASON, macosAppsUnavailableReason } from "../../utils/capability";
 import { isIosPhysicalDevice, resolveDevice } from "../../utils/device-info";
 import { externalNativeId } from "../../utils/external-devices";
 import { getSimulatorRuntimeKind } from "../../utils/ios-devices";
-import { isMacosAppsEnabled } from "../../utils/macos-apps";
 import { getRemoteSimulatorRuntimeKind } from "../../utils/sim-remote";
 import { invokeSubTool } from "../../utils/sub-invoke";
 import {
@@ -148,13 +147,16 @@ function macosAppHint(devices: RawDevice[], platform?: FlowPlatform): string {
 }
 
 /**
- * Why `--platform macos` found nothing, when the reason is the flag: with it
- * off, list-devices adds no Mac app at all, so the plain "no device" message
- * would send the caller looking for an app that is running.
+ * Why `--platform macos` found nothing, when list-devices adds no Mac app at
+ * all: the flag is off, or the host is not a Mac. Without it the plain "no
+ * device" message would send the caller looking for an app that is running.
  */
 function macosFlagHint(platform?: FlowPlatform): string {
-  if (platform !== "macos" || isMacosAppsEnabled()) return "";
-  return " The macos-apps flag is off, so no Mac app is listed. Run: argent enable macos-apps.";
+  const reason = platform === "macos" ? macosAppsUnavailableReason() : null;
+  if (!reason) return "";
+  return reason === MACOS_APPS_FLAG_OFF_REASON
+    ? " The macos-apps flag is off, so no Mac app is listed. Run: argent enable macos-apps."
+    : ` No Mac app is listed: ${reason}.`;
 }
 
 function describeDevice(d: RawDevice): string {
@@ -294,10 +296,10 @@ async function candidateRuntimeKind(d: RawDevice): Promise<FlowRuntimeKind | und
  * through the explicit id, and a Mac app only through it or `platform`; see
  * {@link isBooted}. `requires` narrows the booted candidates.
  *
- * An explicit Mac app id is refused while the macos-apps flag is off. The id
- * classifies by its shape alone and skips the device list, which is where the
- * flag hides Mac apps, so without this check a flow would read the app's tree
- * and drive it with the flag off.
+ * An explicit Mac app id is refused while the macos-apps flag is off, or off
+ * macOS. The id classifies by its shape alone and skips the device list, which
+ * is where the flag and the host check hide Mac apps, so without this check a
+ * flow would go on to steps that can never run here.
  */
 export async function resolveFlowDevice(
   registry: Registry,
@@ -306,9 +308,8 @@ export async function resolveFlowDevice(
 ): Promise<DeviceInfo> {
   if (opts.device) {
     const device = resolveDevice(opts.device);
-    if (device.platform === "macos" && !isMacosAppsEnabled()) {
-      throw deviceResolutionError(`Cannot run on ${device.id}: ${MACOS_APPS_FLAG_OFF_REASON}`);
-    }
+    const macosRefusal = device.platform === "macos" ? macosAppsUnavailableReason() : null;
+    if (macosRefusal) throw deviceResolutionError(`Cannot run on ${device.id}: ${macosRefusal}`);
     return device;
   }
 
