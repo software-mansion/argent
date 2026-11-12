@@ -20,6 +20,9 @@ import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { menuBarTool } from "../src/tools/menu-bar";
 import { macosAppBlueprint } from "../src/blueprints/macos-app";
 import { createRegistry } from "../src/utils/setup-registry";
+import { directiveCommandHint } from "../src/tools/flows/flow-add-step";
+import { runDirective } from "../src/tools/flows/flow-actions";
+import { gestureTapTool } from "../src/tools/gesture-tap";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
 
 const flag = useMacosAppsFlag();
@@ -96,6 +99,32 @@ describe("with no stored macos-apps value", () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(ToolNotFoundError);
+  });
+
+  it("off macOS, leaves the Mac app out of the errors and hints an agent reads", async () => {
+    const registry = createRegistry();
+    const android = resolveDevice("emulator-5554");
+    const failure = async (run: () => Promise<unknown>) => String(await run().catch((e) => e));
+    // Every text that renders `<flag:macos-apps>` for an agent, outside GET /tools.
+    const texts = async () => [
+      await failure(() => registry.invokeTool("boot-device", { udid: "x", avdName: "y" })),
+      await failure(() =>
+        gestureTapTool.execute({}, { udid: android.id, x: 0.5, y: 0.5, button: "right" })
+      ),
+      (
+        await runDirective(
+          { registry, device: android },
+          { kind: "tap", x: 0.5, y: 0.5, button: "right" }
+        )
+      ).reason,
+      directiveCommandHint("swipe"),
+      directiveCommandHint("scroll-to"),
+    ];
+    const MAC_TEXT = /macosAppPath|Mac app|macOS/;
+    for (const text of await texts()) expect(text).toMatch(MAC_TEXT);
+
+    onLinux();
+    for (const text of await texts()) expect(text).not.toMatch(MAC_TEXT);
   });
 });
 

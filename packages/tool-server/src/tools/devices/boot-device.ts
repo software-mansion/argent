@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { isFeatureEnabled, isFlagEnabled } from "@argent/configuration-core";
+import { isFlagEnabled } from "@argent/configuration-core";
 import {
   FAILURE_CODES,
   FailureError,
@@ -73,7 +73,7 @@ import {
   isIosPhysicalUdid,
   nativeIdPlatform,
 } from "../../utils/external-devices";
-import { InvalidToolInputError, MACOS_APPS_FLAG } from "../../utils/capability";
+import { InvalidToolInputError, isFlagOffered, MACOS_APPS_FLAG } from "../../utils/capability";
 import {
   simctlBoot as simRemoteBoot,
   simctlBootstatus as simRemoteBootstatus,
@@ -2349,7 +2349,7 @@ HarmonyOS hands the instance to DevEco Studio's Emulator manager, then waits for
         throw new InvalidToolInputError(
           renderFlagGated(
             "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), <flag:harmonyos>`harmonyInstance` (HarmonyOS), </flag:harmonyos><flag:macos-apps>`macosAppPath` (Mac app), </flag:macos-apps>or `electronAppPath` (Electron).",
-            isFeatureEnabled
+            isFlagOffered
           ),
           {
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,

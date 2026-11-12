@@ -137,6 +137,18 @@ export function macosAppsUnavailableReason(): string | null {
   return null;
 }
 
+/**
+ * Whether what a flag adds is offered to the agent: its tools, and its
+ * `<flag:...>` spans and properties in tool text and in errors. Mac apps run
+ * only on macOS, so elsewhere the macos-apps flag adds nothing, and no text
+ * points the agent at a Mac app the host refuses. Every `renderFlagGated` call
+ * that an agent reads passes this, not the bare flag read.
+ */
+export function isFlagOffered(flag: string): boolean {
+  if (flag === MACOS_APPS_FLAG) return macosAppsUnavailableReason() === null;
+  return isFeatureEnabled(flag);
+}
+
 const MACOS_POINTER_ONLY =
   "a Mac app takes mouse input: use gesture-drag to drag and gesture-scroll to scroll";
 const MACOS_NO_TRACKPAD_GESTURES =

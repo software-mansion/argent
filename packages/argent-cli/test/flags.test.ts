@@ -147,6 +147,28 @@ describe("enable / disable CLI", () => {
     expect(isFlagEnabled("opt-out-flag")).toBe(false);
   });
 
+  it("says when the project value overrides a global enable or disable", () => {
+    setFlag("opt-out-flag", false, "project");
+    const on = captureConsole(() => enable(["opt-out-flag"], TEST_REGISTRY));
+    expect(on.stdout).toContain('sets "opt-out-flag" to false');
+    expect(on.stdout).toContain("Run: argent enable opt-out-flag --scope project");
+
+    setFlag("my-feature-flag", true, "project");
+    const off = captureConsole(() => disable(["my-feature-flag"], TEST_REGISTRY));
+    expect(off.stdout).toContain("Run: argent disable my-feature-flag --scope project");
+  });
+
+  it("adds no note when the project value agrees, or the toggle is project-scoped", () => {
+    setFlag("opt-out-flag", true, "project");
+    expect(captureConsole(() => enable(["opt-out-flag"], TEST_REGISTRY)).stdout).not.toContain(
+      "overrides"
+    );
+    const scoped = captureConsole(() =>
+      disable(["opt-out-flag", "--scope", "project"], TEST_REGISTRY)
+    );
+    expect(scoped.stdout).not.toContain("overrides");
+  });
+
   it("enable then disable on an opt-out flag round-trips true → false", () => {
     captureConsole(() => enable(["opt-out-flag"], TEST_REGISTRY));
     expect(readFlags("global")).toEqual({ "opt-out-flag": true });
