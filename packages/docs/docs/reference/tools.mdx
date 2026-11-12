@@ -239,6 +239,11 @@ A native Mac app (AppKit, SwiftUI, react-native-macos) is a device of its own. T
 - `argent tools` omits `file-panel` and `menu-bar`. A call of one of these two tools fails with a `not found` error.
 - Every other tool refuses a Mac app id with a message that names the flag.
 
+On a host other than macOS, the flag does not change the tool list. With the flag on:
+
+- `argent tools` omits `file-panel` and `menu-bar`, as when the flag is off.
+- Every other tool refuses a Mac app id with a message that names macOS. `boot-device` also refuses `macosAppPath` with this message.
+
 See [Mac apps](/docs/features/mac-apps) for the requirements and the limits.
 
 | Tool         | Description                                                                                            |
