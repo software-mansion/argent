@@ -1,5 +1,6 @@
 import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import { createAudioSession, releaseAudio, type AudioSession } from "../utils/ios-audio";
+import { clearAudioLeftovers } from "../utils/ios-audio-leftovers";
 
 // Session for the `audio-*` tools on one iOS simulator: the input feeder and the recorders this
 // process owns. Disposing it (tool-server exit, stop-all-simulator-servers) gives the apps their
@@ -16,6 +17,8 @@ export const iosAudioSessionBlueprint: ServiceBlueprint<AudioSession, string> = 
 
   async factory(_deps, udid) {
     const session = createAudioSession(udid);
+    // A killed tool-server never released its input or recordings: clear them before this one writes its own.
+    await clearAudioLeftovers(session.dir).catch(() => {});
     return {
       api: session,
       dispose: async () => releaseAudio(session),

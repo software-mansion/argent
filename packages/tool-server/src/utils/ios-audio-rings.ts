@@ -230,6 +230,37 @@ export class InputFeeder {
   }
 }
 
+/** The in ring's write cursor and the app's read cursor, or null when the ring is gone or unreadable. */
+function readInCursors(ringPath: string): { write: number; read: number } | null {
+  try {
+    const fd = fs.openSync(ringPath, "r");
+    try {
+      const b = Buffer.alloc(RING_HDR);
+      if (fs.readSync(fd, b, 0, RING_HDR, 0) < 68 || b.readUInt32LE(0) !== IN_MAGIC) return null;
+      return { write: b.readUInt32LE(16), read: b.readUInt32LE(64) };
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether nobody feeds this in ring any more, for an input file that does not name its owner. A live feeder stays
+ * `LEAD_FRAMES` ahead of the app's cursor and tops the ring up within a tick of the app reading, so a ring an app
+ * drained whose write cursor then stands still for `windowMs` has no feeder. While no app reads, a live and a dead
+ * feeder look the same: that says no, which only keeps a file nobody hears yet.
+ */
+export async function feederGone(ringPath: string, windowMs = 1_000): Promise<boolean> {
+  const before = readInCursors(ringPath);
+  if (!before) return true;
+  if (((before.write - before.read) | 0) >= LEAD_FRAMES / 2) return false;
+  await new Promise((resolve) => setTimeout(resolve, windowMs));
+  const after = readInCursors(ringPath);
+  return !after || after.write === before.write;
+}
+
 function wavHeader(channels: number, rate: number, frames: number): Buffer {
   const data = Math.min(frames * channels * 2, 0xffffffff - 36);
   const h = Buffer.alloc(44);

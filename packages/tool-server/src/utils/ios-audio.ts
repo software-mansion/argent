@@ -19,6 +19,7 @@ import {
   STREAM_RATE,
   type FeederSource,
 } from "./ios-audio-rings";
+import { OWNER_LINE, processAlive } from "./ios-audio-leftovers";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,6 +32,9 @@ const execFileAsync = promisify(execFile);
  *   input           host -> app   source=stream  ring=<in ring>   (absent: the real microphone)
  *   rec.<bundleId>  host -> app   id=<s>  ring=<out ring>  mute=0|1  (present: record the app's output)
  *   st.<bundleId>   app -> host   key=value status the app rewrites when it changes
+ *
+ * The host's files carry its pid (`host=<pid>`, or in the name), so a later tool-server can clear what a killed one
+ * left behind without touching what a live one owns (`ios-audio-leftovers.ts`).
  *
  * The samples travel through the two ring files of `ios-audio-rings.ts`: this process feeds the in
  * ring and drains the out ring, so the hook only copies. Every control write is a temp file plus
@@ -251,15 +255,6 @@ export function parseAppStatus(text: string): AppAudioStatus {
   };
 }
 
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 /**
  * The app's hook status, or null when the hook is not live in it: the app never loaded the hook
  * (launched before {@link ensureAudioEnv}, or by something that replaced the injected libraries), or
@@ -388,7 +383,7 @@ export async function setAudioInput(
   if (source.kind === "tone") {
     feederSource = { kind: "tone", frequencyHz: source.frequencyHz, amplitude: source.amplitude };
   } else {
-    clipName = `clip-${Date.now()}.wav`;
+    clipName = `clip-${process.pid}-${Date.now()}.wav`;
     const clipPath = path.join(dir, clipName);
     await convertClip(source.path, clipPath);
     const fd = fs.openSync(clipPath, "r");
@@ -417,19 +412,22 @@ export async function setAudioInput(
   if (feeder?.running) {
     feeder.setSource(feederSource);
   } else {
-    removeFiles(dir, "in-");
-    feeder = new InputFeeder(path.join(dir, `in-${randomUUID().slice(0, 8)}.ring`), feederSource);
+    removeFiles(dir, `in-${process.pid}-`);
+    feeder = new InputFeeder(
+      path.join(dir, `in-${process.pid}-${randomUUID().slice(0, 8)}.ring`),
+      feederSource
+    );
     feeder.start();
     session.feeder = feeder;
   }
   const inputFile = path.join(dir, "input");
   // A new ring path is what makes the apps map it; rewriting the same one would restart nothing.
-  const control = `source=stream\nring=${feeder.ringPath}\n`;
+  const control = `source=stream\nring=${feeder.ringPath}\n${OWNER_LINE}`;
   if (!fs.existsSync(inputFile) || fs.readFileSync(inputFile, "utf8") !== control) {
     writeAtomic(inputFile, control);
   }
-  // The feeder has closed the previous clip, so it can be deleted.
-  removeFiles(dir, "clip-", clipName);
+  // The feeder has closed the previous clip, so it can be deleted. Other tool-servers' clips are theirs.
+  removeFiles(dir, `clip-${process.pid}-`, clipName);
   return { source: source.kind, durationMs };
 }
 
@@ -441,8 +439,8 @@ export function clearAudioInput(session: AudioSession): void {
   if (!fs.existsSync(dir)) return;
   // Apps keep their mapping of an unlinked ring until they see the input file gone.
   fs.rmSync(path.join(dir, "input"), { force: true });
-  removeFiles(dir, "clip-");
-  removeFiles(dir, "in-");
+  removeFiles(dir, `clip-${process.pid}-`);
+  removeFiles(dir, `in-${process.pid}-`);
 }
 
 /** Fails fast when the app runs a hook that speaks another version of the control protocol. */
@@ -508,7 +506,10 @@ export async function startRecording(
   const recorder = new OutputRecorder(path.join(dir, `out-${bundleId}-${id}.ring`), outputPath);
   const recFile = path.join(dir, `rec.${bundleId}`);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeAtomic(recFile, `id=${id}\nring=${recorder.ringPath}\nmute=${muteOutput ? 1 : 0}\n`);
+  writeAtomic(
+    recFile,
+    `id=${id}\nring=${recorder.ringPath}\nmute=${muteOutput ? 1 : 0}\n${OWNER_LINE}`
+  );
   if (dormant) {
     pendingIds.set(bundleId, id);
     recorders.set(bundleId, recorder);

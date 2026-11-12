@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as path from "node:path";
 
 // Arming (native-devtools' env setup) inserts the audio hook next to the bootstrap only while the
 // `ios-audio-always-inserted` flag is on; off, the first audio tool call inserts it instead.
@@ -118,5 +120,30 @@ describe("arming inserts the audio hook per the ios-audio-always-inserted flag",
     }
     expect(inserted()).toBe("/fake/libArgentInjectionBootstrap.dylib");
     expect(setenvCalls.some((a) => a[0] === "ARGENT_AUDIO_DIR")).toBe(false);
+  });
+
+  it("clears what a killed tool-server left, flag or not, and keeps a live one's", async () => {
+    const dead = spawnSync("true").pid!;
+    for (const on of [true, false]) {
+      flagOn = on;
+      const dir = audioDir(UDID);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "input"),
+        `source=stream\nring=${dir}/in-${dead}-a.ring\nhost=${dead}\n`
+      );
+      fs.writeFileSync(path.join(dir, `in-${dead}-a.ring`), "");
+      fs.writeFileSync(
+        path.join(dir, "rec.com.live"),
+        `id=a\nring=${dir}/out-com.live-a.ring\nhost=${process.pid}\n`
+      );
+      fs.writeFileSync(path.join(dir, "out-com.live-a.ring"), "");
+      await localIosHost.setupNativeDevtoolsEnv(UDID, {
+        transport: "unix",
+        socketPath: "/tmp/x.sock",
+      });
+      expect(fs.readdirSync(dir).sort()).toEqual(["out-com.live-a.ring", "rec.com.live"]);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

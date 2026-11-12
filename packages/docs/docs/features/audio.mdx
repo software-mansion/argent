@@ -50,7 +50,7 @@ Argent saves each recording in the `.argent/recordings/` directory of the projec
 
 - Argent supports iOS simulators on the same Mac as the tool server. Argent does not support tvOS simulators, physical iPhones, or remote simulators.
 - Argent does not cover web content in `WKWebView` such as `getUserMedia`, and does not cover `AVCaptureSession` audio.
-- The tool server feeds the microphone input and writes the recording. When the tool server stops, or when `stop-all-simulator-servers` releases the simulator, Argent gives the real microphone back and drops a recording that runs. If the tool server stops without a clean exit, the app hears silence.
+- The tool server feeds the microphone input and writes the recording. When the tool server stops, or when `stop-all-simulator-servers` releases the simulator, Argent gives the real microphone back and drops a recording that runs. If the tool server stops without a clean exit, the app hears silence until a new tool server connects to the simulator. The new tool server then gives the microphone back and stops the muted recordings that the old tool server left. It does not change the input or the recordings of a different tool server that runs.
 - Argent records one app at a time. When an app plays through several audio streams, the recording contains the mix that the app sends to the speaker.
 - An app that a tool starts with its own injected libraries does not get the hook. Xcode runs with the Main Thread Checker, Detox, and XCUITest do this. Start the app with Argent instead.
 - The audio hook uses private parts of the simulator audio stack that Apple can change. Argent tests it on iOS 26.5, 27.0, and 27.1.

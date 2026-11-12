@@ -301,7 +301,7 @@ describe("hook state", () => {
     await startRecording(session, BUNDLE, path.join(dir, "out.wav"), true);
     expect(Date.now() - t0).toBeLessThan(500);
     expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(
-      /^id=\w+\nring=.*\nmute=1\n$/
+      /^id=\w+\nring=.*\nmute=1\nhost=\d+\n$/
     );
     const done = await stopRecording(session, BUNDLE); // never opened audio: an empty recording, at once
     expect(done.durationMs).toBe(0);
@@ -469,7 +469,7 @@ describe("setAudioInput", () => {
       setAudioInput(session, { kind: "tone", frequencyHz: 440, amplitude: 0.25 })
     ).resolves.toEqual({ source: "tone" });
     expect(fs.readFileSync(path.join(dir, "input"), "utf8")).toMatch(
-      /^source=stream\nring=.+\.ring\n$/
+      new RegExp(`^source=stream\nring=.+/in-${process.pid}-.+\\.ring\nhost=${process.pid}\n$`)
     );
     expect(path.dirname(inputRing())).toBe(dir);
     expect(fs.statSync(inputRing()).size).toBe(128 + 65_536 * 4);
@@ -586,7 +586,9 @@ describe("recording", () => {
     try {
       await startRecording(session, BUNDLE, wav(), true);
       expect(fs.readFileSync(path.join(dir, `rec.${BUNDLE}`), "utf8")).toMatch(
-        /^id=.+\nring=.+out-com\.example\.app-.+\.ring\nmute=1\n$/
+        new RegExp(
+          `^id=.+\nring=.+out-com\\.example\\.app-.+\\.ring\nmute=1\nhost=${process.pid}\n$`
+        )
       );
       const finished = await stopRecording(session, BUNDLE);
       expect(finished).toEqual({

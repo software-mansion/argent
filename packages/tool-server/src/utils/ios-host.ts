@@ -16,6 +16,7 @@ import {
 } from "@argent/native-devtools-ios";
 import { SIMCTL_KILL_SIGNAL, SIMCTL_SPAWN_TIMEOUT_MS } from "./simctl-config";
 import { PS_BIN } from "./vega-process";
+import { clearAudioLeftovers } from "./ios-audio-leftovers";
 import {
   simctlArgsForUdid,
   simctlTargetForUdid,
@@ -317,6 +318,11 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
+  if (!tvOs && endpoint.transport === "unix") {
+    // Every arming, flag or not: apps keep loading the audio hook a killed tool-server inserted, and would keep
+    // hearing the silence of its input even if no audio tool is called again.
+    await clearAudioLeftovers(audioDir(nativeId)).catch(() => {});
+  }
   let updated = buildDyldInsertLibraries(existing, bootstrapPath);
   const audioDylib =
     !tvOs && endpoint.transport === "unix" && audioAlwaysInserted() ? installedAudioDylib() : null;
