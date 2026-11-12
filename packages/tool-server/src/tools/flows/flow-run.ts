@@ -2895,6 +2895,7 @@ async function runScriptStep(
     flowDir: scopeFlowDir(scope),
     step,
     projectRoot: state.projectRoot,
+    device: state.device,
     logBudget: state.scriptLogBudget,
     ...(state.signal ? { signal: state.signal } : {}),
   });

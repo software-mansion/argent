@@ -439,6 +439,22 @@ Three entries in the list give access to a credential. Each entry holds the valu
 
 `PATH` is the value of the tool-server too. A script that runs `psql`, `docker` or `pnpm` finds the binary on that `PATH`. An editor that starts the tool-server gives it the `PATH` of the editor. The script also runs under the Node binary of the tool-server, not the binary on the `PATH` of your shell.
 
+Argent also gives the script the device of the run in three names:
+
+| Name                     | Value                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `ARGENT_DEVICE_ID`       | The id of the device that `list-devices` prints, for example an iOS UDID, an Android serial or `chromium-cdp-9222` |
+| `ARGENT_DEVICE_PLATFORM` | `ios`, `ios-remote`, `android`, `chromium`, `vega`, `harmony` or `macos`                                           |
+| `ARGENT_DEVICE_KIND`     | `simulator`, `emulator`, `device`, `vvd` for a Vega Virtual Device, or `app`                                       |
+
+The kind `device` is a physical iPhone or a physical Android device. On HarmonyOS, `device` is each target that `hdc` connects to, also a booted emulator. `ARGENT_DEVICE_KIND` is `app` for a Chromium app and for a Mac app.
+
+Some ids are not the ids of the platform tools. A remote simulator has the platform `ios-remote`. A device from a [device provider](/docs/reference/device-providers) has an id that starts with `ext:`. `xcrun simctl` and `adb` do not accept these ids.
+
+Argent reads the device when the step starts. A `launch` step that boots a new Chromium instance moves the run to that instance. A later `script` step then gets the id of the new instance. A run without a device sets none of the three names. An e2e test of script steps alone has no device, unless you pass `--device`. Argent sets these names itself. A value with the same name in the environment of the tool-server does not reach the script.
+
+When the agent records a `script` step in an e2e test that runs on a device, the agent gives `e2e-add-script` that device in `udid`. The script then gets the same three names as on a replay. For an e2e test of script steps alone, the agent omits `udid`, because a replay of that e2e test has no device. Argent does not write the device to the e2e test file. A replay gives the script the device of that run.
+
 A failed step stops the e2e test. The verdict names the side that caused the failure.
 
 | Verdict | Cause      | Examples                                                                                                                   |

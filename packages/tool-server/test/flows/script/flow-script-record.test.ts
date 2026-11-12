@@ -68,7 +68,7 @@ async function start(name: string, projectRoot = root, ctx?: ToolContext) {
 async function addScript(
   name: string,
   scriptPath: string,
-  extra: { timeout?: number; project_root?: string } = {},
+  extra: { timeout?: number; project_root?: string; udid?: string } = {},
   ctx?: ToolContext
 ) {
   const { project_root: projectRoot = root, ...rest } = extra;
@@ -432,12 +432,9 @@ describe("recording a script step", () => {
   });
 
   it("needs no device of any kind", async () => {
-    expect(Object.keys(flowAddScriptTool.zodSchema!.shape).sort()).toEqual([
-      "name",
-      "path",
-      "project_root",
-      "timeout",
-    ]);
+    const shape = flowAddScriptTool.zodSchema!.shape;
+    expect(Object.keys(shape).sort()).toEqual(["name", "path", "project_root", "timeout", "udid"]);
+    expect(shape.udid.isOptional()).toBe(true);
 
     await write("scripts/seed.mjs", `output.ok = true;`);
     await start("deviceless");
@@ -518,6 +515,45 @@ describe("recording a script step", () => {
     expect(result.logTruncated).toBe(true);
     expect(result.log).toMatch(/\[6 V8 stack frames omitted]/);
     expect(Buffer.byteLength(result.log!, "utf8")).toBeLessThan(SCRIPT_STEP_LOG_LIMIT_BYTES / 2);
+  });
+});
+
+describe("the device values a recorded script gets", () => {
+  const PRINT_DEVICE_ENV =
+    `const names = ["ARGENT_DEVICE_ID", "ARGENT_DEVICE_PLATFORM", "ARGENT_DEVICE_KIND"];\n` +
+    `console.log(JSON.stringify(Object.fromEntries(names.map((n) => [n, process.env[n] ?? null]))));`;
+
+  it("hands the script the udid it is given, and records the step without it", async () => {
+    await write("scripts/device.mjs", PRINT_DEVICE_ENV);
+    await start("on-device");
+
+    const result = await addScript("on-device", "../../scripts/device.mjs", {
+      udid: "emulator-5554",
+    });
+
+    expect(result.status).toBe("pass");
+    expect(JSON.parse(result.log!.trim())).toEqual({
+      ARGENT_DEVICE_ID: "emulator-5554",
+      ARGENT_DEVICE_PLATFORM: "android",
+      ARGENT_DEVICE_KIND: "emulator",
+    });
+    expect(await steps("on-device")).toEqual([
+      { kind: "script", path: "../../scripts/device.mjs" },
+    ]);
+  });
+
+  it("leaves them unset without a udid", async () => {
+    await write("scripts/device.mjs", PRINT_DEVICE_ENV);
+    await start("no-device");
+
+    const result = await addScript("no-device", "../../scripts/device.mjs");
+
+    expect(result.status).toBe("pass");
+    expect(JSON.parse(result.log!.trim())).toEqual({
+      ARGENT_DEVICE_ID: null,
+      ARGENT_DEVICE_PLATFORM: null,
+      ARGENT_DEVICE_KIND: null,
+    });
   });
 });
 
