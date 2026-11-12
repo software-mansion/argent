@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const execFileMock = vi.fn();
+/** Returned from execFileMock: the call never answers. */
+const HANG = Symbol("hang");
 
 // Production spawns `ps` by absolute path (PS_BIN); match on basename so the mock
 // fires regardless.
@@ -20,6 +22,7 @@ vi.mock("node:child_process", async () => {
       const callback = typeof opts === "function" ? opts : cb!;
       const options = typeof opts === "function" ? undefined : opts;
       const result = execFileMock(cmd, args, options);
+      if (result === HANG) return;
       if (result instanceof Error) callback(result, { stdout: "", stderr: "" });
       else callback(null, result ?? { stdout: "", stderr: "" });
     },
@@ -97,13 +100,26 @@ vi.mock("../src/utils/ios-device/devicectl", async () => {
   };
 });
 
+// Whether Xcode's component install is pending, set per test. Defaults to installed.
+const xcodePending = vi.hoisted(() => ({ simctl: false, devicectl: false }));
+vi.mock("../src/utils/xcode-first-launch", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/xcode-first-launch")>(
+    "../src/utils/xcode-first-launch"
+  );
+  return {
+    ...actual,
+    xcodeFirstLaunchPending: (wrapper: "simctl" | "devicectl") => xcodePending[wrapper],
+  };
+});
+
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AddressInfo } from "node:net";
-import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { BRANCH_DEADLINE_MS, listDevicesTool } from "../src/tools/devices/list-devices";
 import { listIosPhysicalDevices } from "../src/utils/ios-device/devicectl";
+import { xcodeFirstLaunchHint, xcodeInstallInstruction } from "../src/utils/xcode-first-launch";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -150,8 +166,25 @@ function simctlJson(): string {
   });
 }
 
+/**
+ * A non-default adb server adds a sentence to `hint`, so the developer's own
+ * adb variables would decide every assertion about it. Each test starts from
+ * adb's default server and sets what it exercises itself.
+ */
+const ADB_ENV = ["ADB_SERVER_SOCKET", "ANDROID_ADB_SERVER_ADDRESS", "ANDROID_ADB_SERVER_PORT"];
+let savedAdbEnv: Record<string, string | undefined>;
+
 beforeEach(() => {
   execFileMock.mockReset();
+  savedAdbEnv = Object.fromEntries(ADB_ENV.map((name) => [name, process.env[name]]));
+  for (const name of ADB_ENV) delete process.env[name];
+});
+
+afterEach(() => {
+  for (const name of ADB_ENV) {
+    if (savedAdbEnv[name] === undefined) delete process.env[name];
+    else process.env[name] = savedAdbEnv[name];
+  }
 });
 
 describe("list-devices", () => {
@@ -221,6 +254,37 @@ describe("list-devices", () => {
     expect(result.avds).toEqual([{ name: "Pixel_3a_API_34" }, { name: "Pixel_7_API_34" }]);
   });
 
+  it("tags remote iOS and tvOS simulators with their runtime kind and skips any other runtime, like the local listing", async () => {
+    const devices = {
+      "com.apple.CoreSimulator.SimRuntime.tvOS-18-0": [
+        { udid: "TV-1", name: "Apple TV", state: "Booted" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.iOS-18-0": [
+        { udid: "PHONE-1", name: "iPhone 16", state: "Booted" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.watchOS-11-0": [
+        { udid: "WATCH-1", name: "Apple Watch", state: "Shutdown" },
+      ],
+      "com.apple.CoreSimulator.SimRuntime.xrOS-2-0": [
+        { udid: "VISION-1", name: "Apple Vision Pro", state: "Shutdown" },
+      ],
+    };
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "sim-remote" && args[0] === "simctl") {
+        return { stderr: "", stdout: JSON.stringify({ devices }) };
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const remote = result.devices.filter((d) => d.platform === "ios-remote");
+    expect(remote.map((d) => [d.name, "runtimeKind" in d ? d.runtimeKind : "missing"])).toEqual([
+      ["Apple TV", "tv"],
+      ["iPhone 16", "mobile"],
+    ]);
+  });
+
   /**
    * The common case, which the suite-wide setup already models. No provider
    * registered, so the result must not carry a word about them.
@@ -241,6 +305,204 @@ describe("list-devices", () => {
     const result = await listDevicesTool.execute!({}, {});
 
     expect(result.devices.length).toBeGreaterThan(0);
+    expect(result).not.toHaveProperty("hint");
+  });
+
+  /**
+   * A cold CoreSimulatorService holds `simctl list` past its timeout, and the
+   * tool-server can be serving by then, so an empty iOS list must not read as
+   * "no simulators".
+   */
+  it("says the iOS list may be incomplete when simctl list is killed at its timeout", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error("Command failed: xcrun simctl list devices --json"), {
+          killed: true,
+          signal: "SIGKILL",
+        });
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
+    expect(result.hint).toContain("did not answer within 10s");
+    // Xcode 27.1's simctl wrapper hangs in a pending first launch, which no retry fixes.
+    expect(result.hint).toContain(`ask the user to ${xcodeInstallInstruction()};`);
+  });
+
+  it("kills simctl list with SIGKILL after 10s", async () => {
+    execFileMock.mockImplementation(() => ({ stderr: "", stdout: "" }));
+
+    await listDevicesTool.execute!({}, {});
+
+    const list = execFileMock.mock.calls.find(
+      ([cmd, args]) => cmd === "xcrun" && args.includes("list") && args.includes("devices")
+    );
+    expect(list?.[2]).toMatchObject({ timeout: 10_000, killSignal: "SIGKILL" });
+  });
+
+  it("counts an iOS branch cut off by the deadline as timed out", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      execFileMock.mockImplementation((cmd: string, args: string[]) =>
+        cmd === "xcrun" && args[0] === "simctl" ? HANG : { stderr: "", stdout: "" }
+      );
+
+      const pending = listDevicesTool.execute!({}, {});
+      await vi.advanceTimersByTimeAsync(BRANCH_DEADLINE_MS);
+      const result = await pending;
+
+      expect(result.hint).toContain("did not answer within 10s");
+    } finally {
+      stderr.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("adds no hint when simctl fails without timing out", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error('xcrun: error: unable to find utility "simctl"'), {
+          code: 72,
+          killed: false,
+        });
+      }
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result).not.toHaveProperty("hint");
+  });
+
+  /**
+   * Issue #1721: after an Xcode update, every simctl call would start Xcode's
+   * component install and wait for a password. The listing must not call it,
+   * and must say why simulators are missing instead of implying Xcode is not
+   * installed.
+   */
+  describe("while simctl would start Xcode's component install", () => {
+    const simctlCalls = () =>
+      execFileMock.mock.calls.filter(([cmd, args]) => cmd === "xcrun" && args[0] === "simctl");
+
+    beforeEach(() => {
+      xcodePending.simctl = true;
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "xcrun" && args[0] === "simctl") return { stderr: "", stdout: simctlJson() };
+        if (cmd === "adb" && args[0] === "devices") {
+          return { stderr: "", stdout: "List of devices attached\nemulator-5554\tdevice\n" };
+        }
+        return { stderr: "", stdout: "" };
+      });
+    });
+
+    afterEach(() => {
+      xcodePending.simctl = false;
+    });
+
+    it("does not call simctl, lists no simulators, and says why", async () => {
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(simctlCalls()).toEqual([]);
+      expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
+      // The text itself is pinned in xcode-first-launch.test.ts, on a fixture
+      // Xcode: here it would depend on the host's.
+      expect(result.hint).toBe(xcodeFirstLaunchHint(["simctl"]));
+    });
+
+    it("still lists the other platforms, and physical iPhones from devicectl", async () => {
+      vi.mocked(listIosPhysicalDevices).mockResolvedValueOnce([
+        {
+          udid: "00008110-000000000000001E",
+          name: "Test iPhone",
+          osVersion: "26.0",
+          model: "iPhone14,2",
+          developerModeEnabled: true,
+          pairingState: "paired",
+          transportType: "wired",
+          tunnelState: "connected",
+        },
+      ]);
+
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(result.devices.filter((d) => d.platform === "android")).toHaveLength(1);
+      expect(result.devices.filter((d) => d.platform === "ios")).toEqual([
+        expect.objectContaining({ kind: "device", udid: "00008110-000000000000001E" }),
+      ]);
+    });
+  });
+
+  // `listIosPhysicalDevices` itself answers [] while devicectl is refused; the
+  // gates test pins that. Here: what the listing says, and that simulators stay.
+  describe("while devicectl would start Xcode's component install", () => {
+    beforeEach(() => {
+      xcodePending.devicectl = true;
+      execFileMock.mockImplementation((cmd: string, args: string[]) =>
+        cmd === "xcrun" && args[0] === "simctl"
+          ? { stderr: "", stdout: simctlJson() }
+          : { stderr: "", stdout: "" }
+      );
+    });
+
+    afterEach(() => {
+      xcodePending.simctl = false;
+      xcodePending.devicectl = false;
+    });
+
+    it("still lists simulators, and says why iPhones are missing", async () => {
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(result.devices.filter((d) => d.platform === "ios").length).toBeGreaterThan(0);
+      expect(result.hint).toBe(xcodeFirstLaunchHint(["devicectl"]));
+    });
+
+    it("covers both when simctl would start it too", async () => {
+      xcodePending.simctl = true;
+
+      const result = await listDevicesTool.execute!({}, {});
+
+      expect(result.devices.filter((d) => d.platform === "ios")).toEqual([]);
+      expect(result.hint).toBe(xcodeFirstLaunchHint(["simctl", "devicectl"]));
+    });
+  });
+
+  /**
+   * The agent's own adb reaches the default server, where these serials do not
+   * exist. No Android device is listed: the agent may boot one next.
+   */
+  it("tells the agent how to reach a non-default adb server", async () => {
+    process.env.ANDROID_ADB_SERVER_PORT = "5038";
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.filter((d) => d.platform === "android")).toEqual([]);
+    expect(result.hint).toContain("`ANDROID_ADB_SERVER_PORT=5038 adb -s <serial> ...`");
+  });
+
+  it("says nothing about the adb server when the environment names the default one", async () => {
+    process.env.ANDROID_ADB_SERVER_PORT = "5037";
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\nemulator-5554\tdevice\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.devices.some((d) => d.platform === "android")).toBe(true);
     expect(result).not.toHaveProperty("hint");
   });
 
@@ -746,5 +1008,49 @@ describe("list-devices — external provider shadows", () => {
     /** The two rules that differ from a device argent booted itself. */
     expect(result.hint).toContain("boot-device");
     expect(result.hint).toContain("provider.workspace.path");
+    expect(result.hint).not.toContain("ANDROID_ADB_SERVER_PORT");
+  });
+
+  it("gives the provider rules and the adb server in one hint when both apply", async () => {
+    process.env.ANDROID_ADB_SERVER_PORT = "5038";
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return { stderr: "", stdout: simctlJson() };
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    expect(result.hint).toContain("provider.workspace.path");
+    expect(result.hint).toContain("`ANDROID_ADB_SERVER_PORT=5038 adb -s <serial> ...`");
+  });
+
+  it("keeps the provider rules alongside the iOS timeout notice", async () => {
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "xcrun" && args[0] === "simctl") {
+        return Object.assign(new Error("Command failed: xcrun simctl list devices --json"), {
+          killed: true,
+        });
+      }
+
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stderr: "", stdout: "List of devices attached\n" };
+      }
+
+      return { stderr: "", stdout: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+
+    const hints = result.hint!.split("\n\n");
+    expect(hints).toHaveLength(2);
+    expect(hints[0]).toContain("did not answer within 10s");
+    expect(hints[1]).toContain("provider.workspace.path");
   });
 });

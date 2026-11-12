@@ -4,6 +4,7 @@ import { run } from "../src/run.js";
 const toolsClientMock = vi.hoisted(() => ({
   fetchTool: vi.fn(),
   callTool: vi.fn(),
+  baseUrl: vi.fn(async () => ({ url: "http://127.0.0.1:1", token: undefined })),
 }));
 
 const telemetryMock = vi.hoisted(() => ({
@@ -12,7 +13,8 @@ const telemetryMock = vi.hoisted(() => ({
   track: vi.fn(),
 }));
 
-vi.mock("@argent/tools-client", () => ({
+vi.mock("@argent/tools-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/tools-client")>()),
   createToolsClient: vi.fn(() => toolsClientMock),
 }));
 
@@ -47,6 +49,24 @@ describe("argent run telemetry", () => {
     exitSpy.mockRestore();
     errorSpy.mockRestore();
     logSpy.mockRestore();
+  });
+
+  it("emits cli:run_fail when the result reports a failure", async () => {
+    toolsClientMock.callTool.mockResolvedValue({ data: { ok: false }, failure: "it failed" });
+
+    await expect(run(["sample-tool"], { paths: {} as never })).rejects.toThrow("process.exit:1");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "cli:run_fail",
+      expect.objectContaining({
+        tool: "sample-tool",
+        error_code: "CLI_RUN_TOOL_RESULT_FAILED",
+        failure_stage: "cli_run_tool_result",
+        failure_area: "cli",
+        error_kind: "unknown",
+      })
+    );
+    expect(telemetryMock.shutdown).toHaveBeenCalledTimes(1);
   });
 
   it("emits cli:run_fail, not tool:fail, when tool-server call fails", async () => {
@@ -87,5 +107,49 @@ describe("argent run telemetry", () => {
     );
     expect(telemetryMock.track).not.toHaveBeenCalledWith("tool:fail", expect.anything());
     expect(telemetryMock.shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves alias_used off cli:run_fail for a tool called by its own id", async () => {
+    toolsClientMock.callTool.mockRejectedValue(new Error("boom"));
+
+    await expect(run(["sample-tool"], { paths: {} as never })).rejects.toThrow("process.exit:1");
+
+    const call = telemetryMock.track.mock.calls.find(([event]) => event === "cli:run_fail");
+    expect(call?.[1]).not.toHaveProperty("alias_used");
+  });
+
+  it("records the canonical id and alias_used when a former id fails at the server", async () => {
+    toolsClientMock.fetchTool.mockResolvedValue({
+      ...toolMeta,
+      name: "flow-execute",
+      aliasOf: "e2e-execute",
+    });
+    toolsClientMock.callTool.mockRejectedValue(new Error("boom"));
+
+    await expect(run(["flow-execute"], { paths: {} as never })).rejects.toThrow("process.exit:1");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "cli:run_fail",
+      expect.objectContaining({
+        tool: "e2e-execute",
+        alias_used: true,
+        error_code: "CLI_RUN_TOOL_CALL_FAILED",
+      })
+    );
+  });
+
+  it("records the canonical id and alias_used when a former id fails flag parsing", async () => {
+    await expect(
+      run(["flow-execute", "--args", "not-json"], { paths: {} as never })
+    ).rejects.toThrow("process.exit:2");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "cli:run_fail",
+      expect.objectContaining({
+        tool: "e2e-execute",
+        alias_used: true,
+        error_code: "CLI_RUN_ARGS_JSON_INVALID",
+      })
+    );
   });
 });

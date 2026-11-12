@@ -1,11 +1,5 @@
 export type ReRenderReason =
-  | "parent"
-  | "props"
-  | "hooks"
-  | "context"
-  | "state"
-  | "force_update"
-  | "unknown";
+  "parent" | "props" | "hooks" | "context" | "state" | "force_update" | "unknown";
 
 export interface HotCommitComponentEntry {
   name: string;
@@ -73,6 +67,7 @@ export interface ComponentFinding {
     isMemoized: boolean;
     hasUseCallback: boolean;
     hasUseMemo: boolean;
+    otherMatches?: Array<{ file: string; line: number }>;
   };
   sourceSnippet?: string;
 }

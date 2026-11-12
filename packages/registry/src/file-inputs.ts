@@ -95,9 +95,10 @@ export interface FileInputMember extends Omit<FileInputWire, typeof FILE_INPUT_M
    * How the tool-server looks the member up. For `flow`: the directory of the
    * file that names the target, a NUL, and the target as written, which is
    * exactly the pair the runner resolves; for the flow of a nested
-   * `tool: flow-execute` step, `<project_root>/.argent/flows`, a NUL and
-   * `<name>.yaml`. For `baseline`: the absolute client
-   * path `<dir>/__baselines__/<key>/<name>.png`. For `tool`: a file argument
+   * `tool: flow-execute` step, each directory of its `paths`
+   * (`NestedFlowTarget`) the client looked in, a NUL and `<name>.yaml`. For
+   * `baseline`: the absolute client path
+   * `<dir>/__baselines__/<key>/<name>.png`. For `tool`: a file argument
    * of a `tool:` step ({@link isClientFileArgument}), as the step spells it.
    * One path is sent once: a `tool` member also serves as the baseline at
    * that path.
@@ -145,12 +146,18 @@ export interface FileInputSpec {
   target: string;
   /** Client-side path template; `${param}` substitutes the tool's string args. */
   path: string;
+  /**
+   * Client-DERIVED `file` targets only: templates tried in order in place of
+   * `path`. The client wraps the first whose file exists, or the first when
+   * none does. Clients that do not know the field use `path`.
+   */
+  paths?: string[];
   kind: FileInputKind;
   optional?: boolean;
   /**
    * Client-DERIVED targets only: skip this spec whenever the named param is
    * set — it is an alternate source that supersedes this template (e.g.
-   * flow-execute's flow_file spec is skipped when flow_path is set). The
+   * flow-execute's e2e_test_file spec is skipped when e2e_test_path is set). The
    * client then does not derive/wrap `target`, and the server drops a derived
    * wrapper an older client still sent, so a dual-source misuse is diagnosed
    * by the tool's own validation instead of by this spec's file resolution.
@@ -161,7 +168,7 @@ export interface FileInputSpec {
    * Server-side: unwrap this spec's wrapper back to its client path string —
    * neither resolved nor dropped — whenever the named param is set. The
    * complement of {@link skipWhenSet} for a CALLER-authored target with an
-   * alternate source param (e.g. flow-execute's flow_path vs name): both on
+   * alternate source param (e.g. flow-execute's e2e_test_path vs name): both on
    * the wire is a dual-source misuse the tool's own exactly-one validation
    * must diagnose, so the boundary must not resolve the wrapper (the error
    * would hinge on whether an unused file exists) and must not drop it (which
@@ -306,7 +313,7 @@ export function interpolateFileInputPath(
 /**
  * The names a file argument of a `tool:` step may have to travel over a link,
  * in any case of letters: the files the tools take (`screenshot-diff` PNGs, a
- * `flow_path`). The tool-server refuses another one before the first step,
+ * `e2e_test_path`). The tool-server refuses another one before the first step,
  * and the client sends no other one.
  */
 export const TOOL_FILE_EXTENSIONS = [".png", ".yaml"] as const;
@@ -343,7 +350,7 @@ export function toolStepFiles(
 /**
  * A file the client sends for a `tool:` step over a link: a `file` input whose
  * path is one argument of the step as written (not a path the tool builds out
- * of several, such as `flow_file`), absolute, with a
+ * of several, such as `e2e_test_file`), absolute, with a
  * {@link TOOL_FILE_EXTENSIONS} name. The client and the runner both decide it
  * here, so the runner finds every file it reads among the members.
  */

@@ -6,7 +6,13 @@ import {
   warmTelemetryIdentitySync,
   writeConsentFlag,
 } from "@argent/telemetry";
-import { ALL_ADAPTERS, copyRulesAndAgents, type McpConfigAdapter } from "./mcp-configs.js";
+import {
+  ALL_ADAPTERS,
+  copyRulesAndAgents,
+  findRetiredRulesAndAgents,
+  type McpConfigAdapter,
+} from "./mcp-configs.js";
+import { reportRetiredFiles } from "./retired-files.js";
 import {
   RULES_DIR,
   AGENTS_DIR,
@@ -28,6 +34,7 @@ import { parseInitArgs, InitCancelled } from "./init-args.js";
 import {
   InitTelemetry,
   INSTALL_MODE_FLAG_CONFLICT,
+  INSTALL_SKILLS_FAILED,
   INSTALL_UNCLASSIFIED_FAILED,
 } from "./init-telemetry.js";
 import { promptInstallMode } from "./init-mode-prompt.js";
@@ -37,7 +44,12 @@ import { chooseScope, type Scope } from "./init-scope.js";
 import { writeMcpConfigs } from "./init-mcp-write.js";
 import { cleanupStaleMcpConfigs } from "./init-stale-config.js";
 import { configureAllowlist } from "./init-allowlist.js";
-import { runSkillsStep, type SkillsMethod } from "./init-skills.js";
+import {
+  formatSkillsSummaryLine,
+  runSkillsStep,
+  skillsAreMissing,
+  type SkillsStepResult,
+} from "./init-skills.js";
 
 // `argent init` orchestrator. Step modules signal a cancelled prompt by throwing
 // InitCancelled(step); the catch below turns that into cli_init_cancel + a clean exit.
@@ -162,7 +174,7 @@ export async function init(args: string[]): Promise<void> {
     tel.editorsConfiguredCount = writtenAdapters.length;
 
     track("installation:editors_select", {
-      editors: writtenAdapters.map((a) => sanitizeEditorName(a.name)),
+      editors: writtenAdapters.map((a) => a.telemetryName ?? sanitizeEditorName(a.name)),
       detected_editor_count: detected.length,
       scope,
       install_mode: tel.installMode,
@@ -257,7 +269,7 @@ export async function init(args: string[]): Promise<void> {
 
     // Step 2 — the module prints its own step header.
 
-    const skillsMethod = await runSkillsStep({
+    const skills = await runSkillsStep({
       nonInteractive: parsed.nonInteractive,
       fromTar: parsed.fromTar,
       version,
@@ -265,7 +277,7 @@ export async function init(args: string[]): Promise<void> {
       customRoot,
     });
 
-    p.log.step(pc.bold("Step 3: Rules & Agents"));
+    p.log.step(pc.bold("Step 3: Rules"));
 
     const copyResults = copyRulesAndAgents(
       writtenAdapters,
@@ -276,40 +288,68 @@ export async function init(args: string[]): Promise<void> {
     );
 
     if (copyResults.length > 0) {
-      p.note(copyResults.join("\n"), "Rules & Agents");
+      p.note(copyResults.join("\n"), "Rules");
     } else {
-      p.log.info(pc.dim("No rules or agents to copy for selected editors."));
+      p.log.info(pc.dim("No rules to copy for selected editors."));
     }
+
+    await reportRetiredFiles(
+      findRetiredRulesAndAgents(
+        [{ adapters: writtenAdapters, scope: normalizedScope }],
+        effectiveRoot,
+        RULES_DIR,
+        AGENTS_DIR
+      ),
+      !parsed.nonInteractive
+    );
 
     printSummary({
       installMode: tel.installMode,
       selectedAdapters: writtenAdapters,
       scope,
       allowlistEnabled: allowlist.enabled,
-      skillsMethod,
+      skills,
       copiedRules: copyResults.length > 0,
       wroteProjectTelemetryOptOut,
     });
 
-    p.note(
-      [
-        pc.bold(pc.green("Argent is ready!")),
-        "",
-        `${pc.bold("Get started")} by asking your assistant:`,
-        "",
-        `   ${pc.bold(pc.cyan(`"What can Argent do?"`))}`,
-        "",
-        pc.dim("It will walk you through all capabilities available."),
-      ].join("\n"),
-      pc.bgGreen(pc.black(" Get Started "))
-    );
-    p.outro("Done.");
+    const skillsMissing = skillsAreMissing(skills);
+    if (skills.outcome === "success" || (skills.method === "manual" && !skills.forcedManual)) {
+      p.note(
+        [
+          pc.bold(pc.green("Argent is ready!")),
+          "",
+          `${pc.bold("Get started")} by asking your assistant:`,
+          "",
+          `   ${pc.bold(pc.cyan(`"What can Argent do?"`))}`,
+          "",
+          pc.dim("It will walk you through all capabilities available."),
+        ].join("\n"),
+        pc.bgGreen(pc.black(" Get Started "))
+      );
+    } else if (skills.installedCount > 0) {
+      p.log.warn(
+        `${pc.bold("Skills were not updated:")} ${skills.installedCount} skills from an earlier ` +
+          `install stay in use. Run ${pc.cyan("argent init")} again to update them.`
+      );
+    } else {
+      p.log.warn(
+        `${pc.bold("Argent is not ready:")} the MCP server and rules are in place, but no skills are ` +
+          `installed. Run ${pc.cyan("argent init")} again to install them.`
+      );
+    }
+    p.outro(skillsMissing ? "Done, without skills." : "Done.");
 
-    tel.initSucceeded = true;
+    tel.initSucceeded = !skillsMissing;
     // Persist an interactive first-run telemetry choice only now that init has
     // completed: until here it is an in-process override, so an aborted setup
     // leaves nothing behind and the next run re-prompts.
     if ("commit" in consent) consent.commit();
+    if (skillsMissing) {
+      await tel.finalize(INSTALL_SKILLS_FAILED);
+      // Everything else is written, but the step itself calls skills required.
+      process.exit(1);
+    }
     await tel.finalize();
   } catch (err) {
     if (err instanceof InitCancelled) {
@@ -340,7 +380,7 @@ interface SummaryArgs {
   selectedAdapters: McpConfigAdapter[];
   scope: Scope;
   allowlistEnabled: boolean;
-  skillsMethod: SkillsMethod;
+  skills: SkillsStepResult;
   copiedRules: boolean;
   /** `--no-telemetry` in local mode also wrote `.argent/config.json`. */
   wroteProjectTelemetryOptOut: boolean;
@@ -351,7 +391,7 @@ function printSummary({
   selectedAdapters,
   scope,
   allowlistEnabled,
-  skillsMethod,
+  skills,
   copiedRules,
   wroteProjectTelemetryOptOut,
 }: SummaryArgs): void {
@@ -361,8 +401,8 @@ function printSummary({
       ? `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`
       : `${pc.yellow("MCP server")} NOT configured — no editor config was written`,
     `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
-    `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
-    `${pc.green("Rules & agents")} ${copiedRules ? "copied" : "n/a"}`,
+    formatSkillsSummaryLine(skills),
+    `${pc.green("Rules")} ${copiedRules ? "copied" : "n/a"}`,
   ];
 
   p.note(summaryLines.join("\n"), "Summary");
@@ -375,7 +415,7 @@ function printSummary({
         `${pc.bold("Commit")} so your team shares the same setup:`,
         `  ${pc.cyan("package.json")} + your lockfile`,
         `  the written MCP config (.mcp.json, .cursor/mcp.json, …)`,
-        `  ${pc.cyan(".argent/install.json")}${wroteProjectTelemetryOptOut ? ` + ${pc.cyan(".argent/config.json")}` : ""}, and the skills/rules/agents files`,
+        `  ${pc.cyan(".argent/install.json")}${wroteProjectTelemetryOptOut ? ` + ${pc.cyan(".argent/config.json")}` : ""}, and the skills and rules files`,
         "",
         `Teammates then get argent on ${pc.cyan("npm install")} — no global install, no ${pc.cyan("argent init")}.`,
         pc.dim(

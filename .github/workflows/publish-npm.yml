@@ -78,7 +78,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
@@ -126,7 +126,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download signed native binaries (dylibs, ax-service, Android helper APK)
+      - name: Download signed native binaries (dylibs, ax-service, Android helper APK, network inspector agent)
         run: bash scripts/download-native-binaries.sh "$BINARIES_TAG"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -201,6 +201,11 @@ jobs:
       - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      # Native Mac app library and launch helper: without them boot-device
+      # cannot start a Mac app.
+      - run: test -f packages/argent/dylibs/macos/libNativeDevtoolsMacos.dylib
+      - run: test -f packages/argent/dylibs/macos/libArgentInjectionBootstrap.dylib
+      - run: test -x packages/argent/bin/darwin/argent-macos-helper
       # TCP-transport (sim-remote / ios-remote) binaries — the ax-service and
       # native-devtools variants the remote code path spawns/injects over a
       # sim-remote-tunnelled TCP socket. bin/tcp is platform-NEUTRAL:
@@ -222,6 +227,9 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+      - run: test -f packages/argent/bin/network-inspector/network-inspector.jar
+      - run: test -f packages/argent/bin/network-inspector/x86_64/libjvmti_network_inspector.so
+      - run: test -f packages/argent/bin/network-inspector/arm64-v8a/libjvmti_network_inspector.so
       # Flow `script` runner + watchdogs, flat in dist/ beside tool-server.cjs.
       # flow-script-executor.ts resolves the runner there via __dirname, and the
       # runner resolves both watchdogs against its own import.meta.url.
@@ -374,7 +382,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"

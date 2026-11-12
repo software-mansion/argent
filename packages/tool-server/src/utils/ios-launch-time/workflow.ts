@@ -751,7 +751,7 @@ export async function prepareLaunch(
       const text = deviceErrorText(error);
       // Only the runner's own ID tells a leftover runner from the current one.
       const runner = isFreeProfileLimit(text)
-        ? await resolveRunnerSigningConfig().catch(() => null)
+        ? await resolveRunnerSigningConfig(device.id).catch(() => null)
         : null;
       const friendly = freeProfileLimitMessage(text, {
         subject: `the app ${settings.PRODUCT_BUNDLE_IDENTIFIER}`,

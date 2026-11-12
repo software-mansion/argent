@@ -14,8 +14,10 @@ import { describeIosDevice } from "./platforms/ios-device";
 import { describeChromium } from "./platforms/chromium";
 import { describeTv } from "./platforms/tv";
 import { describeVega, vegaRequires } from "./platforms/vega";
+import { describeHarmony, harmonyRequires } from "./platforms/harmony";
+import { describeMacos } from "./platforms/macos";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isAndroidTv } from "../../utils/adb";
 import { formatDescribeTree } from "./format-tree";
@@ -32,32 +34,14 @@ function withDescription(data: DescribeTreeData): DescribeResult {
   return out;
 }
 
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id)."
-    ),
-  bundleId: z
-    .string()
-    .optional()
-    .describe(
-      "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
-        "and the describe tool falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium, " +
-        "and on a physical iOS device."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
-
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  harmony: { device: true },
+  macos: { app: true },
 };
 
 interface ChromiumServices {
@@ -138,55 +122,69 @@ function makeDescribeExecute(
       requires: vegaRequires,
       handler: async (_services, params) => withDescription(await describeVega(params.udid)),
     },
+    harmony: {
+      requires: harmonyRequires,
+      handler: async (_services, _params, device) =>
+        withDescription(await describeHarmony(harmonyConnectKey(device.id))),
+    },
+    // The in-app library's connection resolves through the closed-over
+    // registry, after the macos-apps flag check, as the iOS services do.
+    macos: {
+      handler: async (_services, _params, device) =>
+        withDescription(await describeMacos(registry, device)),
+    },
   });
 }
+
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .min(1)
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
+    ),
+  bundleId: z
+    .string()
+    .optional()
+    .describe(
+      "App bundle ID, used as a target hint on iOS when the AX-service returns no elements " +
+        "and describe falls back to native-devtools inspection. " +
+        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on every other platform, " +
+        "including a physical iOS device."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
 
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
   return {
     id: "describe",
+    // Android's device probes plus the tree dump can outlast the 30s MCP fetch timeout.
+    longRunning: true,
+    description: `Get the accessibility / DOM element tree for the current screen.
+Use when you need element frames or labels and have no fresh tree: most interaction tools (not tv-remote or shake) already return one after each action.
+On iOS it reads the AXRuntime accessibility service, so it sees whatever is visible, including system dialogs and permission prompts. While a system dialog is visible it returns the dialog's elements (buttons, text); otherwise the foreground app's. On a physical iOS device it covers only the app started with launch-app; to read system dialogs there, launch-app \`com.apple.springboard\` first.
+On Android it reads the tree through Argent's UiAutomation helper, falling back to \`uiautomator dump\`. On Chromium it walks the DOM over the Chrome DevTools Protocol: every visible element with its ARIA role, accessible name and bounding rect.
+On Vega (Fire TV) it reads the on-device automation toolkit; \`[focused]\`/\`[selected]\` mark the D-pad cursor, which you move with \`tv-remote\` (Vega has no touch).<flag:harmonyos>
+On HarmonyOS it runs the device's \`uitest dumpLayout\` (\`source: "harmony-uitest"\`); each top-level child is a window whose \`identifier\` (not its label) is the owning bundle, so an app plus the status bar reads as two windows. A suspended display still dumps its last frame, so the result then carries a \`hint\`, as it does for an empty dump.</flag:harmonyos><flag:macos-apps>
+On a Mac app it reads the app's accessibility tree with web view content and React Native testIDs merged in; frames are fractions of the app window, grown to include sheets and menus past it.</flag:macos-apps>
+On a TV target (Apple TV / Android TV: a \`list-devices\` entry with runtimeKind 'tv') it returns the FOCUSED element and the FOCUSABLE elements instead, since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\`, then call describe again to confirm where focus landed.
+
+Returns \`{ description, source }\`: \`description\` renders the tree one line per element, with its role, label/value/id, VoiceOver hint (iOS simulator), interactivity flags and frame. Frames are normalized [0,1] fractions of the screen / window width and height (not pixels); tap an element at the centre of its frame. The tree has no z-order or occlusion information: an element may be covered by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
+Fails if the tree cannot be read, e.g. on a physical iOS device before launch-app has started an app.
+
+For UIKit properties of a view (class name, accessibilityIdentifier), use native-find-views (iOS simulator only).
+For React Native component names, or a testID describe does not list, use debugger-component-tree.`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "accessibility element tree ui hierarchy tap coordinates ios android chromium vega <flag:harmonyos>harmony harmonyos </flag:harmonyos><flag:macos-apps>macos mac app </flag:macos-apps>dom tv tvos apple tv android tv fire tv focus focusable remote dpad",
+    readOnly: true,
     interaction: {
       startedMsg: () => "Reading screen",
       completedMsg: () => "Read screen",
       failedMsg: ({ failureSignal }) => `Failed to read screen: ${failureSignal.error_code}`,
     },
-    description: `Get the accessibility / DOM element tree for the current screen.
-On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible, including
-system dialogs, permission prompts, and any foreground app content. On a physical iOS device the tree
-covers only the app registered by launch-app. On Android, runs \`uiautomator dump\`.
-On Chromium, walks the renderer's DOM via Chrome DevTools Protocol: every visible element with its ARIA
-role, accessible name, and bounding rect (normalized to 0–1).
-On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
-\`[focused]\`/\`[selected]\` so you can see where the D-pad cursor is, then move it with the \`tv-remote\` tool
-(Vega is remote-driven, not touch). If describe returns an empty tree on Vega, relaunch the foreground
-app (the toolkit attaches at launch) and try again.
-
-When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
-with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
-On a physical iOS device, launch-app \`com.apple.springboard\` first to read system dialogs.
-
-Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree, one
-line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
-are normalized [0,1] fractions of the screen / window width/height (not pixels), the same space as
-gesture-tap / gesture-swipe / gesture-pinch.
-
-To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
-\`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
-can be applied to a line in isolation.
-The tree carries no z-order or occlusion information: an element listed at a point may be covered
-by an overlay (e.g. a toolbar over list rows), so check a screenshot when a tap lands unexpectedly.
-
-For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
-use native-describe-screen with an explicit bundleId instead (iOS simulator only).
-For React Native apps, debugger-component-tree returns React component names with tap coordinates.
-
-On a TV target (Apple TV / Android TV: a \`list-devices\` entry with runtimeKind 'tv') this returns
-the focus-driven view instead: the currently FOCUSED element and the list of FOCUSABLE elements,
-since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\` (up/down/left/right/select/
-back/menu/home), then call describe again to confirm where focus landed.`,
-    alwaysLoad: true,
-    searchHint:
-      "accessibility element tree ui hierarchy tap coordinates ios android chromium vega dom tv tvos apple tv android tv fire tv focus focusable remote dpad",
-    zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);

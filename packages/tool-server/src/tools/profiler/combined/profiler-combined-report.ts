@@ -30,11 +30,6 @@ import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/de
 import { metroPort, metroPortField } from "../../../utils/debugger/metro-port";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
-const zodSchema = z.object({
-  port: metroPortField,
-  device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
-});
-
 interface HangCommitCorrelation {
   hang: UiHang;
   hangWallStartMs: number;
@@ -46,21 +41,26 @@ interface HangCommitCorrelation {
   }[];
 }
 
+const zodSchema = z.object({
+  port: metroPortField,
+  device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
+});
+
 export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-combined-report",
+  description: `Generate a cross-correlated report combining React Profiler and native profiler data.
+Maps native hangs to React commits using wall-clock time alignment.
+Call this tool when both profilers were run in parallel on the same session.
+Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
+Fails if either react-profiler-analyze or native-profiler-analyze has not been called first, or if the session stored no React commits.`,
+  zodSchema,
+  readOnly: true,
   interaction: {
     startedMsg: () => "Building combined performance report",
     completedMsg: () => "Built combined performance report",
     failedMsg: ({ failureSignal }) =>
       `Failed to build combined performance report: ${failureSignal.error_code}`,
   },
-  description: `Generate a cross-correlated report combining React Profiler and native profiler data.
-Maps native hangs to React commits using wall-clock time alignment.
-Requires both react-profiler-analyze and native-profiler-analyze to have been called first.
-Call this tool when both profilers were run in parallel on the same session.
-Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
-Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
-  zodSchema,
   // iOS reads xctrace output; Android re-queries the Perfetto .pftrace via
   // loadAndroidCombinedData. Chromium has no native trace capture.
   capability: {
@@ -121,6 +121,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
 
     let uiHangs: UiHang[];
     let memoryLeaks: MemoryLeak[];
+    // Android has no leak capture; on iOS the trace may lack a Leaks table.
+    let leaksRecorded: boolean;
     // iOS froze uiHangs + memoryLeaks into parsedData at analyze; Android
     // re-queries the .pftrace on demand here.
     if (nativeApi.platform === "android") {
@@ -142,6 +144,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       const data = await loadAndroidCombinedData(nativeApi.traceFile, nativeApi.appProcess ?? "");
       uiHangs = data.uiHangs;
       memoryLeaks = [];
+      leaksRecorded = false;
     } else {
       if (!nativeApi.parsedData) {
         throw new FailureError("No native profiler data. Run native-profiler-analyze first.", {
@@ -153,6 +156,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       }
       uiHangs = nativeApi.parsedData.uiHangs;
       memoryLeaks = nativeApi.parsedData.memoryLeaks;
+      leaksRecorded = nativeApi.parsedData.leaksRecorded;
     }
 
     // Cache lookup only — this report needs no live CDP connection.
@@ -169,7 +173,14 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     const onDisk = await readCommitTree(sessionPaths.commitsPath);
     const commitTree = { commits: onDisk.commits, hookNames: new Map() };
     if (commitTree.commits.length === 0) {
-      throw new FailureError("No React commit data. Run react-profiler-analyze first.", {
+      // Analyzing again would change nothing. Name the storage rule, not a cause:
+      // the list is also empty after a slow commit with no named components, and
+      // when nothing rendered at all.
+      const message =
+        "No React commits are stored for this session: only commits of 16ms or more with named " +
+        "components, and their neighbours, are kept. There is nothing to correlate with the native " +
+        "profile. Use the native-profiler-analyze report on its own.";
+      throw new FailureError(message, {
         error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
         failure_stage: "profiler_combined_report_load_react_data",
         failure_area: "tool_server",
@@ -280,7 +291,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       "React Profiler + Native Profiler — Cross-Tool Correlation",
       "",
       `**React Profiler:** ${nonMarginCommits.length} hot commits  `,
-      `**Native Profiler:** ${uiHangs.length} hangs, ${memoryLeaks.length} leaks`,
+      `**Native Profiler:** ${uiHangs.length} hangs, ` +
+        (leaksRecorded ? `${memoryLeaks.length} leaks` : `leaks not recorded`),
       "",
       `**Clock offset:** React started ${((reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
       "",

@@ -106,14 +106,41 @@ export interface RunnerArtifact {
   fromCache: boolean;
 }
 
-function derivedDir(): string {
+function derivedRoot(): string {
   return path.join(os.homedir(), ".argent", "ios-device-runner", "derived");
+}
+
+/**
+ * One directory per team: phones can sign under different teams, and a build
+ * under one team must not replace the build another phone is running from.
+ */
+function derivedDirForTeam(teamId: string): string {
+  return path.join(derivedRoot(), teamId);
 }
 
 /**
  * Stamp written after a successful build. Cache hits require a matching stamp.
  */
 const CACHE_KEY_FILE = ".argent-cache-key";
+
+/** Team ids are ten uppercase letters and digits. */
+const TEAM_DIRECTORY_RE = /^[A-Z0-9]{10}$/;
+
+/**
+ * Earlier versions built directly in the derived root, and a build that failed
+ * there left no stamp. Only team directories belong in the root now, so anything
+ * else is such a build and only takes up disk space.
+ */
+async function removeBuildSharedByAllTeams(currentTeamId: string): Promise<void> {
+  const root = derivedRoot();
+  const entries = await fsp.readdir(root).catch(() => [] as string[]);
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry !== currentTeamId && !TEAM_DIRECTORY_RE.test(entry))
+      .map((entry) => fsp.rm(path.join(root, entry), { recursive: true, force: true }))
+  );
+}
 
 /**
  * Find the base device .xctestrun under a derived-data dir.
@@ -299,10 +326,12 @@ export async function ensureRunnerArtifact(
   ]);
   const staticArgs = runnerBuildStaticArgs(projectPath, config);
   const cacheKey = computeRunnerCacheKey(sourcesHash, xcodeVersion, staticArgs);
-  const derivedDataPath = derivedDir();
+  const derivedDataPath = derivedDirForTeam(config.teamId);
   const build = opts.build ?? buildRunnerArtifact;
 
   return withRunnerBuildLock(async (): Promise<RunnerArtifact> => {
+    await removeBuildSharedByAllTeams(config.teamId);
+
     const stampPath = path.join(derivedDataPath, CACHE_KEY_FILE);
     const stamped = await fsp.readFile(stampPath, "utf8").catch(() => null);
 
@@ -328,7 +357,7 @@ export async function ensureRunnerArtifact(
       });
     }
 
-    const built = await build(derivedDataPath, staticArgs, opts.destinationUdid);
+    const built = await build(derivedDataPath, staticArgs, opts.destinationUdid, config.teamId);
     await fsp.writeFile(stampPath, cacheKey);
 
     return built;
@@ -341,7 +370,8 @@ export async function ensureRunnerArtifact(
 async function buildRunnerArtifact(
   derivedDataPath: string,
   staticArgs: readonly string[],
-  destinationUdid: string | undefined
+  destinationUdid: string | undefined,
+  teamId: string
 ): Promise<RunnerArtifact> {
   await fsp.mkdir(derivedDataPath, { recursive: true });
 
@@ -367,7 +397,7 @@ async function buildRunnerArtifact(
 
     throw withFailureSignal(
       new Error(
-        `Building the iOS device runner failed.${hint ? ` ${hint}` : ""}\n\n` +
+        `Building the iOS device runner failed.${hint ? ` Signing team: ${teamId}. ${hint}` : ""}\n\n` +
           `xcodebuild reported:\n${xcodebuildFailureSummary(output)}`,
         { cause: error }
       ),

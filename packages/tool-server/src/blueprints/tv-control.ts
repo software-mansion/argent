@@ -12,11 +12,17 @@ import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators, cacheSimulatorRuntimeKind } from "../utils/ios-devices";
 import { simctlTargetForUdidSync } from "../utils/ios-device-sets";
+import { firstSimulatorPoll } from "../utils/simulator-watcher";
 import { UnsupportedOperationError } from "../utils/capability";
-import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
+import type {
+  TvControlApi,
+  TvDescribeResponse,
+  TvDirection,
+  TvHierarchyResponse,
+} from "./tv-control-types";
 
 // Re-exported so existing importers of `tv-control` keep working.
-export type { TvControlApi, TvDescribeResponse, TvDirection, TvElement };
+export type { TvControlApi, TvDescribeResponse };
 
 export const TV_CONTROL_NAMESPACE = "TvControl";
 
@@ -105,11 +111,11 @@ async function sendJson(socketPath: string, command: string, timeoutMs?: number)
 
 // Spawn the AX reader *inside* the simulator. It binds its own unix socket on
 // the host-shared /tmp, so the host connects to that path directly.
-function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
-  // The factory's device-list validation already learned this UDID's device
-  // set, so the synchronous cached lookup is warm here. Spawning the AX reader
-  // is the ax-service mechanism, so a provider's device needs that grant.
-  const axTarget = simctlTargetForUdidSync(udid, { granted: "ax-service" });
+function spawnAxDaemon(
+  udid: string,
+  socketPath: string,
+  axTarget: ReturnType<typeof simctlTargetForUdidSync>
+): ChildProcess {
   const proc = execFile(
     "xcrun",
     [
@@ -251,9 +257,15 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     const hidSock = hidSocketPath(udid);
     let disposed = false;
 
-    await ensureAutomationEnabled(udid);
+    // A select could open an app from the home screen, which must not launch
+    // before the watcher has armed native-devtools injection.
+    await Promise.all([ensureAutomationEnabled(udid), firstSimulatorPoll()]);
 
-    let axProc = spawnAxDaemon(udid, axSock);
+    // The device-list validation above already learned this UDID's device set,
+    // so the synchronous cached lookup is warm. Spawning the AX reader is the
+    // ax-service mechanism, so a provider's device needs that grant.
+    const axTarget = () => simctlTargetForUdidSync(udid, { granted: "ax-service" });
+    let axProc = spawnAxDaemon(udid, axSock, axTarget());
     const hidProc = spawnHidDaemon(udid, hidSock);
 
     // Spawned via `simctl spawn`, not as a child of the app, so it survives
@@ -323,6 +335,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     // half-spawned daemon or double-spawn.
     let axRespawn: Promise<void> | null = null;
     async function spawnFreshAx(): Promise<void> {
+      // Built before the old daemon is killed, so a respawn that is refused
+      // (Xcode's component install is pending) leaves a working daemon in place.
+      const target = axTarget();
       if (axProc && !axProc.killed) {
         axProc.removeListener("exit", onAxExit);
         axProc.removeListener("error", onAxError);
@@ -334,10 +349,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       } catch {
         /* no stale socket to remove */
       }
-      axProc = spawnAxDaemon(udid, axSock);
-      axProc.on("exit", onAxExit);
-      axProc.on("error", onAxError);
       try {
+        axProc = spawnAxDaemon(udid, axSock, target);
+        axProc.on("exit", onAxExit);
+        axProc.on("error", onAxError);
         await waitForSocket(axSock, axProc, 15_000);
       } catch (err) {
         // The socket never came up (a bind that timed out, not a clean exit —
@@ -430,6 +445,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
           focused: r.focused ?? null,
           focusable: r.focusable ?? [],
         };
+      },
+
+      async hierarchy(): Promise<TvHierarchyResponse> {
+        return (await sendAx("hierarchy", 10_000)) as TvHierarchyResponse;
       },
 
       async navigate(direction: TvDirection): Promise<void> {

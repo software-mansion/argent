@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -147,11 +147,63 @@ describe("enable / disable CLI", () => {
     expect(isFlagEnabled("opt-out-flag")).toBe(false);
   });
 
+  it("says when the project value overrides a global enable or disable", () => {
+    setFlag("opt-out-flag", false, "project");
+    const on = captureConsole(() => enable(["opt-out-flag"], TEST_REGISTRY));
+    expect(on.stdout).toContain('sets "opt-out-flag" to false');
+    expect(on.stdout).toContain("Run: argent enable opt-out-flag --scope project");
+
+    setFlag("my-feature-flag", true, "project");
+    const off = captureConsole(() => disable(["my-feature-flag"], TEST_REGISTRY));
+    expect(off.stdout).toContain("Run: argent disable my-feature-flag --scope project");
+  });
+
+  it("adds no note when the project value agrees, or the toggle is project-scoped", () => {
+    setFlag("opt-out-flag", true, "project");
+    expect(captureConsole(() => enable(["opt-out-flag"], TEST_REGISTRY)).stdout).not.toContain(
+      "overrides"
+    );
+    const scoped = captureConsole(() =>
+      disable(["opt-out-flag", "--scope", "project"], TEST_REGISTRY)
+    );
+    expect(scoped.stdout).not.toContain("overrides");
+  });
+
   it("enable then disable on an opt-out flag round-trips true → false", () => {
     captureConsole(() => enable(["opt-out-flag"], TEST_REGISTRY));
     expect(readFlags("global")).toEqual({ "opt-out-flag": true });
     captureConsole(() => disable(["opt-out-flag"], TEST_REGISTRY));
     expect(readFlags("global")).toEqual({ "opt-out-flag": false });
+  });
+
+  it.each([
+    ["http://192.0.2.10:3001", "refuses a call that names a secret of this machine"],
+    ["https://192.0.2.10:3001", "A call sends it the value `argent secrets` lists"],
+  ])("enable forward-secrets with a link to %s says what a call sends", async (url, note) => {
+    vi.stubEnv("ARGENT_TOOLS_URL", url);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await enable(["forward-secrets"]);
+      const out = log.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(out).toContain('Enabled flag "forward-secrets" (global)');
+      expect(out).toContain(`Note: a remote tool-server is linked (${url}). `);
+      expect(out).toContain(note);
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("enable forward-secrets with no link prints no note", async () => {
+    vi.stubEnv("ARGENT_TOOLS_URL", "");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await enable(["forward-secrets"]);
+      expect(log).toHaveBeenCalledTimes(1);
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("the shipped `argent disable video-watermark` writes false", () => {
@@ -266,7 +318,7 @@ describe("enable / disable CLI", () => {
 
 describe("flags (list) CLI", () => {
   it("ships the argent-lens flag in the production registry", () => {
-    // Guards the gate: setup-registry.ts reads isFlagEnabled("argent-lens"),
+    // Guards the gate: setup-registry.ts reads isFeatureEnabled("argent-lens"),
     // so that exact name must stay registered (and discoverable via `argent flags`).
     const out = captureConsole(() => flagsCmd([]));
     expect(out.stdout).toContain("argent-lens");

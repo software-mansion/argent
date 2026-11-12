@@ -1,5 +1,5 @@
 // Hermes CPU profile (CDP Profiler.stop format)
-export interface HermesCallFrame {
+interface HermesCallFrame {
   functionName: string;
   scriptId: string;
   url: string;
@@ -34,7 +34,7 @@ interface BackendCommitData {
   changeDescriptions?: Array<[number, unknown]>;
 }
 
-export interface BackendRootData {
+interface BackendRootData {
   commitData: BackendCommitData[];
 }
 
@@ -90,8 +90,8 @@ export interface RawProfilingInput {
     detectedArchitecture?: "bridge" | "bridgeless";
     anyCompilerOptimized?: boolean; // pre-scanned in react-profiler-stop before hot filtering
     hotCommitIndices?: number[]; // commits whose heat reached the 16ms floor
-    allClear?: boolean; // every commit stayed under the 16ms floor
-    maxCommitMs?: number; // max commit heat when allClear=true
+    noHotCommits?: boolean; // no named commit reached the 16ms floor
+    maxCommitMs?: number; // slowest commit when noHotCommits=true
     totalReactCommits?: number; // all commit batches, including ones hot filtering dropped
     unattributedByCommit?: Array<[number, number, number]>;
   };

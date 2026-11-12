@@ -1,8 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
+
+// HarmonyOS is behind the `harmonyos` flag; these cases drive it with the flag on.
+vi.mock("../src/utils/harmony-flag", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/harmony-flag")>()),
+  isHarmonyEnabled: () => true,
+}));
 import { z } from "zod";
 import { Registry } from "@argent/registry";
 import type { ToolContext } from "@argent/registry";
 import { createRunSequenceTool } from "../src/tools/run-sequence";
+import { gestureTapTool } from "../src/tools/gesture-tap";
+import { gestureRotateTool } from "../src/tools/gesture-rotate";
+import { assertSupported } from "../src/utils/capability";
+import { resolveDevice } from "../src/utils/device-info";
+import { renderFlagGated } from "../src/utils/flag-gated-text";
 
 // A minimal registry stub: records every invokeTool call and returns a marker.
 function makeMockRegistry() {
@@ -32,6 +43,7 @@ const TVOS_UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 // iOS-shaped udid so `resolveDevice` classifies it as an iOS simulator without
 // touching a real device (classification is purely shape-based).
 const IOS = "11111111-1111-1111-1111-111111111111";
+const HARMONY = "harmony-025DEK236V035771";
 
 describe("run-sequence", () => {
   it("allows TV steps and dispatches them in order with the shared udid injected", async () => {
@@ -58,6 +70,42 @@ describe("run-sequence", () => {
       expect(c.args.udid).toBe(TVOS_UDID);
     }
     expect(calls[0]!.args).toMatchObject({ button: "right", udid: TVOS_UDID });
+  });
+
+  it("accepts a HarmonyOS device, and stops at the first step that platform cannot run", async () => {
+    const { registry, calls } = makeMockRegistry();
+    const tool = createRunSequenceTool(registry);
+    // The outer gate runs in the HTTP layer, not in execute().
+    expect(() =>
+      assertSupported("run-sequence", tool.capability, resolveDevice(HARMONY))
+    ).not.toThrow();
+
+    registry.getTool = vi.fn((id: string) =>
+      id === "gesture-tap" ? gestureTapTool : gestureRotateTool
+    );
+
+    const result = await tool.execute!(
+      {},
+      {
+        udid: HARMONY,
+        steps: [
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.5 } },
+          {
+            tool: "gesture-rotate",
+            args: { centerX: 0.5, centerY: 0.5, radius: 0.15, startAngle: 0, endAngle: 90 },
+          },
+          { tool: "gesture-tap", args: { x: 0.5, y: 0.6 } },
+        ],
+      }
+    );
+
+    expect(result.completed).toBe(1);
+    expect(calls.map((c) => c.tool)).toEqual(["gesture-tap"]);
+    expect(calls[0]!.args.udid).toBe(HARMONY);
+    const blocked = result.steps[1];
+    expect(blocked && "error" in blocked && blocked.error).toContain(
+      "is not supported on harmony device"
+    );
   });
 
   it("rejects a tool that isn't in the allow-list and stops the sequence", async () => {
@@ -89,6 +137,16 @@ describe("run-sequence", () => {
     // The registry resolves each step's services lazily; run-sequence itself
     // declares none — declaring simulator-server would hang for a tvOS udid.
     expect(tool.services({ udid: TVOS_UDID, steps: [] } as any)).toEqual({});
+  });
+
+  it("keeps the await-ui-element row inside the 4096 chars Claude Code shows, with macos-apps on", () => {
+    const text = renderFlagGated(
+      createRunSequenceTool(mockRegistry()).description ?? "",
+      (flag) => flag === "macos-apps"
+    );
+    const row = text.indexOf("  await-ui-element:");
+    expect(row).toBeGreaterThan(0);
+    expect(text.indexOf("\n", row)).toBeLessThanOrEqual(4096);
   });
 
   it("runs each step in order, injecting the shared udid", async () => {
@@ -169,6 +227,33 @@ describe("run-sequence", () => {
     expect(last.error).toMatch(/no element matched/i);
     expect(result.completed).toBe(1);
     expect(result.total).toBe(3);
+  });
+
+  it("says a wait that stopped the sequence without judging its condition was not judged", async () => {
+    const registry = mockRegistry((id: string) =>
+      id === "await-ui-element"
+        ? { success: false, elapsed: 5000, cause: "unreadable", note: "tree source down" }
+        : { tapped: true }
+    );
+    const tool = createRunSequenceTool(registry);
+
+    const result = await tool.execute(
+      {},
+      {
+        udid: IOS,
+        steps: [
+          {
+            tool: "await-ui-element",
+            args: { condition: "visible", selector: { text: "Continue" } },
+          },
+        ],
+      }
+    );
+
+    expect(result.steps[0]).toEqual({
+      tool: "await-ui-element",
+      error: "await-ui-element condition not judged (unreadable): tree source down",
+    });
   });
 
   it("continues past an await-ui-element step whose condition is met", async () => {

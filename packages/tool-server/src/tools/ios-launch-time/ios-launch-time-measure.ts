@@ -81,7 +81,7 @@ export function createIosLaunchTimeMeasureTool(
       failedMsg: ({ failureSignal }) => `Failed to measure iOS launch: ${failureSignal.error_code}`,
     },
     description:
-      "Run five launches of an iOS app on a connected iPhone and measure them with XCTApplicationLaunchMetric. Use when the user asks how long the app takes to launch, e.g. to set a baseline before an optimization or to verify a fix. Builds the app and Argent's XCUITest runner in Release and runs the app once first, so the launches are usually warm; iOS can still evict the app from memory. The default metric ends at the first frame, or later if the app registers extended launch tasks. Set `allow_simulator` only when Mac-hardware timings are acceptable. Does not edit the app project. On iOS 18 iPhones XCTest can drop some of the five measurements; the result then has fewer samples and a warning, and a run that loses the first one fails with no samples, so rerun. Returns { averageMs, medianMs, samplesMs, samplesCollected, samplesExpected, device, bundleId, resultPath, metricsPath, logPath, warning }; results and build logs go to <workspace>/.argent/traces/<datetime>. Fails if no iPhone is connected by USB cable, the scheme cannot be resolved, the build fails, or Argent's device runner is active on the iPhone.",
+      "Run five launches of an iOS app on a connected iPhone and measure them with XCTApplicationLaunchMetric. Use when the user asks how long the app takes to launch, e.g. to set a baseline before an optimization or to verify a fix. Builds the app and Argent's UI test runner in Release and runs the app once first, so the launches are usually warm; iOS can still evict the app from memory. The default metric ends at the first frame, or later if the app registers extended launch tasks. Set `allow_simulator` only when timings from the host machine are acceptable. Does not edit the app project. On iOS 18 iPhones XCTest can drop some of the five measurements; the result then has fewer samples and a warning, and a run that loses the first one fails with no samples, so rerun. Returns { averageMs, medianMs, samplesMs, samplesCollected, samplesExpected, device, bundleId, resultPath, metricsPath, logPath, warning }; results and build logs go to <workspace>/.argent/traces/<datetime>. Fails if no iPhone is connected by USB cable, the scheme cannot be resolved, the build fails, or Argent's device runner is active on the iPhone.",
     zodSchema: schema,
     fileInputs,
     services: () => ({}),
@@ -122,7 +122,9 @@ export function createIosLaunchTimeMeasureTool(
         (message) => ctx?.emitProgress?.({ type: "device-action", message }),
         ctx?.signal
       );
-      const runnerSigning = context.simulator ? null : await resolveRunnerSigningConfig();
+      const runnerSigning = context.simulator
+        ? null
+        : await resolveRunnerSigningConfig(context.deviceId);
       const runnerBundleId = runnerSigning?.appBundleId ?? "com.argent.runner.tsimulator";
       const testBundleId = runnerSigning?.testBundleId ?? `${runnerBundleId}.uitests`;
       const runnerBuildKey = createHash("sha256")

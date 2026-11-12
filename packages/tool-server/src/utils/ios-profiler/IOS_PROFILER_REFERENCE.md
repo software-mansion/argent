@@ -84,8 +84,8 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    and all of 27+ as broken, with no upper bound). Because the malloc path terminates the running app before
    launching, `native-profiler-start { malloc_stack_logging: true }` is **rejected
    up front** on those versions (before the app is touched) rather than silently
-   capturing nothing — re-run without the flag (leaks are still detected, just
-   unattributed) or set `ARGENT_IOS_CAPTURE=device` to force it on a known-good
+   capturing nothing — re-run without the flag (CPU and hang data only: that capture has no
+   leak data, and the reports say so) or set `ARGENT_IOS_CAPTURE=device` to force it on a known-good
    host. The non-malloc path already routes around this via the capture-strategy
    selector (`--all-processes` fallback), but that fallback cannot `--launch`, so
    it cannot substitute for the malloc cold start. Forcing
@@ -166,8 +166,8 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 
 `renderNativeProfilerReport` produces a markdown document with these sections:
 
-1. **Header** — trace filename, platform, timestamp, any export warnings.
-2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks).
+1. **Header** — trace filename, platform, timestamp, any export warnings. When the trace has no leak data (the `all-processes` capture, or a leaks export that failed), a warning that memory leaks were not checked and that the app must not be reported as leak-free.
+2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks). Memory Leaks reads `not recorded` when the trace has no leak data.
 3. **CPU Hotspots** — table of dominant function, thread, weight (ms / %), sample count, `duringHang` flag, severity. Per hotspot: top 3 call chains and either burst windows or active range.
 4. **UI Hangs** — table of type / start (`MM:SS.mmm`) / duration / severity. Per hang: top app call chains during the hang window with sample counts (or top suspected functions if chain extraction was empty).
 5. **Memory Leaks** — table of object type, count, total size, responsible frame, library.
@@ -175,6 +175,8 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 7. **Next Steps** — concrete `profiler-stack-query` invocations the agent can chain into.
 
 The inline report is capped (top 5 hotspots, top 3 hangs); the full report is always written to `<trace>-report.md` for re-read.
+
+With no findings, the report is a short all clear instead. Without leak data it keeps the header warning and says only that no CPU hotspots or UI hangs were detected.
 
 ---
 
@@ -187,7 +189,7 @@ Reads the cached `parsedData` on the session — no XML re-parse. Modes:
 | `hang_stacks`      | `hang_index`                  | The hang's suspected functions, app call chains during the hang, plus all unique stacks across CPU samples whose dominant function matches a suspect.                          |
 | `function_callers` | `function_name`               | Frames immediately above (callers) and below (callees) the named frame across all samples, ranked by frequency. Effectively a poor-man's call graph for a hot native function. |
 | `thread_breakdown` | optional `thread` filter      | Per-thread weight (ms/%) and sample count. With a filter, also lists hotspots on that thread.                                                                                  |
-| `leak_stacks`      | optional `object_type` filter | Filtered, sorted memory leak table.                                                                                                                                            |
+| `leak_stacks`      | optional `object_type` filter | Filtered, sorted memory leak table, or a note that no leak data was recorded.                                                                                                  |
 
 Top-N is configurable (default 15).
 
@@ -240,7 +242,7 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 - **Simulator ≠ device.** Simulator CPU times reflect the host Mac. For absolute numbers, profile a real device.
 - **`xctrace` overhead.** Hermes runtime internals (`JSLexer`, `JSONEmitter`, etc.) dominating the JS thread usually means profiler overhead, not app work.
 - **Run-to-run variance.** Treat changes < ~15 % across a single run as noise.
-- **Live data variance.** Different API responses change rendering work — record a flow (`argent-create-flow`) for stable before/after comparisons.
+- **Live data variance.** Different API responses change rendering work — record an e2e test (`argent-create-e2e`) for stable before/after comparisons.
 - **xctrace requirement.** Needs Xcode CLT installed (`xcrun xctrace version`).
 - **Leak attribution is limited under `--attach`.** Argent attaches to the already-running app, so the `Leaks`/`Allocations` instruments have no malloc-stack history. On the simulator this means leaked objects come back with `responsible-frame = "<Call stack limit reached>"`, an empty library, and the list is dominated by untracked system allocations (`Malloc N Bytes`, `xpc_*`). Treat the simulator leak list as a coarse signal, not a set of attributed app bugs — actionable stacks need malloc stack logging enabled at launch.
 

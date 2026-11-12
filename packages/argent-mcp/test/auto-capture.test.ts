@@ -82,6 +82,14 @@ describe("shouldAutoScreenshot", () => {
     expect(shouldAutoScreenshot("mcp__argent__launch-app")).toBe(true);
   });
 
+  it("returns the screen after await-ui-element, settled like a tap", () => {
+    expect(shouldAutoScreenshot("mcp__argent__await-ui-element")).toBe(true);
+    expect(shouldAutoDescribe("mcp__argent__await-ui-element")).toBe(true);
+    expect(getAutoScreenshotDelayMs("await-ui-element")).toBe(
+      getAutoScreenshotDelayMs("gesture-tap")
+    );
+  });
+
   it("returns false for screenshot", () => {
     expect(shouldAutoScreenshot("screenshot")).toBe(false);
   });
@@ -96,6 +104,16 @@ describe("shouldAutoScreenshot", () => {
     expect(shouldAutoScreenshot("simulator-server")).toBe(false);
     expect(shouldAutoScreenshot("activate-sso")).toBe(false);
   });
+
+  it.each(["menu-bar", "mcp__argent__file-panel"])(
+    "captures nothing after %s action list, which only reads",
+    (tool) => {
+      expect(shouldAutoScreenshot(tool, { udid: "u", action: "list" })).toBe(false);
+      expect(shouldAutoDescribe(tool, { udid: "u", action: "list" })).toBe(false);
+      expect(shouldAutoScreenshot(tool, { udid: "u", action: "choose" })).toBe(true);
+      expect(shouldAutoDescribe(tool, { udid: "u", action: "choose" })).toBe(true);
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

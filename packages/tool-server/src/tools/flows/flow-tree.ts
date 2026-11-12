@@ -4,13 +4,14 @@ import { queryFullHierarchyTree, queryIosDeviceFlowTree } from "./flow-ios-tree"
 import { queryAndroidFullHierarchy } from "./flow-android-tree";
 import { queryChromiumTree } from "./flow-chromium-tree";
 import { queryVegaTree } from "./flow-vega-tree";
+import { queryMacosTree } from "./flow-macos-tree";
 import type { DescribeTreeData } from "../describe/contract";
 
 /**
  * Fetch the tree a flow resolves selectors against: on iOS/Android the full
  * view hierarchy rather than the trimmed tree `describe` walks, on
- * Chromium/Vega that same describe tree re-shaped into the flow contract (flat
- * leaves, hoisted `subtreeText`).
+ * Chromium/Vega/macOS that same describe tree re-shaped into the flow contract
+ * (flat leaves, hoisted `subtreeText`).
  *
  * There is deliberately NO fallback to the trimmed AX/uiautomator tree: it
  * lacks the testID nodes and hoisted `subtreeText` flows resolve against, so a
@@ -29,18 +30,21 @@ export async function fetchFlowTree(
   device: DeviceInfo,
   target?: FlowTreeTarget
 ): Promise<DescribeTreeData> {
-  return FLOW_TREE_SOURCES[device.platform](registry, device, target);
+  const source = FLOW_TREE_SOURCES[device.platform];
+  if (!source) {
+    throw new Error(`ui-tree matching is not supported on platform "${device.platform}"`);
+  }
+  return source(registry, device, target);
 }
 
-/**
- * The source {@link fetchFlowTree} reads on each platform. Total by type: a
- * `Platform` added without a source here is a compile error, not a read that
- * quietly degrades at runtime.
- */
-const FLOW_TREE_SOURCES: Record<
-  Platform,
-  (registry: Registry, device: DeviceInfo, target?: FlowTreeTarget) => Promise<DescribeTreeData>
-> = {
+type FlowTreeSource = (
+  registry: Registry,
+  device: DeviceInfo,
+  target?: FlowTreeTarget
+) => Promise<DescribeTreeData>;
+
+/** Per-platform source; `null` where flows have none. */
+const FLOW_TREE_SOURCES: Record<Platform, FlowTreeSource | null> = {
   // Simulator iOS uses the injected hierarchy and an optional target.
   // Physical devices use the XCUITest runner tree.
   "ios": (registry, device, target) =>
@@ -56,4 +60,13 @@ const FLOW_TREE_SOURCES: Record<
   "android": (registry, device) => queryAndroidFullHierarchy(registry, device),
   "chromium": (registry, device) => queryChromiumTree(registry, device),
   "vega": (_registry, device) => queryVegaTree(device),
+  // Coordinate steps and `snapshot` run; selector steps error.
+  "harmony": null,
+  // The in-app library's tree; refuses when the macos-apps flag is off.
+  "macos": (registry, device) => queryMacosTree(registry, device),
 };
+
+/** Absent, not down: every read fails by construction. */
+export function supportsFlowTree(platform: Platform): boolean {
+  return FLOW_TREE_SOURCES[platform] !== null;
+}

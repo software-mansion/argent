@@ -1,4 +1,5 @@
 import { FAILURE_CODES, withFailureSignal } from "@argent/registry";
+import { teamsCoveringDevice } from "./provisioning-profiles";
 import { announceDetectedSigningTeam, detectSigningTeams } from "./team-detect";
 
 /**
@@ -37,13 +38,16 @@ function signingConfigForTeam(teamId: string): RunnerSigningConfig {
 }
 
 /**
- * Resolve signing: `ARGENT_IOS_TEAM_ID` when set, otherwise the team detected
- * from this Mac's keychain (memoized; several teams auto-pick the newest).
+ * Resolve signing: `ARGENT_IOS_TEAM_ID` when set, otherwise a team detected
+ * from this Mac's keychain (memoized). With several teams, `udid` narrows the
+ * pick to teams whose provisioning profile already lists that phone, since those
+ * can build for it without registering it; the newest of those wins. Without any,
+ * the newest team wins, and building against the phone can register it.
  * Throws only when neither yields a team, and that error prompts an Xcode
  * sign-in: with no certificate in the keychain, naming a team id could not
  * make the build signable anyway.
  */
-export async function resolveRunnerSigningConfig(): Promise<RunnerSigningConfig> {
+export async function resolveRunnerSigningConfig(udid?: string): Promise<RunnerSigningConfig> {
   const envTeamId = process.env.ARGENT_IOS_TEAM_ID?.trim();
 
   if (envTeamId) {
@@ -62,10 +66,28 @@ export async function resolveRunnerSigningConfig(): Promise<RunnerSigningConfig>
     );
   }
 
-  announceDetectedSigningTeam(teams);
+  const covering = udid && teams.length > 1 ? await teamsCoveringDevice(udid) : new Set<string>();
+  const winner = teams.find((team) => covering.has(team.teamId)) ?? teams[0]!;
 
-  return signingConfigForTeam(teams[0]!.teamId);
+  announceDetectedSigningTeam(
+    teams,
+    winner,
+    udid
+      ? { udid, coveringTeams: teams.filter((team) => covering.has(team.teamId)).length }
+      : undefined
+  );
+
+  return signingConfigForTeam(winner.teamId);
 }
+
+/**
+ * For the failures a team choice can cause. The detection note carries this too,
+ * but only on a completed call, once per phone and team: a failed build, or a
+ * later session on the same tool-server, would never see it.
+ */
+const TEAM_OVERRIDE_HINT =
+  "To sign under a different team, set ARGENT_IOS_TEAM_ID in the tool-server's environment: " +
+  "argent server stop && ARGENT_IOS_TEAM_ID=<team-id> argent server start --detach";
 
 /** Map xcodebuild output to a signing-recovery hint, or null. */
 export function resolveSigningHint(output: string): string | null {
@@ -76,7 +98,7 @@ export function resolveSigningHint(output: string): string | null {
   if (lower.includes("team has no devices")) {
     return (
       "This team has no registered devices yet. Keep the phone connected and retry: " +
-      "building against the connected device registers it with the team."
+      `building against the connected device registers it with the team. ${TEAM_OVERRIDE_HINT}`
     );
   }
 
@@ -90,7 +112,7 @@ export function resolveSigningHint(output: string): string | null {
     // The derived bundle id is unique per team. This is a free-team app-id cap.
     return (
       "Registering the runner bundle id failed. On a free Personal Team, Apple limits " +
-      "new app ids; wait a few days and retry, or sign under a paid team."
+      `new app ids; wait a few days and retry, or sign under a paid team. ${TEAM_OVERRIDE_HINT}`
     );
   }
 
@@ -118,7 +140,7 @@ export function resolveSigningHint(output: string): string | null {
   ) {
     return (
       "Provisioning failed. Check that this team's Apple ID is signed into Xcode " +
-      "(Xcode > Settings > Accounts), then retry."
+      `(Xcode > Settings > Accounts), then retry. ${TEAM_OVERRIDE_HINT}`
     );
   }
 

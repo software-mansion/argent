@@ -8,8 +8,11 @@ import type {
   ToolDefinition,
 } from "@argent/registry";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, harmonyConnectKey } from "../../utils/device-info";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { describeTvFocus } from "../describe/platforms/tv-focus";
+import { resolveTvApi } from "../tv/tv-service";
+import type { TvControlApi } from "../../blueprints/tv-control-types";
 import { isAndroidTv } from "../../utils/adb";
 import { assertSupported } from "../../utils/capability";
 import { ensureDeps } from "../../utils/check-deps";
@@ -21,13 +24,16 @@ import { describeIosDevice } from "../describe/platforms/ios-device";
 import { describeAndroid, androidRequires } from "../describe/platforms/android";
 import { describeChromium } from "../describe/platforms/chromium";
 import { describeVega, vegaRequires } from "../describe/platforms/vega";
+import { pollHarmonyTree, harmonyRequires } from "../describe/platforms/harmony";
+import { describeMacosForJudging } from "../flows/flow-macos-tree";
 import {
   selectorSchema,
-  nodeText,
+  assertText,
+  macFieldText,
   findAll,
   isVisible,
-  firstInReadingOrder,
   evaluateCondition,
+  textCheckTarget,
 } from "../../utils/ui-tree-match";
 
 // Exported so run-sequence can allowlist this tool without repeating the string.
@@ -56,9 +62,8 @@ const HIDDEN_UNREADABLE_NOTE =
 
 /**
  * WHY an unmet wait came back `success: false`. {@link isUnmetUiWaitResult}
- * answers "did this wait fail", which is all `run-sequence` and `flow-run`
- * need. A caller that NARRATES the failure needs more, because only one cause
- * judges the condition:
+ * answers "did this wait fail". A caller that NARRATES the failure needs more,
+ * because only one cause judges the condition:
  *
  * - `unmet` — the tree was read and the condition was false there.
  * - `unreadable` — the tree source never answered, so nothing was observed.
@@ -91,67 +96,6 @@ export function unmetUiWaitCause(result: unknown): UnmetUiWaitCause {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 400;
-
-const zodSchema = z
-  .object({
-    udid: z
-      .string()
-      .min(1)
-      .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
-    condition: z
-      .enum(["exists", "visible", "hidden", "text"])
-      .describe(
-        "What to wait for. `exists`: selector is anywhere in the tree. " +
-          "`visible`: selector is present with a non-zero on-screen frame. `hidden`: selector is absent " +
-          "or zero-area. `text`: the first visible match in reading order (topmost), falling back to the first match overall if none is visible, " +
-          "contains (or, with textMatch `equals`, exactly matches) " +
-          "expectedText. If a loose selector hits several elements, only that one is checked, so narrow it to target the intended element."
-      ),
-    selector: selectorSchema.describe("Element to match (text / identifier / role)."),
-    expectedText: z
-      .string()
-      .min(1)
-      .optional()
-      .describe(
-        "For condition `text`: the string the first visible matched element (topmost in reading order; the first match overall if none is visible) must contain (default) or equal (see `textMatch`). Case-insensitive."
-      ),
-    textMatch: z
-      .enum(["contains", "equals"])
-      .optional()
-      .describe(
-        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
-      ),
-    bundleId: z
-      .string()
-      .optional()
-      .describe(
-        "Optional iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on Android / Chromium, " +
-          "and on physical iOS."
-      ),
-    timeoutMs: z
-      .number()
-      .int()
-      .positive()
-      .max(120_000)
-      .optional()
-      .describe(
-        `Max time to wait for the condition before giving up (default ${DEFAULT_TIMEOUT_MS}).`
-      ),
-    pollIntervalMs: z
-      .number()
-      .int()
-      .min(50)
-      .max(5000)
-      .optional()
-      .describe(`How often to re-check the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
-  })
-  .strict()
-  .refine((p) => p.condition !== "text" || p.expectedText !== undefined, {
-    message: "condition `text` requires expectedText",
-    path: ["expectedText"],
-  });
-
-type Params = z.infer<typeof zodSchema>;
 
 const conditionDescription = {
   exists: "appear",
@@ -205,7 +149,7 @@ const DARK_TAIL_TOLERANCE_MAX_MS = 2000;
  *
  * - `trusted` — it settled, returned a tree, and the tree could be judged on.
  * - `untrusted` — it settled, and what came back cannot be judged: the fetch
- *   threw, or the tree was blind.
+ *   threw, or the tree was blind or stale.
  * - `unsettled` — it never came back. The newest data is then the read BEFORE
  *   it, whose age is the only evidence there is.
  */
@@ -253,13 +197,40 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  harmony: { device: true },
+  macos: { app: true },
 };
 
 // The matching engine lives in utils/ui-tree-match so the flow directives and
 // recorder reuse the exact selector semantics; `evaluateMatches` is a
 // params-shaped wrapper for this tool and its tests.
 export function evaluateMatches(params: Params, matches: DescribeNode[]): boolean {
-  return evaluateCondition(params.condition, params.expectedText, matches, params.textMatch);
+  return evaluateCondition(
+    params.condition,
+    params.expectedText,
+    matches,
+    params.textMatch,
+    undefined,
+    isMacos(params)
+  );
+}
+
+function isMacos(params: Params): boolean {
+  return params.udid !== undefined && resolveDevice(params.udid).platform === "macos";
+}
+
+// A blind read judges nothing; a partial one (an Apple TV hierarchy cut at its
+// node cap) shows what it found, but its misses prove nothing: `exists` needs a
+// match, the other conditions a visible one.
+function cannotJudge(
+  data: DescribeTreeData,
+  matches: DescribeNode[],
+  everMatched: boolean,
+  condition: Params["condition"]
+): boolean {
+  if (isBlindRead(data, everMatched, condition)) return true;
+  if (data.partial !== true) return false;
+  return condition === "exists" ? matches.length === 0 : !matches.some(isVisible);
 }
 
 // Fold the read's hint / restart prompt into the timeout note so the agent sees
@@ -288,11 +259,12 @@ function timeoutNote(
   switch (params.condition) {
     case "text": {
       // Visible-first, mirroring evaluateCondition, so the note quotes the
-      // element the check read.
-      const first = firstInReadingOrder(matches.filter(isVisible)) ?? firstInReadingOrder(matches);
+      // element the check read, and the text it read (a Mac app's container
+      // is checked against its subtree text).
+      const first = textCheckTarget(matches, undefined, isMacos(params));
       const wanted = params.textMatch === "equals" ? "equal" : "contain";
       base = first
-        ? `element matched but its text was "${nodeText(first)}" (wanted to ${wanted} "${params.expectedText}")`
+        ? `element matched but its text was "${macFieldText(first, isMacos(params)) ?? assertText(first)}" (wanted to ${wanted} "${params.expectedText}")`
         : "no element matched the selector before timeout";
       break;
     }
@@ -313,6 +285,73 @@ function timeoutNote(
   return appendDiagnostics(base, lastData);
 }
 
+const zodSchema = z
+  .object({
+    udid: z
+      .string()
+      .min(1)
+      .describe(
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
+      ),
+    condition: z
+      .enum(["exists", "visible", "hidden", "text"])
+      .describe(
+        "What to wait for. `exists`: the selector matches an element anywhere in the tree. " +
+          "`visible`: it matches one with a non-zero on-screen frame. `hidden`: it matches nothing, " +
+          "or only a zero-area element (e.g. a spinner that went away). `text`: the first visible match in reading order " +
+          "(topmost, then leftmost; the first match overall if none is visible) contains expectedText, or equals it " +
+          "with textMatch `equals`. Only that match is checked, so if a loose selector hits several elements, " +
+          "narrow it to the one holding the text.<flag:macos-apps> On a Mac app, a match in an open menu comes first, " +
+          "then one in an alert, sheet or popover, then one in the window.</flag:macos-apps>"
+      ),
+    selector: selectorSchema.describe(
+      "Element to match. Give at least one field; every given field must match."
+    ),
+    expectedText: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Required for condition `text`: the string the checked match must contain or equal (see `textMatch`)."
+      ),
+    textMatch: z
+      .enum(["contains", "equals"])
+      .optional()
+      .describe(
+        "For condition `text`: how expectedText is compared. `contains` (default) is a case-insensitive substring; `equals` is a case-insensitive full-string match."
+      ),
+    bundleId: z
+      .string()
+      .optional()
+      .describe(
+        "iOS app bundle id, passed to the describe fallback (see `describe`). Ignored on every other platform, " +
+          "including physical iOS."
+      ),
+    timeoutMs: z
+      .number()
+      .int()
+      .positive()
+      .max(120_000)
+      .optional()
+      .describe(
+        `Max time to wait for the condition before giving up (default ${DEFAULT_TIMEOUT_MS}).`
+      ),
+    pollIntervalMs: z
+      .number()
+      .int()
+      .min(50)
+      .max(5000)
+      .optional()
+      .describe(`How often to re-check the tree (default ${DEFAULT_POLL_INTERVAL_MS}).`),
+  })
+  .strict()
+  .refine((p) => p.condition !== "text" || p.expectedText !== undefined, {
+    message: "condition `text` requires expectedText",
+    path: ["expectedText"],
+  });
+
+type Params = z.infer<typeof zodSchema>;
+
 // A factory (like `describe`) because the iOS / Android tree fetch resolves the
 // AX / android-devtools services through the registry rather than through the
 // tool's own services() declaration. Only the Chromium CDP session flows in as a
@@ -322,18 +361,22 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     device: DeviceInfo,
     params: Params,
     services: Record<string, unknown>,
-    isTvOs: boolean,
-    androidIsTv: boolean
+    tvApi: TvControlApi | null,
+    androidIsTv: boolean,
+    budgetMs: number
   ): Promise<DescribeTreeData> {
     // ios-remote reads the same AX tree through describeIos: the ax-service
     // blueprint routes it over the sim-remote tunnel, so only the preflight dep
-    // differs from the local branch. `isTvOs` is false for it, matching describe.
+    // differs from the local branch. It is never tvOS, matching describe.
     if (device.platform === "ios" || device.platform === "ios-remote") {
       // Physical devices poll the same XCUITest runner snapshot as describe.
       if (device.kind === "device") {
         return describeIosDevice(registry, device);
       }
-      return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs });
+      // Apple TV: match against the focus view; describeIos short-circuits tvOS
+      // to an empty tree, so no selector could ever resolve (#620).
+      if (tvApi) return describeTvFocus(tvApi);
+      return describeIos(registry, device, { bundleId: params.bundleId }, { isTvOs: false });
     }
     if (device.platform === "android") {
       return describeAndroid(registry, device.id, undefined, androidIsTv);
@@ -341,11 +384,28 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
     if (device.platform === "vega") {
       return describeVega(device.id);
     }
+    if (device.platform === "harmony") {
+      return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
+    }
+    if (device.platform === "macos") {
+      // A read known to miss content (a web view, an element that did not
+      // answer) cannot judge `hidden`: the failed fetch is retried, and
+      // reported as unreadable at the deadline.
+      return describeMacosForJudging(registry, device, AWAIT_UI_ELEMENT_TOOL_ID);
+    }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
 
   return {
     id: AWAIT_UI_ELEMENT_TOOL_ID,
+    description: `Block until a UI element reaches an expected state or the timeout elapses, so you don't have to poll screenshot/describe yourself. It polls the same tree as \`describe\`.
+Use when the next step needs an element that appears or disappears asynchronously, e.g. after a tap or navigation, or before tapping something that loads late.
+Returns { success: boolean, elapsed: number, note?, cause? }. If the condition does not hold by the timeout, it returns success=false, and that is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or \`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check.<flag:harmonyos> A \`note\` on success=true can also say the tree was read off a suspended HarmonyOS panel, which is not the live screen.</flag:harmonyos>`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "wait await poll until visible hidden exists text appears disappears timeout element condition settle",
+    readOnly: true,
     interaction: {
       startedMsg: ({ params }) =>
         `Waiting for UI element to ${conditionDescription[params.condition]}`,
@@ -353,36 +413,7 @@ export function createAwaitUiElementTool(registry: Registry): ToolDefinition<Par
       failedMsg: ({ failureSignal }) =>
         `Failed while waiting for UI element: ${failureSignal.error_code}`,
     },
-    description: `Block until a UI element reaches an expected state or a timeout elapses, so you don't have to poll screenshot/describe yourself.
-
-Conditions:
-  exists:    the selector matches an element anywhere in the tree.
-  visible:   the selector matches an element with a non-zero on-screen frame.
-  hidden:    the selector matches nothing, or only a zero-area element (e.g. a spinner that disappeared).
-  text:      the first VISIBLE match in reading order (topmost, then leftmost; falling back to the first match
-             overall if none is visible) contains expectedText (case-insensitive substring), or exactly matches
-             it when textMatch is \`equals\`. A loose selector can match several elements; only that one is
-             inspected, so if a different match is the one holding the text the wait still reports failure;
-             narrow the selector to target it.
-
-The selector is { text?, identifier?, role? }; every provided field must match. text and role match as
-case-insensitive substrings of the element's label/value and role; identifier matches exactly (case-insensitive),
-also accepting the unqualified Android resource-id name ('submit' matches 'com.example.app:id/submit').
-It polls the same accessibility / DOM tree as \`describe\`
-(iOS simulator AXRuntime, physical-iOS runner snapshot, Android uiautomator, Chromium CDP,
-Vega automation toolkit) every pollIntervalMs
-(default ${DEFAULT_POLL_INTERVAL_MS}ms) until timeoutMs (default ${DEFAULT_TIMEOUT_MS}ms).
-
-Returns { success: boolean, elapsed: number, note?, cause? }. success=false means the wait ended without the
-condition holding, which is not always a verdict on the condition: \`cause\` says which it was: \`unmet\` (the tree
-was read and the condition was false there), \`unreadable\` (no trustworthy read, so nothing was judged) or
-\`cancelled\`. \`note\` describes what was seen. Only \`unmet\` licenses rewriting the check. Use this after a
-tap/navigation to wait for the next screen, or before tapping an element that appears asynchronously.`,
-    alwaysLoad: true,
-    searchHint:
-      "wait await poll until visible hidden exists text appears disappears timeout element condition settle",
     longRunning: true,
-    zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
@@ -400,10 +431,15 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
       else if (device.platform === "vega") await ensureDeps(vegaRequires);
+      else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
 
       // Resolve tvOS / Android-TV once. Physical devices skip the tvOS probe. They are never tvOS simulators.
       const isTvOs =
         device.platform === "ios" && device.kind !== "device" && (await isTvOsSimulator(device.id));
+      // Resolved before the clock starts: the first resolution spawns the tvOS
+      // daemons and can take seconds. A failure is infrastructure, so it throws
+      // rather than reporting an unmet condition.
+      const tvApi = isTvOs ? await resolveTvApi(registry, device.id) : null;
       const androidIsTv = device.platform === "android" && (await isAndroidTv(device.id));
 
       // Clock starts after setup so its fixed cost isn't charged to timeoutMs.
@@ -427,22 +463,26 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       let lastTrustedReadAt: number | undefined;
 
       const poll = await pollDescribeTree<WaitResult>({
-        fetchTree: () => fetchTree(device, params, services, isTvOs, androidIsTv),
+        fetchTree: (budgetMs) => fetchTree(device, params, services, tvApi, androidIsTv, budgetMs),
         timeoutMs,
         pollIntervalMs,
         signal,
         onSample: (data, nowMs) => {
           const matches = findAll(data.tree, selector);
           if (matches.length > 0) everMatched = true;
-          const blind = isBlindRead(data, everMatched);
-          if (!blind) lastTrustedReadAt = nowMs;
+          const blind = cannotJudge(data, matches, everMatched, params.condition);
+          if (!blind && !data.stale) lastTrustedReadAt = nowMs;
           if (!blind && evaluateMatches(params, matches)) {
             const result: WaitResult = { success: true, elapsed: Date.now() - start };
-            if (params.condition === "hidden" && !everMatched) {
-              result.note =
-                "condition met immediately — the selector never matched any element, " +
-                "so it may have already been hidden before the wait, or the selector is wrong";
-            }
+            // Both notes: a suspended panel can satisfy `hidden` on sight.
+            const notes = [
+              params.condition === "hidden" && !everMatched
+                ? "condition met immediately — the selector never matched any element, " +
+                  "so it may have already been hidden before the wait, or the selector is wrong"
+                : null,
+              data.stale && data.hint ? data.hint : null,
+            ].filter((n): n is string => n !== null);
+            if (notes.length > 0) result.note = notes.join(" ");
             return { done: true, result };
           }
           return { done: false };
@@ -452,17 +492,25 @@ tap/navigation to wait for the next screen, or before tapping an element that ap
       if (poll.aborted) return cancelled();
       if (poll.result) return poll.result;
 
-      // The final attempt is trusted only if it settled and came back with a
-      // tree the condition could be judged on. `lastError` alone cannot say:
-      // the loop leaves it unset for an attempt it abandoned at the deadline,
-      // so that the note can still be built from an older tree.
-      const finalRead: FinalRead = !poll.lastAttemptSettled
-        ? "unsettled"
-        : poll.lastError === undefined &&
-            poll.lastData !== null &&
-            !isBlindRead(poll.lastData, everMatched)
-          ? "trusted"
-          : "untrusted";
+      // The final attempt is trusted only if it came back with a tree the
+      // condition could be judged on. `lastError` cannot stand in for that: the
+      // loop leaves it unset both for an attempt it abandoned at the deadline
+      // and for one that failed with no budget left, so that the note can still
+      // be built from an older tree.
+      const finalRead: FinalRead =
+        poll.lastAttempt === "unsettled"
+          ? "unsettled"
+          : poll.lastAttempt === "tree" &&
+              poll.lastData !== null &&
+              !poll.lastData.stale &&
+              !cannotJudge(
+                poll.lastData,
+                findAll(poll.lastData.tree, selector),
+                everMatched,
+                params.condition
+              )
+            ? "trusted"
+            : "untrusted";
       return {
         success: false,
         elapsed: Date.now() - start,

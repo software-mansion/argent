@@ -13,52 +13,9 @@ import { makeIosImpl, makeIosRemoteImpl } from "./platforms/ios";
 import { makeIosDeviceImpl } from "./platforms/ios-device";
 import { makeAndroidImpl } from "./platforms/android";
 import { makeChromiumImpl } from "./platforms/chromium";
+import { makeMacosImpl } from "./platforms/macos";
 import { vegaImpl } from "./platforms/vega";
-
-// `text` and `key` are at-most-one, and the advertised JSON Schema cannot say
-// so: `not` is one of the top-level combinators #782 banned repo-wide, and
-// `tool-input-schema-contract.test.ts` fails any tool declaring one — the
-// Messages API rejects such a request with a 400 that fails EVERY tool in it.
-// The check therefore runs in `execute`, and the constraint reaches a client
-// only as prose: both fields' `.describe()` and the tool description each
-// restate it, so a caller reading either parameter alone still sees it.
-const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, or Chromium id)."
-    ),
-  text: z
-    .string()
-    .optional()
-    .describe(
-      "Text to type character by character. Cannot be combined with `key` in one call (one call per action); " +
-        "to type and then press a key, put two `keyboard` steps in one `run-sequence`. " +
-        "Handles uppercase and common punctuation. " +
-        "To type a credential without its plaintext ever entering your context, use a secret placeholder: " +
-        '`{{secret:<NAME>}}`, e.g. text: "{{secret:APP_PASSWORD}}". The value is resolved on the machine running the ' +
-        "tool-server, from the first source that defines the name: the `ARGENT_SECRET_<NAME>` environment variable, " +
-        "`.argent/secrets.env` in the project, the project's `.env.local` / `.env` (only their `ARGENT_SECRET_`-prefixed keys), " +
-        "then `~/.argent/secrets.env`. Nothing else on the host is reachable. " +
-        "Placeholders can be embedded in longer text and are never echoed back resolved. " +
-        "If the secret you need is not set, the failure lists the available names and every source it looked in; ask the user to add it " +
-        "to one of them (a secrets file applies immediately; an env var needs a restart), NEVER ask the user to paste the secret value into the conversation."
-    ),
-  key: z
-    .string()
-    .optional()
-    .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text` in one call: one call per action; to type and then press a key, put two `keyboard` steps in one `run-sequence`. Not supported on TV targets; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`."
-    ),
-  delayMs: z
-    .number()
-    .optional()
-    .describe(
-      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets (typed via `adb input text`, which has no per-key cadence), on Vega (text/keys injected in a single shot), on TV targets (Apple TV / Android TV type the whole string at the daemon's own cadence), and on physical iOS."
-    ),
-});
-
-type Params = z.infer<typeof zodSchema>;
+import { harmonyImpl } from "./platforms/harmony";
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
@@ -66,7 +23,58 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
+  harmony: { device: true },
+  macos: { app: true },
 };
+
+// `text` and `key` are at-most-one, and the advertised JSON Schema cannot say
+// so: `not` is one of the top-level combinators #782 banned repo-wide, and
+// `tool-input-schema-contract.test.ts` fails any tool declaring one — the
+// Messages API rejects such a request with a 400 that fails EVERY tool in it.
+// The check therefore runs in `execute`, and the constraint reaches a client
+// only as prose: both fields' `.describe()` restate it, so a caller reading
+// either parameter alone still sees it.
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .describe(
+      "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
+    ),
+  text: z
+    .string()
+    .optional()
+    .describe(
+      "Text to type character by character; handles uppercase, digits and common punctuation. " +
+        "Cannot be combined with `key`: to type and then press a key, send two `keyboard` steps in one " +
+        '`run-sequence` ({ text: "hello" } then { key: "enter" }). ' +
+        "To type a credential without its plaintext ever entering your context, use a secret placeholder " +
+        '`{{secret:<NAME>}}`, e.g. "{{secret:APP_PASSWORD}}", alone or inside longer text. It is resolved on the machine ' +
+        "running the tool-server, from the first source that defines the name: the `ARGENT_SECRET_<NAME>` environment " +
+        "variable, `.argent/secrets.env` in the project, the project's `.env.local` / `.env` (only their " +
+        "`ARGENT_SECRET_`-prefixed keys), then `~/.argent/secrets.env`. Nothing else on the host is reachable. " +
+        "Over a link with the `forward-secrets` flag on, the client's own sources are checked first. " +
+        "The result echoes the placeholder, never the value, and the auto-screenshot after typing is skipped. " +
+        "To submit after a secret, put both steps in ONE `run-sequence`: that keeps the skip covering the Enter, " +
+        "which a second bare `keyboard` call would not. " +
+        "If the secret is not set, the failure lists the available names and the sources it checked; ask the user " +
+        "to add it to one of them (a secrets file applies immediately, an env var needs a restart). NEVER ask the " +
+        "user to paste the secret value into the conversation."
+    ),
+  key: z
+    .string()
+    .optional()
+    .describe(
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1-f12. Cannot be combined with `text`; to do both, send two `keyboard` steps in one `run-sequence`. Not supported on Apple TV / Android TV; move focus with `tv-remote` (up/down/left/right) instead. Physical iOS: only `enter` and `backspace`.<flag:harmonyos> HarmonyOS: only enter (return), backspace (delete), space, arrow-left and arrow-right; any other key fails with 400 KEYBOARD_KEY_UNSUPPORTED.</flag:harmonyos><flag:macos-apps> Mac app: also delete (forward delete), home, end, page-up, page-down, and shortcuts with modifiers joined by + (command, shift, option, control), e.g. command+a.</flag:macos-apps>"
+    ),
+  delayMs: z
+    .number()
+    .optional()
+    .describe(
+      "Delay in ms between key presses (default 50). Ignored on Android phones/tablets, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega, Apple TV / Android TV and physical iOS, which type the whole string in one shot or at their own cadence."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
 
 // TV is a `runtimeKind`, not a `platform` — a tvOS sim dispatches as "ios" and
 // an Android TV as "android" by id shape — so those two branches probe the kind
@@ -83,6 +91,8 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     KeyboardParams,
     KeyboardResult,
     Record<string, unknown>,
+    Record<string, unknown>,
+    Record<string, unknown>,
     Record<string, unknown>
   >({
     toolId: "keyboard",
@@ -93,9 +103,21 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
     android: makeAndroidImpl(registry),
     chromium: makeChromiumImpl(registry),
     vega: vegaImpl,
+    harmony: harmonyImpl,
+    macos: makeMacosImpl(registry),
   });
   return {
     id: "keyboard",
+    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, <flag:harmonyos>HarmonyOS device, </flag:harmonyos>Chromium app, <flag:macos-apps>Mac app, </flag:macos-apps>Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
+Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; focus a text field with \`tv-remote\` first (e.g. a search or login box), then type into it with keyboard.
+Tap the field first: with no focus the text is dropped and the call still succeeds.
+Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if an unsupported key name is provided (rejected before anything is sent) or if the device's input backend is not reachable.
+A failure is not rolled back. Un-typeable text is rejected mid-string on the iOS simulator and Chromium, leaving the characters before it in the field (Android, <flag:harmonyos>HarmonyOS, </flag:harmonyos>Vega and TV targets check the whole string up front).<flag:macos-apps> A Mac app types any character.</flag:macos-apps> A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
+React Native: after typing, the next tap outside the field may only close the keyboard. If only the keyboard closed, tap again; where the field submits on return, \`key: "enter"\` avoids the extra tap.`,
+    zodSchema,
+    alwaysLoad: true,
+    searchHint:
+      "type text keyboard input named key enter escape arrow tv vega fire tv <flag:harmonyos>harmony harmonyos </flag:harmonyos>search field hid leanback",
     interaction: {
       // Never quote the parameters: `text` may hold a plaintext credential and
       // `key` is an unvalidated free string here, yet these messages reach the
@@ -112,22 +134,10 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
       completedMsg: ({ params }) => (params.text === undefined ? "Pressed a key" : "Entered text"),
       failedMsg: ({ failureSignal }) => `Failed to use keyboard: ${failureSignal.error_code}`,
     },
-    description: `Type text or press special keys on the device (iOS simulator, Android emulator or device, Chromium app, Vega Virtual Device, or Apple TV / Android TV) using keyboard events.
-Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
-Returns { typed: string, keys: number }. On physical iOS, reactivated: true = app was re-fronted; re-describe. Fails if text and key are both given in one call (rejected before anything is typed), if an unsupported key name is provided, or if the device's input backend is not reachable.
-A failure is not rolled back. An unsupported key name is always rejected before anything is sent. Un-typeable text is not: the iOS simulator and Chromium reject it mid-string and leave the characters before it in the field (Android, Vega and TV targets check the whole string up front). A transport failure partway also leaves the text already sent. On a retry, read the field's actual contents; do not assume it is unchanged.
-- text: types a string (supports uppercase, digits, common punctuation). To type a credential, use \`{{secret:<NAME>}}\`, resolved server-side from the \`ARGENT_SECRET_<NAME>\` env var or an argent secrets file (\`.argent/secrets.env\` in the project, \`~/.argent/secrets.env\`, or an \`ARGENT_SECRET_\`-prefixed key in the project's \`.env\`/\`.env.local\`), so the plaintext never enters agent context; the result echoes the placeholder, not the value, and the after-typing auto-screenshot is skipped. To submit after typing a secret, put both steps in ONE \`run-sequence\`: that keeps the skip covering the Enter, which a second bare \`keyboard\` call would not.
-- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1-f12). NOT supported on TV targets; move focus with \`tv-remote\` instead. Physical iOS: only \`enter\` and \`backspace\`.
-On a TV target (runtimeKind 'tv') only \`text\` applies. Focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
-One call does one action: pass text OR key, never both. To type and then press a key, send two \`keyboard\` steps in one \`run-sequence\` ({ text: "hello" } then { key: "enter" }), which also keeps it to a single round-trip.`,
-    zodSchema,
     capability,
-    alwaysLoad: true,
     // Typing time grows with text length on several backends and can outlast the MCP
     // fetch timeout, whose abort replays the call: the text would be typed twice.
     longRunning: true,
-    searchHint:
-      "type text keyboard input named key enter escape arrow tv vega fire tv search field hid leanback",
     services: () => ({}),
     execute: async (services, params, options) => {
       // A combined call has no meaning a caller can rely on: `key: "enter"` reads
@@ -201,7 +211,9 @@ One call does one action: pass text OR key, never both. To type and then press a
       // see only the placeholder) and before the dispatch, so run-sequence and
       // flow `type` steps are covered for free.
       if (params.text === undefined) return dispatch(services, params, options);
-      const { text, secrets } = resolveSecretPlaceholders(params.text);
+      const { text, secrets } = resolveSecretPlaceholders(params.text, {
+        clientSecrets: options?.clientSecrets,
+      });
       if (secrets.length === 0) return dispatch(services, params, options);
       try {
         const result = await dispatch(services, { ...params, text }, options);

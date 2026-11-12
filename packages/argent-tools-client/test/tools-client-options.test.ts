@@ -31,6 +31,8 @@ let url: string;
 let requests: Array<{ method: string; url: string; body: string }>;
 let uploadStatus: number;
 let runFlowData: unknown;
+let runFlowFailure: string | undefined;
+let runFlowStreams: boolean;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
@@ -44,6 +46,8 @@ beforeEach(async () => {
   requests = [];
   uploadStatus = 200;
   runFlowData = { ok: true };
+  runFlowFailure = undefined;
+  runFlowStreams = true;
   server = createServer(async (req, res) => {
     const body = await readBody(req);
     requests.push({ method: req.method ?? "", url: req.url ?? "", body });
@@ -72,7 +76,7 @@ beforeEach(async () => {
             description: "",
             inputSchema: {},
             fileInputs: [
-              { target: "flow_path", path: "${flow_path}", kind: "file", collect: "flow" },
+              { target: "e2e_test_path", path: "${e2e_test_path}", kind: "file", collect: "flow" },
             ],
           },
         ],
@@ -96,7 +100,15 @@ beforeEach(async () => {
     if (req.method === "POST" && req.url === "/tools/reinstall-app") {
       return json({ data: { reinstalled: true } });
     }
-    if (req.method === "POST" && req.url === "/tools/run-flow") return json({ data: runFlowData });
+    if (req.method === "POST" && req.url === "/tools/run-flow") {
+      const body = { data: runFlowData, ...(runFlowFailure ? { failure: runFlowFailure } : {}) };
+      if (runFlowStreams && req.headers.accept?.includes("application/x-ndjson")) {
+        res.writeHead(200, { "Content-Type": "application/x-ndjson" });
+        res.end(`${JSON.stringify({ event: "result", ...body })}\n`);
+        return;
+      }
+      return json(body);
+    }
     if (req.method === "POST" && req.url === "/tools/proxy-page") {
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end("<html>Sign in</html>");
@@ -213,12 +225,12 @@ describe("createToolsClient options", () => {
       const { callTool } = createToolsClient({
         baseUrl: async () => ({ url, token: "t", remote }),
       });
-      await callTool("run-flow", { flow_path: flowPath });
+      await callTool("run-flow", { e2e_test_path: flowPath });
     }
 
     const [routed, local] = requests
       .filter((r) => r.url === "/tools/run-flow")
-      .map((r) => (JSON.parse(r.body) as { flow_path: Record<string, unknown> }).flow_path);
+      .map((r) => (JSON.parse(r.body) as { e2e_test_path: Record<string, unknown> }).e2e_test_path);
     expect(Buffer.from(routed!.content as string, "base64").toString("utf8")).toBe("steps: []\n");
     expect(local).toMatchObject({ __argentFileInput: true, path: flowPath });
     expect(local).not.toHaveProperty("content");
@@ -237,7 +249,7 @@ describe("createToolsClient options", () => {
     });
 
     await expect(
-      callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME })
+      callTool("run-flow", { e2e_test_path: flowPath, project_root: TEST_HOME })
     ).rejects.toThrow(
       "The connection to the tool-server closed before run-flow finished (fetch failed). " +
         "The tool may have run; check its effect before you run it again."
@@ -251,6 +263,21 @@ describe("createToolsClient options", () => {
     );
   });
 
+  it("tells the server it writes recordings under .argent/e2e, linked or not", async () => {
+    for (const remote of [true, false]) {
+      const fetchImpl = vi.fn((u: string, init: RequestInit) => fetch(u, init));
+      const { callTool } = createToolsClient({
+        baseUrl: async () => ({ url, token: "t", remote }),
+        fetchImpl,
+      });
+      await callTool("reinstall-app", {});
+      const init = fetchImpl.mock.calls.find(([u]) => u.endsWith("/tools/reinstall-app"))![1];
+      const headers = init.headers as Record<string, string>;
+      expect(headers["x-argent-e2e-dir"]).toBe("1");
+      expect(headers["x-argent-linked"]).toBe(remote ? "1" : undefined);
+    }
+  });
+
   it("names the proxy body limit when POST /upload refuses a large run: fragment", async () => {
     // Past the inline budget, so the fragment goes through POST /upload.
     writeFileSync(join(TEST_HOME, "big.yaml"), `steps: []\n#${"x".repeat(300 * 1024)}\n`);
@@ -261,9 +288,10 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: true }),
     });
 
-    const err = await callTool("run-flow", { flow_path: flowPath, project_root: TEST_HOME }).catch(
-      (e: unknown) => e
-    );
+    const err = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+    }).catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(ToolInvocationError);
     expect(err).toMatchObject({
@@ -294,8 +322,8 @@ describe("createToolsClient options", () => {
       baseUrl: async () => ({ url, token: "t", remote: true }),
     });
 
-    const { data } = await callTool("run-flow", {
-      flow_path: flowPath,
+    const { data, failure } = await callTool("run-flow", {
+      e2e_test_path: flowPath,
       project_root: TEST_HOME,
       updateBaselines: true,
     });
@@ -304,7 +332,104 @@ describe("createToolsClient options", () => {
       inside,
       { path: outside, error: `${outside} is not a baseline of this call (${dir}/<name>.png)` },
     ]);
+    expect(failure).toBe(`Baselines not written on this client: ${outside}`);
     expect(existsSync(outside)).toBe(false);
+  });
+
+  it("reports every refused baseline as the failure of a buffered answer too", async () => {
+    runFlowStreams = false;
+    const outside = join(realpathSync(TEST_HOME), "stray.png");
+    const outside2 = join(realpathSync(TEST_HOME), "stray2.png");
+    runFlowData = {
+      ok: true,
+      baselineWrites: [outside, outside2].map((path) => ({
+        __argentClientFile: true,
+        path,
+        content: Buffer.from("png").toString("base64"),
+        encoding: "base64",
+      })),
+    };
+    const flowPath = join(TEST_HOME, "buffered.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    const { failure } = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+      updateBaselines: true,
+    });
+
+    expect(failure).toBe(`Baselines not written on this client: ${outside}, ${outside2}`);
+  });
+
+  it("keeps the tool-server's failure over a refused baseline", async () => {
+    runFlowFailure = 'e2e test "snap" failed: 0 passed, 1 failed, 0 errored';
+    const outside = join(realpathSync(TEST_HOME), "stray.png");
+    runFlowData = {
+      ok: false,
+      baselineWrites: [
+        {
+          __argentClientFile: true,
+          path: outside,
+          content: Buffer.from("png").toString("base64"),
+          encoding: "base64",
+        },
+      ],
+    };
+    const flowPath = join(TEST_HOME, "both.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+    });
+
+    for (const streams of [true, false]) {
+      runFlowStreams = streams;
+      const { failure } = await callTool("run-flow", {
+        e2e_test_path: flowPath,
+        project_root: TEST_HOME,
+        updateBaselines: true,
+      });
+      expect(failure).toBe(runFlowFailure);
+    }
+  });
+
+  it("logs each baseline it writes under the [e2e-files] tag", async () => {
+    vi.stubEnv("ARGENT_E2E_FILES_LOG", "1");
+    const flowPath = join(TEST_HOME, "logged.yaml");
+    writeFileSync(flowPath, "steps:\n  - snapshot: title\n");
+    const written = join(
+      realpathSync(TEST_HOME),
+      "__baselines__",
+      "logged",
+      "title__ios-30x60.png"
+    );
+    runFlowData = {
+      ok: true,
+      baselineWrites: [
+        {
+          __argentClientFile: true,
+          path: written,
+          content: Buffer.from("png").toString("base64"),
+          encoding: "base64",
+        },
+      ],
+    };
+    const diagnostics: string[] = [];
+    const { callTool } = createToolsClient({
+      baseUrl: async () => ({ url, token: "t", remote: true }),
+      onDiagnostic: (line) => diagnostics.push(line),
+    });
+
+    const result = await callTool("run-flow", {
+      e2e_test_path: flowPath,
+      project_root: TEST_HOME,
+      updateBaselines: true,
+    });
+
+    expect(diagnostics).toContain(`[e2e-files] baseline ${written}: written`);
+    expect(result).not.toHaveProperty("failure");
   });
 
   it("rejects a 2xx answer whose body cannot be read", async () => {

@@ -1,5 +1,5 @@
 import { Registry, type ToolDefinition } from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
@@ -9,8 +9,10 @@ import { chromiumCdpBlueprint } from "../blueprints/chromium-cdp";
 import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-runtime-debugger";
 import { tvControlBlueprint } from "../blueprints/tv-control";
 import { androidTvControlBlueprint } from "../blueprints/android-tv-control";
+import { macosAppBlueprint } from "../blueprints/macos-app";
+import { androidNetworkInspectorBlueprint } from "../blueprints/android-network-inspector";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
-import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
+import { createNativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../tools/native-devtools/native-full-hierarchy";
 import { nativeDescribeScreenTool } from "../tools/native-devtools/native-describe-screen";
@@ -38,7 +40,7 @@ import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
-import { rotateTool } from "../tools/rotate";
+import { createRotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
 import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
@@ -99,6 +101,8 @@ import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
+import { filePanelTool } from "../tools/file-panel";
+import { menuBarTool } from "../tools/menu-bar";
 import { axServiceRef, type AXServiceApi } from "../blueprints/ax-service";
 import { resolveDevice } from "./device-info";
 import { setLivePanelSourceProvider } from "./foldable";
@@ -107,7 +111,7 @@ export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
   // just the HTTP edge in http.ts. Re-read per invocation, so `argent
   // enable/disable <flag>` needs no tool-server restart.
-  const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
+  const registry = new Registry({ isFlagEnabled: (flag) => isFeatureEnabled(flag) });
 
   // The panel a foldable renders to is asked of the ax-service before every
   // touch and capture (`utils/foldable.ts`); that daemon is a service of this
@@ -130,6 +134,8 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(chromiumJsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(tvControlBlueprint);
   registry.registerBlueprint(androidTvControlBlueprint);
+  registry.registerBlueprint(macosAppBlueprint);
+  registry.registerBlueprint(androidNetworkInspectorBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -156,7 +162,9 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(createKeyboardTool(registry));
   registry.registerTool(createPasteTool(registry));
-  registry.registerTool(rotateTool);
+  registry.registerTool(filePanelTool);
+  registry.registerTool(menuBarTool);
+  registry.registerTool(createRotateTool(registry));
   registry.registerTool(shakeTool);
   registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
@@ -196,7 +204,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createIosLaunchTimeMeasureTool(registry));
   registry.registerTool(iosLaunchTimeProfileTool);
   registry.registerTool(nativeDevtoolsStatusTool);
-  registry.registerTool(nativeNetworkLogsTool);
+  registry.registerTool(createNativeNetworkLogsTool(registry));
   registry.registerTool(nativeFindViewsTool);
   registry.registerTool(nativeFullHierarchyTool);
   registry.registerTool(nativeDescribeScreenTool);

@@ -1,3 +1,5 @@
+import { readFileSync } from "fs";
+import { join } from "path";
 import { describe, it, expect } from "vitest";
 import { parseCpuXml } from "../../src/utils/ios-profiler/pipeline/xml-parser";
 
@@ -41,6 +43,128 @@ describe("decodeXml (via parseCpuXml)", () => {
   it("decodes &apos; to single quote", () => {
     const result = getFirstFrameName(makeXml("&apos;x&apos;"));
     expect(result).toBe("'x'");
+  });
+});
+
+function row(sampleTime: string, stack: string): string {
+  return `<row>${sampleTime}<thread fmt="main"></thread><weight>1000000</weight>${stack}</row>`;
+}
+
+function stackNames(xml: string): string[][] {
+  return parseCpuXml(xml).map((s) => s.stack.map((f) => f.name));
+}
+
+describe("stack shapes", () => {
+  it("reads a <backtrace> and a later <backtrace ref>", () => {
+    const xml = [
+      row(
+        "<sample-time>1</sample-time>",
+        '<backtrace id="10"><frame id="11" name="leaf"/><frame id="12" name="root"/></backtrace>'
+      ),
+      row("<sample-time>2</sample-time>", '<backtrace ref="10"/>'),
+    ].join("");
+    expect(stackNames(xml)).toEqual([
+      ["leaf", "root"],
+      ["leaf", "root"],
+    ]);
+  });
+
+  it("reads a <backtrace> nested in a <tagged-backtrace> and a later <tagged-backtrace ref> (Xcode 26)", () => {
+    const xml = [
+      row(
+        "<sample-time>1</sample-time>",
+        '<tagged-backtrace id="10" fmt="leaf ← (1 other frames)"><backtrace id="11">' +
+          '<frame id="12" name="leaf"/><frame id="13" name="root"/></backtrace>' +
+          '<uint64 id="14" fmt="0x0">0</uint64></tagged-backtrace>'
+      ),
+      row("<sample-time>2</sample-time>", '<tagged-backtrace ref="10"/>'),
+    ].join("");
+    expect(stackNames(xml)).toEqual([
+      ["leaf", "root"],
+      ["leaf", "root"],
+    ]);
+  });
+
+  it("reads frames inside a <tagged-backtrace> and a later <tagged-backtrace ref> (Xcode 27)", () => {
+    const xml = [
+      row(
+        "<sample-time>1</sample-time>",
+        '<tagged-backtrace id="10" truncated="YES"><frame id="11" name="leaf"/>' +
+          '<frame id="12" name="root"/></tagged-backtrace>'
+      ),
+      row(
+        "<sample-time>2</sample-time>",
+        '<tagged-backtrace id="13"><frame id="14" name="other"/><frame ref="12"/></tagged-backtrace>'
+      ),
+      row("<sample-time>3</sample-time>", '<tagged-backtrace ref="10"/>'),
+      row("<sample-time>4</sample-time>", "<sentinel/>"),
+    ].join("");
+    expect(stackNames(xml)).toEqual([["leaf", "root"], ["other", "root"], ["leaf", "root"], []]);
+  });
+
+  it("keeps a row with a <sample-time ref> and resolves a later ref to its stack", () => {
+    const xml = [
+      row('<sample-time id="1">1</sample-time>', "<sentinel/>"),
+      row(
+        '<sample-time ref="1"/>',
+        '<tagged-backtrace id="10"><frame id="11" name="leaf"/></tagged-backtrace>'
+      ),
+      row(
+        "<sample-time>2</sample-time>",
+        '<tagged-backtrace id="12"><frame ref="11"/><frame id="13" name="root"/></tagged-backtrace>'
+      ),
+      row("<sample-time>3</sample-time>", '<tagged-backtrace ref="10"/>'),
+    ].join("");
+    expect(stackNames(xml)).toEqual([[], ["leaf"], ["leaf", "root"], ["leaf"]]);
+  });
+});
+
+// Trimmed from real exports of a simulator app recorded with argent: its worker
+// thread runs cpuProbeHashLoop(_:) and its main thread cpuProbeCountPrimes(_:).
+describe("real xctrace time-profile exports", () => {
+  const APP_PID = 92556;
+  const load = (xcode: string) =>
+    readFileSync(
+      join(__dirname, "..", "fixtures", "xctrace", `time-profile-xcode-${xcode}.xml`),
+      "utf8"
+    );
+  const appStacks = (xml: string) =>
+    parseCpuXml(xml, APP_PID).map((s) => ({
+      thread: s.threadFmt.split(" ")[0],
+      stack: s.stack.map((f) => f.name),
+    }));
+
+  it("Xcode 27.2: every app sample has its stack", () => {
+    const samples = appStacks(load("27.2"));
+    expect(samples.map((s) => [s.thread, s.stack.length])).toEqual([
+      ["CpuProbeWorker", 9],
+      ["Main", 15],
+      ["Main", 15],
+      ["CpuProbeWorker", 9],
+    ]);
+    expect(samples[0]!.stack).toContain("cpuProbeHashLoop(_:)");
+    expect(samples[1]!.stack[0]).toBe("cpuProbeCountPrimes(_:)");
+    expect(samples[2]!.stack).toEqual(samples[1]!.stack);
+    expect(samples[3]!.stack).toEqual(samples[0]!.stack);
+  });
+
+  it("Xcode 26.6: every app sample has its stack, including a row with a sample-time ref", () => {
+    const samples = appStacks(load("26.6"));
+    expect(samples.map((s) => [s.thread, s.stack.length])).toEqual([
+      ["CpuProbeWorker", 9],
+      ["Main", 15],
+      ["CpuProbeWorker", 9],
+      ["Main", 15],
+      ["CpuProbeWorker", 9],
+      ["CpuProbeWorker", 9],
+    ]);
+    expect(samples[0]!.stack).toContain("cpuProbeHashLoop(_:)");
+    expect(samples[1]!.stack[0]).toBe("cpuProbeCountPrimes(_:)");
+    expect(samples[2]!.stack).toEqual(samples[0]!.stack);
+    expect(samples[3]!.stack).toEqual(samples[1]!.stack);
+    expect(samples[4]!.stack[0]).toBe("DYLD-STUB$$_platform_bzero");
+    expect(samples[4]!.stack).toContain("cpuProbeHashLoop(_:)");
+    expect(samples[5]!.stack).toEqual(samples[4]!.stack);
   });
 });
 

@@ -13,10 +13,11 @@ import {
   selectorToFrame,
   findAll,
   evaluateCondition,
-  firstInReadingOrder,
+  textCheckTarget,
   frameContains,
   isVisible,
   assertText,
+  macFieldText,
   nodeText,
   treeFingerprint,
   type Selector,
@@ -25,9 +26,11 @@ import {
 } from "../../utils/ui-tree-match";
 import { settleWithin, sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool } from "../../utils/sub-invoke";
-import { isIosPhysicalDevice, isIosSimulator } from "../../utils/device-info";
+import { isIosSimulator } from "../../utils/device-info";
+import { renderFlagGated } from "../../utils/flag-gated-text";
+import { isFlagOffered } from "../../utils/capability";
 import { bindDeviceArgs } from "./flow-device";
-import { fetchFlowTree } from "./flow-tree";
+import { fetchFlowTree, supportsFlowTree } from "./flow-tree";
 import {
   capturePixelsWithin,
   comparePixels,
@@ -247,11 +250,26 @@ const TYPE_FOCUS_TIMEOUT_MS = 3000;
 // - Vega's toolkit page source never reports `focused`; polling would burn
 //   the whole timeout on every type step.
 // - "xcuitest-runner" emits focused, but first-responder handoff on hardware is unverified. Keep the fixed settle.
+//
+// Both macOS sources poll: on a Mac app the focused field was in the tree for
+// 24 of 24 `type` steps, with the screen locked and unlocked.
 const FOCUS_REPORTING_SOURCES: ReadonlySet<DescribeSource> = new Set([
   "native-devtools",
   "android-devtools",
   "cdp-dom",
+  "macos-devtools",
+  "macos-fallback",
 ]);
+
+/**
+ * A device driven with a mouse and wheel rather than touch: a Chromium app or a
+ * native Mac app. Neither takes `gesture-swipe` or `gesture-custom`, so the
+ * directives below send these devices `gesture-scroll` (scroll-to) and
+ * `gesture-drag` (swipe, long-press), and refuse the two-finger gestures.
+ */
+function isPointerDesktop(device: DeviceInfo): boolean {
+  return device.platform === "chromium" || device.platform === "macos";
+}
 
 // Re-read the tree until two consecutive reads match, so a tap never lands
 // mid-fling and a resolved frame can't go stale before we act.
@@ -712,6 +730,9 @@ interface ScrollResolve {
   warning?: string;
 }
 
+// gesture-scroll's refusal on a Mac app at a point where nothing scrolls.
+const NO_SCROLLABLE_VIEW = /No scrollable view at the point/;
+
 /**
  * Dispatch one momentum-free scroll increment anchored at the center of
  * `region`. The anchor (the touch-down / wheel point) is what selects the scroll
@@ -721,8 +742,9 @@ interface ScrollResolve {
  * point is clamped, so the down stays at the anchor and keeps latching to the
  * right container), sized to the clip window rather than the screen so
  * consecutive views of a small container's content still overlap. Touch
- * platforms use a `momentum: false` swipe (no fling); Chromium uses wheel
- * events.
+ * platforms use a `momentum: false` swipe (no fling); the pointer desktops
+ * (Chromium, macOS) use `gesture-scroll`, whose deltas are the same fractions
+ * of the window.
  */
 async function scrollIncrement(
   env: ActionEnv,
@@ -734,7 +756,7 @@ async function scrollIncrement(
   const extent = direction === "up" || direction === "down" ? region.height : region.width;
   const dist = Math.min(SCROLL_INCREMENT, Math.max(MIN_SCROLL_INCREMENT, extent / 2));
 
-  if (env.device.platform === "chromium") {
+  if (isPointerDesktop(env.device)) {
     // Positive deltaY/deltaX reveals content below / to the right (see gesture-scroll).
     const delta =
       direction === "down"
@@ -857,7 +879,19 @@ async function scrollToVisible(
     }
     prevFp = fp;
 
-    warning ??= await scrollIncrement(env, axisDirection, region);
+    try {
+      warning ??= await scrollIncrement(env, axisDirection, region);
+    } catch (err) {
+      if (!(err instanceof Error && NO_SCROLLABLE_VIEW.test(err.message))) throw err;
+      if (frame) return { frame, ...warnedBy(warning) };
+      return {
+        reason:
+          `nothing scrolls at the centre of ${within ? describeSelector(within) : "the screen"}, ` +
+          `so ${describeSelector(target)} cannot be scrolled into view; name its scroll ` +
+          "container in within:",
+        ...warnedBy(warning),
+      };
+    }
   }
   return {
     reason: `${describeSelector(target)} not found after ${MAX_SCROLL_ITERATIONS} scroll attempts`,
@@ -896,26 +930,60 @@ export async function runDirective(env: ActionEnv, step: DirectiveStep): Promise
       reason: `${step.kind} is a touch directive and Vega is remote-driven — move focus with \`tool: tv-remote\` steps (and type via \`tool: keyboard\`) instead`,
     };
   }
-  // Chromium: not "no backend" — CDP can dispatch two-finger touch, but a
-  // mouse-driven desktop app has no uniform pinch-zoom mapping (and no
+  // The pointer desktops refuse both two-finger gestures, before the auto-wait
+  // and before any input. Not "no backend" - CDP can dispatch two-finger touch,
+  // but a mouse-driven desktop app has no uniform pinch-zoom mapping (and no
   // rotate-gesture idiom at all) for it to hit.
-  if ((step.kind === "pinch" || step.kind === "rotate") && env.device.platform === "chromium") {
+  if ((step.kind === "pinch" || step.kind === "rotate") && isPointerDesktop(env.device)) {
+    const platform = env.device.platform;
     return {
       ok: false,
       reason:
         step.kind === "pinch"
-          ? "pinch is unsupported on chromium — desktop apps have no uniform pinch-zoom mapping (they zoom via ctrl+wheel or their own controls); drive the app's zoom UI with tap/keyboard instead"
-          : "rotate is unsupported on chromium — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead",
+          ? `pinch is unsupported on ${platform} — desktop apps have no uniform pinch-zoom mapping (they zoom via ctrl+wheel, a shortcut or their own controls); drive the app's zoom UI with tap/keyboard instead`
+          : `rotate is unsupported on ${platform} — desktop apps have no rotate-gesture idiom; drive the app's rotate controls with tap/keyboard instead`,
     };
   }
-  // Physical iOS: XCTest has no two-finger coordinate API. Fail here before the auto-wait.
-  if ((step.kind === "pinch" || step.kind === "rotate") && isIosPhysicalDevice(env.device)) {
+  // HarmonyOS has no hold or arc backend; flow steps skip the capability gate,
+  // so refuse with a reason the author can act on.
+  if (env.device.platform === "harmony" && (step.kind === "long-press" || step.kind === "rotate")) {
     return {
       ok: false,
       reason:
-        step.kind === "pinch"
-          ? "pinch is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this flow on a simulator or drive the app's zoom UI with tap steps instead"
-          : "rotate is unsupported on a physical iOS device: XCTest exposes no two-finger coordinate API on hardware; run this flow on a simulator or drive the app's rotate controls with tap steps instead",
+        step.kind === "long-press"
+          ? "long-press is unsupported on HarmonyOS — `uitest uiInput` has a `longClick` verb, but it takes no hold duration and argent drives holds through `gesture-custom`, which has no HarmonyOS backend; use `tap`"
+          : "rotate is unsupported on HarmonyOS — `uinput -T -m` is the platform's only multi-contact injection and it moves each finger along ONE straight line per call, with no way to chain segments into an arc; drive the app's own rotate control with `tap`, or `pinch`, which is a straight-line gesture and does run here",
+    };
+  }
+  // Only a Mac app takes a right-click; the others refuse it before the auto-wait too,
+  // rather than after it with gesture-tap's own error.
+  if (step.kind === "tap" && step.button === "right" && env.device.platform !== "macos") {
+    const platform = env.device.platform;
+    return {
+      ok: false,
+      reason: renderFlagGated(
+        platform === "chromium"
+          ? `tap with button: right is a mouse right-click<flag:macos-apps>, which argent sends only to a Mac app</flag:macos-apps>; ` +
+              `argent does not support it on chromium yet`
+          : `tap with button: right is a mouse right-click<flag:macos-apps>, which only a Mac app takes</flag:macos-apps>; ` +
+              `${platform} takes none` +
+              // HarmonyOS refuses long-press too.
+              (platform === "harmony"
+                ? ""
+                : ". On a touch screen, open a context menu with long-press"),
+        isFlagOffered
+      ),
+    };
+  }
+  // Without a flow tree source, idle can never be judged.
+  if (step.kind === "idle" && !supportsFlowTree(env.device.platform)) {
+    return {
+      ok: false,
+      indeterminate: true,
+      reason:
+        `\`await: { idle }\` cannot run on ${env.device.platform}: e2e tests have no UI-tree source on ` +
+        `this platform, so screen stillness can never be judged. Replace this step with an explicit ` +
+        `\`wait:\`.`,
     };
   }
   switch (step.kind) {
@@ -980,14 +1048,16 @@ type GestureSettle = { aborted?: true; warning?: string };
  */
 async function settleForGesture(env: ActionEnv): Promise<GestureSettle> {
   let warning: string | undefined;
-  try {
-    await settleTree(env, { skipProvenOutage: true });
-  } catch (err) {
-    // tree-source outage — this gesture needs no frame from it, so dispatch
-    // anyway. Untyped because a settle has nothing else to throw: every read
-    // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
-    // so the walk's own unguarded recursion is unreachable on every adapter.
-    warning = unsettledGestureWarning(err);
+  if (supportsFlowTree(env.device.platform)) {
+    try {
+      await settleTree(env, { skipProvenOutage: true });
+    } catch (err) {
+      // tree-source outage — this gesture needs no frame from it, so dispatch
+      // anyway. Untyped because a settle has nothing else to throw: every read
+      // is validated by `parseDescribeResult` before `treeFingerprint` walks it,
+      // so the walk's own unguarded recursion is unreachable on every adapter.
+      warning = unsettledGestureWarning(err);
+    }
   }
   if (env.signal?.aborted) return { aborted: true };
   return warning !== undefined ? { warning } : {};
@@ -1086,17 +1156,19 @@ function targetPointFromFrame(
 /**
  * Tap a resolved target point. `times` rides the gesture-tap tool's
  * `clickCount`: one dispatched multi-tap gesture, never N separate calls, whose
- * RPC gaps could fall outside the OS double-tap window.
+ * RPC gaps could fall outside the OS double-tap window. `button` rides the
+ * tool's `button` unchanged.
  */
 async function runTap(
   env: ActionEnv,
-  target: { selector?: FlowSelector; x?: number; y?: number; times?: number }
+  target: Extract<DirectiveStep, { kind: "tap" }>
 ): Promise<DirectiveOutcome> {
   const resolved = await resolveTargetPoint(env, target);
   if ("fail" in resolved) return resolved.fail;
   const sent = await invokeOnDevice(env, "gesture-tap", {
     ...resolved.point,
     ...(target.times !== undefined ? { clickCount: target.times } : {}),
+    ...(target.button !== undefined ? { button: target.button } : {}),
   });
   return { ok: true, ...warnedBy(resolved.warning, toolWarning(sent)) };
 }
@@ -1112,11 +1184,11 @@ const DEFAULT_LONG_PRESS_MS = 800;
  * Press-and-hold on a target (same resolution as tap) for `duration` ms. Touch
  * platforms dispatch ONE `gesture-custom` train (Down, then Up delayed by the
  * duration) so the hold length is exact. On a physical iOS device the train
- * maps to the runner longPress. Chromium has no touch, so the closest
- * honest mapping is a mouse press-hold-release (`gesture-drag` with from == to)
- * — apps implementing pointer-based long-press respond, anything else sees a
- * slow click. A desktop context menu is a *right*-click, deliberately not
- * aliased here.
+ * maps to the runner longPress. The pointer desktops (Chromium, macOS) have no
+ * touch, so the closest honest mapping is a mouse press-hold-release
+ * (`gesture-drag` with from == to) - apps implementing pointer-based long-press
+ * respond, anything else sees a slow click. A desktop context menu is a
+ * *right*-click, deliberately not aliased here.
  */
 async function runLongPress(
   env: ActionEnv,
@@ -1127,7 +1199,7 @@ async function runLongPress(
   const point = resolved.point;
   const duration = step.duration ?? DEFAULT_LONG_PRESS_MS;
   let sent: unknown;
-  if (env.device.platform === "chromium") {
+  if (isPointerDesktop(env.device)) {
     try {
       await invokeOnDevice(env, "gesture-drag", {
         fromX: point.x,
@@ -1365,10 +1437,10 @@ const SWIPE_GEOMETRY: Record<
  * ({@link SWIPE_GEOMETRY}, clamped short at the screen edge), `by` (signed
  * relative delta delivered exactly: an unanchored start slides on-screen to fit
  * it, an authored anchor fails instead), or `to`. Touch dispatches one
- * `gesture-swipe`; Chromium has no touch, so a swipe is a mouse drag
- * (`gesture-drag`), where a `from` on a draggable node hands the gesture to the
- * browser's own drag-and-drop exactly as a real mouse would. `momentum` rides
- * both dispatches.
+ * `gesture-swipe`; the pointer desktops (Chromium, macOS) have no touch, so a
+ * swipe is a mouse drag (`gesture-drag`), where a `from` on a draggable node
+ * hands the gesture to the app's own drag-and-drop exactly as a real mouse
+ * would. `momentum` rides both dispatches.
  */
 async function runSwipe(
   env: ActionEnv,
@@ -1566,7 +1638,7 @@ async function runSwipe(
   try {
     sent = await invokeOnDevice(
       env,
-      env.device.platform === "chromium" ? "gesture-drag" : "gesture-swipe",
+      isPointerDesktop(env.device) ? "gesture-drag" : "gesture-swipe",
       travel
     );
   } catch (err) {
@@ -1581,11 +1653,13 @@ async function runSwipe(
   // eats the touch and both steps still report pass. Unconditional, since
   // `momentum: false` zeroes the finger's release velocity, not the app's
   // animations.
-  try {
-    await settleTree(env);
-  } catch {
-    // Tree-source outage AFTER the gesture landed: proceed as runSnapshot's
-    // settle does rather than fail a swipe that happened.
+  if (supportsFlowTree(env.device.platform)) {
+    try {
+      await settleTree(env);
+    } catch {
+      // Tree-source outage AFTER the gesture landed: proceed as runSnapshot's
+      // settle does rather than fail a swipe that happened.
+    }
   }
   // settleTree returns undefined only on abort, which must read as the uniform
   // aborted skip, never a pass.
@@ -1676,6 +1750,10 @@ async function waitForCondition(
   // Whether the LAST completed read attempt was trusted — assigned on every pass
   // through the loop, so post-loop it describes the final poll.
   let lastReadTrusted: boolean;
+  // The hint of the last read when it was a `hidden` read of a Mac app's
+  // fallback walk, which is always blind: it names the cause, which the
+  // reasons below must not call an empty tree.
+  let fallbackHint: string | undefined;
   let finalPoll = false;
 
   for (;;) {
@@ -1685,9 +1763,13 @@ async function waitForCondition(
       lastMatches = flowFindAll(data.tree, step.selector, data.uiOrientation);
       fetchError = undefined;
       everMatched ||= lastMatches.length > 0;
-      const blind = isBlindRead(data, everMatched);
+      const blind = isBlindRead(data, everMatched, step.condition);
       if (!blind) lastTrustedReadAt = Date.now();
       lastReadTrusted = !blind;
+      fallbackHint =
+        blind && step.condition === "hidden" && data.source === "macos-fallback"
+          ? data.hint
+          : undefined;
       if (
         !blind &&
         evaluateCondition(
@@ -1695,7 +1777,8 @@ async function waitForCondition(
           step.expectedText,
           lastMatches,
           step.textMatch,
-          data.uiOrientation
+          data.uiOrientation,
+          env.device.platform === "macos"
         )
       ) {
         return { ok: true };
@@ -1736,13 +1819,16 @@ async function waitForCondition(
   //    reads still describe the window, so a transient error on the trailing
   //    poll must not flip a clean skip into a hard error. The determinate
   //    verdict stands, with the failed final read appended rather than dropped.
+  const fallbackReason = `could not confirm the element is hidden: ${fallbackHint}`;
   if (lastTrustedReadAt === undefined) {
     return {
       ok: false,
       indeterminate: true,
       reason: fetchError
         ? `could not read the UI tree: ${fetchError}`
-        : "could not evaluate the condition — every read of the UI tree was empty or degraded",
+        : fallbackHint
+          ? fallbackReason
+          : "could not evaluate the condition — every read of the UI tree was empty or degraded",
     };
   }
   if (!lastReadTrusted) {
@@ -1758,7 +1844,9 @@ async function waitForCondition(
         indeterminate: true,
         reason: fetchError
           ? `could not confirm the element is hidden — it was visible earlier, but the last UI read failed: ${fetchError}`
-          : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
+          : fallbackHint
+            ? fallbackReason
+            : "could not confirm the element is hidden — it was visible earlier, but the last UI reads were empty",
       };
     }
     const darkTailMs = Date.now() - lastTrustedReadAt;
@@ -1789,7 +1877,8 @@ async function waitForCondition(
         lastMatches,
         // The read `lastMatches` came from is the last one that answered, and
         // only a read that answers writes the orientation.
-        readingOrientation(env)
+        readingOrientation(env),
+        env.device.platform === "macos"
       ) + blipNote,
   };
 }
@@ -2371,7 +2460,8 @@ function assertReason(
   expectedText: string | undefined,
   textMatch: TextMatchMode | undefined,
   matches: ReturnType<typeof findAll>,
-  orientation: UiOrientation | undefined
+  orientation: UiOrientation | undefined,
+  macos: boolean
 ): string {
   const sel = describeSelector(selector);
   switch (condition) {
@@ -2390,15 +2480,14 @@ function assertReason(
     case "text": {
       // The same pick evaluateCondition made, so the reason quotes the element
       // the check read.
-      const first =
-        firstInReadingOrder(matches.filter(isVisible), orientation) ??
-        firstInReadingOrder(matches, orientation);
+      const first = textCheckTarget(matches, orientation, macos);
       if (!first) return `no element matched selector ${sel}`;
       const wanted = describeTextExpectation(expectedText, textMatch, "infinitive");
       // The check accepts the element's own label/value as well as its hoisted
       // subtree text (see evaluateCondition), so quote both when they differ.
-      const shown = assertText(first);
-      const own = nodeText(first);
+      const field = macFieldText(first, macos);
+      const shown = field ?? assertText(first);
+      const own = field ?? nodeText(first);
       const ownNote = own && own !== shown ? ` (own text "${own}")` : "";
       return `element matched ${sel} but its text was "${shown}"${ownNote} (wanted to ${wanted})`;
     }
