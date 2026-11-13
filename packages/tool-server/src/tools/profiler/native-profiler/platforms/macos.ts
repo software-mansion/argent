@@ -7,6 +7,7 @@ import { InvalidToolInputError } from "../../../../utils/capability";
 import { waitForChildExit } from "../../../../utils/profiler-shared/lifecycle";
 import {
   getTrackedMacosApp,
+  inBackgroundSession,
   readCodeSignature,
   runningTrackedApp,
 } from "../../../../utils/macos-apps";
@@ -44,27 +45,42 @@ interface MacosStartParams {
 const mallocStackLoggingPids = new Map<string, number>();
 
 /**
- * Refuses an app whose signature has no get-task-allow: for such a process
- * macOS asks for an administrator password before Instruments may attach, and
- * xctrace reports that it records while it waits for the dialog. `target` is the
- * running app's pid, or its bundle when it is not running. `startedNote` tells
- * the caller that argent started the process it refuses.
+ * Refuses an app whose signature has no get-task-allow. In the user's desktop
+ * session, macOS asks for an administrator password before Instruments may
+ * attach to such a process, and xctrace reports that it records while it waits
+ * for the dialog. In a Background session (over SSH, for example) macOS shows
+ * no dialog: the Time Profiler template records such an app there, but the Leaks
+ * and Allocations instruments of the bundled template cannot attach to it. So
+ * there only a recording with the bundled template is refused; with a template
+ * the caller chose, the attach decides. `target` is the running app's pid, or
+ * its bundle when it is not running. `startedNote` tells the caller that argent
+ * started the process it refuses.
  */
 async function assertDebuggable(
   bundleId: string,
   target: number | string,
+  templatePath: string | undefined,
   startedNote?: string
 ): Promise<void> {
   const signature = await readCodeSignature(target);
   // No signature that codesign can read: the attach decides.
   if (!signature || signature.entitlements.getTaskAllow) return;
+  const background = await inBackgroundSession();
+  if (background && templatePath !== undefined) return;
+  const why = background
+    ? `In this session, which is not the user's desktop session (over SSH, for example), macOS ` +
+      `lets Instruments sample such an app, but the Leaks and Allocations instruments of the ` +
+      `default template cannot attach to it, so argent does not start the recording. Pass ` +
+      `template_path: "Time Profiler" to record CPU samples and hangs without leaks, or profile ` +
+      `a build that Xcode signed for development (Build or Run, Debug or Release), or sign the ` +
+      `build you profile with com.apple.security.get-task-allow.`
+    : `macOS lets Instruments record such an app only after an administrator types a password ` +
+      `in a system dialog, and nothing is recorded while the dialog waits, so argent does not ` +
+      `start the recording. Profile a build that Xcode signed for development (Build or Run, ` +
+      `Debug or Release), or sign the build you profile with com.apple.security.get-task-allow.`;
   throw new FailureError(
     `${bundleId} is signed without the entitlement com.apple.security.get-task-allow, as an ` +
-      `archived, notarized or App Store build is. macOS lets Instruments record such an app ` +
-      `only after an administrator types a password in a system dialog, and nothing is recorded ` +
-      `while the dialog waits, so argent does not start the recording. Profile a build that ` +
-      `Xcode signed for development (Build or Run, Debug or Release), or sign the build you ` +
-      `profile with com.apple.security.get-task-allow.` +
+      `archived, notarized or App Store build is. ${why}` +
       (startedNote ? ` ${startedNote}` : ""),
     {
       error_code: FAILURE_CODES.NATIVE_PROFILER_APP_NOT_DEBUGGABLE,
@@ -101,7 +117,7 @@ export async function startNativeProfilerMacos(
     // Before the restart, which loses the app's state.
     const before =
       (await runningTrackedApp(bundleId))?.pid ?? getTrackedMacosApp(bundleId)?.appPath;
-    if (before !== undefined) await assertDebuggable(bundleId, before);
+    if (before !== undefined) await assertDebuggable(bundleId, before, params.template_path);
     // Refuses before it quits anything when the app cannot be started again,
     // or a dialog of the app holds up the quit.
     const launched = await macosApp.launch({ restart: true, env: { MallocStackLogging: "1" } });
@@ -112,7 +128,7 @@ export async function startNativeProfilerMacos(
       `state is gone. It keeps running with malloc stack logging, which slows it down, until ` +
       `restart-app starts it again without.`;
     // The bundle on disk, which the restart started, can differ from the process checked above.
-    await assertDebuggable(bundleId, pid, restartNote);
+    await assertDebuggable(bundleId, pid, params.template_path, restartNote);
     notes.push(restartNote);
     if (launched.note) notes.push(launched.note);
   } else {
@@ -130,7 +146,7 @@ export async function startNativeProfilerMacos(
       );
     }
     pid = app.pid;
-    await assertDebuggable(bundleId, pid);
+    await assertDebuggable(bundleId, pid, params.template_path);
     if (mallocStackLoggingPids.get(bundleId) === pid) {
       stillLogs = true;
       notes.push(

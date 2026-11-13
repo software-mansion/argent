@@ -756,6 +756,20 @@ export async function readCodeSignature(
 }
 
 /**
+ * Whether this process runs in a Background launchd session, for example over
+ * SSH: `launchctl managername` prints "Background" there and "Aqua" in the
+ * user's desktop session. False when it cannot tell.
+ */
+export async function inBackgroundSession(): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("launchctl", ["managername"], { timeout: 5_000 });
+    return stdout.trim() === "Background";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Reads what a launch needs from the bundle: `Info.plist` (bundle id,
  * executable, name) and the code signature. An unsigned app is neither
  * hardened nor sandboxed.

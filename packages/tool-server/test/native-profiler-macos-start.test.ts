@@ -56,6 +56,7 @@ vi.mock("../src/utils/macos-apps", async (importOriginal) => ({
   runningTrackedApp: vi.fn(async () => undefined),
   getTrackedMacosApp: vi.fn(() => undefined),
   readCodeSignature: vi.fn(async () => null),
+  inBackgroundSession: vi.fn(async () => false),
 }));
 vi.mock("../src/utils/ios-profiler/export", () => ({
   exportIosTraceData: vi.fn(async () => {
@@ -80,7 +81,12 @@ import { InvalidToolInputError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import { getDebugDir } from "../src/utils/react-profiler/debug/dump";
 import { listenForDarwinNotification, type NotifyHandle } from "../src/utils/ios-profiler/notify";
-import { getTrackedMacosApp, readCodeSignature, runningTrackedApp } from "../src/utils/macos-apps";
+import {
+  getTrackedMacosApp,
+  inBackgroundSession,
+  readCodeSignature,
+  runningTrackedApp,
+} from "../src/utils/macos-apps";
 import { isProfiling } from "../src/utils/profiling-devices";
 import { isCaptureInFlight } from "../src/utils/profiler-shared/capture-guard";
 import {
@@ -708,6 +714,38 @@ describe("startNativeProfilerMacos and the app's code signature", () => {
     expect(signatureMock).toHaveBeenCalledWith(4321);
     expect(spawnMock).not.toHaveBeenCalled();
     expect(api.profilingActive).toBe(false);
+  });
+
+  it("in a Background session, records an app without get-task-allow with the template the caller chose", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    signatureMock.mockResolvedValue(signature(false));
+    // Over SSH, for example: macOS shows no password dialog there, and Time Profiler records the app.
+    vi.mocked(inBackgroundSession).mockResolvedValueOnce(true);
+
+    const result = await start(api, app, {
+      device_id: deviceId,
+      template_path: "Time Profiler",
+    });
+
+    expect(result.status).toBe("recording");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("in a Background session, refuses an app without get-task-allow with the bundled template", async () => {
+    const api = await session();
+    const { app } = fakeMacosApp();
+    runningMock.mockResolvedValue(trackedApp(4321));
+    signatureMock.mockResolvedValue(signature(false));
+    vi.mocked(inBackgroundSession).mockResolvedValueOnce(true);
+
+    const err = await start(api, app, { device_id: deviceId }).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(NOT_DEBUGGABLE);
+    expect((err as Error).message).toContain('template_path: "Time Profiler"');
+    expect((err as Error).message).not.toContain("system dialog");
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("records when the signature cannot be read", async () => {
