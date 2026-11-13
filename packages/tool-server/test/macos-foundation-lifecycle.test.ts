@@ -98,7 +98,7 @@ import { createNetworkCaptureStopTool } from "../src/tools/network/network-captu
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { resolveDevice } from "../src/utils/device-info";
-import { NOT_RECONNECTED } from "../src/utils/native-network-record";
+import { NOT_RECONNECTED, PROCESS_ENDED } from "../src/utils/native-network-record";
 import { MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
 import {
   chromiumRefusal,
@@ -799,6 +799,19 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         "https://example.com/first",
         "https://example.com/second",
       ]);
+    });
+
+    it("fails an open request when the app exits on its own", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/held", { hold: true });
+      process.kill(pid, "SIGKILL");
+      await waitUntil(() => !pidAlive(pid));
+      const log = await readUntil((l) => l.requests[0]?.state === "failed");
+      expect(log.requests.map((r) => [r.url, r.state, r.errorText])).toEqual([
+        ["https://example.com/held", "failed", PROCESS_ENDED],
+      ]);
+      expect(log.header).toMatch(/^macos-native: not armed, 1 request \(the app is not connected;/);
     });
 
     it("fails an open request once the connection drops while the app runs and argent does not reconnect", async () => {
