@@ -108,6 +108,35 @@ describe("createArgentClient", () => {
     expect(error).toMatchObject({ message: "bad", code: "C", kind: "validation", issues: [1] });
   });
 
+  it("rejects both names of one param as ArgentToolError with issues, sending nothing", async () => {
+    // The real tools client, which refuses the call before it is sent (#1794).
+    const actual =
+      await vi.importActual<typeof import("@argent/tools-client")>("@argent/tools-client");
+    const fetchImpl = vi.fn(async () => Response.json({ tools: [] }));
+    const baseUrl = vi.fn(async () => ({ url: "http://stub", token: "t", remote: false }));
+    createToolsClient.mockImplementation(() => actual.createToolsClient({ baseUrl, fetchImpl }));
+
+    const error = await createArgentClient()
+      .callTool("e2e-execute", {
+        project_root: "/p",
+        device: "d",
+        flow_path: "/p/.argent/e2e/a.yaml",
+        e2e_test_path: "/p/.argent/e2e/a.yaml",
+      })
+      .catch((e: unknown) => e);
+
+    const message = "Pass e2e_test_path or its former name flow_path, not both.";
+    expect(error).toBeInstanceOf(ArgentToolError);
+    expect(error).toMatchObject({
+      message,
+      kind: "validation",
+      issues: [{ code: "custom", path: [], message }],
+    });
+    // Neither a tool-server is looked up (or started) nor a request sent.
+    expect(baseUrl).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("forwards the abort signal of listTools", async () => {
     const fetchTools = vi.fn(async () => []);
     createToolsClient.mockImplementation(() => ({ fetchTools, callTool }));
