@@ -96,6 +96,7 @@ import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native
 import { createNetworkCaptureStartTool } from "../src/tools/network/network-capture-start";
 import { createNetworkCaptureStopTool } from "../src/tools/network/network-capture-stop";
 import { networkRequestTool } from "../src/tools/network/network-request";
+import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { resolveDevice } from "../src/utils/device-info";
 import { NOT_RECONNECTED } from "../src/utils/native-network-record";
 import { MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
@@ -258,6 +259,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       "network-capture-start": createNetworkCaptureStartTool(registry),
       "network-capture-stop": createNetworkCaptureStopTool(registry),
       "view-network-request-details": networkRequestTool,
+      "stop-simulator-server": createStopSimulatorServerTool(registry),
     };
     for (const tool of Object.values(tools)) registry.registerTool(tool);
   });
@@ -812,6 +814,25 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         ["https://example.com/held", "failed", NOT_RECONNECTED],
       ]);
       expect(pidAlive(pid)).toBe(true);
+    });
+
+    it("stop-simulator-server ends the capture and drops its records: the next read says not started, and the app records nothing", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      await request("https://example.com/a");
+      const [{ id }] = (await readLog()).requests;
+
+      expect(await run("stop-simulator-server", { udid: DEVICE_ID })).toEqual({
+        stopped: true,
+        udid: DEVICE_ID,
+      });
+      expect(await readLog()).toMatchObject({ started: false, armed: false, count: 0, total: 0 });
+      expect(await details(id)).toBe(
+        `Request ${id} not found. Native network capture is not started, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with native-network-logs.`
+      );
+      // The next connection starts with capture off.
+      expect(await request("https://example.com/b")).toEqual({ active: false, activations: 1 });
+      expect((await readLog()).total).toBe(0);
     });
 
     it("network-capture-stop turns capture off in the app and keeps the records until the next start", async () => {
