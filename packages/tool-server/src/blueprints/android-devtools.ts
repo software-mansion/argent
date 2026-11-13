@@ -92,6 +92,8 @@ const READY_TIMEOUT_MS = 30_000;
 const EXIT_GRACE_MS = 200;
 /** How long `am instrument` gets to exit once `shutdown` is answered; it takes about 0.1 s. */
 const HELPER_EXIT_TIMEOUT_MS = 3_000;
+/** How long dispose waits for `am force-stop`; it takes about 0.2 s. */
+const DISPOSE_FORCE_STOP_WAIT_MS = 2_000;
 const HELPER_PORT_MARKER = /^INSTRUMENTATION_STATUS:\s*port=(\d+)/;
 const ADB_FORWARD_PORT_MARKER = /^(\d+)\s*$/;
 
@@ -584,14 +586,20 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         });
       });
 
-    const request = async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
-      let current = client;
-      if (socketLost && !disposed && !procExited) {
-        reconnecting ??= reconnect().finally(() => {
-          reconnecting = null;
-        });
-        current = await reconnecting;
-      }
+    /** The live client, reconnecting first when the helper closed the socket. */
+    const connected = async (): Promise<AndroidDevtoolsClient> => {
+      if (!socketLost || disposed || procExited) return client;
+      reconnecting ??= reconnect().finally(() => {
+        reconnecting = null;
+      });
+      return reconnecting;
+    };
+
+    const send = async <T>(
+      current: AndroidDevtoolsClient,
+      method: string,
+      params?: Record<string, unknown>
+    ): Promise<T> => {
       try {
         return await current.request<T>(method, params);
       } catch (err) {
@@ -623,6 +631,9 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       }
     };
 
+    const request = async <T>(method: string, params?: Record<string, unknown>): Promise<T> =>
+      send<T>(await connected(), method, params);
+
     const api: AndroidDevtoolsApi = {
       isReady: () => ready && !disposed,
       getHierarchy(getOpts: GetHierarchyOptions = {}) {
@@ -640,9 +651,12 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         return request<{ ok: boolean; idleMs: number; protocol: string }>("ping");
       },
       async setText(text: string, setOpts: { check?: boolean } = {}) {
+        // Outside the `try`: a reconnect that times out never sent the text,
+        // so it must not be reported below as a fill that may have landed.
+        const current = await connected();
         let result: Partial<SetTextResult>;
         try {
-          result = await request<Partial<SetTextResult>>("setText", {
+          result = await send<Partial<SetTextResult>>(current, "setText", {
             text,
             ...(setOpts.check ? { check: true } : {}),
           });
@@ -714,7 +728,18 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           }
         }
         if (acknowledged) await waitForHelperExit(HELPER_EXIT_TIMEOUT_MS);
-        else if (!procExited) await forceStopHelper();
+        else if (!procExited) {
+          // Bounded: on a hung adb transport the command runs out its own 5 s,
+          // and the launcher's SIGKILL follows 6 s after it asks for a stop.
+          let timer: NodeJS.Timeout | undefined;
+          await Promise.race([
+            forceStopHelper(),
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, DISPOSE_FORCE_STOP_WAIT_MS);
+            }),
+          ]);
+          clearTimeout(timer);
+        }
         void opening?.then(
           (opened) => opened.client.close(),
           () => undefined
