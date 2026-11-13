@@ -290,6 +290,17 @@ export function xctraceEndWarning({ result, idleMs }: XctraceEnd): string | unde
   return undefined;
 }
 
+/**
+ * Why the trace can lack its tables, for analyze: xctrace was ended before it
+ * finished the recording. Null when it ended on SIGINT.
+ */
+export function unfinishedRecordingReason({ result }: XctraceEnd): string | null {
+  return result.clean
+    ? null
+    : `xctrace did not end on SIGINT, so argent ended it with ${result.signalUsed}, and the ` +
+        `recording was not finished.`;
+}
+
 export interface XctraceCapture {
   appProcess: string;
   traceFile: string;

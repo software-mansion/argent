@@ -23,7 +23,10 @@ import {
   nativeProfilerSessionBlueprint,
   type NativeProfilerSessionApi,
 } from "../src/blueprints/native-profiler-session";
-import { stopNativeProfilerIos } from "../src/tools/profiler/native-profiler/platforms/ios";
+import {
+  analyzeNativeProfilerIos,
+  stopNativeProfilerIos,
+} from "../src/tools/profiler/native-profiler/platforms/ios";
 import { commitXctraceRecording } from "../src/tools/profiler/native-profiler/platforms/xctrace";
 import { xctraceProgressProbe } from "../src/utils/ios-profiler/xctrace-progress";
 import { RECORDING_CAP_MS } from "../src/utils/profiler-shared/types";
@@ -55,6 +58,18 @@ class FakeXctrace extends EventEmitter {
 }
 
 const TRACE = "/tmp/native-profiler-20260101-000000.trace";
+
+/** What the export of a trace that xctrace never finished gives: no table. */
+function exportNoTable(): void {
+  vi.mocked(exportIosTraceData).mockImplementationOnce(async () => ({
+    files: { cpu: null, hangs: null, leaks: null },
+    diagnostics: { tocSchemas: [], cpuSchemaUsed: null, errors: { toc: "Document Missing" } },
+  }));
+}
+
+const KILLED =
+  "Not exported: xctrace did not end on SIGINT, so argent ended it with SIGTERM, and the " +
+  "recording was not finished. Call native-profiler-start for a new recording.";
 const STALL_MS = 30_000;
 const POLL_MS = 2_000;
 
@@ -164,6 +179,43 @@ describe("native-profiler-stop and an xctrace that hangs after SIGINT", () => {
   });
 });
 
+describe("native-profiler-analyze after a stop that had to end xctrace", () => {
+  for (const [platform, deviceId] of [
+    ["an iOS simulator", IOS],
+    ["a Mac app", MAC],
+  ] as const) {
+    it(`on ${platform}, says the recording was not finished, not that the template lacks a table`, async () => {
+      const child = new FakeXctrace();
+      child.respondsTo.add("SIGTERM");
+      const api = await recording(deviceId, child);
+      exportNoTable();
+
+      const pending = stopNativeProfilerIos(api);
+      await vi.advanceTimersByTimeAsync(STALL_MS + 2 * POLL_MS);
+      await pending;
+      vi.useRealTimers();
+
+      const { exportErrors } = await analyzeNativeProfilerIos(api);
+      expect(exportErrors.cpu).toBe(KILLED);
+      expect(exportErrors.hangs).toBe(KILLED);
+      expect(JSON.stringify(exportErrors)).not.toContain("template may not include");
+    });
+  }
+
+  it("keeps the usual text when xctrace ended on SIGINT", async () => {
+    const child = new FakeXctrace();
+    child.respondsTo.add("SIGINT");
+    const api = await recording(IOS, child);
+    exportNoTable();
+
+    await stopNativeProfilerIos(api);
+    vi.useRealTimers();
+
+    const { exportErrors } = await analyzeNativeProfilerIos(api);
+    expect(exportErrors.cpu).toContain("template may not include a Time Profiler");
+  });
+});
+
 describe("the 10-minute recording cap", () => {
   /** A recording of `child` whose 10-minute cap has fired. */
   async function capped(deviceId: string, child: FakeXctrace) {
@@ -250,6 +302,21 @@ describe("the 10-minute recording cap", () => {
     // Each once: what is left of the data, and what to do.
     expect(result.warning).not.toContain("partial trace");
     expect(result.warning?.match(/Call native-profiler-start/g)).toHaveLength(1);
+  });
+
+  it("makes analyze say that the capped recording was not finished when xctrace was killed", async () => {
+    const child = new FakeXctrace();
+    child.respondsTo.add("SIGTERM");
+    const { api } = await capped(IOS, child);
+    exportNoTable();
+
+    const pending = stopNativeProfilerIos(api);
+    await vi.advanceTimersByTimeAsync(120_000 + 2 * POLL_MS);
+    await pending;
+    vi.useRealTimers();
+
+    const { exportErrors } = await analyzeNativeProfilerIos(api);
+    expect(exportErrors.cpu).toBe(KILLED);
   });
 
   it("lets a teardown kill an xctrace that has not ended, and says its bundle is not saved", async () => {

@@ -40,6 +40,7 @@ import {
   newTraceOutputPath,
   resolveDefaultTemplatePath,
   spawnXctraceRecording,
+  unfinishedRecordingReason,
   xctraceEndWarning,
   xctraceRunErrors,
 } from "./xctrace";
@@ -662,7 +663,8 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     // Pair the exports with the capture mode of the recording that just ended.
     api.mallocStackLogging = api.recordingMallocStackLogging;
     api.appEndedDuringCapture = ended;
-    api.exportSkipReason = diagnostics.skipped ?? null;
+    api.exportSkipReason =
+      diagnostics.skipped ?? (cappedEnd ? unfinishedRecordingReason(cappedEnd) : null);
     api.recordedMs = null;
     api.appSuspensions = suspensionSpans(suspensions, diagnostics);
 
@@ -715,7 +717,8 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   // Before xctrace saves the trace and the exports run: an app that quits during
   // them did not quit during the recording.
   const ended = appEnded(api);
-  let warning = xctraceEndWarning(await endXctrace(child, api.traceFile, recordedMs));
+  const end = await endXctrace(child, api.traceFile, recordedMs);
+  let warning = xctraceEndWarning(end);
   if (warning) process.stderr.write(`[native-profiler] ${warning}\n`);
 
   api.profilingActive = false;
@@ -749,7 +752,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   // Pair the exports with the capture mode of the recording that just ended.
   api.mallocStackLogging = api.recordingMallocStackLogging;
   api.appEndedDuringCapture = ended;
-  api.exportSkipReason = diagnostics.skipped ?? null;
+  api.exportSkipReason = diagnostics.skipped ?? unfinishedRecordingReason(end);
   api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
   if (ended) {

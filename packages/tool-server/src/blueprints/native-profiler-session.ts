@@ -121,8 +121,10 @@ export interface NativeProfilerSessionApi {
    */
   appEndedDuringCapture: boolean;
   /**
-   * Why the last stop exported no table (ExportDiagnostics.skipped), for analyze
-   * to say instead of a missing table. Stamped at stop; cleared by profiler-load.
+   * Why the last stop has no table to analyze, for analyze to say instead of a
+   * missing table: it exported none (ExportDiagnostics.skipped), or it had to
+   * kill xctrace before the recording was finished. Stamped at stop; cleared by
+   * profiler-load.
    */
   exportSkipReason: string | null;
   /**
