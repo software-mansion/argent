@@ -132,7 +132,7 @@ parseLeaksFile ┘                                                │
 
 `xctrace` exports rely on an **id/ref deduplication scheme**: each `<frame>`, `<binary>`, `<backtrace>`, `<thread>`, `<weight>`, `<hang-type>`, etc. is defined once with `id="N"` and referenced afterwards by `<… ref="N"/>`. The parser maintains a `Map` per element type and resolves refs as it goes — without this most rows would be empty.
 
-DOM parsing is impractical (multi-MB files, deep nesting), so the parser pulls only what it needs with targeted regex (`<row[\s>](.*?)</row>`). System frames are flagged here using `SYSTEM_LIBRARY_PATH_PREFIXES` (`/usr/lib/`, `/System/Library/`, `/Library/Developer/CoreSimulator/`) so later stages can cheaply filter them out.
+DOM parsing is impractical (multi-MB files, deep nesting), so the parser pulls only what it needs with targeted regex (`<row[\s>](.*?)</row>`). System frames are flagged here using `SYSTEM_LIBRARY_PATH_PREFIXES` (`/usr/lib/`, `/System/Library/`, `/Library/Developer/CoreSimulator/`), and a path that contains `SIMULATOR_RUNTIME_PATH_SEGMENT` (the libraries of the iOS 27 simulator runtime, which macOS mounts under a cryptex path), so later stages can cheaply filter them out.
 
 Output shapes:
 

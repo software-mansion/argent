@@ -35,11 +35,11 @@ Stacks are leaf-first (deepest frame at index 0). To find the most actionable fr
 2. **Second pass**: First non-system, non-hex-address frame (including RN framework internals like `RCT`, `Yoga`, `Hermes`, `JSI`, `React`, etc.) — picked only if no user/third-party code was found.
 3. **Fallback**: First named frame, then `stack[0]`.
 
-This ensures third-party libraries and user code are surfaced over RN framework internals, while system frames (`/usr/lib/`, `/System/Library/`, `/Library/Developer/CoreSimulator/`) are skipped entirely.
+This ensures third-party libraries and user code are surfaced over RN framework internals, while system frames (`/usr/lib/`, `/System/Library/`, `/Library/Developer/CoreSimulator/`, and a path that contains `/Library/Developer/CoreSimulator/Profiles/Runtimes/`) are skipped entirely.
 
 ### System library filtering
 
-Frames from binaries whose paths start with `/usr/lib/`, `/System/Library/`, or `/Library/Developer/CoreSimulator/` are marked as system frames. These are excluded from app call chains and deprioritized in dominant function detection. The goal is to focus the report on app code, not framework internals the developer cannot change.
+Frames from binaries whose paths start with `/usr/lib/`, `/System/Library/`, or `/Library/Developer/CoreSimulator/` are marked as system frames, and so are frames from a binary whose path contains `/Library/Developer/CoreSimulator/Profiles/Runtimes/`: macOS mounts the iOS 27 simulator runtime under a cryptex path (`SIMULATOR_RUNTIME_PATH_SEGMENT`). These are excluded from app call chains and deprioritized in dominant function detection. The goal is to focus the report on app code, not framework internals the developer cannot change.
 
 ### Hang–CPU correlation via time windows
 
