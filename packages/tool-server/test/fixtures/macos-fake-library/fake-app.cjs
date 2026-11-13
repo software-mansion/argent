@@ -13,9 +13,10 @@
 // Network capture: like the real library, it reports requests as CDP events
 // only after a CDP Network.enable, which it answers, until Network.disable or
 // until the client's connection closes. `Net.request` sends one request (with
-// `headers`, and `hold: true` to send only its first event, until
-// `Net.finish`), and `--launch-request` sends one 150 ms after the start. A
-// body read answers as the real Mac library does: it keeps no bodies.
+// `headers`, a request body `postData`, a response `body`, and `hold: true` to
+// send only its first event, until `Net.finish`), and `--launch-request` sends
+// one 150 ms after the start. It keeps the bodies and answers the body reads,
+// as the real library does.
 "use strict";
 const fs = require("node:fs");
 const net = require("node:net");
@@ -28,6 +29,8 @@ const startedAt = Date.now();
 const network = { active: false, activations: 0 };
 /** Requests whose last events wait for `Net.finish`. */
 const held = [];
+/** The bodies of each request, by its requestId. */
+const bodies = new Map();
 const clients = new Set();
 let nextRequestId = 1;
 let askingToSave = false;
@@ -79,7 +82,7 @@ function serve(socket) {
   });
 }
 
-function cdp(socket, { id, method }) {
+function cdp(socket, { id, method, params }) {
   if (mode === "network-silent") return;
   const answer = (body) =>
     socket.write(JSON.stringify({ type: "CDP", payload: { id, ...body } }) + "\n");
@@ -91,10 +94,19 @@ function cdp(socket, { id, method }) {
     case "Network.disable":
       network.active = false;
       return answer({ result: {} });
-    case "Network.getResponseBody":
-      return answer({ error: { message: "No response body stored for requestId" } });
-    case "Network.getRequestPostData":
-      return answer({ error: { message: "No request stored for requestId" } });
+    case "Network.getResponseBody": {
+      const body = bodies.get(params?.requestId)?.body;
+      return body
+        ? answer({ result: { body, base64Encoded: false, wasTruncated: false } })
+        : answer({ error: { message: "No response body stored for requestId" } });
+    }
+    case "Network.getRequestPostData": {
+      const entry = bodies.get(params?.requestId);
+      if (!entry) return answer({ error: { message: "No request stored for requestId" } });
+      return entry.postData
+        ? answer({ result: { postData: entry.postData, base64Encoded: false } })
+        : answer({ error: { message: "No request post data available for requestId" } });
+    }
     default:
       return answer({ error: { message: `Unsupported method: ${method}` } });
   }
@@ -109,9 +121,10 @@ function sendEvents(events) {
 }
 
 /** One request's events, to the connected client, as the real library sends them. */
-function sendRequest(url, method, headers = {}, hold = false) {
+function sendRequest(url, method, headers = {}, hold = false, postData, body) {
   if (!network.active) return;
   const requestId = `fake-${nextRequestId++}`;
+  bodies.set(requestId, { postData, body });
   const last = [
     [
       "Network.responseReceived",
@@ -120,9 +133,11 @@ function sendRequest(url, method, headers = {}, hold = false) {
         response: { url, status: 200, headers: { "Set-Cookie": "session=fake-secret" } },
       },
     ],
-    ["Network.loadingFinished", { requestId, encodedDataLength: 12 }],
+    ["Network.loadingFinished", { requestId, encodedDataLength: body?.length ?? 12 }],
   ];
-  sendEvents([["Network.requestWillBeSent", { requestId, request: { url, method, headers } }]]);
+  // A body the app streams comes with no postData: the agent reads it.
+  const request = { url, method, headers, ...(postData ? { hasPostData: true } : {}) };
+  sendEvents([["Network.requestWillBeSent", { requestId, request }]]);
   if (hold) held.push(last);
   else sendEvents(last);
 }
@@ -140,7 +155,14 @@ function handle(socket, msg) {
       return reply({ result: { params, pid: process.pid, argv: process.argv.slice(2), deadline } });
     case "Net.request":
       for (let i = 0; i < (params.count ?? 1); i++) {
-        sendRequest(params.url, params.method, params.headers, params.hold === true);
+        sendRequest(
+          params.url,
+          params.method,
+          params.headers,
+          params.hold === true,
+          params.postData,
+          params.body
+        );
       }
       // A CDP reply: its id must neither answer the call nor enter the log.
       socket.write(JSON.stringify({ type: "CDP", payload: { id, result: {} } }) + "\n");

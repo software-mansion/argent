@@ -99,7 +99,6 @@ import { networkRequestTool } from "../src/tools/network/network-request";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { resolveDevice } from "../src/utils/device-info";
 import { NOT_RECONNECTED, PROCESS_ENDED } from "../src/utils/native-network-record";
-import { MACOS_NO_BODIES } from "../src/blueprints/ios-network-records";
 import {
   chromiumRefusal,
   findRunningCopies,
@@ -715,11 +714,14 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(urls(await readLog())).toEqual(["https://example.com/c"]);
     });
 
-    it("gives a record's details with its secret headers redacted", async () => {
+    it("gives a record's details with its secret headers redacted and its bodies", async () => {
       await run("boot-device", { macosAppPath: appPath });
       await start();
       await request("https://example.com/secret", {
+        method: "POST",
         headers: { Authorization: "Bearer fake-token", Accept: "application/json" },
+        postData: '{"name":"mac"}',
+        body: '{"ok":true}',
       });
       const [line] = (await readLog()).requests;
       const found = await details(line!.id);
@@ -728,15 +730,21 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         state: "complete",
         request: {
           url: "https://example.com/secret",
-          method: "GET",
+          method: "POST",
           headers: { Authorization: "[REDACTED]", Accept: "application/json" },
+          postData: '{"name":"mac"}',
         },
-        response: { status: 200, headers: { "Set-Cookie": "[REDACTED]" } },
+        response: { status: 200, headers: { "Set-Cookie": "[REDACTED]" }, body: '{"ok":true}' },
       });
-      // The fake keeps no bodies, as the Mac library does.
-      expect(found.response.body).toBe(`[unavailable: ${MACOS_NO_BODIES}]`);
       expect(JSON.stringify(found)).not.toContain("fake-token");
       expect(JSON.stringify(found)).not.toContain("fake-secret");
+
+      // A body the library does not hold gets the iOS text, as on iOS.
+      await request("https://example.com/gone");
+      const gone = (await readLog()).requests.find((r) => r.url === "https://example.com/gone")!;
+      expect((await details(gone.id)).response.body).toBe(
+        "[unavailable: the agent no longer holds this body]"
+      );
 
       expect(await details("macos-0000-999999")).toBe(
         "Request macos-0000-999999 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
