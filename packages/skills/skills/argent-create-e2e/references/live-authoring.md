@@ -105,7 +105,7 @@ Without step 1, `hidden` also passes for a typo or an element that never existed
 
 Discover the element first, then record `gesture-tap` at its frame center; the live coordinates are transport for the gesture, not a final locator.
 
-**Pass `selector` when you know which field is stable.** The recorder is `id`-first, which is wrong when the id is positional (`row-3`) and the text is durable: `e2e-add-step { command: "gesture-tap", args: …, selector: { text: "Settings" } }`. It sits beside `args`, not inside the JSON. The selector is checked against the replay tree, not `describe`. A replay taps the centre of the element the selector resolves to there, so the innermost element at that centre must be the one under the tap. The call is refused before the tap runs when that tree cannot be read (or the platform has none), the selector matches nothing there, or its centre is on another element. That refusal names the centre: when the selector names the element you meant (a text leaf narrower than its row, say), record the tap again at that point. When it says a smaller element sits at the centre, the tree cannot tell which of the two takes the touch: a label passes it to its row, a button keeps it. Record there only if the result is the one you want. `selector` with any other `command`, with `delayMs`, or inside `args` is refused the same way.
+**Pass `selector` when you know which field is stable.** The recorder is `id`-first, which is wrong when the id is positional (`row-3`) and the text is durable: `e2e-add-step { command: "gesture-tap", args: …, selector: { text: "Settings" } }`. It sits beside `args`, not inside the JSON. The selector is checked against the replay tree, not `describe`. A replay taps the centre of the element the selector resolves to there, so the innermost element at that centre must be the one under the tap. The call is refused before the tap runs when that tree cannot be read (or the platform has none), the selector matches nothing there, or its centre is on another element (on a Mac app, also when it is away from a click on an element where the point matters, such as a slider). That refusal names the centre: when the selector names the element you meant (a text leaf narrower than its row, say), record the tap again at that point. When it says a smaller element sits at the centre, the tree cannot tell which of the two takes the touch: a label passes it to its row, a button keeps it. Record there only if the result is the one you want. `selector` with any other `command`, with `delayMs`, or inside `args` is refused the same way.
 
 With no `selector`, the recorder reads the pre-tap tree and derives one in a fixed order (`id`, then `text`, then `role`), giving three outcomes. Read the `recorded` line after every tap, because the first never warns. It names the derived form (a selector map, or the kept point):
 
@@ -199,6 +199,7 @@ e2e-finish-recording { TEST }
 After meaning-preserving conversion:
 
 ```yaml
+version: 1
 steps:
   - echo: Restart Acme Notes. Expect Home
   - launch: com.acme.notes
