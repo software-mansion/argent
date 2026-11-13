@@ -10,11 +10,9 @@ import { __resetProfilingDevicesForTesting, isProfiling } from "../../src/utils/
 
 import { createReactProfilerStartTool } from "../../src/tools/profiler/react/react-profiler-start";
 
-const findRuntimeDeviceMock = vi.hoisted(() =>
-  vi.fn(async (): Promise<string | undefined> => undefined)
-);
+const findRuntimeDevicesMock = vi.hoisted(() => vi.fn(async (): Promise<string[]> => []));
 vi.mock("../../src/utils/debugger/runtime-device", () => ({
-  findRuntimeDevice: () => findRuntimeDeviceMock(),
+  findRuntimeDevices: () => findRuntimeDevicesMock(),
 }));
 
 const LOGICAL_ID = "1c3346c4a6889e88dbb8116da34f0f4af6f8067c";
@@ -73,7 +71,8 @@ function fakeSession(deviceId: string, onStart: (api: ReactProfilerSessionApi) =
 afterEach(() => {
   __resetProfilingDevicesForTesting();
   resetDeviceAliases();
-  findRuntimeDeviceMock.mockReset();
+  findRuntimeDevicesMock.mockReset();
+  findRuntimeDevicesMock.mockResolvedValue([]);
 });
 
 describe("react-profiler-start registers the run where the device's calls look", () => {
@@ -96,9 +95,9 @@ describe("react-profiler-start registers the run where the device's calls look",
     expect(sent.at(-1)).toBe("Profiler.stop");
   });
 
-  it("registers a run keyed by a logicalDeviceId under the device it runs on too", async () => {
+  it("registers a run keyed by a logicalDeviceId under every id of the device it runs on too", async () => {
     rememberLogicalKeyedDevice(LOGICAL_ID, LOGICAL_ID);
-    findRuntimeDeviceMock.mockResolvedValue("emulator-5554");
+    findRuntimeDevicesMock.mockResolvedValue(["emulator-5554", "127.0.0.1:5555"]);
     const { registry } = fakeSession(LOGICAL_ID);
     const tool = createReactProfilerStartTool(registry);
 
@@ -108,6 +107,7 @@ describe("react-profiler-start registers the run where the device's calls look",
     );
 
     expect(isProfiling("emulator-5554")).toBe(true);
+    expect(isProfiling("127.0.0.1:5555")).toBe(true);
     expect(isProfiling(LOGICAL_ID)).toBe(true);
     expect(result).not.toHaveProperty("__argentNote");
   });
@@ -135,7 +135,7 @@ describe("react-profiler-start registers the run where the device's calls look",
       { device_id: "emulator-5554", port: 8081, sample_interval_us: 100, force: false }
     );
 
-    expect(findRuntimeDeviceMock).not.toHaveBeenCalled();
+    expect(findRuntimeDevicesMock).not.toHaveBeenCalled();
     expect(isProfiling("emulator-5554")).toBe(true);
   });
 });

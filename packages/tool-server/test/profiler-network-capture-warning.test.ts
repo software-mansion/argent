@@ -11,10 +11,10 @@ vi.mock("../src/blueprints/android-network-inspector", async (importActual) => (
   liveAndroidNetworkCaptureDevices: (packageName: string) => liveDevices(packageName),
 }));
 
-// The device the profiled runtime is found on, for a logicalDeviceId session.
-const findRuntimeDevice = vi.fn(async (): Promise<string | undefined> => undefined);
+// The ids of the device the profiled runtime is found on, for a logicalDeviceId session.
+const findRuntimeDevices = vi.fn(async (): Promise<string[]> => []);
 vi.mock("../src/utils/debugger/runtime-device", () => ({
-  findRuntimeDevice: () => findRuntimeDevice(),
+  findRuntimeDevices: () => findRuntimeDevices(),
 }));
 
 vi.mock("../src/utils/check-deps", () => ({
@@ -61,8 +61,8 @@ beforeEach(() => {
   live.mockReturnValue([]);
   liveDevices.mockReset();
   liveDevices.mockReturnValue([]);
-  findRuntimeDevice.mockReset();
-  findRuntimeDevice.mockResolvedValue(undefined);
+  findRuntimeDevices.mockReset();
+  findRuntimeDevices.mockResolvedValue([]);
   resetDeviceAliases();
 });
 
@@ -162,7 +162,7 @@ describe("nativeNetworkCaptureWarning", () => {
       connectedWithLogicalId();
       captureOnSerial(PKG, OTHER_PKG);
 
-      const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, SERIAL);
+      const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, [SERIAL]);
 
       expect(live).toHaveBeenCalledWith(SERIAL);
       expect(liveDevices).not.toHaveBeenCalled();
@@ -178,8 +178,49 @@ describe("nativeNetworkCaptureWarning", () => {
       connectedWithLogicalId();
       captureOnSerial(PKG);
 
-      expect(nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, "emulator-5556")).toBeUndefined();
+      expect(nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, ["emulator-5556"])).toBeUndefined();
       expect(liveDevices).not.toHaveBeenCalled();
+    });
+
+    describe("on a device found under two adb transports", () => {
+      const USB = "R58M123ABC";
+      const WIRELESS = "192.168.1.5:5555";
+
+      it("finds capture kept under either serial, in either order, and names that serial", () => {
+        connectedWithLogicalId();
+        live.mockImplementation((deviceId) => (deviceId === WIRELESS ? [PKG] : []));
+
+        for (const devices of [
+          [USB, WIRELESS],
+          [WIRELESS, USB],
+        ]) {
+          const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, devices);
+
+          expect(warning).toContain(
+            `Native network capture is on for ${PKG} on ${WIRELESS}, the device this profile runs on:`
+          );
+          expect(warning).toContain(
+            `call native-network-logs with udid ${WIRELESS} and stop: true for that app, then restart-app on ${WIRELESS}`
+          );
+        }
+        expect(liveDevices).not.toHaveBeenCalled();
+      });
+
+      it("names each app with the serial its capture is under when both serials have some", () => {
+        connectedWithLogicalId();
+        live.mockImplementation((deviceId) =>
+          deviceId === USB ? [PKG] : deviceId === WIRELESS ? [OTHER_PKG] : []
+        );
+
+        const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, [USB, WIRELESS]);
+
+        expect(warning).toContain(
+          `Native network capture is on for ${PKG}, ${OTHER_PKG} on ${USB} and ${WIRELESS}, adb serials of the device this profile runs on:`
+        );
+        expect(warning).toContain(
+          `call native-network-logs with stop: true for ${PKG} with udid ${USB}, ${OTHER_PKG} with udid ${WIRELESS}, then restart-app on ${USB}`
+        );
+      });
     });
   });
 
@@ -343,7 +384,7 @@ describe("react-profiler-start", () => {
       const PROFILED_SERIAL = "emulator-5556";
 
       it("adds no warning when capture is on for the app only on another device", async () => {
-        findRuntimeDevice.mockResolvedValue(PROFILED_SERIAL);
+        findRuntimeDevices.mockResolvedValue([PROFILED_SERIAL]);
         captureOnSerial(PKG);
 
         const result = await start(ANDROID_APP);
@@ -354,7 +395,7 @@ describe("react-profiler-start", () => {
       });
 
       it("warns about that device alone, by its id, when capture is on there", async () => {
-        findRuntimeDevice.mockResolvedValue(SERIAL);
+        findRuntimeDevices.mockResolvedValue([SERIAL]);
         captureOnSerial(PKG);
 
         const result = await start(ANDROID_APP);
@@ -369,7 +410,7 @@ describe("react-profiler-start", () => {
       });
 
       it("checks the simulator, not Android devices by app, for an iOS runtime", async () => {
-        findRuntimeDevice.mockResolvedValue(IOS_UDID);
+        findRuntimeDevices.mockResolvedValue([IOS_UDID]);
         captureOnSerial(PKG);
 
         const result = await start({ appId: PKG, platform: "ios" });
@@ -377,6 +418,18 @@ describe("react-profiler-start", () => {
         expect(live).toHaveBeenCalledWith(IOS_UDID);
         expect(liveDevices).not.toHaveBeenCalled();
         expect(result).not.toHaveProperty("warning");
+      });
+
+      it("warns when capture is kept under the device's other adb serial", async () => {
+        const WIRELESS = "192.168.1.5:5555";
+        findRuntimeDevices.mockResolvedValue([SERIAL, WIRELESS]);
+        live.mockImplementation((deviceId) => (deviceId === WIRELESS ? [PKG] : []));
+
+        const result = await start(ANDROID_APP);
+
+        expect(result.warning).toContain(
+          `Native network capture is on for ${PKG} on ${WIRELESS}, the device this profile runs on:`
+        );
       });
     });
   });

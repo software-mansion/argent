@@ -22,34 +22,61 @@ const CAPTURE_COST =
  * fail the start it annotates.
  *
  * For a `deviceId` that is a Metro logicalDeviceId, which names no device:
- * `runtimeDevice` is the `list-devices` id the profiled runtime was found on,
- * and is checked instead, named in the warning since the caller's id cannot
- * reach it. `runtimeApp` is what the runtime said about itself, for when it was
- * not found (see {@link logicalDeviceWarning}).
+ * `runtimeDevices` are the `list-devices` ids the profiled runtime was found
+ * on (see {@link foundDeviceWarning}). `runtimeApp` is what the runtime said
+ * about itself, for when it was not found (see {@link logicalDeviceWarning}).
  */
 export function nativeNetworkCaptureWarning(
   deviceId: string,
   runtimeApp?: RuntimeAppMetadata,
-  runtimeDevice?: string
+  runtimeDevices: readonly string[] = []
 ): string | undefined {
-  const device = runtimeDevice ?? deviceId;
-  let packages: string[];
   try {
-    packages = liveAndroidNetworkCaptures(device);
-    if (packages.length === 0) return logicalDeviceWarning(device, runtimeApp);
+    if (runtimeDevices.length > 0) return foundDeviceWarning(runtimeDevices);
+    const packages = liveAndroidNetworkCaptures(deviceId);
+    if (packages.length === 0) return logicalDeviceWarning(deviceId, runtimeApp);
+    const apps = packages.join(", ");
+    const one = packages.length === 1;
+    return (
+      `Native network capture is on for ${apps} on this device: Argent attaches its in-app agent ` +
+      `to the processes of ${one ? "that app" : "these apps"}. ${CAPTURE_COST} ` +
+      `To profile without it, stop this profile, call native-network-logs with stop: true for ${one ? "that app" : "each of these apps"}, then restart-app and profile again.`
+    );
   } catch {
     return undefined;
   }
-  const apps = packages.join(", ");
-  const one = packages.length === 1;
-  const named = device !== deviceId;
+}
+
+/**
+ * For a logicalDeviceId session whose runtime was found: checks every id of
+ * that device and no other device. One device can have several ids, one per
+ * adb transport, and capture is kept under the one `native-network-logs` was
+ * called with. The caller's own id reaches none of them, so the warning names
+ * the id each capture is under, as the `udid` to pass.
+ */
+function foundDeviceWarning(devices: readonly string[]): string | undefined {
+  const captures = devices
+    .map((device) => ({ device, packages: liveAndroidNetworkCaptures(device) }))
+    .filter(({ packages }) => packages.length > 0);
+  const first = captures[0];
+  if (!first) return undefined;
+  const apps = [...new Set(captures.flatMap(({ packages }) => packages))].sort();
+  const one = apps.length === 1;
+  const where =
+    captures.length === 1
+      ? `${first.device}, the device this profile runs on`
+      : `${captures.map(({ device }) => device).join(" and ")}, adb serials of the device this profile runs on`;
+  const stop =
+    captures.length === 1
+      ? `with udid ${first.device} and stop: true for ${one ? "that app" : "each of these apps"}`
+      : `with stop: true for ${captures
+          .flatMap(({ device, packages }) => packages.map((pkg) => `${pkg} with udid ${device}`))
+          .join(", ")}`;
   return (
-    `Native network capture is on for ${apps} on ` +
-    `${named ? `${device}, the device this profile runs on` : "this device"}: Argent attaches its in-app agent ` +
+    `Native network capture is on for ${apps.join(", ")} on ${where}: Argent attaches its in-app agent ` +
     `to the processes of ${one ? "that app" : "these apps"}. ${CAPTURE_COST} ` +
-    `To profile without it, stop this profile, call native-network-logs with ` +
-    `${named ? `udid ${device} and ` : ""}stop: true for ${one ? "that app" : "each of these apps"}, ` +
-    `then restart-app${named ? ` on ${device}` : ""} and profile again.`
+    `To profile without it, stop this profile, call native-network-logs ${stop}, ` +
+    `then restart-app on ${first.device} and profile again.`
   );
 }
 
