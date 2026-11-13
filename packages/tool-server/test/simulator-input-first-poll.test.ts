@@ -46,6 +46,11 @@ vi.mock("node:child_process", async () => {
     },
     execFile: (...args: unknown[]) => {
       execFileMock(...args);
+      // tv-control's daemon reap awaits `pkill`, which exits 1 on no match.
+      const done = args.at(-1);
+      if (args[0] === "pkill" && typeof done === "function") {
+        setImmediate(() => done(Object.assign(new Error("no match"), { code: 1 }), "", ""));
+      }
       return exitingProc();
     },
   };

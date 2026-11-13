@@ -19,6 +19,7 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "paste",
   "rotate",
   "fold",
+  "tv-remote",
   "launch-app",
   "restart-app",
   "open-url",
@@ -48,6 +49,7 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "gesture-rotate": 1500,
   "run-sequence": 15000,
   "button": 1500,
+  "tv-remote": 1500,
   "rotate": 1000,
   // The fold tool already waits for the panel hand-over; the cap covers the
   // repaint after it.
@@ -99,6 +101,7 @@ export const AUTO_DESCRIBE_TOOLS = new Set([
   "paste",
   "rotate",
   "fold",
+  "tv-remote",
   "launch-app",
   "restart-app",
   "open-url",

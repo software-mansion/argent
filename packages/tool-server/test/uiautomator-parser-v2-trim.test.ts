@@ -284,3 +284,57 @@ describe("parseUiAutomatorDump — v2 trim focused behaviour", () => {
     expect(labels).toContain("on screen");
   });
 });
+
+describe("parseUiAutomatorDump — D-pad cursor", () => {
+  const row = (label: string, extra: string) =>
+    `<node class="android.widget.LinearLayout" text="${label}" clickable="true" focusable="true" ${extra} package="com.android.tv.settings" bounds="[0,100][800,200]" />`;
+
+  it("marks the focused and the selected element", () => {
+    const xml = `<hierarchy rotation="0">
+${row("Network", 'focused="true" selected="false"')}
+${row("Display", 'focused="false" selected="true"').replace("[0,100][800,200]", "[0,200][800,300]")}
+${row("Sound", 'focused="false" selected="false"').replace("[0,100][800,200]", "[0,300][800,400]")}
+</hierarchy>`;
+
+    const nodes = flatten(parseUiAutomatorDump(xml, 1920, 1080));
+    const flags = (label: string) => {
+      const n = nodes.find((x) => x.label === label)!;
+      return [n.focused ?? false, n.selected ?? false];
+    };
+    expect(flags("Network")).toEqual([true, false]);
+    expect(flags("Display")).toEqual([false, true]);
+    expect(flags("Sound")).toEqual([false, false]);
+  });
+
+  it("keeps an unlabelled card that holds focus", () => {
+    const card = (title: string, focused: boolean, x: number) =>
+      `<node class="android.widget.FrameLayout" focusable="true" focused="${focused}" package="com.example.tv" bounds="[${x},0][${x + 400},300]">
+  <node class="android.widget.TextView" text="${title}" package="com.example.tv" bounds="[${x},250][${x + 400},300]" />
+</node>`;
+    const dump = (aFocused: boolean) =>
+      `<hierarchy rotation="0">${card("Movie A", aFocused, 0)}${card("Movie B", !aFocused, 400)}</hierarchy>`;
+
+    const focusedFrameX = (xml: string) =>
+      flatten(parseUiAutomatorDump(xml, 1920, 1080))
+        .filter((n) => n.focused)
+        .map((n) => n.frame.x);
+
+    expect(focusedFrameX(dump(true))).toEqual([0]);
+    expect(focusedFrameX(dump(false))).toEqual([400 / 1920]);
+  });
+
+  it("keeps the focus of a wrapper collapsed into its same-bounds inner target", () => {
+    const xml = `<hierarchy rotation="0">
+<node class="android.widget.FrameLayout" content-desc="Play" clickable="true" focusable="true" focused="true" selected="true" package="com.example.tv" bounds="[0,0][400,200]">
+  <node class="android.widget.Button" text="" clickable="true" focusable="false" focused="false" package="com.example.tv" bounds="[0,0][400,200]" />
+</node>
+</hierarchy>`;
+
+    const nodes = flatten(parseUiAutomatorDump(xml, 1920, 1080));
+    const play = nodes.filter((n) => n.label === "Play");
+    expect(play).toHaveLength(1);
+    expect(play[0]!.role).toBe("Button");
+    expect(play[0]!.focused).toBe(true);
+    expect(play[0]!.selected).toBe(true);
+  });
+});
