@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Registry } from "@argent/registry";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FAILURE_CODES, getFailureSignal, Registry } from "@argent/registry";
 import {
   createNativeProfilerLaunchAnalysisTool,
   type NativeProfilerLaunchAnalysisParams,
@@ -122,5 +122,55 @@ describe("native-profiler-launch-analysis", () => {
         }),
       })
     ).toBe("Recording iOS App Launch in Production");
+  });
+});
+
+describe("native-profiler-launch-analysis failures", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+  beforeEach(() => {
+    // The workspace check runs after the macOS check, so the case runs on any host.
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", platform);
+  });
+
+  async function expectMissingWorkspace(mode: "measure" | "profile", failedMsg: string) {
+    const { registry } = rig();
+    const failed = vi.fn();
+    registry.events.on("toolFailed", failed);
+    const error = await registry
+      .invokeTool(ID, { mode, workspace_path: "/nonexistent/app" })
+      .catch((e: unknown) => e);
+    expect((error as Error).message).toBe(
+      `[Tool:${ID}] workspace_path is not a directory: /nonexistent/app`
+    );
+    const signal = {
+      error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+      failure_stage: "launch_analysis_workspace_path",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    };
+    expect(getFailureSignal(error)).toEqual(signal);
+    expect(getFailureSignal(failed.mock.calls[0]![2])).toEqual(signal);
+    expect(failed.mock.calls[0]![4]).toBe(failedMsg);
+  }
+
+  it("reports a missing workspace in measure mode as invalid input", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../src/tools/profiler/native-profiler/launch-analysis/measure")
+    >("../../src/tools/profiler/native-profiler/launch-analysis/measure");
+    vi.mocked(measureLaunch).mockImplementationOnce(actual.measureLaunch);
+    await expectMissingWorkspace("measure", "Failed to measure iOS launch: TOOL_INPUT_INVALID");
+  });
+
+  it("reports a missing workspace in profile mode as invalid input", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../src/tools/profiler/native-profiler/launch-analysis/profile")
+    >("../../src/tools/profiler/native-profiler/launch-analysis/profile");
+    vi.mocked(profileLaunch).mockImplementationOnce(actual.profileLaunch);
+    await expectMissingWorkspace("profile", "Failed to record iOS App Launch: TOOL_INPUT_INVALID");
   });
 });

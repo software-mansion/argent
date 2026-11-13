@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import { createRegistry } from "../../src/utils/setup-registry";
 import { definitionsById } from "../helpers/catalog";
 import {
@@ -9,6 +10,7 @@ import {
   appBuildKey,
   assertResolvedConfiguration,
   CommandExitError,
+  commandFailureKind,
   CommandTimeoutError,
   deviceErrorText,
   freeProfileLimitMessage,
@@ -93,9 +95,20 @@ it("checks the resolved CONFIGURATION against the requested one", () => {
   expect(() =>
     assertResolvedConfiguration({ CONFIGURATION: "Production" }, "Production")
   ).not.toThrow();
-  expect(() => assertResolvedConfiguration({ CONFIGURATION: "Release" }, "Production")).toThrow(
-    "Xcode did not resolve the app to Production."
-  );
+  const error = (() => {
+    try {
+      assertResolvedConfiguration({ CONFIGURATION: "Release" }, "Production");
+    } catch (e) {
+      return e;
+    }
+  })();
+  expect((error as Error).message).toBe("Xcode did not resolve the app to Production.");
+  expect(getFailureSignal(error)).toEqual({
+    error_code: FAILURE_CODES.LAUNCH_ANALYSIS_PROJECT_UNRESOLVED,
+    failure_stage: "launch_analysis_resolve_settings",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
 });
 
 it("keeps build caches of different configurations apart", () => {
@@ -284,9 +297,14 @@ it("rejects a relative workspace_path before it touches a device", async () => {
   await expect(prepareLaunch({ workspacePath: "." })).rejects.toThrow(
     "workspace_path must be an absolute path"
   );
-  await expect(prepareLaunch({ workspacePath: "~/dev" })).rejects.toThrow(
-    "workspace_path must be an absolute path"
-  );
+  const error = await prepareLaunch({ workspacePath: "~/dev" }).catch((e: unknown) => e);
+  expect((error as Error).message).toBe("workspace_path must be an absolute path: ~/dev");
+  expect(getFailureSignal(error)).toEqual({
+    error_code: FAILURE_CODES.TOOL_INPUT_INVALID,
+    failure_stage: "launch_analysis_workspace_path",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
 });
 
 it("selects the iOS app target over embedded watch apps and App Clips", () => {
@@ -405,6 +423,16 @@ describe("xctrace crash retry", () => {
     expect(error).toMatchObject({ code: null, signal: "SIGSEGV" });
     expect((error as Error).message).toContain("was killed by SIGSEGV");
     expect(isCrash(error)).toBe(true);
+  });
+
+  it("gives the error_kind of a failed command", () => {
+    expect(commandFailureKind(new CommandTimeoutError("timed out"))).toBe("timeout");
+    expect(commandFailureKind(execFileError(null, "SIGTERM"))).toBe("subprocess");
+    expect(
+      commandFailureKind(Object.assign(execFileError(null, "SIGTERM"), { killed: true }))
+    ).toBe("timeout");
+    expect(commandFailureKind(exitError(null, "SIGSEGV"))).toBe("crash");
+    expect(commandFailureKind(exitError(65, null))).toBe("subprocess");
   });
 
   it("exposes the exit code of a logged command that failed", async () => {

@@ -7,6 +7,13 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { argentHomeDir } from "@argent/configuration-core";
 import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  wrapFailure,
+  type FailureKind,
+} from "@argent/registry";
+import {
   GENERIC_DEVICECTL_HINT,
   listIosPhysicalDevices,
   ensureDeviceReady,
@@ -20,6 +27,7 @@ import { detectSigningTeams } from "../ios-device/team-detect";
 import { xcodebuildFailureSummary } from "../ios-device/runner-artifact";
 import { scheduleGroupSigkill, signalGroup } from "../process-kill";
 import { withKeyedLock } from "../keyed-lock";
+import { InvalidToolInputError } from "../capability";
 
 const execFileAsync = promisify(execFile);
 // A clean Release build of a large app (many pods, Hermes bytecode) can pass
@@ -228,6 +236,14 @@ export function isCrash(error: unknown): boolean {
   );
 }
 
+/** The error_kind of a failed runLogged or execFile command. */
+export function commandFailureKind(error: unknown): FailureKind {
+  if (error instanceof CommandTimeoutError || (error as { killed?: unknown } | null)?.killed) {
+    return "timeout";
+  }
+  return isCrash(error) ? "crash" : "subprocess";
+}
+
 export const XCTRACE_EXPORT_ATTEMPTS = 3;
 
 /**
@@ -399,6 +415,15 @@ export async function ensureLaunchDeviceReady(
   }
 }
 
+function deviceUnavailable(message: string, error_kind: FailureKind): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE,
+    failure_stage: "launch_analysis_select_device",
+    failure_area: "tool_server",
+    error_kind,
+  });
+}
+
 async function selectDevice(
   request: LaunchRequest,
   onProgress?: (message: string) => void,
@@ -417,9 +442,10 @@ async function selectDevice(
   // Matched before the cable filter, so a named iPhone that is off the cable
   // says so instead of reading as absent.
   if (selected && selected.transportType !== "wired") {
-    throw new Error(
+    throw deviceUnavailable(
       `iPhone ${selected.udid} is not connected by USB cable (transport: ${selected.transportType ?? "none"}). ` +
-        "Launch measurement runs over the cable; connect it and retry."
+        "Launch measurement runs over the cable; connect it and retry.",
+      "unsupported"
     );
   }
   const physical = devices.filter((device) => device.transportType === "wired");
@@ -434,17 +460,19 @@ async function selectDevice(
     };
   }
   if (physical.length > 0 && !request.deviceId) {
-    throw new Error(
+    throw deviceUnavailable(
       `Connected iPhones: ${physical.map((d) => d.udid).join(", ")}. Pass device_id to select one.` +
         (request.allowSimulator
           ? " To use a booted simulator while an iPhone is connected, pass the simulator's UDID as device_id."
-          : "")
+          : ""),
+      "validation"
     );
   }
   if (!request.allowSimulator) {
-    throw new Error(
+    throw deviceUnavailable(
       "No selected connected iPhone is available. Connect and unlock one, pass device_id, or explicitly set allow_simulator. " +
-        "Simulator launch timings reflect Mac hardware rather than a physical iPhone."
+        "Simulator launch timings reflect Mac hardware rather than a physical iPhone.",
+      "not_found"
     );
   }
   const all = (await listIosSimulators()).filter((device) => device.runtimeKind !== "tv");
@@ -452,16 +480,18 @@ async function selectDevice(
     ? all.find((device) => device.udid === request.deviceId)
     : undefined;
   if (requested && requested.state !== "Booted") {
-    throw new Error(
-      `Simulator ${requested.udid} is not booted (state: ${requested.state}). Boot it with boot-device, then retry.`
+    throw deviceUnavailable(
+      `Simulator ${requested.udid} is not booted (state: ${requested.state}). Boot it with boot-device, then retry.`,
+      "not_found"
     );
   }
   // xcodebuild and xctrace see only the default device set, so a simulator from
   // an additional set (ios.additionalDeviceSets) cannot be built for or recorded.
   if (requested?.deviceSet) {
-    throw new Error(
+    throw deviceUnavailable(
       `Simulator ${requested.udid} is in the device set ${requested.deviceSet}. xcodebuild and xctrace ` +
-        "see only Xcode's default device set; use a simulator from that set."
+        "see only Xcode's default device set; use a simulator from that set.",
+      "unsupported"
     );
   }
   const simulators = all.filter((device) => device.state === "Booted" && !device.deviceSet);
@@ -471,10 +501,11 @@ async function selectDevice(
       ? simulators[0]
       : undefined;
   if (!simulator) {
-    throw new Error(
+    throw deviceUnavailable(
       request.deviceId
         ? `No connected iPhone or booted simulator has the UDID ${request.deviceId}.`
-        : "Boot a single iOS simulator or select one with device_id."
+        : "Boot a single iOS simulator or select one with device_id.",
+      request.deviceId || simulators.length === 0 ? "not_found" : "validation"
     );
   }
   return {
@@ -486,12 +517,53 @@ async function selectDevice(
   };
 }
 
+/** A container, scheme, app target or configuration that does not resolve. */
+function projectUnresolved(
+  message: string,
+  failure_stage: string,
+  error_kind: FailureKind
+): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.LAUNCH_ANALYSIS_PROJECT_UNRESOLVED,
+    failure_stage,
+    failure_area: "tool_server",
+    error_kind,
+  });
+}
+
+/** Runs an xcodebuild query and parses its JSON; a failure is a project resolution failure. */
+async function xcodebuildJson<T>(
+  args: string[],
+  root: string,
+  failure_stage: string,
+  signal?: AbortSignal
+): Promise<T> {
+  try {
+    return JSON.parse(await smallCommand("xcodebuild", args, root, signal)) as T;
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw wrapFailure(error, {
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_PROJECT_UNRESOLVED,
+      failure_stage,
+      failure_area: "tool_server",
+      error_kind: commandFailureKind(error),
+      ...subprocessFailureMetadata(error, "xcodebuild"),
+    });
+  }
+}
+
 async function findContainer(root: string, explicit?: string): Promise<string> {
   if (explicit) {
     const candidate = path.resolve(root, explicit);
     if (!candidate.startsWith(`${root}${path.sep}`))
-      throw new Error("xcode_container must be inside workspace_path.");
-    if (!fs.existsSync(candidate)) throw new Error(`Xcode container does not exist: ${candidate}`);
+      throw new InvalidToolInputError("xcode_container must be inside workspace_path.", {
+        failure_stage: "launch_analysis_xcode_container",
+      });
+    if (!fs.existsSync(candidate))
+      throw new InvalidToolInputError(`Xcode container does not exist: ${candidate}`, {
+        failure_stage: "launch_analysis_xcode_container",
+        error_kind: "not_found",
+      });
     return candidate;
   }
   const candidates: string[] = [];
@@ -506,9 +578,11 @@ async function findContainer(root: string, explicit?: string): Promise<string> {
   const workspaces = candidates.filter((entry) => entry.endsWith(".xcworkspace"));
   const preferred = workspaces.length > 0 ? workspaces : candidates;
   if (preferred.length !== 1) {
-    throw new Error(
+    throw projectUnresolved(
       `Expected one Xcode workspace or project, found ${preferred.length}. Pass xcode_container. ` +
-        preferred.join(", ")
+        preferred.join(", "),
+      "launch_analysis_resolve_container",
+      preferred.length === 0 ? "not_found" : "validation"
     );
   }
   return preferred[0]!;
@@ -524,16 +598,23 @@ async function selectScheme(
   requested?: string,
   signal?: AbortSignal
 ): Promise<string> {
-  const json = JSON.parse(
-    await smallCommand("xcodebuild", ["-list", "-json", ...containerArgs(container)], root, signal)
-  ) as {
+  const json = await xcodebuildJson<{
     workspace?: { schemes?: string[] };
     project?: { schemes?: string[] };
-  };
+  }>(
+    ["-list", "-json", ...containerArgs(container)],
+    root,
+    "launch_analysis_resolve_scheme",
+    signal
+  );
   const schemes = json.workspace?.schemes ?? json.project?.schemes ?? [];
   if (requested) {
     if (!schemes.includes(requested))
-      throw new Error(`Scheme ${requested} not found in ${container}.`);
+      throw projectUnresolved(
+        `Scheme ${requested} not found in ${container}.`,
+        "launch_analysis_resolve_scheme",
+        "not_found"
+      );
     return requested;
   }
   const podSchemes = await podSchemeNames(container);
@@ -543,7 +624,11 @@ async function selectScheme(
   const shown = own.slice(0, MAX_LISTED_SCHEMES).join(", ");
   const more =
     own.length > MAX_LISTED_SCHEMES ? ` and ${own.length - MAX_LISTED_SCHEMES} more` : "";
-  throw new Error(`Select a scheme explicitly. Available schemes: ${shown}${more}`);
+  throw projectUnresolved(
+    `Select a scheme explicitly. Available schemes: ${shown}${more}`,
+    "launch_analysis_resolve_scheme",
+    "validation"
+  );
 }
 
 // Keeps the error short; the full list is one `xcodebuild -list` away.
@@ -630,7 +715,11 @@ export function assertResolvedConfiguration(
   configuration: string
 ): void {
   if (app.CONFIGURATION !== configuration) {
-    throw new Error(`Xcode did not resolve the app to ${configuration}.`);
+    throw projectUnresolved(
+      `Xcode did not resolve the app to ${configuration}.`,
+      "launch_analysis_resolve_settings",
+      "validation"
+    );
   }
 }
 
@@ -675,13 +764,18 @@ async function appSettings(
     destination,
     derivedDataPath
   );
-  const settings = JSON.parse(
-    await smallCommand("xcodebuild", args, root, signal)
-  ) as XcodeSettings[];
+  const settings = await xcodebuildJson<XcodeSettings[]>(
+    args,
+    root,
+    "launch_analysis_resolve_settings",
+    signal
+  );
   const apps = iosAppTargets(settings);
   if (apps.length !== 1) {
-    throw new Error(
-      `Scheme ${scheme} resolves to ${apps.length} app targets; select an unambiguous app scheme.`
+    throw projectUnresolved(
+      `Scheme ${scheme} resolves to ${apps.length} app targets; select an unambiguous app scheme.`,
+      "launch_analysis_resolve_settings",
+      apps.length === 0 ? "not_found" : "validation"
     );
   }
   const app = apps[0]!.buildSettings;
@@ -692,7 +786,11 @@ async function appSettings(
     !app.FULL_PRODUCT_NAME ||
     !app.EXECUTABLE_NAME
   ) {
-    throw new Error("Xcode did not provide app bundle ID or build product path.");
+    throw projectUnresolved(
+      "Xcode did not provide app bundle ID or build product path.",
+      "launch_analysis_resolve_settings",
+      "not_found"
+    );
   }
   return app;
 }
@@ -741,13 +839,24 @@ export async function prepareLaunch(
   signal?.throwIfAborted();
   // A relative path would resolve against the shared tool-server's cwd.
   if (!path.isAbsolute(request.workspacePath)) {
-    throw new Error(`workspace_path must be an absolute path: ${request.workspacePath}`);
+    throw new InvalidToolInputError(
+      `workspace_path must be an absolute path: ${request.workspacePath}`,
+      { failure_stage: "launch_analysis_workspace_path" }
+    );
   }
   if (process.platform !== "darwin")
-    throw new Error("iOS launch measurement requires macOS and Xcode.");
+    throw new FailureError("iOS launch measurement requires macOS and Xcode.", {
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_UNSUPPORTED_HOST,
+      failure_stage: "launch_analysis_host_platform",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    });
   const root = path.resolve(request.workspacePath);
   if (!(await fsp.stat(root).catch(() => null))?.isDirectory()) {
-    throw new Error(`workspace_path is not a directory: ${root}`);
+    throw new InvalidToolInputError(`workspace_path is not a directory: ${root}`, {
+      failure_stage: "launch_analysis_workspace_path",
+      error_kind: "not_found",
+    });
   }
   const device = await selectDevice(request, onProgress, signal);
   await request.checkDevice?.(device);
@@ -786,51 +895,71 @@ export async function prepareLaunch(
         ? [`DEVELOPMENT_TEAM=${appTeamId}`]
         : []),
   ]);
+  const buildLog = path.join(runDir, "app-build.log");
   try {
     await withLaunchBuildLock(derivedDataPath, () =>
-      runLogged("xcodebuild", args, {
-        cwd: root,
-        logPath: path.join(runDir, "app-build.log"),
-        signal,
-      })
+      runLogged("xcodebuild", args, { cwd: root, logPath: buildLog, signal })
     );
   } catch (error) {
     signal?.throwIfAborted();
-    throw new Error(
+    // Simulator builds are unsigned.
+    const signing =
+      !device.simulator &&
+      resolveSigningHint(await fsp.readFile(buildLog, "utf8").catch(() => "")) !== null;
+    throw new FailureError(
       `${configuration} build failed for the app's original bundle ID ${settings.PRODUCT_BUNDLE_IDENTIFIER}. ` +
-        // Simulator builds are unsigned.
         (device.simulator
           ? ""
           : "If signing failed, set up this exact bundle ID for your Apple team in Xcode and retry. ") +
         (error instanceof Error ? error.message : String(error)),
-      { cause: error }
+      {
+        error_code: signing
+          ? FAILURE_CODES.LAUNCH_ANALYSIS_SIGNING_FAILED
+          : FAILURE_CODES.LAUNCH_ANALYSIS_BUILD_FAILED,
+        failure_stage: "launch_analysis_build",
+        failure_area: "tool_server",
+        error_kind: commandFailureKind(error),
+        ...subprocessFailureMetadata(error, "xcodebuild"),
+      },
+      { cause: error instanceof Error ? error : new Error(String(error)) }
     );
   }
   const appPath = path.join(settings.TARGET_BUILD_DIR!, settings.FULL_PRODUCT_NAME!);
   if (!(await fsp.stat(appPath).catch(() => null))?.isDirectory()) {
-    throw new Error(`${configuration} build succeeded but the app was not found at ${appPath}.`);
+    throw new FailureError(
+      `${configuration} build succeeded but the app was not found at ${appPath}.`,
+      {
+        error_code: FAILURE_CODES.LAUNCH_ANALYSIS_BUILD_FAILED,
+        failure_stage: "launch_analysis_build",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+        failure_command: "xcodebuild",
+      }
+    );
   }
   if (device.simulator) {
-    // A simulator that is still booting fails install and launch.
-    await smallCommand(
-      "xcrun",
-      [...simctlPrefix(device.deviceSet), "bootstatus", device.id, "-b"],
-      root,
-      signal,
-      BOOTSTATUS_TIMEOUT_MS
-    );
-    await smallCommand(
-      "xcrun",
-      [...simctlPrefix(device.deviceSet), "install", device.id, appPath],
-      root,
-      signal
-    );
-    await smallCommand(
-      "xcrun",
-      [...simctlPrefix(device.deviceSet), "launch", device.id, settings.PRODUCT_BUNDLE_IDENTIFIER!],
-      root,
-      signal
-    );
+    // Outside the try: a pending Xcode first launch keeps its own signal.
+    const simctl = simctlPrefix(device.deviceSet);
+    try {
+      // A simulator that is still booting fails install and launch.
+      await smallCommand(
+        "xcrun",
+        [...simctl, "bootstatus", device.id, "-b"],
+        root,
+        signal,
+        BOOTSTATUS_TIMEOUT_MS
+      );
+      await smallCommand("xcrun", [...simctl, "install", device.id, appPath], root, signal);
+      await smallCommand(
+        "xcrun",
+        [...simctl, "launch", device.id, settings.PRODUCT_BUNDLE_IDENTIFIER!],
+        root,
+        signal
+      );
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw simctlFailure(error, "launch_analysis_simulator_prelaunch");
+    }
   } else {
     try {
       await waitForDeviceAction(() => installApp(device.id, appPath), onProgress, signal);
@@ -844,7 +973,23 @@ export async function prepareLaunch(
         subject: `the app ${settings.PRODUCT_BUNDLE_IDENTIFIER}`,
         ownBundleIdPrefix: runner?.appBundleId,
       });
-      if (friendly) throw new Error(friendly, { cause: error });
+      if (friendly) {
+        throw new FailureError(
+          friendly,
+          {
+            error_code: FAILURE_CODES.LAUNCH_ANALYSIS_FREE_PROFILE_LIMIT,
+            failure_stage: "launch_analysis_install",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            // The devicectl wrapper keeps the execFile error, with the exit code, as its cause.
+            ...subprocessFailureMetadata(
+              (error as { cause?: unknown }).cause ?? error,
+              "devicectl"
+            ),
+          },
+          { cause: error as Error }
+        );
+      }
       throw error;
     }
     await waitForDeviceAction(
@@ -910,64 +1055,101 @@ export async function terminateForWarmLaunch(
   signal?: AbortSignal
 ): Promise<void> {
   if (context.simulator) {
-    await smallCommand(
-      "xcrun",
-      [
-        ...simctlPrefix(context.simulatorDeviceSet),
-        "terminate",
-        context.deviceId,
-        context.bundleId,
-      ],
-      path.dirname(context.runDir),
-      signal
-    );
+    const simctl = simctlPrefix(context.simulatorDeviceSet);
+    try {
+      await smallCommand(
+        "xcrun",
+        [...simctl, "terminate", context.deviceId, context.bundleId],
+        path.dirname(context.runDir),
+        signal
+      );
+    } catch (error) {
+      signal?.throwIfAborted();
+      throw simctlFailure(error, "launch_analysis_warm_terminate");
+    }
     return;
   }
-  const { stdout } = await execFileAsync(
-    "xcrun",
-    [
-      "devicectl",
-      "device",
-      "info",
-      "processes",
-      "--device",
-      context.deviceId,
-      "--search",
-      context.executableName,
-      "--json-output",
-      "-",
-    ],
-    { timeout: 30_000, maxBuffer: 1024 * 1024, signal }
-  );
-  const jsonStart = stdout.indexOf("{");
-  const payload = JSON.parse(stdout.slice(jsonStart)) as {
+  const devicectlFailure = (error: unknown) => {
+    signal?.throwIfAborted();
+    return wrapFailure(error, {
+      error_code: FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED,
+      failure_stage: "launch_analysis_warm_terminate",
+      failure_area: "tool_server",
+      error_kind: commandFailureKind(error),
+      ...subprocessFailureMetadata(error, "devicectl"),
+    });
+  };
+  let payload: {
     result?: { runningProcesses?: Array<{ executable?: string; processIdentifier?: number }> };
   };
+  try {
+    const { stdout } = await execFileAsync(
+      "xcrun",
+      [
+        "devicectl",
+        "device",
+        "info",
+        "processes",
+        "--device",
+        context.deviceId,
+        "--search",
+        context.executableName,
+        "--json-output",
+        "-",
+      ],
+      { timeout: 30_000, maxBuffer: 1024 * 1024, signal }
+    );
+    payload = JSON.parse(stdout.slice(stdout.indexOf("{"))) as typeof payload;
+  } catch (error) {
+    throw devicectlFailure(error);
+  }
   const process = payload.result?.runningProcesses?.find(
     (entry) =>
       entry.executable !== undefined &&
       isAppExecutable(entry.executable, context.appPath, context.executableName)
   );
   if (!process?.processIdentifier) {
-    throw new Error(
-      `Could not verify that ${context.bundleId} was running before warm-launch capture.`
+    throw new FailureError(
+      `Could not verify that ${context.bundleId} was running before warm-launch capture.`,
+      {
+        error_code: FAILURE_CODES.IOS_DEVICECTL_COMMAND_FAILED,
+        failure_stage: "launch_analysis_warm_terminate",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+        failure_command: "devicectl",
+      }
     );
   }
-  await smallCommand(
-    "xcrun",
-    [
-      "devicectl",
-      "device",
-      "process",
-      "terminate",
-      "--device",
-      context.deviceId,
-      "--pid",
-      String(process.processIdentifier),
-    ],
-    path.dirname(context.runDir),
-    signal
-  );
+  try {
+    await smallCommand(
+      "xcrun",
+      [
+        "devicectl",
+        "device",
+        "process",
+        "terminate",
+        "--device",
+        context.deviceId,
+        "--pid",
+        String(process.processIdentifier),
+      ],
+      path.dirname(context.runDir),
+      signal
+    );
+  } catch (error) {
+    throw devicectlFailure(error);
+  }
+}
+
+/** A failed simctl step that prepares or stops the app on a simulator. */
+function simctlFailure(error: unknown, failure_stage: string): FailureError {
+  return wrapFailure(error, {
+    error_code: FAILURE_CODES.LAUNCH_ANALYSIS_SIMCTL_FAILED,
+    failure_stage,
+    failure_area: "tool_server",
+    error_kind: commandFailureKind(error),
+    ...subprocessFailureMetadata(error, "xcrun_simctl"),
+  });
 }
 
 // Bounds the cleanup, whose device path alone could otherwise take 90 s.

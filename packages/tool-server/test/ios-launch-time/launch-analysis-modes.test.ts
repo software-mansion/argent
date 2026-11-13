@@ -3,11 +3,27 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { Registry } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  getFailureSignal,
+  Registry,
+  ServiceState,
+  type FailureSignal,
+  type ToolContext,
+} from "@argent/registry";
 import { profileLaunch } from "../../src/tools/profiler/native-profiler/launch-analysis/profile";
 import { measureLaunch } from "../../src/tools/profiler/native-profiler/launch-analysis/measure";
-import type { NativeProfilerLaunchAnalysisParams } from "../../src/tools/profiler/native-profiler/native-profiler-launch-analysis";
-import { runLogged, terminateLaunchedApp } from "../../src/utils/ios-launch-time/workflow";
+import {
+  createNativeProfilerLaunchAnalysisTool,
+  type NativeProfilerLaunchAnalysisParams,
+} from "../../src/tools/profiler/native-profiler/native-profiler-launch-analysis";
+import {
+  CommandExitError,
+  CommandTimeoutError,
+  runLogged,
+  terminateLaunchedApp,
+} from "../../src/utils/ios-launch-time/workflow";
+import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../src/blueprints/ios-device-runner";
 
 // Pins what each mode's execute() passes to xcodebuild / xctrace and how it
 // turns the exports into a result. Device and build steps are stubbed.
@@ -18,6 +34,14 @@ const state = vi.hoisted(() => ({
   stdout: new Map<string, string>(),
   exports: new Map<string, string | Error>(),
   recordError: null as Error | null,
+  // Written to the record log before recordError is thrown.
+  recordLog: "",
+  // When false, the recording leaves no .trace bundle.
+  writeTrace: true,
+  runnerError: null as Error | null,
+  runnerLog: "",
+  metricsError: null as Error | null,
+  xcodeVersion: "Xcode 27.0\nBuild version 27A1",
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -32,6 +56,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void
       ) => {
         const key = args.includes("--toc") ? "toc" : args.includes("xcresulttool") ? "metrics" : "";
+        if (key === "metrics" && state.metricsError) return callback(state.metricsError);
         callback(null, { stdout: state.stdout.get(key) ?? "", stderr: "" });
       }
     ),
@@ -42,29 +67,46 @@ vi.mock("../../src/utils/ios-launch-time/workflow", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/utils/ios-launch-time/workflow")>();
   return {
     ...actual,
-    prepareLaunch: vi.fn(async () => ({
-      runDir: state.runDir,
-      deviceId: "UDID-1",
-      deviceName: "Test device",
-      simulator: state.simulator,
-      simulatorDeviceSet: null,
-      destination: state.simulator ? "platform=iOS Simulator,id=UDID-1" : "platform=iOS,id=UDID-1",
-      bundleId: "com.example.app",
-      executableName: "App",
-      appPath: "/dd/App.app",
-      scheme: "App",
-      container: "/w/App.xcodeproj",
-      teamId: null,
-      warning: null,
-    })),
+    prepareLaunch: vi.fn(
+      async (request: { checkDevice?: (d: { simulator: boolean }) => Promise<void> }) => {
+        await request.checkDevice?.({ simulator: state.simulator });
+        return {
+          runDir: state.runDir,
+          deviceId: "UDID-1",
+          deviceName: "Test device",
+          simulator: state.simulator,
+          simulatorDeviceSet: null,
+          destination: state.simulator
+            ? "platform=iOS Simulator,id=UDID-1"
+            : "platform=iOS,id=UDID-1",
+          bundleId: "com.example.app",
+          executableName: "App",
+          appPath: "/dd/App.app",
+          scheme: "App",
+          container: "/w/App.xcodeproj",
+          teamId: null,
+          warning: null,
+        };
+      }
+    ),
     ensureLaunchDeviceReady: vi.fn(async () => undefined),
     terminateForWarmLaunch: vi.fn(async () => undefined),
     terminateLaunchedApp: vi.fn(async () => undefined),
-    xcodeVersion: vi.fn(async () => "Xcode 27.0\nBuild version 27A1"),
-    runLogged: vi.fn(async (_command: string, args: string[]) => {
+    xcodeVersion: vi.fn(async () => state.xcodeVersion),
+    runLogged: vi.fn(async (_command: string, args: string[], options: { logPath: string }) => {
       if (args[0] === "xctrace" && args[1] === "record") {
-        if (state.recordError) throw state.recordError;
-        await mkdir(args[args.indexOf("--output") + 1]!, { recursive: true });
+        if (state.recordError) {
+          await writeFile(options.logPath, state.recordLog);
+          throw state.recordError;
+        }
+        if (state.writeTrace) await mkdir(args[args.indexOf("--output") + 1]!, { recursive: true });
+        return;
+      }
+      if (args[0] === "test") {
+        if (state.runnerError) {
+          await writeFile(options.logPath, state.runnerLog);
+          throw state.runnerError;
+        }
         return;
       }
       if (args[0] === "xctrace" && args[1] === "export") {
@@ -76,6 +118,15 @@ vi.mock("../../src/utils/ios-launch-time/workflow", async (importOriginal) => {
     }),
   };
 });
+
+vi.mock("../../src/utils/ios-device/runner-signing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/utils/ios-device/runner-signing")>()),
+  resolveRunnerSigningConfig: vi.fn(async () => ({
+    teamId: "TEAM123456",
+    appBundleId: "com.argent.runner.tteam123456",
+    testBundleId: "com.argent.runner.tteam123456.uitests",
+  })),
+}));
 
 vi.mock("../../src/utils/ios-device/runner-artifact", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/ios-device/runner-artifact")>()),
@@ -122,6 +173,12 @@ beforeEach(async () => {
   state.stdout.clear();
   state.exports.clear();
   state.recordError = null;
+  state.recordLog = "";
+  state.writeTrace = true;
+  state.runnerError = null;
+  state.runnerLog = "";
+  state.metricsError = null;
+  state.xcodeVersion = "Xcode 27.0\nBuild version 27A1";
   vi.mocked(runLogged).mockClear();
   vi.mocked(terminateLaunchedApp).mockClear();
 });
@@ -144,6 +201,17 @@ async function profile(overrides: Partial<NativeProfilerLaunchAnalysisParams> = 
   const result = (await profileLaunch(params(overrides))) as ProfileResult;
   sessionFiles.push(result.profilerSession.cpuXml);
   return result;
+}
+
+/** The rejection of `work` and its failure signal. */
+async function failure(work: Promise<unknown>): Promise<{ error: Error; signal: FailureSignal }> {
+  const error = (await work.then(
+    () => {
+      throw new Error("expected a failure");
+    },
+    (e: unknown) => e
+  )) as Error;
+  return { error, signal: getFailureSignal(error)! };
 }
 
 function recordArgs(): string[] {
@@ -206,9 +274,81 @@ describe('mode "profile" on a simulator', () => {
   });
 
   it("stops the launched app when the recording fails", async () => {
-    state.recordError = new Error("xctrace failed");
-    await expect(profileLaunch(params())).rejects.toThrow("xctrace failed");
+    state.recordError = new CommandExitError("xcrun exited with 1:\nxctrace failed", 1, null);
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toBe("xcrun exited with 1:\nxctrace failed");
     expect(terminateLaunchedApp).toHaveBeenCalledTimes(1);
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_RECORD_FAILED,
+      failure_stage: "launch_analysis_record",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "xctrace",
+      failure_exit_code: 1,
+    });
+  });
+
+  it("reports a stalled recording as a record timeout", async () => {
+    state.recordError = new CommandTimeoutError("xcrun timed out after 180 s and was killed.");
+    state.recordLog = "Starting recording with the App Launch template.";
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toContain('xctrace stalled at "Starting recording"');
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_RECORD_FAILED,
+      failure_stage: "launch_analysis_record",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+      failure_command: "xctrace",
+    });
+  });
+
+  it("reports a recording without a trace bundle", async () => {
+    state.writeTrace = false;
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toContain("xctrace finished without a trace");
+    expect(signal).toMatchObject({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_RECORD_FAILED,
+      error_kind: "not_found",
+      failure_command: "xctrace",
+    });
+  });
+
+  it("leaves a cancelled recording unclassified", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    state.recordError = controller.signal.reason as Error;
+    const error = await profileLaunch(params(), { signal: controller.signal } as ToolContext).catch(
+      (e: unknown) => e
+    );
+    expect(error).toBe(controller.signal.reason);
+    expect(getFailureSignal(error)).toBeNull();
+    expect(terminateLaunchedApp).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops before the build with Xcode 26.4 on a simulator", async () => {
+    state.xcodeVersion = "Xcode 26.4.1 Build version 17E202";
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toContain("known issue with Xcode 26.4.x");
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_UNSUPPORTED_HOST,
+      failure_stage: "launch_analysis_record_precheck",
+      failure_area: "tool_server",
+      error_kind: "unsupported",
+    });
+    expect(runLogged).not.toHaveBeenCalled();
+  });
+
+  it("fails as an export failure when the trace has no CPU table", async () => {
+    state.stdout.set("toc", TOC.replace(/<table schema="time-profile"[^>]*\/>/, ""));
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toContain("could not export the CPU samples");
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_EXPORT_FAILED,
+      failure_stage: "launch_analysis_export",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+      failure_command: "xctrace",
+    });
   });
 });
 
@@ -245,8 +385,57 @@ describe('mode "profile" on an iPhone', () => {
   });
 
   it("fails without the lifecycle phases, which give the launch window", async () => {
-    state.exports.set("lifecycle", new Error("xctrace export failed"));
-    await expect(profileLaunch(params())).rejects.toThrow(/lifecycle phases/);
+    state.exports.set("lifecycle", new CommandExitError("xcrun exited with 2", 2, null));
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toMatch(/lifecycle phases/);
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_EXPORT_FAILED,
+      failure_stage: "launch_analysis_export",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "xctrace",
+      failure_exit_code: 2,
+    });
+  });
+
+  it("reports an export that crashed on every attempt as a crash", async () => {
+    state.exports.set("lifecycle", new CommandExitError("xcrun exited with 139", 139, null));
+    const { error, signal } = await failure(profileLaunch(params()));
+    expect(error.message).toContain("crashed 3 times in a row");
+    expect(signal).toMatchObject({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_EXPORT_FAILED,
+      error_kind: "crash",
+      failure_exit_code: 139,
+    });
+  });
+
+  it("reports the code and the xctrace metadata through the registry", async () => {
+    state.recordError = new CommandExitError("xcrun exited with 1:\nxctrace failed", 1, null);
+    const registry = new Registry();
+    registry.registerTool(createNativeProfilerLaunchAnalysisTool(registry));
+    const failed = vi.fn();
+    registry.events.on("toolFailed", failed);
+    const { error, signal } = await failure(
+      registry.invokeTool("native-profiler-launch-analysis", {
+        mode: "profile",
+        workspace_path: "/w",
+      })
+    );
+    expect(error.message).toBe(
+      "[Tool:native-profiler-launch-analysis] xcrun exited with 1:\nxctrace failed"
+    );
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_RECORD_FAILED,
+      failure_stage: "launch_analysis_record",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "xctrace",
+      failure_exit_code: 1,
+    });
+    expect(getFailureSignal(failed.mock.calls[0]![2])).toEqual(signal);
+    expect(failed.mock.calls[0]![4]).toBe(
+      "Failed to record iOS App Launch: LAUNCH_ANALYSIS_RECORD_FAILED"
+    );
   });
 });
 
@@ -302,8 +491,109 @@ describe('mode "measure"', () => {
 
   it("fails when XCTest recorded no launch duration", async () => {
     state.stdout.set("metrics", "[]");
-    await expect(measureLaunch(new Registry(), params({ mode: "measure" }))).rejects.toThrow(
-      /recorded no launch measurements/
+    const { error, signal } = await failure(
+      measureLaunch(new Registry(), params({ mode: "measure" }))
     );
+    expect(error.message).toMatch(/recorded no launch measurements/);
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_SAMPLES,
+      failure_stage: "launch_analysis_read_results",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+    });
+  });
+
+  it("reports an unreadable result bundle with the xcresulttool exit code", async () => {
+    state.metricsError = Object.assign(new Error("Command failed: xcrun xcresulttool"), {
+      code: 1,
+    });
+    const { signal } = await failure(measureLaunch(new Registry(), params({ mode: "measure" })));
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_SAMPLES,
+      failure_stage: "launch_analysis_read_results",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "xcresulttool",
+      failure_exit_code: 1,
+    });
+  });
+
+  it("reports a failed launch test with the xcodebuild exit code", async () => {
+    state.runnerError = new CommandExitError(
+      "xcodebuild exited with 65:\nTesting failed",
+      65,
+      null
+    );
+    state.runnerLog = "Testing failed:\n\tApp crashed";
+    const { error, signal } = await failure(
+      measureLaunch(new Registry(), params({ mode: "measure" }))
+    );
+    expect(error.message).toBe("xcodebuild exited with 65:\nTesting failed");
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_RUNNER_TEST_FAILED,
+      failure_stage: "launch_analysis_runner_test",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "xcodebuild",
+      failure_exit_code: 65,
+    });
+  });
+
+  it("reports the runner's free-profile cap", async () => {
+    state.runnerError = new CommandExitError("xcodebuild exited with 65", 65, null);
+    state.runnerLog = "maximum number of installed apps using a free developer profile";
+    const { error, signal } = await failure(
+      measureLaunch(new Registry(), params({ mode: "measure" }))
+    );
+    expect(error.message).toContain("no slot for Argent's UI-test runner");
+    expect(signal).toMatchObject({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_FREE_PROFILE_LIMIT,
+      failure_command: "xcodebuild",
+      failure_exit_code: 65,
+    });
+  });
+
+  it("reports a runner signing failure on an iPhone", async () => {
+    state.simulator = false;
+    state.runnerError = new CommandExitError("xcodebuild exited with 65", 65, null);
+    state.runnerLog = "error: No profiles for 'com.argent.runner.tteam123456' were found";
+    const { signal } = await failure(measureLaunch(new Registry(), params({ mode: "measure" })));
+    expect(signal).toMatchObject({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_SIGNING_FAILED,
+      failure_stage: "launch_analysis_runner_test",
+      failure_command: "xcodebuild",
+    });
+  });
+
+  it("leaves a cancelled launch test unclassified", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    state.runnerError = controller.signal.reason as Error;
+    const error = await measureLaunch(new Registry(), params({ mode: "measure" }), {
+      signal: controller.signal,
+    } as ToolContext).catch((e: unknown) => e);
+    expect(error).toBe(controller.signal.reason);
+    expect(getFailureSignal(error)).toBeNull();
+  });
+
+  it("stops when Argent's device runner is active on the device", async () => {
+    const registry = new Registry();
+    vi.spyOn(registry, "getSnapshot").mockReturnValue({
+      services: new Map([
+        [`${IOS_DEVICE_RUNNER_NAMESPACE}:UDID-1`, { state: ServiceState.RUNNING, dependents: [] }],
+      ]),
+      namespaces: [],
+      tools: [],
+    });
+    const { error, signal } = await failure(
+      measureLaunch(registry, params({ mode: "measure", device_id: "UDID-1" }))
+    );
+    expect(error.message).toContain("Argent's device runner is active on UDID-1");
+    expect(signal).toEqual({
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE,
+      failure_stage: "launch_analysis_runner_active",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   });
 });

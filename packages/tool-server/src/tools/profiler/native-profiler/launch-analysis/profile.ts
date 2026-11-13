@@ -2,9 +2,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import type { ToolContext } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  wrapFailure,
+  type ToolContext,
+} from "@argent/registry";
 import {
   CommandTimeoutError,
+  commandFailureKind,
   ensureLaunchDeviceReady,
   isCrash,
   prepareLaunch,
@@ -92,10 +99,16 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
         if (!simulator) return;
         const version = await xcodeVersion();
         if (stallsSimulatorLaunchRecording(parseXcodeVersion(version))) {
-          throw new Error(
+          throw new FailureError(
             `${version} stalls \`xctrace record --launch\` on a simulator after "Starting recording", ` +
               "so Argent does not record. This is a known issue with Xcode 26.4.x. " +
-              "Use Xcode 27, or record on a physical iPhone."
+              "Use Xcode 27, or record on a physical iPhone.",
+            {
+              error_code: FAILURE_CODES.LAUNCH_ANALYSIS_UNSUPPORTED_HOST,
+              failure_stage: "launch_analysis_record_precheck",
+              failure_area: "tool_server",
+              error_kind: "unsupported",
+            }
           );
         }
       },
@@ -143,11 +156,19 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     // A stalled or aborted recording leaves the launched app suspended.
     // The cleanup is bounded, so a cancel still returns quickly.
     await terminateLaunchedApp(context);
+    ctx?.signal?.throwIfAborted();
+    const recordFailure = {
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_RECORD_FAILED,
+      failure_stage: "launch_analysis_record",
+      failure_area: "tool_server",
+      error_kind: commandFailureKind(error),
+      ...subprocessFailureMetadata(error, "xctrace"),
+    } as const;
     if (
       error instanceof CommandTimeoutError &&
       stalledAtRecordingStart(await fsp.readFile(recordLog, "utf8").catch(() => ""))
     ) {
-      throw new Error(
+      throw new FailureError(
         context.simulator
           ? // Xcode 26.4.x never gets here: checkDevice stops it before the build.
             `xctrace stalled at "Starting recording" with ${await xcodeVersion()} and was stopped after ${RECORD_TIMEOUT_MS / 1000} s. ` +
@@ -155,16 +176,24 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
               `Record log: ${recordLog}`
           : `xctrace stalled after "Starting recording" and was stopped after ${RECORD_TIMEOUT_MS / 1000} s. ` +
               `Record log: ${recordLog}`,
+        recordFailure,
         { cause: error }
       );
     }
-    throw error;
+    throw wrapFailure(error, recordFailure);
   }
   if (!(await fsp.stat(tracePath).catch(() => null))?.isDirectory()) {
-    throw new Error(`xctrace finished without a trace at ${tracePath}; see ${recordLog}.`);
+    throw new FailureError(`xctrace finished without a trace at ${tracePath}; see ${recordLog}.`, {
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_RECORD_FAILED,
+      failure_stage: "launch_analysis_record",
+      failure_area: "tool_server",
+      error_kind: "not_found",
+      failure_command: "xctrace",
+    });
   }
   const exportErrors: Record<string, string> = {};
-  const crashedExports = new Set<string>();
+  // The error of each export that failed, for crash detection and telemetry.
+  const exportFailures: Record<string, unknown> = {};
   const exported: Partial<Record<"lifecycle" | "dyld" | "cpu" | "signpost", string>> = {};
   let toc = "";
   try {
@@ -181,7 +210,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     toc = stdout;
   } catch (error) {
     ctx?.signal?.throwIfAborted();
-    if (isCrash(error)) crashedExports.add("toc");
+    exportFailures.toc = error;
     exportErrors.toc = error instanceof Error ? error.message : String(error);
   }
   const xpaths = {
@@ -222,7 +251,7 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
       exported[key] = output;
     } catch (error) {
       ctx?.signal?.throwIfAborted();
-      if (isCrash(error)) crashedExports.add(key);
+      exportFailures[key] = error;
       exportErrors[key] = error instanceof Error ? error.message : String(error);
     }
   }
@@ -237,15 +266,24 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     simulator: context.simulator,
   });
   if (failedExport) {
-    throw new Error(
+    // Undefined when the TOC has no table for the export.
+    const failure = exportFailures[failedExport];
+    throw new FailureError(
       coreExportFailureMessage({
         table: failedExport,
         reason: exportErrors[failedExport] ?? "",
-        crashed: crashedExports.has(failedExport),
+        crashed: isCrash(failure),
         attempts: XCTRACE_EXPORT_ATTEMPTS,
         xcodeVersion: await xcodeVersion(),
         tracePath,
-      })
+      }),
+      {
+        error_code: FAILURE_CODES.LAUNCH_ANALYSIS_EXPORT_FAILED,
+        failure_stage: "launch_analysis_export",
+        failure_area: "tool_server",
+        error_kind: failure === undefined ? "not_found" : commandFailureKind(failure),
+        ...subprocessFailureMetadata(failure ?? {}, "xctrace"),
+      }
     );
   }
 
@@ -276,7 +314,9 @@ export async function profileLaunch(params: NativeProfilerLaunchAnalysisParams, 
     exportErrors.lifecycle = "Lifecycle export has no first-frame phase; CPU samples are not cut.";
   }
   const launch = context.simulator ? null : deviceLaunchWindow({ phases, endNs });
-  const crashedOptional = [...crashedExports].filter((table) => table in exportErrors);
+  const crashedOptional = Object.keys(exportFailures).filter(
+    (table) => isCrash(exportFailures[table]) && table in exportErrors
+  );
   const notes = [
     context.warning,
     context.simulator ? simulatorProfileNote(signpostMissing) : null,

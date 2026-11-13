@@ -288,6 +288,32 @@ export const FAILURE_CODES = {
   NATIVE_PROFILER_PERFETTO_READY_TIMEOUT: "NATIVE_PROFILER_PERFETTO_READY_TIMEOUT",
   NATIVE_PROFILER_PERFETTO_READY_EXITED: "NATIVE_PROFILER_PERFETTO_READY_EXITED",
 
+  /**
+   * native-profiler-launch-analysis. Input problems use TOOL_INPUT_INVALID and
+   * devicectl steps IOS_DEVICECTL_COMMAND_FAILED.
+   * @see [workflow.ts](../../tool-server/src/utils/ios-launch-time/workflow.ts)
+   */
+  // Not macOS, or an Xcode that cannot record the launch on this target.
+  LAUNCH_ANALYSIS_UNSUPPORTED_HOST: "LAUNCH_ANALYSIS_UNSUPPORTED_HOST",
+  // No usable iPhone or simulator was selected, or Argent's runner holds it.
+  LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE: "LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE",
+  // The Xcode container, scheme, app target or configuration did not resolve.
+  LAUNCH_ANALYSIS_PROJECT_UNRESOLVED: "LAUNCH_ANALYSIS_PROJECT_UNRESOLVED",
+  LAUNCH_ANALYSIS_BUILD_FAILED: "LAUNCH_ANALYSIS_BUILD_FAILED",
+  // xcodebuild failed on code signing or provisioning.
+  LAUNCH_ANALYSIS_SIGNING_FAILED: "LAUNCH_ANALYSIS_SIGNING_FAILED",
+  // The iPhone's free developer profile has no slot for the app or the runner.
+  LAUNCH_ANALYSIS_FREE_PROFILE_LIMIT: "LAUNCH_ANALYSIS_FREE_PROFILE_LIMIT",
+  // simctl could not wait for boot, install, launch or terminate the app.
+  LAUNCH_ANALYSIS_SIMCTL_FAILED: "LAUNCH_ANALYSIS_SIMCTL_FAILED",
+  LAUNCH_ANALYSIS_RECORD_FAILED: "LAUNCH_ANALYSIS_RECORD_FAILED",
+  // xctrace could not export the TOC, the CPU samples or the lifecycle phases.
+  LAUNCH_ANALYSIS_EXPORT_FAILED: "LAUNCH_ANALYSIS_EXPORT_FAILED",
+  // The XCTest launch run of Argent's runner failed.
+  LAUNCH_ANALYSIS_RUNNER_TEST_FAILED: "LAUNCH_ANALYSIS_RUNNER_TEST_FAILED",
+  // The launch test ran, but Argent read no launch measurements from its result.
+  LAUNCH_ANALYSIS_NO_SAMPLES: "LAUNCH_ANALYSIS_NO_SAMPLES",
+
   // iOS and Android share one capture path (simulator-server frames into
   // ffmpeg), so these name the failing stage, not the device family.
   SCREEN_RECORDING_FACTORY_OPTIONS_MISSING: "SCREEN_RECORDING_FACTORY_OPTIONS_MISSING",

@@ -3,9 +3,18 @@ import { promisify } from "node:util";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { isLiveServiceState, type Registry, type ToolContext } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  isLiveServiceState,
+  subprocessFailureMetadata,
+  wrapFailure,
+  type Registry,
+  type ToolContext,
+} from "@argent/registry";
 import { IOS_DEVICE_RUNNER_NAMESPACE } from "../../../../blueprints/ios-device-runner";
 import {
+  commandFailureKind,
   ensureLaunchDeviceReady,
   freeProfileLimitMessage,
   launchBuildCacheDir,
@@ -17,7 +26,10 @@ import {
 } from "../../../../utils/ios-launch-time/workflow";
 import { launchSampleStats } from "../../../../utils/ios-launch-time/results";
 import { resolveRunnerProjectPath } from "../../../../utils/ios-device/runner-artifact";
-import { resolveRunnerSigningConfig } from "../../../../utils/ios-device/runner-signing";
+import {
+  resolveRunnerSigningConfig,
+  resolveSigningHint,
+} from "../../../../utils/ios-device/runner-signing";
 import type { NativeProfilerLaunchAnalysisParams } from "../native-profiler-launch-analysis";
 
 const execFileAsync = promisify(execFile);
@@ -26,9 +38,17 @@ const execFileAsync = promisify(execFile);
 // ArgentLaunchPerformanceTests.swift.
 const LAUNCH_ITERATIONS = 5;
 
-const RUNNER_ACTIVE = (deviceId: string) =>
-  `Argent's device runner is active on ${deviceId}. Run stop-simulator-server for this device ` +
-  "before native-profiler-launch-analysis, then retry.";
+const runnerActive = (deviceId: string) =>
+  new FailureError(
+    `Argent's device runner is active on ${deviceId}. Run stop-simulator-server for this device ` +
+      "before native-profiler-launch-analysis, then retry.",
+    {
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_DEVICE_UNAVAILABLE,
+      failure_stage: "launch_analysis_runner_active",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    }
+  );
 
 type MetricResult = Array<{
   testRuns?: Array<{
@@ -47,7 +67,7 @@ export async function measureLaunch(
       .getSnapshot()
       .services.get(`${IOS_DEVICE_RUNNER_NAMESPACE}:${params.device_id}`);
     if (active && isLiveServiceState(active.state)) {
-      throw new Error(RUNNER_ACTIVE(params.device_id));
+      throw runnerActive(params.device_id);
     }
   }
   const context = await prepareLaunch(
@@ -66,7 +86,7 @@ export async function measureLaunch(
     .getSnapshot()
     .services.get(`${IOS_DEVICE_RUNNER_NAMESPACE}:${context.deviceId}`);
   if (!context.simulator && runner && isLiveServiceState(runner.state)) {
-    throw new Error(RUNNER_ACTIVE(context.deviceId));
+    throw runnerActive(context.deviceId);
   }
   const project = resolveRunnerProjectPath();
   await ensureLaunchDeviceReady(
@@ -140,6 +160,7 @@ export async function measureLaunch(
       })
     );
   } catch (error) {
+    ctx?.signal?.throwIfAborted();
     const message = error instanceof Error ? error.message : String(error);
     // The message keeps only the cap line; the installed bundle IDs follow it in the log.
     const log = await fsp.readFile(runnerLog, "utf8").catch(() => message);
@@ -148,14 +169,45 @@ export async function measureLaunch(
       logPath: runnerLog,
       ownBundleIdPrefix: runnerBundleId,
     });
-    if (friendly) throw new Error(friendly, { cause: error });
-    throw error;
+    const failure = {
+      failure_stage: "launch_analysis_runner_test",
+      failure_area: "tool_server",
+      error_kind: commandFailureKind(error),
+      ...subprocessFailureMetadata(error, "xcodebuild"),
+    } as const;
+    if (friendly) {
+      throw new FailureError(
+        friendly,
+        { error_code: FAILURE_CODES.LAUNCH_ANALYSIS_FREE_PROFILE_LIMIT, ...failure },
+        { cause: error as Error }
+      );
+    }
+    throw wrapFailure(error, {
+      // The simulator runner is unsigned.
+      error_code:
+        !context.simulator && resolveSigningHint(log) !== null
+          ? FAILURE_CODES.LAUNCH_ANALYSIS_SIGNING_FAILED
+          : FAILURE_CODES.LAUNCH_ANALYSIS_RUNNER_TEST_FAILED,
+      ...failure,
+    });
   }
-  const { stdout } = await execFileAsync(
-    "xcrun",
-    ["xcresulttool", "get", "test-results", "metrics", "--path", resultPath],
-    { timeout: 60_000, maxBuffer: 4 * 1024 * 1024, signal: ctx?.signal }
-  );
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(
+      "xcrun",
+      ["xcresulttool", "get", "test-results", "metrics", "--path", resultPath],
+      { timeout: 60_000, maxBuffer: 4 * 1024 * 1024, signal: ctx?.signal }
+    ));
+  } catch (error) {
+    ctx?.signal?.throwIfAborted();
+    throw wrapFailure(error, {
+      error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_SAMPLES,
+      failure_stage: "launch_analysis_read_results",
+      failure_area: "tool_server",
+      error_kind: commandFailureKind(error),
+      ...subprocessFailureMetadata(error, "xcresulttool"),
+    });
+  }
   const metricsPath = path.join(context.runDir, "metrics.json");
   await fsp.writeFile(metricsPath, stdout);
   const results = JSON.parse(stdout) as MetricResult;
@@ -171,7 +223,7 @@ export async function measureLaunch(
     simulator: context.simulator,
   });
   if (!stats) {
-    throw new Error(
+    throw new FailureError(
       context.simulator
         ? "XCTest passed but recorded no launch measurements (XCTApplicationLaunchMetric returned no value). " +
             'Rerun the measurement; mode "profile" is an alternative. ' +
@@ -180,7 +232,13 @@ export async function measureLaunch(
             "the first measured launch loses its metric (XCTApplicationLaunchMetric returned no value). " +
             "This is a known device-side issue, seen on iOS 18 iPhones. A rerun usually returns samples; " +
             'mode "profile" is an alternative. ' +
-            `Result: ${resultPath}. Log: ${runnerLog}`
+            `Result: ${resultPath}. Log: ${runnerLog}`,
+      {
+        error_code: FAILURE_CODES.LAUNCH_ANALYSIS_NO_SAMPLES,
+        failure_stage: "launch_analysis_read_results",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
   const warnings = [context.warning, stats.warning].filter(Boolean);
