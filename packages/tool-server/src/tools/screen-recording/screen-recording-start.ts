@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
 import { FAILURE_CODES, FailureError, type Registry, type ToolDefinition } from "@argent/registry";
 import {
   screenRecordingSessionRef,
@@ -10,10 +12,17 @@ import { assertSupported } from "../../utils/capability";
 import { isTvOsSimulator } from "../../utils/ios-devices";
 import { isRemoteTvOsSimulator } from "../../utils/sim-remote";
 import { isFeatureEnabled } from "@argent/configuration-core";
-import { setPointerTrail, setPointerVisible } from "../../utils/simulator-client";
+import {
+  setPointerTrail,
+  setPointerVisible,
+  startServerRecording,
+  stopServerRecording,
+} from "../../utils/simulator-client";
 import { resolveLivePanel, streamUrlForScreen, unresolvedPanelNote } from "../../utils/foldable";
-import { startCapture, type PanelFollow, type PointerControl } from "./capture";
+import { startCapture, type PanelFollow } from "./capture";
 import { startRemoteCapture } from "./capture-remote";
+import type { PointerControl } from "./pointer-control";
+import type { ServerRecordingControl } from "./server-capture";
 import type { StartRecordingResult } from "./session-guards";
 
 const DEFAULT_TIME_LIMIT_SECONDS = 180;
@@ -22,6 +31,9 @@ const MAX_TIME_LIMIT_SECONDS = 600;
 const POINTER_TRAIL_LENGTH = 8;
 /** Bound each pointer toggle so a wedged sim-server never stalls start/stop. */
 const POINTER_REQUEST_TIMEOUT_MS = 2_000;
+/** Stop muxes the mp4 before it answers, so it gets the larger budget. */
+const RECORDING_START_TIMEOUT_MS = 10_000;
+const RECORDING_STOP_TIMEOUT_MS = 60_000;
 
 const capability = {
   apple: { simulator: true },
@@ -70,7 +82,7 @@ export function createScreenRecordingStartTool(
 The recording keeps running across other tool calls (every result carries a reminder) until \`screen-recording-stop\` is called or timeLimitSeconds elapses. Immediately after starting, set yourself a reminder/wakeup for the expected end of the recording so it is never left running.
 Use when the user wants a video of an interaction, animation, or app behavior; for a single still frame use \`screenshot\` instead.
 Returns { status: "recording", timeLimitSeconds, outputFile }. The video is retrieved later by \`screen-recording-stop\`, not by reading outputFile directly.
-Fails if a recording is already running on the device, the device is not booted, ffmpeg is not installed (local devices only), or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
+Fails if a recording is already running on the device, the device is not booted, the host has to encode the video and ffmpeg is not installed, or the platform cannot be recorded (tvOS, Chromium<flag:harmonyos>, HarmonyOS</flag:harmonyos> and Vega are unsupported).`,
     zodSchema,
     searchHint: "record video screen capture movie mp4 start filming screencast",
     interaction: {
@@ -174,8 +186,8 @@ Fails if a recording is already running on the device, the device is not booted,
         }
       }
 
-      // capture.ts arms the visualizer once the encoder is live and restores it
-      // to off when the recording ends. The toggles are best-effort: a failure
+      // The capture arms the visualizer once the recording is live and restores
+      // it to off when the recording ends. The toggles are best-effort: a failure
       // only costs the overlay, surfaced as a warning at stop.
       const pointer: PointerControl | undefined = showTouches
         ? makePointerControl(simulator)
@@ -187,6 +199,14 @@ Fails if a recording is already running on the device, the device is not booted,
         watermark,
         trimStatic: params.trimStatic ?? true,
         pointer,
+        // Only the macOS simulator-server records for itself (VideoToolbox). A
+        // foldable records here, where the capture follows the live panel. A
+        // provider's server is outside the endpoint allowlist, and its video
+        // path is on another host.
+        server:
+          process.platform !== "darwin" || followPanel || simulator.external
+            ? undefined
+            : makeServerRecordingControl(simulator),
         followPanel,
       });
       return warning !== undefined ? { ...started, warning } : started;
@@ -232,6 +252,31 @@ export function makePointerControl(simulator: SimulatorServerApi): PointerContro
       const pending = enabling;
       if (pending) await pending.catch(() => {});
       await setPointerVisible(simulator, false, AbortSignal.timeout(POINTER_REQUEST_TIMEOUT_MS));
+    },
+  };
+}
+
+export function makeServerRecordingControl(simulator: SimulatorServerApi): ServerRecordingControl {
+  const stop = (id: string) =>
+    stopServerRecording(simulator, id, AbortSignal.timeout(RECORDING_STOP_TIMEOUT_MS));
+  return {
+    async start(opts) {
+      const id = `argent-recording-${randomUUID()}`;
+      try {
+        await startServerRecording(
+          simulator,
+          id,
+          opts,
+          AbortSignal.timeout(RECORDING_START_TIMEOUT_MS)
+        );
+      } catch (err) {
+        // A start that timed out may be recording anyway, and only this id ends it.
+        void stop(id)
+          .then((result) => fs.rm(result.path, { force: true }))
+          .catch(() => {});
+        throw err;
+      }
+      return () => stop(id);
     },
   };
 }
