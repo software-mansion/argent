@@ -21,35 +21,43 @@ const CAPTURE_COST =
  * capture is on for no app on the device. Never throws: a warning must not
  * fail the start it annotates.
  *
- * `runtimeApp` is what the profiled JS runtime said about itself, for a
- * `deviceId` that names no device (see {@link logicalDeviceWarning}). A caller
- * that found the device the runtime runs on passes that device instead.
+ * For a `deviceId` that is a Metro logicalDeviceId, which names no device:
+ * `runtimeDevice` is the `list-devices` id the profiled runtime was found on,
+ * and is checked instead, named in the warning since the caller's id cannot
+ * reach it. `runtimeApp` is what the runtime said about itself, for when it was
+ * not found (see {@link logicalDeviceWarning}).
  */
 export function nativeNetworkCaptureWarning(
   deviceId: string,
-  runtimeApp?: RuntimeAppMetadata
+  runtimeApp?: RuntimeAppMetadata,
+  runtimeDevice?: string
 ): string | undefined {
+  const device = runtimeDevice ?? deviceId;
   let packages: string[];
   try {
-    packages = liveAndroidNetworkCaptures(deviceId);
-    if (packages.length === 0) return logicalDeviceWarning(deviceId, runtimeApp);
+    packages = liveAndroidNetworkCaptures(device);
+    if (packages.length === 0) return logicalDeviceWarning(device, runtimeApp);
   } catch {
     return undefined;
   }
   const apps = packages.join(", ");
   const one = packages.length === 1;
+  const named = device !== deviceId;
   return (
-    `Native network capture is on for ${apps} on this device: Argent attaches its in-app agent ` +
+    `Native network capture is on for ${apps} on ` +
+    `${named ? `${device}, the device this profile runs on` : "this device"}: Argent attaches its in-app agent ` +
     `to the processes of ${one ? "that app" : "these apps"}. ${CAPTURE_COST} ` +
-    `To profile without it, stop this profile, call native-network-logs with stop: true for ${one ? "that app" : "each of these apps"}, then restart-app and profile again.`
+    `To profile without it, stop this profile, call native-network-logs with ` +
+    `${named ? `udid ${device} and ` : ""}stop: true for ${one ? "that app" : "each of these apps"}, ` +
+    `then restart-app${named ? ` on ${device}` : ""} and profile again.`
   );
 }
 
 /**
  * With two or more devices on one Metro, the debugger is connected with a Metro
- * logicalDeviceId, which no adb serial can be derived from, so the lookup by
- * device finds nothing. This is the fallback for when the runtime's device
- * could not be found either. The runtime still says which app it is and on which
+ * logicalDeviceId, which names no device, so the lookup by device finds
+ * nothing. Only the runtime itself can say where it runs, and when that probe
+ * found nothing, the runtime still says which app it is and on which
  * platform, so an Android runtime is warned when capture is on for its app on
  * any Android device, naming them: the id cannot say which one is profiled. An
  * iOS runtime, or one that did not say, is never warned. A `deviceId` that

@@ -157,6 +157,30 @@ describe("nativeNetworkCaptureWarning", () => {
       expect(nativeNetworkCaptureWarning(LOGICAL, { platform: "android" })).toBeUndefined();
       expect(nativeNetworkCaptureWarning(LOGICAL, { appId: PKG })).toBeUndefined();
     });
+
+    it("checks only the device the runtime was found on, and names it", () => {
+      connectedWithLogicalId();
+      captureOnSerial(PKG, OTHER_PKG);
+
+      const warning = nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, SERIAL);
+
+      expect(live).toHaveBeenCalledWith(SERIAL);
+      expect(liveDevices).not.toHaveBeenCalled();
+      expect(warning).toContain(
+        `Native network capture is on for ${PKG}, ${OTHER_PKG} on ${SERIAL}, the device this profile runs on:`
+      );
+      expect(warning).toContain(
+        `native-network-logs with udid ${SERIAL} and stop: true for each of these apps, then restart-app on ${SERIAL}`
+      );
+    });
+
+    it("is undefined when capture is on for the app only on a device the runtime was not found on", () => {
+      connectedWithLogicalId();
+      captureOnSerial(PKG);
+
+      expect(nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP, "emulator-5556")).toBeUndefined();
+      expect(liveDevices).not.toHaveBeenCalled();
+    });
   });
 
   it("does not look at other devices for a device_id that names a device", () => {
@@ -283,34 +307,36 @@ describe("react-profiler-start", () => {
       );
     }
 
-    it("warns when capture is on for the profiled app on an Android device and the runtime's device is unknown", async () => {
-      captureOnSerial(PKG);
+    describe("when the runtime's device is not found", () => {
+      it("warns when capture is on for the profiled app on an Android device", async () => {
+        captureOnSerial(PKG);
 
-      const result = await start(ANDROID_APP);
+        const result = await start(ANDROID_APP);
 
-      expect(result.started_at).toBe(new Date(1_000).toISOString());
-      expect(result.warning).toContain(
-        `Native network capture is on for ${PKG} on ${SERIAL}, which may be the device this profile runs on`
-      );
-      expect(result.warning).toContain(
-        `native-network-logs with stop: true for ${PKG} on that device, then restart-app`
-      );
-    });
+        expect(result.started_at).toBe(new Date(1_000).toISOString());
+        expect(result.warning).toContain(
+          `Native network capture is on for ${PKG} on ${SERIAL}, which may be the device this profile runs on`
+        );
+        expect(result.warning).toContain(
+          `native-network-logs with stop: true for ${PKG} on that device, then restart-app`
+        );
+      });
 
-    it("adds no warning when capture is on only for another app", async () => {
-      captureOnSerial(OTHER_PKG);
+      it("adds no warning when capture is on only for another app", async () => {
+        captureOnSerial(OTHER_PKG);
 
-      const result = await start(ANDROID_APP);
+        const result = await start(ANDROID_APP);
 
-      expect(result).not.toHaveProperty("warning");
-    });
+        expect(result).not.toHaveProperty("warning");
+      });
 
-    it("adds no warning when the profiled runtime is on iOS", async () => {
-      captureOnSerial(PKG);
+      it("adds no warning when the profiled runtime is on iOS", async () => {
+        captureOnSerial(PKG);
 
-      const result = await start({ appId: PKG, platform: "ios" });
+        const result = await start({ appId: PKG, platform: "ios" });
 
-      expect(result).not.toHaveProperty("warning");
+        expect(result).not.toHaveProperty("warning");
+      });
     });
 
     describe("when the runtime's device is found", () => {
@@ -327,22 +353,28 @@ describe("react-profiler-start", () => {
         expect(result).not.toHaveProperty("warning");
       });
 
-      it("warns about that device alone when capture is on there", async () => {
+      it("warns about that device alone, by its id, when capture is on there", async () => {
         findRuntimeDevice.mockResolvedValue(SERIAL);
         captureOnSerial(PKG);
 
         const result = await start(ANDROID_APP);
 
-        expect(result.warning).toContain(`Native network capture is on for ${PKG} on this device`);
+        expect(result.warning).toContain(
+          `Native network capture is on for ${PKG} on ${SERIAL}, the device this profile runs on:`
+        );
+        expect(result.warning).toContain(
+          `call native-network-logs with udid ${SERIAL} and stop: true for that app, then restart-app on ${SERIAL} and profile again.`
+        );
         expect(result.warning).not.toContain("logicalDeviceId");
       });
 
-      it("adds no warning when it is an iOS simulator", async () => {
+      it("checks the simulator, not Android devices by app, for an iOS runtime", async () => {
         findRuntimeDevice.mockResolvedValue(IOS_UDID);
         captureOnSerial(PKG);
 
-        const result = await start(ANDROID_APP);
+        const result = await start({ appId: PKG, platform: "ios" });
 
+        expect(live).toHaveBeenCalledWith(IOS_UDID);
         expect(liveDevices).not.toHaveBeenCalled();
         expect(result).not.toHaveProperty("warning");
       });
