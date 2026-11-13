@@ -192,7 +192,10 @@ describe("shutdownChild with a stall watch", () => {
   });
 });
 
-describe("xctraceProgressProbe", () => {
+// Each test spawns real processes, waits up to 0.8 s and runs `ps` twice with
+// its 2 s timeout: up to about 5 s, the default test timeout. On a busy Mac,
+// one took 24 s.
+describe("xctraceProgressProbe", { timeout: 30_000 }, () => {
   let dir = "";
   const children: ChildProcess[] = [];
 
