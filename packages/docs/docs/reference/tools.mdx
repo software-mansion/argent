@@ -567,7 +567,11 @@ A leak check can take several seconds. When a recording with leak checks is shor
 
 `native-profiler-start` records with Instruments on an iOS simulator and on a [Mac app](#profiling-a-mac-app), and with Perfetto on Android. The bundled Argent template of Instruments starts the first check for memory leaks about 4 seconds after `native-profiler-start` returns, and the next checks about every 11 seconds. A leak is in the trace only after a check that started after the leak has ended. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the trace does not contain the leak.
 
-When `native-profiler-stop` is called while an earlier stop of the same device still runs, it returns the result of the earlier stop. `native-profiler-start` and `native-profiler-analyze` wait until a stop that runs has ended. `profiler-load` and `profiler-combined-report` refuse to run until then.
+On an iOS simulator and on a Mac app, these rules apply while `native-profiler-stop` runs on a device:
+
+- A second `native-profiler-stop` on the same device returns the result of the stop that runs.
+- `native-profiler-start` and `native-profiler-analyze` wait until the stop has ended.
+- `profiler-load` and `profiler-combined-report` refuse to run until the stop has ended.
 
 In a report from Instruments, `native-profiler-analyze` gives the CPU time that Argent and Instruments used inside the app during the recording, and the share of all CPU time:
 
