@@ -801,6 +801,23 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     });
 
+    it("leaves the requests of a quick reconnect open when the dropped connection's exit check ends", async () => {
+      await run("boot-device", { macosAppPath: appPath });
+      await start();
+      const app = await macosApp();
+      await app.call("Net.drop");
+      await waitUntil(() => !app.isConnected());
+      // argent reconnects before the 2 s check of the dropped connection ends.
+      await request("https://example.com/new", { hold: true });
+      await new Promise((r) => setTimeout(r, 2_500));
+      expect((await readLog()).requests.map((r) => [r.url, r.state])).toEqual([
+        ["https://example.com/new", "pending"],
+      ]);
+      await app.call("Net.finish");
+      const log = await readUntil((l) => l.requests[0]?.state === "complete");
+      expect(log.requests[0]).toMatchObject({ url: "https://example.com/new", state: "complete" });
+    }, 15_000);
+
     it("fails an open request when the app exits on its own", async () => {
       const { pid } = await run("boot-device", { macosAppPath: appPath });
       await start();
