@@ -1,7 +1,21 @@
-import { describe, it, expect, vi } from "vitest";
-import { TypedEventEmitter } from "@argent/registry";
-import { reactProfilerSessionBlueprint } from "../../src/blueprints/react-profiler-session";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import {
+  Registry,
+  TypedEventEmitter,
+  type ServiceBlueprint,
+  type ServiceEvents,
+} from "@argent/registry";
+import {
+  cacheProfilerPaths,
+  clearLostProfilerRun,
+  getLostProfilerRun,
+  reactProfilerSessionBlueprint,
+  recordLostProfilerRun,
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
+} from "../../src/blueprints/react-profiler-session";
 import type { JsRuntimeDebuggerApi } from "../../src/blueprints/js-runtime-debugger";
+import { forgetDeviceAlias, rememberDeviceAlias } from "../../src/utils/debugger/device-alias";
 import { STOP_FOR_TAKEOVER_SCRIPT } from "../../src/utils/react-profiler/scripts";
 import {
   __resetProfilingDevicesForTesting,
@@ -209,6 +223,8 @@ describe("ReactProfilerSession on a JS reload", () => {
       undefined
     );
     instance.api.profilingActive = true;
+    // A dispose must not treat this as a run to end: the runtime it ran in is gone.
+    instance.api.sessionId = "uuid-run";
     const events = cdpEventsOf(api);
     // What the registry does on `terminated`.
     instance.events.on("terminated", () => void instance.dispose());
@@ -240,5 +256,158 @@ describe("ReactProfilerSession on a JS reload", () => {
       events.emit("event", "Runtime.executionContextCreated", { context: { id: 2 } });
       expect(sent).toEqual([]);
     }
+  });
+});
+
+/**
+ * The session node is gone once a run is lost, and with it everything it knew,
+ * so react-profiler-status and react-profiler-stop read the cause from a
+ * record the node leaves behind.
+ */
+describe("ReactProfilerSession records how a run was lost", () => {
+  async function activeRun(sent: SentCall[]) {
+    const api = fakeDebuggerApi(sent);
+    const instance = await reactProfilerSessionBlueprint.factory(
+      { debugger: api },
+      "8081:AAAA-1111",
+      undefined
+    );
+    instance.api.profilingActive = true;
+    instance.api.sessionId = "uuid-run";
+    instance.api.profileStartWallMs = 1_000;
+    return { instance, events: cdpEventsOf(api) };
+  }
+
+  afterEach(() => clearLostProfilerRun(8081, "AAAA-1111"));
+
+  it("records a JS reload", async () => {
+    const { events } = await activeRun([]);
+    events.emit("event", "Runtime.executionContextDestroyed", { executionContextId: 1 });
+    expect(getLostProfilerRun(8081, "AAAA-1111")).toMatchObject({
+      cause: "js_reload",
+      sessionId: "uuid-run",
+      startedAtEpochMs: 1_000,
+    });
+  });
+
+  it("records a dropped connection, which reaches the session as a teardown", async () => {
+    // The debugger listens on the client first, as js-runtime-debugger.ts does,
+    // and its teardown disposes this session before the session's own listener
+    // runs. A fake with no such dependency hid that every drop read as a
+    // teardown: "typically by stop-all-simulator-servers" for an app crash.
+    const debuggerApi = fakeDebuggerApi([]);
+    const registry = new Registry();
+    registry.registerBlueprint({
+      namespace: "JsRuntimeDebugger",
+      getURN: (payload: string) => `JsRuntimeDebugger:${payload}`,
+      async factory() {
+        const events = new TypedEventEmitter<ServiceEvents>();
+        cdpEventsOf(debuggerApi).on("disconnected", (error) =>
+          events.emit("terminated", error as Error)
+        );
+        return { api: debuggerApi, dispose: async () => {}, events };
+      },
+    } as unknown as ServiceBlueprint<unknown, string>);
+    registry.registerBlueprint(reactProfilerSessionBlueprint);
+    const api = await registry.resolveService<ReactProfilerSessionApi>(
+      `${REACT_PROFILER_SESSION_NAMESPACE}:8081:AAAA-1111`
+    );
+    api.profilingActive = true;
+    api.sessionId = "uuid-run";
+
+    // The real client is already closed when it emits `disconnected`.
+    vi.spyOn(debuggerApi.cdp, "isConnected").mockReturnValue(false);
+    cdpEventsOf(debuggerApi).emit("disconnected", new Error("connection lost"));
+
+    expect(getLostProfilerRun(8081, "AAAA-1111")).toMatchObject({
+      cause: "cdp_disconnected",
+      sessionId: "uuid-run",
+    });
+  });
+
+  it("keeps the first cause when the same run is lost again", () => {
+    const run = {
+      port: 8081,
+      deviceId: "AAAA-1111",
+      sessionId: "uuid-run",
+      profileStartWallMs: 1_000,
+    };
+    recordLostProfilerRun(run, "js_reload");
+    recordLostProfilerRun(run, "session_torn_down");
+    expect(getLostProfilerRun(8081, "AAAA-1111")?.cause).toBe("js_reload");
+  });
+
+  it("records a teardown mid-run", async () => {
+    const { instance } = await activeRun([]);
+    await instance.dispose();
+    expect(getLostProfilerRun(8081, "AAAA-1111")).toMatchObject({
+      cause: "session_torn_down",
+      sessionId: "uuid-run",
+    });
+  });
+
+  it("records nothing when no run was active", async () => {
+    // `sessionId` set with `profilingActive` off is a failed stop: see
+    // "after a react-profiler-stop failed" in start-stop-ownership.test.ts.
+    const { instance, events } = await activeRun([]);
+    instance.api.profilingActive = false;
+    events.emit("event", "Runtime.executionContextDestroyed", { executionContextId: 1 });
+    await instance.dispose();
+    expect(getLostProfilerRun(8081, "AAAA-1111")).toBeUndefined();
+  });
+
+  it("keeps the record when a session is loaded from disk", async () => {
+    // profiler-load stores through the same cache, and an older session says
+    // nothing about how the last run ended. react-profiler-stop drops the record.
+    const { events } = await activeRun([]);
+    events.emit("event", "Runtime.executionContextDestroyed", { executionContextId: 1 });
+    cacheProfilerPaths(
+      8081,
+      {
+        sessionId: "20261103-120000",
+        debugDir: "/tmp",
+        cpuProfilePath: null,
+        commitsPath: null,
+        cpuSampleIndexPath: null,
+        detectedArchitecture: null,
+        anyCompilerOptimized: null,
+        hotCommitIndices: null,
+        totalReactCommits: null,
+        loadedFromDisk: true,
+      },
+      "AAAA-1111"
+    );
+    expect(getLostProfilerRun(8081, "AAAA-1111")?.cause).toBe("js_reload");
+  });
+
+  it("finds the record under both ids after the alias between them is gone", () => {
+    // A drop or a teardown disposes the debugger, which forgets the alias.
+    rememberDeviceAlias("logical-123", "AAAA-1111");
+    const run = {
+      port: 8081,
+      deviceId: "AAAA-1111",
+      sessionId: "uuid-run",
+      profileStartWallMs: 1_000,
+    };
+    recordLostProfilerRun(run, "cdp_disconnected");
+    forgetDeviceAlias("logical-123");
+
+    expect(getLostProfilerRun(8081, "logical-123")?.sessionId).toBe("uuid-run");
+    expect(getLostProfilerRun(8081, "AAAA-1111")?.sessionId).toBe("uuid-run");
+
+    clearLostProfilerRun(8081, "AAAA-1111");
+    expect(getLostProfilerRun(8081, "logical-123")).toBeUndefined();
+  });
+
+  it("drops the ids of the run it replaces", () => {
+    rememberDeviceAlias("logical-old", "AAAA-1111");
+    const first = { port: 8081, deviceId: "AAAA-1111", sessionId: "run-1", profileStartWallMs: 1 };
+    recordLostProfilerRun(first, "js_reload");
+    forgetDeviceAlias("logical-old");
+
+    recordLostProfilerRun({ ...first, sessionId: "run-2" }, "js_reload");
+
+    expect(getLostProfilerRun(8081, "logical-old")).toBeUndefined();
+    expect(getLostProfilerRun(8081, "AAAA-1111")?.sessionId).toBe("run-2");
   });
 });

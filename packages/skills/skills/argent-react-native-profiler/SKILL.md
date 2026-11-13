@@ -12,16 +12,14 @@ Physical iPhone: not supported; `react-profiler-*` reject `kind: "device"`. Prof
 ### React Profiler (Hermes / React commits)
 
 - `react-profiler-start` / `react-profiler-stop`: record CPU samples and React commits around an interaction.
-- `react-profiler-analyze`: turn the recording into a ranked report: hot commits with the JS functions that ran during each.
-- `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. A debugger drop also ends the recording; check status before stopping or restarting.
-- `react-profiler-component-source`: source, location and memoization status of a component the report flagged.
-- `react-profiler-renders`: how many instances of each component are mounted in the top 30 levels of the tree, with their last render time; no session needed. It does not count re-renders: record a profile for that.
+- `react-profiler-analyze`: turn the recording into a ranked report: hot commits with the JS functions that ran during each, and the file and line of each ranked component it finds in the project.
+- `react-profiler-status`: **only after an interruption** (debugger drop, Metro reload, pause, subagent handoff, any doubt), never otherwise. After a debugger drop, react-profiler-stop can no longer collect the run; check status before stopping or restarting.
 - `react-profiler-fiber-tree`: live component hierarchy, no session needed, for tracing a component's ancestry.
 
 ### Drill-down queries (after analyze)
 
 - `profiler-cpu-query`: JS CPU: top functions, a time window, a function's call tree, CPU during a component's commits.
-- `profiler-commit-query`: React commits by component, time range, commit index, or cascade tree.
+- `profiler-commit-query`: React commits by component, time range, commit index, or cascade tree, and render counts over all commits.
 - `profiler-stack-query`: native data: hang stacks, function callers, thread breakdown, leak details.
 - `profiler-combined-report`: correlates native hangs with React commits when both profilers ran.
 - `profiler-load`: reload an earlier session from disk for the query tools.
@@ -61,7 +59,7 @@ Call `react-profiler-stop` **and** `native-profiler-stop` in parallel (skip the 
 
 Call `react-profiler-analyze` with your annotations. Check the report's React Compiler and build-mode lines before proposing fixes.
 
-If both profilers ran, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report`: it surfaces correlations the individual reports miss.
+If both profilers ran, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report`: it surfaces correlations the individual reports miss. If it says no React commits are stored, use the native report on its own.
 
 ### Step 4: Assess results
 
@@ -78,6 +76,7 @@ Chain the query tools from what the report flags:
 - **Slow commit** → `profiler-commit-query` `by_index` (every component, props changes, parent cascade) or `cascade_tree` (who triggered whom).
 - **Slow component** → `profiler-cpu-query` `component_cpu` → `call_tree` for the hot function → read the source → propose a fix.
 - **A time range** → `profiler-commit-query` `by_time_range`, or `profiler-cpu-query` `time_window`.
+- **Re-render counts over the whole session** → `profiler-commit-query` `render_counts`: every component, including commits under 16 ms that the other modes do not store.
 - **Native hang or leak** → `profiler-stack-query` `hang_stacks` / `leak_stacks`; correlate the hang's timing with React commits.
 
 Pass component names exactly as the report prints them; the wrapped name (`Memo(...)`, `Forget(...)`, `ForwardRef(...)`) resolves too. Repeat until you find the root-cause function and file, judging the evidence as in Step 4. After each round, ask the user whether to keep digging or move to fixing.
@@ -88,7 +87,7 @@ To revisit earlier data, e.g. to compare before and after a fix: `profiler-load`
 
 ### Step 8: Apply fix and re-profile
 
-Read the bottleneck's source (`react-profiler-component-source` or the Read tool), apply the fix, then re-profile the same scenario (Step 1 → interaction → Steps 2-4). Report honestly whether the target metric improved, stayed flat, or regressed, and whether any _other_ metric got worse (e.g. fewer renders but more CPU time, or a different component now re-renders more). If the fix brought no net benefit or unacceptable tradeoffs, revert and reconsider.
+Read the bottleneck's source (the report gives its path from `project_root` and the line), apply the fix, then re-profile the same scenario (Step 1 → interaction → Steps 2-4). Report honestly whether the target metric improved, stayed flat, or regressed, and whether any _other_ metric got worse (e.g. fewer renders but more CPU time, or a different component now re-renders more). If the fix brought no net benefit or unacceptable tradeoffs, revert and reconsider.
 
 If the interaction was recorded as an e2e test, replay it with `e2e-execute` instead of repeating the steps by hand. If the replay fails (e.g. a UI fix changed the layout), follow `argent-create-e2e`'s [Diagnose a replay failure](../argent-create-e2e/references/reliability-and-recovery.md#diagnose-a-replay-failure) before retrying the profiling cycle.
 
@@ -98,7 +97,8 @@ If the user does not want changes, present the report and suggest the fix withou
 
 ## 4. Caveats
 
-- **Dev builds** render ~3x slower than production (the report notes it). Prioritize render counts over durations: counts carry over to production. They are already halved when Strict Mode double-invokes renders.
+- **Dev builds** render ~3x slower than production (the report notes it), and Strict Mode can double durations, but not counts. Use counts together with cost: a high count matters only when its time adds up. Do not memoize a component just because it renders often.
+- **No hot commit** does not mean the app is fine. The report then gives render time, the busiest second and the app components that re-rendered in at least 10 commits and used at least 1 ms of self time per second. `render_counts` lists the rest. These are dev-build numbers, idle time in the recording lowers the share, and a listed component is not a finding.
 - **Live API data** may differ between runs (payload sizes, item counts) and shift render counts and durations independently of your fix. Note when data-dependent components vary.
 - **Run-to-run noise:** variations under ~10-15% in commit duration may be noise; only treat consistent, directional changes as signal.
 - **Profiler overhead:** if the native profile shows `JSLexer`, `JSONEmitter` or Hermes internals dominating the JS thread, that is instrumentation cost, not app work. Discount those entries.
