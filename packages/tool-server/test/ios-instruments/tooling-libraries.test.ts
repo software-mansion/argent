@@ -269,6 +269,30 @@ describe("toolingWork: whose work a sample is", () => {
     expect(toolingWeightNs([sample(1, stack, 10_000_000)]).instruments).toBe(10_000_000);
   });
 
+  it("is the tool's anywhere in a stack with no named frame outside the system", () => {
+    // The recorder's own thread, and a thread of the system that allocates.
+    const recorderThread = [
+      system("mach_absolute_time"),
+      instruments("0x1201208b8"),
+      system("_pthread_start"),
+      system("thread_start"),
+    ];
+    const systemThread = [
+      system("__ulock_wait2"),
+      system("_os_unfair_lock_lock_slow"),
+      instruments("0x115685048"),
+      system("_malloc_zone_malloc_instrumented_or_legacy"),
+      system("_CFRuntimeCreateInstance"),
+      system("_dispatch_client_callout"),
+    ];
+    expect(toolingWork(recorderThread)).toBe("instruments");
+    expect(toolingWork(systemThread)).toBe("instruments");
+    expect(
+      aggregateCpuHotspots([sample(1, recorderThread), sample(2, systemThread)], new Set())
+    ).toEqual([]);
+    expect(toolingWork([system("mach_msg2_trap"), system("_pthread_start")])).toBeNull();
+  });
+
   it("is the app's for a stack with no tool frame, and for an empty stack", () => {
     expect(toolingWork([system("objc_msgSend"), app("main")])).toBeNull();
     expect(toolingWork([])).toBeNull();

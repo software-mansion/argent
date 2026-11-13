@@ -43,12 +43,15 @@ export function findDominantFunction(stack: StackFrame[]): string | null {
  * a frame from the leaf up to the most actionable frame. A sample of argent's
  * describe or tap, or of the recorder that Instruments injects (its frames often
  * have no symbol, below an allocation of the app), is not a cost of the app.
+ * In a stack with no named frame outside the system, such as one on a thread of
+ * the system or of the recorder, a tool's frame anywhere names the tool.
  */
 export function toolingWork(stack: StackFrame[]): ToolingOwner | null {
   const dominant = findDominantFrame(stack);
+  const named = dominant !== null && !dominant.isSystemLibrary && !isHexAddress(dominant.name);
   for (const frame of stack) {
     if (frame.tooling) return frame.tooling;
-    if (frame === dominant) break;
+    if (frame === dominant && named) break;
   }
   return null;
 }
