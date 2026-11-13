@@ -152,7 +152,7 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
   const proc = spawn(
     adbPath,
     ["-s", serial, "shell", "am", "instrument", "-w", manifest.instrumentationRunner],
-    { stdio: ["ignore", "pipe", "pipe"] }
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }
   );
 
   return new Promise<SpawnedHelper>((resolve, reject) => {

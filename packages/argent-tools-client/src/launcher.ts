@@ -315,6 +315,7 @@ export function spawnToolsServer(
       detached: true,
       stdio: ["ignore", "pipe", logFd],
       env: buildToolsServerEnv(paths, port, process.env, options),
+      windowsHide: true,
     });
     fs.closeSync(logFd);
 

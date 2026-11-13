@@ -98,6 +98,7 @@ export async function emulatorSupportsFlag(
       // this await has no deadline of its own.
       killSignal: "SIGKILL",
       maxBuffer: 8 * 1024 * 1024,
+      windowsHide: true,
     });
     output = stdout + stderr;
   } catch (err) {
@@ -219,6 +220,7 @@ export async function runAdb(
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf-8",
       env: envWithoutAdbTrace(),
+      windowsHide: true,
     });
     return { stdout, stderr };
   } catch (err) {
@@ -240,6 +242,7 @@ async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "buffer",
+      windowsHide: true,
     });
     return stdout as unknown as Buffer;
   } catch (err) {
@@ -288,6 +291,7 @@ export async function adbShellInput(
         killSignal: ADB_KILL_SIGNAL,
         maxBuffer: 64 * 1024 * 1024,
         encoding: "utf-8",
+        windowsHide: true,
       },
       (err, stdout, stderr) => {
         if (err) {
@@ -850,6 +854,7 @@ export async function listAvds(): Promise<AvdInfo[]> {
     const { stdout } = await execFileAsync(emulatorPath, ["-list-avds"], {
       timeout: 5_000,
       killSignal: "SIGKILL",
+      windowsHide: true,
     });
     return stdout
       .split("\n")
@@ -894,6 +899,7 @@ export async function checkSnapshotLoadable(
       timeout: options.timeoutMs ?? 10_000,
       killSignal: "SIGKILL",
       maxBuffer: 4 * 1024 * 1024,
+      windowsHide: true,
     });
     const tail = stdout.split("\n").slice(-6).join("\n");
     // "WARNING | change of renderer detected" is noise; real incompatibility
