@@ -41,7 +41,7 @@ const zodSchema = z.object({
       "App bundle ID on iOS or package name on Android<flag:macos-apps> (on a Mac app, the bundle id in the device id)</flag:macos-apps>"
     ),
   port: metroPortField.describe(
-    "The app's Metro port, whose requests are left out of the listing. Omit it to use this device's port, 8081 by default."
+    "The app's Metro port, whose requests are left out of the listing. Omit it to use this device's port, 8081 by default.<flag:macos-apps> A Mac app ignores it.</flag:macos-apps>"
   ),
   limit: z
     .number()
@@ -50,14 +50,14 @@ const zodSchema = z.object({
     .optional()
     .default(50)
     .describe(
-      "Maximum number of requests to return: the most recent ones, oldest first. 0 returns only the header and the total."
+      "Maximum number of requests to return: the most recent ones, oldest first. 0 returns only the header and the total.<flag:macos-apps> On a Mac app, 0 returns no events.</flag:macos-apps>"
     ),
   clear: z
     .boolean()
     .optional()
     .default(false)
     .describe(
-      "Clear the log after reading. The IDs of cleared requests still work in view-network-request-details"
+      "Clear the log after reading. On iOS and Android, the IDs of cleared requests still work in view-network-request-details"
     ),
 });
 
@@ -124,7 +124,7 @@ Returns { status, header, armed, count, total, requests }: one line per request,
 On iOS and Android this tool only reads and never starts capture: call network-capture-start for the app first, then repeat the action whose requests you need. Before a start it returns started: false and a header that says capture is not started; after network-capture-stop it returns stopped: true and still lists what was captured.
 On iOS: when capture started while the app was already running, the header of the first answer says that the app's launch was not recorded; to capture the launch, restart-app and call again, unless the header says the launch cannot be recorded on that device. On a local simulator, launch-app and restart-app return networkCapture saying whether capture is armed in the new process.
 <flag:macos-apps>On a Mac app it returns { status, count, events }: NSURLSession events, react-native-macos fetch included. There the first call starts capture, with no network-capture-start, and capture stays on across restart-app, with a new log per process.
-</flag:macos-apps>If status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
+</flag:macos-apps>On iOS, if status is restart_required: follow the message (usually restart-app), then retry. If status is service_stale: the app is already injected, so restarting it cannot help. Restart the tool-server (\`argent server stop && argent server start --detach\`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names the terminal fallback. If status is connect_pending: the app is injected and still connecting. Do not restart it, wait a few seconds and retry. If status is init_failed: follow the message (re-boot the simulator) rather than retrying.
 On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
 On Android: needs a debuggable build. A header that says not attached means the app's current process started without launch-app or restart-app and runs without capture: restart-app or network-capture-start attaches it.
 Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
