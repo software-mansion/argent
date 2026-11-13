@@ -193,10 +193,11 @@ Examples:
 
 Exits 1 when the tool fails. Also exits 1 when the result reports that the
 call did not do its job: an e2e test that does not pass, an await-ui-element
-wait with success=false, a run-sequence that a step stopped, a debugger tool
-with no connection or an error, a native-devtools precheck that stopped the
-tool, a native-profiler-analyze with status analysis_failed, an e2e recording
-call that recorded nothing, or a baseline that was not written on this client.
+wait with success=false, a keyboard call with verified=false, a run-sequence
+that a step stopped, a debugger tool with no connection or an error, a
+native-devtools precheck that stopped the tool, a native-profiler-analyze with
+status analysis_failed, an e2e recording call that recorded nothing, or a
+baseline that was not written on this client.
 Other results exit 0, also a negative answer such as await-screen-idle's
 settled=false or debugger-status's not_connected.
 `);
