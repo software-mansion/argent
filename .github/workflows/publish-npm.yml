@@ -201,6 +201,11 @@ jobs:
       - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
+      # Native Mac app library and launch helper: without them boot-device
+      # cannot start a Mac app.
+      - run: test -f packages/argent/dylibs/macos/libNativeDevtoolsMacos.dylib
+      - run: test -f packages/argent/dylibs/macos/libArgentInjectionBootstrap.dylib
+      - run: test -x packages/argent/bin/darwin/argent-macos-helper
       # TCP-transport (sim-remote / ios-remote) binaries — the ax-service and
       # native-devtools variants the remote code path spawns/injects over a
       # sim-remote-tunnelled TCP socket. bin/tcp is platform-NEUTRAL:

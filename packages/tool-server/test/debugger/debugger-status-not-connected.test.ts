@@ -81,6 +81,29 @@ async function startEmptyMetro(): Promise<MockMetro> {
   };
 }
 
+/** Metro that lists whatever `targets()` returns at the time of each request. */
+async function startListingMetro(targets: () => unknown[]): Promise<MockMetro> {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/status") {
+      res.end("packager-status:running");
+      return;
+    }
+    if (req.url === "/json/list") {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(targets()));
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    port,
+    close: () => new Promise((resolve) => server.close(() => resolve())),
+  };
+}
+
 /** Fake Chromium CDP endpoint: /json/version + /json/list + a page WS target. */
 async function startFakeChromiumCdp(): Promise<MockMetro> {
   const server = http.createServer((req, res) => {
@@ -226,6 +249,49 @@ describe("debugger-status not-connected results", () => {
     expect(setup.failed).toEqual([]);
     expect(outcomeCalls()).toHaveLength(1);
     expect(outcomeCalls()[0][1]).toMatchObject({ outcome: "no_app_connected" });
+  });
+
+  it("(b2) target device left a shared Metro → no_app_connected about the target device only", async () => {
+    const page = (device: number, logicalDeviceId: string, deviceName: string) => ({
+      id: `page-${device}`,
+      title: "React Native (mock)",
+      webSocketDebuggerUrl: `ws://localhost:8081/inspector/debug?device=${device}&page=1`,
+      deviceName,
+      reactNative: { logicalDeviceId, capabilities: { prefersFuseboxFrontend: true } },
+    });
+    const staying = page(0, "status-stays-1111", "iPhone 17 Pro");
+    const leaving = page(1, "status-leaves-2222", "Pixel 9");
+    let listed = [staying, leaving];
+    const metro = await startListingMetro(() => listed);
+    const setup = makeSetup(jsRuntimeDebuggerBlueprint);
+    cleanups.push(async () => {
+      await setup.registry.dispose();
+      await metro.close();
+    });
+
+    // Metro lists both devices once (the udid is refused as ambiguous), then the
+    // Pixel's app exits while the agent still holds its logicalDeviceId.
+    const first = (await setup.invoke({
+      port: metro.port,
+      device_id: "some-udid",
+    })) as DebuggerNotConnectedResult;
+    expect(first.reason).toBe("device_mismatch");
+    listed = [staying];
+
+    const result = (await setup.invoke({
+      port: metro.port,
+      device_id: "status-leaves-2222",
+    })) as DebuggerNotConnectedResult;
+
+    expect(result.status).toBe("not_connected");
+    expect(result.reason).toBe("no_app_connected");
+    expect(result.detail).toContain("no longer attached");
+    expect(result.detail).toContain("iPhone 17 Pro (status-stays-1111)");
+    // The iPhone's app is still attached, so the guidance must not claim no app is.
+    expect(result.guidance).toMatch(
+      /^Metro is running, but no app on the target device is attached/
+    );
+    expect(setup.failed).toEqual([]);
   });
 
   it("(c) happy path → status:connected with the legacy field superset and a connected outcome", async () => {
