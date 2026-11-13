@@ -74,7 +74,6 @@ import { sleepOrAbort } from "../../utils/timing";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { supportsFlowTree } from "./flow-tree";
 import { iosDeviceRunnerRef } from "../../blueprints/ios-device-runner";
-import { isUnlandedKeyboardTextResult } from "../keyboard";
 import {
   deviceResolutionError,
   resolveFlowDevice,
@@ -3180,17 +3179,6 @@ async function execLeafStep(
             status: verdict.status,
             tool: step.name,
             reason: verdict.reason,
-            result,
-            outputHint,
-            args,
-          };
-        }
-        if (isUnlandedKeyboardTextResult(step.name, result)) {
-          return {
-            ...base,
-            status: "fail",
-            tool: step.name,
-            reason: `typed text did not land${result.note ? `: ${result.note}` : ""}`,
             result,
             outputHint,
             args,
