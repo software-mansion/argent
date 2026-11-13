@@ -32,8 +32,8 @@ interface PipelineOutput {
 
 interface PipelineOptions {
   /**
-   * Keep only CPU samples from this PID. Set by the all-processes strategy, whose
-   * capture is host-wide; null for the device strategy, already scoped by `--attach`.
+   * Keep only the CPU samples and hangs of this PID. Set by the all-processes strategy,
+   * whose capture is host-wide; null for the device strategy, already scoped by `--attach`.
    */
   cpuFilterPid?: number | null;
   /**
@@ -137,7 +137,7 @@ export async function runIosProfilerPipeline(
 ): Promise<PipelineOutput> {
   const [cpuSamples, rawHangs, { leaks: rawLeaks, detailExported }] = await Promise.all([
     parseCpuFile(files.cpu ?? null, options.cpuFilterPid ?? null),
-    parseHangsFile(files.hangs ?? null),
+    parseHangsFile(files.hangs ?? null, options.cpuFilterPid ?? null),
     parseLeaksFile(files.leaks ?? null),
   ]);
   for (const sample of cpuSamples) sample.stack = withAppCallsThroughArgent(sample.stack);

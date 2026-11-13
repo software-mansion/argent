@@ -143,6 +143,8 @@ RawHang   = { startNs, durationNs, hangType, threadFmt }
 RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count }
 ```
 
+With a filter PID (`cpuFilterPid`, set by the host-wide `all-processes` capture), the parser keeps only the CPU samples and the hangs whose `<process>` has that PID: that capture records every process on the host, also other simulators' SpringBoard.
+
 ### Stage 1 — Correlate (`pipeline/01-correlate.ts`)
 
 - **Hang ↔ CPU correlation.** For each hang, filter CPU samples whose `timestampNs` ∈ `[startNs, startNs + durationNs]`; their timestamps are returned in `hangSampleTimestamps` so Stage 2 can flag overlapping CPU hotspots. The suspects come from the samples of the hang's thread (`RawHang.threadFmt`, the main thread in Instruments' hangs, matched by `normalizeThreadName`). When the hang's thread ran for less than 10% of the hang (`hangThreadRanMs`), they come from all threads in the window: `suspectsFromOtherThreads` when other threads ran, the thread's own samples when no other thread ran; with no `appSuspensions` and leak data in the trace, such a hang also gets `mayHoldLeakCheck`. Of each sample, count the **dominant function** and the **app call chain** (system + hex frames stripped). Top 5 functions and top 3 chains attach to the hang (none to a hang with no sample).
