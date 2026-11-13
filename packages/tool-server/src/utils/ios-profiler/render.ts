@@ -69,6 +69,12 @@ interface RenderInput {
    * leak-free. Undefined (Android) leaves the report unchanged.
    */
   leaksRecorded?: boolean;
+  /**
+   * Mac apps: true when a note in freshnessNote says that the trace can miss
+   * findings (the app ended during the recording, or no leak check finished), so
+   * a report with no finding must not read as all clear.
+   */
+  mayMissFindings?: boolean;
 }
 
 interface InlineCap {
@@ -84,8 +90,15 @@ interface InlineCap {
 export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
-  const { payload, traceFile, freshnessNote, cpuDiagnostic, mallocStackLogging, leaksRecorded } =
-    input;
+  const {
+    payload,
+    traceFile,
+    freshnessNote,
+    cpuDiagnostic,
+    mallocStackLogging,
+    leaksRecorded,
+    mayMissFindings,
+  } = input;
   const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
   const status: "ok" | "analysis_failed" =
@@ -96,7 +109,14 @@ export async function renderNativeProfilerReport(
 
   const fullReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic, leaksRecorded)
+      ? renderAllClear(
+          payload,
+          exportErrors,
+          freshnessNote,
+          cpuDiagnostic,
+          leaksRecorded,
+          mayMissFindings
+        )
       : renderFullReport(
           payload,
           exportErrors,
@@ -115,7 +135,14 @@ export async function renderNativeProfilerReport(
 
   const inlineReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors, freshnessNote, cpuDiagnostic, leaksRecorded)
+      ? renderAllClear(
+          payload,
+          exportErrors,
+          freshnessNote,
+          cpuDiagnostic,
+          leaksRecorded,
+          mayMissFindings
+        )
       : renderFullReport(
           payload,
           exportErrors,
@@ -208,7 +235,8 @@ function renderAllClear(
   exportErrors?: Record<string, string>,
   freshnessNote?: string,
   cpuDiagnostic?: string,
-  leaksRecorded?: boolean
+  leaksRecorded?: boolean,
+  mayMissFindings?: boolean
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -244,7 +272,9 @@ function renderAllClear(
     lines.push(
       leaksRecorded === false
         ? `No CPU hotspots or UI hangs detected. Memory leaks were not checked (see above).`
-        : `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
+        : mayMissFindings
+          ? `No CPU hotspots, UI hangs, or memory issues detected, but this trace can miss them (see above).`
+          : `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
       ``,
       `Consider re-profiling under heavier load or longer duration to catch issues that don't appear in short sessions.`
     );

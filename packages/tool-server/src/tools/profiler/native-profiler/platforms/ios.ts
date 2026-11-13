@@ -1039,6 +1039,15 @@ export async function analyzeNativeProfilerIos(
     bottlenecks,
   };
 
+  const shortLeakNote =
+    api.platform === "macos" &&
+    leaksRecorded &&
+    memoryLeaks.length === 0 &&
+    api.recordedMs !== null &&
+    api.recordedMs < SHORT_LEAK_RECORDING_MS
+      ? shortLeakRecordingNote(api.recordedMs)
+      : null;
+
   return renderNativeProfilerReport({
     payload,
     traceFile: api.traceFile,
@@ -1061,13 +1070,7 @@ export async function analyzeNativeProfilerIos(
           ? `> ⚠️ **Hangs and the leak check:** ${LEAK_CHECK_HANG_NOTE}`
           : null,
         suspensionAdjustment ? suspensionNote(suspensionAdjustment, leaksRecorded) : null,
-        api.platform === "macos" &&
-        leaksRecorded &&
-        memoryLeaks.length === 0 &&
-        api.recordedMs !== null &&
-        api.recordedMs < SHORT_LEAK_RECORDING_MS
-          ? `> ⚠️ **Memory leaks:** ${shortLeakRecordingNote(api.recordedMs)}`
-          : null,
+        shortLeakNote ? `> ⚠️ **Memory leaks:** ${shortLeakNote}` : null,
       ]
         .filter(Boolean)
         .join("\n\n") || undefined,
@@ -1076,6 +1079,7 @@ export async function analyzeNativeProfilerIos(
     // unattributed-leaks note then goes by the attributed-leak count instead).
     mallocStackLogging: api.mallocStackLogging,
     leaksRecorded,
+    mayMissFindings: api.appEndedDuringCapture || shortLeakNote !== null,
     cpuDiagnostic: toolingNote(toolingCpuMs, totalCpuMs, api.platform === "macos"),
   });
 }

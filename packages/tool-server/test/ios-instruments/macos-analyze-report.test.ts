@@ -248,7 +248,7 @@ describe("the note on a recording too short for a leak check", () => {
         `native-profiler-start returns`
     );
     expect(report).toContain("Do not report the app as leak-free");
-    expect(report.indexOf(SHORT_NOTE)).toBeLessThan(report.indexOf("All clear"));
+    expect(report.indexOf(SHORT_NOTE)).toBeLessThan(report.indexOf("---"));
   });
 
   it("is absent, and leaks read as not checked, when a Mac trace had no Leaks instrument", async () => {
@@ -309,6 +309,42 @@ describe("the note on a recording too short for a leak check", () => {
     expect((await analyzeNativeProfilerIos(recorded("ios", 5_000))).report).not.toContain(
       SHORT_NOTE
     );
+  });
+});
+
+describe("the closing line of a report with no finding", () => {
+  const ALL_CLEAR = "All clear — no CPU hotspots, UI hangs, or memory issues detected.";
+  const MAY_MISS =
+    "No CPU hotspots, UI hangs, or memory issues detected, but this trace can miss them (see above).";
+
+  it("does not say all clear below a note that the trace can miss findings", async () => {
+    pipeline({});
+    const short = makeApi("macos");
+    short.recordedMs = 8_000;
+    const ended = makeApi("macos");
+    ended.recordedMs = 30_000;
+    ended.appEndedDuringCapture = true;
+    for (const api of [short, ended]) {
+      const result = await analyzeNativeProfilerIos(api);
+      expect(result.bottlenecksTotal).toBe(0);
+      for (const report of [result.report, readFileSync(result.reportFile!, "utf8")]) {
+        expect(report).toContain(MAY_MISS);
+        expect(report).not.toContain("All clear");
+      }
+    }
+  });
+
+  it("says all clear without such a note, on a Mac app and on iOS", async () => {
+    pipeline({});
+    const mac = makeApi("macos");
+    mac.recordedMs = 30_000;
+    const ios = makeApi("ios");
+    ios.recordedMs = 8_000;
+    for (const api of [mac, ios]) {
+      const { report } = await analyzeNativeProfilerIos(api);
+      expect(report).toContain(ALL_CLEAR);
+      expect(report).not.toContain(MAY_MISS);
+    }
   });
 });
 
