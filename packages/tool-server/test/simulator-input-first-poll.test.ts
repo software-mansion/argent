@@ -71,6 +71,11 @@ vi.mock("../src/blueprints/ax-service", () => ({
   ensureAutomationEnabled: async () => {},
 }));
 
+vi.mock("../src/utils/ax-prefs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/ax-prefs")>()),
+  clearAutomationEnabledOrWarn: async () => {},
+}));
+
 vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/ios-devices")>()),
   isTvOsSimulator: async (udid: string) => udid === TV_UDID,

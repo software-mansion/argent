@@ -54,7 +54,11 @@ vi.mock("@argent/native-devtools-ios", async () => {
   };
 });
 
-import { ensureAutomationEnabled, isEntitlementBypassActive } from "../src/utils/ax-prefs";
+import {
+  clearAutomationEnabled,
+  ensureAutomationEnabled,
+  isEntitlementBypassActive,
+} from "../src/utils/ax-prefs";
 import { listIosSimulators } from "../src/utils/ios-devices";
 import { localIosHost } from "../src/utils/ios-host";
 
@@ -69,6 +73,23 @@ function xcrunCalls() {
 describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", () => {
   it("ensureAutomationEnabled passes killSignal SIGKILL + a finite timeout", async () => {
     await ensureAutomationEnabled("UDID-1");
+    const simctl = xcrunCalls();
+    expect(simctl.length).toBeGreaterThan(0);
+    for (const c of simctl) {
+      expect(c.options?.killSignal).toBe("SIGKILL");
+      expect(typeof c.options?.timeout).toBe("number");
+    }
+  });
+
+  it("ensureAutomationEnabled writes AutomationEnabled as true inside the simulator", async () => {
+    await ensureAutomationEnabled("UDID-4");
+    expect(xcrunCalls().map((c) => c.args.slice(c.args.indexOf("defaults")))).toEqual([
+      ["defaults", "write", "com.apple.Accessibility", "AutomationEnabled", "-bool", "true"],
+    ]);
+  });
+
+  it("clearAutomationEnabled passes killSignal SIGKILL + a finite timeout", async () => {
+    await clearAutomationEnabled("UDID-3");
     const simctl = xcrunCalls();
     expect(simctl.length).toBeGreaterThan(0);
     for (const c of simctl) {
@@ -101,7 +122,7 @@ describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", (
   // rather than the internal functions. This is the block that guards
   // `listRunningUIKitApplicationBundleIds` (the call this fix added a
   // previously-missing timeout+kill to) and the six other ios-host simctl spawns.
-  it("localIosHost.bootstrapAx (ensureAutomationEnabled + entitlement probe) passes killSignal SIGKILL", async () => {
+  it("localIosHost.bootstrapAx (clearAutomationEnabled + entitlement probe) passes killSignal SIGKILL", async () => {
     await localIosHost.bootstrapAx("UDID-HOST-1");
     const simctl = xcrunCalls();
     expect(simctl.length).toBeGreaterThan(0);
@@ -109,6 +130,16 @@ describe("iOS simctl calls are hard-killed on timeout (SIGKILL, not SIGTERM)", (
       expect(c.options?.killSignal).toBe("SIGKILL");
       expect(typeof c.options?.timeout).toBe("number");
     }
+  });
+
+  it("localIosHost.bootstrapAx deletes AutomationEnabled and never writes it", async () => {
+    await localIosHost.bootstrapAx("UDID-HOST-3");
+    const automationCalls = xcrunCalls()
+      .filter((c) => c.args.includes("AutomationEnabled"))
+      .map((c) => c.args.slice(c.args.indexOf("defaults")));
+    expect(automationCalls).toEqual([
+      ["defaults", "delete", "com.apple.Accessibility", "AutomationEnabled"],
+    ]);
   });
 
   it("localIosHost.listRunningBundleIds (launchctl list) passes killSignal SIGKILL + a finite timeout", async () => {

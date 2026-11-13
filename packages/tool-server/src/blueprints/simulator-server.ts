@@ -13,7 +13,7 @@ import {
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerRunDir } from "@argent/native-devtools-ios";
 import { getAndroidSdkRoot } from "@argent/configuration-core";
-import { ensureAutomationEnabled } from "./ax-service";
+import { clearAutomationEnabledOrWarn } from "../utils/ax-prefs";
 import { ensureDep } from "../utils/check-deps";
 import { isFoldableSimulator, isTvOsSimulator } from "../utils/ios-devices";
 import { deviceSetForUdid } from "../utils/ios-device-sets";
@@ -578,7 +578,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       }
       // Input could open an app from the home screen, which must not launch
       // before the watcher has armed native-devtools injection.
-      await Promise.all([ensureAutomationEnabled(device.id).catch(() => {}), firstSimulatorPoll()]);
+      await Promise.all([clearAutomationEnabledOrWarn(device.id), firstSimulatorPoll()]);
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
       // through adb (gRPC bridge / screen-sharing agent respectively).
