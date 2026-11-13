@@ -125,6 +125,8 @@ On an iOS simulator, a line of `describe` can show:
 
 `gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, and `gesture-custom` require position coordinates from 0 to 1, inclusive, not pixels. Argent rejects coordinates outside this range before sending input and names the invalid coordinate. This also applies to calls in `run-sequence` and e2e steps. The `deltaX` and `deltaY` scroll distances can be negative or greater than 1.
 
+After a `run-sequence` step that can start an animation, Argent waits at most 1 second for the screen to stop changing. There is no wait on a physical iPhone, a HarmonyOS device or a Mac app. Set `settle: false` next to `steps` to turn off this wait for the full sequence. Set `settle: false` on one step to turn off the wait after that step only.
+
 Through the MCP server, an interaction tool and `await-ui-element` return a screenshot and the element tree after the screen stops changing. These limits apply:
 
 - Argent waits at most 15 seconds for the screenshot and the element tree together. If a capture takes longer, the result does not include it.

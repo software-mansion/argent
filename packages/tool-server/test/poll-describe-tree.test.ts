@@ -58,3 +58,39 @@ describe("pollDescribeTree with Xcode's component install pending", () => {
     expect(result.lastError).toMatch(/ax-service query timed out/);
   });
 });
+
+describe("pollDescribeTree", () => {
+  it("ends on the first failed read with stopOnError", async () => {
+    const fetchTree = vi.fn(() => Promise.reject(new Error("no page target")));
+
+    const result = await pollDescribeTree({
+      fetchTree,
+      timeoutMs: 2000,
+      pollIntervalMs: 10,
+      stopOnError: true,
+      onSample: () => ({ done: false }),
+    });
+
+    expect(fetchTree).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ result: undefined, aborted: false, polls: 1 });
+    expect(result.lastError).toBe("no page target");
+    expect(result.elapsedMs).toBeLessThan(2000);
+  });
+
+  it("starts no read once the deadline has passed with skipFetchAtDeadline", async () => {
+    const fetchTree = vi.fn((_budgetMs: number) =>
+      Promise.resolve({ tree: { children: [] } } as never)
+    );
+
+    const result = await pollDescribeTree({
+      fetchTree,
+      timeoutMs: 100,
+      pollIntervalMs: 30,
+      skipFetchAtDeadline: true,
+      onSample: () => ({ done: false }),
+    });
+
+    expect(fetchTree.mock.calls.every(([budgetMs]) => budgetMs > 0)).toBe(true);
+    expect(result.polls).toBe(fetchTree.mock.calls.length);
+  });
+});
