@@ -56,7 +56,7 @@ The agent stops the capture when it has the requests that it needs, or before a 
 
 A request that runs at the stop completes in the list on iOS and in the JS runtime layer. On Android, the list shows the request as failed. The request in the app continues. After the stop, an Android request body or response body is available only if the agent read it before the stop.
 
-On Chromium and Electron, Argent starts the capture when it attaches to the page. Argent attaches when the agent uses a Chromium tool for the first time. On Vega, a read of the network log starts the capture of the JS runtime layer. On a Mac app, a read of the native network log starts the native capture. The agent cannot stop the capture of a Mac app.
+On Chromium and Electron, Argent starts the capture when it attaches to the page. Argent attaches when the agent uses a Chromium tool for the first time. On Vega, a read of the network log starts the capture of the JS runtime layer. On a Mac app, a read of the native network log starts the native capture. The agent cannot start or stop this capture for one app. The capture stops when the tool-server disconnects from the app, for example when the agent stops the services of the app.
 
 ## Native network capture on Android
 

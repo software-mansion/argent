@@ -59,7 +59,7 @@ export function createNetworkCaptureStartTool(
   return {
     id: "network-capture-start",
     description: `Start network capture for an app on every layer that sees its requests: the app's JS runtime and the native layer (NSURLProtocol on iOS; OkHttp on Android, which needs a debuggable build).
-Use when you are about to trigger requests you need to inspect, also as a step of an e2e test. Unlike native-network-logs and view-network-logs, which only read and say capture is not started until this runs, this turns capture on and waits a few seconds for each layer to arm. A second call keeps the requests captured so far.
+Use when you are about to trigger requests you need to inspect, also as a step of an e2e test. Unlike native-network-logs and view-network-logs, which on iOS and Android only read and say capture is not started until this runs, this turns capture on and waits a few seconds for each layer to arm. A second call keeps the requests captured so far.
 Returns { status, layers }: per layer, armed, and a reason when it is not armed (unavailable: true when nothing arms it without a change you must make). A native layer that is not armed yet arms by itself, for example at the app's next launch, and native capture follows the app into later processes that launch-app and restart-app start, until network-capture-stop. The JS layer arms only at a call of this tool: call it again once the app's JavaScript has loaded, and after a reload or relaunch. Capture can slow the app.
 Fails with NETWORK_CAPTURE_UNAVAILABLE when no layer can capture this app.`,
     zodSchema: captureSchema,

@@ -160,7 +160,7 @@ const MACOS_NO_TRACKPAD_GESTURES =
   "gesture-tap or keyboard";
 const MACOS_NO_CAPTURE_START_STOP =
   "a Mac app's network capture has no start or stop: native-network-logs turns it on at its first call, " +
-  "and it stays on until the tool-server disconnects from the app";
+  "and stop-simulator-server or stop-all-simulator-servers for the app ends it and drops its log";
 
 /**
  * Why a tool without a `macos` block refuses a Mac app, where the stock "no

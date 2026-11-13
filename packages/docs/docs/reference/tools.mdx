@@ -166,10 +166,11 @@ To capture a request:
 | `ios-native`     | iOS          | The `URLSession` requests               | `native-network-logs` |
 | `android-native` | Android      | The OkHttp requests of a debuggable app | `native-network-logs` |
 
-The two tools do not support Chromium and Vega. There, Argent starts the capture without them:
+The two tools do not support Chromium, Vega and Mac apps. There, Argent starts the capture without them:
 
 - Chromium: Argent starts the capture when it attaches to the page. Each Chromium tool attaches Argent to the page.
 - Vega: a read starts the capture of the JS runtime layer. Each call of `view-network-logs` or `view-network-request-details` installs the capture in the JS runtime of the app, also after a reload.
+- Mac apps: the first call of `native-network-logs` starts the native capture. See [Mac apps](#mac-apps).
 
 | Parameter  | Effect                                                                                                                                                                                                                      |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
