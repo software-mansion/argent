@@ -15,7 +15,12 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { macosArtifacts } from "@argent/native-devtools-ios";
-import { attachNdjsonReader, reportDroppedFrameToStderr } from "../utils/ndjson-socket";
+import {
+  attachNdjsonReader,
+  createNdjsonCdpRequester,
+  reportDroppedFrameToStderr,
+  type NdjsonCdpRequester,
+} from "../utils/ndjson-socket";
 import { macosAppIdFromBundleId, parseMacosAppBundleId } from "../utils/device-info";
 import { pidIsAlive, pollPidsUntilGone, signalGroupThenPid } from "../utils/process-kill";
 import { settleWithin, sleep } from "../utils/timing";
@@ -36,16 +41,18 @@ import {
   runningTrackedApp,
   stageLibraryFor,
 } from "../utils/macos-apps";
+import {
+  createIosNetworkRecords,
+  type IosNetworkCaptureState,
+  type IosNetworkRecords,
+} from "./ios-network-records";
 import { isInjectableBundleId } from "./native-devtools";
+import type { NativeNetworkRecord } from "../utils/native-network-record";
 
-export interface NetworkEvent {
-  method: string;
-  params: unknown;
-  timestamp: number;
-}
-
-/** How many network events a Mac app's log keeps; the oldest go first. */
-const NATIVE_NETWORK_LOG_LIMIT = 1000;
+/** The library acknowledges Network.enable and Network.disable within this. */
+const NETWORK_CAPTURE_ACK_TIMEOUT_MS = 5_000;
+/** How long a closed channel's process gets to exit before its open requests stay open. */
+const PROCESS_EXIT_WAIT_MS = 2_000;
 
 /**
  * The in-app library of one native Mac app (device id `macos-app-<bundle id>`):
@@ -63,9 +70,11 @@ const NATIVE_NETWORK_LOG_LIMIT = 1000;
  * its reply carries the same id with `result` or `error: {message}`. `deadline`
  * (ms since 1970) is when argent stops waiting: a request that has not run by
  * then never runs, so a retry after a timeout does not type or click twice.
- * `{"type":"Control","payload":{"command":"activateNetworkInspection"}}` turns
- * on the network capture, which reports each request as
- * `{"type":"CDP","payload":{"method","params"}}`.
+ * The network capture speaks CDP: `{"type":"CDP","payload":{"id","method"}}`
+ * with Network.enable or Network.disable, which the library answers with the
+ * same id. While capture is on, it reports each request as events
+ * `{"type":"CDP","payload":{"method","params"}}`. A new connection starts with
+ * capture off.
  */
 
 export const MACOS_APP_NAMESPACE = "MacosApp";
@@ -147,18 +156,29 @@ export interface MacosAppApi {
   isConnected(): boolean;
   handshake(): MacosLibraryHandshake | null;
   /**
-   * Turns on the library's network capture; the first `native-network-logs`
-   * call does this, since a Mac app has no network-capture-start. It stays on:
-   * each later connection, also the one to a restarted app, turns it on again.
+   * Starts native network capture: ends a stop and stays on, so every later
+   * connection, also the one to a restarted app, is armed when argent adopts
+   * it. Resolves armed once the app's connection acknowledges Network.enable,
+   * and with a reason when it does not within 5 s or the app does not run.
+   * Never rejects.
    */
-  activateNetworkInspection(): Promise<void>;
+  startNetworkCapture(): Promise<{ armed: boolean; reason?: string }>;
   /**
-   * The network events of the current app process, oldest first, at most
-   * {@link NATIVE_NETWORK_LOG_LIMIT}. A new process starts an empty log; a
-   * reconnect to the same process keeps it.
+   * Stops native network capture and keeps the records: no new request is
+   * recorded, and no later connection is armed until the next start. A
+   * connected app is sent Network.disable, which it acknowledges within 5 s.
+   * Never rejects.
    */
-  networkLog(): NetworkEvent[];
-  clearNetworkLog(): void;
+  stopNetworkCapture(): Promise<{ confirmed: boolean; reason?: string }>;
+  isNetworkCaptureStarted(): boolean;
+  isNetworkCaptureStopped(): boolean;
+  /**
+   * True once per start that found the app running: its requests before the
+   * start were not recorded. Reading it clears it.
+   */
+  takeCaptureGap(): boolean;
+  /** The app's request records, kept across reconnects and relaunches until the service stops. */
+  networkRecords(): IosNetworkRecords;
 }
 
 /** The protocol this tool-server speaks. The library raises it only for changes an older tool-server cannot read. */
@@ -358,6 +378,14 @@ interface PendingCall {
   timer: NodeJS.Timeout;
 }
 
+/** What a channel hands its app's service about the network capture. */
+interface ChannelNetworkSink {
+  /** One network event, with the pid of the process that sent it. */
+  event(method: string, params: unknown, pid: number): void;
+  /** The channel closed, for whatever reason. */
+  closed(channel: LibraryChannel): void;
+}
+
 /**
  * One NDJSON connection to the library: the inherited socket of a launch, or a
  * reconnect through the listening socket. The reader is attached at
@@ -365,6 +393,14 @@ interface PendingCall {
  * never dropped.
  */
 class LibraryChannel {
+  /** The CDP requests of the network capture, such as Network.enable. */
+  readonly cdp: NdjsonCdpRequester;
+  /** The library acknowledged Network.enable on this channel. */
+  armed = false;
+  /** The Network.enable on its way, resolved by the acknowledgement. */
+  enabling?: Promise<boolean>;
+  /** Why the last Network.enable did not arm this channel. */
+  enableFailure?: string;
   private readonly pending = new Map<number, PendingCall>();
   private nextId = 1;
   private hello: MacosLibraryHandshake | null = null;
@@ -380,14 +416,15 @@ class LibraryChannel {
 
   /**
    * @param expectedPid the app's pid when known; a launch learns it from the helper after the spawn.
-   * @param onNetworkEvent receives each network event, with the pid of the process that sent it.
+   * @param network receives the network events and the close.
    */
   constructor(
     private readonly socket: net.Socket,
     private readonly bundleId: string,
     private readonly expectedPid: number | null,
-    private readonly onNetworkEvent: (event: NetworkEvent, pid: number) => void
+    private readonly network: ChannelNetworkSink
   ) {
+    this.cdp = createNdjsonCdpRequester(socket, { label: `macos-app ${bundleId}` });
     this.ready.catch(() => undefined);
     attachNdjsonReader(socket, {
       onDropped: reportDroppedFrameToStderr(`macos-app ${bundleId}`),
@@ -447,12 +484,6 @@ class LibraryChannel {
     });
   }
 
-  /** A `Control` command, which the library does not answer. */
-  sendControl(command: string): void {
-    if (this.closeError) return;
-    this.socket.write(JSON.stringify({ type: "Control", payload: { command } }) + "\n");
-  }
-
   close(): void {
     this.closedByArgent = true;
     this.socket.destroy();
@@ -474,14 +505,12 @@ class LibraryChannel {
       return;
     }
     if (msg.type === "CDP") {
-      // A network event has a method and no id. A frame with an id answers a
-      // CDP request, and argent sends none: its id is not a ViewInspector id.
+      // A frame with an id answers a CDP request of this channel, before the
+      // events after it are read. A network event has a method and no id.
       const p = msg.payload;
+      if (this.cdp.handleResponse(p)) return;
       if (p && typeof p.method === "string" && p.id === undefined) {
-        this.onNetworkEvent(
-          { method: p.method, params: p.params, timestamp: Date.now() },
-          this.hello.pid
-        );
+        this.network.event(p.method, p.params, this.hello.pid);
       }
       return;
     }
@@ -524,11 +553,14 @@ class LibraryChannel {
             "unknown"
           )
     );
+    this.network.closed(this);
   }
 
   private fail(err: FailureError): void {
     if (this.closeError) return;
     this.closeError = err;
+    this.armed = false;
+    this.cdp.close();
     this.settleHello.reject(err);
     for (const call of this.pending.values()) {
       clearTimeout(call.timer);
@@ -637,38 +669,193 @@ const lifecycles = new Map<
  */
 const heldQuits = new Map<string, { pid: number; openBefore: Set<unknown> }>();
 
+/** How a CDP request of the records fails when the app's connection is gone. */
+function connectionClosedBefore(bundleId: string, method: string): FailureError {
+  return new FailureError(
+    `macos-app ${bundleId}: the connection closed before ${method} was answered`,
+    {
+      error_code: FAILURE_CODES.NDJSON_CDP_CONNECTION_CLOSED,
+      failure_stage: "ndjson_cdp_request",
+      failure_area: "tool_server",
+      error_kind: "network",
+    }
+  );
+}
+
+/**
+ * The network capture of every Mac app service, so a reader that knows only a
+ * `macos-` id finds its record without the service.
+ */
+const macosCaptures = new Set<{ records: IosNetworkRecords; captured: () => boolean }>();
+
+/** Ids are unique per tool-server, so the app that recorded one does not matter. */
+export function findMacosNativeRecord(
+  id: string
+): { records: IosNetworkRecords; record: NativeNetworkRecord } | undefined {
+  for (const { records } of macosCaptures) {
+    const record = records.record(id);
+    if (record) return { records, record };
+  }
+  return undefined;
+}
+
+/** Some Mac app has capture started or stopped, so its ids can be listed. */
+export function hasMacosNetworkCapture(): boolean {
+  return [...macosCaptures].some(({ captured }) => captured());
+}
+
 function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () => void } {
   let channel: LibraryChannel | null = null;
   let connecting: Promise<LibraryChannel> | null = null;
   let launching = false;
   let disposed = false;
 
-  // Network capture. Off until the first native-network-logs call;
-  // after that each new channel turns it on again. The log belongs to one app
-  // process: a restarted app starts an empty one, a reconnect keeps it.
-  let networkInspection = false;
-  let networkLog: NetworkEvent[] = [];
-  let networkLogPid: number | null = null;
+  // Network capture: on from network-capture-start until network-capture-stop.
+  // A new channel starts with capture off, so adopt sends Network.enable on
+  // each one while capture is on.
+  let captureStarted = false;
+  let captureStopped = false;
+  let captureGap = false;
+  /** argent launched the recorded process while capture was on, and capture stayed on. */
+  let armedSinceLaunch = false;
+  /**
+   * The app process whose events the records take, and the channel they come
+   * on. The records number the process as their connection: argent can
+   * reconnect to the same process, which keeps its number, and a new process
+   * gets the next one.
+   */
+  let recordedProcess: { pid: number; index: number; channel: LibraryChannel } | null = null;
+  let nextProcessIndex = 1;
 
-  const networkLogOf = (pid: number): NetworkEvent[] => {
-    if (pid !== networkLogPid) {
-      networkLog = [];
-      networkLogPid = pid;
+  /** The adopted channel, while it is open. */
+  const liveChannel = (): LibraryChannel | null =>
+    channel?.isOpen && channel.handshake ? channel : null;
+
+  const captureState = (): IosNetworkCaptureState => {
+    const ch = liveChannel();
+    if (!ch) {
+      return {
+        armed: false,
+        note: captureStarted
+          ? "the app is not connected; capture arms when argent starts the app or connects to it, as network-capture-start does"
+          : "the app is not connected",
+      };
     }
-    return networkLog;
+    return {
+      armed: ch.armed,
+      pid: ch.handshake!.pid,
+      ...(ch.armed
+        ? {}
+        : ch.enabling
+          ? { note: "waiting for the app to acknowledge Network.enable" }
+          : ch.enableFailure
+            ? { note: ch.enableFailure }
+            : {}),
+    };
   };
 
-  const recordNetworkEvent = (event: NetworkEvent, pid: number): void => {
-    const log = networkLogOf(pid);
-    if (log.length >= NATIVE_NETWORK_LOG_LIMIT) log.shift();
-    log.push(event);
+  const records = createIosNetworkRecords(
+    captureState,
+    {
+      liveConnection: () => {
+        const ch = liveChannel();
+        return ch && recordedProcess?.pid === ch.handshake!.pid ? recordedProcess.index : undefined;
+      },
+      request: (index, method, params, timeoutMs) => {
+        const ch = liveChannel();
+        return ch && recordedProcess?.index === index && recordedProcess.pid === ch.handshake!.pid
+          ? ch.cdp.request(method, params, { timeoutMs })
+          : Promise.reject(connectionClosedBefore(bundleId, method));
+      },
+    },
+    () => captureStarted,
+    "macos-native"
+  );
+  const capture = { records, captured: () => captureStarted || captureStopped };
+  macosCaptures.add(capture);
+
+  const network: ChannelNetworkSink = {
+    event(method, params, pid) {
+      // Events come only after the Network.enable of an adopted channel.
+      if (recordedProcess?.pid === pid) records.fold(recordedProcess.index, method, params);
+    },
+    closed(ch) {
+      const process = recordedProcess;
+      if (!ch.handshake || process?.pid !== ch.handshake.pid) return;
+      // The app turns capture off when argent's connection closes, so the
+      // open requests get no more events. A reconnect fails them in adopt.
+      void pollPidsUntilGone([process.pid], {
+        timeoutMs: PROCESS_EXIT_WAIT_MS,
+        pollIntervalMs: POLL_MS,
+      }).then((left) => {
+        if (disposed) return;
+        if (left.length === 0) {
+          records.connectionClosed(process.index, { superseded: false, running: false });
+        } else if (recordedProcess?.channel === ch) {
+          records.connectionClosed(process.index, { superseded: false, running: true });
+        }
+      });
+    },
   };
 
-  const adopt = (ch: LibraryChannel): void => {
+  /**
+   * Sends Network.enable unless the channel is armed or already waiting for
+   * the reply. The reply arms the channel as its frame is read, before the
+   * events after it, unless capture was stopped meanwhile. A channel that does
+   * not answer in time stays open and unarmed: the next start asks again.
+   */
+  const enableOn = (ch: LibraryChannel): Promise<boolean> => {
+    if (ch.armed) return Promise.resolve(true);
+    if (ch.enabling) return ch.enabling;
+    delete ch.enableFailure;
+    const enabling = ch.cdp
+      .request(
+        "Network.enable",
+        {},
+        {
+          timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS,
+          onResult: () => {
+            if (captureStarted) ch.armed = true;
+          },
+        }
+      )
+      .then(
+        () => ch.armed,
+        (err: unknown) => {
+          if (!ch.isOpen || disposed) return false;
+          ch.enableFailure =
+            getFailureSignal(err)?.error_kind === "timeout"
+              ? `the app did not acknowledge Network.enable within ${NETWORK_CAPTURE_ACK_TIMEOUT_MS / 1000} s; network-capture-start asks again`
+              : `the app did not enable capture (${errorMessage(err)}); network-capture-start asks again`;
+          return false;
+        }
+      )
+      .finally(() => {
+        if (ch.enabling === enabling) ch.enabling = undefined;
+      });
+    ch.enabling = enabling;
+    return enabling;
+  };
+
+  const adopt = (ch: LibraryChannel, launched = false): void => {
     if (channel !== ch) channel?.close();
     channel = ch;
-    networkLogOf(ch.handshake!.pid);
-    if (networkInspection) ch.sendControl("activateNetworkInspection");
+    const pid = ch.handshake!.pid;
+    if (recordedProcess?.pid !== pid) {
+      // The last process is gone, so its open requests never finish.
+      if (recordedProcess) {
+        records.connectionClosed(recordedProcess.index, { superseded: true });
+      }
+      recordedProcess = { pid, index: nextProcessIndex++, channel: ch };
+      captureGap = false;
+      armedSinceLaunch = launched && captureStarted;
+    } else if (recordedProcess.channel !== ch) {
+      // The open requests of the same process lost their events while argent
+      // was not connected. One that still runs completes when its end comes.
+      records.connectionClosed(recordedProcess.index, { superseded: false, running: true });
+      recordedProcess.channel = ch;
+    }
+    if (captureStarted) void enableOn(ch);
   };
 
   const closeChannel = (): void => {
@@ -705,7 +892,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       net.createConnection(app.listenSocket),
       bundleId,
       app.pid,
-      recordNetworkEvent
+      network
     );
     try {
       await ch.waitForHandshake(RECONNECT_TIMEOUT_MS);
@@ -1087,12 +1274,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       }
     );
     // Attached before the first await: the handshake may come before the helper's answer.
-    const ch = new LibraryChannel(
-      helper.stdio[3] as net.Socket,
-      bundleId,
-      null,
-      recordNetworkEvent
-    );
+    const ch = new LibraryChannel(helper.stdio[3] as net.Socket, bundleId, null, network);
     let pid: number;
     try {
       pid = await helperPid(helper, info.executable);
@@ -1166,7 +1348,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       sandboxed: info.sandboxed,
       logPath,
     };
-    adopt(ch);
+    adopt(ch, true);
     const { note: noWindow, refusal: noDrivableWindow } = await waitForFirstWindow(
       ch,
       pid,
@@ -1231,24 +1413,74 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     },
     isConnected: () => Boolean(channel?.isOpen && channel.handshake),
     handshake: () => (channel?.isOpen ? channel.handshake : null),
-    async activateNetworkInspection() {
-      networkInspection = true;
+    async startNetworkCapture() {
+      captureStopped = false;
+      const startedNow = !captureStarted;
+      captureStarted = true;
+      // A launch in flight adopts its channel, which arms it.
       await lifecycles.get(bundleId)?.settled;
-      // A channel that ensureChannel opens just now gets it from adopt as
-      // well: the library ignores a repeat.
-      (await ensureChannel()).sendControl("activateNetworkInspection");
+      let ch: LibraryChannel;
+      try {
+        ch = await ensureChannel();
+      } catch (err) {
+        return {
+          armed: false,
+          reason:
+            errorCode(err) === FAILURE_CODES.MACOS_APP_NOT_RUNNING
+              ? `${bundleId} is not running; capture arms when boot-device or launch-app starts it`
+              : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
+        };
+      }
+      // A launch this start waited for armed its process from the start.
+      if (startedNow && !armedSinceLaunch) captureGap = true;
+      const armed = await enableOn(ch);
+      if (armed) return { armed };
+      return { armed, reason: captureState().note ?? "the app did not acknowledge Network.enable" };
     },
-    networkLog: () => [...networkLog],
-    clearNetworkLog: () => {
-      networkLog.length = 0;
+    async stopNetworkCapture() {
+      captureStopped = true;
+      captureStarted = false;
+      captureGap = false;
+      armedSinceLaunch = false;
+      const ch = liveChannel();
+      // A channel that closed took the capture off with it.
+      if (!ch) return { confirmed: true };
+      // The next start sends Network.enable again, whatever became of one on its way now.
+      ch.armed = false;
+      ch.enabling = undefined;
+      delete ch.enableFailure;
+      try {
+        await ch.cdp.request("Network.disable", {}, { timeoutMs: NETWORK_CAPTURE_ACK_TIMEOUT_MS });
+        return { confirmed: true };
+      } catch (err) {
+        if (!ch.isOpen || disposed) return { confirmed: true };
+        return {
+          confirmed: false,
+          reason: `${
+            getFailureSignal(err)?.error_kind === "timeout"
+              ? `the app did not acknowledge Network.disable within ${NETWORK_CAPTURE_ACK_TIMEOUT_MS / 1000} s`
+              : `the app did not disable capture (${errorMessage(err)})`
+          }; argent records none of its new requests, and its next process starts without capture`,
+        };
+      }
     },
+    isNetworkCaptureStarted: () => captureStarted,
+    isNetworkCaptureStopped: () => captureStopped,
+    takeCaptureGap: () => {
+      const gap = captureGap;
+      captureGap = false;
+      return gap;
+    },
+    networkRecords: () => records,
   };
 
   return {
     api,
     dispose: () => {
       disposed = true;
-      // A launch in flight finishes its checks on its channel first.
+      macosCaptures.delete(capture);
+      // A launch in flight finishes its checks on its channel first. A closed
+      // channel takes the network capture off with it.
       if (!launching) closeChannel();
     },
   };

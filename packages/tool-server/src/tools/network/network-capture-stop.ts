@@ -25,6 +25,8 @@ import { canonicalDeviceId } from "../../utils/debugger/device-alias";
 import { metroPort } from "../../utils/debugger/metro-port";
 import { resolveDevice } from "../../utils/device-info";
 import { localIosHost } from "../../utils/ios-host";
+import { macosAppRef, type MacosAppApi } from "../../blueprints/macos-app";
+import { requireMacosAppOfBundle } from "../native-devtools/macos-view-hierarchy";
 import { classifyNotConnected, resolveDebuggerService } from "../debugger/not-connected";
 import {
   CAPTURE_CAPABILITY,
@@ -49,7 +51,7 @@ export function createNetworkCaptureStopTool(
     id: "network-capture-stop",
     description: `Stop network capture for an app on every layer and keep what was captured.
 Use when you have the requests you need, before you profile, or to end capture in an e2e test. Unlike stop-all-simulator-servers, the requests stay listed in native-network-logs and view-network-logs, and their ids keep working in view-network-request-details.
-Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. A request in flight at the stop completes in the list on iOS and in the JS runtime; on Android the list marks it failed, while the app's own request goes on. On Android, a body that view-network-request-details did not read before the stop is no longer available.
+Capture stays off: the read tools, launch-app and restart-app do not turn it on again; network-capture-start does. A request in flight at the stop completes in the list on iOS<flag:macos-apps> and Mac apps</flag:macos-apps> and in the JS runtime; on Android the list marks it failed, while the app's own request goes on. On Android, a body that view-network-request-details did not read before the stop is no longer available.
 Returns { status, layers }: per layer, armed (false once the layer confirmed the stop), total (the requests it keeps for the app) and a reason when the layer was not reached or was not started.`,
     zodSchema: captureSchema,
     capability: CAPTURE_CAPABILITY,
@@ -64,6 +66,12 @@ Returns { status, layers }: per layer, armed (false once the layer confirmed the
     async execute(_services, params) {
       const device = resolveDevice(params.udid);
       const port = metroPort({ device_id: params.udid, port: params.port });
+      if (device.platform === "macos") {
+        const layer = await withCaptureLock(params.udid, params.bundleId, () =>
+          stopMacosLayer(registry, device, params.bundleId, port)
+        );
+        return { status: "ok", layers: [layer] };
+      }
       const layers = await withCaptureLock(params.udid, params.bundleId, () =>
         runLayers([
           device.platform !== "android" && !isInjectableBundleId(params.bundleId)
@@ -267,6 +275,35 @@ async function stopIosLayer(
     layer: "ios-native",
     armed: !confirmed,
     total: api.networkRecords(bundleId)?.records(port).length ?? 0,
+    ...(reason ? { reason } : {}),
+  };
+}
+
+/** A Mac app has one layer, in the app's own service. */
+async function stopMacosLayer(
+  registry: Registry,
+  device: DeviceInfo,
+  bundleId: string,
+  port: number
+): Promise<StoppedLayer> {
+  const ref = macosAppRef(device);
+  if (!isLiveService(registry, ref.urn)) {
+    return { layer: "macos-native", armed: false, total: 0, reason: NOT_STARTED };
+  }
+  const app = requireMacosAppOfBundle(
+    { macosApp: await registry.resolveService<MacosAppApi>(ref.urn, ref.options) },
+    device,
+    "network-capture-stop",
+    bundleId
+  );
+  if (!app.isNetworkCaptureStarted() && !app.isNetworkCaptureStopped()) {
+    return { layer: "macos-native", armed: false, total: 0, reason: NOT_STARTED };
+  }
+  const { confirmed, reason } = await app.stopNetworkCapture();
+  return {
+    layer: "macos-native",
+    armed: !confirmed,
+    total: app.networkRecords().records(port).length,
     ...(reason ? { reason } : {}),
   };
 }

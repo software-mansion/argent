@@ -24,7 +24,7 @@ Argent starts the app with the Argent library inside the app process. Thus Argen
 
 Argent starts the app in the folder `/`. The app gets only the basic variables of a login session, for example `HOME`, `USER`, `PATH` and `LANG`. The app does not get the other environment variables of the Argent tool-server.
 
-When the tool-server disconnects from the app, for example when the tool-server stops, the app works as without Argent. The app can come to the front again. Argent releases a mouse button that the agent held, removes a prepared answer for the next file panel, and stops the network capture of `native-network-logs`.
+When the tool-server disconnects from the app, for example when the tool-server stops, the app works as without Argent. The app can come to the front again. Argent releases a mouse button that the agent held, removes a prepared answer for the next file panel, and stops the network capture.
 
 ## The first run
 
@@ -167,6 +167,6 @@ Each tool that does not support a Mac app fails with a `not supported on macos a
 - Argent drives an app through a standard window. The start fails for a menu bar app that shows no standard window, and for an app that shows only panels or borderless windows.
 - The tree does not show web content in a closed shadow root or in an iframe from a different origin.
 - While the Mac is locked, the tree does not show an open context menu, a `hidden` check does not pass, and a screenshot of a window that is partly off the screen can fail. Clicks, typing and other screenshots still work.
-- Screen recording, profiling, the JavaScript debugger tools, hardware buttons, rotate, shake, `reinstall-app`, `settings-permissions`, `network-capture-start` and `network-capture-stop` are not available.
+- Screen recording, profiling, the JavaScript debugger tools, hardware buttons, rotate, shake, `reinstall-app` and `settings-permissions` are not available.
 
 The [tools reference](/docs/reference/tools#mac-apps) contains the tools and their behavior on a Mac app.

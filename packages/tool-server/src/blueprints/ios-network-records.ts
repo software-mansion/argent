@@ -32,6 +32,10 @@ import {
 const RUN_TAG = randomBytes(2).toString("hex");
 
 export const IOS_NATIVE_REQUEST_ID = /^ios-[0-9a-f]{4}-\d+$/;
+export const MACOS_NATIVE_REQUEST_ID = /^macos-[0-9a-f]{4}-\d+$/;
+
+/** The layers of the in-app NSURLProtocol agent: on an iOS simulator, and in a Mac app. */
+export type AppleNativeLayer = "ios-native" | "macos-native";
 
 /** Shared by every store of the tool-server, so ids never repeat across apps or devices. */
 let nextRecordNumber = 1;
@@ -64,6 +68,8 @@ const NO_ANSWER = `the app did not answer within ${POST_DATA_WAIT_MS / 1000} s; 
 const CONNECTION_CLOSED = "the agent's connection closed before this body was read";
 const REQUEST_BODY_GONE = "the agent holds no body for this request";
 const RESPONSE_BODY_GONE = "the agent no longer holds this body";
+/** The Mac library keeps no bodies, so its "No ..." answer is not an eviction. */
+export const MACOS_NO_BODIES = "argent does not keep the bodies of a Mac app's requests";
 const NO_RESPONSE_BODY = "the response has no body";
 
 export interface IosNetworkCaptureState {
@@ -126,9 +132,11 @@ export interface IosNetworkRecordStore extends IosNetworkRecords {
   /** The store still holds a record that came in on `connection`. */
   holdsRecordsOf(connection: number): boolean;
   /**
-   * Fails the open records of a connection that closed. A connection does not
-   * come back for the same process, so its open records never settle. The
-   * check also decides why a body of the connection can no longer be read.
+   * Fails the open records of a connection that closed. An iOS connection does
+   * not come back for the same process, so its open records never settle. A
+   * Mac app's connection is its process, which argent can reconnect to: a
+   * request that still runs then completes when its end comes. The check also
+   * decides why a body of the connection can no longer be read.
    */
   connectionClosed(connection: number, check: ClosedConnectionCheck): void;
 }
@@ -136,14 +144,17 @@ export interface IosNetworkRecordStore extends IosNetworkRecords {
 /**
  * One app's records. They belong to the app, not to a connection, so a
  * reconnect and a relaunch keep the history. `state` reads the app's live
- * connection, which the native-devtools service owns. While `recording` is
- * false, a new request gets no record; the events of a recorded one still fold.
+ * connection, which the native-devtools service owns, or a Mac app's service.
+ * While `recording` is false, a new request gets no record; the events of a
+ * recorded one still fold. `layer` names the records and starts their ids.
  */
 export function createIosNetworkRecords(
   state: () => IosNetworkCaptureState,
   link: IosAgentLink,
-  recording: () => boolean = () => true
+  recording: () => boolean = () => true,
+  layer: AppleNativeLayer = "ios-native"
 ): IosNetworkRecordStore {
+  const idPrefix = layer === "macos-native" ? "macos" : "ios";
   const records: NativeNetworkRecord[] = [];
   let recordChars = 0;
   const recordSizes = new WeakMap<NativeNetworkRecord, number>();
@@ -183,8 +194,8 @@ export function createIosNetworkRecords(
           : Date.now();
     const postData = typeof req.postData === "string" ? req.postData : "";
     const record: NativeNetworkRecord = {
-      id: `ios-${RUN_TAG}-${nextRecordNumber++}`,
-      layer: "ios-native",
+      id: `${idPrefix}-${RUN_TAG}-${nextRecordNumber++}`,
+      layer,
       layerId,
       connection,
       state: "pending",
@@ -407,6 +418,7 @@ export function createIosNetworkRecords(
         const detail = at === -1 ? message : message.slice(at + marker.length);
         // The agent answers a body it does not hold with an error that says so.
         if (/^no /i.test(detail)) {
+          if (layer === "macos-native") return MACOS_NO_BODIES;
           return kind === "post" ? REQUEST_BODY_GONE : RESPONSE_BODY_GONE;
         }
         return `the agent did not return the body: ${detail}`;
@@ -438,6 +450,8 @@ export function createIosNetworkRecords(
         case "Network.responseReceived": {
           const r = asObject(p.response);
           const status = typeof r.status === "number" ? r.status : 0;
+          // A Mac app's request failed at a reconnect can still finish.
+          delete record.errorText;
           record.state = "headers";
           record.response = {
             // The URL of the final response, after any redirects.
@@ -454,6 +468,7 @@ export function createIosNetworkRecords(
           // A request in flight at a clear lists again once it settles, so
           // polling with clear sees it finish.
           cleared.delete(record);
+          delete record.errorText;
           record.state = "complete";
           if (typeof p.encodedDataLength === "number")
             record.encodedDataLength = p.encodedDataLength;
