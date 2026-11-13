@@ -109,12 +109,14 @@ if (process.platform === "darwin") {
   console.log(`⊘ Skipping native devtools dylibs build (macOS-only on ${process.platform})\n`);
 }
 
-console.log("Building dispatcher TypeScript...");
-execSync("npm run build:dispatcher -w @swmansion/argent", {
+// The dispatcher imports other workspace packages through their dist/ entry
+// points. Build the project references first so a fresh clone has those files.
+console.log("Building workspace TypeScript...");
+execSync("npm run build", {
   cwd: ROOT,
   stdio: "inherit",
 });
-console.log("✓ Dispatcher TypeScript built\n");
+console.log("✓ Workspace TypeScript built\n");
 
 console.log("Bundling dispatcher subcommands...");
 execSync("node scripts/bundle-tools.cjs --esm-only", {
@@ -305,8 +307,11 @@ function restoreCliRecord() {
 }
 
 let toolServerPid = null;
+let cleanedUp = false;
 
 function cleanup() {
+  if (cleanedUp) return;
+  cleanedUp = true;
   console.log("\nCleaning up...");
 
   if (toolServerPid && isProcessAlive(toolServerPid)) {

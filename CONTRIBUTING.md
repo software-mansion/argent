@@ -58,7 +58,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    npm run dev
    ```
 
-   On macOS this builds the native devtools dylibs from the private `packages/argent-private` submodule if you have SSH access to it, and otherwise uses the ones from step 3. It then builds the dispatcher, points `~/.claude.json`, `~/.cursor/mcp.json` and `~/.argent/cli.json` at the local build, and starts the tool-server from source. Press `Ctrl+C` to stop and restore your global Argent configuration.
+   On macOS this builds the native devtools dylibs from the private `packages/argent-private` submodule if you have SSH access to it, and otherwise uses the ones from step 3. It then builds the workspace TypeScript, points `~/.claude.json`, `~/.cursor/mcp.json` and `~/.argent/cli.json` at the local build, and starts the tool-server from source. Press `Ctrl+C` to stop and restore your global Argent configuration.
 
    To use a different port:
 
@@ -66,10 +66,10 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    PORT=4000 npm run dev
    ```
 
-   > **Note:** On a physical iPhone the tool-server builds the on-device XCUITest runner from `packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj`. A packaged tool-server finds that project next to its bundle; one started from source (`npm run dev`, `npm run start`, or `node packages/tool-server/dist/index.js start`) does not, and the first tool that drives the runner (`describe`, a gesture, `screenshot`) fails with "Could not locate the ios-device-runner Xcode project". Point it at the project:
+   > **Note:** On a physical iPhone the tool-server builds the on-device XCUITest runner from `packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj`. A packaged tool-server finds that project next to its bundle, and one started from source (`npm run dev`, `npm run start`, or `node packages/tool-server/dist/index.js start`) finds it in the workspace. To build a different copy, point `ARGENT_IOS_RUNNER_PROJECT` at it:
    >
    > ```bash
-   > ARGENT_IOS_RUNNER_PROJECT="$PWD/packages/ios-device-runner/ArgentRunner/ArgentRunner.xcodeproj" npm run dev
+   > ARGENT_IOS_RUNNER_PROJECT="/path/to/ArgentRunner.xcodeproj" npm run dev
    > ```
 
 That's it, no separate install steps per package are needed, except `packages/docs`. It is excluded from the workspace glob and keeps its own lockfile, so `npm run lint` from the root needs `npm install` run inside `packages/docs` first.

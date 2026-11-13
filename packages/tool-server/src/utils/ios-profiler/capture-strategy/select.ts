@@ -14,7 +14,7 @@ import { allProcessesStrategy } from "./all-processes";
 
 const ENV_OVERRIDE = "ARGENT_IOS_CAPTURE";
 
-interface XcodeVersion {
+export interface XcodeVersion {
   major: number;
   minor: number;
 }
@@ -61,6 +61,12 @@ function parseEnvOverride(): OverrideParse {
   return { kind: "invalid", raw: original };
 }
 
+/** Major and minor from `xcodebuild -version` output, e.g. "Xcode 26.4.1\nBuild version 17E202". */
+export function parseXcodeVersion(text: string): XcodeVersion | null {
+  const m = text.match(/Xcode\s+(\d+)\.(\d+)/);
+  return m ? { major: Number(m[1]), minor: Number(m[2]) } : null;
+}
+
 function readActiveXcodeVersion(): XcodeVersion | null {
   try {
     // `xcodebuild -version` honours DEVELOPER_DIR / xcode-select and prints e.g.
@@ -71,9 +77,7 @@ function readActiveXcodeVersion(): XcodeVersion | null {
       timeout: 5_000,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    const m = out.match(/Xcode\s+(\d+)\.(\d+)/);
-    if (!m) return null;
-    return { major: Number(m[1]), minor: Number(m[2]) };
+    return parseXcodeVersion(out);
   } catch {
     return null;
   }

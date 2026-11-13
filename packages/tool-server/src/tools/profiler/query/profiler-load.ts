@@ -507,7 +507,8 @@ Fails if the session_id is not found or the session's trace files are missing fr
   },
   // The Hermes, xctrace and perfetto formats this loads have no Chromium
   // equivalent; the gate fails at the call site, not inside the trace parser.
-  capability: RN_ONLY_TOOL_CAPABILITY,
+  // Physical iPhones load the xctrace sessions native-profiler-launch-analysis writes.
+  capability: { ...RN_ONLY_TOOL_CAPABILITY, apple: { simulator: true, device: true } },
   // load_native re-parses the whole export, which can outlast the 30s MCP fetch
   // timeout; an aborted call is replayed, not cancelled.
   longRunning: true,

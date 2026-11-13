@@ -69,6 +69,6 @@ Each tool that does not exist on hardware fails with a `not supported on ios dev
 - The agent presses the home, volume and action buttons only. The power button and the app switcher are not available.
 - The agent types text, Enter and Backspace only. Other named keys are not available.
 - The agent changes an app permission in the Settings app of the phone, not with the permissions tool.
-- JavaScript debugging, React and native profiling, native view inspection, screen recording and paste work on a simulator only.
+- JavaScript debugging, React and native profiling, native view inspection, screen recording and paste work on a simulator only. The exception is the [iOS launch analysis](/docs/features/ios-launch-performance). It works on a physical device.
 
 The device appears in the device list as an iOS entry with kind `device`, with state `connected` while the cable is attached. Argent drives the device with the same interaction tools it uses on simulators. The [tools reference](/docs/reference/tools#devices-and-apps) contains all tools and describes how a physical device appears in `list-devices`.

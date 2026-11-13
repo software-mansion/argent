@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import type { CpuSample, RawHang, RawLeak, StackFrame } from "../types";
-import { SYSTEM_LIBRARY_PATH_PREFIXES } from "../config";
+import { DEVICE_SUPPORT_PATH_SEGMENT, SYSTEM_LIBRARY_PATH_PREFIXES } from "../config";
 
 function decodeXml(str: string): string {
   return str
@@ -28,7 +28,10 @@ function extractRows(xml: string): string[] {
 }
 
 function isSystemLibraryPath(path: string): boolean {
-  return SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return (
+    SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
+    path.includes(DEVICE_SUPPORT_PATH_SEGMENT)
+  );
 }
 
 /**

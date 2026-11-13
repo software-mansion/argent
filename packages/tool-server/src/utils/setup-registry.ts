@@ -71,6 +71,7 @@ import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profil
 import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/native-profiler-start";
 import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
 import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
+import { createNativeProfilerLaunchAnalysisTool } from "../tools/profiler/native-profiler/native-profiler-launch-analysis";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
 import { screenRecordingSessionBlueprint } from "../blueprints/screen-recording-session";
 import { createScreenRecordingStartTool } from "../tools/screen-recording/screen-recording-start";
@@ -193,6 +194,7 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeProfilerStartTool);
   registry.registerTool(nativeProfilerStopTool);
   registry.registerTool(nativeProfilerAnalyzeTool);
+  registry.registerTool(createNativeProfilerLaunchAnalysisTool(registry));
   registry.registerTool(profilerCpuQueryTool);
   registry.registerTool(profilerCommitQueryTool);
   registry.registerTool(profilerStackQueryTool);

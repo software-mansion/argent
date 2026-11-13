@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-optimization
-description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to argent-react-native-profiler for measurement.
+description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup / TTI (including iOS launch time). Delegates to argent-react-native-profiler for measurement.
 ---
 
 ## Rules
@@ -45,3 +45,12 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 ### Phase 4: Verify no regressions
 
 Navigate every screen and UI flow within scope (the entire app if no scope was given, via `argent-device-interact`) and confirm each renders without errors. Check `debugger-log-registry` for warnings and errors (`Grep` its log file). Argent hides LogBox toasts once a `debugger-*` tool connects, so screenshots catch only full-screen red errors. Look for regressions the fixes introduced (e.g. fewer re-renders but higher CPU, or new jank on a different screen). Main agent only.
+
+## Startup time (TTI)
+
+TTI is made of two parts. Measure both and report them separately; neither alone is TTI.
+
+1. **Native launch (iOS)**: process start to the first native frame. Runtime creation and early JS work can fall inside this window and show up in the launch profile. Measure it with `native-profiler-launch-analysis` `mode: "measure"` and profile it with `mode: "profile"`; follow §4 of `argent-native-profiler`.
+2. **React Native startup**: bundle load and evaluation, then the render of the first usable screen. The React profiler cannot record it: `react-profiler-start` attaches to the running JS runtime, and a reload or app restart discards that runtime. Work that runs before the first frame shows up in the launch profile. To profile the render cost of the first usable screen, start `argent-react-native-profiler` and open that screen again.
+
+Do not add the two parts into one TTI number. They can overlap (runtime creation can run before the first frame), and they come from different builds and hardware: the launch tool uses a Release build on an iPhone, the React profiler a debug Metro build on a simulator. Re-measure the part you changed and confirm the other did not regress.
