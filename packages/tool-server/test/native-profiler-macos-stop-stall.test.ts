@@ -1,8 +1,8 @@
 /**
- * native-profiler-stop on a Mac app watches xctrace for a hang after SIGINT
- * (on a Mac app it sometimes stops for good: idle, and writing nothing), ends a
- * hung one early and says so. An iOS simulator's stop has no such watch.
- * xctrace, its progress probe and the export are faked.
+ * native-profiler-stop watches xctrace for a hang after SIGINT (it sometimes
+ * stops for good: idle, and writing nothing), ends a hung one early and says
+ * so, on a Mac app and on an iOS simulator. xctrace, its progress probe and the
+ * export are faked.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
@@ -129,15 +129,32 @@ describe("native-profiler-stop and an xctrace that hangs after SIGINT", () => {
     expect(result.warning).toBeUndefined();
   });
 
-  it("on an iOS simulator, has no stall watch and waits out the SIGINT window", async () => {
+  it("on an iOS simulator, ends a hung xctrace early too, still exports, and warns", async () => {
     const child = new FakeXctrace();
     child.respondsTo.add("SIGTERM");
     const api = await recording(IOS, child);
 
     const pending = stopNativeProfilerIos(api);
+    await vi.advanceTimersByTimeAsync(STALL_MS + 2 * POLL_MS);
+
+    expect(child.signals).toEqual(["SIGINT", "SIGTERM"]);
+    expect(vi.mocked(xctraceProgressProbe)).toHaveBeenCalledWith(child, TRACE);
+    const result = await pending;
+    expect(result.warning).toMatch(/^xctrace hung while it ended the recording/);
+    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledWith(TRACE, false);
+    expect(api.captureProcess).toBeNull();
+  });
+
+  it("on an iOS simulator, waits the whole SIGINT window for an xctrace that makes progress", async () => {
+    const child = new FakeXctrace();
+    child.respondsTo.add("SIGTERM");
+    const api = await recording(IOS, child);
+    let n = 0;
+    vi.mocked(xctraceProgressProbe).mockImplementationOnce(() => async () => `0:0${n++}|4096`);
+
+    const pending = stopNativeProfilerIos(api);
     await vi.advanceTimersByTimeAsync(STALL_MS + 10 * POLL_MS);
     expect(child.signals).toEqual(["SIGINT"]);
-    expect(vi.mocked(xctraceProgressProbe)).not.toHaveBeenCalled();
 
     // The 5-minute window, then the ordinary escalation.
     await vi.advanceTimersByTimeAsync(300_000);

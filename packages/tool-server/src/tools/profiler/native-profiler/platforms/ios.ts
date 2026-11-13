@@ -54,9 +54,9 @@ const STOP_GRACE_MS = 300_000;
 const STOP_TERM_MS = 5_000;
 const STOP_KILL_MS = 5_000;
 /**
- * How long a stopping xctrace may make no progress (Mac apps only) before the
- * stop ends it: a fifth of the recording, within 30 s to 2 min. A healthy stop
- * starts with a wait that grows with the recording: after a 5 min recording,
+ * How long a stopping xctrace may make no progress before the stop ends it: a
+ * fifth of the recording, within 30 s to 2 min. A healthy stop starts with a
+ * wait that grows with the recording: after a 5 min recording of a Mac app,
  * 23 s in which xctrace's CPU time or the trace bundle changed at least every
  * 11 s.
  */
@@ -728,17 +728,9 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     graceMs: STOP_GRACE_MS,
     termMs: STOP_TERM_MS,
     killMs: STOP_KILL_MS,
-    // On a Mac app, xctrace sometimes hangs after SIGINT for good, also with no
-    // argent in the app: idle, and writing nothing.
-    ...(api.platform === "macos"
-      ? {
-          stall: {
-            probe: xctraceProgressProbe(child, api.traceFile),
-            idleMs,
-            pollMs: 2_000,
-          },
-        }
-      : {}),
+    // xctrace sometimes hangs after SIGINT for good, also with no argent in the
+    // app: idle, and writing nothing.
+    stall: { probe: xctraceProgressProbe(child, api.traceFile), idleMs, pollMs: 2_000 },
   });
 
   let warning: string | undefined;

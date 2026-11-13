@@ -533,7 +533,6 @@ Without `malloc_stack_logging`, a memory leak has an allocation backtrace only w
 `native-profiler-stop` on a Mac app takes about 15 to 25 seconds for a short recording, because xctrace completes the trace and exports it. A long recording takes more time. The result has the same fields as on iOS: `traceFile`, `exportedFiles` and `exportDiagnostics`.
 
 - When the app ended during the recording, the result has a `warning`. The app quit, crashed or started again, and the trace contains only a part of the data. The report of `native-profiler-analyze` has the same note below its title.
-- Sometimes xctrace does not end after the stop of a recording. This fault of xctrace also occurs without Argent. When xctrace uses no CPU time and writes nothing to the trace for a time, Argent ends xctrace and the result has a `warning`. This time is one fifth of the recording time, from 30 to 120 seconds. The exported data can be incomplete or missing.
 - When xctrace reports errors at the end of the recording, the result has a `warning` with these errors. When xctrace could not attach to the app, the trace contains no data. Then the tool does not export the tables, and the `warning` tells the agent to start the recording again. `exportDiagnostics.skipped` gives the reason, and the report of `native-profiler-analyze` gives the same reason.
 - When the app ended during the recording and xctrace cannot list the tables of the trace in 60 seconds, the tool does not export the tables. After a crash of the app, the trace can contain almost no data, and each export of this trace takes more than a minute. `exportDiagnostics.skipped` and the `cpu`, `hangs` and `leaks` entries of `exportDiagnostics.errors` tell this.
 - After 10 minutes, Argent stops a recording that is still on. On a Mac app, Argent ends xctrace when it does not end in the 2 minutes after this stop.
@@ -572,6 +571,8 @@ On an iOS simulator and on a Mac app, these rules apply while `native-profiler-s
 - A second `native-profiler-stop` on the same device returns the result of the stop that runs.
 - `native-profiler-start` and `native-profiler-analyze` wait until the stop has ended.
 - `profiler-load` and `profiler-combined-report` refuse to run until the stop has ended.
+
+Sometimes xctrace does not end after the stop of a recording on an iOS simulator or a Mac app. This fault of xctrace also occurs without Argent. When xctrace uses no CPU time and writes nothing to the trace for a time, `native-profiler-stop` ends xctrace. This time is one fifth of the recording time, from 30 to 120 seconds. The result then has a `warning`. The exported data can be incomplete or missing.
 
 In a report from Instruments, `native-profiler-analyze` gives the CPU time that Argent and Instruments used inside the app during the recording, and the share of all CPU time:
 
