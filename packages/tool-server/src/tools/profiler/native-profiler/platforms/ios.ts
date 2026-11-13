@@ -16,7 +16,6 @@ import {
   type SuspensionAdjustment,
 } from "../../../../utils/ios-profiler/app-suspensions";
 import type { ExportDiagnostics, IosExportKey } from "../../../../utils/ios-profiler/export";
-import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
 import {
   selectIosCaptureStrategy,
@@ -37,10 +36,11 @@ import {
   assertNoCaptureRunning,
   waitForStop,
   commitXctraceRecording,
+  endXctrace,
   newTraceOutputPath,
   resolveDefaultTemplatePath,
   spawnXctraceRecording,
-  xctraceProgressProbe,
+  xctraceEndWarning,
   xctraceRunErrors,
 } from "./xctrace";
 
@@ -48,21 +48,6 @@ const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
 const MAX_START_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1_200;
 const COLD_START_SIGNATURE = "Cannot find process matching name:";
-
-// Ceiling, not a fixed wait — 30s SIGTERM'd xctrace mid-package.
-const STOP_GRACE_MS = 300_000;
-const STOP_TERM_MS = 5_000;
-const STOP_KILL_MS = 5_000;
-/**
- * How long a stopping xctrace may make no progress before the stop ends it: a
- * fifth of the recording, within 30 s to 2 min. A healthy stop starts with a
- * wait that grows with the recording: after a 5 min recording of a Mac app,
- * 23 s in which xctrace's CPU time or the trace bundle changed at least every
- * 11 s.
- */
-function stallIdleMs(recordedMs: number): number {
-  return Math.min(120_000, Math.max(30_000, Math.round(recordedMs / 5)));
-}
 
 interface AppInfo {
   CFBundleExecutable: string;
@@ -663,6 +648,9 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     const traceFile = api.traceFile;
     const wasTimeout = api.recordingTimedOut;
     const exitInfo = api.lastExitInfo;
+    // The cap ended xctrace as a stop does, and xctrace may still save the trace.
+    const cappedEnd = wasTimeout && api.cappedEnd ? await api.cappedEnd : null;
+    api.cappedEnd = null;
     api.recordingTimedOut = false;
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
@@ -678,9 +666,13 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     api.recordedMs = null;
     api.appSuspensions = suspensionSpans(suspensions, diagnostics);
 
+    // When xctrace did not end on the cap's SIGINT, its warning says what is left
+    // of the data and to record again.
+    const endWarning = cappedEnd ? xctraceEndWarning(cappedEnd) : undefined;
     let warning = wasTimeout
-      ? "Recording timed out at 10 min cap; exported the partial trace. " +
-        "Call native-profiler-start again for a fresh recording."
+      ? "Recording timed out at 10 min cap; " +
+        (endWarning ??
+          "exported the partial trace. Call native-profiler-start again for a fresh recording.")
       : `xctrace exited before stop was called (code=${exitInfo?.code ?? "?"}, ` +
         `signal=${exitInfo?.signal ?? "?"}); exported the partial trace. ` +
         (api.platform === "macos"
@@ -720,33 +712,11 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
 
   const child = api.captureProcess;
   const recordedMs = Date.now() - (api.wallClockStartMs ?? Date.now());
-  const idleMs = stallIdleMs(recordedMs);
   // Before xctrace saves the trace and the exports run: an app that quits during
   // them did not quit during the recording.
   const ended = appEnded(api);
-  const result = await shutdownChild(child, {
-    graceMs: STOP_GRACE_MS,
-    termMs: STOP_TERM_MS,
-    killMs: STOP_KILL_MS,
-    // xctrace sometimes hangs after SIGINT for good, also with no argent in the
-    // app: idle, and writing nothing.
-    stall: { probe: xctraceProgressProbe(child, api.traceFile), idleMs, pollMs: 2_000 },
-  });
-
-  let warning: string | undefined;
-  if (result.stalled) {
-    warning =
-      `xctrace hung while it ended the recording: for ${Math.round(idleMs / 1000)} s it used ` +
-      `no CPU and wrote nothing to the trace. This is a fault of xctrace, which also happens ` +
-      `without argent. argent ended it with ${result.signalUsed}, so the exported data may be ` +
-      `incomplete or missing. Call native-profiler-start again for a new recording.`;
-    process.stderr.write(`[native-profiler] ${warning}\n`);
-  } else if (!result.clean) {
-    warning =
-      `xctrace did not respond to SIGINT${result.signalUsed === "SIGKILL" ? "/SIGTERM" : ""}; ` +
-      `${result.signalUsed} was used. Trace bundle may be incomplete.`;
-    process.stderr.write(`[native-profiler] ${warning}\n`);
-  }
+  let warning = xctraceEndWarning(await endXctrace(child, api.traceFile, recordedMs));
+  if (warning) process.stderr.write(`[native-profiler] ${warning}\n`);
 
   api.profilingActive = false;
   api.capturePid = null;

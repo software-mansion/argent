@@ -13,7 +13,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shutdownChild } from "../../src/utils/profiler-shared/lifecycle";
-import { xctraceProgressProbe } from "../../src/tools/profiler/native-profiler/platforms/xctrace";
+import { xctraceProgressProbe } from "../../src/utils/ios-profiler/xctrace-progress";
 
 class FakeChild extends EventEmitter {
   exitCode: number | null = null;
@@ -237,6 +237,18 @@ describe("xctraceProgressProbe", { timeout: 30_000 }, () => {
     appendFileSync(join(dir, "Trace1.run", "data"), "more bytes");
 
     expect(await probe()).not.toBe(before);
+  });
+
+  // A tool-server that a GUI app or launchd started has a PATH without /bin, where ps is.
+  it("reads the CPU time also when no ps is on PATH", async () => {
+    const sleeping = run("sleep", ["30"]);
+    const originalPath = process.env.PATH;
+    process.env.PATH = dir;
+    try {
+      expect(await unreadable(xctraceProgressProbe(sleeping, dir))).not.toBeNull();
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 
   // `ps -o time=` shows hundredths of a second on macOS, where xctrace runs;

@@ -76,6 +76,7 @@ function makeApi(platform: "ios" | "macos"): NativeProfilerSessionApi {
     wallClockStartMs: Date.now(),
     parsedData: null,
     recordingTimeout: null,
+    cappedEnd: null,
     recordingTimedOut: false,
     recordingExitedUnexpectedly: false,
     lastExitInfo: null,

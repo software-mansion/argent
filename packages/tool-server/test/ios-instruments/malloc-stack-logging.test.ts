@@ -48,6 +48,7 @@ function fakeApi(): NativeProfilerSessionApi {
     wallClockStartMs: null,
     parsedData: null,
     recordingTimeout: null,
+    cappedEnd: null,
     recordingTimedOut: false,
     recordingExitedUnexpectedly: false,
     lastExitInfo: null,

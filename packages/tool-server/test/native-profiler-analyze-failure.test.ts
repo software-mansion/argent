@@ -107,6 +107,7 @@ async function buildSessionWithTrace(): Promise<{
     suspensionWatch: null,
     appSuspensions: null,
     recordingTimeout: null,
+    cappedEnd: null,
     recordingTimedOut: false,
     recordingExitedUnexpectedly: false,
     lastExitInfo: null,

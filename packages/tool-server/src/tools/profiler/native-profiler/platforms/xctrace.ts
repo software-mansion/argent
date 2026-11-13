@@ -1,6 +1,4 @@
-import { execFile, spawn, type ChildProcess } from "child_process";
-import { promises as fsp } from "node:fs";
-import { promisify } from "node:util";
+import { spawn, type ChildProcess } from "child_process";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { existsSync } from "node:fs";
 import * as path from "path";
@@ -13,6 +11,8 @@ import {
 } from "../../../../utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
+import { shutdownChild, type ShutdownResult } from "../../../../utils/profiler-shared/lifecycle";
+import { xctraceProgressProbe } from "../../../../utils/ios-profiler/xctrace-progress";
 
 // The `xctrace record` lifecycle that iOS simulators and Mac apps share: what
 // differs per platform is only how the target is found and the record arguments.
@@ -228,8 +228,67 @@ export async function spawnXctraceRecording(
   return { child: xctraceProcess, pid: xctraceProcess.pid };
 }
 
-/** How long a Mac app's xctrace may take to end after the recording cap's SIGINT. */
-const CAPPED_XCTRACE_KILL_MS = 120_000;
+// Ceiling, not a fixed wait: 30 s SIGTERM'd xctrace mid-package.
+const STOP_GRACE_MS = 300_000;
+const STOP_TERM_MS = 5_000;
+const STOP_KILL_MS = 5_000;
+/**
+ * How long a stopping xctrace may make no progress before the stop ends it: a
+ * fifth of the recording, within 30 s to 2 min. A healthy stop starts with a
+ * wait that grows with the recording: after a 5 min recording of a Mac app,
+ * 23 s in which xctrace's CPU time or the trace bundle changed at least every
+ * 11 s.
+ */
+function stallIdleMs(recordedMs: number): number {
+  return Math.min(120_000, Math.max(30_000, Math.round(recordedMs / 5)));
+}
+
+/** How a recording's xctrace ended, with the stall watch's limit. */
+export interface XctraceEnd {
+  result: ShutdownResult;
+  idleMs: number;
+}
+
+/**
+ * Ends a recording's xctrace: SIGINT, then SIGTERM and SIGKILL when it does not
+ * end in 5 minutes. xctrace sometimes hangs after SIGINT for good, also with no
+ * argent in the app: idle, and writing nothing. So the ladder goes on earlier
+ * when it makes no progress for {@link stallIdleMs} of the recording.
+ */
+export async function endXctrace(
+  child: ChildProcess,
+  traceFile: string,
+  recordedMs: number
+): Promise<XctraceEnd> {
+  const idleMs = stallIdleMs(recordedMs);
+  const result = await shutdownChild(child, {
+    graceMs: STOP_GRACE_MS,
+    termMs: STOP_TERM_MS,
+    killMs: STOP_KILL_MS,
+    stall: { probe: xctraceProgressProbe(child, traceFile), idleMs, pollMs: 2_000 },
+  });
+  return { result, idleMs };
+}
+
+/** What the stop says when xctrace did not end on its SIGINT. */
+export function xctraceEndWarning({ result, idleMs }: XctraceEnd): string | undefined {
+  if (result.stalled) {
+    return (
+      `xctrace hung while it ended the recording: for ${Math.round(idleMs / 1000)} s it used ` +
+      `no CPU and wrote nothing to the trace. This is a fault of xctrace, which also happens ` +
+      `without argent. argent ended it with ${result.signalUsed}, so the exported data may be ` +
+      `incomplete or missing. Call native-profiler-start again for a new recording.`
+    );
+  }
+  if (!result.clean) {
+    return (
+      `xctrace did not respond to SIGINT${result.signalUsed === "SIGKILL" ? "/SIGTERM" : ""}; ` +
+      `${result.signalUsed} was used. Trace bundle may be incomplete. Call ` +
+      `native-profiler-start again for a new recording.`
+    );
+  }
+  return undefined;
+}
 
 export interface XctraceCapture {
   appProcess: string;
@@ -285,6 +344,7 @@ export function commitXctraceRecording(
   // recovery flags reset here too — clearing them on a FAILED start would make stop's
   // partial-trace recovery for the previous abnormal capture unreachable.
   api.recordingTimedOut = false;
+  api.cappedEnd = null;
   api.recordingExitedUnexpectedly = false;
   api.lastExitInfo = null;
   api.appProcess = capture.appProcess;
@@ -303,63 +363,27 @@ export function commitXctraceRecording(
   api.recordingTimeout = setTimeout(() => {
     // Now, not at the stop: an app that quits after the recording did not quit during it.
     api.recordingAppEnded = appEnded(api);
-    try {
-      xctraceProcess.kill("SIGINT");
-    } catch {
-      // already dead
-    }
     api.profilingActive = false;
-    api.capturePid = null;
-    api.captureProcess = null;
     api.recordingTimeout = null;
     api.recordingTimedOut = true;
-    // No stop waits for this xctrace, and on a Mac app it can hang after SIGINT
-    // for good (see stopNativeProfilerIos).
-    if (api.platform === "macos") {
-      setTimeout(() => {
-        if (xctraceProcess.exitCode === null && xctraceProcess.signalCode === null) {
-          try {
-            xctraceProcess.kill("SIGKILL");
-          } catch {
-            // already dead
-          }
-        }
-      }, CAPPED_XCTRACE_KILL_MS).unref();
-    }
+    // As a stop does: xctrace saves the trace after the SIGINT, which can take
+    // minutes, and can hang there for good. The stop after the cap waits for
+    // this end before it exports, and a teardown still reaches the process.
+    api.cappedEnd = endXctrace(xctraceProcess, capture.traceFile, RECORDING_CAP_MS);
   }, RECORDING_CAP_MS);
 
-  xctraceProcess.on("exit", (code, signal) => handleXctraceExit(api, code, signal));
+  xctraceProcess.on("exit", (code, signal) => {
+    // A newer recording's xctrace can be the capture by then.
+    if (api.captureProcess !== xctraceProcess) return;
+    handleXctraceExit(api, code, signal);
+    // After the cap, which keeps the process until it ends.
+    api.capturePid = null;
+    api.captureProcess = null;
+  });
 
   return {
     status: "recording",
     pid: xctracePid,
     traceFile: capture.traceFile,
-  };
-}
-
-const execFileAsync = promisify(execFile);
-
-/**
- * A fingerprint of a stopping xctrace's progress for `shutdownChild`'s stall
- * watch: its CPU time and the bytes in the trace bundle. Null when the child
- * has no pid; rejects when `ps` or the bundle cannot be read, which the watch
- * treats as no reading.
- */
-export function xctraceProgressProbe(
-  child: ChildProcess,
-  traceFile: string
-): () => Promise<string | null> {
-  return async () => {
-    if (!child.pid) return null;
-    const { stdout } = await execFileAsync("ps", ["-o", "time=", "-p", String(child.pid)], {
-      timeout: 2_000,
-    });
-    const entries = await fsp.readdir(traceFile, { recursive: true, withFileTypes: true });
-    let bytes = 0;
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      bytes += (await fsp.stat(path.join(entry.parentPath, entry.name))).size;
-    }
-    return `${stdout.trim()}|${bytes}`;
   };
 }

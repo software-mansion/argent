@@ -9,10 +9,7 @@ import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 import type { DeviceInfo } from "@argent/registry";
 
-vi.mock("../src/tools/profiler/native-profiler/platforms/xctrace", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../src/tools/profiler/native-profiler/platforms/xctrace")
-  >()),
+vi.mock("../src/utils/ios-profiler/xctrace-progress", () => ({
   xctraceProgressProbe: vi.fn(() => async () => "0:01.20|4096"),
 }));
 vi.mock("../src/utils/ios-profiler/export", () => ({
@@ -27,10 +24,8 @@ import {
   type NativeProfilerSessionApi,
 } from "../src/blueprints/native-profiler-session";
 import { stopNativeProfilerIos } from "../src/tools/profiler/native-profiler/platforms/ios";
-import {
-  commitXctraceRecording,
-  xctraceProgressProbe,
-} from "../src/tools/profiler/native-profiler/platforms/xctrace";
+import { commitXctraceRecording } from "../src/tools/profiler/native-profiler/platforms/xctrace";
+import { xctraceProgressProbe } from "../src/utils/ios-profiler/xctrace-progress";
 import { RECORDING_CAP_MS } from "../src/utils/profiler-shared/types";
 import { exportIosTraceData } from "../src/utils/ios-profiler/export";
 import { resolveDevice } from "../src/utils/device-info";
@@ -40,15 +35,20 @@ class FakeXctrace extends EventEmitter {
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   respondsTo = new Set<NodeJS.Signals>();
+  /** How long it takes to end after a signal it responds to: saving the trace. */
+  exitAfterMs = 0;
   signals: NodeJS.Signals[] = [];
 
   kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.signals.push(signal);
-    if (this.respondsTo.has(signal)) {
-      queueMicrotask(() => {
+    if (signal === "SIGKILL" || this.respondsTo.has(signal)) {
+      const exit = () => {
+        if (this.exitCode !== null || this.signalCode !== null) return;
         this.signalCode = signal;
         this.emit("exit", null, signal);
-      });
+      };
+      if (this.exitAfterMs > 0 && signal !== "SIGKILL") setTimeout(exit, this.exitAfterMs);
+      else queueMicrotask(exit);
     }
     return true;
   }
@@ -164,44 +164,128 @@ describe("native-profiler-stop and an xctrace that hangs after SIGINT", () => {
   });
 });
 
-describe("the 10-minute recording cap and an xctrace that does not end", () => {
-  async function capped(deviceId: string, child: FakeXctrace): Promise<NativeProfilerSessionApi> {
+describe("the 10-minute recording cap", () => {
+  /** A recording of `child` whose 10-minute cap has fired. */
+  async function capped(deviceId: string, child: FakeXctrace) {
     const device: DeviceInfo = resolveDevice(deviceId);
-    const { api } = await nativeProfilerSessionBlueprint.factory({}, device, { device } as never);
+    const instance = await nativeProfilerSessionBlueprint.factory({}, device, { device } as never);
+    // As spawnXctraceRecording leaves it.
+    instance.api.captureProcess = child as unknown as ChildProcess;
+    instance.api.capturePid = child.pid;
     commitXctraceRecording(
-      api,
+      instance.api,
       { child: child as unknown as ChildProcess, pid: child.pid },
       { appProcess: "ExampleExec", traceFile: TRACE, mallocStackLogging: false, cpuFilterPid: null }
     );
     await vi.advanceTimersByTimeAsync(RECORDING_CAP_MS);
-    return api;
+    expect(child.signals).toEqual(["SIGINT"]);
+    expect(instance.api.recordingTimedOut).toBe(true);
+    expect(instance.api.profilingActive).toBe(false);
+    return instance;
   }
 
-  it("on a Mac app, kills it 2 min after the cap's SIGINT, as no stop waits for it", async () => {
-    const child = new FakeXctrace();
-    const api = await capped(MAC, child);
-    expect(child.signals).toEqual(["SIGINT"]);
-    expect(api.recordingTimedOut).toBe(true);
-    expect(api.captureProcess).toBeNull();
+  for (const [platform, deviceId] of [
+    ["an iOS simulator", IOS],
+    ["a Mac app", MAC],
+  ] as const) {
+    it(`on ${platform}, ends a hung xctrace as a stop does, with no stop`, async () => {
+      const child = new FakeXctrace();
+      await capped(deviceId, child);
 
-    await vi.advanceTimersByTimeAsync(119_000);
-    expect(child.signals).toEqual(["SIGINT"]);
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(child.signals).toEqual(["SIGINT", "SIGKILL"]);
-  });
+      // The stall watch of a 10-minute recording: 2 min of no progress.
+      await vi.advanceTimersByTimeAsync(118_000);
+      expect(child.signals).toEqual(["SIGINT"]);
+      await vi.advanceTimersByTimeAsync(2 * POLL_MS);
+      expect(child.signals).toEqual(["SIGINT", "SIGTERM"]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(child.signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
+    });
+  }
 
-  it("on a Mac app, leaves one alone that ended on the cap's SIGINT", async () => {
+  it("leaves one alone that ends on the cap's SIGINT", async () => {
     const child = new FakeXctrace();
     child.respondsTo.add("SIGINT");
-    await capped(MAC, child);
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(child.signals).toEqual(["SIGINT"]);
-  });
-
-  it("on an iOS simulator, only sends the cap's SIGINT, as before", async () => {
-    const child = new FakeXctrace();
-    await capped(IOS, child);
+    const { api } = await capped(IOS, child);
     await vi.advanceTimersByTimeAsync(300_000);
     expect(child.signals).toEqual(["SIGINT"]);
+    expect(api.captureProcess).toBeNull();
+  });
+
+  it("makes the stop after the cap wait until xctrace has saved the trace, then export it", async () => {
+    const child = new FakeXctrace();
+    child.respondsTo.add("SIGINT");
+    // Saving a 10-minute trace takes a while; the progress changes meanwhile.
+    child.exitAfterMs = 45_000;
+    let n = 0;
+    vi.mocked(xctraceProgressProbe).mockImplementationOnce(() => async () => `0:0${n++}|4096`);
+    const { api } = await capped(IOS, child);
+
+    const pending = stopNativeProfilerIos(api);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(vi.mocked(exportIosTraceData)).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000 + POLL_MS);
+    const result = await pending;
+    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledWith(TRACE, false);
+    expect(child.signals).toEqual(["SIGINT"]);
+    expect(result.warning).toMatch(/^Recording timed out at 10 min cap/);
+    expect(result.warning).not.toContain("xctrace hung");
+    expect(api.recordingTimedOut).toBe(false);
+    expect(api.cappedEnd).toBeNull();
+  });
+
+  it("says in the stop after the cap that xctrace hung and was ended", async () => {
+    const child = new FakeXctrace();
+    child.respondsTo.add("SIGTERM");
+    const { api } = await capped(IOS, child);
+
+    const pending = stopNativeProfilerIos(api);
+    await vi.advanceTimersByTimeAsync(120_000 + 2 * POLL_MS);
+    const result = await pending;
+    expect(child.signals).toEqual(["SIGINT", "SIGTERM"]);
+    expect(vi.mocked(exportIosTraceData)).toHaveBeenCalledTimes(1);
+    expect(result.warning).toMatch(
+      /^Recording timed out at 10 min cap; xctrace hung while it ended/
+    );
+    // Each once: what is left of the data, and what to do.
+    expect(result.warning).not.toContain("partial trace");
+    expect(result.warning?.match(/Call native-profiler-start/g)).toHaveLength(1);
+  });
+
+  it("lets a teardown kill an xctrace that has not ended, and says its bundle is not saved", async () => {
+    const child = new FakeXctrace();
+    const instance = await capped(IOS, child);
+    expect(instance.api.captureProcess).toBe(child);
+
+    await instance.dispose();
+    expect(child.signals).toEqual(["SIGINT", "SIGKILL"]);
+
+    const fresh = await nativeProfilerSessionBlueprint.factory({}, resolveDevice(IOS), {
+      device: resolveDevice(IOS),
+    } as never);
+    const err = await stopNativeProfilerIos(fresh.api).catch((e: unknown) => e);
+    expect((err as Error).message).toContain("without its finalize pass");
+  });
+
+  it("does not let the capped xctrace's exit end a newer recording", async () => {
+    const old = new FakeXctrace();
+    old.respondsTo.add("SIGINT");
+    old.exitAfterMs = 30_000;
+    const { api } = await capped(IOS, old);
+
+    const next = new FakeXctrace();
+    next.pid = 7474;
+    api.captureProcess = next as unknown as ChildProcess;
+    commitXctraceRecording(
+      api,
+      { child: next as unknown as ChildProcess, pid: next.pid },
+      { appProcess: "ExampleExec", traceFile: TRACE, mallocStackLogging: false, cpuFilterPid: null }
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(old.signalCode).toBe("SIGINT");
+    expect(api.profilingActive).toBe(true);
+    expect(api.captureProcess).toBe(next);
+    expect(api.recordingExitedUnexpectedly).toBe(false);
   });
 });

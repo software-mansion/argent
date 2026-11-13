@@ -156,6 +156,7 @@ function newSession(): NativeProfilerSessionApi {
     recordingMallocStackLogging: null,
     recordingTimedOut: false,
     recordingTimeout: null,
+    cappedEnd: null,
     traceFile: null,
     wallClockStartMs: null,
   };

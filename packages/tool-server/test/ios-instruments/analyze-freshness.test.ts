@@ -63,6 +63,7 @@ function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
     wallClockStartMs,
     parsedData: null,
     recordingTimeout: null,
+    cappedEnd: null,
     recordingTimedOut: false,
     recordingExitedUnexpectedly: false,
     lastExitInfo: null,

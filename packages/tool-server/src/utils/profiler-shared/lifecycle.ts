@@ -15,7 +15,7 @@ interface ShutdownTimings {
   stall?: { probe: () => Promise<string | null>; idleMs: number; pollMs: number };
 }
 
-interface ShutdownResult {
+export interface ShutdownResult {
   /** No escalation past SIGINT was needed. */
   clean: boolean;
   /** Furthest signal the ladder reached. */

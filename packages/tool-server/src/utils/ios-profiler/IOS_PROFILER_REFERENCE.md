@@ -93,7 +93,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    the error names the forced override as the cause (its own failure code) rather
    than blaming a degraded Xcode that isn't present.
 4. **Start gating** — only resolves the tool call once `xctrace` prints `Starting recording` / `Ctrl-C to stop` on stdout. At that point Argent records `Date.now()` (`wallClockStartMs`) — the anchor used later for cross-tool time alignment.
-5. **Safety timeout** — auto-SIGINTs after 10 minutes if `stop` is never called.
+5. **Safety timeout** - after 10 minutes with no `stop`, ends xctrace as a stop does: SIGINT, the stall watch, then SIGTERM and SIGKILL. The next `stop` waits for that end, then exports the trace.
 
 ### `native-profiler-stop`
 
