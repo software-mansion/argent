@@ -217,6 +217,60 @@ describe("android-devtools connection lifecycle", () => {
     await instance.dispose();
   });
 
+  // #1880: a helper that stops answering keeps its UiAutomation registration,
+  // so the describe fallback's `uiautomator dump` dies until it is stopped.
+  it("force-stops and terminates a helper whose getHierarchy times out", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) => (method === "getHierarchy" ? undefined : { result: { ok: true } });
+    const { runAdb } = await import("../../src/utils/adb");
+    const forceStop = [
+      "-s",
+      "emulator-5554",
+      "shell",
+      "am",
+      "force-stop",
+      "com.argent.androiddevtools",
+    ];
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const read = instance.api.getHierarchy().catch((err: unknown) => err);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const err = await read;
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT);
+      expect(terminated).toHaveLength(1);
+      // Awaited before the error reaches the caller, so its fallback dump can register.
+      expect(vi.mocked(runAdb)).toHaveBeenCalledWith(forceStop, { timeoutMs: 5_000 });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await instance.dispose();
+  });
+
+  it("keeps the helper when setText times out, since the text may have landed", async () => {
+    const { instance, terminated } = await start();
+    answer = (method) => (method === "setText" ? undefined : { result: { ok: true } });
+    const { runAdb } = await import("../../src/utils/adb");
+    vi.mocked(runAdb).mockClear();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const typed = instance.api.setText("x");
+      await vi.advanceTimersByTimeAsync(14_000);
+      await expect(typed).resolves.toMatchObject({ timedOut: true });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(terminated).toHaveLength(0);
+    expect(
+      vi.mocked(runAdb).mock.calls.some(([args]) => (args as string[]).includes("force-stop"))
+    ).toBe(false);
+    await instance.dispose();
+  });
+
   it("lets `am instrument` exit after shutdown before removing the forward, without a kill", async () => {
     const { instance } = await start();
     exitAfterShutdownMs = 150;

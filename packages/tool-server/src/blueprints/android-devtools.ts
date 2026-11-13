@@ -564,6 +564,19 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         });
       });
 
+    // Killing `adb shell am instrument` on the host does not stop a helper
+    // that has stopped answering; `am force-stop` does, and `am instrument`
+    // exits with it. Once per instance.
+    let forceStopping: Promise<void> | undefined;
+    const forceStopHelper = (): Promise<void> =>
+      (forceStopping ??= runAdb(
+        ["-s", serial, "shell", "am", "force-stop", helperManifest().packageName],
+        { timeoutMs: 5_000 }
+      ).then(
+        () => undefined,
+        () => undefined
+      ));
+
     const request = async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
       let current = client;
       if (socketLost && !disposed && !procExited) {
@@ -585,6 +598,19 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           err.message.includes("UiAutomation not connected")
         ) {
           events.emit("terminated", err);
+        }
+        // A helper that stops answering stays alive and keeps the device's only
+        // UiAutomation registration, so the caller's `uiautomator dump` fallback
+        // is killed with "already registered" and this helper is reused on every
+        // later call (#1880). Stop it before the error reaches the fallback.
+        // `setText` is left alone: its timeout means the text may have landed.
+        if (
+          !disposed &&
+          method !== "setText" &&
+          getFailureSignal(err)?.error_code === FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT
+        ) {
+          events.emit("terminated", err instanceof Error ? err : undefined);
+          await forceStopHelper();
         }
         throw err;
       }
