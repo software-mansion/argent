@@ -1,10 +1,8 @@
-import type { ChildProcess } from "child_process";
 import * as path from "path";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import type { MacosAppApi } from "../../../../blueprints/macos-app";
 import { InvalidToolInputError } from "../../../../utils/capability";
-import { waitForChildExit } from "../../../../utils/profiler-shared/lifecycle";
 import {
   getTrackedMacosApp,
   inBackgroundSession,
@@ -18,9 +16,8 @@ import {
   commitXctraceRecording,
   newTraceOutputPath,
   resolveDefaultTemplatePath,
+  settleAfterStart,
   spawnXctraceRecording,
-  xctraceOutput,
-  xctraceRunErrors,
 } from "./xctrace";
 
 /**
@@ -196,72 +193,4 @@ export async function startNativeProfilerMacos(
   } finally {
     if (!recording) suspensionWatch?.end();
   }
-}
-
-/**
- * xctrace reports that tracing started before its instruments record: a hang
- * that began 0.65 s after that was missed in 4 of 4 runs, one that began 0.9 s
- * after it was found in 5 of 5. So the start returns only this long after
- * tracing started, and the caller can act on the app at once.
- */
-const ARM_SETTLE_MS = 1_500;
-
-/**
- * xctrace prints "Starting recording" when it begins to attach, and "Ctrl-C to
- * stop" when tracing starts, with the tracing-started notification: 1.2 to
- * 1.7 s later with Xcode 27.2 and 26.6. The readiness wait ends at the first
- * of the three, so after "Starting recording" the start waits for "Ctrl-C to
- * stop", at most this long.
- */
-const TRACING_STARTED_TIMEOUT_MS = 10_000;
-
-/** Resolves when tracing started, xctrace exited, or the wait timed out. */
-function waitForTracingStarted(child: ChildProcess): Promise<void> {
-  const beforeTracing = () => {
-    const output = xctraceOutput(child);
-    return output.includes("Starting recording") && !output.includes("Ctrl-C to stop");
-  };
-  if (!beforeTracing() || child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      child.stdout?.off("data", onData);
-      child.off("exit", done);
-      resolve();
-    };
-    // Runs after the listener that keeps the output, which xctrace.ts adds first.
-    const onData = () => {
-      if (!beforeTracing()) done();
-    };
-    const timer = setTimeout(done, TRACING_STARTED_TIMEOUT_MS);
-    child.stdout?.on("data", onData);
-    child.once("exit", done);
-  });
-}
-
-// Before the session takes the capture, so that a failure here leaves the
-// previous capture as it was. A teardown in the wait is reported by the commit.
-async function settleAfterStart(api: NativeProfilerSessionApi, child: ChildProcess): Promise<void> {
-  await waitForTracingStarted(child);
-  if (!(await waitForChildExit(child, ARM_SETTLE_MS)) || api.disposed) return;
-  api.capturePid = null;
-  api.captureProcess = null;
-  const errors = xctraceRunErrors(child);
-  const said =
-    errors.length > 0 ? errors.join(" ") : xctraceOutput(child).trim().slice(-500) || "<nothing>";
-  throw new FailureError(
-    `xctrace quit right after the recording started (code=${child.exitCode ?? "?"}, ` +
-      `signal=${child.signalCode ?? "?"}), so nothing is recorded. xctrace said: ${said} ` +
-      `Check that the app still runs, then call native-profiler-start again.`,
-    {
-      error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED,
-      failure_stage: "native_profiler_xctrace_start",
-      failure_area: "tool_server",
-      error_kind: "subprocess",
-      failure_command: "xctrace",
-      ...(child.exitCode !== null ? { failure_exit_code: child.exitCode } : {}),
-    }
-  );
 }

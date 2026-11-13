@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { withoutSettleAfterStart } from "../helpers/without-settle-after-start";
 import { EventEmitter } from "events";
 import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import type { NativeProfilerSessionApi } from "../../src/blueprints/native-profiler-session";
@@ -38,6 +39,7 @@ function fakeApi(): NativeProfilerSessionApi {
     appEndedDuringCapture: false,
     exportSkipReason: null,
     recordedMs: null,
+    startReturnedMs: null,
     stopInProgress: null,
     suspensionWatch: null,
     appSuspensions: null,
@@ -117,6 +119,7 @@ describe("native-profiler-start malloc_stack_logging", () => {
     vi.doUnmock("../../src/utils/ios-profiler/notify");
     vi.doUnmock("../../src/utils/ios-profiler/startup");
     vi.doUnmock("../../src/utils/simulator-watcher");
+    vi.doUnmock("../../src/tools/profiler/native-profiler/platforms/xctrace");
   });
 
   function applyCommonMocks(spawnFn: unknown, execSyncFn: unknown, execFileSyncFn: unknown) {
@@ -137,6 +140,10 @@ describe("native-profiler-start malloc_stack_logging", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
   }
 
   it("waits for the simulator watcher's first poll before terminating and relaunching", async () => {
@@ -495,6 +502,10 @@ describe("native-profiler-start malloc_stack_logging", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
 
     const startNativeProfilerIos = await importStart();
     const api = fakeApi();

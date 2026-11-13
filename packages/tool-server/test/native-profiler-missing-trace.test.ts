@@ -71,6 +71,7 @@ describe("native-profiler-analyze: missing trace file", () => {
         appEndedDuringCapture: false,
         exportSkipReason: null,
         recordedMs: null,
+        startReturnedMs: null,
         stopInProgress: null,
         suspensionWatch: null,
         appSuspensions: null,

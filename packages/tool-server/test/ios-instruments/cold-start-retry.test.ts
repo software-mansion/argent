@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { withoutSettleAfterStart } from "../helpers/without-settle-after-start";
 import { EventEmitter } from "events";
 import {
   nativeProfilerSessionBlueprint,
@@ -38,6 +39,7 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doUnmock("../../src/utils/react-profiler/debug/dump");
     vi.doUnmock("../../src/utils/ios-profiler/notify");
     vi.doUnmock("../../src/utils/ios-profiler/startup");
+    vi.doUnmock("../../src/tools/profiler/native-profiler/platforms/xctrace");
   });
 
   it("retries once when xctrace fails with the cold-start signature, then resolves", async () => {
@@ -63,6 +65,10 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
     vi.doMock("../../src/utils/check-deps", () => ({
       ensureDeps: vi.fn(async () => {}),
       ensureDep: vi.fn(async () => {}),
@@ -109,6 +115,10 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
     vi.doMock("../../src/utils/check-deps", () => ({
       ensureDeps: vi.fn(async () => {}),
       ensureDep: vi.fn(async () => {}),
@@ -160,6 +170,10 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
     }));
+    vi.doMock(
+      "../../src/tools/profiler/native-profiler/platforms/xctrace",
+      withoutSettleAfterStart
+    );
     vi.doMock("../../src/utils/check-deps", () => ({
       ensureDeps: vi.fn(async () => {}),
       ensureDep: vi.fn(async () => {}),

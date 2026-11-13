@@ -528,8 +528,6 @@ With `malloc_stack_logging: true`, Argent quits the app and starts it again with
 
 Without `malloc_stack_logging`, a memory leak has an allocation backtrace only when the app allocated the object after the start of the recording. With `malloc_stack_logging`, the leaks of older objects also have an allocation backtrace.
 
-`native-profiler-start` on a Mac app returns 1.5 seconds after xctrace reports that tracing started, because the instruments start to record some time after this report. When xctrace quits in this time, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_EXITED`, and the error contains the last output of xctrace.
-
 `native-profiler-stop` on a Mac app takes about 15 to 25 seconds for a short recording, because xctrace completes the trace and exports it. A long recording takes more time. The result has the same fields as on iOS: `traceFile`, `exportedFiles` and `exportDiagnostics`.
 
 - When the app ended during the recording, the result has a `warning`. The app quit, crashed or started again, and the trace contains only a part of the data. The report of `native-profiler-analyze` has the same note below its title.
@@ -563,6 +561,8 @@ A leak check can take several seconds. When a recording with leak checks is shor
 | `profiler-stack-query`      | Query native trace data for iterative native investigation                   |
 
 `native-profiler-start` records with Instruments on an iOS simulator and on a [Mac app](#profiling-a-mac-app), and with Perfetto on Android. The bundled Argent template of Instruments starts the first check for memory leaks about 4 seconds after `native-profiler-start` returns, and the next checks about every 11 seconds. A leak is in the trace only after a check that started after the leak has ended. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the trace does not contain the leak.
+
+On an iOS simulator and on a Mac app, xctrace first reports that the recording starts. Then xctrace reports that tracing started. The instruments start to record some time after this second report. Thus `native-profiler-start` returns 1.5 seconds after the second report. When the first report does not come in 10 seconds after the start of xctrace, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_TIMEOUT`. When the second report does not come in 10 seconds after the first report, the tool returns 1.5 seconds after these 10 seconds. When xctrace quits before the tool returns, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_EXITED`. The error contains the last output of xctrace.
 
 On an iOS simulator and on a Mac app, these rules apply while `native-profiler-stop` runs on a device:
 

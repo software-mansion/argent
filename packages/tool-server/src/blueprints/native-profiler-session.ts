@@ -78,6 +78,11 @@ export interface NativeProfilerSessionApi {
   traceFile: string | null;
   exportedFiles: Record<string, string | null> | null;
   profilingActive: boolean;
+  /**
+   * Trace time 0 on the wall clock, the anchor of the combined report. xctrace:
+   * when xctrace printed "Starting recording" (else when the start returned), and
+   * after the stop the trace's `<start-date>` when the stop could read it.
+   */
   wallClockStartMs: number | null;
   parsedData: NativeProfilerParsedData | null;
   /**
@@ -133,6 +138,8 @@ export interface NativeProfilerSessionApi {
    * cleared by profiler-load.
    */
   recordedMs: number | null;
+  /** xctrace only: when native-profiler-start returned, for `recordedMs`. */
+  startReturnedMs: number | null;
   /**
    * xctrace only: the native-profiler-stop that is ending the recording and
    * exporting its trace, null otherwise. A second stop returns it; analyze waits
@@ -297,6 +304,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       appEndedDuringCapture: false,
       exportSkipReason: null,
       recordedMs: null,
+      startReturnedMs: null,
       stopInProgress: null,
       suspensionWatch: null,
       appSuspensions: null,

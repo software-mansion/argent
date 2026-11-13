@@ -50,6 +50,7 @@ function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
     appEndedDuringCapture: false,
     exportSkipReason: null,
     recordedMs: null,
+    startReturnedMs: null,
     stopInProgress: null,
     suspensionWatch: null,
     appSuspensions: null,

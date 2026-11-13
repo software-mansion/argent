@@ -11,7 +11,11 @@ import {
 } from "../../../../utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
-import { shutdownChild, type ShutdownResult } from "../../../../utils/profiler-shared/lifecycle";
+import {
+  shutdownChild,
+  waitForChildExit,
+  type ShutdownResult,
+} from "../../../../utils/profiler-shared/lifecycle";
 import { xctraceProgressProbe } from "../../../../utils/ios-profiler/xctrace-progress";
 import {
   kernelTraceDir,
@@ -161,15 +165,21 @@ export function appEnded(api: NativeProfilerSessionApi): boolean {
   }
 }
 
-/** The end of each recording's xctrace output: the run issues come last. */
-const outputTails = new WeakMap<ChildProcess, { text: string }>();
+/**
+ * The end of each recording's xctrace output (the run issues come last), and
+ * when xctrace printed "Starting recording", by the wall clock.
+ */
+const outputTails = new WeakMap<ChildProcess, { text: string; startingRecordingMs?: number }>();
 const OUTPUT_TAIL_CHARS = 16_384;
 
 /** Keeps the end of what `child` prints, for {@link xctraceOutput}. */
 export function keepOutputTail(child: ChildProcess): void {
-  const tail = { text: "" };
+  const tail: { text: string; startingRecordingMs?: number } = { text: "" };
   const add = (data: Buffer) => {
     tail.text = (tail.text + data.toString()).slice(-OUTPUT_TAIL_CHARS);
+    if (tail.startingRecordingMs === undefined && tail.text.includes("Starting recording")) {
+      tail.startingRecordingMs = Date.now();
+    }
   };
   child.stdout?.on("data", add);
   child.stderr?.on("data", add);
@@ -185,7 +195,7 @@ export function xctraceOutput(child: ChildProcess): string {
  * The `[Error]` lines that xctrace printed under "Run issues were detected" when
  * the recording ended, in order and without the marker.
  */
-export function xctraceRunErrors(child: ChildProcess): string[] {
+function xctraceRunErrors(child: ChildProcess): string[] {
   const text = xctraceOutput(child);
   return [...text.matchAll(/^\s*\* \[Error\] (.+?)\s*$/gm)].map((m) => m[1]);
 }
@@ -209,17 +219,32 @@ function removeKernelTraceAfterExit(child: ChildProcess, file: Promise<string | 
   else child.once("exit", remove);
 }
 
+const KERNEL_TRACE = /kperf|ktrace|kernel trace/i;
+
+/**
+ * Why xctrace could not start a recording whose errors name the kernel trace,
+ * as a sentence with a leading space; empty for other errors.
+ */
+export function kernelTraceBusyNote(errors: string): string {
+  return KERNEL_TRACE.test(errors)
+    ? " macOS lets one recording at a time use the kernel trace, and another recording " +
+        "on this Mac used it (Instruments, xctrace or a native-profiler-start for another device)."
+    : "";
+}
+
 /**
  * Resolves true once xctrace prints that tracing started, false when it exits
- * first. "Starting recording", which can end the readiness wait, comes before
- * the helper creates the kernel trace: on a Mac app, more than 1 s before.
+ * first or `timeoutMs` passes. "Starting recording", which can end the
+ * readiness wait, comes before the helper creates the kernel trace: on a Mac
+ * app, more than 1 s before.
  */
-function whenTracingStarted(child: ChildProcess): Promise<boolean> {
+function whenTracingStarted(child: ChildProcess, timeoutMs?: number): Promise<boolean> {
   const started = () => xctraceOutput(child).includes("Ctrl-C to stop");
   if (started()) return Promise.resolve(true);
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(false);
   return new Promise((resolve) => {
     const done = (result: boolean) => {
+      clearTimeout(timer);
       child.stdout?.off("data", onData);
       child.off("exit", onExit);
       resolve(result);
@@ -229,6 +254,7 @@ function whenTracingStarted(child: ChildProcess): Promise<boolean> {
       if (started()) done(true);
     };
     const onExit = () => done(started());
+    const timer = timeoutMs === undefined ? undefined : setTimeout(() => done(false), timeoutMs);
     child.stdout?.on("data", onData);
     child.once("exit", onExit);
   });
@@ -305,6 +331,55 @@ export async function spawnXctraceRecording(
   return { child: xctraceProcess, pid: xctraceProcess.pid };
 }
 
+/**
+ * xctrace reports that tracing started before its instruments record: a hang
+ * that began 0.65 s after that was missed in 4 of 4 runs, one that began 0.9 s
+ * after it was found in 5 of 5. So the start returns only this long after
+ * tracing started, and the caller can act on the app at once.
+ */
+const ARM_SETTLE_MS = 1_500;
+
+/**
+ * xctrace prints "Starting recording" when it begins to attach, and "Ctrl-C to
+ * stop" when tracing starts, with the tracing-started notification: 0.9 to
+ * 1.7 s later with Xcode 27.2 and 26.6. The readiness wait ends at the first
+ * of the three, so after "Starting recording" the start waits for "Ctrl-C to
+ * stop", at most this long.
+ */
+const TRACING_STARTED_TIMEOUT_MS = 10_000;
+
+// Before the session takes the capture, so that a failure here leaves the
+// previous capture as it was. A teardown in the wait is reported by the commit.
+export async function settleAfterStart(
+  api: NativeProfilerSessionApi,
+  child: ChildProcess
+): Promise<void> {
+  if (xctraceOutput(child).includes("Starting recording")) {
+    await whenTracingStarted(child, TRACING_STARTED_TIMEOUT_MS);
+  }
+  if (!(await waitForChildExit(child, ARM_SETTLE_MS)) || api.disposed) return;
+  resetStartState(api);
+  const errors = xctraceRunErrors(child);
+  const said =
+    errors.length > 0 ? errors.join(" ") : xctraceOutput(child).trim().slice(-500) || "<nothing>";
+  const busy = kernelTraceBusyNote(errors.join(" "));
+  throw new FailureError(
+    `xctrace quit right after the recording started (code=${child.exitCode ?? "?"}, ` +
+      `signal=${child.signalCode ?? "?"}), so nothing is recorded. xctrace said: ${said}` +
+      (busy
+        ? `${busy} Call native-profiler-start again.`
+        : ` Check that the app still runs, then call native-profiler-start again.`),
+    {
+      error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED,
+      failure_stage: "native_profiler_xctrace_start",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+      failure_command: "xctrace",
+      ...(child.exitCode !== null ? { failure_exit_code: child.exitCode } : {}),
+    }
+  );
+}
+
 function sessionTornDownError(api: NativeProfilerSessionApi): FailureError {
   return new FailureError(
     `The native profiling session for ${api.deviceId} was torn down by a ` +
@@ -349,7 +424,7 @@ export interface XctraceEnd {
  * How often the stop sends SIGINT again while xctrace has not said that it
  * stops. xctrace ignores a SIGINT that comes before it starts to trace, and then
  * records until it is killed. On a busy Mac it started to trace 24 s after its
- * start, while the start of a Mac app waits at most 10 s for that.
+ * start, while the start waits at most 10 s for that.
  */
 const SIGINT_REPEAT_MS = 5_000;
 
@@ -472,11 +547,12 @@ export function commitXctraceRecording(
 ): { status: "recording"; pid: number; traceFile: string } {
   const { child: xctraceProcess, pid: xctracePid } = started;
 
-  // A `stop-all-simulator-servers` that landed inside the readiness handshake above
-  // already destroyed this session — `Registry._teardown` nulled the node's instance,
-  // so the owner's `native-profiler-stop` would answer "call native-profiler-start
-  // first". Reporting `status: "recording"` would hand back an unreachable session
-  // with a trace file on disk. Reap what this attempt spawned instead.
+  // A `stop-all-simulator-servers` that landed after the spawn (in the readiness
+  // handshake, or in the wait after it) already destroyed this session:
+  // `Registry._teardown` nulled the node's instance, so the owner's
+  // `native-profiler-stop` would answer "call native-profiler-start first".
+  // Reporting `status: "recording"` would hand back an unreachable session with a
+  // trace file on disk. Reap what this attempt spawned instead.
   if (api.disposed) {
     try {
       xctraceProcess.kill("SIGKILL");
@@ -504,7 +580,13 @@ export function commitXctraceRecording(
   api.cpuFilterPid = capture.cpuFilterPid;
   api.recordingAppPid = capture.appPid ?? null;
   api.profilingActive = true;
-  api.wallClockStartMs = Date.now();
+  // Trace time 0 on the wall clock, until the stop reads the trace's own start.
+  // Measured with Xcode 27.2 on an iOS simulator and a Mac app: the trace starts
+  // 0.2 to 0.25 s after xctrace prints "Starting recording", and the start
+  // returns about 2.4 s after it.
+  api.startReturnedMs = Date.now();
+  api.wallClockStartMs =
+    outputTails.get(xctraceProcess)?.startingRecordingMs ?? api.startReturnedMs;
   // See the Android twin: a live capture makes any earlier teardown breadcrumb
   // unconsumable, and therefore a future false accusation.
   takeReapedSession("native-profiler", api.deviceId);

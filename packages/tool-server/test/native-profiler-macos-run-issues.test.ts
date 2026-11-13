@@ -140,14 +140,14 @@ async function quit(app: ChildProcess): Promise<void> {
  */
 async function recording(
   deviceId: string,
-  beforeCommit?: () => void
+  beforeCommit?: () => void | Promise<void>
 ): Promise<NativeProfilerSessionApi> {
   const device: DeviceInfo = resolveDevice(deviceId);
   const { api } = await nativeProfilerSessionBlueprint.factory({}, device, { device } as never);
   const traceFile = path.join(dir, `native-profiler-${Date.now()}.trace`);
   fs.mkdirSync(traceFile, { recursive: true });
   const started = await spawnXctraceRecording(api, () => ["record", "--output", traceFile]);
-  beforeCommit?.();
+  await beforeCommit?.();
   commitXctraceRecording(api, started, {
     appProcess: "PM-sdbg",
     traceFile,
@@ -563,4 +563,85 @@ describe("a native-profiler-stop that is still exporting", () => {
     await stopNativeProfilerIos(ios);
     expect(ios.recordedMs).toBeNull();
   });
+});
+
+describe.each([
+  ["an iOS simulator", IOS],
+  ["a Mac app", MAC],
+])("the wall clock at trace time 0 on %s", (_name, deviceId) => {
+  const NO_TABLES = { cpu: null, hangs: null, leaks: null };
+
+  /**
+   * A recording whose start returned 300 ms after xctrace said "Starting
+   * recording", the stub's first line, where the readiness wait ends. A real
+   * start returns about 2.4 s after it, and the trace starts 0.2 s after it.
+   */
+  async function startedLate(): Promise<{ api: NativeProfilerSessionApi; ready: number }> {
+    let ready = 0;
+    const api = await recording(deviceId, async () => {
+      ready = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    return { api, ready };
+  }
+
+  function exportWithTraceStart(traceStartMs: number | undefined): void {
+    vi.mocked(exportIosTraceData).mockResolvedValueOnce({
+      files: NO_TABLES,
+      diagnostics: { tocSchemas: [], cpuSchemaUsed: null, errors: {}, traceStartMs },
+    });
+  }
+
+  it("is when xctrace said that it starts the recording, until the stop", async () => {
+    runIssues(null);
+    const { api, ready } = await startedLate();
+    const stamped = api.wallClockStartMs;
+    // No start date in the table of contents: the stamp stays.
+    exportWithTraceStart(undefined);
+    await stopNativeProfilerIos(api);
+
+    expect(stamped).not.toBeNull();
+    expect(stamped!).toBeLessThanOrEqual(ready);
+    expect(api.wallClockStartMs).toBe(stamped);
+  });
+
+  it("is the trace's start date after the stop, also in the analyzed data", async () => {
+    runIssues(null);
+    const { api } = await startedLate();
+    const traceStartMs = api.wallClockStartMs! + 220;
+    exportWithTraceStart(traceStartMs);
+
+    await stopNativeProfilerIos(api);
+    expect(api.wallClockStartMs).toBe(traceStartMs);
+
+    // The combined report anchors the analyzed hangs with this value.
+    await analyzeNativeProfilerIos(api);
+    expect(api.parsedData?.wallClockStartMs).toBe(traceStartMs);
+  });
+
+  it("is the trace's start date after xctrace exited before the stop", async () => {
+    runIssues(null);
+    const { api } = await startedLate();
+    const traceStartMs = api.wallClockStartMs! + 220;
+    exportWithTraceStart(traceStartMs);
+
+    await endXctrace(api);
+    await stopNativeProfilerIos(api);
+    expect(api.wallClockStartMs).toBe(traceStartMs);
+  });
+});
+
+// The note about a short leak recording counts from there: Instruments begins its
+// first leak check about 4 s after native-profiler-start returns.
+it("counts a Mac app's recording time from the return of the start", async () => {
+  runIssues(null);
+  let ready = 0;
+  const api = await recording(MAC, async () => {
+    ready = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  });
+  await stopNativeProfilerIos(api);
+
+  expect(api.recordedMs).not.toBeNull();
+  expect(api.recordedMs!).toBeLessThan(Date.now() - ready - 250);
 });

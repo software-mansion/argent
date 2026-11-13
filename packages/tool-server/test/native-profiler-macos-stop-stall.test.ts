@@ -140,7 +140,7 @@ describe("native-profiler-stop and an xctrace that hangs after SIGINT", () => {
     child.respondsTo.add("SIGTERM");
     const api = await recording(MAC, child);
     // A 10-minute recording: a healthy stop waits longer before it writes.
-    api.wallClockStartMs = Date.now() - 600_000;
+    api.startReturnedMs = Date.now() - 600_000;
 
     const pending = stopNativeProfilerIos(api);
     await vi.advanceTimersByTimeAsync(110_000);

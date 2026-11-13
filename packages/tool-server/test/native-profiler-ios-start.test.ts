@@ -15,7 +15,7 @@
  *     destroyed mid-handshake into a failure instead of a `status: "recording"`
  *     nothing can stop.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 import * as os from "node:os";
@@ -23,9 +23,22 @@ import { FAILURE_CODES, getFailureSignal, type DeviceInfo } from "@argent/regist
 
 class FakeXctrace extends EventEmitter {
   pid = 4242;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
   stdout = new EventEmitter();
   stderr = new EventEmitter();
-  kill = vi.fn(() => true);
+  kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
+    queueMicrotask(() => this.exitWith(signal));
+    return true;
+  });
+
+  /** Exits as a real ChildProcess does: the handle's fields first, then the event. */
+  exitWith(signal: NodeJS.Signals | null, code: number | null = signal ? null : 0): void {
+    if (this.exitCode !== null || this.signalCode !== null) return;
+    this.signalCode = signal;
+    this.exitCode = code;
+    this.emit("exit", this.exitCode, this.signalCode);
+  }
 }
 
 vi.mock("child_process", async (importOriginal) => ({
@@ -99,13 +112,31 @@ beforeEach(() => {
   __resetReapedSessionsForTesting();
 });
 
+/** How long a start waits after xctrace reports that it records, before it returns. */
+const ARM_SETTLE_MS = 1_500;
+
+/** Runs a start on the fake clock past the wait after the recording starts. */
+async function settled<T>(promise: Promise<T>): Promise<T> {
+  promise.catch(() => {});
+  await vi.advanceTimersByTimeAsync(ARM_SETTLE_MS);
+  return promise;
+}
+
 describe("startNativeProfilerIos", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("clears the teardown breadcrumb its own success would make unconsumable", async () => {
     const instance = await session();
     const api = instance.api as NativeProfilerSessionApi;
     recordReapedSession("native-profiler", api.deviceId, "an earlier trace");
 
-    const result = await startNativeProfilerIos(api, startParams);
+    const result = await settled(startNativeProfilerIos(api, startParams));
 
     expect(result.status).toBe("recording");
     expect(takeReapedSession("native-profiler", api.deviceId)).toBeUndefined();
@@ -117,7 +148,7 @@ describe("startNativeProfilerIos", () => {
     const api = instance.api as NativeProfilerSessionApi;
     recordReapedSession("native-profiler", "emulator-5554", "somebody else's trace");
 
-    await startNativeProfilerIos(api, startParams);
+    await settled(startNativeProfilerIos(api, startParams));
 
     expect(takeReapedSession("native-profiler", "emulator-5554")).toBeDefined();
     if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
@@ -177,24 +208,11 @@ describe("startNativeProfilerIos", () => {
 });
 
 describe("startNativeProfilerIos and a teardown during the readiness wait", () => {
-  /** An xctrace that never says it records and exits when it is killed, as the real one does. */
-  class StartingXctrace extends FakeXctrace {
-    exitCode: number | null = null;
-    signalCode: NodeJS.Signals | null = null;
-    kill = vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
-      queueMicrotask(() => {
-        this.signalCode = signal;
-        this.emit("exit", null, signal);
-      });
-      return true;
-    });
-  }
-
   /** Starts with the real readiness wait, and tears the session down while it waits. */
   async function startAndTearDown(params: Parameters<typeof startNativeProfilerIos>[1]) {
     const instance = await session();
     const api = instance.api as NativeProfilerSessionApi;
-    const child = new StartingXctrace();
+    const child = new FakeXctrace();
     vi.mocked(spawn).mockReturnValueOnce(child as unknown as ChildProcess);
     const actual = await vi.importActual<typeof import("../src/utils/ios-profiler/startup")>(
       "../src/utils/ios-profiler/startup"
@@ -248,5 +266,89 @@ describe("startNativeProfilerIos and a teardown during the readiness wait", () =
         throw new Error("simctl unavailable in this test");
       });
     }
+  });
+});
+
+describe("startNativeProfilerIos: the wait after the recording starts", () => {
+  const STARTING = "Starting recording with the Time Profiler template. Targeting All Processes.\n";
+  const TRACING = "Ctrl-C to stop the recording\n";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A start with the real readiness wait, which ends at xctrace's first line. */
+  async function startWithReadiness() {
+    const actual = await vi.importActual<typeof import("../src/utils/ios-profiler/startup")>(
+      "../src/utils/ios-profiler/startup"
+    );
+    vi.mocked(waitForXctraceReady).mockImplementationOnce(actual.waitForXctraceReady);
+    const api = (await session()).api as NativeProfilerSessionApi;
+    const state = { done: false, error: undefined as unknown };
+    const pending = startNativeProfilerIos(api, startParams);
+    pending.then(
+      () => (state.done = true),
+      (err: unknown) => {
+        state.done = true;
+        state.error = err;
+      }
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const child = api.captureProcess as unknown as FakeXctrace;
+    expect(child).toBeInstanceOf(FakeXctrace);
+    return { api, pending, state, child };
+  }
+
+  it("returns only 1.5 s after xctrace says that tracing started", async () => {
+    const { api, pending, state, child } = await startWithReadiness();
+
+    child.stdout.emit("data", Buffer.from(STARTING));
+    // xctrace prints the Ctrl-C line 1.2 to 1.7 s later, when tracing starts.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(state.done).toBe(false);
+    expect(api.profilingActive).toBe(false);
+
+    child.stdout.emit("data", Buffer.from(TRACING));
+    await vi.advanceTimersByTimeAsync(ARM_SETTLE_MS - 1);
+    expect(state.done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(pending).resolves.toMatchObject({ status: "recording" });
+    expect(api.profilingActive).toBe(true);
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  it("fails with what xctrace printed when it quits in that time", async () => {
+    const { api, state, child } = await startWithReadiness();
+
+    child.stdout.emit("data", Buffer.from(STARTING + TRACING));
+    await vi.advanceTimersByTimeAsync(1_000);
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        "Run issues were detected (trace is still ready to be viewed):\n" +
+          "* [Error] Failed to start the recording: _lockKPerf: could not lock kperf. " +
+          "Likely another session just started.\n"
+      )
+    );
+    child.exitWith(null, 2);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(getFailureSignal(state.error)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED
+    );
+    expect((state.error as Error).message).toContain(
+      "xctrace said: Failed to start the recording: _lockKPerf: could not lock kperf."
+    );
+    // As the stop says for this error: the app is not the cause.
+    expect((state.error as Error).message).toContain(
+      "macOS lets one recording at a time use the kernel trace"
+    );
+    expect((state.error as Error).message).not.toContain("Check that the app still runs");
+    expect(api.profilingActive).toBe(false);
+    expect(api.captureProcess).toBeNull();
   });
 });

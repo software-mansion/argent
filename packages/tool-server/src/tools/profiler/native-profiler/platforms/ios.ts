@@ -37,8 +37,10 @@ import {
   waitForStop,
   commitXctraceRecording,
   endXctrace,
+  kernelTraceBusyNote,
   newTraceOutputPath,
   resolveDefaultTemplatePath,
+  settleAfterStart,
   spawnXctraceRecording,
   unfinishedRecordingReason,
   xctraceEndWarning,
@@ -592,6 +594,7 @@ export async function startNativeProfilerIos(
   let started: { child: ChildProcess; pid: number };
   try {
     started = await startWithRetry();
+    await settleAfterStart(api, started.child);
   } catch (err) {
     // The malloc path terminated the running app; if the capture never started,
     // relaunch it. The attach path never terminates, so only this path needs this.
@@ -664,6 +667,8 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
       ? skippedTraceExport(runErrors.skipReason)
       : await exportIosTraceData(traceFile, ended);
     api.exportedFiles = exportedFiles;
+    // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
+    api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
     // Pair the exports with the capture mode of the recording that just ended.
     api.mallocStackLogging = api.recordingMallocStackLogging;
     api.appEndedDuringCapture = ended;
@@ -724,7 +729,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   }
 
   const child = api.captureProcess;
-  const recordedMs = Date.now() - (api.wallClockStartMs ?? Date.now());
+  const recordedMs = Date.now() - (api.startReturnedMs ?? Date.now());
   // Before xctrace saves the trace and the exports run: an app that quits during
   // them did not quit during the recording.
   const ended = appEnded(api);
@@ -750,11 +755,13 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     ? skippedTraceExport(runErrors.skipReason)
     : await exportIosTraceData(api.traceFile, ended);
   api.exportedFiles = exportedFiles;
+  // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
+  api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
   // Pair the exports with the capture mode of the recording that just ended.
   api.mallocStackLogging = api.recordingMallocStackLogging;
   api.appEndedDuringCapture = ended;
   api.exportSkipReason = diagnostics.skipped ?? unfinishedRecordingReason(end);
-  api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
+  api.recordedMs = api.platform === "macos" && api.startReturnedMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
@@ -777,8 +784,6 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
  * kperf. Likely another session just started.", in a trace of 1.1 s.
  */
 const NOT_RECORDED = /^Failed to start the recording/;
-const KERNEL_TRACE = /kperf|ktrace|kernel trace/i;
-
 /**
  * What the run errors that xctrace printed mean for the recording: the warning,
  * and why to export nothing when xctrace recorded nothing (each export of an
@@ -799,12 +804,10 @@ function readRunErrors(
     };
   }
   if (runErrors.some((line) => NOT_RECORDED.test(line))) {
-    const busy = KERNEL_TRACE.test(reported)
-      ? " macOS lets one recording at a time use the kernel trace, and another recording " +
-        "on this Mac used it (Instruments, xctrace or a native-profiler-start for another device)."
-      : "";
     return {
-      warning: `xctrace could not record: ${reported}${busy} Call native-profiler-start again.`,
+      warning:
+        `xctrace could not record: ${reported}${kernelTraceBusyNote(reported)} ` +
+        `Call native-profiler-start again.`,
       skipReason: "xctrace could not start the recording, so the trace holds no data.",
     };
   }

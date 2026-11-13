@@ -77,6 +77,10 @@ vi.mock("../src/utils/ios-profiler/startup", () => ({
   waitForXctraceReady: async () => ({ via: "notify" }),
 }));
 
+vi.mock("../src/tools/profiler/native-profiler/platforms/xctrace", async (importOriginal) =>
+  (await import("./helpers/without-settle-after-start")).withoutSettleAfterStart(importOriginal)
+);
+
 vi.mock("../src/utils/ios-profiler/notify", () => ({
   listenForDarwinNotification: () => ({
     cancel: () => {},
@@ -146,6 +150,7 @@ function newSession(): NativeProfilerSessionApi {
     appEndedDuringCapture: false,
     exportSkipReason: null,
     recordedMs: null,
+    startReturnedMs: null,
     stopInProgress: null,
     suspensionWatch: null,
     appSuspensions: null,
