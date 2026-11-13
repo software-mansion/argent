@@ -1,5 +1,5 @@
 import { Registry, type ToolDefinition } from "@argent/registry";
-import { isFlagEnabled } from "@argent/configuration-core";
+import { isFeatureEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { iosDeviceRunnerBlueprint } from "../blueprints/ios-device-runner";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
@@ -110,7 +110,7 @@ export function createRegistry(): Registry {
   // Gates every dispatch path (flow-execute, flow-add-step, run-sequence), not
   // just the HTTP edge in http.ts. Re-read per invocation, so `argent
   // enable/disable <flag>` needs no tool-server restart.
-  const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
+  const registry = new Registry({ isFlagEnabled: (flag) => isFeatureEnabled(flag) });
 
   // The panel a foldable renders to is asked of the ax-service before every
   // touch and capture (`utils/foldable.ts`); that daemon is a service of this

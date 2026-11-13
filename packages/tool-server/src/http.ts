@@ -44,6 +44,7 @@ import { FileInputError, resolveFileInputs, type UploadEntry } from "./file-inpu
 import {
   assertSupported,
   InvalidToolInputError,
+  isFlagOffered,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
@@ -104,7 +105,7 @@ function isToolExposed(
   def: { featureFlag?: string; hideWhen?: () => boolean } | undefined
 ): boolean {
   if (!def) return false;
-  if (def.featureFlag && !isFlagEnabled(def.featureFlag)) return false;
+  if (def.featureFlag && !isFlagOffered(def.featureFlag)) return false;
   if (def.hideWhen?.()) return false;
   return true;
 }
@@ -697,18 +698,18 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           aliasOf?: string;
         } = {
           name: def.id,
-          description: renderFlagGated(def.description ?? "", isFlagEnabled),
+          description: renderFlagGated(def.description ?? "", isFlagOffered),
           inputSchema: renderFlagGated(
             def.inputSchema ?? { type: "object", properties: {} },
-            isFlagEnabled
+            isFlagOffered
           ),
         };
-        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagEnabled);
+        if (def.outputHint) entry.outputHint = renderFlagGated(def.outputHint, isFlagOffered);
         if (def.fileInputs && def.fileInputs.length > 0) {
           entry.fileInputs = withFormerParamSpecs(def.id, def.fileInputs);
         }
         if (def.alwaysLoad) entry.alwaysLoad = true;
-        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagEnabled);
+        if (def.searchHint) entry.searchHint = renderFlagGated(def.searchHint, isFlagOffered);
         if (def.longRunning) entry.longRunning = true;
         if (def.hideFromMcp) entry.hideFromMcp = true;
         if (def.readOnly) entry.readOnly = true;

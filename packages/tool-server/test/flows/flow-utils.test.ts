@@ -1733,9 +1733,14 @@ describe("native launch shorthand", () => {
 // ── the authoring platform fold ──────────────────────────────────────
 
 describe("the authoring platform fold", () => {
-  // The allowed launch keys include macos while the macos-apps flag is on, so
-  // the developer's own flags must not reach the message.
+  // The allowed launch keys name macos only where the macos-apps flag is on and
+  // the host is macOS, so the developer's own flags must not reach the message,
+  // and a test that reads it pins the host.
   scopeTempFlags();
+  const realPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+  });
 
   it("folds only ios-remote, and leaves every writable platform alone", async () => {
     expect(authoringPlatform("ios-remote")).toBe("ios");
@@ -1766,13 +1771,20 @@ describe("the authoring platform fold", () => {
     );
   });
 
-  it("keeps `ios-remote` unwritable: the launch map still rejects the key", async () => {
-    // The fold exists so no flow file needs a remote key. Accepting one would
-    // let a flow name the host, which is the thing a flow deliberately cannot do.
-    expect(() => parseFlow('steps:\n  - launch: { "ios-remote": com.acme.app }\n')).toThrow(
-      /allowed keys: native, ios, android, chromium, vega\)/
-    );
-  });
+  it.each<[string, NodeJS.Platform, string]>([
+    ["on a Mac", "darwin", "native, ios, android, chromium, vega, macos"],
+    ["off macOS", "linux", "native, ios, android, chromium, vega"],
+  ])(
+    "keeps `ios-remote` unwritable %s: the launch map still rejects the key",
+    async (_host, platform, keys) => {
+      // The fold exists so no flow file needs a remote key. Accepting one would
+      // let a flow name the host, which is the thing a flow deliberately cannot do.
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      expect(() => parseFlow('steps:\n  - launch: { "ios-remote": com.acme.app }\n')).toThrow(
+        `launch has unknown key \`ios-remote\` — allowed keys: ${keys})`
+      );
+    }
+  );
 });
 
 // ── Recording sessions ───────────────────────────────────────────────
