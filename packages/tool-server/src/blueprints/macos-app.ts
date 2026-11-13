@@ -716,6 +716,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   let captureStarted = false;
   let captureStopped = false;
   let captureGap = false;
+  /** argent launched the recorded process while capture was on, and capture stayed on. */
+  let armedSinceLaunch = false;
   /**
    * The app process whose events the records take, and the channel they come
    * on. The records number the process as their connection: argent can
@@ -835,7 +837,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
     return enabling;
   };
 
-  const adopt = (ch: LibraryChannel): void => {
+  const adopt = (ch: LibraryChannel, launched = false): void => {
     if (channel !== ch) channel?.close();
     channel = ch;
     const pid = ch.handshake!.pid;
@@ -846,6 +848,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       }
       recordedProcess = { pid, index: nextProcessIndex++, channel: ch };
       captureGap = false;
+      armedSinceLaunch = launched && captureStarted;
     } else if (recordedProcess.channel !== ch) {
       // The open requests of the same process lost their events while argent
       // was not connected. One that still runs completes when its end comes.
@@ -1345,7 +1348,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       sandboxed: info.sandboxed,
       logPath,
     };
-    adopt(ch);
+    adopt(ch, true);
     const { note: noWindow, refusal: noDrivableWindow } = await waitForFirstWindow(
       ch,
       pid,
@@ -1428,7 +1431,8 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
               : `argent cannot reach ${bundleId}, so capture arms when argent connects to it: ${errorMessage(err)}`,
         };
       }
-      if (startedNow) captureGap = true;
+      // A launch this start waited for armed its process from the start.
+      if (startedNow && !armedSinceLaunch) captureGap = true;
       const armed = await enableOn(ch);
       if (armed) return { armed };
       return { armed, reason: captureState().note ?? "the app did not acknowledge Network.enable" };
@@ -1437,6 +1441,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
       captureStopped = true;
       captureStarted = false;
       captureGap = false;
+      armedSinceLaunch = false;
       const ch = liveChannel();
       // A channel that closed took the capture off with it.
       if (!ch) return { confirmed: true };

@@ -6,7 +6,8 @@
 // while it shows it, it quits without saving, as AppKit does; `Prompt.cancel`
 // answers it), windowless, minimized, panel-only, network-silent (answers no
 // CDP request). `--alert` shows an alert of
-// the app's own from the start. Its one window appears
+// the app's own from the start. `--handshake-delay=<ms>` sends the handshake
+// that much later, as a slow launch does. Its one window appears
 // 200 ms after the handshake, as a real app's first window comes after its launch.
 //
 // Network capture: like the real library, it reports requests as CDP events
@@ -20,6 +21,9 @@ const fs = require("node:fs");
 const net = require("node:net");
 
 const mode = (process.argv.find((a) => a.startsWith("--mode=")) ?? "--mode=ok").slice(7);
+const handshakeDelayMs = Number(
+  (process.argv.find((a) => a.startsWith("--handshake-delay=")) ?? "=0").split("=")[1]
+);
 const startedAt = Date.now();
 const network = { active: false, activations: 0 };
 /** Requests whose last events wait for `Net.finish`. */
@@ -45,18 +49,21 @@ function serve(socket) {
     // The real library turns capture off when its client goes.
     network.active = false;
   });
-  socket.write(
-    JSON.stringify({
-      type: "Control",
-      payload: {
-        bundleId,
-        pid: process.pid,
-        platform: "macos",
-        protocol: mode === "bad-protocol" ? 2 : 1,
-        libraryVersion: "fake",
-      },
-    }) + "\n"
-  );
+  const hello = () =>
+    socket.write(
+      JSON.stringify({
+        type: "Control",
+        payload: {
+          bundleId,
+          pid: process.pid,
+          platform: "macos",
+          protocol: mode === "bad-protocol" ? 2 : 1,
+          libraryVersion: "fake",
+        },
+      }) + "\n"
+    );
+  if (handshakeDelayMs > 0) setTimeout(hello, handshakeDelayMs);
+  else hello();
   let buf = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {

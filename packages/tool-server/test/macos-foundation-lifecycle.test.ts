@@ -862,6 +862,24 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       ]);
     });
 
+    it("says no gap when the start waits for a launch, which arms the new process, and says it after a stop and a new start", async () => {
+      const booting = run("boot-device", {
+        macosAppPath: appPath,
+        macosAppArgs: ["--handshake-delay=500"],
+      });
+      // The start comes while the launch waits for the handshake, and waits for it.
+      await waitUntil(() => fakeAppPids().length > 0);
+      const [{ pid }, capture] = await Promise.all([booting, start()]);
+      expect(capture.layers).toEqual([{ layer: "macos-native", armed: true }]);
+      await request("https://example.com/x");
+      expect((await readLog()).header).toBe(`macos-native: armed, 1 request (pid ${pid})`);
+
+      // The process ran while capture was stopped, so a new start says so.
+      await stop();
+      await start();
+      expect((await readLog()).header).toBe(`macos-native: armed, 1 request (pid ${pid}; ${GAP})`);
+    });
+
     it("arms the app when argent starts it after a start that found it not running", async () => {
       expect((await start()).layers).toEqual([
         {
