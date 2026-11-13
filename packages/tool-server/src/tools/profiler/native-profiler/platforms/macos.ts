@@ -143,31 +143,43 @@ export async function startNativeProfilerMacos(
   const executable = getTrackedMacosApp(bundleId)?.executable;
   const appProcess = executable ? path.basename(executable) : bundleId;
 
-  const started = await spawnXctraceRecording(api, (notifyName) => {
-    const args = [
-      "record",
-      "--template",
-      templatePath,
-      "--attach",
-      String(pid),
-      "--output",
-      outputFile,
-      "--no-prompt",
-    ];
-    if (notifyName) args.push("--notify-tracing-started", notifyName);
-    return args;
-  });
+  // Before xctrace attaches, which suspends the app for a moment too. Instruments
+  // suspends the whole app at each leak check; while argent watches, a call
+  // waits for the app instead of timing out, and analyze takes the suspensions
+  // out of the hangs.
+  const suspensionWatch = await macosApp.watchSuspensions(pid);
+  let recording = false;
+  try {
+    const started = await spawnXctraceRecording(api, (notifyName) => {
+      const args = [
+        "record",
+        "--template",
+        templatePath,
+        "--attach",
+        String(pid),
+        "--output",
+        outputFile,
+        "--no-prompt",
+      ];
+      if (notifyName) args.push("--notify-tracing-started", notifyName);
+      return args;
+    });
 
-  await settleAfterStart(api, started.child);
-  const result = commitXctraceRecording(api, started, {
-    appProcess,
-    traceFile: outputFile,
-    mallocStackLogging: useMallocStackLogging || stillLogs,
-    // Scoped to the app by --attach.
-    cpuFilterPid: null,
-    appPid: pid,
-  });
-  return notes.length > 0 ? { ...result, warning: notes.join(" ") } : result;
+    await settleAfterStart(api, started.child);
+    const result = commitXctraceRecording(api, started, {
+      appProcess,
+      traceFile: outputFile,
+      mallocStackLogging: useMallocStackLogging || stillLogs,
+      // Scoped to the app by --attach.
+      cpuFilterPid: null,
+      appPid: pid,
+    });
+    api.suspensionWatch = suspensionWatch;
+    recording = true;
+    return notes.length > 0 ? { ...result, warning: notes.join(" ") } : result;
+  } finally {
+    if (!recording) suspensionWatch?.end();
+  }
 }
 
 /**

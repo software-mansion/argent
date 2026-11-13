@@ -88,6 +88,7 @@ import {
   stopNativeProfilerIos,
 } from "../src/tools/profiler/native-profiler/platforms/ios";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
+import type { AppSuspensionWindow } from "../src/utils/ios-profiler/app-suspensions";
 
 useMacosAppsFlag();
 
@@ -139,7 +140,12 @@ function signature(getTaskAllow: boolean) {
   };
 }
 
-function fakeMacosApp(pid = 7777, note?: string) {
+function fakeMacosApp(
+  pid = 7777,
+  note?: string,
+  watch: { end(): AppSuspensionWindow[] } | null = null
+) {
+  const watchSuspensions = vi.fn(async (_pid: number) => watch);
   const launch = vi.fn(async (): Promise<MacosLaunchResult> => ({
     bundleId,
     pid,
@@ -151,7 +157,11 @@ function fakeMacosApp(pid = 7777, note?: string) {
     logPath: "/tmp/example.log",
     ...(note ? { note } : {}),
   }));
-  return { app: { bundleId, launch } as unknown as MacosAppApi, launch };
+  return {
+    app: { bundleId, launch, watchSuspensions } as unknown as MacosAppApi,
+    launch,
+    watchSuspensions,
+  };
 }
 
 async function sessionInstance() {

@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  */
 const behaviour = vi.hoisted(() => ({
   toc: "ok" as "ok" | "timeout" | "error",
+  summary: "",
   calls: [] as string[][],
 }));
 
@@ -27,7 +28,9 @@ vi.mock("child_process", () => ({
       cb?.(err);
       return undefined;
     }
-    const stdout = args.includes("--toc") ? '<table schema="time-profile"/>' : "";
+    const stdout = args.includes("--toc")
+      ? `${behaviour.summary}<table schema="time-profile"/>`
+      : "";
     cb?.(null, { stdout, stderr: "" });
     return undefined;
   },
@@ -39,6 +42,26 @@ const TRACE = "/tmp/native-profiler-20260101-000000.trace";
 
 beforeEach(() => {
   behaviour.calls.length = 0;
+  behaviour.summary = "";
+});
+
+describe("exportIosTraceData reads the trace's start and length from the table of contents", () => {
+  it("as ms since 1970 and ms", async () => {
+    behaviour.toc = "ok";
+    behaviour.summary =
+      "<summary><start-date>2026-11-13T07:12:38.063+01:00</start-date>" +
+      "<end-date>2026-11-13T07:12:46.980+01:00</end-date><duration>8.917049</duration></summary>";
+    const { diagnostics } = await exportIosTraceData(TRACE);
+    expect(diagnostics.traceStartMs).toBe(Date.UTC(2026, 10, 13, 6, 12, 38, 63));
+    expect(diagnostics.traceDurationMs).toBeCloseTo(8917.049, 3);
+  });
+
+  it("leaves them out when the table of contents has none", async () => {
+    behaviour.toc = "ok";
+    const { diagnostics } = await exportIosTraceData(TRACE);
+    expect(diagnostics.traceStartMs).toBeUndefined();
+    expect(diagnostics.traceDurationMs).toBeUndefined();
+  });
 });
 
 describe("exportIosTraceData when the table of contents export", () => {

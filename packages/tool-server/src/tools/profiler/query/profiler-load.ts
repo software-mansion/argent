@@ -426,6 +426,7 @@ async function loadNativeSession(
   api.appEndedDuringCapture = false;
   api.exportSkipReason = null;
   api.recordedMs = null;
+  api.appSuspensions = null;
   api.wallClockStartMs = null;
   api.traceFile = null;
 

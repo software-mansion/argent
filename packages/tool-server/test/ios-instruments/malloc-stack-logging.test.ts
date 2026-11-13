@@ -38,6 +38,8 @@ function fakeApi(): NativeProfilerSessionApi {
     exportSkipReason: null,
     recordedMs: null,
     stopInProgress: null,
+    suspensionWatch: null,
+    appSuspensions: null,
     traceFile: null,
     exportedFiles: null,
     disposed: false,

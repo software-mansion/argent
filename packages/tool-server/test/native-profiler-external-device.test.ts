@@ -146,6 +146,8 @@ function newSession(): NativeProfilerSessionApi {
     exportSkipReason: null,
     recordedMs: null,
     stopInProgress: null,
+    suspensionWatch: null,
+    appSuspensions: null,
     parsedData: null,
     platform: "ios",
     profilingActive: false,

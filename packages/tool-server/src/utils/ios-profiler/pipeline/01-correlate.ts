@@ -92,7 +92,7 @@ export function correlateHangsWithCpu(
   return { uiHangs, hangSampleTimestamps };
 }
 
-function classifyHangSeverity(hangType: string): "RED" | "YELLOW" {
+export function classifyHangSeverity(hangType: string): "RED" | "YELLOW" {
   const lower = hangType.toLowerCase();
   if (lower.includes("severe") || lower === "hang") return "RED";
   return "YELLOW";

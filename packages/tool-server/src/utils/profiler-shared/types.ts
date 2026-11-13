@@ -65,6 +65,11 @@ export interface UiHang {
    */
   toolingLabels?: Record<string, string>;
   severity: "RED" | "YELLOW";
+  /**
+   * Mac apps only: ms of the hang's span during which macOS held the app
+   * suspended, such as for a leak check. `durationMs` leaves this time out.
+   */
+  suspendedMs?: number;
   /** Android-only: Perfetto jank_type, e.g. "App Deadline Missed". */
   jankReason?: string;
   /** Android-only: main-thread state durations during this hang. */

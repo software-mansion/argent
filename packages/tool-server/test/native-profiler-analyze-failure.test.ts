@@ -103,6 +103,8 @@ async function buildSessionWithTrace(): Promise<{
     exportSkipReason: null,
     recordedMs: null,
     stopInProgress: null,
+    suspensionWatch: null,
+    appSuspensions: null,
     recordingTimeout: null,
     recordingTimedOut: false,
     recordingExitedUnexpectedly: false,

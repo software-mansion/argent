@@ -25,6 +25,16 @@ function hangFunctionName(hang: UiHang, fn: string): string {
 }
 
 /**
+ * Follows a hang's duration when macOS held the app suspended during the hang,
+ * time the duration leaves out. Empty otherwise.
+ */
+export function hangSuspendedNote(hang: UiHang): string {
+  return hang.suspendedMs !== undefined && hang.suspendedMs > 0
+    ? `, not counting ${hang.suspendedMs}ms when the app was suspended`
+    : "";
+}
+
+/**
  * Said where an iOS capture with no Leaks table would otherwise read as "0 leaks":
  * the analyze report (with a warning not to report the app as leak-free) and
  * leak_stacks. The combined report and profiler-load print their own shorter
@@ -373,14 +383,14 @@ function renderFullReport(
       );
       uiHangs.forEach((b, i) => {
         lines.push(
-          `| ${i + 1} | ${b.hangType} | ${b.jankReason ?? "—"} | ${b.startTimeFormatted} | ${b.durationMs}ms | ${severityEmoji(b.severity)} |`
+          `| ${i + 1} | ${b.hangType} | ${b.jankReason ?? "—"} | ${b.startTimeFormatted} | ${b.durationMs}ms${hangSuspendedNote(b)} | ${severityEmoji(b.severity)} |`
         );
       });
     } else {
       lines.push(`| # | Type | Start | Duration | Severity |`, `|---|---|---|---|---|`);
       uiHangs.forEach((b, i) => {
         lines.push(
-          `| ${i + 1} | ${b.hangType} | ${b.startTimeFormatted} | ${b.durationMs}ms | ${severityEmoji(b.severity)} |`
+          `| ${i + 1} | ${b.hangType} | ${b.startTimeFormatted} | ${b.durationMs}ms${hangSuspendedNote(b)} | ${severityEmoji(b.severity)} |`
         );
       });
     }
@@ -388,7 +398,7 @@ function renderFullReport(
     const hangDetailSlice = isFinite(cap.hangLimit) ? uiHangs.slice(0, cap.hangLimit) : uiHangs;
     for (const hang of hangDetailSlice) {
       const header =
-        `**${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms)**` +
+        `**${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)})**` +
         (hang.jankReason ? ` — reason: \`${hang.jankReason}\`` : "") +
         (hang.gcOverlapMs && hang.gcOverlapMs > 0
           ? ` — +${Math.round(hang.gcOverlapMs)}ms in GC`
@@ -517,7 +527,7 @@ function renderFullReport(
           : "";
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
-        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
+        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms${hangSuspendedNote(b)}): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
       );
     }
     lines.push(``);

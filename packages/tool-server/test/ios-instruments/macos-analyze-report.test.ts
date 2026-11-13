@@ -51,6 +51,8 @@ function makeApi(platform: "ios" | "macos"): NativeProfilerSessionApi {
     exportSkipReason: null,
     recordedMs: null,
     stopInProgress: null,
+    suspensionWatch: null,
+    appSuspensions: null,
     captureProcess: null,
     traceFile: join(dir, "native-profiler-20260101-000000.trace"),
     exportedFiles: {

@@ -18,7 +18,11 @@ import {
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-shared/format";
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
-import { LEAKS_NOT_RECORDED, MAC_UNATTRIBUTED_LEAKS } from "../../../utils/ios-profiler/render";
+import {
+  LEAKS_NOT_RECORDED,
+  MAC_UNATTRIBUTED_LEAKS,
+  hangSuspendedNote,
+} from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
 
 const stackQueryMode = {
@@ -43,7 +47,7 @@ function getIosParsedData(api: NativeProfilerSessionApi) {
   return api.parsedData;
 }
 
-function renderHangStacksIos(
+export function renderHangStacksIos(
   cpuSamples: CpuSample[],
   uiHangs: UiHang[],
   hangIndex: number,
@@ -57,7 +61,7 @@ function renderHangStacksIos(
   const suspectedSet = new Set(hang.suspectedFunctions);
 
   const lines: string[] = [
-    `## Hang #${hangIndex} — ${hang.hangType} (${hang.durationMs}ms at ${hang.startTimeFormatted})`,
+    `## Hang #${hangIndex} — ${hang.hangType} (${hang.durationMs}ms at ${hang.startTimeFormatted}${hangSuspendedNote(hang)})`,
     "",
     `**Severity:** ${hang.severity}`,
     "",

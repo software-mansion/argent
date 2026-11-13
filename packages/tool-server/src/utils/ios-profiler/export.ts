@@ -33,6 +33,10 @@ export interface ExportDiagnostics {
   errors: Record<string, string>;
   /** Why the stop exported no table, when it skipped them all. */
   skipped?: string;
+  /** The trace's `<start-date>` in ms since 1970: trace time 0 on the wall clock. */
+  traceStartMs?: number;
+  /** The trace's `<duration>` in ms. */
+  traceDurationMs?: number;
 }
 
 /** execFile killed the command when its timeout ran out. */
@@ -57,6 +61,10 @@ async function discoverTraceSchemas(
     while ((m = schemaRe.exec(toc)) !== null) {
       schemas.push(m[1]);
     }
+    const startMs = Date.parse(/<start-date>([^<]+)<\/start-date>/.exec(toc)?.[1] ?? "");
+    if (diagnostics && Number.isFinite(startMs)) diagnostics.traceStartMs = startMs;
+    const durationS = Number(/<duration>([^<]+)<\/duration>/.exec(toc)?.[1]);
+    if (diagnostics && durationS > 0) diagnostics.traceDurationMs = durationS * 1000;
     return schemas;
   } catch (err) {
     // Recorded rather than swallowed: an empty schema list otherwise surfaces

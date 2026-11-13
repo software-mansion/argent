@@ -58,6 +58,18 @@ vi.mock("../src/utils/macos-apps", async (importOriginal) => ({
   // Unread, as when codesign is missing: the start records.
   readCodeSignature: vi.fn(async () => null),
 }));
+// The helper that watches the app's suspensions: a stand-in, as spawn is the fake xctrace.
+vi.mock("@argent/native-devtools-ios", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/native-devtools-ios")>()),
+  macosArtifacts: () => ({
+    bootstrap: "/stand-in/libArgentInjectionBootstrap.dylib",
+    library: "/stand-in/libNativeDevtoolsMacos.dylib",
+    helper: "/stand-in/argent-macos-helper",
+  }),
+}));
+vi.mock("../src/utils/macos-suspension-watch", () => ({
+  startSuspensionWatch: vi.fn(async () => null),
+}));
 vi.mock("../src/utils/check-deps", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/utils/check-deps")>()),
   ensureDeps: vi.fn(async () => {}),
@@ -86,6 +98,7 @@ import { getTrackedMacosApp, runningTrackedApp } from "../src/utils/macos-apps";
 import { ensureDeps } from "../src/utils/check-deps";
 import { adbShell } from "../src/utils/adb";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
+import { startSuspensionWatch } from "../src/utils/macos-suspension-watch";
 
 const flag = useMacosAppsFlag();
 
@@ -272,6 +285,92 @@ describe("the native profiler tools on a Mac app id", () => {
   });
 });
 
+describe("the app's suspensions during a recording", () => {
+  it("are watched from the start, ended after xctrace, and put on the trace's timeline", async () => {
+    vi.mocked(runningTrackedApp).mockResolvedValue(tracked);
+    vi.mocked(getTrackedMacosApp).mockReturnValue(tracked);
+    const traceStartMs = Date.now();
+    const order: string[] = [];
+    const end = vi.fn(() => {
+      order.push("end");
+      return [
+        // Before the trace: left out.
+        { startMs: traceStartMs - 3_000, endMs: traceStartMs - 1_000 },
+        { startMs: traceStartMs + 1_000, endMs: traceStartMs + 3_500 },
+      ];
+    });
+    vi.mocked(startSuspensionWatch).mockResolvedValueOnce({
+      pid: process.pid,
+      suspendedSince: () => null,
+      suspendedMsBetween: () => 0,
+      waitUntilRunning: async () => true,
+      end,
+    });
+    vi.mocked(exportIosTraceData).mockImplementation(async () => {
+      order.push("export");
+      return {
+        files: writeExports(debugDir.path),
+        // The trace ends 3 s after its start: the second window is cut there.
+        diagnostics: {
+          tocSchemas: [],
+          cpuSchemaUsed: null,
+          errors: {},
+          traceStartMs,
+          traceDurationMs: 3_000,
+        },
+      } as never;
+    });
+
+    expect((await call("native-profiler-start", { device_id: MAC })).status).toBe(200);
+    expect(vi.mocked(startSuspensionWatch)).toHaveBeenCalledWith(
+      "/stand-in/argent-macos-helper",
+      process.pid
+    );
+    // Watched from before the spawn of xctrace, whose attach suspends the app too.
+    expect(vi.mocked(startSuspensionWatch).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(spawn).mock.invocationCallOrder[0]!
+    );
+    const session = await macSession();
+    expect(session.suspensionWatch).not.toBeNull();
+    expect(end).not.toHaveBeenCalled();
+
+    expect((await call("native-profiler-stop", { device_id: MAC })).status).toBe(200);
+    expect(order).toEqual(["end", "export"]);
+    expect(session.suspensionWatch).toBeNull();
+    expect(session.appSuspensions).toEqual([{ startNs: 1_000_000_000, endNs: 3_000_000_000 }]);
+  });
+
+  it("are unknown when nothing watched or the trace's start is unknown", async () => {
+    vi.mocked(runningTrackedApp).mockResolvedValue(tracked);
+    vi.mocked(getTrackedMacosApp).mockReturnValue(tracked);
+    vi.mocked(exportIosTraceData).mockResolvedValue({
+      files: writeExports(debugDir.path),
+      diagnostics: { tocSchemas: [], cpuSchemaUsed: null, errors: {} },
+    } as never);
+    const session = await macSession();
+
+    // The helper cannot watch (startSuspensionWatch resolves null).
+    expect((await call("native-profiler-start", { device_id: MAC })).status).toBe(200);
+    expect(session.suspensionWatch).toBeNull();
+    expect((await call("native-profiler-stop", { device_id: MAC })).status).toBe(200);
+    expect(session.appSuspensions).toBeNull();
+
+    // Watched, but the export found no start date.
+    const end = vi.fn(() => [{ startMs: 1, endMs: 2 }]);
+    vi.mocked(startSuspensionWatch).mockResolvedValueOnce({
+      pid: process.pid,
+      suspendedSince: () => null,
+      suspendedMsBetween: () => 0,
+      waitUntilRunning: async () => true,
+      end,
+    });
+    expect((await call("native-profiler-start", { device_id: MAC })).status).toBe(200);
+    expect((await call("native-profiler-stop", { device_id: MAC })).status).toBe(200);
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(session.appSuspensions).toBeNull();
+  });
+});
+
 describe("an app that ended during the recording", () => {
   it("makes the stop warn and the report say so at the top", async () => {
     // macOS pids stay below 100000, so no process has this one.
@@ -324,6 +423,8 @@ describe("profiler-load on a Mac app id", () => {
     const listed = await call("profiler-load", { mode: "list", device_id: MAC });
     expect(listed.status).toBe(200);
     expect(listed.body.data).toContain(`\`${SESSION_ID}\``);
+    // As a stop of an earlier recording leaves them.
+    (await macSession()).appSuspensions = [{ startNs: 0, endNs: 1_000_000_000 }];
 
     const loaded = await call("profiler-load", {
       mode: "load_native",
@@ -336,6 +437,8 @@ describe("profiler-load on a Mac app id", () => {
     expect(loaded.body.data).toContain("- UI hangs: 1");
     const api = await macSession();
     expect(api.platform).toBe("macos");
+    // A loaded trace has no record of the app's suspensions.
+    expect(api.appSuspensions).toBeNull();
     expect(api.exportedFiles).toEqual({
       cpu: join(debugDir.path, `native-profiler-${SESSION_ID}_raw_cpu.xml`),
       hangs: join(debugDir.path, `native-profiler-${SESSION_ID}_raw_hangs.xml`),

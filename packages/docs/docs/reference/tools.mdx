@@ -540,9 +540,12 @@ Without `malloc_stack_logging`, a memory leak has an allocation backtrace only w
 
 `native-profiler-analyze` on a Mac app returns a report with the title "macOS Instruments Analysis". The report has the same sections as the report of an iOS simulator.
 
-Instruments pauses the app for several seconds when it checks for leaks, about every 11 seconds. In this time, a tap or a `describe` can fail with `MACOS_APP_RPC_TIMEOUT`, and the main thread can show a hang that is not the work of the app. When the report has UI hangs and the recording checked for leaks, the report has a note below its title. The note tells the agent to record the same actions again with `template_path: "Time Profiler"`. This template of Instruments records hangs and CPU samples, but does not check for leaks.
+Instruments suspends the whole app for several seconds when it checks for leaks, about every 11 seconds, and nothing in the app runs in this time. During the recording, Argent watches when macOS holds the app suspended:
 
-A leak check took about 10 seconds on a Mac app that Argent drove. When a recording shorter than 20 seconds found no leak, the report has a note below its title. The note tells that the trace can hold no finished leak check, and that the app must not be reported as free of leaks.
+- A call to the app, such as a tap, `describe` or a screenshot, waits until the app runs again, for at most 25 seconds. When a suspension starts while a call is under way and lasts past the timeout of the call, the call fails with `MACOS_APP_RPC_TIMEOUT` and says how long the app was suspended. Look at the app before you repeat the call: the action can have happened.
+- `native-profiler-analyze` takes the suspended time out of each UI hang, and labels the hang by the time that is left: a microhang from 250 ms, a hang from 500 ms, a severe hang from 2 seconds. A hang with less than 250 ms left is not reported. The report then has a note below its title that gives the number of suspensions and of the hangs they changed.
+
+A leak check can take several seconds. When a recording shorter than 20 seconds found no leak, the report has a note below its title. The note tells that the trace can hold no finished leak check, and that the app must not be reported as free of leaks.
 
 ## Profiling
 

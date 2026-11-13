@@ -10,6 +10,7 @@ import {
 import { assertExternalCapability } from "../utils/external-devices";
 import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
+import type { AppSuspensionSpan, AppSuspensionWindow } from "../utils/ios-profiler/app-suspensions";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { adbShell } from "../utils/adb";
 import { adbCommandPrefix } from "../utils/adb-server";
@@ -130,6 +131,17 @@ export interface NativeProfilerSessionApi {
    */
   stopInProgress: Promise<unknown> | null;
   /**
+   * Mac apps only: the watch of the app's suspensions that runs with the
+   * recording. `end()` stops it and returns what it saw. Null when nothing watches.
+   */
+  suspensionWatch: { end(): AppSuspensionWindow[] } | null;
+  /**
+   * Mac apps only: when macOS held the app suspended during the recording in
+   * `exportedFiles`, on the trace's timeline. Null when argent did not watch the
+   * app or the trace's start is unknown. Stamped at stop; cleared by profiler-load.
+   */
+  appSuspensions: AppSuspensionSpan[] | null;
+  /**
    * Set by `dispose()` and never cleared: `Registry._teardown` nulls the
    * node's instance, so the next resolve builds a fresh api.
    *
@@ -194,6 +206,8 @@ function androidSalvage(midCapture: boolean, onDeviceTracePath: string | null): 
 }
 
 function clearLiveState(state: NativeProfilerSessionApi): void {
+  state.suspensionWatch?.end();
+  state.suspensionWatch = null;
   state.profilingActive = false;
   state.capturePid = null;
   state.captureProcess = null;
@@ -265,6 +279,8 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       exportSkipReason: null,
       recordedMs: null,
       stopInProgress: null,
+      suspensionWatch: null,
+      appSuspensions: null,
       disposed: false,
       recordingTimeout: null,
       recordingTimedOut: false,

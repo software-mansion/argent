@@ -43,7 +43,7 @@ Follow `argent-native-profiler`, with these differences:
 - `NATIVE_PROFILER_APP_NOT_DEBUGGABLE`: the build has no `com.apple.security.get-task-allow` (an archived, notarized or App Store build). Profile a build Xcode signed for development, such as the Debug build from `xcodebuild ... build`. Do not sign files or add entitlements.
 - Leaks of objects allocated after the start already carry a backtrace. Use `malloc_stack_logging: true` only for leaks of older objects: it restarts the app (state lost), and the app stays slow until `restart-app`. Call `restart-app` before a later CPU or hang pass.
 - Keep the app running until `native-profiler-stop`: a quit, crash or `restart-app` during the recording leaves only part of the trace.
-- During a recording, Instruments' leak check pauses the app for several seconds about every 11 s. A tap or `describe` can then fail with `MACOS_APP_RPC_TIMEOUT`: describe the app, and repeat the action only if it did not happen. The report then can show a hang that is this pause; it says how to check one.
+- During a recording, Instruments' leak check suspends the app for several seconds about every 11 s: a tap or `describe` then takes longer, as it waits for the app to run again.
 - Only the native profiler takes a Mac app id: `react-profiler-*`, `profiler-cpu-query`, `profiler-commit-query`, `profiler-combined-report` and `profiler-load` `load_react` refuse it.
 
 ## E2E tests
