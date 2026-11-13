@@ -525,6 +525,19 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
       if (!disposed) events.emit("terminated", err);
     });
 
+    // Killing `adb shell am instrument` on the host does not stop a helper
+    // that has stopped answering; `am force-stop` does, and `am instrument`
+    // exits with it. Once per instance.
+    let forceStopping: Promise<void> | undefined;
+    const forceStopHelper = (): Promise<void> =>
+      (forceStopping ??= runAdb(
+        ["-s", serial, "shell", "am", "force-stop", helperManifest().packageName],
+        { timeoutMs: 5_000 }
+      ).then(
+        () => undefined,
+        () => undefined
+      ));
+
     // One attempt per lost socket. The forward accepts a connection even when
     // nothing listens behind it and closes it at once, so only an answered
     // ping proves the helper is still there; anything else tears down.
@@ -535,7 +548,14 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         await opened.client.request("ping");
       } catch (err) {
         opened?.client.close();
-        if (!disposed) events.emit("terminated", err instanceof Error ? err : undefined);
+        if (!disposed) {
+          events.emit("terminated", err instanceof Error ? err : undefined);
+          // The forward connected and the ping went unanswered: the helper is
+          // there, holding UiAutomation, as on a request timeout below (#1880).
+          if (getFailureSignal(err)?.error_code === FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT) {
+            await forceStopHelper();
+          }
+        }
         throw err;
       }
       if (disposed) {
@@ -563,19 +583,6 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           resolve();
         });
       });
-
-    // Killing `adb shell am instrument` on the host does not stop a helper
-    // that has stopped answering; `am force-stop` does, and `am instrument`
-    // exits with it. Once per instance.
-    let forceStopping: Promise<void> | undefined;
-    const forceStopHelper = (): Promise<void> =>
-      (forceStopping ??= runAdb(
-        ["-s", serial, "shell", "am", "force-stop", helperManifest().packageName],
-        { timeoutMs: 5_000 }
-      ).then(
-        () => undefined,
-        () => undefined
-      ));
 
     const request = async <T>(method: string, params?: Record<string, unknown>): Promise<T> => {
       let current = client;
@@ -678,7 +685,7 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         // The helper finishes 50 ms after it replies, and once `am` is gone
         // that `finish()` crashes on the dead UiAutomation connection, so
         // killing adb on the reply crashes the helper, and killing it without
-        // a reply orphans it until the next start force-stops it.
+        // a reply orphans it, so a helper that does not reply is force-stopped.
         let opening: Promise<{ client: AndroidDevtoolsClient }> | undefined;
         let acknowledged = false;
         if (!procExited) {
@@ -707,6 +714,7 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
           }
         }
         if (acknowledged) await waitForHelperExit(HELPER_EXIT_TIMEOUT_MS);
+        else if (!procExited) await forceStopHelper();
         void opening?.then(
           (opened) => opened.client.close(),
           () => undefined

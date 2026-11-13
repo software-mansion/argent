@@ -36,6 +36,7 @@ vi.mock("node:child_process", async () => {
 vi.mock("../../src/utils/adb", () => {
   const runAdb = vi.fn(async (args: string[]) => {
     if (args.includes("--remove")) log.push("forward-remove");
+    if (args.includes("force-stop")) log.push("force-stop");
     return args.includes("forward")
       ? { stdout: `${helperPort}\n`, stderr: "" }
       : { stdout: "", stderr: "" };
@@ -269,6 +270,44 @@ describe("android-devtools connection lifecycle", () => {
       vi.mocked(runAdb).mock.calls.some(([args]) => (args as string[]).includes("force-stop"))
     ).toBe(false);
     await instance.dispose();
+  });
+
+  // After 60 s idle the first request is the reconnect's ping, not the caller's RPC.
+  it("force-stops a helper whose reconnect ping times out, before rejecting", async () => {
+    const { instance, terminated } = await start();
+    await helperClosesConnection();
+    answer = (method) => (method === "ping" ? undefined : { result: { ok: true } });
+    const pings = () => log.filter((method) => method === "ping").length;
+    const pingsBefore = pings();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const read = instance.api
+        .getHierarchy()
+        .catch((err: unknown) => ({ err, stopped: log.includes("force-stop") }));
+      // The ping's timer starts once the new socket has connected.
+      while (pings() === pingsBefore) await new Promise((resolve) => setImmediate(resolve));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const { err, stopped } = (await read) as { err: unknown; stopped: boolean };
+
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.ANDROID_DEVTOOLS_RPC_TIMEOUT);
+      expect(stopped).toBe(true);
+      expect(terminated).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await instance.dispose();
+  });
+
+  it("force-stops a helper that does not answer shutdown, instead of orphaning it", async () => {
+    const { instance } = await start();
+    answer = (method) => (method === "shutdown" ? undefined : { result: { ok: true } });
+    exitAfterShutdownMs = null;
+
+    await instance.dispose();
+
+    expect(log.slice(-3)).toEqual(["shutdown", "force-stop", "forward-remove"]);
   });
 
   it("lets `am instrument` exit after shutdown before removing the forward, without a kill", async () => {
