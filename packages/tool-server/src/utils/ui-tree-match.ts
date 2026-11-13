@@ -629,12 +629,12 @@ export function evaluateCondition(
           ? uiTreeMatchInternals.createRegExp(expectedText).test(field)
           : textMatches(field, expectedText, textMatch);
       }
-      // An element with no text at all reads as "", so `matches: '^$'` or a
-      // negative lookahead can check an empty field. Selector matching still
-      // skips empty text, or `.*` would select every unlabeled view. Not an
-      // iOS text field: the simulator's view tree carries no typed text, so a
-      // filled field reads "" there (an empty one reads its placeholder). Nor a
-      // Mac app's password field, whose text argent never reads.
+      // An element with no text at all reads as "", so `matches: '^$'` can
+      // check it. Selector matching still skips empty text, or `.*` would
+      // select every unlabeled view. Not an iOS text field: the simulator's
+      // view tree carries no typed text, so a filled field without a label
+      // or child text reads "" there. Nor a Mac app's password field, whose
+      // text argent never reads.
       if (
         textMatch === "matches" &&
         (textFieldsShowText ? !first.password : first.role !== "AXTextField") &&

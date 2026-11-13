@@ -235,6 +235,16 @@ describe("ui-tree-match", () => {
     expect(evaluateCondition("text", "x", [field], "contains")).toBe(false);
   });
 
+  // e2e-yaml.mdx documents '^[^@]*$' as the no-@ check.
+  it("a no-@ regex text condition fails when @ is on a later line", () => {
+    const frame = { x: 0.1, y: 0.1, width: 0.5, height: 0.05 };
+    const withAt = node({ label: "Contact us\nsupport@example.com", frame });
+    const withoutAt = node({ label: "Contact us\nby phone", frame });
+
+    expect(evaluateCondition("text", "^[^@]*$", [withAt], "matches")).toBe(false);
+    expect(evaluateCondition("text", "^[^@]*$", [withoutAt], "matches")).toBe(true);
+  });
+
   it("a regex text condition does not read an iOS text field with no text as empty", () => {
     // The simulator's view tree has no typed text: a field holding "Rex" reads "".
     const field = node({

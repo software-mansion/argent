@@ -299,6 +299,58 @@ describe("adaptFullAndroidHierarchyToDescribeResult", () => {
     expect(evaluateCondition("text", "Row 50", feed)).toBe(false);
   });
 
+  // Documented in reference/e2e-yaml.mdx.
+  it("reads an empty password or described field as text, so '^$' fails, and a described field's description before its text", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.widget.EditText" resource-id="plain" package="com.acme.app" text="" bounds="[40,100][1040,180]" />
+    <node index="1" class="android.widget.EditText" resource-id="secret" package="com.acme.app" password="true" text="" bounds="[40,200][1040,280]" />
+    <node index="2" class="android.widget.EditText" resource-id="secret-described" package="com.acme.app" password="true" content-desc="Password" text="" bounds="[40,300][1040,380]" />
+    <node index="3" class="android.widget.EditText" resource-id="described" package="com.acme.app" content-desc="Name" text="" bounds="[40,400][1040,480]" />
+    <node index="4" class="android.widget.EditText" resource-id="described-filled" package="com.acme.app" content-desc="Name" text="abc" bounds="[40,500][1040,580]" />
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const field = (id: string) => findAll(tree, { identifier: id });
+
+    expect(evaluateCondition("text", "^$", field("plain"), "matches")).toBe(true);
+    expect(field("secret")[0]!.label).toBe("[password]");
+    expect(field("secret-described")[0]!.label).toBe("[password]");
+    expect(field("described")[0]!.label).toBe("Name");
+    for (const id of ["secret", "described"]) {
+      expect(evaluateCondition("text", "^$", field(id), "matches")).toBe(false);
+    }
+    expect(evaluateCondition("text", "^Name abc$", field("described-filled"), "matches")).toBe(
+      true
+    );
+  });
+
+  // Documented in reference/e2e-yaml.mdx.
+  it("reads a container whose text is all in identified, password or off-screen children as empty, so '^$' passes", () => {
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" class="android.widget.FrameLayout" package="com.acme.app" bounds="[0,0][1080,1920]">
+    <node index="0" class="android.view.ViewGroup" resource-id="card" package="com.acme.app" bounds="[40,100][1040,280]">
+      <node index="0" class="android.widget.TextView" resource-id="title" package="com.acme.app" text="Hello" bounds="[40,100][1040,180]" />
+      <node index="1" class="android.widget.EditText" package="com.acme.app" password="true" text="" bounds="[40,200][1040,280]" />
+    </node>
+    <node index="1" class="android.view.ViewGroup" resource-id="plain" package="com.acme.app" bounds="[40,300][1040,380]">
+      <node index="0" class="android.widget.TextView" package="com.acme.app" text="Hello" bounds="[40,300][1040,380]" />
+    </node>
+    <node index="2" class="android.view.ViewGroup" resource-id="offscreen" package="com.acme.app" bounds="[40,400][1040,480]">
+      <node index="0" class="android.widget.TextView" package="com.acme.app" text="Hello" bounds="[1200,400][1400,480]" />
+    </node>
+  </node>
+</hierarchy>`;
+    const tree = adaptFullAndroidHierarchyToDescribeResult(xml, SCREEN_W, SCREEN_H);
+    const emptyPasses = (id: string) =>
+      evaluateCondition("text", "^$", findAll(tree, { identifier: id }), "matches");
+    expect(emptyPasses("card")).toBe(true);
+    expect(emptyPasses("plain")).toBe(false);
+    expect(emptyPasses("offscreen")).toBe(true);
+  });
+
   it("never hoists a password field's text (placeholder only)", () => {
     const tree = adaptFullAndroidHierarchyToDescribeResult(RN_XML, SCREEN_W, SCREEN_H);
     const [pw] = findAll(tree, { identifier: "password" });
