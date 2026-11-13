@@ -270,6 +270,56 @@ describe("a tap recorded at a point of a Mac app element", () => {
   });
 });
 
+describe("a tap recorded on a Mac app with a supplied selector", () => {
+  const SEEK = { identifier: "seek", frame: { x: 0.1, y: 0.2, width: 0.6, height: 0.1 } };
+
+  function tap(x: number, selector: { identifier: string } | undefined, reg: Registry) {
+    return createFlowAddStepTool(reg).execute({}, {
+      name: "seek",
+      project_root: tmpDir,
+      command: "gesture-tap",
+      args: JSON.stringify({ udid: MAC, x, y: 0.25 }),
+      ...(selector && { selector }),
+    } as never) as Promise<{ message: string }>;
+  }
+
+  it("refuses a click away from the centre of a slider, running nothing, and records either remedy", async () => {
+    serve([n({ ...SEEK, role: "AXSlider", clickable: true })], "macos-devtools");
+    await start("seek");
+    const reg = registry();
+
+    const refused = await tap(0.2, { identifier: "seek" }, reg);
+
+    expect(refused.message).toMatch(
+      /`selector` \{"identifier":"seek"\} resolves, in the tree a replay reads, to an element centred at \(0\.4, 0\.25\), and a replay clicks there, away from this click\./
+    );
+    expect(refused.message).toMatch(
+      /If a click there does what you want, record the tap at \(0\.4, 0\.25\)\. Otherwise omit the selector\./
+    );
+    expect(reg.invokeTool).not.toHaveBeenCalled();
+    expect(await recordedSteps("seek")).toEqual([]);
+
+    await tap(0.4, { identifier: "seek" }, registry());
+    await tap(0.2, undefined, registry());
+
+    expect(await recordedSteps("seek")).toEqual([
+      { kind: "tap", selector: { identifier: "seek" } },
+      { kind: "tap", x: 0.2, y: 0.25 },
+    ]);
+  });
+
+  it("keeps a selector for a click away from the centre of a button, which takes it anywhere", async () => {
+    serve([n({ ...SEEK, role: "AXButton", clickable: true })], "macos-devtools");
+    await start("seek");
+
+    await tap(0.2, { identifier: "seek" }, registry());
+
+    expect(await recordedSteps("seek")).toEqual([
+      { kind: "tap", selector: { identifier: "seek" } },
+    ]);
+  });
+});
+
 describe("a tap recorded in a web editor of a Mac app", () => {
   it.each([
     [
