@@ -67,7 +67,9 @@ vi.mock("@argent/native-devtools-ios", async (importOriginal) => ({
     helper: "/stand-in/argent-macos-helper",
   }),
 }));
-vi.mock("../src/utils/macos-suspension-watch", () => ({
+// The real helper lookup, which reads the macosArtifacts mock above.
+vi.mock("../src/utils/macos-suspension-watch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/macos-suspension-watch")>()),
   startSuspensionWatch: vi.fn(async () => null),
 }));
 vi.mock("../src/utils/check-deps", async (importOriginal) => ({

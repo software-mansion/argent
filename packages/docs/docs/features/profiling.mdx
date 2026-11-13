@@ -100,6 +100,7 @@ Argent writes each session to disk in a directory with the name `argent-profiler
 - The memory leak data is available on iOS and on Mac apps only. On Android, Argent reports memory growth as a weak signal.
 - Sometimes Instruments does not end after the stop of a recording. This fault also occurs without Argent. When Instruments does no work for some time, Argent ends it and tells the agent. The data of this recording can be incomplete.
 - Instruments checks the app for memory leaks about every 11 to 15 seconds. A leak is in the profile only after a check that started after the leak. Keep the recording on for about 25 seconds after the action that leaks. Otherwise the profile does not contain the leak.
+- Instruments suspends the whole app during each leak check. On a Mac app and on an iOS simulator, Argent watches for this and takes the suspended time out of each hang. A hang that was only the suspension is not in the report. When Argent cannot watch the app, the report tells that a hang can contain a suspension.
 - On Android, native network capture can slow the app and change the timings in a profile. When native network capture is on for an app on the device, the start of a profiler gives a warning. To profile without it, ask the agent to stop native network capture for the app. Then restart the app. See [Network inspection](/docs/features/network).
 
 Argent does this with the `react-profiler-*`, `native-profiler-*` and `profiler-*` tools. The [tools reference](/docs/reference/tools) contains all tools.

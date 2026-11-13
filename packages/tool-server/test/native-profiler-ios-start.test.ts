@@ -71,6 +71,19 @@ vi.mock("../src/utils/ios-profiler/startup", () => ({
 vi.mock("../src/utils/simulator-watcher", () => ({
   firstSimulatorPoll: vi.fn(async () => {}),
 }));
+// The real helper lookup, which reads the macosArtifacts mock below.
+vi.mock("../src/utils/macos-suspension-watch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/macos-suspension-watch")>()),
+  startSuspensionWatch: vi.fn(async () => null),
+}));
+vi.mock("@argent/native-devtools-ios", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@argent/native-devtools-ios")>()),
+  macosArtifacts: vi.fn(() => ({
+    bootstrap: "/fake/bootstrap.dylib",
+    library: "/fake/library.dylib",
+    helper: "/fake/argent-macos-helper",
+  })),
+}));
 vi.mock("../src/utils/ios-profiler/capture-strategy", () => ({
   selectIosCaptureStrategy: vi.fn(() => ({
     name: "device",
@@ -454,5 +467,323 @@ describe("startNativeProfilerIos with malloc_stack_logging", () => {
       ["terminate", "SIGKILL"],
       ["launch", "SIGKILL"],
     ]);
+  });
+});
+
+/**
+ * The leak check of the Argent template suspends the whole simulator app, and
+ * xctrace counts the pause in a hang. The start watches the app's host pid with
+ * the helper of Mac apps, so analyze can take the pauses out.
+ */
+describe("startNativeProfilerIos and the app's suspensions", () => {
+  const APP_PID = 4321;
+
+  async function mockRunningApp() {
+    const cp = await import("child_process");
+    vi.mocked(cp.execFileSync).mockImplementation(((_file: string, args: readonly string[]) => {
+      if (args.includes("launchctl"))
+        return `${APP_PID}\t0\tUIKitApplication:com.example.app[1a]\n`;
+      if (args.includes("listapps")) return "(plist)";
+      if (args.includes("get_app_container")) return "/apps/Bluesky.app\n";
+      if (args[0] === "-convert") {
+        return JSON.stringify({
+          "com.example.app": {
+            CFBundleExecutable: "Bluesky",
+            CFBundleIdentifier: "com.example.app",
+            ApplicationType: "User",
+          },
+        });
+      }
+      return "";
+    }) as never);
+  }
+
+  function fakeWatch() {
+    return {
+      pid: APP_PID,
+      suspendedSince: () => null,
+      suspendedMsBetween: () => 0,
+      waitUntilRunning: async () => true,
+      end: vi.fn(() => [{ startMs: 1, endMs: 2 }]),
+    };
+  }
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    await mockRunningApp();
+    const watch = await import("../src/utils/macos-suspension-watch");
+    vi.mocked(watch.startSuspensionWatch).mockReset().mockResolvedValue(null);
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    const cp = await import("child_process");
+    vi.mocked(cp.execFileSync).mockImplementation(() => {
+      throw new Error("simctl unavailable in this test");
+    });
+  });
+
+  it("watches the app's host pid from before xctrace attaches, for the session", async () => {
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const cp = await import("child_process");
+    const watch = fakeWatch();
+    let spawnedBeforeWatch: boolean | null = null;
+    vi.mocked(startSuspensionWatch).mockImplementationOnce(async () => {
+      spawnedBeforeWatch = vi.mocked(cp.spawn).mock.calls.length > spawnsBefore;
+      return watch;
+    });
+    const spawnsBefore = vi.mocked(cp.spawn).mock.calls.length;
+    const api = (await session()).api as NativeProfilerSessionApi;
+
+    await settled(startNativeProfilerIos(api, startParams));
+
+    expect(startSuspensionWatch).toHaveBeenCalledWith("/fake/argent-macos-helper", APP_PID);
+    expect(spawnedBeforeWatch).toBe(false);
+    expect(vi.mocked(cp.spawn).mock.calls.length).toBeGreaterThan(spawnsBefore);
+    expect(api.suspensionWatch).toBe(watch);
+    expect(watch.end).not.toHaveBeenCalled();
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  /** The order of the first call of each mock, for "before" and "after". */
+  function firstCall(mock: { mock: { invocationCallOrder: number[] } }): number {
+    return mock.mock.invocationCallOrder[0] ?? Infinity;
+  }
+
+  /** The first launchctl list call of this test. */
+  async function firstLaunchctlCall(): Promise<number> {
+    const cp = await import("child_process");
+    const mock = vi.mocked(cp.execFileSync).mock;
+    const index = mock.calls.findIndex(([, args]) => (args as string[]).includes("launchctl"));
+    return index < 0 ? Infinity : mock.invocationCallOrder[index]!;
+  }
+
+  const mallocParams = { ...startParams, malloc_stack_logging: true };
+
+  function deviceForMalloc(): void {
+    vi.mocked(resolveIosCaptureStrategy).mockReturnValueOnce({
+      strategy: { name: "device" },
+      reason: { kind: "default" },
+    } as unknown as ReturnType<typeof resolveIosCaptureStrategy>);
+  }
+
+  it("watches the app that malloc_stack_logging launches, from when the start finds its pid", async () => {
+    // xctrace launches the app, so the start knows its pid only after the start.
+    deviceForMalloc();
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const cp = await import("child_process");
+    vi.mocked(cp.execFileSync).mockClear();
+    vi.mocked(cp.spawn).mockClear();
+    const watch = fakeWatch();
+    vi.mocked(startSuspensionWatch).mockResolvedValueOnce(watch);
+    const api = (await session()).api as NativeProfilerSessionApi;
+
+    await settled(startNativeProfilerIos(api, mallocParams));
+
+    expect(vi.mocked(cp.spawn).mock.calls[0]?.[1]).toContain("--launch");
+    expect(startSuspensionWatch).toHaveBeenCalledWith("/fake/argent-macos-helper", APP_PID);
+    expect(firstCall(vi.mocked(cp.spawn))).toBeLessThan(await firstLaunchctlCall());
+    expect(await firstLaunchctlCall()).toBeLessThan(firstCall(vi.mocked(startSuspensionWatch)));
+    expect(api.suspensionWatch).toBe(watch);
+    expect(watch.end).not.toHaveBeenCalled();
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  it("watches an app that xctrace attached to by name, from when the start finds its pid", async () => {
+    // The app was not running yet when the start listed the apps.
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const cp = await import("child_process");
+    vi.mocked(cp.spawn).mockClear();
+    const listed = vi.mocked(cp.execFileSync).getMockImplementation()!;
+    vi.mocked(cp.execFileSync).mockImplementation(((file: string, args: readonly string[]) =>
+      args.includes("launchctl") && vi.mocked(cp.spawn).mock.calls.length === 0
+        ? ""
+        : listed(file, args as string[])) as never);
+    const watch = fakeWatch();
+    vi.mocked(startSuspensionWatch).mockResolvedValueOnce(watch);
+    const api = (await session()).api as NativeProfilerSessionApi;
+
+    await settled(startNativeProfilerIos(api, startParams));
+
+    expect(startSuspensionWatch).toHaveBeenCalledTimes(1);
+    expect(startSuspensionWatch).toHaveBeenCalledWith("/fake/argent-macos-helper", APP_PID);
+    expect(firstCall(vi.mocked(cp.spawn))).toBeLessThan(firstCall(vi.mocked(startSuspensionWatch)));
+    expect(api.suspensionWatch).toBe(watch);
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  it("records as before when the start does not find the pid after the start", async () => {
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const cp = await import("child_process");
+    const listed = vi.mocked(cp.execFileSync).getMockImplementation()!;
+
+    // By name: the app is not listed after the start either.
+    vi.mocked(cp.execFileSync).mockImplementation(((file: string, args: readonly string[]) =>
+      args.includes("launchctl") ? "" : listed(file, args as string[])) as never);
+    const byName = (await session()).api as NativeProfilerSessionApi;
+    await expect(settled(startNativeProfilerIos(byName, startParams))).resolves.toMatchObject({
+      status: "recording",
+    });
+    expect(byName.suspensionWatch).toBeNull();
+    if (byName.recordingTimeout) clearTimeout(byName.recordingTimeout);
+
+    // malloc_stack_logging: the list fails after the start.
+    __resetXctraceRecordingsForTesting();
+    vi.mocked(cp.execFileSync).mockImplementation(((file: string, args: readonly string[]) => {
+      if (args.includes("launchctl")) throw new Error("launchctl timed out");
+      return listed(file, args as string[]);
+    }) as never);
+    deviceForMalloc();
+    const launched = (await session()).api as NativeProfilerSessionApi;
+    await expect(settled(startNativeProfilerIos(launched, mallocParams))).resolves.toMatchObject({
+      status: "recording",
+    });
+    expect(launched.suspensionWatch).toBeNull();
+    expect(startSuspensionWatch).not.toHaveBeenCalled();
+    if (launched.recordingTimeout) clearTimeout(launched.recordingTimeout);
+  });
+
+  it("does not read the app list again after the start when it failed before", async () => {
+    // Each call can wait out its 10 s timeout, and the start waits for it.
+    const cp = await import("child_process");
+    const listed = vi.mocked(cp.execFileSync).getMockImplementation()!;
+    vi.mocked(cp.execFileSync).mockImplementation(((file: string, args: readonly string[]) => {
+      if (args.includes("launchctl")) throw new Error("spawnSync xcrun ETIMEDOUT");
+      return listed(file, args as string[]);
+    }) as never);
+    vi.mocked(cp.execFileSync).mockClear();
+    const api = (await session()).api as NativeProfilerSessionApi;
+
+    await expect(settled(startNativeProfilerIos(api, startParams))).resolves.toMatchObject({
+      status: "recording",
+    });
+
+    const launchctlCalls = vi
+      .mocked(cp.execFileSync)
+      .mock.calls.filter(([, args]) => (args as string[]).includes("launchctl"));
+    expect(launchctlCalls).toHaveLength(1);
+    expect(api.suspensionWatch).toBeNull();
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  it("fails and ends the watch when xctrace quits while the watch starts", async () => {
+    deviceForMalloc();
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const cp = await import("child_process");
+    const child = new FakeXctrace();
+    vi.mocked(cp.spawn).mockReturnValueOnce(child as unknown as ChildProcess);
+    const watch = fakeWatch();
+    vi.mocked(startSuspensionWatch).mockImplementationOnce(async () => {
+      child.exitWith(null, 1);
+      return watch;
+    });
+    vi.mocked(cp.execFileSync).mockClear();
+    const api = (await session()).api as NativeProfilerSessionApi;
+
+    const err = await settled(startNativeProfilerIos(api, mallocParams)).catch((e: unknown) => e);
+
+    expect(getFailureSignal(err)?.error_code).toBe(
+      FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED
+    );
+    expect(watch.end).toHaveBeenCalledTimes(1);
+    expect(api.suspensionWatch).toBeNull();
+    expect(api.profilingActive).toBe(false);
+    // The malloc path terminated the app for its cold start, and restores it.
+    const calls = vi
+      .mocked(cp.execFileSync)
+      .mock.calls.map(([, args]) => (args as string[]).join(" "));
+    expect(calls).toContain(`launch ${iosDevice.id} com.example.app`);
+  });
+
+  it("ends the watch of a recording that the cap ended without a stop", async () => {
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const watch = fakeWatch();
+    vi.mocked(startSuspensionWatch).mockResolvedValueOnce(watch);
+    const api = (await session()).api as NativeProfilerSessionApi;
+    const capped = fakeWatch();
+    api.suspensionWatch = capped;
+    api.recordingTimedOut = true;
+
+    await settled(startNativeProfilerIos(api, startParams));
+
+    expect(capped.end).toHaveBeenCalledTimes(1);
+    expect(api.suspensionWatch).toBe(watch);
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  it("does not watch with the all-processes fallback, which records no leak check", async () => {
+    const strategy = await import("../src/utils/ios-profiler/capture-strategy");
+    vi.mocked(strategy.selectIosCaptureStrategy).mockReturnValueOnce({
+      name: "all-processes",
+      attachesByName: false,
+      cpuFilterPid: () => APP_PID,
+      buildRecordArgs: () => ["record", "--all-processes"],
+    } as never);
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const api = (await session()).api as NativeProfilerSessionApi;
+
+    await settled(startNativeProfilerIos(api, startParams));
+
+    expect(startSuspensionWatch).not.toHaveBeenCalled();
+    expect(api.suspensionWatch).toBeNull();
+    if (api.recordingTimeout) clearTimeout(api.recordingTimeout);
+  });
+
+  it("records as before when there is no helper or it cannot watch", async () => {
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const native = await import("@argent/native-devtools-ios");
+    vi.mocked(native.macosArtifacts).mockImplementationOnce(() => {
+      throw new Error("macOS app artifact not found");
+    });
+    const noHelper = (await session()).api as NativeProfilerSessionApi;
+    await expect(settled(startNativeProfilerIos(noHelper, startParams))).resolves.toMatchObject({
+      status: "recording",
+    });
+    expect(startSuspensionWatch).not.toHaveBeenCalled();
+    expect(noHelper.suspensionWatch).toBeNull();
+    if (noHelper.recordingTimeout) clearTimeout(noHelper.recordingTimeout);
+
+    // A helper from before the command: startSuspensionWatch returns null. The
+    // first fake xctrace keeps running, and would refuse a second recording.
+    __resetXctraceRecordingsForTesting();
+    const oldHelper = (await session()).api as NativeProfilerSessionApi;
+    await expect(settled(startNativeProfilerIos(oldHelper, startParams))).resolves.toMatchObject({
+      status: "recording",
+    });
+    expect(startSuspensionWatch).toHaveBeenCalledTimes(1);
+    expect(oldHelper.suspensionWatch).toBeNull();
+    if (oldHelper.recordingTimeout) clearTimeout(oldHelper.recordingTimeout);
+  });
+
+  it("ends the watch when xctrace does not start, and when a teardown lands mid-handshake", async () => {
+    const { startSuspensionWatch } = await import("../src/utils/macos-suspension-watch");
+    const startup = await import("../src/utils/ios-profiler/startup");
+
+    const failed = fakeWatch();
+    vi.mocked(startSuspensionWatch).mockResolvedValueOnce(failed);
+    vi.mocked(startup.waitForXctraceReady).mockRejectedValueOnce(new Error("xctrace exited"));
+    const api = (await session()).api as NativeProfilerSessionApi;
+    await expect(settled(startNativeProfilerIos(api, startParams))).rejects.toThrow(
+      "xctrace exited"
+    );
+    expect(failed.end).toHaveBeenCalledTimes(1);
+    expect(api.suspensionWatch).toBeNull();
+
+    // The fake xctrace of the failed start keeps running.
+    __resetXctraceRecordingsForTesting();
+    const torn = fakeWatch();
+    vi.mocked(startSuspensionWatch).mockResolvedValueOnce(torn);
+    const instance = await session();
+    vi.mocked(startup.waitForXctraceReady).mockImplementationOnce(async () => {
+      await instance.dispose();
+      return { stderrBuffer: "" };
+    });
+    const tornApi = instance.api as NativeProfilerSessionApi;
+    const err = await settled(startNativeProfilerIos(tornApi, startParams)).catch(
+      (e: unknown) => e
+    );
+    expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.NATIVE_PROFILER_SESSION_TORN_DOWN);
+    expect(torn.end).toHaveBeenCalledTimes(1);
+    expect(tornApi.suspensionWatch).toBeNull();
   });
 });

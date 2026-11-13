@@ -175,14 +175,16 @@ export interface NativeProfilerSessionApi {
    */
   stopInProgress: Promise<unknown> | null;
   /**
-   * Mac apps only: the watch of the app's suspensions that runs with the
-   * recording. `end()` stops it and returns what it saw. Null when nothing watches.
+   * Mac apps and iOS simulators, but not the all-processes fallback: the watch of
+   * the app's suspensions that runs with the recording. `end()` stops it and
+   * returns what it saw. Null when nothing watches.
    */
   suspensionWatch: { end(): AppSuspensionWindow[] } | null;
   /**
-   * Mac apps only: when macOS held the app suspended during the recording in
-   * `exportedFiles`, on the trace's timeline. Null when argent did not watch the
-   * app or the trace's start is unknown. Stamped at stop; cleared by profiler-load.
+   * Mac apps and iOS simulators, but not the all-processes fallback: when macOS
+   * held the app suspended during the recording in `exportedFiles`, on the
+   * trace's timeline. Null when argent did not watch the app or the trace's
+   * start is unknown. Stamped at stop; cleared by profiler-load.
    */
   appSuspensions: AppSuspensionSpan[] | null;
   /**

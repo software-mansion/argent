@@ -226,7 +226,19 @@ describe("the note on hangs and the leak check", () => {
     expect(report.indexOf(LEAK_NOTE)).toBeLessThan(report.indexOf("---"));
   });
 
-  it("is absent without hangs, without leak data, and on an iOS simulator", async () => {
+  it("is at the top of an iOS report with hangs, in iOS words, when argent did not watch the app", async () => {
+    withHangs([hang]);
+    const { report } = await analyzeNativeProfilerIos(makeApi("ios"));
+    expect(report).toContain(
+      `> ⚠️ ${LEAK_NOTE} Instruments pauses the app for several seconds while it checks the app ` +
+        `for leaks, about every 12 to 15 s.`
+    );
+    expect(report).toContain('`template_path: "Time Profiler"`');
+    expect(report).not.toContain("Mac app");
+    expect(report.indexOf(LEAK_NOTE)).toBeLessThan(report.indexOf("---"));
+  });
+
+  it("is absent without hangs and without leak data", async () => {
     withHangs([]);
     expect((await analyzeNativeProfilerIos(makeApi("macos"))).report).not.toContain(LEAK_NOTE);
 
@@ -240,7 +252,7 @@ describe("the note on hangs and the leak check", () => {
     expect((await analyzeNativeProfilerIos(makeApi("macos"))).report).not.toContain(LEAK_NOTE);
     writeFileSync(join(dir, "leaks.xml"), LEAKS_CHECKED_NONE_FOUND);
 
-    withHangs([hang]);
+    withHangs([]);
     expect((await analyzeNativeProfilerIos(makeApi("ios"))).report).not.toContain(LEAK_NOTE);
   });
 });

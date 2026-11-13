@@ -37,8 +37,9 @@ interface PipelineOptions {
    */
   cpuFilterPid?: number | null;
   /**
-   * Mac apps: when macOS held the app suspended, on the trace's timeline. Their
-   * time is taken out of the hangs. Null or absent takes no suspended time out.
+   * Mac apps and iOS simulator apps: when macOS held the app suspended, on the
+   * trace's timeline. Their time is taken out of the hangs. Null or absent takes
+   * no suspended time out.
    */
   appSuspensions?: AppSuspensionSpan[] | null;
   /**

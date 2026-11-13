@@ -594,6 +594,8 @@ macOS lets one recording at a time use the kernel trace that Instruments uses fo
 
 Argent checks the processes of the Mac again immediately before it starts xctrace. Two tool-servers that start xctrace at the same moment can still both record. Argent cannot see a recording in the Instruments app. A recording on Android does not use xctrace, and it does not block a recording with Instruments.
 
+Instruments suspends the whole app during each leak check, and the trace can show this time as a UI hang. Argent watches when the app is suspended during the recording, on a Mac app and on an iOS simulator. Then `native-profiler-analyze` takes the suspended time out of each UI hang, as the [Mac app](#profiling-a-mac-app) section tells. When Argent cannot watch the app, the report has a note below its title. The note tells that a hang can contain a suspension. On an iOS simulator, taps and other calls do not wait for the app.
+
 On an iOS simulator and on a Mac app, these rules apply while `native-profiler-stop` runs on a device:
 
 - A second `native-profiler-stop` on the same device returns the result of the stop that runs.

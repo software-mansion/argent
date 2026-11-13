@@ -9,6 +9,13 @@ import type { NativeProfilerSessionApi } from "../../src/blueprints/native-profi
 // xctrace argv. Default mode must still `--attach`; malloc_stack_logging mode
 // must cold-`--launch` the resolved .app with `--env MallocStackLogging=1`.
 
+// The start also watches the app's suspensions with a helper process, which
+// native-profiler-ios-start.test.ts covers; here only xctrace is spawned.
+vi.mock("../../src/utils/macos-suspension-watch", () => ({
+  suspensionWatchHelper: () => "/fake/argent-macos-helper",
+  startSuspensionWatch: async () => null,
+}));
+
 class StartFakeChild extends EventEmitter {
   pid = 4242;
   stdout = new EventEmitter();

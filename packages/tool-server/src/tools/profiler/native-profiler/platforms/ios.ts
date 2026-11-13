@@ -13,6 +13,11 @@ import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-d
 import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
 import { SIMCTL_KILL_SIGNAL } from "../../../../utils/simctl-config";
 import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
+import {
+  startSuspensionWatch,
+  suspensionWatchHelper,
+  type SuspensionWatch,
+} from "../../../../utils/macos-suspension-watch";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData, skippedTraceExport } from "../../../../utils/ios-profiler/export";
 import {
@@ -472,6 +477,7 @@ async function startIosRecording(
   const useMallocStackLogging = params.malloc_stack_logging === true;
   let appProcess: string;
   let launchBundlePath: string | null = null;
+  let launchBundleId: string | null = null;
   // Bundle id the malloc path terminated for its cold start, so a failed start can
   // best-effort relaunch it instead of leaving the user's app dead.
   let mallocRelaunchBundleId: string | null = null;
@@ -505,6 +511,7 @@ async function startIosRecording(
     // The relaunch below must not beat injection.
     await firstSimulatorPoll();
     appProcess = info.CFBundleExecutable;
+    launchBundleId = info.CFBundleIdentifier;
     launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
     // Terminate any running instance so the env var is set from process start
     // (best-effort; not-running is fine).
@@ -556,6 +563,15 @@ async function startIosRecording(
       );
     }
   }
+
+  // The leak check of the Argent template suspends the whole app, as on a Mac
+  // app, and analyze takes the suspensions out of the hangs. The all-processes
+  // fallback records no leak check. A pid known now is watched from before
+  // xctrace attaches. The pid of an app that xctrace launches, or attaches to by
+  // name, is known only after the start.
+  const watchesApp = useMallocStackLogging || strategy?.name === "device";
+  let suspensionWatch =
+    watchesApp && detected?.pid != null ? await watchAppSuspensions(detected.pid) : null;
 
   const attemptStart = (): Promise<{ child: ChildProcess; pid: number }> =>
     spawnXctraceRecording(api, (notifyName) => {
@@ -624,14 +640,42 @@ async function startIosRecording(
     );
   };
 
-  let started: { child: ChildProcess; pid: number };
+  let recording = false;
   try {
-    started = await startWithRetry();
+    const started = await startWithRetry();
     await settleAfterStart(api, started.child);
+    // Not when the list failed before the start: a failure can take its 10 s timeout again.
+    if (watchesApp && detected?.pid == null && !detected?.listFailure) {
+      // Before the first leak check, which begins about 4 to 7 s after the start returns.
+      const pid = startedAppPid(
+        params.device_id,
+        launchBundleId !== null ? { bundleId: launchBundleId } : { name: appProcess }
+      );
+      suspensionWatch = pid !== null ? await watchAppSuspensions(pid) : null;
+      // xctrace can quit while the watch starts, before the commit listens for its
+      // exit: then the start fails as the wait above makes it fail.
+      if (started.child.exitCode !== null || started.child.signalCode !== null) {
+        await settleAfterStart(api, started.child);
+      }
+    }
+    const result = commitXctraceRecording(api, started, {
+      appProcess,
+      traceFile: outputFile,
+      mallocStackLogging: useMallocStackLogging,
+      customTemplate: params.template_path !== undefined,
+      // Null for the device strategy (scoped by --attach) and for a malloc cold launch
+      // (scoped by --launch); the app PID only for the host-wide all-processes fallback.
+      cpuFilterPid: strategy ? strategy.cpuFilterPid(detected!) : null,
+    });
+    // A recording that the cap or an exit ended keeps its watch until a stop.
+    api.suspensionWatch?.end();
+    api.suspensionWatch = suspensionWatch;
+    recording = true;
+    return result;
   } catch (err) {
     // The malloc path terminated the running app; if the capture never started,
     // relaunch it. The attach path never terminates, so only this path needs this.
-    // Not after a teardown, as for one that the commit below reports.
+    // Not after a teardown, as for one that the commit reports.
     if (mallocRelaunchBundleId && !api.disposed) {
       try {
         execFileSync(
@@ -652,16 +696,36 @@ async function startIosRecording(
       }
     }
     throw err;
+  } finally {
+    if (!recording) suspensionWatch?.end();
   }
-  return commitXctraceRecording(api, started, {
-    appProcess,
-    traceFile: outputFile,
-    mallocStackLogging: useMallocStackLogging,
-    customTemplate: params.template_path !== undefined,
-    // Null for the device strategy (scoped by --attach) and for a malloc cold launch
-    // (scoped by --launch); the app PID only for the host-wide all-processes fallback.
-    cpuFilterPid: strategy ? strategy.cpuFilterPid(detected!) : null,
-  });
+}
+
+/**
+ * The host pid of the app that xctrace launched, or attached to by name, from
+ * the simulator's `launchctl list` as the start reads it before xctrace
+ * attaches. Null when the list fails or does not show the app.
+ */
+function startedAppPid(udid: string, app: { bundleId: string } | { name: string }): number | null {
+  try {
+    if ("name" in app) return resolveExplicitApp(udid, app.name).pid;
+    return (
+      enumerateRunningUserApps(udid).find(({ info }) => info.CFBundleIdentifier === app.bundleId)
+        ?.pid ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Watches a simulator app, which is a process of this Mac, with the helper of
+ * Mac apps. Null when there is no helper or it cannot watch: then the hangs
+ * stay as recorded.
+ */
+async function watchAppSuspensions(pid: number): Promise<SuspensionWatch | null> {
+  const helper = suspensionWatchHelper();
+  return helper ? startSuspensionWatch(helper, pid) : null;
 }
 
 export interface IosStopResult {
@@ -867,7 +931,7 @@ function readRunErrors(
   };
 }
 
-/** Ends the Mac app's suspension watch: what it saw, or null when nothing watched. */
+/** Ends the app's suspension watch: what it saw, or null when nothing watched. */
 function endSuspensionWatch(api: NativeProfilerSessionApi): AppSuspensionWindow[] | null {
   const watch = api.suspensionWatch;
   api.suspensionWatch = null;
@@ -887,15 +951,29 @@ const APP_ENDED_NOTE =
   "of what the app did before that, so the report can miss CPU work, hangs and leaks of that " +
   "time. Profile the scenario again with the app running until native-profiler-stop.";
 
-// Measured on two Mac apps that argent drove: each check held up taps and describe for about
-// 10 s, and the report showed hangs of 11 to 14 s where the app did no heavy work. The same
-// actions under the Time Profiler template showed no hang, and that template still found a
-// 1.5 s and a 2 s hang of the app.
-const LEAK_CHECK_HANG_NOTE =
-  "Instruments pauses a Mac app for several seconds while it checks the app for leaks, about " +
-  "every 11 s. A hang, mainly one that began at a tap or a describe, can be this pause and not " +
-  "the app's own work. To check a hang, record the same actions again with `template_path: \"Time " +
-  'Profiler"`, which records hangs and CPU samples but does not check for leaks.';
+const CHECK_A_HANG =
+  'To check a hang, record the same actions again with `template_path: "Time Profiler"`, which ' +
+  "records hangs and CPU samples but does not check for leaks.";
+
+/** Says that the hangs can hold the leak checks' pauses, when argent did not watch for them. */
+const LEAK_CHECK_HANG_NOTE: Record<"macos" | "ios", string> = {
+  // Measured on two Mac apps that argent drove: each check held up taps and describe for about
+  // 10 s, and the report showed hangs of 11 to 14 s where the app did no heavy work. The same
+  // actions under the Time Profiler template showed no hang, and that template still found a
+  // 1.5 s and a 2 s hang of the app.
+  macos:
+    "Instruments pauses a Mac app for several seconds while it checks the app for leaks, about " +
+    "every 11 s. A hang, mainly one that began at a tap or a describe, can be this pause and not " +
+    `the app's own work. ${CHECK_A_HANG}`,
+  // Measured on an iOS 27 simulator with Xcode 27.2, on a loaded Mac: a check held the app
+  // suspended for 1.2 to 19.6 s in five recordings. A check that came while the main thread had
+  // work made the hang longer by the pause: a hang of 17415 ms had 5584 ms of main-thread CPU and
+  // 11842 ms of pause. Taps do not wait for a suspended simulator app.
+  ios:
+    "Instruments pauses the app for several seconds while it checks the app for leaks, about " +
+    "every 12 to 15 s. A hang that overlaps a check can include this pause, so the app's own work " +
+    `can be much shorter than the hang. ${CHECK_A_HANG}`,
+};
 
 /**
  * What argent changed in the hangs, for a note: "left out 1 hang <why>, and took <what>
@@ -922,8 +1000,8 @@ function hangChanges(
 }
 
 /**
- * Says what the pipeline took out of the hangs when argent watched the Mac app's
- * suspensions, in place of LEAK_CHECK_HANG_NOTE. Each leak check suspended the
+ * Says what the pipeline took out of the hangs when argent watched the app's
+ * suspensions (a Mac app or an iOS simulator app), in place of LEAK_CHECK_HANG_NOTE. Each leak check suspended the
  * whole app, so a hang that began before or during one included it. Null when
  * no hang changed.
  */
@@ -1074,8 +1152,8 @@ export async function analyzeNativeProfilerIos(
     checkExportFileMissing(api.exportedFiles.leaks ?? null),
   ]);
 
-  // Null on iOS and when argent did not watch the Mac app: the hangs stay as recorded.
-  const appSuspensions = api.platform === "macos" ? api.appSuspensions : null;
+  // Null when argent did not watch the app: the hangs stay as recorded.
+  const appSuspensions = api.appSuspensions;
   const {
     bottlenecks,
     cpuSamples,
@@ -1187,8 +1265,9 @@ export async function analyzeNativeProfilerIos(
         api.appEndedDuringCapture
           ? `> ⚠️ **The app ended during the recording:** ${APP_ENDED_NOTE}`
           : null,
-        api.platform === "macos" && appSuspensions === null && leaksRecorded && uiHangs.length > 0
-          ? `> ⚠️ **Hangs and the leak check:** ${LEAK_CHECK_HANG_NOTE}`
+        appSuspensions === null && leaksRecorded && uiHangs.length > 0
+          ? "> ⚠️ **Hangs and the leak check:** " +
+            LEAK_CHECK_HANG_NOTE[api.platform === "macos" ? "macos" : "ios"]
           : null,
         suspensionAdjustment ? suspensionNote(suspensionAdjustment, leaksRecorded) : null,
         recorderNote(recorderAdjustment),
