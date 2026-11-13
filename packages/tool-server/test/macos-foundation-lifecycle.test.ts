@@ -914,6 +914,22 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect((await readLog()).header).toBe(`macos-native: armed, 1 request (pid ${pid}; ${GAP})`);
     });
 
+    it("keeps capture off in the new process when network-capture-stop comes during a restart", async () => {
+      const { pid } = await run("boot-device", { macosAppPath: appPath });
+      await start();
+      const restarting = run("restart-app", {
+        udid: DEVICE_ID,
+        bundleId: BUNDLE_ID,
+        launchArgs: ["--handshake-delay=500"],
+      });
+      // The stop comes while the new process has not connected yet.
+      await waitUntil(() => fakeAppPids().some((p) => p !== pid));
+      const [, stopped] = await Promise.all([restarting, stop()]);
+      expect(stopped.layers).toEqual([{ layer: "macos-native", armed: false, total: 0 }]);
+      expect(await request("https://example.com/after")).toEqual({ active: false, activations: 0 });
+      expect(await readLog()).toMatchObject({ stopped: true, total: 0 });
+    });
+
     it("arms the app when argent starts it after a start that found it not running", async () => {
       expect((await start()).layers).toEqual([
         {
