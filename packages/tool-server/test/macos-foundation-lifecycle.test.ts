@@ -739,6 +739,13 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
       expect(JSON.stringify(found)).not.toContain("fake-token");
       expect(JSON.stringify(found)).not.toContain("fake-secret");
 
+      // A body the library does not hold gets the iOS text, as on iOS.
+      await request("https://example.com/gone");
+      const gone = (await readLog()).requests.find((r) => r.url === "https://example.com/gone")!;
+      expect((await details(gone.id)).response.body).toBe(
+        "[unavailable: the agent no longer holds this body]"
+      );
+
       expect(await details("macos-0000-999999")).toBe(
         "Request macos-0000-999999 not found. Use native-network-logs to list the requests the Mac app native layer recorded."
       );
