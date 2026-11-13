@@ -45,6 +45,8 @@ function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,

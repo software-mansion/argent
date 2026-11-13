@@ -145,7 +145,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 ### Stage 1 — Correlate (`pipeline/01-correlate.ts`)
 
 - **Hang ↔ CPU correlation.** For each hang, filter CPU samples whose `timestampNs` ∈ `[startNs, startNs + durationNs]`. Within that window, count the **dominant function** of every sample and the **app call chain** (system + hex frames stripped). Top 5 functions and top 3 chains attach to the hang. Their timestamps are also returned in `hangSampleTimestamps` so Stage 2 can flag overlapping CPU hotspots.
-- **Leak aggregation.** Group raw leaks by `(objectType, responsible frame)`, summing `sizeBytes * count` — with `malloc_stack_logging` the same object type can leak from several distinct call sites, and each site is its own finding. The frame half of the key is normalized the way `isLeakAttributed` matches it: trimmed, with every unattributed spelling (`""`, `Unknown`, the `<Call stack limit reached>` sentinel) collapsed into one bucket, so an export that mixes those spellings still yields one unattributed group per type (and under `--attach`, where nothing is attributed, grouping degrades to per-type). Attributed leaks (a resolved responsible frame) sort first, then by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently.) Severity follows attribution: a resolved responsible frame ⇒ RED, no recorded frame ⇒ a low-confidence YELLOW (see `isLeakAttributed`).
+- **Leak aggregation.** Group raw leaks by `(objectType, responsible frame)`, summing `sizeBytes * count` — with `malloc_stack_logging` the same object type can leak from several distinct call sites, and each site is its own finding. The frame half of the key is normalized the way `isLeakAttributed` matches it: trimmed, with every unattributed spelling (`""`, `Unknown`, `(null)`, the `<Call stack limit reached>` sentinel) collapsed into one bucket, so an export that mixes those spellings still yields one unattributed group per type (and under `--attach`, where nothing is attributed, grouping degrades to per-type). App leaks sort first, then the leaks whose responsible frame is in a system library, then the unattributed ones; each part by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently.) Severity follows attribution: a resolved responsible frame in the app's code ⇒ RED; one in a system library ⇒ YELLOW, with a note that names the libraries (the Swift runtime's allocator in `libswiftCore.dylib` counts as the app's); no recorded frame ⇒ a low-confidence YELLOW (see `isLeakAttributed`).
 - Hang severity is classified from the type string: contains `severe` or equals `hang` ⇒ RED; `microhang` ⇒ YELLOW.
 - **Mac apps: suspensions.** When the session has `appSuspensions` (when macOS held the app suspended, on the trace's timeline), the pipeline drops the hangs with under 250 ms of their own before the correlation, and gives each other hang its own length, the label of that length and `suspendedMs`. See `app-suspensions.ts`.
 
@@ -221,7 +221,7 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 
 - **Hang ↔ Commit correlations** — top overlapping commit per hang with its root-cause component, top components, JS CPU hotspots, and native CPU "suspects".
 - **Hangs without React commit match** — likely pure native work.
-- **Memory leaks** — same attribution split as the analyze report: attributed leaks are listed individually (and heuristically tied to a recently-mounted React component when `objectType`/`responsibleFrame` matches its name), while unattributed leaks collapse into a single low-confidence YELLOW caveat.
+- **Memory leaks** — same attribution split as the analyze report: attributed leaks are listed individually, the app's own first (heuristically tied to a recently-mounted React component when `objectType`/`responsibleFrame` matches its name), then those of system libraries with the note that they are not confirmed app leaks, while unattributed leaks collapse into a single low-confidence YELLOW caveat.
 
 ---
 
@@ -234,7 +234,8 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 | CPU hotspot | wall-time < 3 %                                              | filtered out |
 | UI hang     | type contains `severe` or equals `hang`                      | RED          |
 | UI hang     | `microhang`                                                  | YELLOW       |
-| Memory leak | attributed (resolved responsible frame)                      | RED          |
+| Memory leak | attributed, responsible frame in the app's code              | RED          |
+| Memory leak | attributed, responsible frame in a system library            | YELLOW       |
 | Memory leak | unattributed (`<Call stack limit reached>` under `--attach`) | YELLOW       |
 
 ---

@@ -197,3 +197,107 @@ describe("leak attribution rendering on a Mac app", () => {
     expect(res.report).not.toContain("On a Mac app");
   });
 });
+
+describe("leaks of system libraries in the report", () => {
+  it("rates them YELLOW with a note, and gives the retain-cycle advice for the app's leaks only", async () => {
+    const appLeak: MemoryLeak = {
+      ...leak(
+        true,
+        "swift::swift_slowAllocTyped(unsigned long, unsigned long, unsigned long long)",
+        "libswiftCore.dylib"
+      ),
+      objectType: "ProfLeakNodeA",
+    };
+    const systemLeak: MemoryLeak = {
+      ...leak(true, "-[NSXPCConnection initWithMachServiceName:options:]", "Foundation"),
+      objectType: "xpc_connection_t",
+      count: 3,
+      systemLibrary: true,
+      severity: "YELLOW",
+    };
+    const res = await renderNativeProfilerReport({
+      payload: payload([appLeak, systemLeak]),
+      traceFile: null,
+    });
+
+    expect(res.report).toContain("| Memory Leaks | 2 | 🔴 1  🟡 1 |");
+    expect(res.report).toContain(
+      "> 🟡 **1 leak group(s) from system libraries** (3 object(s); `Foundation`): the responsible " +
+        "frame is in a library of the OS, not in the app's code."
+    );
+    const advice = res.report.slice(res.report.indexOf("### Memory Leaks"));
+    expect(advice).toContain("`ProfLeakNodeA` x1");
+    expect(advice).not.toContain("`xpc_connection_t`");
+  });
+});
+
+describe("leaks of a template without the Allocations instrument in the report", () => {
+  // Such a template gives `(null)` as the frame and the library of every leak.
+  it("says that the template has no Allocations instrument, on a Mac app and on iOS", async () => {
+    const leaks: MemoryLeak[] = [
+      { ...leak(false, "(null)", "(null)"), objectType: "ProfLeakNodeA", count: 200 },
+      { ...leak(false, "(null)", "(null)"), objectType: "NSSet", count: 138 },
+    ];
+    for (const platform of ["macOS", "iOS"]) {
+      const res = await renderNativeProfilerReport({
+        payload: {
+          metadata: { traceFile: null, platform, timestamp: "2026-11-13T00:00:00Z" },
+          bottlenecks: leaks,
+        },
+        traceFile: null,
+      });
+      expect(res.report).toContain("| Memory Leaks | 2 | 🟡 2 |");
+      expect(res.report).toContain("> 🟡 **2 unattributed leak group(s)** (338 object(s), 2 KB)");
+      expect(res.report).toContain(
+        "responsible frame `(null)`, no library. The template of this recording has no " +
+          "Allocations instrument"
+      );
+      expect(res.report).not.toContain("malloc_stack_logging: true");
+      expect(res.report).not.toContain("Check for retain cycles");
+    }
+  });
+
+  it("is not said for a `(null)` group next to attributed leaks", async () => {
+    // An iOS malloc_stack_logging recording with the bundled template: one group of 1 object
+    // had `(null)` as its frame, next to an attributed Foundation leak.
+    const leaks: MemoryLeak[] = [
+      { ...leak(true, "+[NSXPCInterface interfaceWithProtocol:]", "Foundation"), count: 3 },
+      { ...leak(false, "(null)", "(null)"), objectType: "Malloc 32 Bytes", totalSizeBytes: 32 },
+    ];
+    const res = await renderNativeProfilerReport({
+      payload: payload(leaks),
+      traceFile: null,
+      mallocStackLogging: true,
+    });
+    expect(res.report).toContain(
+      "> 🟡 **1 unattributed leak group(s)** (1 object(s), 32 B): responsible frame `(null)`, " +
+        "no library. Some leaks here were attributed"
+    );
+    expect(res.report).not.toContain("no Allocations instrument");
+  });
+
+  it("is said only when the recording used a template of the caller, or the template is unknown", async () => {
+    // A malloc_stack_logging recording with the bundled template, which has the Allocations
+    // instrument: its only unattributed group was a `(null)` "Malloc 32 Bytes".
+    const leaks: MemoryLeak[] = [
+      { ...leak(false, "(null)", "(null)"), objectType: "Malloc 32 Bytes", totalSizeBytes: 32 },
+    ];
+    const render = (customTemplate: boolean | null) =>
+      renderNativeProfilerReport({
+        payload: payload(leaks),
+        traceFile: null,
+        mallocStackLogging: true,
+        customTemplate,
+      });
+    const bundled = (await render(false)).report;
+    expect(bundled).toContain(
+      "> 🟡 **1 unattributed leak group(s)** (1 object(s), 32 B): responsible frame `(null)`, " +
+        "no library. This capture ran with malloc stack logging enabled"
+    );
+    expect(bundled).not.toContain("no Allocations instrument");
+    expect(bundled).not.toContain("template_path");
+    for (const customTemplate of [true, null]) {
+      expect((await render(customTemplate)).report).toContain("no Allocations instrument");
+    }
+  });
+});

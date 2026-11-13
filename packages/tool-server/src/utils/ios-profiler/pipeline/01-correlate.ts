@@ -1,5 +1,6 @@
 import type { CpuSample, RawHang, RawLeak, UiHang, MemoryLeak } from "../types";
 import { TOOLING_LABEL, findDominantFunction, extractAppCallChain } from "./02-aggregate";
+import { isSystemLibraryPath } from "./xml-parser";
 
 const TOP_N_FUNCTIONS = 5;
 const TOP_N_CHAINS = 3;
@@ -102,15 +103,45 @@ export function classifyHangSeverity(hangType: string): "RED" | "YELLOW" {
  * How xctrace spells "no responsible frame": it records malloc-stack history only
  * for a target cold-launched under malloc_stack_logging, so an attached capture
  * yields the `<Call stack limit reached>` sentinel (or a missing attribute,
- * parsed as "Unknown") for every leak.
+ * parsed as "Unknown") for every leak. A template with the Leaks instrument but no
+ * Allocations instrument gives `(null)` as the frame and the library of every leak
+ * (measured: `Time Profiler` plus `--instrument Leaks` on a Mac app, 817 of 817 rows).
  */
-const UNATTRIBUTED_LEAK_FRAMES = new Set(["", "Unknown", "<Call stack limit reached>"]);
+const UNATTRIBUTED_LEAK_FRAMES = new Set(["", "Unknown", "<Call stack limit reached>", "(null)"]);
 
 export function isLeakAttributed(responsibleFrame: string): boolean {
   return !UNATTRIBUTED_LEAK_FRAMES.has(responsibleFrame.trim());
 }
 
-export function aggregateLeaks(rawLeaks: RawLeak[]): MemoryLeak[] {
+/**
+ * Instruments gives the Swift runtime's allocator (`swift_slowAllocTyped` in
+ * libswiftCore.dylib) as the responsible frame of a leaked Swift object, also
+ * one that the app's own code made, so this library tells nothing about who
+ * leaked the object.
+ */
+const ALLOCATOR_LIBRARIES = new Set(["libswiftCore.dylib"]);
+
+/**
+ * Whether the responsible frame of a leak is in a system library: macOS or iOS
+ * leaks it by itself, not the app's code. `libraryPaths` gives the path of each
+ * binary the trace sampled, by name; a library not in it counts as the app's.
+ */
+function inSystemLibrary(library: string, libraryPaths: ReadonlyMap<string, string>): boolean {
+  if (ALLOCATOR_LIBRARIES.has(library)) return false;
+  const libraryPath = libraryPaths.get(library);
+  return libraryPath !== undefined && isSystemLibraryPath(libraryPath);
+}
+
+/** App leaks first, then the system's own leaks, then the unattributed ones. */
+export function leakRank(leak: Pick<MemoryLeak, "attributed" | "systemLibrary">): number {
+  if (!leak.attributed) return 2;
+  return leak.systemLibrary ? 1 : 0;
+}
+
+export function aggregateLeaks(
+  rawLeaks: RawLeak[],
+  libraryPaths: ReadonlyMap<string, string> = new Map()
+): MemoryLeak[] {
   const groups = new Map<
     string,
     { objectType: string; totalSize: number; count: number; frame: string; library: string }
@@ -141,21 +172,21 @@ export function aggregateLeaks(rawLeaks: RawLeak[]): MemoryLeak[] {
   }
 
   return [...groups.values()]
-    .map((g) => {
+    .map((g): MemoryLeak => {
       const attributed = isLeakAttributed(g.frame);
+      const systemLibrary = attributed && inSystemLibrary(g.library, libraryPaths);
       return {
-        type: "memory_leak" as const,
-        platform: "ios" as const,
+        type: "memory_leak",
+        platform: "ios",
         objectType: g.objectType,
         totalSizeBytes: g.totalSize,
         count: g.count,
         responsibleFrame: g.frame,
         responsibleLibrary: g.library,
         attributed,
-        severity: (attributed ? "RED" : "YELLOW") as "RED" | "YELLOW",
+        ...(systemLibrary ? { systemLibrary } : {}),
+        severity: attributed && !systemLibrary ? "RED" : "YELLOW",
       };
     })
-    .sort((a, b) =>
-      a.attributed === b.attributed ? b.totalSizeBytes - a.totalSizeBytes : a.attributed ? -1 : 1
-    );
+    .sort((a, b) => leakRank(a) - leakRank(b) || b.totalSizeBytes - a.totalSizeBytes);
 }

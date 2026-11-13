@@ -57,6 +57,8 @@ function makeApi(platform: "ios" | "macos"): NativeProfilerSessionApi {
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,

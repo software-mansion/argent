@@ -22,6 +22,7 @@ function leak(partial: Partial<MemoryLeak> & Pick<MemoryLeak, "objectType">): Me
     responsibleFrame: partial.responsibleFrame ?? "<Call stack limit reached>",
     responsibleLibrary: partial.responsibleLibrary ?? "",
     attributed,
+    ...(partial.systemLibrary ? { systemLibrary: true } : {}),
     severity: partial.severity ?? (attributed ? "RED" : "YELLOW"),
   };
 }
@@ -178,5 +179,75 @@ describe("renderLeakStacksIos on a Mac app", () => {
     const out = renderLeakStacksIos([noise(0)], undefined, 10, true, true, true);
     expect(out).toContain("the capture ran with malloc stack logging");
     expect(out).not.toContain("On a Mac app");
+  });
+});
+
+describe("renderLeakStacksIos — leaks of system libraries", () => {
+  it("lists the app's leaks before the larger ones of system libraries, and says what those are", () => {
+    const system = (i: number) =>
+      leak({
+        objectType: `NSXPCInterface ${i}`,
+        totalSizeBytes: 50_000 + i,
+        responsibleFrame: "+[NSXPCInterface interfaceWithProtocol:]",
+        responsibleLibrary: "Foundation",
+        attributed: true,
+        systemLibrary: true,
+        severity: "YELLOW",
+      });
+    const out = renderLeakStacksIos([system(1), system(2), ATTRIBUTED_SMALL], undefined, 2);
+
+    const rows = out.split("\n").filter((l) => l.startsWith("| `"));
+    expect(rows[0]).toContain("`MyModel`");
+    expect(rows).toHaveLength(2);
+    expect(out).toContain("**1 leak group(s) from system libraries** (1 object(s); `Foundation`)");
+  });
+});
+
+describe("renderLeakStacksIos — a template without the Allocations instrument", () => {
+  it("says that the template has no Allocations instrument, not that malloc stack logging was off", () => {
+    const nullLeak = (objectType: string) =>
+      leak({ objectType, responsibleFrame: "(null)", responsibleLibrary: "(null)" });
+    for (const macApp of [true, false]) {
+      const out = renderLeakStacksIos(
+        [nullLeak("ProfLeakNodeA"), nullLeak("NSSet")],
+        undefined,
+        10,
+        null,
+        true,
+        macApp
+      );
+      expect(out).toContain(
+        "> 🟡 2 of 2 group(s) are unattributed (`(null)`, no library). The template of this " +
+          "recording has no Allocations instrument"
+      );
+      expect(out).not.toContain("malloc_stack_logging");
+      expect(out).not.toContain("xctrace --attach");
+    }
+  });
+
+  it("is not said for a recording with the bundled template", () => {
+    const nullGroup = leak({
+      objectType: "Malloc 32 Bytes",
+      responsibleFrame: "(null)",
+      responsibleLibrary: "(null)",
+    });
+    const bundled = renderLeakStacksIos([nullGroup], undefined, 10, true, true, false, false);
+    expect(bundled).toContain("unattributed");
+    expect(bundled).not.toContain("no Allocations instrument");
+    expect(renderLeakStacksIos([nullGroup], undefined, 10, true, true, false, true)).toContain(
+      "no Allocations instrument"
+    );
+  });
+
+  it("is not said for a `(null)` group next to attributed groups", () => {
+    const nullGroup = leak({
+      objectType: "Malloc 32 Bytes",
+      responsibleFrame: "(null)",
+      responsibleLibrary: "(null)",
+    });
+    const out = renderLeakStacksIos([ATTRIBUTED_SMALL, nullGroup], undefined, 10, true, true);
+    expect(out).toContain("unattributed");
+    expect(out).not.toContain("no Allocations instrument");
+    expect(out).not.toContain("<Call stack limit reached>");
   });
 });

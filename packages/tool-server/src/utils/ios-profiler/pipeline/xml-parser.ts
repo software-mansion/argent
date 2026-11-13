@@ -31,7 +31,7 @@ function extractRows(xml: string): string[] {
   return rows;
 }
 
-function isSystemLibraryPath(path: string): boolean {
+export function isSystemLibraryPath(path: string): boolean {
   return (
     SYSTEM_LIBRARY_PATH_PREFIXES.some((prefix) => path.startsWith(prefix)) ||
     path.includes(SIMULATOR_RUNTIME_PATH_SEGMENT)
@@ -356,6 +356,29 @@ export function parseLeaksXml(xml: string): RawLeak[] {
   }
 
   return leaks;
+}
+
+/**
+ * The path of each binary in a CPU export, by its name. A leak names only its
+ * responsible library, and these are the paths of the binaries the trace sampled.
+ */
+function parseBinaryPaths(xml: string): Map<string, string> {
+  const paths = new Map<string, string>();
+  const binaryRe = /<binary\s+id="\d+"\s+[^>]*?name="([^"]*)"[^>]*?path="([^"]*)"[^>]*?\/?>/g;
+  let bm;
+  while ((bm = binaryRe.exec(xml)) !== null) {
+    paths.set(decodeXml(bm[1]), decodeXml(bm[2]));
+  }
+  return paths;
+}
+
+export async function parseBinaryPathsFile(filePath: string | null): Promise<Map<string, string>> {
+  if (!filePath) return new Map();
+  try {
+    return parseBinaryPaths(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return new Map();
+  }
 }
 
 /**

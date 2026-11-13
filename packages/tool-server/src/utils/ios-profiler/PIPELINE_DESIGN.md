@@ -68,10 +68,11 @@ Leak data from xctrace is a static summary — total count and size by object ty
 | CPU Hotspot | weight < 3%                                                         | filtered out |
 | UI Hang     | type contains "severe" or equals "hang"                             | RED          |
 | UI Hang     | type is "microhang"                                                 | YELLOW       |
-| Memory Leak | attributed (resolved responsible frame)                             | RED          |
+| Memory Leak | attributed, responsible frame in the app's code                     | RED          |
+| Memory Leak | attributed, responsible frame in a system library                   | YELLOW       |
 | Memory Leak | unattributed (no recorded frame, e.g. `<Call stack limit reached>`) | YELLOW       |
 
-The 3% minimum weight filter prevents noise — xctrace captures thousands of samples and most functions appear briefly. 15% RED threshold flags functions consuming significant wall time. Leak severity follows attribution: a leak with a resolved responsible frame is a confident RED, but under `xctrace --attach` (argent's default capture mode) most simulator leaks have no malloc-stack history and come back with the `<Call stack limit reached>` sentinel and an empty library — benign system noise, demoted to a low-confidence YELLOW rather than flagged as a confirmed app bug. The opt-in `malloc_stack_logging` cold launch records allocation backtraces from process start, so those leaks come back attributed (RED, with a real frame + library).
+The 3% minimum weight filter prevents noise — xctrace captures thousands of samples and most functions appear briefly. 15% RED threshold flags functions consuming significant wall time. Leak severity follows attribution: a leak with a resolved responsible frame in the app's code is a confident RED, and one in a system library is a YELLOW (macOS or iOS most likely leaks it by itself). But under `xctrace --attach` (argent's default capture mode) most simulator leaks have no malloc-stack history and come back with the `<Call stack limit reached>` sentinel and an empty library — benign system noise, demoted to a low-confidence YELLOW rather than flagged as a confirmed app bug. The opt-in `malloc_stack_logging` cold launch records allocation backtraces from process start, so those leaks come back attributed (with a real frame + library).
 
 ### Thread normalization
 

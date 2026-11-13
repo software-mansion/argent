@@ -98,6 +98,8 @@ async function buildSessionWithTrace(): Promise<{
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,

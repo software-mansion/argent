@@ -34,6 +34,8 @@ function fakeApi(): NativeProfilerSessionApi {
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,
@@ -474,6 +476,29 @@ describe("native-profiler-start malloc_stack_logging", () => {
 
     expect(api.recordingMallocStackLogging).toBe(false);
     expect(api.mallocStackLogging).toBe(true); // untouched until the next stop
+    // The bundled template; the template of the previous capture stays until the next stop.
+    expect(api.recordingCustomTemplate).toBe(false);
+    expect(api.customTemplate).toBeNull();
+  });
+
+  it("stamps a recording with template_path as one with the caller's template", async () => {
+    const { spawnFn, execSyncFn, execFileSyncFn } = mockChildProcess();
+    applyCommonMocks(spawnFn, execSyncFn, execFileSyncFn);
+
+    const startNativeProfilerIos = await importStart();
+    const api = fakeApi();
+
+    await startNativeProfilerIos(api, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+      template_path: "/tmp/Custom.tracetemplate",
+    });
+
+    const [, args] = spawnFn.mock.calls[0] as unknown as [string, string[]];
+    expect(args[args.indexOf("--template") + 1]).toBe("/tmp/Custom.tracetemplate");
+    expect(api.recordingCustomTemplate).toBe(true);
+    // The template of the previous capture stays until the next stop.
+    expect(api.customTemplate).toBeNull();
   });
 
   it("keeps `--launch -- <app>` last when --notify-tracing-started is present", async () => {

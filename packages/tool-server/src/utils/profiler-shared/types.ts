@@ -93,7 +93,13 @@ export interface MemoryLeak {
    * likely system noise than a confirmed app leak.
    */
   attributed: boolean;
-  /** RED only when attributed; unattributed leaks are a low-confidence YELLOW. */
+  /**
+   * True when the responsible frame is in a system library (a path the trace
+   * shows under /System/Library/, /usr/lib/ or a simulator runtime): macOS or
+   * iOS leaked the object by itself, not the app's code.
+   */
+  systemLibrary?: boolean;
+  /** RED only when attributed to the app's code; the others are a low-confidence YELLOW. */
   severity: "RED" | "YELLOW";
 }
 

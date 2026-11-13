@@ -146,6 +146,8 @@ function newSession(): NativeProfilerSessionApi {
     exportedFiles: null,
     lastExitInfo: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,

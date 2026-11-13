@@ -65,6 +65,11 @@ interface RenderInput {
    */
   mallocStackLogging?: boolean | null;
   /**
+   * Whether the recording used a template of the caller (template_path). False for the
+   * bundled template, which has the Allocations instrument. Null/undefined when unknown.
+   */
+  customTemplate?: boolean | null;
+  /**
    * xctrace: false when the trace has no leak data (no leaks export, or one with
    * no Leaks detail) or Instruments could not capture it, so the report must not
    * read as leak-free. Undefined (Android) leaves the report unchanged.
@@ -99,6 +104,7 @@ export async function renderNativeProfilerReport(
     freshnessNote,
     cpuDiagnostic,
     mallocStackLogging,
+    customTemplate,
     leaksRecorded,
     leaksNotRecordedCause,
     mayMissFindings,
@@ -133,7 +139,8 @@ export async function renderNativeProfilerReport(
           mallocStackLogging,
           cpuDiagnostic,
           leaksRecorded,
-          leaksNotRecordedCause
+          leaksNotRecordedCause,
+          customTemplate
         );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
@@ -161,7 +168,8 @@ export async function renderNativeProfilerReport(
           mallocStackLogging,
           cpuDiagnostic,
           leaksRecorded,
-          leaksNotRecordedCause
+          leaksNotRecordedCause,
+          customTemplate
         );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
@@ -299,7 +307,8 @@ function renderFullReport(
   mallocStackLogging?: boolean | null,
   cpuDiagnostic?: string,
   leaksRecorded?: boolean,
-  leaksNotRecordedCause?: string
+  leaksNotRecordedCause?: string,
+  customTemplate?: boolean | null
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -509,6 +518,8 @@ function renderFullReport(
           `| ${i + 1} | \`${escapeMarkdownTableCell(b.objectType)}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${escapeMarkdownTableCell(demangleSymbol(b.responsibleFrame))}\` | ${escapeMarkdownTableCell(b.responsibleLibrary) || "—"} | ${severityEmoji(b.severity)} |`
         );
       });
+      const systemLeaks = attributedLeaks.filter((b) => b.systemLibrary);
+      if (systemLeaks.length > 0) lines.push(``, renderSystemLibraryLeaksNote(systemLeaks));
     } else {
       lines.push(`_No attributed leaks — nothing with a resolved responsible frame._`);
     }
@@ -520,7 +531,8 @@ function renderFullReport(
           unattributedLeaks,
           attributedLeaks.length,
           mallocStackLogging,
-          payload.metadata.platform.toLowerCase() === "macos"
+          payload.metadata.platform.toLowerCase() === "macos",
+          customTemplate
         )
       );
     }
@@ -573,10 +585,10 @@ function renderFullReport(
     lines.push(``);
   }
 
-  const attributedLeaks = memoryLeaks.filter((b) => b.attributed);
-  if (attributedLeaks.length > 0) {
+  const appLeaks = memoryLeaks.filter((b) => b.attributed && !b.systemLibrary);
+  if (appLeaks.length > 0) {
     lines.push(`### Memory Leaks`, ``);
-    for (const b of attributedLeaks) {
+    for (const b of appLeaks) {
       lines.push(
         `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${demangleSymbol(b.responsibleFrame)}\`: Check for retain cycles or strong delegate references.`
       );
@@ -622,12 +634,39 @@ function renderFullReport(
   return lines.join("\n");
 }
 
+/** The note on the leaks whose responsible frame is in a system library. */
+export function renderSystemLibraryLeaksNote(systemLeaks: MemoryLeak[]): string {
+  const objs = systemLeaks.reduce((s, b) => s + b.count, 0);
+  const libraries = [...new Set(systemLeaks.map((b) => b.responsibleLibrary))]
+    .map((name) => `\`${name}\``)
+    .join(", ");
+  return (
+    `> ${severityEmoji("YELLOW")} **${systemLeaks.length} leak group(s) from system libraries** ` +
+    `(${objs} object(s); ${libraries}): the responsible frame is in a library of the OS, not in the ` +
+    `app's code. Most likely the OS leaks these objects by itself, so they are not confirmed app leaks.`
+  );
+}
+
 /** Why a leak of a Mac app has no allocation backtrace without malloc stack logging. */
 export const MAC_UNATTRIBUTED_LEAKS =
   "On a Mac app without malloc stack logging, only an object allocated after the start of the " +
   "recording has an allocation backtrace. These are most likely older objects or benign system " +
   "allocations, not confirmed app leaks. To attribute them, record again with " +
   "`malloc_stack_logging: true`.";
+
+/** Why no leak has a responsible frame when each names `(null)` (see isLeakAttributed). */
+export const NO_ALLOCATIONS_LEAKS =
+  "The template of this recording has no Allocations instrument, so Instruments gave no leak a " +
+  "responsible frame, also not a leak of the app's code. To attribute leaks, record again " +
+  "without `template_path`: the bundled Argent template has the Allocations instrument.";
+
+/**
+ * True when each of these leaks names `(null)` as its frame. A template with Leaks but no
+ * Allocations gives `(null)` to every leak, so only with no attributed leak does it mean that.
+ */
+export function leaksWithoutAllocations(leaks: MemoryLeak[]): boolean {
+  return leaks.length > 0 && leaks.every((b) => b.responsibleFrame.trim() === "(null)");
+}
 
 function renderLeaksNotRecordedNote(cause?: string): string {
   return (
@@ -647,19 +686,33 @@ function renderLeaksNotRecordedNote(cause?: string): string {
  *
  * On a Mac app, attributed leaks do not prove malloc stack logging: without it,
  * Instruments still records a backtrace for each object allocated after the start.
+ *
+ * `customTemplate` is whether the recording used a template of the caller; null/undefined
+ * when unknown. Only such a template can lack the Allocations instrument.
  */
 export function renderUnattributedLeaksNote(
   unattributedLeaks: MemoryLeak[],
   attributedCount: number,
   mallocStackLogging?: boolean | null,
-  macApp = false
+  macApp = false,
+  customTemplate?: boolean | null
 ): string {
   const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
   const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+  const nullFrames = leaksWithoutAllocations(unattributedLeaks);
+  const frame = nullFrames ? "`(null)`" : "`<Call stack limit reached>`";
+  // The bundled template has the Allocations instrument.
+  if (nullFrames && attributedCount === 0 && customTemplate !== false) {
+    return (
+      `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
+      `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`(null)\`, no library. ` +
+      NO_ALLOCATIONS_LEAKS
+    );
+  }
   if (macApp && mallocStackLogging !== true) {
     return (
       `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
-      `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
+      `(${objs} object(s), ${formatBytes(bytes)}): responsible frame ${frame}, no library. ` +
       MAC_UNATTRIBUTED_LEAKS
     );
   }
@@ -683,8 +736,7 @@ export function renderUnattributedLeaksNote(
           `stack logging enabled at launch.`;
   return (
     `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
-    `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
-    hint
+    `(${objs} object(s), ${formatBytes(bytes)}): responsible frame ${frame}, no library. ${hint}`
   );
 }
 

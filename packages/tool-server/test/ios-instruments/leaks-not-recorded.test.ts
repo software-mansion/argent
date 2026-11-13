@@ -402,6 +402,7 @@ describe("iOS reports when no leak data was recorded", () => {
       memoryLeaks: [],
       leaksRecorded: false,
       mallocStackLogging: null,
+      customTemplate: null,
       wallClockStartMs: 1_000_000,
     };
     const out = (await profilerCombinedReportTool.execute({ nativeSession: api } as never, {
@@ -411,6 +412,90 @@ describe("iOS reports when no leak data was recorded", () => {
 
     expect(out).toContain("**Native Profiler:** 1 hangs, leaks not recorded");
     expect(out).not.toContain("0 leaks");
+  });
+});
+
+describe("leaks of a Mac app with no CPU sample", () => {
+  // A template without Time Profiler, or a CPU export that failed: the CPU export
+  // gives no path of a library, so the libraries of the OS are those of this Mac.
+  const FOUNDATION_LEAK =
+    `<?xml version="1.0"?>\n<trace-query-result>\n` +
+    `<node xpath='//trace-toc[1]/run[1]/tracks[1]/track[2]/details[1]/detail[1]'>` +
+    `<row leaked-object="NSXPCInterface" size="80" responsible-frame="+[NSXPCInterface interfaceWithProtocol:]" ` +
+    `count="3" responsible-library="Foundation" address="0x1"/></node></trace-query-result>\n`;
+
+  /** Foundation is a framework of this "Mac", whatever runs the test; other paths stay real. */
+  function foundationOnThisMac() {
+    const access = fs.access.bind(fs);
+    return vi.spyOn(fs, "access").mockImplementation(async (p, mode) => {
+      const file = String(p);
+      if (!file.startsWith("/System/Library/")) return access(file, mode);
+      if (file === "/System/Library/Frameworks/Foundation.framework") return;
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+  }
+
+  it("analyze and profiler-load rate a leak of Foundation as a leak of a system library", async () => {
+    const spy = foundationOnThisMac();
+    try {
+      const api = await freshMacSession();
+      api.traceFile = path.join(dir, "native-profiler-mac.trace");
+      const leaks = path.join(dir, "raw_leaks.xml");
+      await fs.writeFile(leaks, FOUNDATION_LEAK);
+      api.exportedFiles = { cpu: null, hangs: null, leaks };
+      const res = await analyzeNativeProfilerIos(api);
+      expect(api.parsedData?.memoryLeaks[0]).toMatchObject({
+        severity: "YELLOW",
+        systemLibrary: true,
+      });
+      expect(res.report).toContain(
+        "**1 leak group(s) from system libraries** (3 object(s); `Foundation`)"
+      );
+
+      await writeSavedIosSession(SESSION_ID, FOUNDATION_LEAK);
+      const loaded = await freshMacSession();
+      await loadNative(loaded);
+      expect(loaded.parsedData?.memoryLeaks[0]).toMatchObject({
+        severity: "YELLOW",
+        systemLibrary: true,
+      });
+
+      // An iOS app: the frameworks of this Mac are not those of the simulator runtime.
+      const ios = await freshIosSession();
+      await loadNative(ios);
+      expect(ios.parsedData?.memoryLeaks[0]).toMatchObject({ severity: "RED" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("a `(null)` leak of a recording with the bundled template", () => {
+  // The bundled template has the Allocations instrument, so a `(null)` frame does not mean
+  // that the template has none. Measured: a malloc_stack_logging recording on iOS whose only
+  // unattributed group was one `(null)` "Malloc 32 Bytes".
+  const NULL_LEAK =
+    `<?xml version="1.0"?>\n<trace-query-result>\n` +
+    `<node xpath='//trace-toc[1]/run[1]/tracks[1]/track[2]/details[1]/detail[1]'>` +
+    `<row leaked-object="Malloc 32 Bytes" size="32" responsible-frame="(null)" count="1" ` +
+    `responsible-library="(null)" address="0x1"/></node></trace-query-result>\n`;
+
+  it("gets the usual note in analyze and leak_stacks, and the template is frozen with the data", async () => {
+    const leaks = path.join(dir, "raw_leaks.xml");
+    await fs.writeFile(leaks, NULL_LEAK);
+    for (const customTemplate of [false, true]) {
+      const api = await buildIosSession(leaks);
+      api.mallocStackLogging = true;
+      api.customTemplate = customTemplate;
+      const res = await analyzeNativeProfilerIos(api);
+      expect(api.parsedData?.customTemplate).toBe(customTemplate);
+      // A later stop must not re-label the data that analyze parsed.
+      api.customTemplate = !customTemplate;
+      for (const text of [res.report, await leakStacks(api)]) {
+        if (customTemplate) expect(text).toContain("no Allocations instrument");
+        else expect(text).not.toContain("no Allocations instrument");
+      }
+    }
   });
 });
 

@@ -655,6 +655,7 @@ async function startIosRecording(
     appProcess,
     traceFile: outputFile,
     mallocStackLogging: useMallocStackLogging,
+    customTemplate: params.template_path !== undefined,
     // Null for the device strategy (scoped by --attach) and for a malloc cold launch
     // (scoped by --launch); the app PID only for the host-wide all-processes fallback.
     cpuFilterPid: strategy ? strategy.cpuFilterPid(detected!) : null,
@@ -702,8 +703,9 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     api.leaksCaptureError = runErrors?.leaksCaptureError ?? null;
     // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
     api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
-    // Pair the exports with the capture mode of the recording that just ended.
+    // Pair the exports with the capture mode and template of the recording that just ended.
     api.mallocStackLogging = api.recordingMallocStackLogging;
+    api.customTemplate = api.recordingCustomTemplate;
     api.appEndedDuringCapture = ended;
     api.exportSkipReason =
       diagnostics.skipped ?? (cappedEnd ? unfinishedRecordingReason(cappedEnd) : null);
@@ -791,8 +793,9 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   api.leaksCaptureError = runErrors?.leaksCaptureError ?? null;
   // Trace time 0 on the wall clock: the start stamped it about 0.2 s early.
   api.wallClockStartMs = diagnostics.traceStartMs ?? api.wallClockStartMs;
-  // Pair the exports with the capture mode of the recording that just ended.
+  // Pair the exports with the capture mode and template of the recording that just ended.
   api.mallocStackLogging = api.recordingMallocStackLogging;
+  api.customTemplate = api.recordingCustomTemplate;
   api.appEndedDuringCapture = ended;
   api.exportSkipReason = diagnostics.skipped ?? unfinishedRecordingReason(end);
   api.recordedMs = api.platform === "macos" && api.startReturnedMs !== null ? recordedMs : null;
@@ -1005,6 +1008,7 @@ export async function analyzeNativeProfilerIos(
   } = await runIosProfilerPipeline(api.exportedFiles, {
     cpuFilterPid: api.cpuFilterPid,
     appSuspensions,
+    macApp: api.platform === "macos",
   });
 
   // No leaks export means no leak data, not zero leaks: a trace whose template
@@ -1028,6 +1032,7 @@ export async function analyzeNativeProfilerIos(
     // (leak_stacks, combined report) stay paired with it after a newer capture
     // re-stamps the session fields.
     mallocStackLogging: api.mallocStackLogging,
+    customTemplate: api.customTemplate,
     // Freeze the start time too — the combined report anchors these hangs to
     // wall-clock time and must use THIS capture's start, not a later one's.
     wallClockStartMs: api.wallClockStartMs,
@@ -1112,6 +1117,7 @@ export async function analyzeNativeProfilerIos(
     // capture-mode sidecar, so a restored session renders with null (the
     // unattributed-leaks note then goes by the attributed-leak count instead).
     mallocStackLogging: api.mallocStackLogging,
+    customTemplate: api.customTemplate,
     leaksRecorded,
     leaksNotRecordedCause:
       !leaksRecorded && api.leaksCaptureError

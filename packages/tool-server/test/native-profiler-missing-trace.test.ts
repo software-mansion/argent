@@ -66,6 +66,8 @@ describe("native-profiler-analyze: missing trace file", () => {
         cpuFilterPid: null,
         recordingMallocStackLogging: null,
         mallocStackLogging: null,
+        recordingCustomTemplate: null,
+        customTemplate: null,
         recordingAppPid: null,
         recordingAppEnded: false,
         appEndedDuringCapture: false,

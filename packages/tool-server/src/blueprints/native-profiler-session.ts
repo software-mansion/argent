@@ -54,6 +54,11 @@ export interface NativeProfilerParsedData {
    */
   mallocStackLogging: boolean | null;
   /**
+   * Whether THIS data was recorded with a template of the caller, frozen at parse time
+   * as `mallocStackLogging` is. Null when unknown (session restored from disk).
+   */
+  customTemplate: boolean | null;
+  /**
    * Recording start (wall-clock ms) of THIS data, frozen at parse time: the
    * combined report anchors these hangs, and reading the live session field
    * instead would shift them all once a later capture re-stamps it. Null for
@@ -111,6 +116,19 @@ export interface NativeProfilerSessionApi {
    * Android, or after a load.
    */
   mallocStackLogging: boolean | null;
+  /**
+   * xctrace only (iOS and macOS): whether the IN-FLIGHT (or most recently attempted)
+   * recording used a template of the caller (native-profiler-start's template_path), not
+   * the bundled Argent template. Stop copies it into `customTemplate`.
+   */
+  recordingCustomTemplate: boolean | null;
+  /**
+   * xctrace only (iOS and macOS): whether the data in `exportedFiles` was recorded with a
+   * template of the caller. Only such a template can lack the Allocations instrument, which
+   * the leaks need for a responsible frame. Stamped at stop; cleared by profiler-load. Null
+   * before any stop, on Android, or after a load.
+   */
+  customTemplate: boolean | null;
   /**
    * Mac apps only: the pid of the app that the in-flight (or most recent)
    * recording attached to. Null on iOS and Android.
@@ -309,6 +327,8 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       cpuFilterPid: null,
       recordingMallocStackLogging: null,
       mallocStackLogging: null,
+      recordingCustomTemplate: null,
+      customTemplate: null,
       recordingAppPid: null,
       recordingAppEnded: false,
       appEndedDuringCapture: false,

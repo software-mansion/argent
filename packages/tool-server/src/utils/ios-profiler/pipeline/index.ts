@@ -1,7 +1,15 @@
-import type { Bottleneck, CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../types";
-import { parseCpuFile, parseHangsFile, parseLeaksFile } from "./xml-parser";
-import { correlateHangsWithCpu, aggregateLeaks } from "./01-correlate";
+import { promises as fs } from "fs";
+import type { Bottleneck, CpuSample, UiHang, CpuHotspot, MemoryLeak, RawLeak } from "../types";
+import {
+  isSystemLibraryPath,
+  parseBinaryPathsFile,
+  parseCpuFile,
+  parseHangsFile,
+  parseLeaksFile,
+} from "./xml-parser";
+import { correlateHangsWithCpu, aggregateLeaks, isLeakAttributed } from "./01-correlate";
 import { aggregateCpuHotspots, toolingWeightNs, withAppCallsThroughArgent } from "./02-aggregate";
+import { SIMULATOR_RUNTIME_PATH_SEGMENT } from "../config";
 import {
   removeSuspendedTime,
   withoutSuspendedTime,
@@ -36,6 +44,87 @@ interface PipelineOptions {
    * time is taken out of the hangs. Null or absent leaves the hangs as recorded.
    */
   appSuspensions?: AppSuspensionSpan[] | null;
+  /**
+   * The trace is of a Mac app: the libraries of its OS are those of this Mac, also when
+   * the trace sampled none of them (a template without Time Profiler, or no CPU export).
+   */
+  macApp?: boolean;
+}
+
+/** Where an app keeps its frameworks: a Mac app in `Contents/Frameworks`, an iOS app in `Frameworks`. */
+const APP_FRAMEWORK_DIRS = ["/Contents/Frameworks/", "/Frameworks/"];
+const OS_FRAMEWORK_DIRS = ["/System/Library/Frameworks/", "/System/Library/PrivateFrameworks/"];
+/** The bundle of an app's binary: its executable or one of its frameworks. */
+const APP_BUNDLE_BINARY = /^(.+?\.app)\/(?:Contents\/(?:MacOS|Frameworks)\/|Frameworks\/|[^/]+$)/;
+/** Where a simulator runtime keeps the file system of its OS. */
+const RUNTIME_ROOT = "/Contents/Resources/RuntimeRoot";
+
+/**
+ * The path of each responsible library of the attributed leaks, by name. A leak
+ * names only the library: its path is that of the binary in the CPU export. A
+ * framework that the trace did not sample is the app's when the app's bundle has
+ * it, and the OS's when the OS of the trace has it. Measured on a Mac app:
+ * AppIntents and LinkServices leaked objects, and the CPU export had neither.
+ */
+async function leakLibraryPaths(
+  rawLeaks: RawLeak[],
+  cpuFile: string | null,
+  macApp: boolean
+): Promise<Map<string, string>> {
+  const libraries = new Set(
+    rawLeaks
+      .filter((leak) => isLeakAttributed(leak.responsibleFrame))
+      .map((leak) => leak.responsibleLibrary)
+      .filter((name) => /^[^/]+$/.test(name) && !name.startsWith("."))
+  );
+  if (libraries.size === 0) return new Map();
+  const paths = await parseBinaryPathsFile(cpuFile);
+  const bundles = new Set<string>();
+  for (const path of paths.values()) {
+    const bundle = isSystemLibraryPath(path) ? null : APP_BUNDLE_BINARY.exec(path)?.[1];
+    if (bundle) bundles.add(bundle);
+  }
+  const osRoot = traceOsRoot(paths.values()) ?? (macApp ? "" : null);
+  // The app's bundles first: a framework of the app can have the name of one of the OS.
+  const frameworkDirs = [
+    ...[...bundles].flatMap((bundle) => APP_FRAMEWORK_DIRS.map((dir) => bundle + dir)),
+    ...(osRoot === null ? [] : OS_FRAMEWORK_DIRS.map((dir) => osRoot + dir)),
+  ];
+  for (const name of libraries) {
+    if (paths.has(name)) continue;
+    for (const dir of frameworkDirs) {
+      if (await exists(`${dir}${name}.framework`)) {
+        paths.set(name, `${dir}${name}.framework`);
+        break;
+      }
+    }
+  }
+  return paths;
+}
+
+/**
+ * The root of the OS whose libraries the trace sampled: the simulator runtime's
+ * for an iOS app, "" (this Mac) for a Mac app. Null when the trace sampled no
+ * library of either: for an iOS app, the frameworks of this Mac are not those of its OS.
+ */
+function traceOsRoot(binaryPaths: Iterable<string>): string | null {
+  let onThisMac = false;
+  for (const path of binaryPaths) {
+    const runtime = path.indexOf(SIMULATOR_RUNTIME_PATH_SEGMENT);
+    const root = runtime === -1 ? -1 : path.indexOf(`${RUNTIME_ROOT}/`, runtime);
+    if (root !== -1) return path.slice(0, root + RUNTIME_ROOT.length);
+    if (path.startsWith("/System/Library/")) onThisMac = true;
+  }
+  return onThisMac ? "" : null;
+}
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function runIosProfilerPipeline(
@@ -59,7 +148,10 @@ export async function runIosProfilerPipeline(
     : correlated.uiHangs;
 
   const cpuHotspots = aggregateCpuHotspots(cpuSamples, hangSampleTimestamps);
-  const memoryLeaks = aggregateLeaks(rawLeaks);
+  const memoryLeaks = aggregateLeaks(
+    rawLeaks,
+    await leakLibraryPaths(rawLeaks, files.cpu ?? null, options.macApp ?? false)
+  );
 
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...memoryLeaks];
 

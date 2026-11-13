@@ -404,7 +404,7 @@ async function loadNativeSession(
   }
 
   const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks, leaksDetailExported } =
-    await runIosProfilerPipeline(files);
+    await runIosProfilerPipeline(files, { macApp: api.platform === "macos" });
   // Stop writes no raw_leaks.xml when the trace had no Leaks table, or (Xcode 26.6)
   // one with no Leaks detail in it. The run errors of xctrace are not in these
   // files, so a trace whose leak capture failed (leaksCaptureError) reads as checked.
@@ -419,6 +419,7 @@ async function loadNativeSession(
     memoryLeaks,
     leaksRecorded,
     mallocStackLogging: null,
+    customTemplate: null,
     wallClockStartMs: null,
   };
   api.exportedFiles = files;
@@ -427,6 +428,7 @@ async function loadNativeSession(
   // by a stale CPU filter PID, a stale-trace note, and the report .md written over
   // the old trace's.
   api.mallocStackLogging = null;
+  api.customTemplate = null;
   api.cpuFilterPid = null;
   api.appEndedDuringCapture = false;
   api.exportSkipReason = null;

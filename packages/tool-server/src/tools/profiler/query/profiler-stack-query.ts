@@ -21,9 +21,13 @@ import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 import {
   LEAKS_NOT_RECORDED,
   MAC_UNATTRIBUTED_LEAKS,
+  NO_ALLOCATIONS_LEAKS,
   hangSuspendedNote,
+  leaksWithoutAllocations,
+  renderSystemLibraryLeaksNote,
 } from "../../../utils/ios-profiler/render";
 import { metroDeviceIdParam } from "../../../utils/debugger/device-id-param";
+import { leakRank } from "../../../utils/ios-profiler/pipeline/01-correlate";
 
 const stackQueryMode = {
   hang_stacks: "hang stacks",
@@ -251,7 +255,8 @@ export function renderLeakStacksIos(
   topN: number,
   mallocStackLogging?: boolean | null,
   leaksRecorded?: boolean,
-  macApp = false
+  macApp = false,
+  customTemplate?: boolean | null
 ): string {
   // Empty because nothing was recorded, not because nothing leaked.
   if (leaksRecorded === false) return `_${LEAKS_NOT_RECORDED}_`;
@@ -275,19 +280,18 @@ export function renderLeakStacksIos(
       : "_No memory leaks detected._";
   }
 
-  // Attributed first so a small real leak survives the top-N slice ahead of
-  // larger unattributed system noise.
+  // The app's own leaks first, then those of system libraries, then the
+  // unattributed ones, so a small real leak survives the top-N slice ahead of
+  // larger system noise.
   const sorted = [...filtered]
-    .sort((a, b) => {
-      if (a.attributed !== b.attributed) return a.attributed ? -1 : 1;
-      return b.totalSizeBytes - a.totalSizeBytes;
-    })
+    .sort((a, b) => leakRank(a) - leakRank(b) || b.totalSizeBytes - a.totalSizeBytes)
     .slice(0, topN);
 
   const totalBytes = sorted.reduce((s, l) => s + l.totalSizeBytes, 0);
   const totalCount = sorted.reduce((s, l) => s + l.count, 0);
 
-  const unattributedCount = sorted.filter((l) => !l.attributed).length;
+  const unattributed = sorted.filter((l) => !l.attributed);
+  const unattributedCount = unattributed.length;
 
   const lines: string[] = [
     `## Memory Leaks${objectTypeFilter ? ` (filter: "${objectTypeFilter}")` : ""}`,
@@ -296,10 +300,20 @@ export function renderLeakStacksIos(
     "",
   ];
 
-  if (unattributedCount > 0 && macApp && mallocStackLogging !== true) {
+  const nullFrames = leaksWithoutAllocations(unattributed);
+  const frame = nullFrames ? "`(null)`" : "`<Call stack limit reached>`";
+  // A template without Allocations gives `(null)` to every leak, also to the app's, and
+  // the bundled template has the Allocations instrument.
+  if (nullFrames && !memoryLeaks.some((l) => l.attributed) && customTemplate !== false) {
     lines.push(
       `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        `(\`<Call stack limit reached>\`, no library). ${MAC_UNATTRIBUTED_LEAKS}`,
+        `(\`(null)\`, no library). ${NO_ALLOCATIONS_LEAKS}`,
+      ""
+    );
+  } else if (unattributedCount > 0 && macApp && mallocStackLogging !== true) {
+    lines.push(
+      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
+        `(${frame}, no library). ${MAC_UNATTRIBUTED_LEAKS}`,
       ""
     );
   } else if (unattributedCount > 0) {
@@ -310,11 +324,14 @@ export function renderLeakStacksIos(
       : "captured under `xctrace --attach`, which has no malloc-stack history";
     lines.push(
       `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
-        `(\`<Call stack limit reached>\`, no library) — ${cause}. ` +
+        `(${frame}, no library) — ${cause}. ` +
         "Most likely benign system allocations, not confirmed app leaks.",
       ""
     );
   }
+
+  const systemLeaks = sorted.filter((l) => l.attributed && l.systemLibrary);
+  if (systemLeaks.length > 0) lines.push(renderSystemLibraryLeaksNote(systemLeaks), "");
 
   lines.push(
     "| Object Type | Size | Count | Responsible Frame | Library |",
@@ -371,7 +388,8 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
         params.top_n,
         data.mallocStackLogging,
         data.leaksRecorded,
-        api.platform === "macos"
+        api.platform === "macos",
+        data.customTemplate
       );
     default:
       throw new FailureError(`Unknown mode: ${params.mode}`, {

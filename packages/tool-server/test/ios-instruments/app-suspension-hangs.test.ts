@@ -339,6 +339,8 @@ function makeApi(
     cpuFilterPid: null,
     recordingMallocStackLogging: null,
     mallocStackLogging: null,
+    recordingCustomTemplate: null,
+    customTemplate: null,
     recordingAppPid: null,
     recordingAppEnded: false,
     appEndedDuringCapture: false,
@@ -540,6 +542,7 @@ describe("the suspended time next to a hang's duration", () => {
         memoryLeaks: [],
         leaksRecorded: true,
         mallocStackLogging: null,
+        customTemplate: null,
         wallClockStartMs: START,
       };
       api.parsedData = parsedData;

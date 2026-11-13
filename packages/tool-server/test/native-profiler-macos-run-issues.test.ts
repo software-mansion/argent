@@ -170,6 +170,7 @@ async function recording(
     appProcess: "PM-sdbg",
     traceFile,
     mallocStackLogging: false,
+    customTemplate: false,
     cpuFilterPid: null,
     // Still running, so the app-ended note stays out of the warning.
     appPid: process.pid,
