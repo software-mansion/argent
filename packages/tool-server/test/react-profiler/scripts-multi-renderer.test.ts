@@ -498,8 +498,8 @@ describe("buildHeartbeatScript", () => {
 
 describe("REACT_NATIVE_PROFILER_SETUP_SCRIPT (per-renderer cache isolation)", () => {
   it("clearing one renderer's cache bucket does not affect another's", () => {
-    // The wrapper does `cache.set(ri, Object.create(null))` on start; a flat
-    // cache shared across renderers would let ri#2's start wipe ri#1's entries.
+    // The wrapper gives each ri its own bucket on start; a flat cache shared
+    // across renderers would let ri#2's start wipe ri#1's entries.
     const a = makeRi();
     const b = makeRi();
     const ris = new Map<number, MockRi>([
