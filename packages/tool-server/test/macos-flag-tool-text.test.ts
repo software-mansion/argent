@@ -110,6 +110,10 @@ describe("the native profiler tools' Mac app text", () => {
       /On a Mac app, argent restarts the app with MallocStackLogging=1 and then attaches/
     );
     expect(on.properties.template_path!.description).toMatch(/^iOS and Mac apps only\./);
+    // The leak-check note of a Mac app report names a built-in template.
+    expect(on.properties.template_path!.description).toMatch(
+      /or the name of a built-in template such as "Time Profiler"/
+    );
     expect(on.description).toMatch(/On a Mac app, a warning says when the app runs with malloc/);
 
     const off = advertised("native-profiler-start", false);

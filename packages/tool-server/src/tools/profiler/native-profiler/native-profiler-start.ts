@@ -39,7 +39,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. Path to an Instruments .tracetemplate file (defaults to the bundled Argent template)."
+      'iOS<flag:macos-apps> and Mac apps</flag:macos-apps> only. Path to an Instruments .tracetemplate file, or the name of a built-in template such as "Time Profiler" (defaults to the bundled Argent template).'
     ),
   malloc_stack_logging: z
     .boolean()
