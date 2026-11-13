@@ -44,7 +44,7 @@ Follow `argent-native-profiler`, with these differences:
 - Leaks of objects allocated after the start already carry a backtrace. Use `malloc_stack_logging: true` only for leaks of older objects: it restarts the app (state lost), and the app stays slow until `restart-app`. Call `restart-app` before a later CPU or hang pass.
 - Keep the app running until `native-profiler-stop`: a quit, crash or `restart-app` during the recording leaves only part of the trace.
 - During a recording, Instruments' leak check suspends the app for several seconds about every 11 s: a tap or `describe` then takes longer, as it waits for the app to run again.
-- Only the native profiler takes a Mac app id: `react-profiler-*`, `profiler-cpu-query`, `profiler-commit-query`, `profiler-combined-report` and `profiler-load` `load_react` refuse it.
+- A react-native-macos app: follow `argent-react-native-profiler`, which also starts the native profiler; the notes above still apply to it.
 
 ## E2E tests
 
@@ -52,4 +52,4 @@ Read `references/e2e.md` before recording or writing a test for a Mac app.
 
 ## react-native-macos
 
-A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). `debugger-*` and the React profiler do not take a Mac app id: read the screen with `describe`, and profile with the native profiler (see Profiling).
+A Debug build loads JavaScript from Metro: start Metro before `boot-device` (see `argent-react-native-app-workflow`). `debugger-*` tools do not take a Mac app id: read the screen with `describe`. The React profiler does: follow `argent-react-native-profiler` with the Mac app id as `device_id`, without `debugger-connect`.

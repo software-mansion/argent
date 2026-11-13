@@ -81,9 +81,17 @@ The agent can prepare an answer before it opens a panel. Only a panel of the kin
 
 A Debug build of a react-native-macos app loads its JavaScript from Metro. Start Metro before the agent starts the app.
 
+The agent records a [React profile](/docs/features/profiling) of a react-native-macos app, as on iOS and Android:
+
+- The app must be a Debug build of react-native-macos 0.76 or later that loads its JavaScript from Metro. A Release build has no JavaScript debugger.
+- Argent finds the app on Metro from its bundle id. Thus the React profile works also when other devices use the same Metro, for example an iOS simulator with the same app.
+- The agent records the native profile at the same time. The combined report then tells which React commit caused which hang.
+
+The JavaScript debugger tools are not available on a Mac app.
+
 ### Profiling
 
-The agent records a [native profile](/docs/features/profiling) of the app with Xcode Instruments: the CPU time, the UI hangs and the memory leaks. The React profiler is not available on a Mac app, also not in a react-native-macos app.
+The agent records a [native profile](/docs/features/profiling) of the app with Xcode Instruments: the CPU time, the UI hangs and the memory leaks. In a react-native-macos app, the agent also records a React profile. See [React Native](#react-native). The text below is about the native profile.
 
 - The agent profiles an app that Argent started. The profiler attaches to the app while the app runs. The profiler does not start the app again, except for malloc stack logging. See below.
 - macOS lets Instruments record an app without a system dialog only when the app allows debugging. Thus the app must have the entitlement `com.apple.security.get-task-allow`. Xcode adds this entitlement to each build that it signs for development, a Release build too. An archived build does not have it, for example a notarized build or an App Store build.
@@ -150,6 +158,7 @@ Argent does not start an Electron app or a Chromium browser as a Mac app. Argent
 | The app runs already without the Argent library                                  | Quit the app yourself, or let the agent start the app with `force`. A start with `force` loses the unsaved changes in that copy. Xcode Run and `react-native run-macos` start the app without the Argent library. |
 | The start fails because of the hardened runtime                                  | For a Debug build, do one of the steps in [The hardened runtime](#the-hardened-runtime). For a Release build, start the Debug build instead.                                                                      |
 | The profiler does not start because the app does not allow debugging             | Profile a build that Xcode signed for development, for example the Debug build. See [Profiling](#profiling).                                                                                                      |
+| The React profiler does not find the app on Metro                                | Start a Debug build of react-native-macos 0.76 or later that loads its JavaScript from this Metro. If Metro does not use port 8081, tell the agent the port.                                                      |
 | The start fails because a different build runs                                   | Quit that copy if it is yours. To run both builds, give this build a bundle id of its own. See [Several agents and git worktrees](#several-agents-and-git-worktrees).                                             |
 | An e2e test launch warns that it started another worktree's build                | Quit the copy of the other build if it is yours. Then ask the agent to start the build of this worktree, and run the e2e test again.                                                                              |
 | A call says that Argent reaches the app only through the connection of its start | Quit the app, or ask the agent to start the app again with `force`. To prevent this, give the build a shorter bundle id. See [Limits](#limits).                                                                   |
@@ -188,6 +197,7 @@ Each tool that does not support a Mac app fails with a `not supported on macos a
 - Argent drives an app through a standard window. The start fails for a menu bar app that shows no standard window, and for an app that shows only panels or borderless windows.
 - The tree does not show web content in a closed shadow root or in an iframe from a different origin.
 - While the Mac is locked, the tree does not show an open context menu, a `hidden` check does not pass, and a screenshot of a window that is partly off the screen can fail. Clicks, typing and other screenshots still work.
-- Screen recording, the React profiler, the JavaScript debugger tools, hardware buttons, rotate, shake, `reinstall-app` and `settings-permissions` are not available.
+- The React profiler supports react-native-macos 0.76 and later only.
+- Screen recording, the JavaScript debugger tools, hardware buttons, rotate, shake, `reinstall-app` and `settings-permissions` are not available.
 
 The [tools reference](/docs/reference/tools#mac-apps) contains the tools and their behavior on a Mac app.

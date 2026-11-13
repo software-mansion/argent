@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { unsetFlag } from "@argent/configuration-core";
-import { Registry, ToolNotFoundError, type ToolCapability } from "@argent/registry";
+import { FAILURE_CODES, Registry, ToolNotFoundError, type ToolCapability } from "@argent/registry";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
@@ -24,7 +24,11 @@ import { directiveCommandHint } from "../src/tools/flows/flow-add-step";
 import { runDirective } from "../src/tools/flows/flow-actions";
 import { parseFlow, parseRequires } from "../src/tools/flows/flow-utils";
 import { gestureTapTool } from "../src/tools/gesture-tap";
+import { debuggerConnectTool } from "../src/tools/debugger/debugger-connect";
+import { profilerCommitQueryTool } from "../src/tools/profiler/query/profiler-commit-query";
+import { profilerCpuQueryTool } from "../src/tools/profiler/query/profiler-cpu-query";
 import { useMacosAppsFlag } from "./helpers/macos-apps-flag";
+import { definitionsById } from "./helpers/catalog";
 
 const flag = useMacosAppsFlag();
 
@@ -317,6 +321,71 @@ describe("over HTTP", () => {
       .send({ macosAppPath: `${process.env.HOME}/Missing.app` });
     expect(missing.status).toBe(500);
     expect(missing.body.error_code).toBe("MACOS_APP_PATH_INVALID");
+  });
+});
+
+describe("the React profiler tools on a Mac id", () => {
+  // A react-native-macos Debug build serves its Hermes runtime through Metro.
+  const REACT_PROFILER_TOOLS = [
+    "react-profiler-start",
+    "react-profiler-stop",
+    "react-profiler-status",
+    "react-profiler-analyze",
+    "react-profiler-fiber-tree",
+    "react-profiler-renders",
+    "react-profiler-cpu-summary",
+    "react-profiler-component-source",
+    "profiler-cpu-query",
+    "profiler-commit-query",
+    "profiler-load",
+    "profiler-combined-report",
+  ];
+  const DEBUGGER_TOOLS = [
+    "debugger-connect",
+    "debugger-status",
+    "debugger-evaluate",
+    "debugger-reload-metro",
+    "debugger-component-tree",
+    "debugger-inspect-element",
+    "debugger-log-registry",
+  ];
+  const definitions = definitionsById(createRegistry());
+  const gate = (id: string) => () =>
+    assertSupported(id, definitions.get(id)!.capability, resolveDevice(MAC));
+
+  it("with the flag on, admits the React profiler tools and still refuses the debugger tools", () => {
+    for (const id of REACT_PROFILER_TOOLS) expect(gate(id), id).not.toThrow();
+    for (const id of DEBUGGER_TOOLS) expect(gate(id), id).toThrow("no macos support declared");
+  });
+
+  it("with the flag off, or off macOS, refuses the React profiler tools", () => {
+    flag.off();
+    for (const id of REACT_PROFILER_TOOLS) expect(gate(id), id).toThrow(FLAG_MESSAGE);
+    flag.on();
+    onLinux();
+    for (const id of REACT_PROFILER_TOOLS) expect(gate(id), id).toThrow(HOST_MESSAGE);
+  });
+
+  it("over HTTP, a React data query reaches its own state check and debugger-connect is refused", async () => {
+    const registry = new Registry();
+    registry.registerTool(profilerCommitQueryTool);
+    registry.registerTool(profilerCpuQueryTool);
+    registry.registerTool(debuggerConnectTool);
+    const http = createHttpApp(registry).app;
+
+    for (const [tool, body] of [
+      ["profiler-commit-query", { device_id: MAC, mode: "render_counts" }],
+      ["profiler-cpu-query", { device_id: MAC, mode: "top_functions" }],
+    ] as const) {
+      const res = await request(http).post(`/tools/${tool}`).send(body);
+      expect({ tool, code: res.body.error_code }).toEqual({
+        tool,
+        code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+      });
+    }
+    const connect = await request(http).post("/tools/debugger-connect").send({ device_id: MAC });
+    expect(connect.status).toBe(400);
+    expect(connect.body.error).toContain("no macos support declared");
   });
 });
 

@@ -29,7 +29,7 @@ import {
   STOP_IN_PROGRESS_NOTE,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
-import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
+import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { canonicalDeviceId, isLogicalKeyedDevice } from "../../../utils/debugger/device-alias";
 import { findRuntimeDevice } from "../../../utils/debugger/runtime-device";
 import { trackProfilingRun } from "../../../utils/profiling-devices";
@@ -164,7 +164,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID or Android serial)."
+      "Device id from list-devices: the SAME id you passed to debugger-connect (iOS simulator UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial).<flag:macos-apps> A Mac app needs no debugger-connect.</flag:macos-apps>"
     ),
   sample_interval_us: z.coerce
     .number()
@@ -187,7 +187,7 @@ export function createReactProfilerStartTool(
     id: "react-profiler-start",
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Use when you need to profile a user interaction.
-On an iOS simulator or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
+On an iOS simulator<flag:macos-apps>, a Mac app</flag:macos-apps> or Android device, also call native-profiler-start in the same message with the same device_id, unless the user has said no to native profiling. profiler-combined-report then correlates the two.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
 Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture }. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ. If a session is already running, returns { already_running: true, mine, owner, … } instead, without clobbering its data, unless it is another tool-server's stale run, has no owner record, or is a lost run of this tool-server: start replaces those. mine: true means this tool-server started the run: if it is yours, call react-profiler-stop. With stale: true it may be another agent's: follow the note. Otherwise, BEFORE OVERTAKING with { force: true }, ask the user for approval first, as how_to_reclaim explains. A start that replaces a run reports it in took_over.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
@@ -199,7 +199,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       failedMsg: ({ failureSignal }) =>
         `Failed to start React profiler: ${failureSignal.error_code}`,
     },
-    capability: RN_ONLY_TOOL_CAPABILITY,
+    capability: REACT_PROFILER_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       // Collapse a forwarded logicalDeviceId onto the connect id so this

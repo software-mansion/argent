@@ -43,7 +43,9 @@ interface HangCommitCorrelation {
 
 const zodSchema = z.object({
   port: metroPortField,
-  device_id: metroDeviceIdParam("iOS Simulator/device UDID or Android serial"),
+  device_id: metroDeviceIdParam(
+    "iOS Simulator/device UDID<flag:macos-apps>, Mac app id</flag:macos-apps> or Android serial"
+  ),
 });
 
 export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
@@ -61,11 +63,12 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     failedMsg: ({ failureSignal }) =>
       `Failed to build combined performance report: ${failureSignal.error_code}`,
   },
-  // iOS reads xctrace output; Android re-queries the Perfetto .pftrace via
-  // loadAndroidCombinedData. Chromium has no native trace capture.
+  // iOS and Mac apps read xctrace output; Android re-queries the Perfetto
+  // .pftrace via loadAndroidCombinedData. Chromium has no native trace capture.
   capability: {
     apple: { simulator: true },
     android: { emulator: true, device: true, unknown: true },
+    macos: { app: true },
   },
   // The Android branch re-queries the .pftrace, so a cold trace-processor engine
   // re-pays the full parse past the 30s MCP fetch timeout, whose abort replays
@@ -294,7 +297,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       `**Native Profiler:** ${uiHangs.length} hangs, ` +
         (leaksRecorded ? `${memoryLeaks.length} leaks` : `leaks not recorded`),
       "",
-      `**Clock offset:** React started ${((reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
+      `**Clock offset:** React started ${(Math.abs(reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
       "",
     ];
 
