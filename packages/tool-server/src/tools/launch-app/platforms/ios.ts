@@ -40,12 +40,10 @@ export function makeIosImpl(
        * fail on a grant the provider withheld, so one device would launch or
        * not depending only on which of its names was used.
        */
+      let nativeDevtools: NativeDevtoolsApi | undefined;
       if (!externalClaimForAnyId(device.id)) {
         const ndRef = nativeDevtoolsRef(device);
-        const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
-          ndRef.urn,
-          ndRef.options
-        );
+        nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
         const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
         if (blocked) return blocked;
       }
@@ -104,7 +102,12 @@ export function makeIosImpl(
           { cause: err instanceof Error ? err : new Error(String(err)) }
         );
       }
-      return { launched: true, bundleId: params.bundleId };
+      const networkCapture = await nativeDevtools?.networkCaptureAfterLaunch(params.bundleId);
+      return {
+        launched: true,
+        bundleId: params.bundleId,
+        ...(networkCapture ? { networkCapture } : {}),
+      };
     },
   };
 }

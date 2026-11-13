@@ -61,7 +61,7 @@ export const nativeProfilerStartTool: ToolDefinition<
   description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory leaks). Android: Perfetto (CPU, jank, RSS-growth weak signal).
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
-Returns { status, pid, traceFile } confirming the recording has started. On Android, a warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ.
+Returns { status, pid, traceFile } confirming the recording has started. A warning names the apps with native network capture on (started by native-network-logs): their timings in the profile can differ.
 Fails if no app is running on the device, or the profiler cannot attach to the process.`,
   zodSchema,
   interaction: {
@@ -82,15 +82,14 @@ Fails if no app is running on the device, or the profiler cannot attach to the p
     // Dispatch on the session's platform, not the udid shape: tests pair a
     // synthetic platform with a fake udid that fails the iOS-UDID regex.
     let started: Awaited<ReturnType<typeof startNativeProfilerAndroid>>;
-    let warning: string | undefined;
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
       started = await startNativeProfilerIos(api, params);
     } else {
       await ensureDeps(["adb"]);
       started = await startNativeProfilerAndroid(api, params);
-      warning = nativeNetworkCaptureWarning(params.device_id);
     }
+    const warning = nativeNetworkCaptureWarning(params.device_id);
     trackProfilingRun(device.id, api);
     return warning ? { ...started, warning } : started;
   },

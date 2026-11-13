@@ -177,14 +177,14 @@ To capture a request:
 3. Do the action that sends the request again.
 4. Call `native-network-logs` again to read the list of requests.
 
-| Parameter  | Effect on Android                                                                                                                      |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `udid`     | The serial of the device                                                                                                               |
-| `bundleId` | The package name of the app                                                                                                            |
-| `port`     | The Metro port. Argent removes the traffic to this port on a local address from the list. The default is the Metro port of the device. |
-| `limit`    | The maximum number of requests in the list. Argent returns the most recent requests, oldest first. The default is 50.                  |
-| `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                                |
-| `stop`     | Stop native network capture for this app. The capture of a different app continues.                                                    |
+| Parameter  | Effect on Android                                                                                                                                                                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `udid`     | The serial of the device                                                                                                                                                                                                                                                             |
+| `bundleId` | The package name of the app                                                                                                                                                                                                                                                          |
+| `port`     | The Metro port. Argent removes the requests to this port on a local address from the list: `localhost`, `127.0.0.1`, `[::1]` or `10.0.2.2`. A request to this port on a different host stays in the list. The default is the Metro port of the device.                               |
+| `limit`    | The maximum number of requests in the list, an integer of 0 or more. Argent returns the most recent requests, oldest first. With 0, `requests` is empty, and the result still gives the `header` and the `total`. Argent refuses a negative number or a fraction. The default is 50. |
+| `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                                                                                                                                                                              |
+| `stop`     | Stop native network capture for this app. The capture of a different app continues.                                                                                                                                                                                                  |
 
 The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `total` and `requests`. The `capture` field and the `header` line show the state of the capture. The `capture` field is absent when `armed` is `false`. The `captureDetail` field contains the detail that the in-app agent sent with the state. The `header` line shows this detail too. These are the states:
 
@@ -224,7 +224,75 @@ With `stop: true`, `native-network-logs` does not list requests. The result cont
 
 The in-app agent stays in the current process of the app until this process ends. The `message` field tells you to call `restart-app`. After the stop, `launch-app` and `restart-app` do not attach the in-app agent. The next call of `native-network-logs` without `stop` starts native network capture again.
 
-On iOS, `stop: true` fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`. The native devtools of iOS cannot stop network capture. On iOS, network capture stays on for the app until `stop-all-simulator-servers` stops the services of the device and the app restarts.
+### Native `NSURLProtocol` layer on iOS
+
+On iOS, `native-network-logs` reads the `URLSession` requests of an app on an iOS simulator. The first call for an app starts the capture with `Network.enable`. The call waits until the app acknowledges `Network.enable`, for at most 5 seconds. Thus the first call for a connected app usually returns `armed: true`. Argent does not capture the requests from before this call.
+
+On a simulator where Argent uses the socket of a device provider, the provider controls the capture. Argent does not send `Network.enable` there, because `Network.enable` resets the network settings of the provider, for example its throttling. Instead, each call asks the agent if the capture is on. `armed` is `true` when the capture of the provider is on.
+
+To capture a request:
+
+1. Call `native-network-logs` with the UDID of the simulator and the bundle ID of the app.
+2. Do the action that sends the request again.
+3. Call `native-network-logs` again to read the list of requests.
+
+| Parameter  | Effect on iOS                                                                                                                                                                                                                                                                        |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `udid`     | The UDID of the simulator                                                                                                                                                                                                                                                            |
+| `bundleId` | The bundle ID of the app                                                                                                                                                                                                                                                             |
+| `port`     | The Metro port. Argent removes the requests to this port on a local address from the list: `localhost`, `127.0.0.1`, `[::1]` or `10.0.2.2`. A request to this port on a different host stays in the list. The default is the Metro port of the device.                               |
+| `limit`    | The maximum number of requests in the list, an integer of 0 or more. Argent returns the most recent requests, oldest first. With 0, `requests` is empty, and the result still gives the `header` and the `total`. Argent refuses a negative number or a fraction. The default is 50. |
+| `clear`    | Remove the current requests from the later lists. A request that runs at the time of the clear comes back in the list when it ends.                                                                                                                                                  |
+| `stop`     | Not available on iOS. The call fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`.                                                                                                                                                                                          |
+
+The result contains `header`, `armed`, `count`, `total` and `requests`. `count` is the number of entries in `requests`. `total` is the number of requests in the full list. The `header` line shows the state of the capture, the number of requests and the process ID of the app, for example `ios-native: armed, 12 requests (pid 4711)`. Argent reads the process ID on the simulator when the app connects. A result from before the end of this read has no process ID. When `armed` is `false`, the `header` line gives one of these reasons:
+
+- Argent waits for the app to acknowledge `Network.enable`.
+- The app did not acknowledge `Network.enable` within 5 seconds. The next call asks the app again.
+- `Network.enable` failed. The `header` line gives the error. The next call asks the app again.
+- The app is not connected. Argent arms the next process of the app when the process connects.
+
+On a simulator of a device provider, Argent does not send `Network.enable`. Argent asks the agent of the app if the capture is on. When `armed` is `false`, the `header` line gives one of these reasons:
+
+- Argent waits for the agent to tell if the capture is on.
+- The agent did not tell within 5 seconds if the capture is on. The next call asks the agent again.
+- The request to the agent failed. The `header` line gives the error. The next call asks the agent again.
+- The provider has the capture off. Turn the capture on in the provider.
+- The app is not connected.
+
+If the capture started while the app was already running, the `header` line of the first result says that Argent did not record the launch of the app. To capture the launch, call `restart-app`, then call `native-network-logs` again. On a simulator where Argent uses the socket of a device provider, Argent records the requests from the time that it connects to the agent of the app. This time can be before the first call of `native-network-logs`. If the app already ran when Argent connected, the `header` line of the first result says that Argent did not record the requests from before this time. It also says that a relaunch ends the capture there, and it tells you not to restart the app.
+
+Each entry of `requests` contains these fields:
+
+| Field                | Content                                                                                         |
+| -------------------- | ----------------------------------------------------------------------------------------------- |
+| `id`                 | The ID of the request, with the format `ios-<4 hex digits>-<number>`, for example `ios-3f9a-12` |
+| `method`, `url`      | The method and the URL that the app requested                                                   |
+| `state`              | `pending`, `headers`, `complete` or `failed`                                                    |
+| `status`, `mimeType` | The status and the MIME type of the response, after the response headers arrive                 |
+| `durationMs`         | The duration of the request, when Argent knows it                                               |
+| `errorText`          | The error of a failed request                                                                   |
+
+`view-network-request-details` does not give the details of an `ios-` ID.
+
+When the connection of the app closes, Argent marks each request that still runs as `failed`. The `errorText` field gives one of these errors:
+
+| `errorText`                                                                                              | Cause                                                                             |
+| -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `the app process ended before the request finished`                                                      | The app process ended, or the app relaunched.                                     |
+| `the agent did not reconnect after its connection dropped, so this request's final events never arrived` | The connection closed, and Argent did not find a sign that the app process ended. |
+
+The list also contains the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the list. Argent keeps the 2000 most recent requests of each app. Argent keeps fewer requests when the requests have very large headers or URLs. Argent keeps the list until `stop-all-simulator-servers` stops the services of the device, the simulator shuts down, or the tool-server stops.
+
+Argent arms each new process of the app when the process connects, also a process that starts from a tap on the home screen or from a link. While the capture is on for an app, these tools tell you:
+
+| Tool                                            | What it reports                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `launch-app`, `restart-app`                     | On a local simulator, the tool waits until the new process is armed, for at most 5 seconds. The `networkCapture` field tells that the capture is armed, with the process ID. If the capture is not armed yet, the field tells that the new process did not connect or did not acknowledge `Network.enable` yet. Then `native-network-logs` shows when the capture is armed. `launch-app` does not start a new process when the app already runs. If that process does not have the injection of Argent, or started before the tool-server started the services of the device, the tool does not wait. The field tells you to call `restart-app`. On a remote simulator and on a simulator of a device provider, the result has no `networkCapture` field. |
+| `e2e-execute`                                   | A `launch` step uses `restart-app`. The report shows the `networkCapture` note as a `warning`, with the same rules as on Android.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the simulator with the capture on. The warning names only the apps that connected to Argent at least once. To profile without it, the warning tells you to call `stop-all-simulator-servers` for the device, then `restart-app`. On a simulator of a device provider, the result has no warning, because the capture there is the capture of the provider.                                                                                                                                                                                                                                                                                                                                         |
+
+The native devtools of iOS cannot stop the capture for one app. The capture stays on for the app until `stop-all-simulator-servers` stops the services of the device. The running process of the app keeps the capture until the app restarts. Thus call `restart-app` after `stop-all-simulator-servers`.
 
 ## Chromium and Electron
 

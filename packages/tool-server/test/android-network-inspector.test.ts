@@ -3627,6 +3627,28 @@ describe("the tools on the Android native layer", () => {
     );
   });
 
+  it("native-network-logs with limit 0 returns no requests, but the header and the total count them all", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    for (const n of [1, 2, 3]) agent.request(agent.rid(n), `https://example.com/${n}`);
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(3));
+
+    const result = await nativeNetworkLogsTool.execute!(
+      { androidNetwork: api },
+      { udid: SERIAL, bundleId: PKG, limit: 0, clear: false }
+    );
+
+    expect(result).toEqual({
+      status: "ok",
+      header: "android-native: armed, 3 requests (pid 4722; capture active)",
+      armed: true,
+      capture: "active",
+      count: 0,
+      total: 3,
+      requests: [],
+    });
+  });
+
   it("native-network-logs routes Android through the inspector service, keyed by the device whatever its spelling", async () => {
     const registry = toolRegistry();
     await registry.invokeTool("native-network-logs", {

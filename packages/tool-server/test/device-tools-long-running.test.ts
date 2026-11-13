@@ -88,7 +88,9 @@ describe("device tools that can outlive the MCP fetch timeout", () => {
 // No client timeout backs these, and a wedged simctl ignores SIGTERM.
 describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => {
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
-  const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
+  const fakeRegistry = {
+    resolveService: vi.fn(async () => ({ networkCaptureAfterLaunch: async () => undefined })),
+  } as never;
 
   beforeEach(() => {
     calls.length = 0;
@@ -137,7 +139,9 @@ describe("iOS simctl calls of longRunning app tools are SIGKILL-bounded", () => 
 
 describe("iOS app tools fail when the step before launch or install times out", () => {
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
-  const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
+  const fakeRegistry = {
+    resolveService: vi.fn(async () => ({ networkCaptureAfterLaunch: async () => undefined })),
+  } as never;
   const cases = [
     {
       id: "reinstall-app",
@@ -208,7 +212,9 @@ describe("iOS app tools fail when the step before launch or install times out", 
 
 describe("iOS app tools report a timed-out launch, install or openurl as a timeout", () => {
   const UDID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
-  const fakeRegistry = { resolveService: vi.fn(async () => ({})) } as never;
+  const fakeRegistry = {
+    resolveService: vi.fn(async () => ({ networkCaptureAfterLaunch: async () => undefined })),
+  } as never;
 
   beforeEach(() => {
     calls.length = 0;

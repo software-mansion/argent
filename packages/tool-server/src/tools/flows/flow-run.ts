@@ -177,7 +177,7 @@ export interface StepReport {
    * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
    * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited. Also raised by a launch whose Android native network
+   * from one that waited. Also raised by a launch whose native network
    * capture note differs from the last one reported for that app
    * ({@link networkCaptureWarning}).
    */
@@ -627,7 +627,7 @@ async function treeSourceGate(
 }
 
 /**
- * The `networkCapture` note an Android launch-app or restart-app result carries
+ * The `networkCapture` note a launch-app or restart-app result carries
  * while native network capture, started earlier by `native-network-logs`, is on
  * for the app: whether the capture followed the app into the new process.
  * Reported as a step warning: the step passed, but the app may run
