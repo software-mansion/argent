@@ -575,6 +575,12 @@ Sometimes xctrace does not end after the stop of a recording on an iOS simulator
 
 On an iOS simulator and on a Mac app, Argent stops a recording after 10 minutes in the same way as `native-profiler-stop`. When xctrace hangs, Argent also ends it. The next `native-profiler-stop` waits until xctrace has saved the trace. Then it exports the trace and returns a `warning` about the 10-minute limit.
 
+For each recording, xctrace writes the raw kernel trace to a file `instruments<random>.ktrace` in the temporary folder of the user. xctrace does not delete this file, and the file can be larger than 1 GB. After xctrace has ended, Argent deletes the file of its recording. Argent does not delete a file in these conditions, because then a new file can be the file of another recording:
+
+- Another recording started at the same time.
+- xctrace did not report that tracing started, for example after a start that failed.
+- xctrace reported an error for the recording, for example because another recording used the kernel trace.
+
 In a report from Instruments, `native-profiler-analyze` gives the CPU time that Argent and Instruments used inside the app during the recording, and the share of all CPU time:
 
 - Argent: the code that Argent runs inside the app, for example for `describe` and taps on a Mac app.

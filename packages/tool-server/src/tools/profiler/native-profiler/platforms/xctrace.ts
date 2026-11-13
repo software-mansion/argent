@@ -13,6 +13,12 @@ import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
 import { shutdownChild, type ShutdownResult } from "../../../../utils/profiler-shared/lifecycle";
 import { xctraceProgressProbe } from "../../../../utils/ios-profiler/xctrace-progress";
+import {
+  kernelTraceDir,
+  listKernelTraces,
+  newKernelTrace,
+  removeKernelTraceWhenIdle,
+} from "../../../../utils/ios-profiler/kernel-trace";
 
 // The `xctrace record` lifecycle that iOS simulators and Mac apps share: what
 // differs per platform is only how the target is found and the record arguments.
@@ -183,6 +189,50 @@ export function xctraceRunErrors(child: ChildProcess): string[] {
 }
 
 /**
+ * Deletes the raw kernel trace of this xctrace's recording once xctrace has
+ * exited, by any path: stop, the 10-minute cap, its own exit or a teardown.
+ * Nothing else deletes it. See kernel-trace.ts.
+ *
+ * An xctrace that reported an error can have no file of its own: one that lost
+ * the kernel trace to another recording says that tracing started and then
+ * that it could not start the recording. The one new file is then the other
+ * recording's, so it stays. The run issues come last, so they are read when
+ * the file would be deleted, 2 s or more after the exit.
+ */
+function removeKernelTraceAfterExit(child: ChildProcess, file: Promise<string | null>): void {
+  const ours = () => xctraceRunErrors(child).length === 0;
+  const remove = () =>
+    void file.then((found) => (found ? removeKernelTraceWhenIdle(found, ours) : undefined));
+  if (child.exitCode !== null || child.signalCode !== null) remove();
+  else child.once("exit", remove);
+}
+
+/**
+ * Resolves true once xctrace prints that tracing started, false when it exits
+ * first. "Starting recording", which can end the readiness wait, comes before
+ * the helper creates the kernel trace: on a Mac app, more than 1 s before.
+ */
+function whenTracingStarted(child: ChildProcess): Promise<boolean> {
+  const started = () => xctraceOutput(child).includes("Ctrl-C to stop");
+  if (started()) return Promise.resolve(true);
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const done = (result: boolean) => {
+      child.stdout?.off("data", onData);
+      child.off("exit", onExit);
+      resolve(result);
+    };
+    // Runs after the listener that keeps the output, which is added first.
+    const onData = () => {
+      if (started()) done(true);
+    };
+    const onExit = () => done(started());
+    child.stdout?.on("data", onData);
+    child.once("exit", onExit);
+  });
+}
+
+/**
  * Spawns `xctrace` with the arguments `buildArgs` returns and waits until it
  * records. `notifyName` is the Darwin notification to pass as
  * `--notify-tracing-started`, or undefined when notifyutil is unavailable and
@@ -194,6 +244,12 @@ export async function spawnXctraceRecording(
 ): Promise<{ child: ChildProcess; pid: number }> {
   const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
   const notify = await registerStartupNotify(notifyName);
+  // Not awaited, here and below: the helper creates the file seconds after the
+  // spawn, and the start does not wait for a listing of the folder.
+  const kernelTraces = kernelTraceDir();
+  const kernelTracesBefore = listKernelTraces(kernelTraces);
+  const ownKernelTrace = () =>
+    kernelTracesBefore.then((before) => newKernelTrace(kernelTraces, before));
 
   const xctraceProcess = spawn("xctrace", buildArgs(notify ? notifyName : undefined), {
     stdio: ["ignore", "pipe", "pipe"],
@@ -202,12 +258,24 @@ export async function spawnXctraceRecording(
   api.capturePid = xctraceProcess.pid ?? null;
   api.captureProcess = xctraceProcess;
 
+  // Before the readiness wait, which cancels the notification when it ends at stdout.
+  const notified = notify?.fired.then(() => true);
   try {
     await waitForXctraceReady(xctraceProcess, { notify, timeoutMs: STARTUP_TIMEOUT_MS });
   } catch (err) {
     resetStartState(api);
     throw err;
   }
+  // The helper creates it about 1 s before xctrace says that tracing started.
+  // When xctrace never says so, as after a start that failed, the file stays:
+  // the one new file can be the file of another recording.
+  const tracing = whenTracingStarted(xctraceProcess);
+  removeKernelTraceAfterExit(
+    xctraceProcess,
+    (notified ? Promise.race([notified, tracing]) : tracing).then((started) =>
+      started ? ownKernelTrace() : null
+    )
+  );
 
   if (!xctraceProcess.pid) {
     try {
