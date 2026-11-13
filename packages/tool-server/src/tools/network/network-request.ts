@@ -205,7 +205,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "Device id from list-devices (iOS simulator UDID or Android serial<flag:macos-apps>, or a Mac app id</flag:macos-apps>), the same id used with debugger-connect. A native ID needs no debugger connection."
+      "Device id from list-devices (iOS simulator UDID or Android serial, the same id used with debugger-connect<flag:macos-apps>, or a Mac app id</flag:macos-apps>). A native ID needs no debugger connection."
     ),
   requestId: z
     .string()
