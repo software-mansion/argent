@@ -315,6 +315,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       reactCommits: pipelineOutput.reactCommits,
       annotations: params.annotations,
       debugDir,
+      sessionId: sessionPaths.sessionId,
       noHotCommits: pipelineOutput.noHotCommits,
       noReactCommits: totalReactCommits === 0,
       maxCommitMs: pipelineOutput.maxCommitMs,

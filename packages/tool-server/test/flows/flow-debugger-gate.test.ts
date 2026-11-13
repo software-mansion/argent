@@ -86,8 +86,8 @@ describe("flow-execute with a debugger-status connectivity gate", () => {
     expect(gate.reason).toMatch(/debugger not connected \(metro_not_running\)/);
     expect(gate.reason).toMatch(/Do not retry in a loop/);
     // `detail` must reach the report: it is the only field that names what
-    // actually answered the port (and device_mismatch's guidance explicitly
-    // forwards the agent to it for the valid logicalDeviceIds).
+    // actually answered the port (and device_mismatch's guidance sends the agent
+    // to it for what Metro has and what to do).
     expect(gate.reason).toContain(NOT_CONNECTED_RESULT.detail);
     expect(gate.result).toEqual(NOT_CONNECTED_RESULT);
     expect(result.ok).toBe(false);

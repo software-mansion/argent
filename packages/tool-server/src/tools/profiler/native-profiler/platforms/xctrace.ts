@@ -7,6 +7,7 @@ import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { takeReapedSession } from "../../../../utils/reaped-sessions";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
+import { startOldProfilerSessionCleanup } from "../../../../utils/profiler-shared/session-retention";
 import {
   listenForDarwinNotification,
   type NotifyHandle,
@@ -81,6 +82,7 @@ export function assertNoCaptureRunning(api: NativeProfilerSessionApi): void {
 /** A new `.trace` path in the debug directory, which getDebugDir creates. */
 export async function newTraceOutputPath(): Promise<string> {
   const debugDir = await getDebugDir();
+  startOldProfilerSessionCleanup(debugDir);
   const timestamp = new Date()
     .toISOString()
     .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))

@@ -83,6 +83,7 @@ function buildApi(opts: {
     hotCommitIndices: null,
     totalReactCommits: null,
     profileStartWallMs: null,
+    runtimeDeviceId: null,
     sessionId: opts.sessionId,
     ownerToolServerPid: null,
     disposed: false,

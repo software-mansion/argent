@@ -19,8 +19,19 @@ import { resolveDevice } from "../../../utils/device-info";
 import { REACT_PROFILER_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
+import { leaksWereRecorded } from "../native-profiler/platforms/ios";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
+import { readXctraceSessionMetadata } from "../../../utils/ios-profiler/session-metadata";
+import {
+  nativeRecording,
+  pairProfilerSessions,
+  reactRecording,
+  sameRunSessions,
+  type NativeTrace,
+} from "../../../utils/profiler-shared/session-pairs";
+import { scanProfilerSessions } from "../../../utils/profiler-shared/session-ids";
+import { markProfilerSessionUsed } from "../../../utils/profiler-shared/session-retention";
 import {
   isCaptureInFlight,
   inFlightGuardMessage,
@@ -50,32 +61,11 @@ function assertSafeSessionId(sessionId: string): void {
 }
 
 async function listSessions(debugDir: string): Promise<string> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(debugDir);
-  } catch {
+  const sessions = await scanProfilerSessions(debugDir);
+  if (!sessions) {
     return "_No debug directory found. Profile the app first to generate trace data._";
   }
-
-  const reactSessions = new Map<string, string[]>();
-  const nativeSessions = new Map<string, string[]>();
-
-  for (const entry of entries) {
-    const reactMatch = entry.match(/^react-profiler-(\d{8}-\d{6})_/);
-    if (reactMatch) {
-      const sid = reactMatch[1];
-      if (!reactSessions.has(sid)) reactSessions.set(sid, []);
-      reactSessions.get(sid)!.push(entry);
-      continue;
-    }
-
-    const nativeMatch = entry.match(/^native-profiler-(\d{8}-?\d{6})/);
-    if (nativeMatch) {
-      const sid = nativeMatch[1];
-      if (!nativeSessions.has(sid)) nativeSessions.set(sid, []);
-      nativeSessions.get(sid)!.push(entry);
-    }
-  }
+  const { react: reactSessions, native: nativeSessions } = sessions;
 
   // Classify by artifact: a `.pftrace` (or its sidecar) is Android, an xctrace
   // `.trace` bundle or `_raw_*.xml` is iOS. iOS and Android captured in the same
@@ -99,39 +89,64 @@ async function listSessions(debugDir: string): Promise<string> {
     return "_No profiling sessions found in the debug directory._";
   }
 
+  // One read of each commits file: the table's columns and the recording's times.
+  const reactMeta = new Map<string, Awaited<ReturnType<typeof readCommitTree>>["meta"]>();
+  for (const [sid, files] of reactSessions) {
+    const commitsFile = files.find((f) => f.includes("_commits.json"));
+    if (!commitsFile) continue;
+    try {
+      reactMeta.set(sid, (await readCommitTree(path.join(debugDir, commitsFile))).meta);
+    } catch {
+      // older or corrupted file: leave the "—" placeholders
+    }
+  }
+  const reactRuns = new Map(
+    [...reactSessions.keys()].map((sid) => [sid, reactRecording(sid, reactMeta.get(sid))])
+  );
+  // An id can hold an xctrace and an Android session: each pairs on its own device.
+  const pairsOf = async (trace: NativeTrace) =>
+    pairProfilerSessions(
+      reactRuns,
+      new Map(
+        await Promise.all(
+          [...nativeSessions.keys()].map(
+            async (sid) => [sid, await nativeRecording(debugDir, sid, trace)] as const
+          )
+        )
+      )
+    );
+  const iosPairs = await pairsOf("xctrace");
+  const androidPairs = await pairsOf("android");
+  // The iOS and the Android session of one id are on two devices: a React session
+  // pairs with one of them at most.
+  const nativeOfReact = (sid: string) => [
+    ...(iosPairs.reactToNative.get(sid) ?? []),
+    ...(androidPairs.reactToNative.get(sid) ?? []),
+  ];
+  const sameRunCell = (ids: string[] | undefined) =>
+    ids && ids.length > 0 ? ids.map((id) => `\`${id}\``).join(", ") : "—";
+
   const lines: string[] = ["## Available Profiling Sessions", ""];
 
   if (reactSessions.size > 0) {
     lines.push("### React Profiler Sessions", "");
-    lines.push("| Session ID | Runtime | Device | Metro bundle |");
-    lines.push("|---|---|---|---|");
-    for (const [sid, files] of [...reactSessions.entries()].sort().reverse()) {
-      let appName: string | null = null;
-      let deviceName: string | null = null;
-      let projectRoot: string | null = null;
-      const commitsFile = files.find((f) => f.includes("_commits.json"));
-      if (commitsFile) {
-        try {
-          const onDisk = await readCommitTree(path.join(debugDir, commitsFile));
-          if (onDisk.meta) {
-            appName = onDisk.meta.appName ?? null;
-            deviceName = onDisk.meta.deviceName ?? null;
-            projectRoot = onDisk.meta.projectRoot ?? null;
-          }
-        } catch {
-          // older or corrupted file — leave the "—" placeholders
-        }
-      }
-      const project = projectRoot ? path.basename(projectRoot) : null;
-      lines.push(`| \`${sid}\` | ${appName ?? "—"} | ${deviceName ?? "—"} | ${project ?? "—"} |`);
+    lines.push("| Session ID | Runtime | Device | Metro bundle | Native session (same run) |");
+    lines.push("|---|---|---|---|---|");
+    for (const sid of [...reactSessions.keys()].sort().reverse()) {
+      const meta = reactMeta.get(sid);
+      const project = meta?.projectRoot ? path.basename(meta.projectRoot) : null;
+      lines.push(
+        `| \`${sid}\` | ${meta?.appName ?? "—"} | ${meta?.deviceName ?? "—"} | ${project ?? "—"} | ` +
+          `${sameRunCell(nativeOfReact(sid))} |`
+      );
     }
     lines.push("");
   }
 
   if (iosSessions.size > 0) {
     lines.push("### Native Profiler Sessions (iOS)", "");
-    lines.push("| Session ID | Files |");
-    lines.push("|---|---|");
+    lines.push("| Session ID | Files | React session (same run) |");
+    lines.push("|---|---|---|");
     for (const [sid, files] of [...iosSessions.entries()].sort().reverse()) {
       const hasCpu = files.some((f) => f.includes("_raw_cpu.xml"));
       const hasHangs = files.some((f) => f.includes("_raw_hangs.xml"));
@@ -142,26 +157,31 @@ async function listSessions(debugDir: string): Promise<string> {
       if (hasHangs) parts.push("hangs");
       if (hasLeaks) parts.push("leaks");
       if (hasReport) parts.push("report");
-      lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
+      lines.push(
+        `| \`${sid}\` | ${parts.join(", ")} | ${sameRunCell(iosPairs.nativeToReact.get(sid))} |`
+      );
     }
     lines.push("");
   }
 
   if (androidSessions.size > 0) {
     lines.push("### Native Profiler Sessions (Android)", "");
-    lines.push("| Session ID | Files |");
-    lines.push("|---|---|");
+    lines.push("| Session ID | Files | React session (same run) |");
+    lines.push("|---|---|---|");
     for (const [sid, files] of [...androidSessions.entries()].sort().reverse()) {
       const parts: string[] = [];
       if (files.some((f) => f.endsWith(".pftrace"))) parts.push("pftrace");
       if (files.some((f) => f.includes("-report.md"))) parts.push("report");
-      lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
+      lines.push(
+        `| \`${sid}\` | ${parts.join(", ")} | ${sameRunCell(androidPairs.nativeToReact.get(sid))} |`
+      );
     }
     lines.push("");
   }
 
   lines.push(
-    "_Use `load_react` or `load_native` with the session_id to load data for query tools._"
+    "_Use `load_react` or `load_native` with the session_id to load data for query tools. " +
+      "Either mode also takes the id of the run's other session._"
   );
 
   return lines.join("\n");
@@ -212,6 +232,9 @@ async function loadReactSession(
       }
     );
   }
+
+  // So the cleanup of old sessions keeps it while it is in use.
+  await markProfilerSessionUsed([cpuPath, commitsPath, cpuIndexPath]);
 
   let detectedArchitecture: "bridge" | "bridgeless" | null = null;
   let anyCompilerOptimized: boolean | null = null;
@@ -290,17 +313,14 @@ async function loadReactSession(
   return lines.join("\n");
 }
 
-async function loadNativeSession(
-  debugDir: string,
-  sessionId: string,
-  api: NativeProfilerSessionApi,
-  appProcessOverride?: string
-): Promise<string> {
-  assertSafeSessionId(sessionId);
-  // Loading overwrites the session's capture state (traceFile, exportedFiles,
-  // parsedData, …), which strands a live or unrecovered capture: stop's export
-  // needs traceFile, and only the raw_*.xml that export writes can be loaded
-  // back — the .trace bundle cannot.
+/**
+ * Loading overwrites the session's capture state (traceFile, exportedFiles,
+ * parsedData, …), which strands a live or unrecovered capture: stop's export
+ * needs traceFile, and only the raw_*.xml that export writes can be loaded back
+ * (the .trace bundle cannot). A load checks before it reads and again before it
+ * writes: a native-profiler-start can begin while it reads.
+ */
+function assertNoCaptureInFlight(api: NativeProfilerSessionApi): void {
   if (isCaptureInFlight(api)) {
     throw new FailureError(inFlightGuardMessage(api, "retry profiler-load"), {
       error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
@@ -309,13 +329,28 @@ async function loadNativeSession(
       error_kind: "validation",
     });
   }
+}
+
+async function loadNativeSession(
+  debugDir: string,
+  sessionId: string,
+  api: NativeProfilerSessionApi,
+  appProcessOverride: string | undefined,
+  reactSessionId: string | null
+): Promise<string> {
+  assertSafeSessionId(sessionId);
+  // When the load took the run's native session for a React id, a failure names both.
+  const ofRun = reactSessionId
+    ? `, the native session of the run of React session "${reactSessionId}"`
+    : "";
+  assertNoCaptureInFlight(api);
   if (api.platform === "android") {
     const pftrace = path.join(debugDir, `native-profiler-${sessionId}.pftrace`);
     try {
       await fs.access(pftrace);
     } catch {
       throw new FailureError(
-        `No native profiler .pftrace found for session "${sessionId}". ` +
+        `No native profiler .pftrace found for session "${sessionId}"${ofRun}. ` +
           `Expected file at ${pftrace}`,
         {
           error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
@@ -339,6 +374,8 @@ async function loadNativeSession(
         }
       );
     }
+    await markProfilerSessionUsed([pftrace]);
+    assertNoCaptureInFlight(api);
     api.traceFile = pftrace;
     api.exportedFiles = { pftrace };
     api.appProcess = appProcess;
@@ -388,7 +425,7 @@ async function loadNativeSession(
 
   if (!files.cpu && !files.hangs && !files.leaks) {
     throw new FailureError(
-      `No native profiler XML files found for session "${sessionId}". ` +
+      `No native profiler XML files found for session "${sessionId}"${ofRun}. ` +
         `Expected files matching native-profiler-${sessionId}_raw_*.xml in ${debugDir}`,
       {
         error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
@@ -401,33 +438,48 @@ async function loadNativeSession(
     );
   }
 
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
+  await markProfilerSessionUsed([cpuXml, hangsXml, leaksXml]);
+  const traceFile = path.join(debugDir, `native-profiler-${sessionId}.trace`);
+  // The raw_*.xml carry none of the capture's own fields. The stop saved them next
+  // to the trace; a session saved before that has none, and its fields stay empty.
+  const metadata = await readXctraceSessionMetadata(traceFile);
+  const cpuFilterPid = metadata?.cpuFilterPid ?? null;
+  const appSuspensions = metadata?.appSuspensions ?? null;
+  const mallocStackLogging = metadata?.mallocStackLogging ?? null;
+  const wallClockStartMs = metadata?.wallClockStartMs ?? null;
+  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files, {
+    cpuFilterPid,
+    appSuspensions,
+  });
+  // The rule of the live analyze, so a load reports the leaks as it did.
+  const leaksRecorded = await leaksWereRecorded(api.platform, files.leaks, memoryLeaks);
 
-  // raw_*.xml carry no start time, so the frozen anchor is null and the combined
-  // report reports a missing native anchor rather than mis-anchoring to residue.
+  assertNoCaptureInFlight(api);
+  // Without a saved start time the frozen anchor is null, and the combined report
+  // reports a missing native anchor rather than mis-anchoring to residue.
   api.parsedData = {
     cpuSamples,
     uiHangs,
     cpuHotspots,
     memoryLeaks,
-    // Stop writes no raw_leaks.xml when the trace had no Leaks table.
-    leaksRecorded: files.leaks != null,
-    mallocStackLogging: null,
-    wallClockStartMs: null,
+    leaksRecorded,
+    mallocStackLogging,
+    wallClockStartMs,
   };
   api.exportedFiles = files;
-  // Clear every per-capture field an earlier live capture left behind, or analyze
+  // Replace every per-capture field an earlier live capture left behind, or analyze
   // attributes them to the loaded trace: mislabeled capture mode, samples dropped
-  // by a stale CPU filter PID, a stale-trace note, and the report .md written over
-  // the old trace's.
-  api.mallocStackLogging = null;
-  api.cpuFilterPid = null;
-  api.appEndedDuringCapture = false;
+  // by a stale CPU filter PID, and a stale-trace note. The trace is this session's
+  // own, so the report names it. Without the saved start time, analyze writes no
+  // report .md: it would replace the live report with one that lacks those fields.
+  api.mallocStackLogging = mallocStackLogging;
+  api.cpuFilterPid = cpuFilterPid;
+  api.appEndedDuringCapture = metadata?.appEndedDuringCapture ?? false;
   api.exportSkipReason = null;
-  api.recordedMs = null;
-  api.appSuspensions = null;
-  api.wallClockStartMs = null;
-  api.traceFile = null;
+  api.recordedMs = metadata?.recordedMs ?? null;
+  api.appSuspensions = appSuspensions;
+  api.wallClockStartMs = wallClockStartMs;
+  api.traceFile = traceFile;
 
   const lines: string[] = [
     `Loaded native profiler session \`${sessionId}\`.`,
@@ -435,12 +487,72 @@ async function loadNativeSession(
     `- CPU samples: ${cpuSamples.length}`,
     `- UI hangs: ${uiHangs.length}`,
     `- CPU hotspots: ${cpuHotspots.length}`,
-    `- Memory leaks: ${files.leaks ? memoryLeaks.length : "not recorded"}`,
+    `- Memory leaks: ${leaksRecorded ? memoryLeaks.length : "not recorded"}`,
     "",
     "Query tools (`profiler-stack-query`) are now ready to use against this data.",
   ];
 
   return lines.join("\n");
+}
+
+/**
+ * The session of `kind` that `sessionId` names: that session, or else the one
+ * session of `kind` of the same run as the other kind's session with this id.
+ * `note` says when it is the second. Refuses when the run has more than one.
+ */
+async function sessionToLoad(
+  debugDir: string,
+  kind: "react" | "native",
+  sessionId: string,
+  deviceId: string,
+  trace?: NativeTrace
+): Promise<{ sessionId: string; note: string }> {
+  const { partners, ownElsewhere } = await sameRunSessions(
+    debugDir,
+    kind,
+    sessionId,
+    deviceId,
+    trace
+  );
+  const [own, other] = kind === "react" ? ["React", "native"] : ["native", "React"];
+  // The same word at the start of a sentence.
+  const Own = own[0]!.toUpperCase() + own.slice(1);
+  if (partners.length > 1) {
+    const devices = new Set(partners.map((p) => p.deviceId));
+    const which =
+      devices.size > 1
+        ? `${partners.length} ${own} sessions recorded at the same time as a ${other} session ` +
+          `"${sessionId}": ${partners.map((p) => `\`${p.id}\` on ${p.deviceId}`).join(", ")}.`
+        : `On ${ownElsewhere ? "this" : "its"} device, ${partners.length} ${own} sessions ` +
+          `recorded at the same time as ${other} session "${sessionId}": ` +
+          `${partners.map((p) => `\`${p.id}\``).join(", ")}.`;
+    const first = ownElsewhere
+      ? `${Own} session "${sessionId}" recorded on another device.`
+      : `No ${own} session has the id "${sessionId}".`;
+    throw new FailureError(`${first} ${which} Pass one of them as session_id.`, {
+      error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+      failure_stage: `profiler_load_${kind}_session`,
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
+  }
+  const [partner] = partners;
+  if (!partner) return { sessionId, note: "" };
+  return {
+    sessionId: partner.id,
+    note: ownElsewhere
+      ? `${Own} session \`${sessionId}\` recorded on another device, so it was not loaded. This ` +
+        `is the ${own} session of the run of ${other} session \`${sessionId}\` on this device.\n\n`
+      : `\`${sessionId}\` is a ${other} session; this is the ${own} session of its run.\n\n`,
+  };
+}
+
+/** The session id that a load result names, or else the one that was asked for. */
+function loadedSessionId(params: Params, result: string): string {
+  return (
+    /^Loaded (?:React|native|Android) profiler session `([^`]+)`/m.exec(result)?.[1] ??
+    params.session_id!
+  );
 }
 
 const profilerLoadAction = {
@@ -451,19 +563,21 @@ const profilerLoadAction = {
   },
   load_react: {
     started: (params: Params) => `Loading React profile ${params.session_id}`,
-    completed: (params: Params) => `Loaded React profile ${params.session_id}`,
+    completed: (params: Params, result: string) =>
+      `Loaded React profile ${loadedSessionId(params, result)}`,
     failure: "load",
   },
   load_native: {
     started: (params: Params) => `Loading native profile ${params.session_id}`,
-    completed: (params: Params) => `Loaded native profile ${params.session_id}`,
+    completed: (params: Params, result: string) =>
+      `Loaded native profile ${loadedSessionId(params, result)}`,
     failure: "load",
   },
 } satisfies Record<
   Params["mode"],
   {
     started: (params: Params) => string;
-    completed: (params: Params) => string;
+    completed: (params: Params, result: string) => string;
     failure: string;
   }
 >;
@@ -505,7 +619,7 @@ Fails if the session_id is not found or the session's trace files are missing fr
   zodSchema,
   interaction: {
     startedMsg: ({ params }) => profilerLoadAction[params.mode].started(params),
-    completedMsg: ({ params }) => profilerLoadAction[params.mode].completed(params),
+    completedMsg: ({ params, result }) => profilerLoadAction[params.mode].completed(params, result),
     failedMsg: ({ params, failureSignal }) =>
       `Failed to ${profilerLoadAction[params.mode].failure} saved profiles: ${failureSignal.error_code}`,
   },
@@ -541,7 +655,11 @@ Fails if the session_id is not found or the session's trace files are missing fr
             }
           );
         }
-        return loadReactSession(debugDir, params.session_id, metroPort(params), params.device_id);
+        const react = await sessionToLoad(debugDir, "react", params.session_id, params.device_id);
+        return (
+          react.note +
+          (await loadReactSession(debugDir, react.sessionId, metroPort(params), params.device_id))
+        );
       }
 
       case "load_native": {
@@ -557,7 +675,18 @@ Fails if the session_id is not found or the session's trace files are missing fr
           );
         }
         const api = services.session as NativeProfilerSessionApi;
-        return loadNativeSession(debugDir, params.session_id, api, params.app_process);
+        const native = await sessionToLoad(
+          debugDir,
+          "native",
+          params.session_id,
+          params.device_id,
+          api.platform === "android" ? "android" : "xctrace"
+        );
+        const pairedFrom = native.sessionId === params.session_id ? null : params.session_id;
+        return (
+          native.note +
+          (await loadNativeSession(debugDir, native.sessionId, api, params.app_process, pairedFrom))
+        );
       }
 
       default:

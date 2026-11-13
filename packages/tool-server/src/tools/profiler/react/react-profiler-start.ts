@@ -97,9 +97,17 @@ interface TakeoverReport {
   note: string;
 }
 
+/**
+ * The note of the debugger session when a device_id that matched no target took
+ * the only runtime on Metro: that runtime can be another device's.
+ */
+function fallbackNote(api: ReactProfilerSessionApi): { [RESULT_NOTE_KEY]?: string } {
+  return api.fallbackNote ? { [RESULT_NOTE_KEY]: api.fallbackNote } : {};
+}
+
 /** What a start answers while a stop collects the run, also with force. */
-function stopInProgress() {
-  return { already_running: true, mine: true, note: STOP_IN_PROGRESS_NOTE };
+function stopInProgress(api: ReactProfilerSessionApi) {
+  return { already_running: true, mine: true, note: STOP_IN_PROGRESS_NOTE, ...fallbackNote(api) };
 }
 
 function describeTakeover(input: {
@@ -245,7 +253,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       }
 
       let api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
-      if (api.stopping) return stopInProgress();
+      if (api.stopping) return stopInProgress(api);
       if (!api.cdp.isConnected()) {
         await disposeAndWait();
         api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
@@ -369,7 +377,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
       // A stop that began while this start awaited the app reads as a run this
       // tool-server lost, which a start would replace.
-      if (api.stopping) return stopInProgress();
+      if (api.stopping) return stopInProgress(api);
 
       if (state.isRunning) {
         const owner: ProfilerSessionOwner | null = state.owner;
@@ -400,6 +408,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
             note: staleness.stale
               ? STALE_OWN_RUN_NOTE
               : "A recording started through this tool-server is still running: yours, unless another agent shares this tool-server. Call react-profiler-stop to collect it. To discard it and start over, call react-profiler-start again with { force: true }.",
+            ...fallbackNote(api),
           };
         }
 
@@ -414,6 +423,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
             stale: staleness.stale,
             how_to_reclaim:
               "Another profiling session is already active — see the `owner` field. Ask the user before taking over and explain that the prior session's data will be discarded; to take over, call react-profiler-start again with { force: true }.",
+            ...fallbackNote(api),
           };
         }
 
@@ -552,12 +562,18 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.hotCommitIndices = null;
       api.totalReactCommits = null;
       api.profileStartWallMs = startedAtEpochMs;
+      api.runtimeDeviceId = runtimeDevice ?? null;
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
       trackProfilingRun(api.deviceId, api);
       if (runtimeDevice) trackProfilingRun(runtimeDevice, api);
 
       const warning = nativeNetworkCaptureWarning(deviceId ?? params.device_id, api.runtimeApp);
+      // Exclusive: a logical-keyed session matched its device_id, so it took no fallback.
+      const note =
+        isLogicalKeyedDevice(api.deviceId) && !runtimeDevice
+          ? UNKNOWN_DEVICE_NOTE
+          : api.fallbackNote;
       return {
         started_at: new Date(startedAtEpochMs).toISOString(),
         startedAtEpochMs,
@@ -565,9 +581,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         detected_architecture: api.detectedArchitecture,
         ...(tookOver ? { took_over: tookOver } : {}),
         ...(warning ? { warning } : {}),
-        ...(isLogicalKeyedDevice(api.deviceId) && !runtimeDevice
-          ? { [RESULT_NOTE_KEY]: UNKNOWN_DEVICE_NOTE }
-          : {}),
+        ...(note ? { [RESULT_NOTE_KEY]: note } : {}),
       };
     },
   };

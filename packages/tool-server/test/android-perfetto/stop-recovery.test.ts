@@ -17,6 +17,7 @@ vi.mock("../../src/utils/android-profiler/session-metadata", () => ({
 import { stopPerfetto } from "../../src/utils/android-profiler/capture";
 import { writeAndroidNativeProfilerMetadata } from "../../src/utils/android-profiler/session-metadata";
 import { stopNativeProfilerAndroid } from "../../src/tools/profiler/native-profiler/platforms/android";
+import { RECORDING_CAP_MS } from "../../src/utils/profiler-shared/types";
 
 const mockedStop = vi.mocked(stopPerfetto);
 const mockedWriteMetadata = vi.mocked(writeAndroidNativeProfilerMetadata);
@@ -94,11 +95,27 @@ describe("stopNativeProfilerAndroid — session-state reset (stability #2)", () 
       platform: "android",
       appProcess: "com.example.app",
       wallClockStartMs: 1710000000000,
+      stoppedAtMs: expect.any(Number),
+      deviceId: "emulator-5554",
     });
     expect(api.profilingActive).toBe(false);
     expect(api.capturePid).toBeNull();
     expect(api.captureProcess).toBeNull();
     expect(api.androidOnDeviceTracePath).toBeNull();
+  });
+
+  it("saves the cap as the end of a recording that ran into it, not the later stop", async () => {
+    const api = await buildAndroidSession();
+    primeActiveSession(api);
+    api.recordingTimedOut = true;
+    mockedStop.mockResolvedValueOnce({ hostTracePath: "/tmp/native-profiler-x.pftrace" });
+
+    await stopNativeProfilerAndroid(api);
+
+    expect(mockedWriteMetadata).toHaveBeenCalledWith(
+      "/tmp/native-profiler-x.pftrace",
+      expect.objectContaining({ stoppedAtMs: 1710000000000 + RECORDING_CAP_MS })
+    );
   });
 
   it("does not reuse stale stop fields on a normal second stop", async () => {

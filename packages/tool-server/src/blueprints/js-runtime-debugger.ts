@@ -12,6 +12,7 @@ import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
 import { selectTarget } from "../utils/debugger/target-selection";
+import { checkFallbackTarget } from "../utils/debugger/fallback-target";
 import {
   rememberDeviceAlias,
   forgetDeviceAlias,
@@ -143,6 +144,12 @@ export interface JsRuntimeDebuggerApi {
   appName: string;
   logicalDeviceId: string | undefined;
   runtimeApp?: RuntimeAppMetadata;
+  /**
+   * Can be set when `device_id` matched no target and the session took the
+   * only device on Metro: names that runtime, for the tools that report the
+   * connection. See utils/debugger/fallback-target.ts.
+   */
+  fallbackNote?: string;
   isNewDebugger: boolean;
   cdp: CDPClient;
   sourceResolver: SourceResolver;
@@ -262,6 +269,11 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
      */
     const onPublishedBundler = publishedMetroPort(deviceId, port) === undefined;
     const proxied = onPublishedBundler ? externalJsDebuggerUrl(deviceId) : undefined;
+    // A provider's socket is that device's own runtime, whatever Metro lists.
+    const fallbackNote =
+      selected.matchedDeviceId || proxied
+        ? undefined
+        : await checkFallbackTarget(selected.target, deviceId, port);
 
     const cdp = new CDPClient(proxied ?? selected.webSocketUrl);
     await cdp.connect();
@@ -366,6 +378,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
         appName: selected.target.title,
         logicalDeviceId: selected.target.reactNative?.logicalDeviceId,
         runtimeApp,
+        fallbackNote,
         isNewDebugger: selected.isNewDebugger,
         cdp,
         sourceResolver,

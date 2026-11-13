@@ -5,6 +5,10 @@ interface AndroidNativeProfilerMetadata {
   platform: "android";
   appProcess: string;
   wallClockStartMs: number | null;
+  /** When the recording ended: the stop, or the 10-minute cap. Absent in older files. */
+  stoppedAtMs?: number | null;
+  /** The device that recorded, to pair the session with a React one. Absent in older files. */
+  deviceId?: string | null;
 }
 
 export function androidNativeProfilerMetadataPath(pftracePath: string): string {
@@ -55,7 +59,9 @@ export async function readAndroidNativeProfilerMetadata(
     parsed.platform !== "android" ||
     typeof parsed.appProcess !== "string" ||
     parsed.appProcess.trim() === "" ||
-    (parsed.wallClockStartMs !== null && typeof parsed.wallClockStartMs !== "number")
+    (parsed.wallClockStartMs !== null && typeof parsed.wallClockStartMs !== "number") ||
+    (parsed.stoppedAtMs != null && typeof parsed.stoppedAtMs !== "number") ||
+    (parsed.deviceId != null && typeof parsed.deviceId !== "string")
   ) {
     throw new FailureError(`Invalid Android profiler metadata sidecar at ${metadataPath}`, {
       error_code: FAILURE_CODES.PROFILER_NATIVE_METADATA_INVALID,
@@ -69,5 +75,7 @@ export async function readAndroidNativeProfilerMetadata(
     platform: "android",
     appProcess: parsed.appProcess,
     wallClockStartMs: parsed.wallClockStartMs,
+    ...(parsed.stoppedAtMs != null ? { stoppedAtMs: parsed.stoppedAtMs } : {}),
+    ...(parsed.deviceId != null ? { deviceId: parsed.deviceId } : {}),
   };
 }

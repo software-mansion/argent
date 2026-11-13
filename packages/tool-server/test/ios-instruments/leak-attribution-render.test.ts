@@ -105,9 +105,10 @@ describe("leak attribution rendering", () => {
   });
 
   it("falls back to the attributed-count inference when the capture mode is unknown", async () => {
-    // Sessions restored from disk (profiler-load) have no capture-mode sidecar:
-    // mallocStackLogging is null and the renderer infers the mode the old way —
-    // attributed leaks present ⇒ malloc logging must have been on.
+    // A session that profiler-load restored without its metadata file (saved by an
+    // older version) has no capture mode: mallocStackLogging is null and the renderer
+    // infers the mode the old way: attributed leaks present ⇒ malloc logging must
+    // have been on.
     const res = await renderNativeProfilerReport({
       payload: payload([
         leak(true, "hermes::vm::JSTypedArrayBase::createBuffer(...)", "hermes"),

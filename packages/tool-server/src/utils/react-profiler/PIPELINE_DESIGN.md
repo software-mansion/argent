@@ -56,7 +56,7 @@ No share of the recording decides the outcome either. A floor on it was tried an
 
 ### Cap + persist full report
 
-Top 10 hot commits in inline response to stay token-efficient. Full markdown written to `/tmp/argent-profiler-cwd/react-profiler-report.md` for agent to re-query without re-running profiling. Agent can use the Read tool directly on the file.
+Top 10 hot commits in inline response to stay token-efficient. Full markdown written to `<os.tmpdir()>/argent-profiler-cwd/react-profiler-<sessionId>_report.md`, one file per session, for agent to re-query without re-running profiling. Agent can use the Read tool directly on the file.
 
 ### Findings threshold: renders ≥ 3 OR maxDuration ≥ 30ms
 

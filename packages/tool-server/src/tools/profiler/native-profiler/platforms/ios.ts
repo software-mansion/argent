@@ -1,7 +1,11 @@
 import { execFileSync, type ChildProcess } from "child_process";
 import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { promises as fs } from "fs";
-import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
+import type {
+  NativeProfilerPlatform,
+  NativeProfilerSessionApi,
+} from "../../../../blueprints/native-profiler-session";
+import { RECORDING_CAP_MS, type MemoryLeak } from "../../../../utils/profiler-shared/types";
 import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
@@ -9,6 +13,7 @@ import { firstSimulatorPoll } from "../../../../utils/simulator-watcher";
 import { XcodeFirstLaunchPendingError } from "../../../../utils/dependency-errors";
 import { DEFAULT_EXEC_MAX_BUFFER } from "../../../../utils/ios-profiler/run-with-timeout";
 import { exportIosTraceData, skippedTraceExport } from "../../../../utils/ios-profiler/export";
+import { writeXctraceSessionMetadata } from "../../../../utils/ios-profiler/session-metadata";
 import {
   suspensionSpansInTrace,
   type AppSuspensionSpan,
@@ -677,6 +682,14 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     api.exportSkipReason = diagnostics.skipped ?? null;
     api.recordedMs = null;
     api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+    // When the recording ended: the cap's own time, or the end of the trace that
+    // xctrace wrote before it exited.
+    const traceEndMs =
+      diagnostics.traceStartMs !== undefined && diagnostics.traceDurationMs !== undefined
+        ? diagnostics.traceStartMs + diagnostics.traceDurationMs
+        : null;
+    const capEndMs = api.wallClockStartMs !== null ? api.wallClockStartMs + RECORDING_CAP_MS : null;
+    await saveSessionMetadata(api, traceFile, wasTimeout ? capEndMs : traceEndMs);
 
     let warning = wasTimeout
       ? "Recording timed out at 10 min cap; exported the partial trace. " +
@@ -719,7 +732,9 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   }
 
   const child = api.captureProcess;
-  const recordedMs = Date.now() - (api.wallClockStartMs ?? Date.now());
+  // The recording ends now, at the SIGINT below.
+  const stoppedAtMs = Date.now();
+  const recordedMs = stoppedAtMs - (api.wallClockStartMs ?? stoppedAtMs);
   const idleMs = stallIdleMs(recordedMs);
   // Before xctrace saves the trace and the exports run: an app that quits during
   // them did not quit during the recording.
@@ -790,6 +805,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   api.exportSkipReason = diagnostics.skipped ?? null;
   api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
+  await saveSessionMetadata(api, api.traceFile, stoppedAtMs);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
     // most of what came before.
@@ -803,6 +819,32 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   };
   if (warning) stopResult.warning = warning;
   return stopResult;
+}
+
+/**
+ * Saves what analyze reads besides the exports, for profiler-load. A failed
+ * write costs only a later reload, so the stop goes on.
+ */
+async function saveSessionMetadata(
+  api: NativeProfilerSessionApi,
+  traceFile: string,
+  stoppedAtMs: number | null
+): Promise<void> {
+  try {
+    await writeXctraceSessionMetadata(traceFile, {
+      deviceId: api.deviceId,
+      wallClockStartMs: api.wallClockStartMs,
+      stoppedAtMs,
+      cpuFilterPid: api.cpuFilterPid,
+      mallocStackLogging: api.mallocStackLogging,
+      appSuspensions: api.appSuspensions,
+      recordedMs: api.recordedMs,
+      appEndedDuringCapture: api.appEndedDuringCapture,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[native-profiler] could not save the session metadata: ${msg}\n`);
+  }
 }
 
 /** Ends the Mac app's suspension watch: what it saw, or null when nothing watched. */
@@ -897,6 +939,24 @@ async function leaksDetailExported(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Whether a recording's leaks export holds leak data. No export is no leak data,
+ * not zero leaks: a trace whose template has the Leaks instrument exports an
+ * empty table when nothing leaked, and the all-processes fallback records the
+ * built-in Time Profiler template, which has none. On a Mac app, so is a leaks
+ * export with no Leaks detail in it.
+ */
+export async function leaksWereRecorded(
+  platform: NativeProfilerPlatform,
+  leaksFile: string | null,
+  memoryLeaks: readonly MemoryLeak[]
+): Promise<boolean> {
+  return (
+    leaksFile != null &&
+    (platform !== "macos" || memoryLeaks.length > 0 || (await leaksDetailExported(leaksFile)))
+  );
+}
+
 async function checkExportFileMissing(filePath: string | null): Promise<string | null> {
   if (!filePath) return null;
   try {
@@ -941,10 +1001,11 @@ export async function analyzeNativeProfilerIos(
     });
   }
 
-  const [cpuMissing, hangsMissing, leaksMissing] = await Promise.all([
+  const [cpuMissing, hangsMissing, leaksMissing, traceMissing] = await Promise.all([
     checkExportFileMissing(api.exportedFiles.cpu ?? null),
     checkExportFileMissing(api.exportedFiles.hangs ?? null),
     checkExportFileMissing(api.exportedFiles.leaks ?? null),
+    checkExportFileMissing(api.traceFile),
   ]);
 
   // Null on iOS and when argent did not watch the Mac app: the hangs stay as recorded.
@@ -963,17 +1024,10 @@ export async function analyzeNativeProfilerIos(
     appSuspensions,
   });
 
-  // No leaks export means no leak data, not zero leaks: a trace whose template
-  // has the Leaks instrument exports an empty table when nothing leaked. The
-  // all-processes fallback records the built-in Time Profiler template, which
-  // has none. A leaks file that stop wrote but is now gone or unreadable is no
-  // leak data either. On a Mac app, so is a leaks export with no Leaks detail in it.
+  // A leaks file that stop wrote but is now gone or unreadable is no leak data either.
   const leaksRecorded =
-    api.exportedFiles.leaks != null &&
     !leaksMissing &&
-    (api.platform !== "macos" ||
-      memoryLeaks.length > 0 ||
-      (await leaksDetailExported(api.exportedFiles.leaks)));
+    (await leaksWereRecorded(api.platform, api.exportedFiles.leaks ?? null, memoryLeaks));
 
   api.parsedData = {
     cpuSamples,
@@ -1024,6 +1078,8 @@ export async function analyzeNativeProfilerIos(
   const payload = {
     metadata: {
       traceFile: api.traceFile,
+      // A loaded session can keep its exports after its bundle is gone.
+      traceMissing: traceMissing !== null,
       platform: api.platform === "macos" ? "macOS" : "iOS",
       timestamp: new Date().toISOString(),
     },
@@ -1041,15 +1097,16 @@ export async function analyzeNativeProfilerIos(
 
   return renderNativeProfilerReport({
     payload,
-    traceFile: api.traceFile,
+    // Where the report file goes: next to the trace. A session that profiler-load
+    // loaded without its metadata file has no start time and none of the capture's
+    // own fields (CPU filter, suspensions), so its report must not replace the one
+    // the live analyze wrote.
+    traceFile: api.wallClockStartMs !== null ? api.traceFile : null,
     exportErrors,
-    // A large gap between the in-memory start time and "now" means analyze is reusing
-    // a trace from an earlier capture in this same process run, not a fresh one.
-    //
-    // iOS, unlike Android, has no on-disk metadata sidecar, so profiler-load (raw_*.xml
-    // only) cannot recover the start time: wallClockStartMs is null for a loaded
-    // session, formatTraceFreshness returns null, and the note stays off. See
-    // test/ios-instruments/load-freshness.test.ts.
+    // A large gap between the start time and "now" means analyze is reusing a trace
+    // from an earlier capture, not a fresh one. profiler-load restores the start time
+    // from the metadata file the stop saved; a session saved before that file existed
+    // has none, and the note stays off. See test/ios-instruments/load-freshness.test.ts.
     // All are warnings about the capture itself, shown at the top of the report.
     freshnessNote:
       [
@@ -1065,8 +1122,7 @@ export async function analyzeNativeProfilerIos(
       ]
         .filter(Boolean)
         .join("\n\n") || undefined,
-    // Same live-session-only caveat as wallClockStartMs: profiler-load has no
-    // capture-mode sidecar, so a restored session renders with null (the
+    // Null for a session saved before the stop saved its metadata file (the
     // unattributed-leaks note then goes by the attributed-leak count instead).
     mallocStackLogging: api.mallocStackLogging,
     leaksRecorded,

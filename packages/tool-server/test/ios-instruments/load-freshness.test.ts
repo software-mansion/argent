@@ -3,16 +3,13 @@
  *
  * The iOS analyze path forwards `formatTraceFreshness(api.wallClockStartMs, …)`
  * exactly like Android, but `wallClockStartMs` is only ever set in-memory at
- * `native-profiler-start` (ios.ts) — iOS has NO on-disk metadata sidecar, and
- * the iOS branch of `profiler-load` never restores it. So when an old iOS
- * session is loaded from disk, `wallClockStartMs` stays `null` and the
- * stale-trace warning can never fire — the wiring is effective only for a live
- * session, which is fresh by construction.
+ * `native-profiler-start` (ios.ts). The stop now saves it in a metadata file
+ * next to the trace, and `profiler-load` restores it (load-session-metadata.test.ts).
+ * A session saved before that file existed has none: `wallClockStartMs` stays
+ * `null` and the stale-trace warning cannot fire.
  *
- * These tests pin that behavior: it must degrade cleanly (no crash, no
- * misleading output), NOT silently emit or suppress something wrong. If iOS
- * later grows real start-time persistence, the `wallClockStartMs` assertion
- * here is the canary that should be updated alongside it.
+ * These tests pin that behavior for such a session: it must degrade cleanly (no
+ * crash, no misleading output), NOT silently emit or suppress something wrong.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -73,8 +70,8 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     // captured days ago would be loaded fresh into this state.
     expect(api.wallClockStartMs).toBeNull();
 
-    // iOS sessions persist only raw_*.xml — there is NO metadata.json sidecar to
-    // carry a start time, unlike Android's .pftrace.metadata.json.
+    // A session saved before the stop wrote its metadata file has only raw_*.xml,
+    // with no start time.
     const cpuXml = join(tempDir, `native-profiler-${SESSION_ID}_raw_cpu.xml`);
     await writeFile(cpuXml, "<trace-query-result></trace-query-result>", "utf8");
 
@@ -112,14 +109,14 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
   });
 
   it("clears ALL of a previous live capture's per-capture residue on load", async () => {
-    // The raw_*.xml carry no metadata sidecar, so nothing per-capture is known
-    // about a loaded trace. A live capture earlier in the same process leaves
-    // four fields behind, each of which would corrupt the loaded trace's
-    // analyze if it survived: mallocStackLogging mislabels the
-    // unattributed-leaks note, cpuFilterPid silently filters the loaded CPU
-    // samples by a dead PID, wallClockStartMs fires the stale-trace note with
-    // the wrong timestamp, and traceFile mislabels the report and writes the
-    // .md over the OLD trace's report.
+    // A session with no metadata file has nothing per-capture known about it.
+    // A live capture earlier in the same process leaves four fields behind,
+    // each of which would corrupt the loaded trace's analyze if it survived:
+    // mallocStackLogging mislabels the unattributed-leaks note, cpuFilterPid
+    // silently filters the loaded CPU samples by a dead PID, wallClockStartMs
+    // fires the stale-trace note with the wrong timestamp, and traceFile
+    // mislabels the report and writes the .md over the OLD trace's report.
+    // traceFile becomes the loaded session's own.
     const api = await buildIosSession();
     api.mallocStackLogging = true;
     api.cpuFilterPid = 4242;
@@ -139,11 +136,12 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     expect(api.parsedData?.mallocStackLogging).toBeNull();
     expect(api.cpuFilterPid).toBeNull();
     expect(api.wallClockStartMs).toBeNull();
-    expect(api.traceFile).toBeNull();
+    expect(api.traceFile).toBe(join(tempDir, `native-profiler-${SESSION_ID}.trace`));
 
     // And analyze on the loaded session behaves like a fresh process: no
     // stale-trace note from the old capture's start time, no report mislabeled
-    // with (or written next to) the old .trace.
+    // with (or written next to) the old .trace, and no report written over the
+    // loaded session's live one.
     const { report, reportFile } = await analyzeNativeProfilerIos(api);
     expect(report).not.toContain("Stale trace");
     expect(report).not.toContain("previous-live.trace");

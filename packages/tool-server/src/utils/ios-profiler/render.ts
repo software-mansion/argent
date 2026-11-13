@@ -59,9 +59,8 @@ interface RenderInput {
   /**
    * Whether the capture cold-launched the app with MallocStackLogging=1
    * (native-profiler-start's malloc_stack_logging flag). Null/undefined when
-   * unknown — a session restored from disk has no capture-mode sidecar — in
-   * which case the unattributed-leaks note infers it from the attributed-leak
-   * count.
+   * unknown (a session saved before the stop saved its metadata file), in which
+   * case the unattributed-leaks note infers it from the attributed-leak count.
    */
   mallocStackLogging?: boolean | null;
   /**
@@ -224,6 +223,15 @@ export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableEr
   return lines.join("\n");
 }
 
+/** The trace's name, or its session id when the bundle is gone. */
+function traceLabel(metadata: ProfilerPayload["metadata"]): string {
+  if (!metadata.traceFile) return "unknown";
+  const name = path.basename(metadata.traceFile);
+  if (!metadata.traceMissing) return `\`${name}\``;
+  const sessionId = name.replace(/^native-profiler-/, "").replace(/\.trace$/, "");
+  return `session \`${sessionId}\` (its .trace bundle is no longer on disk)`;
+}
+
 function reportTitle(payload: ProfilerPayload): string {
   const platform = payload.metadata.platform.toLowerCase();
   if (platform === "android") return "Android Perfetto Analysis";
@@ -238,9 +246,7 @@ function renderAllClear(
   leaksRecorded?: boolean,
   mayMissFindings?: boolean
 ): string {
-  const traceName = payload.metadata.traceFile
-    ? `\`${path.basename(payload.metadata.traceFile)}\``
-    : "unknown";
+  const traceName = traceLabel(payload.metadata);
   const lines = [
     `# ${reportTitle(payload)}`,
     ``,
@@ -291,9 +297,7 @@ function renderFullReport(
   cpuDiagnostic?: string,
   leaksRecorded?: boolean
 ): string {
-  const traceName = payload.metadata.traceFile
-    ? `\`${path.basename(payload.metadata.traceFile)}\``
-    : "unknown";
+  const traceName = traceLabel(payload.metadata);
 
   const cpuHotspots = payload.bottlenecks.filter((b): b is CpuHotspot => b.type === "cpu_hotspot");
   const uiHangs = payload.bottlenecks.filter((b): b is UiHang => b.type === "ui_hang");

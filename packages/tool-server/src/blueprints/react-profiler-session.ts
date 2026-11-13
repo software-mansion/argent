@@ -44,6 +44,8 @@ export interface ReactProfilerSessionApi {
   appName: string;
   deviceName: string;
   runtimeApp?: RuntimeAppMetadata;
+  /** The debugger session's `fallbackNote`. */
+  fallbackNote?: string;
   hermesVersion: string;
   detectedArchitecture: "bridge" | "bridgeless" | null;
   sessionPaths: ProfilerSessionPaths | null;
@@ -55,6 +57,12 @@ export interface ReactProfilerSessionApi {
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
   profileStartWallMs: number | null;
+  /**
+   * For a session keyed by Metro's logicalDeviceId: the list-devices id of the
+   * device its runtime runs on, found by the start. Null otherwise, or when the
+   * start could not find it. The stop saves it, to pair the run with a native one.
+   */
+  runtimeDeviceId: string | null;
   sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId while we own the run
   ownerToolServerPid: number | null; // process.pid while this tool-server owns the run
   /** Set by the teardown, so a start that was awaiting the app knows its session is gone. */
@@ -124,6 +132,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       appName: debuggerApi.appName,
       deviceName: debuggerApi.deviceName,
       runtimeApp: debuggerApi.runtimeApp,
+      fallbackNote: debuggerApi.fallbackNote,
       hermesVersion: "unknown",
       detectedArchitecture: null,
       sessionPaths: null,
@@ -134,6 +143,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       hotCommitIndices: null,
       totalReactCommits: null,
       profileStartWallMs: null,
+      runtimeDeviceId: null,
       sessionId: null,
       ownerToolServerPid: null,
       disposed: false,
