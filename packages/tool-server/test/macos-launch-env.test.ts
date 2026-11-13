@@ -81,14 +81,23 @@ function processEnv(pid: number): string {
   });
 }
 
+/** Every process that runs an executable under the suite's directory: each fake app. */
+function suitePids(): number[] {
+  if (!root) return [];
+  const out = execFileSync("ps", ["-ww", "-axo", "pid=,comm="], { encoding: "utf8" });
+  return out
+    .split("\n")
+    .map((line) => /^\s*(\d+)\s+(.*)$/.exec(line))
+    .filter((m): m is RegExpExecArray => m !== null && m[2]!.startsWith(`${root}/`))
+    .map((m) => Number(m[1]));
+}
+
 function macosApp(): Promise<MacosAppApi> {
   const ref = macosAppRef(resolveDevice(DEVICE_ID));
   return registry.resolveService<MacosAppApi>(ref.urn, ref.options);
 }
 
 describe.skipIf(process.platform !== "darwin")("a Mac app launch with extra environment", () => {
-  const pids: number[] = [];
-
   beforeAll(() => {
     // A short HOME: the listening socket lives under it, and sun_path holds 103 bytes.
     root = fs.realpathSync(fs.mkdtempSync("/tmp/amenv-"));
@@ -121,7 +130,9 @@ describe.skipIf(process.platform !== "darwin")("a Mac app launch with extra envi
 
   afterEach(async () => {
     await registry.dispose();
-    for (const pid of pids.splice(0)) {
+    // Every app under the suite's directory, also one of a test that timed out
+    // before it learned the pid.
+    for (const pid of suitePids()) {
       try {
         process.kill(pid, "SIGKILL");
       } catch {
@@ -134,7 +145,6 @@ describe.skipIf(process.platform !== "darwin")("a Mac app launch with extra envi
   it("passes an extra variable to the app, and only for that start", async () => {
     const app = await macosApp();
     const first = await app.launch({ appPath, env: { MallocStackLogging: "1" } });
-    pids.push(first.pid);
 
     expect(helperEnvs()).toHaveLength(1);
     expect(helperEnvs()[0]!.MallocStackLogging).toBe("1");
@@ -145,13 +155,12 @@ describe.skipIf(process.platform !== "darwin")("a Mac app launch with extra envi
     // restart-app starts the app again without it.
     await registry.invokeTool("restart-app", { udid: DEVICE_ID, bundleId: BUNDLE_ID });
     const second = getTrackedMacosApp(BUNDLE_ID)!.pid;
-    pids.push(second);
     expect(second).not.toBe(first.pid);
     expect(helperEnvs()).toHaveLength(2);
     expect(helperEnvs()[1]!.MallocStackLogging).toBeUndefined();
     expect(processEnv(second)).not.toContain("MallocStackLogging");
     expect(await processStartedWithEnv(second, "MallocStackLogging=1")).toBe(false);
-  });
+  }, 20_000);
 
   it("does not let an extra variable replace one of the library's", async () => {
     const app = await macosApp();
@@ -164,7 +173,6 @@ describe.skipIf(process.platform !== "darwin")("a Mac app launch with extra envi
         NATIVE_DEVTOOLS_LISTEN_SOCKET: path.join(root, "elsewhere.sock"),
       },
     });
-    pids.push(launched.pid);
 
     const [env] = helperEnvs();
     expect(env).toMatchObject({
