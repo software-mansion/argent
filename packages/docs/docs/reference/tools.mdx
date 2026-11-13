@@ -564,6 +564,14 @@ A leak check can take several seconds. When a recording with leak checks is shor
 
 On an iOS simulator and on a Mac app, xctrace first reports that the recording starts. Then xctrace reports that tracing started. The instruments start to record some time after this second report. Thus `native-profiler-start` returns 1.5 seconds after the second report. When the first report does not come in 10 seconds after the start of xctrace, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_TIMEOUT`. When the second report does not come in 10 seconds after the first report, the tool returns 1.5 seconds after these 10 seconds. When xctrace quits before the tool returns, the tool fails with `NATIVE_PROFILER_XCTRACE_READY_EXITED`. The error contains the last output of xctrace.
 
+macOS lets one recording at a time use the kernel trace that Instruments uses for CPU samples. When a second recording starts, the second recording fails. The first recording then records no more CPU samples. Thus `native-profiler-start` on an iOS simulator or a Mac app fails with `NATIVE_PROFILER_HOST_RECORDING_RUNNING` in these conditions:
+
+- Argent records or saves a recording with xctrace, on any device. After the 10-minute limit, xctrace can still save the recording of the same device. The error gives the device. When the recording is yours, stop it with `native-profiler-stop`. Otherwise wait until it ends, or ask the user.
+- Argent starts another recording at the same time, on any device. The error gives the device.
+- Another process runs `xctrace record` on the Mac, for example another tool-server. The error gives the process id.
+
+Argent checks the processes of the Mac again immediately before it starts xctrace. Two tool-servers that start xctrace at the same moment can still both record. Argent cannot see a recording in the Instruments app. A recording on Android does not use xctrace, and it does not block a recording with Instruments.
+
 On an iOS simulator and on a Mac app, these rules apply while `native-profiler-stop` runs on a device:
 
 - A second `native-profiler-stop` on the same device returns the result of the stop that runs.

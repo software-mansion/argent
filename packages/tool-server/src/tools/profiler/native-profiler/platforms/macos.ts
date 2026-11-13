@@ -18,6 +18,7 @@ import {
   resolveDefaultTemplatePath,
   settleAfterStart,
   spawnXctraceRecording,
+  startAloneOnHost,
 } from "./xctrace";
 
 /**
@@ -87,9 +88,17 @@ export async function startNativeProfilerMacos(
   macosApp: MacosAppApi,
   params: MacosStartParams
 ): Promise<{ status: "recording"; pid: number; traceFile: string; warning?: string }> {
-  const bundleId = macosApp.bundleId;
   await waitForStop(api);
   assertNoCaptureRunning(api);
+  return startAloneOnHost(api, () => startMacosRecording(api, macosApp, params));
+}
+
+async function startMacosRecording(
+  api: NativeProfilerSessionApi,
+  macosApp: MacosAppApi,
+  params: MacosStartParams
+): Promise<{ status: "recording"; pid: number; traceFile: string; warning?: string }> {
+  const bundleId = macosApp.bundleId;
   if (params.app_process !== undefined) {
     throw new InvalidToolInputError(
       `app_process is not used for a Mac app: the device id ${params.device_id} already names ` +

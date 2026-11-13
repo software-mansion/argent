@@ -431,26 +431,4 @@ describe("the 10-minute recording cap", () => {
     const err = await stopNativeProfilerIos(fresh.api).catch((e: unknown) => e);
     expect((err as Error).message).toContain("without its finalize pass");
   });
-
-  it("does not let the capped xctrace's exit end a newer recording", async () => {
-    const old = new FakeXctrace();
-    old.respondsTo.add("SIGINT");
-    old.exitAfterMs = 30_000;
-    const { api } = await capped(IOS, old);
-
-    const next = new FakeXctrace();
-    next.pid = 7474;
-    api.captureProcess = next as unknown as ChildProcess;
-    commitXctraceRecording(
-      api,
-      { child: next as unknown as ChildProcess, pid: next.pid },
-      { appProcess: "ExampleExec", traceFile: TRACE, mallocStackLogging: false, cpuFilterPid: null }
-    );
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(old.signalCode).toBe("SIGINT");
-    expect(api.profilingActive).toBe(true);
-    expect(api.captureProcess).toBe(next);
-    expect(api.recordingExitedUnexpectedly).toBe(false);
-  });
 });

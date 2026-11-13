@@ -416,8 +416,9 @@ describe("native-profiler-stop and the run issues xctrace prints", () => {
       "Failed to start the recording: _lockKPerf: could not lock kperf. Likely another session just started.";
     const COULD_NOT_RECORD =
       `xctrace could not record: ${KPERF} macOS lets one recording at a time use the kernel ` +
-      `trace, and another recording on this Mac used it (Instruments, xctrace or a ` +
-      `native-profiler-start for another device). Call native-profiler-start again.`;
+      `trace that Instruments records CPU samples with, and another recording on this Mac ` +
+      `used it (Instruments, or an xctrace of another tool or tool-server). Call ` +
+      `native-profiler-start again.`;
     const NOT_EXPORTED =
       "Not exported: xctrace could not start the recording, so the trace holds no data. " +
       "Call native-profiler-start for a new recording.";

@@ -12,6 +12,12 @@ const COLD_START_ERROR =
   "xctrace record exited before recording started (code=19, signal=null). " +
   "stderr: Cannot find process matching name: MyApp";
 
+/** A readiness wait that fails as xctrace exits with the cold-start signature. */
+async function coldStartExit(child: StartFakeChild): Promise<never> {
+  child.exitCode = 19;
+  throw new Error(COLD_START_ERROR);
+}
+
 class StartFakeChild extends EventEmitter {
   pid = 9999;
   stdout = new EventEmitter();
@@ -46,7 +52,7 @@ describe("native-profiler-start cold-start retry", () => {
     const spawnFn = vi.fn(() => new StartFakeChild());
     const waitForReady = vi
       .fn()
-      .mockRejectedValueOnce(new Error(COLD_START_ERROR))
+      .mockImplementationOnce(coldStartExit)
       .mockResolvedValueOnce({ stderrBuffer: "" });
 
     vi.doMock("child_process", () => ({
@@ -97,7 +103,7 @@ describe("native-profiler-start cold-start retry", () => {
 
   it("throws a classified cold-start error after exhausting attempts", async () => {
     const spawnFn = vi.fn(() => new StartFakeChild());
-    const waitForReady = vi.fn().mockRejectedValue(new Error(COLD_START_ERROR));
+    const waitForReady = vi.fn(coldStartExit);
 
     vi.doMock("child_process", () => ({
       spawn: spawnFn,

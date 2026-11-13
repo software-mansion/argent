@@ -90,6 +90,7 @@ vi.mock("../src/utils/ios-profiler/notify", () => ({
 }));
 
 import { startNativeProfilerIos } from "../src/tools/profiler/native-profiler/platforms/ios";
+import { __resetXctraceRecordingsForTesting } from "../src/tools/profiler/native-profiler/platforms/xctrace";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -197,6 +198,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Each test's fake xctrace keeps running.
+  __resetXctraceRecordingsForTesting();
   delete process.env.ARGENT_DEVICE_PROVIDERS;
   delete process.env.ARGENT_IOS_CAPTURE;
   fs.rmSync(temporaryDirectory, { force: true, recursive: true });

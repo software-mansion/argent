@@ -42,6 +42,7 @@ import {
   resolveDefaultTemplatePath,
   settleAfterStart,
   spawnXctraceRecording,
+  startAloneOnHost,
   unfinishedRecordingReason,
   xctraceEndWarning,
 } from "./xctrace";
@@ -420,16 +421,21 @@ export async function startNativeProfilerIos(
   // Warm the UDID → device-set cache; the synchronous simctl helpers below read it
   // via simctlArgsForUdidSync and would otherwise target the wrong set.
   await deviceSetForUdid(params.device_id);
+  await waitForStop(api);
+  assertNoCaptureRunning(api);
+  return startAloneOnHost(api, () => startIosRecording(api, params));
+}
 
+async function startIosRecording(
+  api: NativeProfilerSessionApi,
+  params: IosStartParams
+): Promise<{ status: "recording"; pid: number; traceFile: string }> {
   /**
    * `xctrace --device` resolves a CoreSimulator UDID, and the `ext:` prefix a
    * provider-supplied id carries means nothing outside Argent. simctl argv is
    * substituted by {@linkcode simctlArgsForUdidSync}, this one isn't.
    */
   const xctraceDevice = externalNativeId(params.device_id);
-
-  await waitForStop(api);
-  assertNoCaptureRunning(api);
 
   const templatePath = params.template_path ?? resolveDefaultTemplatePath();
 

@@ -87,6 +87,7 @@ import {
   type NativeProfilerSessionApi,
 } from "../src/blueprints/native-profiler-session";
 import { startNativeProfilerIos } from "../src/tools/profiler/native-profiler/platforms/ios";
+import { __resetXctraceRecordingsForTesting } from "../src/tools/profiler/native-profiler/platforms/xctrace";
 import { execFileSync, spawn } from "child_process";
 import { waitForXctraceReady } from "../src/utils/ios-profiler/startup";
 import { resolveIosCaptureStrategy } from "../src/utils/ios-profiler/capture-strategy";
@@ -110,6 +111,8 @@ const startParams = {
 
 beforeEach(() => {
   __resetReapedSessionsForTesting();
+  // Each test's fake xctrace keeps running.
+  __resetXctraceRecordingsForTesting();
 });
 
 /** How long a start waits after xctrace reports that it records, before it returns. */

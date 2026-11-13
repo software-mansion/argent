@@ -10,6 +10,7 @@ import {
   type NotifyHandle,
 } from "../../../../utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
+import { runningXctraceRecordings } from "../../../../utils/ios-profiler/xctrace-processes";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
 import {
   shutdownChild,
@@ -86,6 +87,135 @@ export function assertNoCaptureRunning(api: NativeProfilerSessionApi): void {
       }
     );
   }
+}
+
+/**
+ * The `xctrace record` processes that this tool-server started, until they
+ * exit, with the device that each one records.
+ */
+const xctraceRecordings = new Map<ChildProcess, { deviceId: string; sinceMs: number }>();
+
+/**
+ * The starts of this tool-server that passed the host check and have not
+ * returned, with their device. Before it spawns xctrace, a start can restart its
+ * Mac app or terminate its iOS app (malloc_stack_logging), so each other start,
+ * of any device, is refused at its first check.
+ */
+const xctraceStarts = new Set<{ deviceId: string }>();
+
+/**
+ * macOS gives the kernel trace, which xctrace records CPU samples with, to one
+ * recording at a time. Measured with Xcode 27.2: a second `xctrace record`
+ * (attached to another process, or `--all-processes`, with the Time Profiler or
+ * the Argent template) failed with "Failed to start the recording: _lockKPerf:
+ * could not lock kperf", and the first one, which ended with no error, had no
+ * CPU sample after the second one began.
+ */
+const ONE_KERNEL_TRACE =
+  "macOS lets one recording at a time use the kernel trace that Instruments records CPU " +
+  "samples with";
+const ONE_RECORDING =
+  `${ONE_KERNEL_TRACE}: a second recording fails to start, and the first one records no CPU ` +
+  `samples from then on.`;
+
+/** What to do about a recording of this tool-server, which can be another agent's. */
+const STOP_IF_YOURS =
+  "If that recording is yours, stop it with native-profiler-stop. Otherwise wait until it " +
+  "ends, or ask the user. Then call native-profiler-start again.";
+
+function hostRecordingRunning(message: string): FailureError {
+  return new FailureError(message, {
+    error_code: FAILURE_CODES.NATIVE_PROFILER_HOST_RECORDING_RUNNING,
+    failure_stage: "native_profiler_start_host_recording",
+    failure_area: "tool_server",
+    error_kind: "validation",
+  });
+}
+
+function deviceName(api: NativeProfilerSessionApi, deviceId: string): string {
+  return deviceId === api.deviceId ? "this device" : deviceId;
+}
+
+/**
+ * Refuses while an xctrace of this tool-server runs, on any device: one that
+ * records, or one that saves the trace after its SIGINT (a stop, or the cap).
+ */
+function assertNoOwnXctraceRecording(api: NativeProfilerSessionApi): void {
+  for (const [child, { deviceId, sinceMs }] of xctraceRecordings) {
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+    const saving = xctraceStopping(child);
+    throw hostRecordingRunning(
+      `argent cannot record ${api.deviceId} now: xctrace (pid ${child.pid}) of this ` +
+        `tool-server ${saving ? "saves a recording of" : "records"} ` +
+        `${deviceName(api, deviceId)}, started ${Math.round((Date.now() - sinceMs) / 1000)} s ` +
+        `ago. ${ONE_RECORDING} ` +
+        (saving
+          ? "If that recording is yours, native-profiler-stop returns it once xctrace has " +
+            "saved it. Otherwise wait until xctrace has saved it, then call " +
+            "native-profiler-start again."
+          : STOP_IF_YOURS)
+    );
+  }
+}
+
+/** Refuses while another start of this tool-server runs, on any device. */
+function assertNoOtherXctraceStart(api: NativeProfilerSessionApi): void {
+  for (const { deviceId } of xctraceStarts) {
+    throw hostRecordingRunning(
+      `argent cannot record ${api.deviceId} now: this tool-server starts a recording of ` +
+        `${deviceName(api, deviceId)}. ${ONE_RECORDING} Wait until that start has returned. ` +
+        STOP_IF_YOURS
+    );
+  }
+}
+
+/**
+ * Refuses while another process records with xctrace on this Mac: another
+ * tool-server, or a hand-started xctrace. A recording in Instruments.app runs
+ * no xctrace and is not seen.
+ */
+async function assertNoForeignXctraceRecording(api: NativeProfilerSessionApi): Promise<void> {
+  const running = await runningXctraceRecordings();
+  // Not the xctrace processes of this tool-server, which the own check reports.
+  // ps can list one here: the first attempt of a cold-start retry, killed after
+  // its readiness wait and not exited yet.
+  const own = new Set([...xctraceRecordings.keys()].map((child) => child.pid));
+  const other = running.find(({ pid }) => !own.has(pid));
+  if (!other) return;
+  throw hostRecordingRunning(
+    `argent cannot record ${api.deviceId} now: another xctrace recording runs on this Mac ` +
+      `(pid ${other.pid}, for ${other.elapsed}: ${other.command.slice(0, 200)}). ${ONE_RECORDING} ` +
+      `Wait until it ends, or ask the user. Then call native-profiler-start again.`
+  );
+}
+
+/**
+ * Runs `start` as the one start of an xctrace recording on this Mac. It refuses
+ * while an xctrace of this tool-server runs, or another start of it, on any
+ * device, and while another process records with xctrace. Until `start` returns,
+ * each other start of this tool-server is refused at its first check, before it
+ * touches its app. spawnXctraceRecording checks the host again before it spawns.
+ */
+export async function startAloneOnHost<T>(
+  api: NativeProfilerSessionApi,
+  start: () => Promise<T>
+): Promise<T> {
+  assertNoOwnXctraceRecording(api);
+  assertNoOtherXctraceStart(api);
+  const reservation = { deviceId: api.deviceId };
+  xctraceStarts.add(reservation);
+  try {
+    await assertNoForeignXctraceRecording(api);
+    return await start();
+  } finally {
+    xctraceStarts.delete(reservation);
+  }
+}
+
+/** Forgets the recordings and starts whose fake xctrace a test left running. */
+export function __resetXctraceRecordingsForTesting(): void {
+  xctraceRecordings.clear();
+  xctraceStarts.clear();
 }
 
 /** A new `.trace` path in the debug directory, which getDebugDir creates. */
@@ -227,8 +357,8 @@ const KERNEL_TRACE = /kperf|ktrace|kernel trace/i;
  */
 export function kernelTraceBusyNote(errors: string): string {
   return KERNEL_TRACE.test(errors)
-    ? " macOS lets one recording at a time use the kernel trace, and another recording " +
-        "on this Mac used it (Instruments, xctrace or a native-profiler-start for another device)."
+    ? ` ${ONE_KERNEL_TRACE}, and another recording on this Mac used it (Instruments, or an ` +
+        `xctrace of another tool or tool-server).`
     : "";
 }
 
@@ -272,11 +402,18 @@ export async function spawnXctraceRecording(
 ): Promise<{ child: ChildProcess; pid: number }> {
   const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
   const notify = await registerStartupNotify(notifyName);
-  // A teardown during the start's awaits, with none from here to the spawn: an
-  // xctrace spawned now would record for a session that is gone.
-  if (api.disposed) {
+  try {
+    // Again, as late as it can be: another process can have started xctrace
+    // since the first check of the start. Two that both run this check before
+    // either spawns xctrace still both record.
+    await assertNoForeignXctraceRecording(api);
+    // A teardown during the start's awaits, with none from here to the spawn: an
+    // xctrace spawned now would record for a session that is gone.
+    if (api.disposed) throw sessionTornDownError(api);
+    assertNoOwnXctraceRecording(api);
+  } catch (err) {
     notify?.cancel();
-    throw sessionTornDownError(api);
+    throw err;
   }
   // Not awaited, here and below: the helper creates the file seconds after the
   // spawn, and the start does not wait for a listing of the folder.
@@ -288,6 +425,9 @@ export async function spawnXctraceRecording(
   const xctraceProcess = spawn("xctrace", buildArgs(notify ? notifyName : undefined), {
     stdio: ["ignore", "pipe", "pipe"],
   });
+  xctraceRecordings.set(xctraceProcess, { deviceId: api.deviceId, sinceMs: Date.now() });
+  // "close" also follows a spawn that failed, which emits no "exit".
+  xctraceProcess.once("close", () => xctraceRecordings.delete(xctraceProcess));
   keepOutputTail(xctraceProcess);
   api.capturePid = xctraceProcess.pid ?? null;
   api.captureProcess = xctraceProcess;
@@ -603,7 +743,8 @@ export function commitXctraceRecording(
   }, RECORDING_CAP_MS);
 
   xctraceProcess.on("exit", (code, signal) => {
-    // A newer recording's xctrace can be the capture by then.
+    // Not after a teardown, which cleared the capture. No newer recording can
+    // be the capture: startAloneOnHost refuses one while this xctrace runs.
     if (api.captureProcess !== xctraceProcess) return;
     handleXctraceExit(api, code, signal, xctraceRunErrors(xctraceProcess));
     // After the cap, which keeps the process until it ends.
