@@ -60,7 +60,8 @@ vi.mock("../src/utils/ios-devices", async (importOriginal) => ({
   }),
 }));
 
-vi.mock("../src/blueprints/ax-service", () => ({
+vi.mock("../src/blueprints/ax-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/blueprints/ax-service")>()),
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
   ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),

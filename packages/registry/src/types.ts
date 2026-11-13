@@ -89,6 +89,17 @@ export interface ServiceNode<T = unknown> {
   dependents: Set<string>;
 }
 
+export interface ServiceSnapshot {
+  state: ServiceState;
+  dependents: string[];
+  /**
+   * Epoch ms a tool call last used this service, or now while one is using it,
+   * whatever the state; otherwise absent unless the service is live and a call
+   * used it since it last started.
+   */
+  lastUsedAt?: number;
+}
+
 /** URN, optionally with options forwarded to the blueprint factory. */
 export type ServiceRef = string | { urn: string; options?: Record<string, unknown> };
 

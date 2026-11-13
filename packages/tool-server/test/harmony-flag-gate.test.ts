@@ -49,7 +49,7 @@ vi.mock("../src/utils/harmony-uitest", async (importOriginal) => ({
 
 import { isFlagEnabled } from "@argent/configuration-core";
 import { listHarmonyInstances, listHarmonyHdcTargets } from "../src/utils/harmony-devices";
-import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { createListDevicesTool } from "../src/tools/devices/list-devices";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { gestureTapTool } from "../src/tools/gesture-tap";
 import { harmonyDisplay } from "../src/utils/harmony-uitest";
@@ -57,6 +57,8 @@ import { createHttpApp } from "../src/http";
 import { createRegistry } from "../src/utils/setup-registry";
 import { FLAG_META_KEY, renderFlagGated } from "../src/utils/flag-gated-text";
 import { __primeDepCacheForTests } from "../src/utils/check-deps";
+
+const listDevicesTool = createListDevicesTool(new Registry());
 
 const flags = new Set<string>();
 vi.mocked(isFlagEnabled).mockImplementation((name: string) => flags.has(name));
@@ -167,5 +169,16 @@ describe("flag-gated tool text", () => {
   it("leaves a span of another flag to that flag", () => {
     const text = "a<flag:harmonyos>b</flag:harmonyos><flag:other>c</flag:other>";
     expect(renderFlagGated(text, (flag) => flag === "other")).toBe("ac");
+  });
+});
+
+describe("createRegistry", () => {
+  it("builds list-devices on the registry its tools run on, which holds the use stamps", async () => {
+    const registry = createRegistry();
+    const snapshot = vi.spyOn(registry, "getSnapshot");
+
+    await registry.invokeTool("list-devices", {});
+
+    expect(snapshot).toHaveBeenCalled();
   });
 });

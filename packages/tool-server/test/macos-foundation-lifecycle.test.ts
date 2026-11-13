@@ -87,7 +87,7 @@ import { setFlag } from "@argent/configuration-core";
 import { FAILURE_CODES, getFailureSignal, Registry, type ToolDefinition } from "@argent/registry";
 import { macosAppBlueprint, macosAppRef } from "../src/blueprints/macos-app";
 import type { MacosAppApi } from "../src/blueprints/macos-app";
-import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { createListDevicesTool } from "../src/tools/devices/list-devices";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { createLaunchAppTool } from "../src/tools/launch-app";
 import { createRestartAppTool } from "../src/tools/restart-app";
@@ -244,7 +244,7 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
     registry = new Registry();
     registry.registerBlueprint(macosAppBlueprint);
     tools = {
-      "list-devices": listDevicesTool,
+      "list-devices": createListDevicesTool(registry),
       "boot-device": createBootDeviceTool(registry),
       "launch-app": createLaunchAppTool(registry),
       "restart-app": createRestartAppTool(registry),
@@ -362,6 +362,8 @@ describe.skipIf(process.platform !== "darwin")("Mac app lifecycle (fake library)
         appPath,
         pid: booted.pid,
         state: "Running",
+        inUse: true,
+        idleSeconds: expect.any(Number),
       },
     ]);
     expect(getTrackedMacosApp(BUNDLE_ID)).toMatchObject({

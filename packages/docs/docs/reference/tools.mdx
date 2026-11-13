@@ -88,6 +88,15 @@ On an Android emulator:
 
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
+`list-devices` adds two fields to a device when a tool call used a service of the device and that service is still open:
+
+- `inUse` is `true`.
+- `idleSeconds` is the time in seconds since a tool last used the device. It is `0` while a tool call is using the device.
+
+A device that is not running does not get the fields.
+
+All agents that use the same Argent installation share one tool-server. Thus, a different agent can be the agent that uses the device. The fields are for information only, and Argent does not refuse a device because of them. The fields do not show devices that other Argent installations or other programs use. Tools that only run a platform command, such as `reinstall-app`, do not count as use. Native profiling, `native-network-logs` on Android and screen recording do not count as use. On Android, `keyboard` does not count as use, and `describe` counts only when the Argent helper app reads the screen. On Android TV, `tv-remote` does not count as use. On a local device, `screen-recording-start` counts as use. `boot-device` does not count as use while the device boots. A debugger session does not count as use when the agent connects it with a `logicalDeviceId`. This occurs when two or more devices share one Metro server. A HarmonyOS device never gets the fields. On a Vega device, only debugger tools and network tools count as use.
+
 With the `macos-apps` flag on, `list-devices` shows each native Mac app that Argent started and that still runs, as a `macos` entry with kind `app`. See [Mac apps](#mac-apps).
 
 ## Inspecting the screen
