@@ -29,6 +29,7 @@ import {
   describeSelector,
   foldStepFromArgs,
   isLinkedRecorderCall,
+  precedesLeadingLaunch,
   type FlowSavedTo,
   type FlowSelector,
   type FlowStep,
@@ -61,7 +62,8 @@ import {
 import { stepAnchor, summarizeStep } from "./flow-step-definitions";
 import { invokeSubTool, describeNestedParamError } from "../../utils/sub-invoke";
 import { isNativeDevtoolsBlockResult } from "../../blueprints/native-devtools";
-import { resolveDevice } from "../../utils/device-info";
+import { parseChromiumCdpPort, resolveDevice } from "../../utils/device-info";
+import { electronLaunchSpec } from "../devices/boot-electron";
 import { assertSupported, isFlagOffered } from "../../utils/capability";
 import { renderFlagGated } from "../../utils/flag-gated-text";
 import {
@@ -888,7 +890,9 @@ const DIRECTIVE_COMMAND_HINTS: Record<string, DirectiveHint> = {
     rewritten: true,
     rewriteCondition:
       "when it carries only the bundle id, or `launchArgs` on iOS (any other extra arg, e.g. an " +
-      "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it)",
+      "Android `activity`, is kept as a raw `tool: restart-app` step, since no `launch:` form carries it); " +
+      "on Chromium, as the app's path and boot args, only as the leading step of a recording " +
+      "without an executionPrerequisite",
   },
   run: {
     tool: "e2e-execute",
@@ -1727,8 +1731,14 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
       // an Android `activity`) keep the raw tool step. An empty `launchArgs` is
       // no args. On a Mac app the step records the arguments the new process
       // got, as a `macos: { app, args }` entry: without `launchArgs` the restart
-      // reuses those of the app's last start. `launch-app` is NOT rewritten — it
-      // foregrounds without terminating.
+      // reuses those of the app's last start. On Chromium the bundleId is a tag
+      // and the other args are ignored, so the step records the relaunched app's
+      // path and boot args instead, and a pinned replay attaches rather than
+      // relaunching (see runChromiumLaunch). Only a leading restart of a
+      // standalone recording maps there: anywhere else a Chromium launch attaches
+      // or boots another instance, so such a restart stays the raw step, which
+      // relaunches the run's instance in place.
+      // `launch-app` is NOT rewritten — it foregrounds without terminating.
       const strippedArgs = stripDeviceKeys(args);
       const { bundleId: _bundleId, launchArgs, ...extraLaunchArgs } = strippedArgs;
       const noLaunchArgs =
@@ -1740,14 +1750,23 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         platformOf(args.udid) === "ios"
           ? (launchArgs as string[])
           : undefined;
+      const chromiumPort =
+        command === "restart-app" && platformOf(args.udid) === "chromium"
+          ? parseChromiumCdpPort(args.udid as string)
+          : null;
+      const chromiumSpec = chromiumPort === null ? undefined : electronLaunchSpec(chromiumPort);
       const isMacos = platformOf(args.udid) === "macos";
       const macosArgs = isMacos ? (toolResult as { args?: string[] } | null)?.args : undefined;
       const isLaunch =
         command === "restart-app" &&
         params.delayMs === undefined &&
         typeof strippedArgs.bundleId === "string" &&
-        Object.keys(extraLaunchArgs).length === 0 &&
-        (noLaunchArgs || iosArgs !== undefined || isMacos);
+        (chromiumPort !== null
+          ? chromiumSpec !== undefined &&
+            !session.flow.executionPrerequisite &&
+            session.flow.steps.every(precedesLeadingLaunch)
+          : Object.keys(extraLaunchArgs).length === 0 &&
+            (noLaunchArgs || iosArgs !== undefined || isMacos));
 
       // A recorded `fold` becomes the `fold:` directive, the same posture change
       // the tool made; args the directive does not take keep the raw tool step.
@@ -1788,11 +1807,17 @@ Returns { message, stepCount, recorded, savedTo }; \`recorded\`, not the status,
         const bundleId = strippedArgs.bundleId as string;
         step = {
           kind: "launch",
-          app: iosArgs
-            ? { native: bundleId, ios: { app: bundleId, args: iosArgs } }
-            : macosArgs?.length
-              ? { macos: { app: bundleId, args: macosArgs } }
-              : bundleId,
+          app: chromiumSpec
+            ? {
+                chromium: chromiumSpec.extraArgs.length
+                  ? { path: chromiumSpec.appPath, args: chromiumSpec.extraArgs }
+                  : chromiumSpec.appPath,
+              }
+            : iosArgs
+              ? { native: bundleId, ios: { app: bundleId, args: iosArgs } }
+              : macosArgs?.length
+                ? { macos: { app: bundleId, args: macosArgs } }
+                : bundleId,
         };
       } else if (foldStep) {
         step = foldStep;

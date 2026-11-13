@@ -335,8 +335,15 @@ describe("killChromiumByPort — raw-pid fallback", () => {
 const GONE_AFTER_MS = 40;
 
 describe("killChromiumByPortAndWait", () => {
-  it("resolves only once the child has actually exited", async () => {
+  it("resolves only once the child and the rest of its group have exited", async () => {
     const { child, port, close } = await bootFakeChild();
+    let groupAlive = true;
+    vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      if (pid === -FAKE_PID && !groupAlive) {
+        throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      }
+      return true;
+    });
     try {
       let settled = false;
       const waited = killChromiumByPortAndWait(port, FAKE_PID).then(() => {
@@ -352,6 +359,11 @@ describe("killChromiumByPortAndWait", () => {
 
       child.exitCode = 0;
       child.emit("exit", 0, null);
+      // The leader is gone, but a process of its group still holds the lock.
+      await new Promise((r) => setTimeout(r, 120));
+      expect(settled).toBe(false);
+
+      groupAlive = false;
       await waited;
       expect(settled).toBe(true);
     } finally {

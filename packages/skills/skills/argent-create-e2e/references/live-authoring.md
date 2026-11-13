@@ -43,7 +43,7 @@ Obey these lifecycle rules:
 2. Record a plain `restart-app` as the first action that is neither an echo nor a script. Pass only the device id and app id. The recorder converts it to `launch:`.
 3. Record `await-ui-element` for the real first screen immediately after restart.
 
-Extra restart arguments prevent `launch:` conversion. An Android `activity`, for example, leaves a raw tool step and therefore a fragment. On iOS, `launchArgs` is the exception: it records as `launch: { native: <app id>, ios: { app, args } }`.
+Extra restart arguments prevent `launch:` conversion. An Android `activity`, for example, leaves a raw tool step and therefore a fragment. On iOS, `launchArgs` is the exception: it records as `launch: { native: <app id>, ios: { app, args } }`. Chromium ignores both arguments, so they never block the conversion there. Only a leading Chromium `restart-app` without `delayMs`, in a test without an `executionPrerequisite`, becomes `launch:`; a later one stays a raw tool step that relaunches the instance of the run.
 
 Do not use splash content as a selector or landmark. Wait for the first real screen.
 
@@ -53,17 +53,17 @@ On iOS, only `restart-app` guarantees an instrumented launch. `launch-app` can f
 
 **The app sets the window size; no boot argument overrides it.** Electron ignores `--window-size`: the size comes from the app's own `BrowserWindow` options, and Argent never resizes the window. Boot a fresh target with `boot-device` and `electronAppPath`, then take one `screenshot` and record its pixel dimensions: that capture size is the snapshot device class ([E2E YAML: Snapshots](e2e-yaml.md#snapshots-and-cli-runs)) and must match when CI replays. If the app sizes its window from host or session state, say so in the report.
 
-After boot, start the recorder before the first in-app action. Record the first-screen wait. `restart-app` has no Chromium support, so a recorded Chromium test is a fragment until polish writes its launch in (and removes any `executionPrerequisite` the recording declared). During polish, add the matching launch:
+After boot, start the recorder and record `restart-app` on the booted id as the first step, then the first-screen wait. `restart-app` relaunches the app on the same id, and the recorder captures it as a launch with the app's absolute path and the boot's arguments:
 
 ```yaml
 steps:
   - launch:
       chromium:
-        path: ../../app
+        path: /Users/me/app
         args: ["--enable-feature-flag"]
 ```
 
-A relative path resolves from the folder of the test being run. Copy the live boot arguments verbatim, and omit `args` when the boot passed none. This packaging exception represents the boot already exercised live. It does not permit a rehearsed UI path.
+During polish, make `path` relative (here `../../app`) so the test replays on other machines. A relative path resolves from the folder of the test being run.
 
 ### Fragments
 
@@ -169,7 +169,6 @@ Only these unrecorded insertions are allowed, at states observed live:
 
 - A planned `snapshot:` for pixel-level evidence.
 - `await: { idle: true }` after a navigation identity check.
-- The Chromium launch that packages the live boot.
 
 Keep raw forms only when conversion changes behavior. Examples include point-anchored or panning pinch, an edge swipe or one with exotic velocity control, or rotation with a tested start angle, radius, pivot, duration, or speed. Keep screenshots for human evidence. Use `snapshot:` for automated visual comparison. Read [E2E YAML](e2e-yaml.md) for syntax.
 
@@ -236,7 +235,7 @@ Resolve every hit and confirm:
 - Every fixed wait has an echo and a following hard check. Prefer a condition or `idle`.
 - No `open-url` replaces tested navigation.
 - Every snapshot is intentional, deterministic, non-mutating, and ready for reviewed baseline creation.
-- The standalone launch and real first-screen gate are present. Only Chromium permits an inserted launch.
+- The standalone launch and real first-screen gate are present.
 - Every screen change has a destination-only identity check and an `idle` readiness check. The two are repaired differently: record a missing identity check live on the restored screen, but add a missing readiness gate in YAML, because `await: { idle: true }` has no recorder form.
 - Every `hidden` check follows a `visible` check on the same stable selector and the removing action. A proven containing screen is not a substitute, because it is no evidence the selector itself ever resolved.
 

@@ -67,6 +67,10 @@ describe("guidance platform-correctness", () => {
     expect(result.guidance).not.toMatch(/\(launch-app\)/);
     expect(result.guidance).toContain("--remote-debugging-port");
     expect(result.guidance).toContain("launch-app cannot start a Chromium app");
+    expect(result.guidance).toContain(
+      "If boot-device started it in this tool-server session, restart-app relaunches it on the same device id"
+    );
+    expect(result.guidance).toContain("an Electron app with boot-device and electronAppPath");
   });
 
   it("Metro cdp_unreachable keeps the launch-app guidance (it IS actionable there)", () => {
@@ -95,7 +99,13 @@ describe("guidance platform-correctness", () => {
       expect(r.guidance).toMatch(/timeout/);
     }
     expect(metro.guidance).toContain("restart-app");
-    expect(chromium.guidance).not.toContain("restart-app");
-    expect(chromium.guidance).toContain("electronAppPath");
+    expect(chromium.guidance).toContain("restart-app if boot-device started it");
+    // The frozen copy holds the app's single-instance lock, which a new copy quits on.
+    expect(chromium.guidance).toContain(
+      "otherwise quit it and relaunch it: an Electron app with boot-device and electronAppPath, " +
+        "any other with --remote-debugging-port"
+    );
+    // boot-device ignores `force` on the Electron path.
+    expect(chromium.guidance).not.toContain("force");
   });
 });

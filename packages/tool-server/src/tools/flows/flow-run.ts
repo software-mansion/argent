@@ -111,7 +111,13 @@ import {
   CHROMIUM_CDP_NAMESPACE,
   type ChromiumCdpApi,
 } from "../../blueprints/chromium-cdp";
-import { bootElectronApp, killChromiumByPortAndWait } from "../devices/boot-electron";
+import {
+  bootElectronApp,
+  electronLaunchSpec,
+  forgetElectronLaunchSpec,
+  killChromiumByPortAndWait,
+  withPortLock,
+} from "../devices/boot-electron";
 import { untrackChromiumPort } from "../../utils/chromium-discovery";
 import {
   isIosPhysicalDevice,
@@ -660,7 +666,8 @@ function networkCaptureWarning(
  * so the run still returns a structured report; a run cancelled mid-launch
  * returns the shared aborted outcome (reported as a skip).
  *
- * Chromium can't relaunch in place — see {@link runChromiumLaunch}.
+ * A Chromium launch boots instead of relaunching in place — see
+ * {@link runChromiumLaunch}.
  */
 async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcome> {
   const env = deviceEnv(state);
@@ -752,8 +759,8 @@ async function runLaunch(state: ExecState, app: Launch): Promise<DirectiveOutcom
 
 /**
  * Execute a `launch` step on a Chromium device. A chromium "device" IS the
- * booted process (its id is the CDP port), so there is no in-place relaunch:
- * only the run's FIRST launch can be satisfied without booting — settling the
+ * booted process (its id is the CDP port), and a launch names an app path, not
+ * an instance to relaunch: only the run's FIRST launch can be satisfied without booting — settling the
  * boot {@link resolveRunDevice} hoisted, or attaching to an instance the runner
  * does not own. Later launches boot their own ({@link bootChromiumForLaunch}).
  */
@@ -1542,7 +1549,7 @@ const zodSchema = z
       .enum(SELECTABLE_PLATFORMS)
       .optional()
       .describe(
-        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host: the bare-string `launch:` the recorder writes holds a bundle id, which fails the run with `Electron boot: path does not exist`, so first edit it to `{ chromium: <app path> }`.<flag:macos-apps> `macos` with no `device` runs a standalone e2e test on the Mac app its `launch` names, which need not be running (a single-key `launch: { macos: … }` map does this on its own). Auto-detection never picks a Mac app otherwise.</flag:macos-apps>"
+        "Restrict auto-detection to this platform when several devices are booted. `ios` selects local simulators only; `ios-remote` selects a remote one. `chromium` with no `device` also makes the runner boot an Electron instance for a standalone e2e test from its `launch` step's chromium value and tear it down after the run, with no fallback to auto-detection (a single-key `launch: { chromium: … }` map, or a `requires:` block that allows only chromium, does this on its own; a fragment, or a launch map without a `chromium` key, is still auto-detected). That value must be an Electron app path on the tool-server host, as in the `launch: { chromium: <app path> }` the recorder writes for a recorded Chromium restart-app; a bare-string `launch:` holding a bundle id fails the run with `Electron boot: path does not exist`.<flag:macos-apps> `macos` with no `device` runs a standalone e2e test on the Mac app its `launch` names, which need not be running (a single-key `launch: { macos: … }` map does this on its own). Auto-detection never picks a Mac app otherwise.</flag:macos-apps>"
       )
       .meta({ [FLAG_ENUM_META_KEY]: { macos: MACOS_APPS_FLAG } }),
     updateBaselines: z
@@ -2270,25 +2277,31 @@ async function bootChromiumForFlow(
 /**
  * Tear down a Chromium instance the runner booted. Best-effort — never fail a
  * run here: dispose the CDP session (if a tool opened one), kill the process,
- * and forget its port so `list-devices` stops probing it. The kill is awaited
+ * and forget its port so `list-devices` stops probing it and restart-app does
+ * not relaunch it, after any restart-app of the instance in flight. The kill is awaited
  * to the process's actual exit (bounded — see {@link killChromiumByPortAndWait})
  * because every next boot of the same app would otherwise race the dying
  * instance's lock.
  */
 async function teardownBootedChromium(registry: Registry, booted: BootedChromium): Promise<void> {
-  const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
-  try {
-    const entry = registry.getSnapshot().services.get(urn);
-    if (entry && isLiveServiceState(entry.state)) await registry.disposeService(urn);
-  } catch {
-    /* the kill below frees the real resource regardless */
-  }
-  try {
-    await killChromiumByPortAndWait(booted.port, booted.pid);
-    untrackChromiumPort(booted.port);
-  } catch {
-    /* one unreachable instance must not strand the others */
-  }
+  await withPortLock(booted.port, async () => {
+    const urn = `${CHROMIUM_CDP_NAMESPACE}:${booted.deviceId}`;
+    try {
+      const entry = registry.getSnapshot().services.get(urn);
+      if (entry && isLiveServiceState(entry.state)) await registry.disposeService(urn);
+    } catch {
+      /* the kill below frees the real resource regardless */
+    }
+    try {
+      // A restart-app may have replaced the booted process; the spec tracks its group.
+      const spec = electronLaunchSpec(booted.port);
+      await killChromiumByPortAndWait(booted.port, spec ? spec.pgid : booted.pid);
+      forgetElectronLaunchSpec(booted.port);
+      untrackChromiumPort(booted.port);
+    } catch {
+      /* one unreachable instance must not strand the others */
+    }
+  });
 }
 
 /**

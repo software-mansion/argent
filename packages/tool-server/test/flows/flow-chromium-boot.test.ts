@@ -26,6 +26,11 @@ const defaultBoot = async (opts: { appPath: string; extraArgs?: string[] }) => {
 const bootElectronApp = vi.fn(defaultBoot);
 const killChromiumByPort = vi.fn();
 const killChromiumByPortAndWait = vi.fn(async () => {});
+const forgetElectronLaunchSpec = vi.fn();
+const electronLaunchSpec = vi.fn(
+  (_port: number): { pid?: number; pgid?: number } | undefined => undefined
+);
+const withPortLock = vi.fn((_port: number, task: () => Promise<unknown>) => task());
 vi.mock("../../src/tools/devices/boot-electron", () => ({
   bootElectronApp: (...args: unknown[]) =>
     (bootElectronApp as (...a: unknown[]) => unknown)(...args),
@@ -33,6 +38,10 @@ vi.mock("../../src/tools/devices/boot-electron", () => ({
     (killChromiumByPort as (...a: unknown[]) => unknown)(...args),
   killChromiumByPortAndWait: (...args: unknown[]) =>
     (killChromiumByPortAndWait as (...a: unknown[]) => unknown)(...args),
+  forgetElectronLaunchSpec: (...args: unknown[]) =>
+    (forgetElectronLaunchSpec as (...a: unknown[]) => unknown)(...args),
+  withPortLock: (port: number, task: () => Promise<unknown>) => withPortLock(port, task),
+  electronLaunchSpec: (port: number) => electronLaunchSpec(port),
 }));
 vi.mock("../../src/utils/chromium-discovery", () => ({ untrackChromiumPort: vi.fn() }));
 
@@ -181,6 +190,9 @@ beforeEach(() => {
   bootElectronApp.mockReset().mockImplementation(defaultBoot);
   killChromiumByPort.mockReset();
   killChromiumByPortAndWait.mockReset();
+  forgetElectronLaunchSpec.mockReset();
+  withPortLock.mockClear();
+  electronLaunchSpec.mockReset().mockReturnValue(undefined);
   ensureCdpReachable.mockReset().mockImplementation(async () => ({ Browser: "TestApp/1.0" }));
 });
 
@@ -229,6 +241,30 @@ describe("flow-execute chromium boot", () => {
     // single-instance lock.
     expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, 4242);
     expect(killChromiumByPort).not.toHaveBeenCalled();
+    // Torn down for good: restart-app must not relaunch the runner's instance.
+    expect(forgetElectronLaunchSpec).toHaveBeenCalledWith(12345);
+    // Behind any restart-app of the instance still in flight.
+    expect(withPortLock).toHaveBeenCalledWith(12345, expect.any(Function));
+    expect(killChromiumByPortAndWait.mock.invocationCallOrder[0]).toBeGreaterThan(
+      withPortLock.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it.each([
+    ["a restart-app replaced the booted process", { pid: 777, pgid: 777 }, 777],
+    // The group can outlive its launcher, still holding the port.
+    ["the replacement's launcher already exited", { pid: undefined, pgid: 777 }, 777],
+  ])("tears down the current process group when %s", async (_name, spec, pid) => {
+    electronLaunchSpec.mockReturnValue(spec);
+    const flowFile = await writeFlow("steps:\n  - launch: { chromium: ./app }\n  - echo: done\n");
+
+    await runFlow(makeRegistry(), {
+      name: "chromium-e2e",
+      project_root: PROJECT_ROOT,
+      e2e_test_file: flowFile,
+    });
+
+    expect(killChromiumByPortAndWait).toHaveBeenCalledWith(12345, pid);
   });
 
   it("counts the hoisted boot in the launch that settles it, as a later launch counts its own", async () => {
