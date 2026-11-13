@@ -12,7 +12,6 @@ import {
 import { assertExternalCapability, externalClaimForAnyId } from "../utils/external-devices";
 import { XcodeFirstLaunchPendingError } from "../utils/dependency-errors";
 import type { CdpNetworkConditions } from "../utils/network-conditions";
-import { metroPort } from "../utils/debugger/metro-port";
 import {
   pickIosHost,
   buildDyldInsertLibraries,
@@ -157,6 +156,8 @@ const NATIVE_DEVTOOLS_AGE_SLOP_MS = 3000;
  */
 export const NATIVE_DEVTOOLS_CONNECT_BUDGET_MS = 15_000;
 
+const LENT_RELEASE_TIMEOUT_MS = 1_000;
+
 /**
  * The agent-facing remedy for each measured state. `connected` is excluded at
  * the type level so an unhandled future state is a compile error rather than a
@@ -256,6 +257,12 @@ export function buildInitFailedResult(
       `Try shutting down and re-booting the simulator, or restart CoreSimulatorService.`,
     attempts: failure.attempts,
   };
+}
+
+/** Conditions for one app, and the Metro port its throttle leaves alone. */
+export interface NetworkThrottle {
+  conditions: CdpNetworkConditions;
+  metroPort: number;
 }
 
 export type NativeDevtoolsPrecheckBlock =
@@ -507,7 +514,7 @@ export interface NativeDevtoolsApi {
    * {@link activateNetworkInspection}: re-sent after every activation and
    * reconnect, since both reset the app's conditions.
    */
-  setNetworkConditions(bundleId: string, conditions: CdpNetworkConditions | null): Promise<void>;
+  setNetworkConditions(bundleId: string, throttle: NetworkThrottle | null): Promise<void>;
   getNetworkLog(bundleId: string): NetworkEvent[];
   clearNetworkLog(bundleId: string): void;
   getAppState(bundleId: string): Promise<NativeAppState>;
@@ -687,7 +694,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     let envRetired = false;
 
     const activatedBundleIds = new Set<string>();
-    const networkConditions = new Map<string, CdpNetworkConditions>();
+    const networkConditions = new Map<string, NetworkThrottle>();
+    /** Attach mode: whether the provider's capture was on before Argent first throttled the app. */
+    const providerCapture = new Map<string, boolean>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
@@ -759,20 +768,21 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       writeMessage(socket, "Control", { command: "activateNetworkInspection" });
     };
 
-    const metroBypass = () => ({ bypassPorts: [metroPort({ device_id: udid })] });
-
-    const writeConditions = (socket: net.Socket, conditions: CdpNetworkConditions): void => {
-      writeMessage(socket, "CDP", { method: "NativeDevtoolsIos.configure", params: metroBypass() });
+    const writeThrottle = (socket: net.Socket, throttle: NetworkThrottle): void => {
+      writeMessage(socket, "CDP", {
+        method: "NativeDevtoolsIos.configure",
+        params: { bypassPorts: [throttle.metroPort] },
+      });
       writeMessage(socket, "CDP", {
         method: "Network.emulateNetworkConditions",
-        params: conditions,
+        params: throttle.conditions,
       });
     };
 
     const sendNetworkSetup = (bundleId: string, socket: net.Socket): void => {
       if (activatedBundleIds.has(bundleId)) writeActivation(socket);
-      const conditions = networkConditions.get(bundleId);
-      if (conditions) writeConditions(socket, conditions);
+      const throttle = networkConditions.get(bundleId);
+      if (throttle) writeThrottle(socket, throttle);
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
@@ -839,6 +849,45 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       method: string,
       params: Record<string, unknown> = {}
     ) => sendRpc(targetBundleId, "CDP", method, params, 5_000);
+
+    const readCaptureEnabled = async (bundleId: string): Promise<boolean> => {
+      const state = await sendCdpRpc(bundleId, "NativeDevtoolsIos.getConditions").catch(() => null);
+      return (state as { enabled?: unknown } | null)?.enabled !== false;
+    };
+
+    const noteProviderCapture = async (bundleId: string): Promise<void> => {
+      if (!lentSocketPath || providerCapture.has(bundleId)) return;
+      providerCapture.set(bundleId, await readCaptureEnabled(bundleId));
+    };
+
+    /** Clearing the throttle must not turn off capture that someone else relies on. */
+    const keepsCapture = (bundleId: string): boolean =>
+      activatedBundleIds.has(bundleId) || providerCapture.get(bundleId) === true;
+
+    const applyThrottle = async (bundleId: string, throttle: NetworkThrottle): Promise<void> => {
+      await noteProviderCapture(bundleId);
+      await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", {
+        bypassPorts: [throttle.metroPort],
+      });
+      await sendCdpRpc(bundleId, "Network.emulateNetworkConditions", { ...throttle.conditions });
+    };
+
+    const clearThrottle = async (bundleId: string): Promise<void> => {
+      await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", { bypassPorts: [] });
+      await sendCdpRpc(bundleId, keepsCapture(bundleId) ? "Network.enable" : "Network.disable");
+      providerCapture.delete(bundleId);
+    };
+
+    /** A provider keeps the app connected after Argent leaves, so the app would stay throttled. */
+    const releaseLentThrottles = async (): Promise<void> => {
+      const cleared = [...networkConditions.keys()]
+        .filter((bundleId) => connections.has(bundleId))
+        .map((bundleId) => clearThrottle(bundleId).catch(() => {}));
+      await Promise.race([
+        Promise.all(cleared),
+        new Promise((resolve) => setTimeout(resolve, LENT_RELEASE_TIMEOUT_MS).unref()),
+      ]);
+    };
 
     const settleRpc = (payload: { id: number; result?: unknown; error?: { message: string } }) => {
       const pending = pendingRpc.get(payload.id);
@@ -1134,17 +1183,21 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (conn) sendNetworkSetup(bundleId, conn.socket);
       },
 
-      async setNetworkConditions(bundleId, conditions) {
-        if (conditions) networkConditions.set(bundleId, conditions);
+      async setNetworkConditions(bundleId, throttle) {
+        const previous = networkConditions.get(bundleId);
+        if (throttle) networkConditions.set(bundleId, throttle);
         else networkConditions.delete(bundleId);
         if (!connections.has(bundleId)) return;
-        const bypassPorts = conditions ? metroBypass() : { bypassPorts: [] };
-        await sendCdpRpc(bundleId, "NativeDevtoolsIos.configure", bypassPorts);
-        if (conditions) {
-          await sendCdpRpc(bundleId, "Network.emulateNetworkConditions", { ...conditions });
-        } else {
-          const monitoring = activatedBundleIds.has(bundleId);
-          await sendCdpRpc(bundleId, monitoring ? "Network.enable" : "Network.disable");
+        if (throttle) {
+          await applyThrottle(bundleId, throttle);
+          return;
+        }
+        if (!previous) return;
+        try {
+          await clearThrottle(bundleId);
+        } catch (err) {
+          if (!networkConditions.has(bundleId)) networkConditions.set(bundleId, previous);
+          throw err;
         }
       },
 
@@ -1216,12 +1269,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       api,
       dispose: async () => {
         disposed = true;
+        if (lentSocketPath) await releaseLentThrottles();
         for (const { socket } of connections.values()) {
           socket.destroy();
         }
         connections.clear();
         activatedBundleIds.clear();
         networkConditions.clear();
+        providerCapture.clear();
         /**
          * Attach mode owns only its end of the connection: hang up and leave
          * the provider's socket file and server exactly as they were.

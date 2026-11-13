@@ -44,6 +44,10 @@ interface TabsManagerDeps {
   onActivated: () => Promise<void>;
 }
 
+const isHttpUrl = (url: string | undefined): url is string => /^https?:/i.test(url ?? "");
+
+const isBlank = (url: string) => url === "" || url === "about:blank";
+
 export function createTabsManager(deps: TabsManagerDeps): TabsManager {
   const { cdp, port } = deps;
 
@@ -156,14 +160,21 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
     }
   }
 
+  async function replaceLocation(url: string): Promise<void> {
+    await cdp.send("Runtime.evaluate", { expression: `location.replace(${JSON.stringify(url)})` });
+  }
+
   async function open(opts?: {
     url?: string;
     label?: string;
     activate?: boolean;
   }): Promise<TabInfo[]> {
+    const requestedUrl = opts?.url;
     const activating = opts?.activate !== false;
-    // An active tab loads its url only after `onActivated` has prepared the new session.
-    const url = activating ? "about:blank" : (opts?.url ?? "about:blank");
+    // An active tab loads an http(s) url only after `onActivated` has applied the
+    // network conditions, replacing its blank page so history keeps one entry.
+    const deferLoad = activating && isHttpUrl(requestedUrl);
+    const url = deferLoad ? "about:blank" : (requestedUrl ?? "about:blank");
     const created = await withBrowserClient(async (browser) => {
       let out: { targetId?: string };
       try {
@@ -202,13 +213,13 @@ export function createTabsManager(deps: TabsManagerDeps): TabsManager {
       labelToTab.set(opts.label, tabId);
       tabToLabel.set(tabId, opts.label);
     }
-    if (activating) {
-      await activate(created, await listTargets());
-      if (opts?.url) await cdp.send("Page.navigate", { url: opts.url });
-    }
+    if (activating) await activate(created, await listTargets());
+    if (deferLoad) await replaceLocation(requestedUrl);
     const tabs = await list();
     return tabs.map((tab) =>
-      tab.targetId === created && !tab.url && opts?.url ? { ...tab, url: opts.url } : tab
+      tab.targetId === created && requestedUrl && isBlank(tab.url)
+        ? { ...tab, url: requestedUrl }
+        : tab
     );
   }
 

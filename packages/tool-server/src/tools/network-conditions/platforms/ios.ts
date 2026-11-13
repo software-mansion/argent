@@ -1,6 +1,7 @@
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { toCdpNetworkConditions } from "../../../utils/network-conditions";
+import { metroPort } from "../../../utils/debugger/metro-port";
 import {
   isInjectableBundleId,
   precheckNativeDevtools,
@@ -65,7 +66,11 @@ export const iosImpl: PlatformImpl<
       if (!api.isConnected(bundleId)) throw notConnected(bundleId);
     }
 
-    await api.setNetworkConditions(bundleId, conditions && toCdpNetworkConditions(conditions));
+    const throttle = conditions && {
+      conditions: toCdpNetworkConditions(conditions),
+      metroPort: metroPort({ device_id: params.udid, port: params.port }),
+    };
+    await api.setNetworkConditions(bundleId, throttle);
     return { scope: "app", conditions };
   },
 };

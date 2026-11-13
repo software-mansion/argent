@@ -124,16 +124,35 @@ describe("TabsManager", () => {
 
     await mgr.open({ url: "https://x.test" });
 
-    expect(order).toEqual(["activated", "Page.navigate"]);
-    expect(cdp.send).toHaveBeenCalledWith("Page.navigate", { url: "https://x.test" });
+    expect(order).toEqual(["activated", "Runtime.evaluate"]);
+    expect(cdp.send).toHaveBeenCalledWith("Runtime.evaluate", {
+      expression: 'location.replace("https://x.test")',
+    });
   });
 
-  it("open() reports the requested url for a tab that has not listed it yet", async () => {
-    listMock.mockResolvedValue([tgt("A"), { ...tgt("TID-NEW"), title: "about:blank", url: "" }]);
+  it.each(["", "about:blank"])(
+    "open() reports the requested url for a tab still listed at %j",
+    async (listedUrl) => {
+      listMock.mockResolvedValue([
+        tgt("A"),
+        { ...tgt("TID-NEW"), title: "about:blank", url: listedUrl },
+      ]);
 
-    const tabs = await mgr.open({ url: "https://x.test" });
+      const tabs = await mgr.open({ url: "https://x.test" });
 
-    expect(tabs.find((t) => t.targetId === "TID-NEW")!.url).toBe("https://x.test");
+      expect(tabs.find((t) => t.targetId === "TID-NEW")!.url).toBe("https://x.test");
+    }
+  );
+
+  it("open() hands a url that loads no network page straight to the new tab", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+
+    await mgr.open({ url: "file:///tmp/index.html" });
+
+    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", {
+      url: "file:///tmp/index.html",
+    });
+    expect(cdp.send).not.toHaveBeenCalled();
   });
 
   it("open() hands the url to a tab it does not activate", async () => {

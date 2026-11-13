@@ -215,11 +215,25 @@ describe("network-conditions on an iOS simulator", () => {
     ).resolves.toEqual({ scope: "app", conditions: { latencyMs: 500 } });
 
     expect(api.setNetworkConditions).toHaveBeenCalledWith(bundleId, {
-      offline: false,
-      latency: 500,
-      downloadThroughput: -1,
-      uploadThroughput: -1,
+      conditions: { offline: false, latency: 500, downloadThroughput: -1, uploadThroughput: -1 },
+      metroPort: 8081,
     });
+  });
+
+  it("leaves the Metro port named by `port` unthrottled", async () => {
+    const { api, services } = fakeNativeDevtools();
+
+    await networkConditionsTool.execute(services, {
+      udid: iosUdid,
+      bundleId,
+      port: 8095,
+      offline: true,
+    });
+
+    expect(api.setNetworkConditions).toHaveBeenCalledWith(
+      bundleId,
+      expect.objectContaining({ metroPort: 8095 })
+    );
   });
 
   it("fails when the app does not confirm the conditions", async () => {

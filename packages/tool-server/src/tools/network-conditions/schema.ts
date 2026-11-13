@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { NetworkConditions } from "../../utils/network-conditions";
+import { metroPortField } from "../../utils/debugger/metro-port";
 
 export const networkConditionsZodSchema = z
   .object({
@@ -14,6 +15,9 @@ export const networkConditionsZodSchema = z
       .min(1)
       .optional()
       .describe("iOS only, and required there: the bundle id of the app to throttle."),
+    port: metroPortField.describe(
+      "iOS only: the Metro port the throttle leaves alone. Omit it to use this device's port (8081 by default)."
+    ),
     latencyMs: z
       .number()
       .int()
@@ -35,7 +39,12 @@ export const networkConditionsZodSchema = z
       .min(1)
       .optional()
       .describe("Upload limit in kilobits per second. iOS and Chromium only."),
-    offline: z.boolean().optional().describe("Fail every request as if the network were down."),
+    offline: z
+      .boolean()
+      .optional()
+      .describe(
+        "Make requests fail as if the network were down. On Android, ports forwarded with adb reverse stay reachable."
+      ),
   })
   .strict();
 

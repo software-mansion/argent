@@ -25,8 +25,11 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { nativeDevtoolsBlueprint, type NativeDevtoolsApi } from "../src/blueprints/native-devtools";
-import type { CdpNetworkConditions } from "../src/utils/network-conditions";
+import {
+  nativeDevtoolsBlueprint,
+  type NativeDevtoolsApi,
+  type NetworkThrottle,
+} from "../src/blueprints/native-devtools";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 const UDID = processScopedUdid("-5555-6666-7777-888888888888");
@@ -34,16 +37,17 @@ const SOCKET = `/tmp/argent-nd-${UDID.slice(0, 8)}.sock`;
 const BUNDLE = "com.example.app";
 const device: DeviceInfo = { id: UDID, platform: "ios", kind: "simulator" };
 
-const SLOW: CdpNetworkConditions = {
+const SLOW_CONDITIONS = {
   offline: false,
   latency: 400,
   downloadThroughput: 50_000,
   uploadThroughput: -1,
 };
+const SLOW: NetworkThrottle = { conditions: SLOW_CONDITIONS, metroPort: 8081 };
 
 const ACTIVATE = ["Control", "activateNetworkInspection"];
 const BYPASS_METRO = ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [8081] }];
-const EMULATE_SLOW = ["CDP", "Network.emulateNetworkConditions", SLOW];
+const EMULATE_SLOW = ["CDP", "Network.emulateNetworkConditions", SLOW_CONDITIONS];
 
 type Message = { type: string; payload: Record<string, any> };
 
@@ -162,6 +166,18 @@ describe("native devtools network conditions", () => {
     );
   });
 
+  it("keeps the given Metro port out of the throttle across a relaunch", async () => {
+    const { api, agent } = await setup();
+    const bypass8095 = ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [8095] }];
+
+    await api.setNetworkConditions(BUNDLE, { ...SLOW, metroPort: 8095 });
+    const relaunched = await connectAgent();
+    agents.push(relaunched);
+
+    expect(agent.received).toEqual([bypass8095, EMULATE_SLOW]);
+    await vi.waitFor(() => expect(relaunched.received).toEqual([bypass8095, EMULATE_SLOW]));
+  });
+
   it("re-sends the conditions when the app reconnects after a relaunch", async () => {
     const { api } = await setup();
     api.activateNetworkInspection(BUNDLE);
@@ -194,6 +210,28 @@ describe("native devtools network conditions", () => {
     await api.setNetworkConditions(BUNDLE, SLOW);
     agent.received.length = 0;
 
+    await api.setNetworkConditions(BUNDLE, null);
+
+    expect(agent.received).toEqual([
+      ["CDP", "NativeDevtoolsIos.configure", { bypassPorts: [] }],
+      ["CDP", "Network.disable", {}],
+    ]);
+  });
+
+  it("sends the clear again when a retried reset follows a failed one", async () => {
+    let refuseClear = true;
+    const { api, agent } = await setup((msg) => {
+      const clearsBypass = msg.payload.params?.bypassPorts?.length === 0;
+      if (clearsBypass && refuseClear) {
+        refuseClear = false;
+        return { error: { message: "configure failed" } };
+      }
+      return { result: {} };
+    });
+    await api.setNetworkConditions(BUNDLE, SLOW);
+
+    await expect(api.setNetworkConditions(BUNDLE, null)).rejects.toThrow("configure failed");
+    agent.received.length = 0;
     await api.setNetworkConditions(BUNDLE, null);
 
     expect(agent.received).toEqual([
