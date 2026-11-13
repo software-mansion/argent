@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 
 import { stripRemotePrefix } from "./device-info";
 import { simulatorRuntimeKind } from "./ios-devices";
+import { sleep } from "./timing";
 
 export const SIM_REMOTE_TIMEOUT_MS = 30_000;
 
@@ -263,26 +264,70 @@ export async function setSimulatorEnv(udid: string, key: string, value: string):
   await run(["setenv", stripRemotePrefix(udid), key, value]);
 }
 
+// Pauses before the second and third `reverse start` attempt.
+const REVERSE_START_RETRY_DELAYS_MS = [500, 2_000];
+// No retry starts later than this after the first attempt. Retries share the
+// first attempt's timeout, so retrying never ends a start later than one
+// attempt could.
+const REVERSE_START_RETRY_WINDOW_MS = 5_000;
+
 /**
- * Start a TCP tunnel on `<port>` between the host and the remote simulator.
- *
- * Idempotent: re-running with the same (udid, port) tolerates "already
- * started" errors so blueprints don't have to track tunnel ownership across
- * service restarts.
+ * Whether a failed `reverse start` is worth repeating: only when the
+ * connection was lost before the request was sent, so the orchestrator holds
+ * nothing for it and the next call redials. Not retried, among others:
+ * - `sending stopped by peer`: the daemon reuses the stopped stream.
+ * - `tunnel-mux connection closed`: the orchestrator may still complete that
+ *   registration, and the dead session's cleanup then deletes every rule on
+ *   the port, including the retry's.
+ * - a forwarder 504: a retry pays two more 5 s pushes (the pre-clean DELETE
+ *   removes the rule the 504 saved), so a forwarder that stays slow makes
+ *   each start 10 s or more slower.
  */
-export async function proxyStart(udid: string, port: number): Promise<void> {
-  try {
-    await run(["proxy", "start", stripRemotePrefix(udid), String(port)]);
-  } catch (err) {
-    const message = (err as Error).message ?? "";
-    if (/already/i.test(message)) return;
-    throw err;
+function isTransientReverseStartError(message: string): boolean {
+  // Lost sending the request, or the relay header while dialling.
+  return /error: (?:tunnel-mux control send: )?connection lost/.test(message);
+}
+
+/**
+ * Start a reverse TCP tunnel on `<port>`, forwarding the remote simulator's
+ * `localhost:<port>` to this host.
+ *
+ * Idempotent: the daemon's "tunnel already active" for the same (udid, port)
+ * counts as started, so blueprints don't have to track tunnel ownership across
+ * service restarts. A request that never reached the orchestrator is retried
+ * a bounded number of times.
+ */
+export async function reverseStart(udid: string, port: number): Promise<void> {
+  const args = ["reverse", "start", stripRemotePrefix(udid), String(port)];
+  const startedAt = Date.now();
+  let prompt: unknown;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const timeoutMs = startedAt + SIM_REMOTE_TIMEOUT_MS - Date.now();
+      await run(args, attempt === 0 ? undefined : { timeoutMs });
+      return;
+    } catch (err) {
+      const message = (err as Error).message ?? "";
+      if (/tunnel already active/.test(message)) return;
+      // A retry cut off by the timeout says nothing new; report what prompted it.
+      if (attempt > 0 && simRemoteExecError(err).killed) throw prompt;
+      const delay = REVERSE_START_RETRY_DELAYS_MS[attempt];
+      if (
+        delay === undefined ||
+        !isTransientReverseStartError(message) ||
+        Date.now() + delay - startedAt > REVERSE_START_RETRY_WINDOW_MS
+      ) {
+        throw err;
+      }
+      prompt = err;
+      await sleep(delay);
+    }
   }
 }
 
-export async function proxyStop(udid: string, port: number): Promise<void> {
+export async function reverseStop(udid: string, port: number): Promise<void> {
   try {
-    await run(["proxy", "stop", stripRemotePrefix(udid), String(port)]);
+    await run(["reverse", "stop", stripRemotePrefix(udid), String(port)]);
   } catch {
     // best-effort cleanup
   }

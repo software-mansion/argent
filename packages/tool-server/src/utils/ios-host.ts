@@ -23,8 +23,8 @@ import {
 import { isTvOsSimulator } from "./ios-devices";
 import { ensureAutomationEnabled, isEntitlementBypassActive } from "./ax-prefs";
 import {
-  proxyStart as simRemoteProxyStart,
-  proxyStop as simRemoteProxyStop,
+  reverseStart as simRemoteReverseStart,
+  reverseStop as simRemoteReverseStop,
   simctlSpawn as simRemoteSpawn,
   injectDylib as simRemoteInjectDylib,
   setSimulatorEnv as simRemoteSetSimulatorEnv,
@@ -620,8 +620,8 @@ export const remoteIosHost: IosHost = {
     return { entitlementBypassActive: true };
   },
   spawnAxDaemon: spawnAxDaemonRemote,
-  startProxy: simRemoteProxyStart,
-  stopProxy: simRemoteProxyStop,
+  startProxy: simRemoteReverseStart,
+  stopProxy: simRemoteReverseStop,
 };
 
 export function pickIosHost(device: DeviceInfo): IosHost {
