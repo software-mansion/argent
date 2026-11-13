@@ -498,6 +498,7 @@ Fails if no active profiling session exists, another stop is running, the CDP co
               profileStartWallMs: api.profileStartWallMs,
               projectRoot: api.projectRoot,
               deviceId: api.deviceId,
+              runtimeDeviceId: api.runtimeDeviceId,
               port: api.port,
               appName: api.appName,
               deviceName: api.deviceName,

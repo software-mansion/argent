@@ -36,6 +36,7 @@ vi.mock("../../src/tools/profiler/native-profiler/platforms/xctrace", async (imp
 }));
 
 import { getDebugDir } from "../../src/utils/react-profiler/debug/dump";
+import { RECORDING_CAP_MS } from "../../src/utils/profiler-shared/types";
 import { exportIosTraceData } from "../../src/utils/ios-profiler/export";
 import { profilerLoadTool } from "../../src/tools/profiler/query/profiler-load";
 import { profilerCombinedReportTool } from "../../src/tools/profiler/combined/profiler-combined-report";
@@ -134,7 +135,10 @@ describe("profiler-load restores an xctrace session's own fields", () => {
     const live = await stoppedLiveSession();
     const saved = JSON.parse(await readFile(`${traceFile}.metadata.json`, "utf8"));
     expect(saved).toEqual({
+      deviceId: DEVICE,
       wallClockStartMs: wallStart,
+      // xctrace ended on its own: the end of the trace it wrote, not the later stop.
+      stoppedAtMs: wallStart - 1_500 + 30_000,
       cpuFilterPid: null,
       mallocStackLogging: true,
       appSuspensions: live.appSuspensions,
@@ -207,6 +211,18 @@ describe("profiler-load restores an xctrace session's own fields", () => {
     expect(saved.mallocStackLogging).toBe(false);
     expect(saved.recordedMs).toBe(api.recordedMs);
     expect(saved.recordedMs).toBeGreaterThanOrEqual(20_000);
+    expect(saved.stoppedAtMs).toBe(api.wallClockStartMs! + api.recordedMs!);
+  });
+
+  it("a recording that ran into the cap ends at the cap, not at the later stop", async () => {
+    const api = await buildMacSession();
+    api.traceFile = traceFile;
+    api.recordingTimedOut = true;
+    api.wallClockStartMs = wallStart - RECORDING_CAP_MS - 600_000;
+    await stopNativeProfilerIos(api);
+
+    const saved = JSON.parse(await readFile(`${traceFile}.metadata.json`, "utf8"));
+    expect(saved.stoppedAtMs).toBe(api.wallClockStartMs + RECORDING_CAP_MS);
   });
 
   it("profiler-combined-report works on a reloaded session", async () => {

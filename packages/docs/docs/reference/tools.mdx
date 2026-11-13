@@ -590,6 +590,15 @@ On an iOS simulator and on a Mac app, these rules apply while `native-profiler-s
 
 On an iOS simulator and on a Mac app, `native-profiler-stop` also writes the file `native-profiler-<session_id>.trace.metadata.json`. This file holds the start time of the recording and other data that the exports do not hold. An example is the times when macOS suspended a Mac app. `profiler-load` with `mode: "load_native"` reads this file. Thus a loaded session gives the same report as the live session, and `profiler-combined-report` works after a load. When the recording is older than 30 minutes, the report also starts with a note that the trace is old. A session that an older version of Argent stored does not have this file. For such a session, `profiler-combined-report` cannot align the two profiles. Also, `native-profiler-analyze` does not write over the report file of the live session.
 
+The native session and the React session of one run have different ids. The id of a native session is the time when its recording started. The id of a React session is the time when `react-profiler-stop` ran. `profiler-load` pairs two sessions when they recorded on the same device and their recording times overlap:
+
+- `mode: "list"` names, for each session, the session of the other kind of the same run.
+- `mode: "load_react"` with the id of a native session loads the React session of the same run. `mode: "load_native"` with the id of a React session loads the native session of the same run. The result says which session Argent loaded.
+- An id can name sessions on two or more devices. The session of the kind that you load can have the id and be on another device. Then Argent loads the session of the same run on the device of `device_id`. If that device has no session with the id, Argent loads the session with the id. In other cases, Argent pairs the sessions with the id on the device of `device_id`. If that device has none, Argent pairs the sessions with the id on the other devices.
+- When more than one session of the other kind recorded at the same time, the load fails. The error names these sessions, and their devices when they are on two or more devices. Load one of them by its id.
+
+A native session that an older version of Argent stored does not hold its recording times and its device. For such a session, the list names no session of the same run.
+
 Argent deletes a stored session when no tool used it for 3 days. A recording, a stop, an analysis and a `profiler-load` of the session use it. Argent does this check when a native recording starts and when `react-profiler-stop` stores a session. Argent deletes all files of such a session in `argent-profiler-cwd`. It also deletes the file `react-profiler-report.md` that older versions of Argent wrote, when no tool wrote it for 3 days. Argent deletes no other files. macOS also deletes the files in the temporary directory that no process read for about 3 days, but it keeps the empty `.trace` folders.
 
 In a report from Instruments, `native-profiler-analyze` gives the CPU time that Argent and Instruments used inside the app during the recording, and the share of all CPU time:
@@ -624,6 +633,8 @@ When two or more devices use one Metro, `react-profiler-start` takes the `logica
 3. The device whose log contains the marker is the device of the React profile.
 
 When Argent finds no device, interaction tools on the device keep the automatic screenshot and element tree. `react-profiler-start` then returns a note. Argent cannot read the log of a physical iPhone or of a device from a provider.
+
+`react-profiler-stop` stores the device that Argent found with the React session. Thus `profiler-load` pairs the React session with the native session of the same run. When Argent found no device, `profiler-load` names no native session of the same run for the React session.
 
 A Mac app does not need a `logicalDeviceId`. `react-profiler-start` takes the Mac app id also when two or more devices use one Metro, because Argent finds the app from its bundle id. Thus Argent does not read a log for a Mac app, and interaction tools on the app return no automatic screenshot or element tree. See [Profiling a Mac app](#profiling-a-mac-app).
 

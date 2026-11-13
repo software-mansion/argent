@@ -10,6 +10,13 @@ import { FAILURE_CODES, FailureError } from "@argent/registry";
  */
 const xctraceSessionMetadataSchema = z.object({
   wallClockStartMs: z.number().nullable(),
+  /**
+   * When the recording ended: the stop, the 10-minute cap, or the end of the trace
+   * when xctrace ended on its own. Absent in older files.
+   */
+  stoppedAtMs: z.number().nullable().optional(),
+  /** The device that recorded, to pair the session with a React one. Absent in older files. */
+  deviceId: z.string().nullable().optional(),
   cpuFilterPid: z.number().nullable(),
   mallocStackLogging: z.boolean().nullable(),
   appSuspensions: z.array(z.object({ startNs: z.number(), endNs: z.number() })).nullable(),

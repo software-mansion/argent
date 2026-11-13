@@ -5,7 +5,7 @@ import type {
   NativeProfilerPlatform,
   NativeProfilerSessionApi,
 } from "../../../../blueprints/native-profiler-session";
-import type { MemoryLeak } from "../../../../utils/profiler-shared/types";
+import { RECORDING_CAP_MS, type MemoryLeak } from "../../../../utils/profiler-shared/types";
 import { externalNativeId } from "../../../../utils/external-devices";
 import { describeReapedSession, takeReapedSession } from "../../../../utils/reaped-sessions";
 import { deviceSetForUdid, simctlArgsForUdidSync } from "../../../../utils/ios-device-sets";
@@ -682,7 +682,14 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
     api.exportSkipReason = diagnostics.skipped ?? null;
     api.recordedMs = null;
     api.appSuspensions = suspensionSpans(suspensions, diagnostics);
-    await saveSessionMetadata(api, traceFile);
+    // When the recording ended: the cap's own time, or the end of the trace that
+    // xctrace wrote before it exited.
+    const traceEndMs =
+      diagnostics.traceStartMs !== undefined && diagnostics.traceDurationMs !== undefined
+        ? diagnostics.traceStartMs + diagnostics.traceDurationMs
+        : null;
+    const capEndMs = api.wallClockStartMs !== null ? api.wallClockStartMs + RECORDING_CAP_MS : null;
+    await saveSessionMetadata(api, traceFile, wasTimeout ? capEndMs : traceEndMs);
 
     let warning = wasTimeout
       ? "Recording timed out at 10 min cap; exported the partial trace. " +
@@ -725,7 +732,9 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   }
 
   const child = api.captureProcess;
-  const recordedMs = Date.now() - (api.wallClockStartMs ?? Date.now());
+  // The recording ends now, at the SIGINT below.
+  const stoppedAtMs = Date.now();
+  const recordedMs = stoppedAtMs - (api.wallClockStartMs ?? stoppedAtMs);
   const idleMs = stallIdleMs(recordedMs);
   // Before xctrace saves the trace and the exports run: an app that quits during
   // them did not quit during the recording.
@@ -796,7 +805,7 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
   api.exportSkipReason = diagnostics.skipped ?? null;
   api.recordedMs = api.platform === "macos" && api.wallClockStartMs !== null ? recordedMs : null;
   api.appSuspensions = suspensionSpans(suspensions, diagnostics);
-  await saveSessionMetadata(api, api.traceFile);
+  await saveSessionMetadata(api, api.traceFile, stoppedAtMs);
   if (ended) {
     // xctrace keeps recording when the app crashes, and the trace then lacks
     // most of what came before.
@@ -818,11 +827,14 @@ async function stopXctraceRecording(api: NativeProfilerSessionApi): Promise<IosS
  */
 async function saveSessionMetadata(
   api: NativeProfilerSessionApi,
-  traceFile: string
+  traceFile: string,
+  stoppedAtMs: number | null
 ): Promise<void> {
   try {
     await writeXctraceSessionMetadata(traceFile, {
+      deviceId: api.deviceId,
       wallClockStartMs: api.wallClockStartMs,
+      stoppedAtMs,
       cpuFilterPid: api.cpuFilterPid,
       mallocStackLogging: api.mallocStackLogging,
       appSuspensions: api.appSuspensions,

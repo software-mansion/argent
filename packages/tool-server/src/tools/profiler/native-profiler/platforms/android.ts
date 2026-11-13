@@ -196,6 +196,11 @@ export async function stopNativeProfilerAndroid(
     api.recordingTimeout = null;
   }
 
+  // When the recording ended: at the cap, or now, at this stop.
+  const stoppedAtMs =
+    api.recordingTimedOut && api.wallClockStartMs !== null
+      ? api.wallClockStartMs + RECORDING_CAP_MS
+      : Date.now();
   let stopResult: Awaited<ReturnType<typeof stopPerfetto>>;
   try {
     stopResult = await stopPerfetto({
@@ -226,6 +231,8 @@ export async function stopNativeProfilerAndroid(
       platform: "android",
       appProcess: api.appProcess,
       wallClockStartMs: api.wallClockStartMs,
+      stoppedAtMs,
+      deviceId: api.deviceId,
     });
   }
 

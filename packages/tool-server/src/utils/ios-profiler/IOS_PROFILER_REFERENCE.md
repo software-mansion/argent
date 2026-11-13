@@ -108,7 +108,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    - `<base>_raw_cpu.xml` — `time-profile` table
    - `<base>_raw_hangs.xml` — `potential-hangs` table
    - `<base>_raw_leaks.xml` — `Leaks` track detail
-4. `<base>.trace.metadata.json` lands next to them: the capture's own fields, which a load from disk restores.
+4. `<base>.trace.metadata.json` lands next to them: the capture's own fields, which a load from disk restores, and the device and the end time of the recording, which pair the session with the React session of its run.
 5. Returns `{ traceFile, exportedFiles, exportDiagnostics }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data.
 
 ### `native-profiler-analyze`
@@ -202,9 +202,9 @@ Top-N is configurable (default 15).
 
 Lists prior `.trace` directories under the debug dir (`<os.tmpdir()>/argent-profiler-cwd/`, e.g. `/var/folders/.../T/argent-profiler-cwd/` on macOS) and re-parses them on demand:
 
-- `mode=list` — enumerate sessions on disk.
-- `mode=load_native session_id=<ts> device_id=<UDID>` — re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again. It restores the capture's own fields (start time, CPU filter PID, capture mode, Mac app suspensions) from the `<trace>.metadata.json` that native-profiler-stop writes, so analyze and the combined report match the live session. A load more than 30 minutes after the recording also gets the stale-trace note at the top of the report.
-- (Also supports `mode=load_react` for Hermes profiler sessions; same idea, different files.)
+- `mode=list` — enumerate sessions on disk. Each row also names the session of the other kind of the same run: same device, recording times that overlap.
+- `mode=load_native session_id=<ts> device_id=<UDID>` — `session_id` can also be the id of the run's React session. Re-runs the parsing pipeline on the stored XMLs and re-hydrates the session so query tools work again. It restores the capture's own fields (start time, CPU filter PID, capture mode, Mac app suspensions) from the `<trace>.metadata.json` that native-profiler-stop writes, so analyze and the combined report match the live session. A load more than 30 minutes after the recording also gets the stale-trace note at the top of the report.
+- (Also supports `mode=load_react` for Hermes profiler sessions; same idea, different files. It also takes the id of the run's native session.)
 
 This is what makes before/after comparisons possible without keeping the original capture session alive.
 

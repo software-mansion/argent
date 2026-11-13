@@ -552,6 +552,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.hotCommitIndices = null;
       api.totalReactCommits = null;
       api.profileStartWallMs = startedAtEpochMs;
+      api.runtimeDeviceId = runtimeDevice ?? null;
       api.sessionId = sessionId;
       api.ownerToolServerPid = process.pid;
       trackProfilingRun(api.deviceId, api);
