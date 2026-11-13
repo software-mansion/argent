@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
 import type { Registry } from "@argent/registry";
 
 // Which apps have live native network capture, per device id asked about.
@@ -18,6 +22,47 @@ vi.mock("../src/blueprints/ios-network-records", async (importActual) => ({
   ...(await importActual<typeof import("../src/blueprints/ios-network-records")>()),
   liveIosNetworkCaptures: (deviceId: string) => liveIos(deviceId),
   liveIosNetworkCaptureDevices: (bundleId: string) => liveIosDevices(bundleId),
+}));
+
+// The real services the "after a stop" cases run reach no device: every adb
+// call fails as on a device that went offline, and every simctl call succeeds.
+vi.mock("../src/utils/adb", async (importActual) => {
+  const actual = await importActual<typeof import("../src/utils/adb")>();
+  const offline = async () => {
+    throw new Error("adb: device offline");
+  };
+  return {
+    ...actual,
+    adbShell: vi.fn(offline),
+    adbShellInput: vi.fn(offline),
+    runAdb: vi.fn(offline),
+    adbReverse: vi.fn(offline),
+    removeAdbReverse: vi.fn(offline),
+  };
+});
+type ExecCb = (err: Error | null, out: { stdout: string; stderr: string }) => void;
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFile: (_cmd: string, args: readonly string[], opts: unknown, cb?: ExecCb) => {
+      const callback = (typeof opts === "function" ? opts : cb!) as ExecCb;
+      const stdout = args.join(" ").includes("simctl list") ? JSON.stringify({ devices: {} }) : "";
+      callback(null, { stdout, stderr: "" });
+    },
+  };
+});
+vi.mock("@argent/native-devtools-ios", () => ({
+  bootstrapDylibPath: () => "/fake/dylibs/libArgentInjectionBootstrap.dylib",
+  bootstrapDylibPathTcp: () => "/fake/dylibs/tcp/libArgentInjectionBootstrap.dylib",
+  bootstrapDylibPathTvos: () => "/fake/dylibs/tvos/libArgentInjectionBootstrap.dylib",
+  tcpInjectionDylibs: () => [],
+  axServiceBinaryPath: () => "/fake/ax-service",
+  axServiceBinaryPathTcp: () => "/fake/ax-service-tcp",
+}));
+vi.mock("../src/utils/ios-devices", async (importActual) => ({
+  ...(await importActual<typeof import("../src/utils/ios-devices")>()),
+  isTvOsSimulator: vi.fn(async () => false),
 }));
 
 vi.mock("../src/utils/check-deps", () => ({
@@ -50,6 +95,13 @@ import {
 import type { NativeProfilerSessionApi } from "../src/blueprints/native-profiler-session";
 import type { RuntimeAppMetadata } from "../src/blueprints/js-runtime-debugger";
 import { rememberLogicalKeyedDevice, resetDeviceAliases } from "../src/utils/debugger/device-alias";
+import {
+  androidNetworkInspectorBlueprint,
+  androidNetworkInspectorRef,
+} from "../src/blueprints/android-network-inspector";
+import { nativeDevtoolsBlueprint, type NativeDevtoolsApi } from "../src/blueprints/native-devtools";
+import { resolveDevice } from "../src/utils/device-info";
+import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 const SERIAL = "emulator-5554";
 const IOS_UDID = "11111111-2222-3333-4444-555555555555";
@@ -98,7 +150,7 @@ describe("nativeNetworkCaptureWarning", () => {
     expect(warning).toContain("can slow the app");
     expect(warning).toContain("timings");
     expect(warning).toContain(
-      "stop this profile, call native-network-logs with stop: true for that app, then restart-app and profile again"
+      "stop this profile, call network-capture-stop for that app, then restart-app and profile again"
     );
   });
 
@@ -109,7 +161,7 @@ describe("nativeNetworkCaptureWarning", () => {
 
     expect(warning).toContain(`on for ${PKG}, com.example.other on this device`);
     expect(warning).toContain("to the processes of these apps");
-    expect(warning).toContain("native-network-logs with stop: true for each of these apps");
+    expect(warning).toContain("call network-capture-stop for each of these apps");
   });
 
   it("names an iOS app with the remedy that ends capture there", () => {
@@ -123,9 +175,9 @@ describe("nativeNetworkCaptureWarning", () => {
     );
     expect(warning).toContain("can slow the app");
     expect(warning).toContain(
-      "stop this profile, call stop-all-simulator-servers for this device, then restart-app and profile again"
+      "stop this profile, call network-capture-stop for that app, then restart-app and profile again"
     );
-    expect(warning).not.toContain("stop: true");
+    expect(warning).not.toContain("stop-all-simulator-servers");
   });
 
   it("is undefined, not a throw, when the lookup fails", () => {
@@ -152,7 +204,7 @@ describe("nativeNetworkCaptureWarning", () => {
       expect(warning).toContain("logicalDeviceId");
       expect(warning).toContain("can slow the app");
       expect(warning).toContain(
-        `native-network-logs with stop: true for ${PKG} on each of those devices, then restart-app`
+        `call network-capture-stop for ${PKG} on each of those devices, then restart-app`
       );
     });
 
@@ -183,7 +235,7 @@ describe("nativeNetworkCaptureWarning", () => {
       );
       expect(warning).toContain("captures the requests of that app's processes there");
       expect(warning).toContain(
-        "call stop-all-simulator-servers for that device, then restart-app and profile again"
+        `call network-capture-stop for ${PKG} on that device, then restart-app and profile again`
       );
     });
 
@@ -213,10 +265,126 @@ describe("nativeNetworkCaptureWarning", () => {
   });
 });
 
+/** Dials the native-devtools service as the app's agent does, and acknowledges each request. */
+function connectApp(socketPath: string): Promise<{ close(): void }> {
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+    const sock = net.createConnection(socketPath, () => {
+      sock.write(JSON.stringify({ type: "Control", payload: { bundleId: PKG } }) + "\n");
+      resolve({ close: () => sock.destroy() });
+    });
+    sock.once("error", reject);
+    sock.on("data", (chunk) => {
+      buffer += chunk.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop()!;
+      for (const line of lines) {
+        const frame = JSON.parse(line) as { type?: string; payload?: { id?: number } };
+        if (frame.type === "CDP" && frame.payload?.id !== undefined) {
+          sock.write(
+            JSON.stringify({ type: "CDP", payload: { id: frame.payload.id, result: {} } }) + "\n"
+          );
+        }
+      }
+    });
+  });
+}
+
 describe("native-profiler-start", () => {
   function session(platform: "ios" | "android"): NativeProfilerSessionApi {
     return { platform } as NativeProfilerSessionApi;
   }
+
+  describe("after network-capture-stop, with the real capture services", () => {
+    it("warns on Android while capture is started, and not once it is stopped", async () => {
+      const actual = await vi.importActual<
+        typeof import("../src/blueprints/android-network-inspector")
+      >("../src/blueprints/android-network-inspector");
+      live.mockImplementation(actual.liveAndroidNetworkCaptures);
+      liveDevices.mockImplementation(actual.liveAndroidNetworkCaptureDevices);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      // The agent's binaries are gitignored build output, so stand in for them.
+      const binRoot = fs.mkdtempSync(path.join(os.tmpdir(), "argent-profiler-network-"));
+      for (const file of [
+        "network-inspector.jar",
+        "x86_64/libjvmti_network_inspector.so",
+        "arm64-v8a/libjvmti_network_inspector.so",
+      ]) {
+        const at = path.join(binRoot, "network-inspector", file);
+        fs.mkdirSync(path.dirname(at), { recursive: true });
+        fs.writeFileSync(at, file);
+      }
+      vi.stubEnv("ARGENT_NATIVE_DEVTOOLS_ANDROID_BIN_DIR", binRoot);
+      const ref = androidNetworkInspectorRef(resolveDevice(SERIAL), PKG, 8081);
+      const inspector = await androidNetworkInspectorBlueprint.factory(
+        {},
+        ref.urn.slice(ref.urn.indexOf(":") + 1),
+        ref.options
+      );
+      try {
+        // adb did not answer, so capture is started and the next launch attaches.
+        await expect(inspector.api.startCapture(8081)).resolves.toMatchObject({ armed: false });
+        expect(inspector.api.isStarted()).toBe(true);
+        const during = await nativeProfilerStartTool.execute(
+          { session: session("android") } as never,
+          { device_id: SERIAL }
+        );
+        expect(during.warning).toContain(`Native network capture is on for ${PKG}`);
+
+        await inspector.api.stopCapture();
+        const after = await nativeProfilerStartTool.execute(
+          { session: session("android") } as never,
+          { device_id: SERIAL }
+        );
+
+        expect(after).toEqual({ status: "recording", pid: 2, traceFile: "/android.pftrace" });
+        connectedWithLogicalId();
+        expect(nativeNetworkCaptureWarning(LOGICAL, ANDROID_APP)).toBeUndefined();
+      } finally {
+        await inspector.dispose();
+        stderr.mockRestore();
+        vi.unstubAllEnvs();
+        fs.rmSync(binRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("warns on iOS while capture is started, and not once it is stopped", async () => {
+      const actual = await vi.importActual<typeof import("../src/blueprints/ios-network-records")>(
+        "../src/blueprints/ios-network-records"
+      );
+      liveIos.mockImplementation(actual.liveIosNetworkCaptures);
+      liveIosDevices.mockImplementation(actual.liveIosNetworkCaptureDevices);
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const udid = processScopedUdid("-2222-3333-4444-555555555555");
+      const device = resolveDevice(udid);
+      const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+      const api = instance.api as NativeDevtoolsApi;
+      try {
+        const app = await connectApp(api.socketPath);
+        await vi.waitFor(() => expect(api.isConnected(PKG)).toBe(true));
+        await expect(api.startNetworkCapture(PKG, 8081)).resolves.toBe(true);
+        const during = await nativeProfilerStartTool.execute({ session: session("ios") } as never, {
+          device_id: udid,
+        });
+        expect(during.warning).toContain(`Native network capture is on for ${PKG}`);
+
+        await expect(api.stopNetworkCapture(PKG)).resolves.toEqual({ confirmed: true });
+        const after = await nativeProfilerStartTool.execute({ session: session("ios") } as never, {
+          device_id: udid,
+        });
+
+        expect(after).toEqual({ status: "recording", pid: 1, traceFile: "/ios.trace" });
+        connectedWithLogicalId();
+        expect(
+          nativeNetworkCaptureWarning(LOGICAL, { appId: PKG, platform: "ios" })
+        ).toBeUndefined();
+        app.close();
+      } finally {
+        await instance.dispose();
+        stderr.mockRestore();
+      }
+    });
+  });
 
   it("warns on Android when native network capture is live", async () => {
     live.mockReturnValue([PKG]);
@@ -247,7 +415,7 @@ describe("native-profiler-start", () => {
 
     expect(result).toMatchObject({ status: "recording", pid: 1 });
     expect(result.warning).toContain(`Native network capture is on for ${PKG}`);
-    expect(result.warning).toContain("stop-all-simulator-servers");
+    expect(result.warning).toContain("call network-capture-stop for that app");
   });
 
   it("adds no warning on iOS when no capture is on", async () => {
@@ -347,7 +515,7 @@ describe("react-profiler-start", () => {
         `Native network capture is on for ${PKG} on ${SERIAL}, which may be the device this profile runs on`
       );
       expect(result.warning).toContain(
-        `native-network-logs with stop: true for ${PKG} on that device, then restart-app`
+        `call network-capture-stop for ${PKG} on that device, then restart-app`
       );
     });
 

@@ -147,9 +147,9 @@ export interface MacosAppApi {
   isConnected(): boolean;
   handshake(): MacosLibraryHandshake | null;
   /**
-   * Turns on the library's network capture, as the first `native-network-logs`
-   * call does on iOS. It stays on: each later connection, also the one to a
-   * restarted app, turns it on again.
+   * Turns on the library's network capture; the first `native-network-logs`
+   * call does this, since a Mac app has no network-capture-start. It stays on:
+   * each later connection, also the one to a restarted app, turns it on again.
    */
   activateNetworkInspection(): Promise<void>;
   /**
@@ -643,7 +643,7 @@ function createMacosAppApi(bundleId: string): { api: MacosAppApi; dispose: () =>
   let launching = false;
   let disposed = false;
 
-  // Network capture. Off until the first native-network-logs call, as on iOS;
+  // Network capture. Off until the first native-network-logs call;
   // after that each new channel turns it on again. The log belongs to one app
   // process: a restarted app starts an empty one, a reconnect keeps it.
   let networkInspection = false;

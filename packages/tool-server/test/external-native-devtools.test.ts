@@ -62,6 +62,7 @@ const BUNDLE_ID = "com.example.app";
 const IOS_UDID = "1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809";
 const PROVIDER_ID = "acme-3f2a9c";
 const DEVICE_ID = makeExternalId(PROVIDER_ID, IOS_UDID);
+const METRO_PORT = 8081;
 
 let temporaryDirectory: string;
 
@@ -327,6 +328,8 @@ describe("a provider that lends its native-devtools agent", () => {
 
     const instance = await instantiate();
     await waitForConnectedBundle(instance.api);
+    // Before a start the read answers not started, whatever is connected.
+    await instance.api.startNetworkCapture("com.example.gone", METRO_PORT);
 
     const { createNativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");
@@ -360,6 +363,7 @@ describe("a provider that lends its native-devtools agent", () => {
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
+    await instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT);
     const { createNativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");
     const { Registry } = await import("@argent/registry");
@@ -414,6 +418,7 @@ describe("a provider that lends its native-devtools agent", () => {
       });
       agent.sendEvent("Network.loadingFinished", { requestId: "r1" });
       await new Promise((resolve) => setTimeout(resolve, 20));
+      await instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT);
 
       const listing = (await nativeNetworkLogsTool.execute(
         { nativeDevtools: instance.api },
@@ -433,8 +438,8 @@ describe("a provider that lends its native-devtools agent", () => {
   });
 
   /**
-   * A lent agent's events reach argent from the handshake on, before any call
-   * asks for capture. The note must not say a request it lists was missed.
+   * A lent agent's events reach argent from the handshake on, before
+   * network-capture-start. The note must not say a request it lists was missed.
    */
   it("says the requests before argent connected were missed, and lists the ones after", async () => {
     vi.useFakeTimers({ toFake: ["performance"] });
@@ -452,6 +457,7 @@ describe("a provider that lends its native-devtools agent", () => {
       });
       agent.sendEvent("Network.loadingFinished", { requestId: "r1" });
       await new Promise((resolve) => setTimeout(resolve, 20));
+      await instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT);
 
       const { createNativeNetworkLogsTool } =
         await import("../src/tools/native-devtools/native-network-logs");
@@ -475,6 +481,32 @@ describe("a provider that lends its native-devtools agent", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /** A read never starts capture, so before a start it has nothing to ask the provider. */
+  it("answers not started before network-capture-start and asks the lent agent nothing", async () => {
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+
+    const listing = (await nativeNetworkLogsTool.execute(
+      { nativeDevtools: instance.api },
+      { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+    )) as { started?: boolean; header: string };
+
+    expect(listing.started).toBe(false);
+    expect(listing.header).toMatch(/^ios-native: not started, 0 requests/);
+    expect(agent.received.filter((message) => message.type === "CDP")).toEqual([]);
+
+    await instance.dispose();
+    await agent.close();
   });
 
   /**
@@ -503,14 +535,16 @@ describe("a provider that lends its native-devtools agent", () => {
         { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
       ) as Promise<{ armed: boolean; header: string; status: string }>;
 
+    await expect(instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT)).resolves.toBe(true);
     const listing = await call();
     await call();
 
     expect(listing.status).toBe("ok");
     expect(listing.armed).toBe(true);
     expect(listing.header).toMatch(/^ios-native: armed, 0 requests/);
-    // Read again on the second call: the provider can turn capture off at any time.
+    // The start reads it, then every read again: the provider can turn capture off at any time.
     expect(cdpMethods()).toEqual([
+      "NativeDevtoolsIos.getConditions",
       "NativeDevtoolsIos.getConditions",
       "NativeDevtoolsIos.getConditions",
     ]);
@@ -531,6 +565,7 @@ describe("a provider that lends its native-devtools agent", () => {
     const { Registry } = await import("@argent/registry");
     const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
 
+    await expect(instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT)).resolves.toBe(false);
     const listing = (await nativeNetworkLogsTool.execute(
       { nativeDevtools: instance.api },
       { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
@@ -547,16 +582,65 @@ describe("a provider that lends its native-devtools agent", () => {
   });
 
   /**
-   * The capture here is the provider's: argent did not turn it on, and the
-   * profiler's remedy (stop this device's services, then restart the app)
-   * neither ends it nor suits a device where a relaunch ends capture.
+   * Network.disable would change the provider's setting as Network.enable does,
+   * so a stop only ends argent's own recording of the app.
    */
-  it("does not warn a profiler start about the provider's capture after a read", async () => {
+  it("stops without sending Network.disable and records none of the provider's later requests", async () => {
     const agent = await startLentAgent();
     publishDescriptor({ socketPath: agent.socketPath });
 
     const instance = await instantiate();
     await waitForConnectedBundle(instance.api);
+    await instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT);
+
+    await expect(instance.api.stopNetworkCapture(BUNDLE_ID)).resolves.toEqual({
+      confirmed: true,
+      reason:
+        "the device provider keeps its own capture setting for the app; argent records none of its new requests",
+    });
+    agent.sendEvent("Network.requestWillBeSent", {
+      requestId: "r1",
+      request: { url: "https://example.com/after-the-stop", method: "GET", headers: {} },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const { createNativeNetworkLogsTool } =
+      await import("../src/tools/native-devtools/native-network-logs");
+    const { Registry } = await import("@argent/registry");
+    const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+    const listing = (await nativeNetworkLogsTool.execute(
+      { nativeDevtools: instance.api },
+      { bundleId: BUNDLE_ID, clear: false, limit: 50, udid: DEVICE_ID }
+    )) as { stopped?: boolean; header: string; total: number };
+
+    expect(listing.stopped).toBe(true);
+    expect(listing.header).toMatch(/^ios-native: stopped, 0 requests/);
+    expect(listing.total).toBe(0);
+    const cdpMethods = () =>
+      agent.received
+        .filter((message) => message.type === "CDP")
+        .map((message) => message.payload.method);
+    expect(cdpMethods()).toEqual(["NativeDevtoolsIos.getConditions"]);
+
+    // Hanging up on a stopped app sends it nothing either.
+    await instance.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(cdpMethods()).toEqual(["NativeDevtoolsIos.getConditions"]);
+    await agent.close();
+  });
+
+  /**
+   * The capture here is the provider's: argent did not turn it on, and the
+   * profiler's remedy (network-capture-stop, then restart the app) neither
+   * ends it nor suits a device where a relaunch ends capture.
+   */
+  it("does not warn a profiler start about the provider's capture after a start", async () => {
+    const agent = await startLentAgent();
+    publishDescriptor({ socketPath: agent.socketPath });
+
+    const instance = await instantiate();
+    await waitForConnectedBundle(instance.api);
+    await instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT);
 
     const { createNativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");
@@ -590,6 +674,7 @@ describe("a provider that lends its native-devtools agent", () => {
 
     const instance = await instantiate();
     await waitForConnectedBundle(instance.api);
+    await instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT);
 
     const { createNativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");
@@ -629,6 +714,7 @@ describe("a provider that lends its native-devtools agent", () => {
 
     const instance = await instantiate();
     await waitForConnectedBundle(instance.api);
+    await instance.api.startNetworkCapture(BUNDLE_ID, METRO_PORT);
 
     const { createNativeNetworkLogsTool } =
       await import("../src/tools/native-devtools/native-network-logs");

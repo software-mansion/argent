@@ -22,7 +22,7 @@ export type RestartAppResult =
       args?: string[];
       /** Mac apps: argent quit a copy that ran without its library, or the new process showed no window in time. */
       note?: string;
-      /** While native network capture is on for the app: whether it followed the app into the new process. */
+      /** Once network-capture-start started native network capture for the app: whether it followed the app into the new process, or that it is stopped. */
       networkCapture?: string;
     }
   | NativeDevtoolsInitFailedResult;

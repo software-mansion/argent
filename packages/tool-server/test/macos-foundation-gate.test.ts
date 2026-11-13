@@ -60,6 +60,11 @@ describe("the macos-apps flag gate", () => {
       "no macos support declared"
     );
     expect(() => assertSupported("button", NOT_MAC_CAPABLE, device)).toThrow("use keyboard");
+    for (const id of ["network-capture-start", "network-capture-stop"]) {
+      expect(() => assertSupported(id, NOT_MAC_CAPABLE, device)).toThrow(
+        "stop-simulator-server or stop-all-simulator-servers for the app ends it"
+      );
+    }
     expect(() => assertMacosAppsEnabled("boot-device")).not.toThrow();
   });
 

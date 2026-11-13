@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
 import * as net from "node:net";
-import type { DeviceInfo } from "@argent/registry";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Registry, type DeviceInfo } from "@argent/registry";
 
-// The native-devtools service arms network capture with a CDP request on the
-// app's socket and reads the app's pid from the host. These tests drive the
+// The native-devtools service starts and stops network capture with CDP
+// requests on the app's socket and reads the app's pid from the host. These tests drive the
 // real service with a fake app on that socket.
 
 const probe = vi.hoisted(() => ({ launchctlList: "", psOutput: "" }));
@@ -45,7 +48,15 @@ vi.mock("node:child_process", async () => {
 
 import { nativeDevtoolsBlueprint, type NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { liveIosNetworkCaptures } from "../src/blueprints/ios-network-records";
+import { createNativeNetworkLogsTool } from "../src/tools/native-devtools/native-network-logs";
 import type { NativeNetworkRecord } from "../src/utils/native-network-record";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import { resolveDevice } from "../src/utils/device-info";
+import {
+  __resetExternalDeviceCacheForTesting,
+  __resetProviderWarningsForTesting,
+  makeExternalId,
+} from "../src/utils/external-devices";
 import { processScopedUdid } from "./helpers/process-scoped-udid";
 
 const UDID = processScopedUdid("-9999-8888-7777-666666666666");
@@ -84,35 +95,45 @@ interface FakeApp {
   closed: Promise<void>;
 }
 
+/** Calls `onFrame` with each newline-delimited JSON frame the socket reads. */
+function readFrames(sock: net.Socket, onFrame: (frame: Frame) => void): void {
+  let buffer = "";
+  sock.on("data", (chunk) => {
+    buffer += chunk.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop()!;
+    for (const line of lines) onFrame(JSON.parse(line) as Frame);
+  });
+}
+
 /**
  * Dials the service's socket as the app does and records every frame it is
- * sent. With `acknowledge`, it answers every CDP request at once.
+ * sent. With `acknowledge`, it answers every CDP request at once; without it,
+ * the test answers them. Network.disable is answered at once either way, so a
+ * dispose does not wait for it, unless `holdDisable`.
  */
 async function connectApp(
   socketPath: string,
-  { acknowledge = true }: { acknowledge?: boolean } = {}
+  {
+    acknowledge = true,
+    holdDisable = false,
+    bundleId = BUNDLE,
+  }: { acknowledge?: boolean; holdDisable?: boolean; bundleId?: string } = {}
 ): Promise<FakeApp> {
   const received: Frame[] = [];
-  let buffer = "";
   const sock = net.createConnection(socketPath);
   await new Promise<void>((resolve) => sock.once("connect", () => resolve()));
   const write = (frame: Frame): void => {
     sock.write(JSON.stringify(frame) + "\n");
   };
-  sock.on("data", (chunk) => {
-    buffer += chunk.toString();
-    const lines = buffer.split("\n");
-    buffer = lines.pop()!;
-    for (const line of lines) {
-      const frame = JSON.parse(line) as Frame;
-      received.push(frame);
-      if (acknowledge && frame.type === "CDP" && frame.payload.id !== undefined) {
-        write({ type: "CDP", payload: { id: frame.payload.id, result: {} } });
-      }
-    }
+  readFrames(sock, (frame) => {
+    received.push(frame);
+    if (frame.type !== "CDP" || frame.payload.id === undefined) return;
+    const answers = frame.payload.method === "Network.disable" ? !holdDisable : acknowledge;
+    if (answers) write({ type: "CDP", payload: { id: frame.payload.id, result: {} } });
   });
   const closed = new Promise<void>((resolve) => sock.once("close", () => resolve()));
-  write({ type: "Control", payload: { bundleId: BUNDLE } });
+  write({ type: "Control", payload: { bundleId } });
   return {
     received,
     send: write,
@@ -126,6 +147,16 @@ const cdpRequests = (app: FakeApp, method: string): Frame[] =>
   app.received.filter((f) => f.type === "CDP" && f.payload.method === method);
 
 const enableRequests = (app: FakeApp): Frame[] => cdpRequests(app, "Network.enable");
+const disableRequests = (app: FakeApp): Frame[] => cdpRequests(app, "Network.disable");
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Settles with what `promise` resolved to, or "pending" when it has not within 50 ms. */
+const within50ms = <T>(promise: Promise<T>): Promise<T | "pending"> =>
+  Promise.race([promise, sleep(50).then(() => "pending" as const)]);
+
+/** The number in an ios- record id, which grows with each record the tool-server issues. */
+const numberOf = (id: string): number => Number(id.split("-")[2]);
 
 /** `request` adds to or replaces the fields of the request the app reports. */
 function requestEvents(
@@ -178,9 +209,9 @@ async function startService(): Promise<NativeDevtoolsApi> {
   return instance.api as NativeDevtoolsApi;
 }
 
-/** Connects the app with capture on for it, and acknowledges its Network.enable. */
+/** Connects the app with capture started for it, and acknowledges its Network.enable. */
 async function connectArmedApp(api: NativeDevtoolsApi): Promise<FakeApp> {
-  await api.activateNetworkInspection(BUNDLE);
+  await api.startNetworkCapture(BUNDLE, 8081);
   const app = await connectApp(api.socketPath, { acknowledge: false });
   await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
   app.reply(enableRequests(app)[0]!.payload.id!);
@@ -238,7 +269,7 @@ describe("native-devtools network capture", () => {
     const app = await connectApp(api.socketPath, { acknowledge: false });
     await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
 
-    const arming = api.activateNetworkInspection(BUNDLE);
+    const arming = api.startNetworkCapture(BUNDLE, 8081);
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
     const [request] = enableRequests(app);
     expect(request!.payload.id).toEqual(expect.any(Number));
@@ -252,14 +283,14 @@ describe("native-devtools network capture", () => {
     expect(api.networkRecords(BUNDLE)!.state()).toMatchObject({ armed: true });
     expect(api.networkRecords(BUNDLE)!.state().note).toBeUndefined();
 
-    // Armed already: a second call sends nothing.
-    await expect(api.activateNetworkInspection(BUNDLE)).resolves.toBe(true);
+    // Armed already: a second start sends nothing.
+    await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
     expect(enableRequests(app)).toHaveLength(1);
   });
 
   it("enables capture at the handshake of an app it is on for, also one that never connected before", async () => {
     const api = await startService();
-    await expect(api.activateNetworkInspection(BUNDLE)).resolves.toBe(false);
+    await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(false);
     // No process of the app carries capture yet, so no profile is warned about it.
     expect(liveIosNetworkCaptures(UDID)).toEqual([]);
 
@@ -267,6 +298,18 @@ describe("native-devtools network capture", () => {
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
     await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
     expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+  });
+
+  it("resolves a start armed when the app connects and acknowledges Network.enable within the wait the start gives it", async () => {
+    const api = await startService();
+
+    const arming = api.startNetworkCapture(BUNDLE, 8081, 5_000);
+    expect(await within50ms(arming)).toBe("pending");
+    const app = await connectApp(api.socketPath);
+
+    await expect(arming).resolves.toBe(true);
+    expect(enableRequests(app)).toHaveLength(1);
+    expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true);
   });
 
   it("sends nothing at the handshake of an app capture is not on for", async () => {
@@ -278,13 +321,13 @@ describe("native-devtools network capture", () => {
     expect(liveIosNetworkCaptures(UDID)).toEqual([]);
   });
 
-  it("keeps an app that does not answer within 5 s connected and unarmed, and asks again on the next call", async () => {
+  it("keeps an app that does not answer within 5 s connected and unarmed, and asks again at the next start", async () => {
     const api = await startService();
     const app = await connectApp(api.socketPath, { acknowledge: false });
     await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const arming = api.activateNetworkInspection(BUNDLE);
+    const arming = api.startNetworkCapture(BUNDLE, 8081);
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
     await vi.advanceTimersByTimeAsync(5_000);
     await expect(arming).resolves.toBe(false);
@@ -293,10 +336,10 @@ describe("native-devtools network capture", () => {
     expect(api.isConnected(BUNDLE)).toBe(true);
     expect(api.networkRecords(BUNDLE)!.state()).toEqual({
       armed: false,
-      note: "the agent did not acknowledge Network.enable within 5 s; the next call asks again",
+      note: "the agent did not acknowledge Network.enable within 5 s; network-capture-start asks again",
     });
 
-    const again = api.activateNetworkInspection(BUNDLE);
+    const again = api.startNetworkCapture(BUNDLE, 8081);
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(2));
     app.reply(enableRequests(app)[1]!.payload.id!);
     await expect(again).resolves.toBe(true);
@@ -307,12 +350,12 @@ describe("native-devtools network capture", () => {
     expect(api.isConnected(BUNDLE)).toBe(true);
   });
 
-  it("keeps an app that answers Network.enable with an error connected and unarmed, and asks again on the next call", async () => {
+  it("keeps an app that answers Network.enable with an error connected and unarmed, and asks again at the next start", async () => {
     const api = await startService();
     const app = await connectApp(api.socketPath, { acknowledge: false });
     await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
 
-    const arming = api.activateNetworkInspection(BUNDLE);
+    const arming = api.startNetworkCapture(BUNDLE, 8081);
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
     app.send({
       type: "CDP",
@@ -326,10 +369,10 @@ describe("native-devtools network capture", () => {
     expect(api.isConnected(BUNDLE)).toBe(true);
     expect(api.networkRecords(BUNDLE)!.state()).toEqual({
       armed: false,
-      note: `the agent did not enable capture (native-devtools ${BUNDLE}: Network.enable failed: capture unavailable); the next call asks again`,
+      note: `the agent did not enable capture (native-devtools ${BUNDLE}: Network.enable failed: capture unavailable); network-capture-start asks again`,
     });
 
-    const again = api.activateNetworkInspection(BUNDLE);
+    const again = api.startNetworkCapture(BUNDLE, 8081);
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(2));
     app.reply(enableRequests(app)[1]!.payload.id!, {});
     await expect(again).resolves.toBe(true);
@@ -340,7 +383,7 @@ describe("native-devtools network capture", () => {
     const api = await startService();
     const app = await connectApp(api.socketPath);
     await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
-    await api.activateNetworkInspection(BUNDLE);
+    await api.startNetworkCapture(BUNDLE, 8081);
 
     const read = api.queryViewHierarchy(BUNDLE, "ViewHierarchy.describeScreen");
     await vi.waitFor(() => expect(app.received.some((f) => f.type === "ViewInspector")).toBe(true));
@@ -361,7 +404,7 @@ describe("native-devtools network capture", () => {
   it("keeps the history across a second handshake of the same app, which supersedes the first", async () => {
     appRunsAs(100);
     const api = await startService();
-    await api.activateNetworkInspection(BUNDLE);
+    await api.startNetworkCapture(BUNDLE, 8081);
     const first = await connectApp(api.socketPath);
     await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
     for (const frame of [
@@ -394,7 +437,7 @@ describe("native-devtools network capture", () => {
   it("reads the pid of the connected process from the host", async () => {
     appRunsAs(4711);
     const api = await startService();
-    await api.activateNetworkInspection(BUNDLE);
+    await api.startNetworkCapture(BUNDLE, 8081);
     await connectApp(api.socketPath);
 
     await vi.waitFor(() =>
@@ -405,7 +448,7 @@ describe("native-devtools network capture", () => {
   it("fails open requests as not reconnected when the same process still runs after its connection closed", async () => {
     appRunsAs(4711);
     const api = await startService();
-    await api.activateNetworkInspection(BUNDLE);
+    await api.startNetworkCapture(BUNDLE, 8081);
     const app = await connectApp(api.socketPath);
     await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
     for (const frame of requestEvents("open", "https://example.com/slow")) app.send(frame);
@@ -429,7 +472,7 @@ describe("native-devtools network capture", () => {
   it("fails open requests as ended when the process is gone after its connection closed", async () => {
     appRunsAs(4711);
     const api = await startService();
-    await api.activateNetworkInspection(BUNDLE);
+    await api.startNetworkCapture(BUNDLE, 8081);
     const app = await connectApp(api.socketPath);
     await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
     for (const frame of requestEvents("open", "https://example.com/slow")) app.send(frame);
@@ -448,7 +491,7 @@ describe("native-devtools network capture", () => {
   it("fails open requests as ended when another process of the app runs after its connection closed", async () => {
     appRunsAs(4711);
     const api = await startService();
-    await api.activateNetworkInspection(BUNDLE);
+    await api.startNetworkCapture(BUNDLE, 8081);
     const app = await connectApp(api.socketPath);
     await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(4711));
     for (const frame of requestEvents("open", "https://example.com/slow")) app.send(frame);
@@ -468,7 +511,7 @@ describe("native-devtools network capture", () => {
 
   it("drops the app's captures and records from the lookups on dispose", async () => {
     const api = await startService();
-    await api.activateNetworkInspection(BUNDLE);
+    await api.startNetworkCapture(BUNDLE, 8081);
     await connectApp(api.socketPath);
     await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
     expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
@@ -484,7 +527,7 @@ describe("native-devtools network capture", () => {
     const app = await connectApp(api.socketPath, { acknowledge: false });
     await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
 
-    const arming = api.activateNetworkInspection(BUNDLE);
+    const arming = api.startNetworkCapture(BUNDLE, 8081);
     await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
     await instance!.dispose();
     instance = null;
@@ -495,6 +538,519 @@ describe("native-devtools network capture", () => {
       new Promise((resolve) => setTimeout(() => resolve("still waiting"), 1_000)),
     ]);
     expect(outcome).toBe(false);
+  });
+});
+
+describe("native-devtools network capture stop", () => {
+  it("stops capture with a Network.disable CDP request, and no later connection of the app is armed", async () => {
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const app = await connectApp(api.socketPath, { holdDisable: true });
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+
+    const stopping = api.stopNetworkCapture(BUNDLE);
+    await vi.waitFor(() => expect(disableRequests(app)).toHaveLength(1));
+    expect(disableRequests(app)[0]).toEqual({
+      type: "CDP",
+      payload: { id: expect.any(Number), method: "Network.disable", params: {} },
+    });
+    expect(await within50ms(stopping)).toBe("pending");
+    app.reply(disableRequests(app)[0]!.payload.id!);
+    await expect(stopping).resolves.toEqual({ confirmed: true });
+
+    expect(api.isNetworkCaptureStarted(BUNDLE)).toBe(false);
+    expect(api.isNetworkCaptureStopped(BUNDLE)).toBe(true);
+    expect(api.networkRecords(BUNDLE)!.state().armed).toBe(false);
+    // No profile is warned about an app whose capture is stopped.
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
+
+    // A relaunch: its handshake is not asked to capture.
+    const relaunched = await connectApp(api.socketPath);
+    await app.closed;
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+    await sleep(50);
+    expect(enableRequests(relaunched)).toHaveLength(0);
+    expect(api.networkRecords(BUNDLE)!.state().armed).toBe(false);
+  });
+
+  it("says a stop the app does not acknowledge within 5 s is not confirmed", async () => {
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const app = await connectApp(api.socketPath, { holdDisable: true });
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stopping = api.stopNetworkCapture(BUNDLE);
+    await vi.waitFor(() => expect(disableRequests(app)).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(stopping).resolves.toEqual({
+      confirmed: false,
+      reason:
+        "the app did not acknowledge Network.disable within 5 s; argent records none of its new requests, and its next process starts without capture",
+    });
+    vi.useRealTimers();
+    expect(api.isNetworkCaptureStopped(BUNDLE)).toBe(true);
+
+    // So the dispose after the test has no app to wait for.
+    app.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+  });
+
+  it("confirms a stop when the app's connection closes before it acknowledges Network.disable", async () => {
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const app = await connectApp(api.socketPath, { holdDisable: true });
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+
+    const stopping = api.stopNetworkCapture(BUNDLE);
+    await vi.waitFor(() => expect(disableRequests(app)).toHaveLength(1));
+    // The app exits: its process sends nothing more.
+    app.close();
+
+    await expect(stopping).resolves.toEqual({ confirmed: true });
+    expect(api.isNetworkCaptureStopped(BUNDLE)).toBe(true);
+  });
+
+  it("records no new request of a stopped app, and completes the one in flight at the stop", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    for (const frame of requestEvents("open", "https://example.com/open")) app.send(frame);
+    await recordOf(api, "https://example.com/open", "pending");
+
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+    for (const frame of [
+      ...requestEvents("new", "https://example.com/new"),
+      ...finishEvents("open"),
+    ]) {
+      app.send(frame);
+    }
+
+    // Frames are read in order, so the new request was read before the finish.
+    await recordOf(api, "https://example.com/open");
+    expect(
+      api
+        .networkRecords(BUNDLE)!
+        .records(8081)
+        .map((r) => r.request.url)
+    ).toEqual(["https://example.com/open"]);
+  });
+
+  it("does not arm an app whose Network.enable reply comes after its stop, and sends Network.enable again at the next start", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    const arming = api.startNetworkCapture(BUNDLE, 8081);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+    app.reply(enableRequests(app)[0]!.payload.id!);
+    await expect(arming).resolves.toBe(false);
+    expect(api.networkRecords(BUNDLE)!.state().armed).toBe(false);
+
+    const again = api.startNetworkCapture(BUNDLE, 8081);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(2));
+    app.reply(enableRequests(app)[1]!.payload.id!);
+    await expect(again).resolves.toBe(true);
+  });
+
+  it("sends Network.enable again at a start right after a stop, while the enable the stop met is unanswered", async () => {
+    const api = await startService();
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+
+    void api.startNetworkCapture(BUNDLE, 8081);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+
+    const again = api.startNetworkCapture(BUNDLE, 8081);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(2));
+    app.reply(enableRequests(app)[1]!.payload.id!);
+    await expect(again).resolves.toBe(true);
+    expect(api.networkRecords(BUNDLE)!.state().armed).toBe(true);
+  });
+
+  it("arms the app again at a start after a stop, once it acknowledges Network.enable", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    await api.stopNetworkCapture(BUNDLE);
+
+    const arming = api.startNetworkCapture(BUNDLE, 8081);
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(2));
+    expect(await within50ms(arming)).toBe("pending");
+    expect(api.isNetworkCaptureStopped(BUNDLE)).toBe(false);
+
+    app.reply(enableRequests(app)[1]!.payload.id!);
+    await expect(arming).resolves.toBe(true);
+    expect(api.isNetworkCaptureStarted(BUNDLE)).toBe(true);
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    for (const frame of requestEvents("next", "https://example.com/next")) app.send(frame);
+    await recordOf(api, "https://example.com/next", "pending");
+  });
+
+  it("marks where a start begins before it arms the app, so a request during the arming counts", async () => {
+    const api = await startService();
+    const app = await connectArmedApp(api);
+    for (const frame of [
+      ...requestEvents("before", "https://example.com/before"),
+      ...finishEvents("before"),
+    ]) {
+      app.send(frame);
+    }
+    const before = await recordOf(api, "https://example.com/before");
+    await api.stopNetworkCapture(BUNDLE);
+
+    const arming = api.startNetworkCapture(BUNDLE, 8190);
+    const mark = api.networkCaptureMark(BUNDLE);
+    expect(mark).toEqual({ lastRecord: numberOf(before), metroPort: 8190 });
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(2));
+    for (const frame of requestEvents("during", "https://example.com/during")) app.send(frame);
+    const during = await recordOf(api, "https://example.com/during", "pending");
+    expect(numberOf(during)).toBeGreaterThan(mark!.lastRecord);
+
+    app.reply(enableRequests(app)[1]!.payload.id!);
+    await expect(arming).resolves.toBe(true);
+  });
+
+  it("says at a launch that capture is stopped for the app until the next start", async () => {
+    const api = await startService();
+    await connectArmedApp(api);
+    await api.stopNetworkCapture(BUNDLE);
+
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(
+      `native network capture is stopped for ${BUNDLE} (network-capture-stop); this process runs without it until network-capture-start`
+    );
+  });
+
+  it("says at a launch that capture is stopped when the stop comes while it waits for the new process to arm", async () => {
+    appRunsAs(200);
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    // The launched process connected and has not answered Network.enable.
+    const app = await connectApp(api.socketPath, { acknowledge: false });
+    await vi.waitFor(() => expect(enableRequests(app)).toHaveLength(1));
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(200));
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let settled = false;
+    const launched = api.networkCaptureAfterLaunch(BUNDLE).finally(() => {
+      settled = true;
+    });
+    // The wait for the process to arm is the only timer on the fake clock.
+    for (let i = 0; i < 100 && vi.getTimerCount() === 0; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(vi.getTimerCount()).toBe(1);
+
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({ confirmed: true });
+    expect(disableRequests(app)).toHaveLength(1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(launched).resolves.toBe(
+      `native network capture is stopped for ${BUNDLE} (network-capture-stop); this process runs without it until network-capture-start`
+    );
+  });
+
+  const STOPPED_NOTE = `native network capture is stopped for ${BUNDLE} (network-capture-stop); this process runs without it until network-capture-start`;
+
+  /** Arms the app as pid 200, then stops its capture with a Network.disable the app does not answer. */
+  async function stopUnacknowledged(api: NativeDevtoolsApi): Promise<FakeApp> {
+    appRunsAs(200);
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const app = await connectApp(api.socketPath, { holdDisable: true });
+    await vi.waitFor(() =>
+      expect(api.networkRecords(BUNDLE)?.state()).toMatchObject({ armed: true, pid: 200 })
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const stopping = api.stopNetworkCapture(BUNDLE);
+    await vi.waitFor(() => expect(disableRequests(app)).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(stopping).resolves.toMatchObject({ confirmed: false });
+    vi.useRealTimers();
+    return app;
+  }
+
+  it("says at a launch that the process which did not acknowledge the stop may still capture, and names the app to profiles until its connection closes", async () => {
+    const api = await startService();
+    const app = await stopUnacknowledged(api);
+
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(
+      `native network capture is stopped for ${BUNDLE} (network-capture-stop), but its running process (pid 200) has not acknowledged Network.disable, so it may still intercept its requests; argent records none of them, and restart-app starts a process without capture`
+    );
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+    expect(api.isNetworkCaptureStarted(BUNDLE)).toBe(false);
+    // A launch that started a new process before the old connection closed.
+    appRunsAs(201);
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(STOPPED_NOTE);
+
+    app.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(STOPPED_NOTE);
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
+
+    // A relaunch: its handshake is not asked to capture.
+    const relaunched = await connectApp(api.socketPath);
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+    await sleep(50);
+    expect(enableRequests(relaunched)).toHaveLength(0);
+  });
+
+  it("forgets a stop the process did not acknowledge once the process acknowledges a later Network.disable", async () => {
+    const api = await startService();
+    const app = await stopUnacknowledged(api);
+    expect(liveIosNetworkCaptures(UDID)).toEqual([BUNDLE]);
+
+    const again = api.stopNetworkCapture(BUNDLE);
+    await vi.waitFor(() => expect(disableRequests(app)).toHaveLength(2));
+    app.reply(disableRequests(app)[1]!.payload.id!);
+    await expect(again).resolves.toEqual({ confirmed: true });
+    await expect(api.networkCaptureAfterLaunch(BUNDLE)).resolves.toBe(STOPPED_NOTE);
+    expect(liveIosNetworkCaptures(UDID)).toEqual([]);
+
+    // So the dispose after the test has no app to wait for.
+    app.close();
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(false));
+  });
+});
+
+describe("native-devtools dispose with network capture", () => {
+  it("sends Network.disable to each app it started or stopped before it closes their connections", async () => {
+    const api = await startService();
+    const connect = (bundleId: string) =>
+      connectApp(api.socketPath, { bundleId, acknowledge: false, holdDisable: true });
+    const armed = await connect("com.example.armed");
+    const unanswered = await connect("com.example.unanswered");
+    const stopped = await connect("com.example.stopped");
+    const never = await connect("com.example.never");
+    await vi.waitFor(() => expect(api.listConnectedBundleIds()).toHaveLength(4));
+
+    const arming = api.startNetworkCapture("com.example.armed", 8081);
+    await vi.waitFor(() => expect(enableRequests(armed)).toHaveLength(1));
+    armed.reply(enableRequests(armed)[0]!.payload.id!);
+    await expect(arming).resolves.toBe(true);
+    // Still without its Network.enable reply at the dispose.
+    void api.startNetworkCapture("com.example.unanswered", 8081);
+    await vi.waitFor(() => expect(enableRequests(unanswered)).toHaveLength(1));
+    // Armed, then stopped by a Network.disable it never answers.
+    const armingStopped = api.startNetworkCapture("com.example.stopped", 8081);
+    await vi.waitFor(() => expect(enableRequests(stopped)).toHaveLength(1));
+    stopped.reply(enableRequests(stopped)[0]!.payload.id!);
+    await expect(armingStopped).resolves.toBe(true);
+    void api.stopNetworkCapture("com.example.stopped");
+    await vi.waitFor(() => expect(disableRequests(stopped)).toHaveLength(1));
+
+    const disposing = instance!.dispose();
+    instance = null;
+    await vi.waitFor(() => {
+      expect(disableRequests(armed)).toHaveLength(1);
+      expect(disableRequests(unanswered)).toHaveLength(1);
+      expect(disableRequests(stopped)).toHaveLength(2);
+    });
+    // Each connection stays open until its app answers.
+    expect(await within50ms(Promise.race([armed.closed, unanswered.closed, stopped.closed]))).toBe(
+      "pending"
+    );
+
+    for (const app of [armed, unanswered, stopped]) {
+      app.reply(disableRequests(app).at(-1)!.payload.id!);
+    }
+    await disposing;
+    await Promise.all([armed.closed, unanswered.closed, stopped.closed, never.closed]);
+    expect(never.received.filter((f) => f.type === "CDP")).toEqual([]);
+  });
+
+  it("ends a dispose after 1 s when an app does not answer Network.disable", async () => {
+    const api = await startService();
+    await api.startNetworkCapture(BUNDLE, 8081);
+    const app = await connectApp(api.socketPath, { holdDisable: true });
+    await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().armed).toBe(true));
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    let disposed = false;
+    const disposing = instance!.dispose().then(() => {
+      disposed = true;
+    });
+    instance = null;
+    // vi.waitFor would move the fake clock, so wait for the frame on I/O turns.
+    while (disableRequests(app).length === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    await vi.advanceTimersByTimeAsync(900);
+    expect(disposed).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    await disposing;
+    vi.useRealTimers();
+    await app.closed;
+  });
+});
+
+describe("native-devtools network capture on a lent agent", () => {
+  const PROVIDER_ID = "acme-3f2a9c";
+  const LENT_UDID = processScopedUdid("-1111-2222-3333-444444444444");
+  const LENT_DEVICE_ID = makeExternalId(PROVIDER_ID, LENT_UDID);
+
+  interface LentAgent {
+    received: Frame[];
+    /** What the provider answers when asked whether capture is on for the app. */
+    captureOn: boolean;
+    send(frame: Frame): void;
+    close(): Promise<void>;
+  }
+
+  let dir: string;
+  let agent: LentAgent | null = null;
+
+  /**
+   * Plays a device provider that lends the app's agent: it publishes the
+   * device and serves the socket the service dials, opening with the app's
+   * handshake and answering every CDP request.
+   */
+  async function lendAgent(): Promise<LentAgent> {
+    const socketPath = path.join(dir, "agent.sock");
+    const sockets: net.Socket[] = [];
+    const write = (socket: net.Socket, frame: Frame) => socket.write(JSON.stringify(frame) + "\n");
+    const server = net.createServer((socket) => {
+      sockets.push(socket);
+      readFrames(socket, (frame) => {
+        lent.received.push(frame);
+        if (frame.type !== "CDP" || frame.payload.id === undefined) return;
+        const result =
+          frame.payload.method === "NativeDevtoolsIos.getConditions"
+            ? { enabled: lent.captureOn }
+            : {};
+        write(socket, { type: "CDP", payload: { id: frame.payload.id, result } });
+      });
+      write(socket, { type: "Control", payload: { bundleId: BUNDLE } });
+    });
+    const lent: LentAgent = {
+      received: [],
+      captureOn: true,
+      send: (frame) => {
+        for (const socket of sockets) write(socket, frame);
+      },
+      close: () =>
+        new Promise((resolve) => {
+          for (const socket of sockets) socket.destroy();
+          server.close(() => resolve());
+        }),
+    };
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+
+    const descriptorPath = path.join(dir, "acme.json");
+    fs.writeFileSync(
+      descriptorPath,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["native-devtools", "simctl"],
+            kind: "simulator",
+            name: "iPhone 16 Pro",
+            nativeDevtools: { socketPath },
+            nativeId: LENT_UDID,
+            platform: "ios",
+            state: "Booted",
+          },
+        ],
+        id: PROVIDER_ID,
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+    process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
+    agent = lent;
+    return lent;
+  }
+
+  async function startLentService(): Promise<NativeDevtoolsApi> {
+    const lentDevice = resolveDevice(LENT_DEVICE_ID);
+    instance = await nativeDevtoolsBlueprint.factory({}, lentDevice, { device: lentDevice });
+    const api = instance.api as NativeDevtoolsApi;
+    await vi.waitFor(() => expect(api.isConnected(BUNDLE)).toBe(true));
+    return api;
+  }
+
+  const cdpMethods = (lent: LentAgent) =>
+    lent.received.filter((f) => f.type === "CDP").map((f) => f.payload.method);
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-lent-"));
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+    __resetExternalDeviceCacheForTesting();
+    __resetProviderWarningsForTesting();
+    __resetDepCacheForTests();
+    // The read checks for xcrun first, and Linux CI has none. Nothing runs it.
+    __primeDepCacheForTests(["xcrun"]);
+  });
+
+  afterEach(async () => {
+    await instance?.dispose();
+    instance = null;
+    await agent?.close();
+    agent = null;
+    delete process.env.ARGENT_DEVICE_PROVIDERS;
+    process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+    __resetExternalDeviceCacheForTesting();
+    __resetDepCacheForTests();
+    fs.rmSync(dir, { force: true, recursive: true });
+  });
+
+  it("sends no Network.disable at a stop or a dispose, and records none of the app's new requests after the stop", async () => {
+    const lent = await lendAgent();
+    const api = await startLentService();
+    await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+    for (const frame of requestEvents("open", "https://example.com/open")) lent.send(frame);
+    await recordOf(api, "https://example.com/open", "pending");
+
+    await expect(api.stopNetworkCapture(BUNDLE)).resolves.toEqual({
+      confirmed: true,
+      reason:
+        "the device provider keeps its own capture setting for the app; argent records none of its new requests",
+    });
+    for (const frame of [
+      ...requestEvents("new", "https://example.com/new"),
+      ...finishEvents("open"),
+    ]) {
+      lent.send(frame);
+    }
+    await recordOf(api, "https://example.com/open");
+    expect(
+      api
+        .networkRecords(BUNDLE)!
+        .records(8081)
+        .map((r) => r.request.url)
+    ).toEqual(["https://example.com/open"]);
+
+    await instance!.dispose();
+    instance = null;
+    // The provider owns the agent's capture setting, so argent only read it.
+    expect(cdpMethods(lent)).toEqual(["NativeDevtoolsIos.getConditions"]);
+  });
+
+  it("asks the provider again at each read of a started app whether capture is on", async () => {
+    const lent = await lendAgent();
+    const api = await startLentService();
+    await expect(api.startNetworkCapture(BUNDLE, 8081)).resolves.toBe(true);
+    const tool = createNativeNetworkLogsTool(new Registry());
+    const read = () =>
+      tool.execute(
+        { nativeDevtools: api },
+        { udid: LENT_DEVICE_ID, bundleId: BUNDLE, limit: 50, clear: false }
+      ) as Promise<{ armed: boolean; header: string }>;
+
+    expect(await read()).toMatchObject({ armed: true });
+    lent.captureOn = false;
+    const off = await read();
+
+    expect(off.armed).toBe(false);
+    expect(off.header).toMatch(
+      /^ios-native: not armed, 0 requests \(the device provider has capture off for the app; argent does not turn it on/
+    );
+    expect(cdpMethods(lent)).toEqual([
+      "NativeDevtoolsIos.getConditions",
+      "NativeDevtoolsIos.getConditions",
+      "NativeDevtoolsIos.getConditions",
+    ]);
   });
 });
 

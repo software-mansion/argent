@@ -1,9 +1,19 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@argent/registry";
-import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
-import { networkInspectorBlueprint } from "../../src/blueprints/network-inspector";
+import {
+  jsRuntimeDebuggerBlueprint,
+  type JsRuntimeDebuggerApi,
+} from "../../src/blueprints/js-runtime-debugger";
+import {
+  forgetJsCapturesOf,
+  installNetworkInterceptor,
+  jsCapture,
+  networkInspectorBlueprint,
+  setJsCapture,
+  type JsCapture,
+} from "../../src/blueprints/network-inspector";
 import { isRedirect, networkLogsTool } from "../../src/tools/network/network-logs";
 import { networkRequestTool } from "../../src/tools/network/network-request";
 import { scopeTempHome } from "../helpers/temp-home";
@@ -37,10 +47,10 @@ let wsConnectionCount = 0;
  * we return responses matching what the real runtime would produce.
  */
 let interceptorInstalled = false;
-/** Makes the interceptor script throw in the "runtime", so it stays uninstalled. */
-let failInstall = false;
-// The install succeeds, but the app's JS runtime reloads before the log is read.
-let reloadAfterInstall = false;
+/** How many times the interceptor script ran in the "runtime". */
+let installs = 0;
+/** The app id the runtime names in `ReactNativeApplication.metadataUpdated`, sent at connect. */
+let runtimeAppId: string | undefined;
 const networkLog: Array<{
   id: number;
   requestId: string;
@@ -74,8 +84,19 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
   const { id, method, params } = msg;
 
   switch (method) {
-    case "FuseboxClient.setClientMetadata":
     case "ReactNativeApplication.enable":
+      if (runtimeAppId !== undefined) {
+        ws.send(
+          JSON.stringify({
+            method: "ReactNativeApplication.metadataUpdated",
+            params: { appIdentifier: runtimeAppId, platform: "android" },
+          })
+        );
+      }
+      ws.send(JSON.stringify({ id, result: {} }));
+      break;
+
+    case "FuseboxClient.setClientMetadata":
     case "Runtime.runIfWaitingForDebugger":
       ws.send(JSON.stringify({ id, result: {} }));
       break;
@@ -114,26 +135,10 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
 
       // The interceptor script sets its install guard, while the log-read
       // scripts never mention it.
-      if (expr.includes("__argent_network_v2")) {
+      if (expr.includes("__argent_network_v3")) {
         // This is the network interceptor installation script
-        if (failInstall) {
-          ws.send(
-            JSON.stringify({
-              id,
-              result: {
-                result: { type: "object" },
-                exceptionDetails: {
-                  exceptionId: 1,
-                  text: "Uncaught",
-                  lineNumber: 0,
-                  columnNumber: 0,
-                },
-              },
-            })
-          );
-          break;
-        }
-        interceptorInstalled = !reloadAfterInstall;
+        installs++;
+        interceptorInstalled = true;
         ws.send(
           JSON.stringify({
             id,
@@ -191,6 +196,7 @@ function handleLogReadScript(ws: WebSocket, id: number, expr: string) {
               type: "string",
               value: JSON.stringify({
                 error: "Network interceptor not installed",
+                installed: false,
               }),
             },
           },
@@ -394,7 +400,18 @@ afterAll(async () => {
   });
 });
 
+const APP = "com.example.app";
+
+function startedCapture(fields: Partial<JsCapture> = {}): JsCapture {
+  return { bundleId: APP, intent: "started", mark: { install: null }, installed: true, ...fields };
+}
+
 describe("NetworkInspector integration (mock server)", () => {
+  // As network-capture-start leaves it: the reads below only read.
+  beforeEach(() => {
+    setJsCapture(`${mockPort}:mock-device`, startedCapture());
+  });
+
   it("shares the same CDP connection with JsRuntimeDebugger (only 1 WS connection)", async () => {
     // Reset counter before this test group starts.
     // The beforeAll already sets up the server but doesn't create any services yet.
@@ -612,43 +629,43 @@ describe("NetworkInspector integration (mock server)", () => {
     }
   });
 
-  it("view-network-logs reports an interceptor that could not be installed", async () => {
-    interceptorInstalled = false;
-    failInstall = true;
-    try {
-      const result = (await registry.invokeTool("view-network-logs", {
-        port: mockPort,
-        device_id: "mock-device",
-      })) as string;
-
-      expect(result).toContain(
-        "Network interceptor could not be installed in the app's JS runtime:"
-      );
-      expect(result).not.toContain("No network traffic captured");
-    } finally {
-      failInstall = false;
-      interceptorInstalled = true;
+  it.each([
+    {
+      says: "that capture stopped recording at a reload",
+      installed: true,
+      text: "Network capture for this app stopped recording at a JavaScript reload; requests since the reload are not recorded. Call network-capture-start again, repeat the action, then read again.",
+    },
+    {
+      says: "that the app's JS runtime was not ready at the start",
+      installed: false,
+      text: "Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so no requests are recorded. Call network-capture-start again, repeat the action, then read again.",
+    },
+  ])(
+    "view-network-logs of a context without the interceptor says $says and installs nothing",
+    async ({ installed, text }) => {
+      setJsCapture(`${mockPort}:mock-device`, startedCapture({ installed }));
+      interceptorInstalled = false;
+      const before = installs;
+      try {
+        const read = () =>
+          registry.invokeTool("view-network-logs", { port: mockPort, device_id: "mock-device" });
+        expect(await read()).toBe(text);
+        // A second read changes nothing either.
+        expect(await read()).toBe(text);
+        expect(
+          await registry.invokeTool("view-network-request-details", {
+            port: mockPort,
+            device_id: "mock-device",
+            requestId: "rn-net-1",
+          })
+        ).toBe(`Request rn-net-1 not found. ${text}`);
+        expect(installs).toBe(before);
+        expect(interceptorInstalled).toBe(false);
+      } finally {
+        interceptorInstalled = true;
+      }
     }
-  });
-
-  it("view-network-logs says to call it again when a reload removed the interceptor", async () => {
-    interceptorInstalled = false;
-    reloadAfterInstall = true;
-    try {
-      const result = (await registry.invokeTool("view-network-logs", {
-        port: mockPort,
-        device_id: "mock-device",
-      })) as string;
-
-      expect(result).toContain("Network interceptor not installed");
-      expect(result).toContain("Call view-network-logs again");
-      expect(result).not.toContain("\u2014");
-      expect(result).not.toContain("No network traffic captured");
-    } finally {
-      reloadAfterInstall = false;
-      interceptorInstalled = true;
-    }
-  });
+  );
 
   it("view-network-logs marks a request whose response came but whose body did not complete as pending", async () => {
     networkLog.push({
@@ -1067,6 +1084,191 @@ describe("NetworkInspector integration (mock server)", () => {
 
     expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}:mock-device`)).toBe("IDLE");
     expect(registry.getServiceState(`NetworkInspector:${mockPort}:mock-device`)).toBe("IDLE");
+  });
+});
+
+describe("JS network reads follow the capture intent (mock server)", () => {
+  const NOT_STARTED =
+    "Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then";
+
+  let nextDevice = 1;
+  /** A device id no earlier case touched, so its services start from nothing. */
+  function freshDevice(): string {
+    return `capture-device-${nextDevice++}`;
+  }
+
+  beforeEach(() => {
+    forgetJsCapturesOf();
+    interceptorInstalled = true;
+  });
+
+  afterAll(() => {
+    forgetJsCapturesOf();
+    runtimeAppId = undefined;
+  });
+
+  function logs(device: string, port = mockPort): Promise<unknown> {
+    return registry.invokeTool("view-network-logs", { port, device_id: device });
+  }
+
+  function details(device: string, requestId = "rn-net-1"): Promise<unknown> {
+    return registry.invokeTool("view-network-request-details", {
+      port: mockPort,
+      device_id: device,
+      requestId,
+    });
+  }
+
+  /** The device's services in the registry, of any state. */
+  function servicesOf(device: string): string[] {
+    return [...registry.getSnapshot().services.keys()].filter((urn) => urn.endsWith(`:${device}`));
+  }
+
+  it.each([
+    { platform: "Android", device: "emulator-5570" },
+    { platform: "iOS", device: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC" },
+  ])(
+    "before any start, both reads on $platform reach nothing in the app and say capture is not started",
+    async ({ device }) => {
+      const connections = wsConnectionCount;
+      const before = installs;
+
+      expect(await logs(device)).toBe(`${NOT_STARTED} call view-network-logs again.`);
+      expect(await details(device)).toBe(
+        `Request rn-net-1 not found. ${NOT_STARTED} list the requests with view-network-logs.`
+      );
+
+      expect(servicesOf(device)).toEqual([]);
+      expect(wsConnectionCount).toBe(connections);
+      expect(installs).toBe(before);
+    }
+  );
+
+  it("names the Metro port the device's capture is on", async () => {
+    const device = freshDevice();
+    setJsCapture(`8190:${device}`, startedCapture());
+    setJsCapture(`8191:${device}`, startedCapture({ bundleId: "com.other.app" }));
+    const hint =
+      " This device has network capture for com.example.app on Metro port 8190: pass port 8190 to read it." +
+      " This device has network capture for com.other.app on Metro port 8191: pass port 8191 to read it.";
+
+    expect(await logs(device)).toBe(`${NOT_STARTED} call view-network-logs again.${hint}`);
+    expect(await details(device)).toBe(
+      `Request rn-net-1 not found. ${NOT_STARTED} list the requests with view-network-logs.${hint}`
+    );
+    expect(servicesOf(device)).toEqual([]);
+  });
+
+  it("after a start, lists through the debugger and installs nothing", async () => {
+    const device = freshDevice();
+    setJsCapture(`${mockPort}:${device}`, startedCapture());
+    const before = installs;
+
+    const result = (await logs(device)) as string;
+    expect(result).toMatch(/^=== NETWORK LOGS \(page 1\/1, \d+ total\) ===/);
+    expect(result).toContain("rn-net-1");
+    expect(await details(device)).toMatchObject({ requestId: "rn-net-1" });
+
+    expect(installs).toBe(before);
+    expect(servicesOf(device)).toEqual([`JsRuntimeDebugger:${mockPort}:${device}`]);
+  });
+
+  it("says a started capture has nothing yet, but not requests sent before the start", async () => {
+    const device = freshDevice();
+    setJsCapture(`${mockPort}:${device}`, startedCapture());
+    const saved = networkLog.splice(0);
+    try {
+      expect(await logs(device)).toBe(
+        "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active: it records XMLHttpRequest (axios included), React Native's fetch, Expo's fetch, and a fetch library that sends through React Native's network module, but not requests sent before network-capture-start."
+      );
+    } finally {
+      networkLog.push(...saved);
+    }
+  });
+
+  it("lists a context that an install after a reload reached, as a later start makes", async () => {
+    const device = freshDevice();
+    const payload = `${mockPort}:${device}`;
+    setJsCapture(payload, startedCapture());
+    interceptorInstalled = false;
+
+    expect(await logs(device)).toContain("stopped recording at a JavaScript reload");
+
+    const dbg = await registry.resolveService<JsRuntimeDebuggerApi>(`JsRuntimeDebugger:${payload}`);
+    expect(await installNetworkInterceptor(dbg.cdp, payload, dbg.runtimeApp)).toEqual({
+      installed: true,
+    });
+    expect(await logs(device)).toContain("rn-net-1");
+  });
+
+  it("lists what a stopped capture recorded, with the stop in its header", async () => {
+    const device = freshDevice();
+    setJsCapture(`${mockPort}:${device}`, startedCapture({ intent: "stopped" }));
+    const before = installs;
+
+    const result = (await logs(device)) as string;
+    expect(result).toMatch(/^=== NETWORK LOGS \(page 1\/1, \d+ total; capture stopped\) ===/);
+    expect(result).toContain("rn-net-1");
+    // Its ids keep working.
+    expect(await details(device)).toMatchObject({ requestId: "rn-net-1", state: "finished" });
+    expect(installs).toBe(before);
+  });
+
+  it("says a stopped capture recorded nothing", async () => {
+    const device = freshDevice();
+    setJsCapture(`${mockPort}:${device}`, startedCapture({ intent: "stopped" }));
+    const saved = networkLog.splice(0);
+    try {
+      expect(await logs(device)).toBe(
+        "No network traffic captured: network capture is stopped for com.example.app (network-capture-stop). Call network-capture-start to capture again, then repeat the action."
+      );
+    } finally {
+      networkLog.push(...saved);
+    }
+  });
+
+  it.each([
+    {
+      since: "a reload cleared what it recorded",
+      installed: true,
+      text: "Network capture is stopped for com.example.app (network-capture-stop), and the app's JS runtime reloaded since, which cleared its requests. Call network-capture-start to capture again, then repeat the action.",
+    },
+    {
+      since: "nothing was recorded in the current runtime",
+      installed: false,
+      text: "Network capture is stopped for com.example.app (network-capture-stop), and nothing was recorded in the app's current JS runtime. Call network-capture-start to capture again, then repeat the action.",
+    },
+  ])(
+    "says a stopped capture has no log when $since, and installs nothing",
+    async ({ installed, text }) => {
+      const device = freshDevice();
+      setJsCapture(`${mockPort}:${device}`, startedCapture({ intent: "stopped", installed }));
+      interceptorInstalled = false;
+      const before = installs;
+
+      expect(await logs(device)).toBe(text);
+      expect(await details(device)).toBe(`Request rn-net-1 not found. ${text}`);
+      expect(installs).toBe(before);
+      expect(servicesOf(device)).toEqual([`JsRuntimeDebugger:${mockPort}:${device}`]);
+    }
+  );
+
+  it("says capture is not started for a runtime of another app than the capture's", async () => {
+    const device = freshDevice();
+    setJsCapture(`${mockPort}:${device}`, startedCapture());
+    runtimeAppId = "com.other.app";
+    const before = installs;
+    try {
+      expect(await logs(device)).toBe(`${NOT_STARTED} call view-network-logs again.`);
+      expect(await details(device)).toBe(
+        `Request rn-net-1 not found. ${NOT_STARTED} list the requests with view-network-logs.`
+      );
+      expect(installs).toBe(before);
+      // The capture's entry stays as it was.
+      expect(jsCapture(`${mockPort}:${device}`)).toEqual(startedCapture());
+    } finally {
+      runtimeAppId = undefined;
+    }
   });
 });
 

@@ -114,13 +114,13 @@ function connectApp(
 }
 
 /**
- * The app connecting with capture already on for it, as after a launch: its
- * connection is armed at the handshake, so nothing before it was missed.
+ * The app connecting with capture already started for it, as after a launch:
+ * its connection is armed at the handshake, so nothing before it was missed.
  * Resolves once that connection is armed and the host has read `pid`, the
  * process `launchctl list` names (`null` when it names none).
  */
 async function launchApp(api: NativeDevtoolsApi, pid: number | null = PID): Promise<FakeApp> {
-  await api.activateNetworkInspection(BUNDLE);
+  await api.startNetworkCapture(BUNDLE, 8081);
   const app = await connectApp(api.socketPath);
   await vi.waitFor(() => {
     const state = api.networkRecords(BUNDLE)?.state();
@@ -276,6 +276,38 @@ describe("native-network-logs lists an iOS app's native requests", () => {
     });
   });
 
+  it("lists the requests a stop kept under a stopped header, with stopped: true, and clears them", async () => {
+    await withService(async (api) => {
+      const app = await launchApp(api);
+      completeRequest(app, "r1", "https://api.example.com/items", { durationMs: 42 });
+      await recorded(api, 1);
+      await api.stopNetworkCapture(BUNDLE);
+
+      expect(await list(api, { clear: true })).toEqual({
+        status: "ok",
+        header:
+          "ios-native: stopped, 1 request (capture stopped by network-capture-stop; network-capture-start turns it on again)",
+        armed: false,
+        stopped: true,
+        count: 1,
+        total: 1,
+        requests: [
+          {
+            id: expect.stringMatching(IOS_ID),
+            method: "GET",
+            url: "https://api.example.com/items",
+            state: "complete",
+            status: 200,
+            mimeType: "text/plain",
+            durationMs: 42,
+          },
+        ],
+      });
+      expect(await list(api)).toMatchObject({ stopped: true, count: 0, total: 0, requests: [] });
+      app.close();
+    });
+  });
+
   it("leaves the pid out of the header when the host could not read one", async () => {
     sim.launchctlList = "";
     await withService(async (api) => {
@@ -292,16 +324,21 @@ describe("native-network-logs lists an iOS app's native requests", () => {
 
   it("says in the header why capture is not armed when the agent refuses Network.enable", async () => {
     await withService(async (api) => {
-      await api.activateNetworkInspection(BUNDLE);
+      await api.startNetworkCapture(BUNDLE, 8081);
       const app = await connectApp(api.socketPath, { enableError: "capture unavailable" });
-      await vi.waitFor(() => expect(api.networkRecords(BUNDLE)?.state().pid).toBe(PID));
+      // A read waits for no reply, so the refusal has to be in before it.
+      await vi.waitFor(() => {
+        const state = api.networkRecords(BUNDLE)?.state();
+        expect(state?.pid).toBe(PID);
+        expect(state?.note).toMatch(/did not enable capture/);
+      });
 
       const listing = await list(api);
 
       expect(listing.armed).toBe(false);
       expect(listing.header).toBe(
         `ios-native: not armed, 0 requests (pid ${PID}; the agent did not enable capture ` +
-          `(native-devtools ${BUNDLE}: Network.enable failed: capture unavailable); the next call asks again)`
+          `(native-devtools ${BUNDLE}: Network.enable failed: capture unavailable); network-capture-start asks again)`
       );
       app.close();
     });

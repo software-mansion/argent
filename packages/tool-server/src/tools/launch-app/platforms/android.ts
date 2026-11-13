@@ -98,11 +98,12 @@ export async function resolveLauncherActivity(
 }
 
 /**
- * Once `native-network-logs` has started native network capture for an app,
+ * Once `network-capture-start` has started native network capture for an app,
  * the capture follows the app into each process that launch-app and
- * restart-app start. The note in the launch result tells the caller whether
- * the new process is instrumented, or why capture did not follow it. Best
- * effort: a launch never fails because capture could not follow it.
+ * restart-app start, until `network-capture-stop`. The note in the launch
+ * result tells the caller whether the new process is instrumented, why capture
+ * did not follow it, or that it is stopped. Best effort: a launch never fails
+ * because capture could not follow it.
  */
 export async function followNativeNetworkCapture(
   udid: string,

@@ -26,9 +26,11 @@ function agentSentence(platform: CapturePlatform, one: boolean, where = ""): str
 }
 
 /**
- * Warning for a profiler start on a device where `native-network-logs` turned
+ * Warning for a profiler start on a device where `network-capture-start` turned
  * native network capture on for an app: the capture follows the app across
  * launches, and nothing else in a profile says the app may run instrumented.
+ * After `network-capture-stop` the app is no longer named, except on iOS
+ * while its connected process has not acknowledged the stop.
  * "On" is the capture's setting, not a live attachment: the app may not be
  * running, or its current process may not have the agent yet. On iOS an app
  * counts only after it has connected, because an app that never connected,
@@ -57,10 +59,7 @@ export function nativeNetworkCaptureWarning(
   }
   const apps = packages.join(", ");
   const one = packages.length === 1;
-  const remedy =
-    platform === "android"
-      ? `call native-network-logs with stop: true for ${one ? "that app" : "each of these apps"}`
-      : "call stop-all-simulator-servers for this device";
+  const remedy = `call network-capture-stop for ${one ? "that app" : "each of these apps"}`;
   return (
     `Native network capture is on for ${apps} on this device: ${agentSentence(platform, one)} ${CAPTURE_COST} ` +
     `To profile without it, stop this profile, ${remedy}, then restart-app and profile again.`
@@ -91,10 +90,7 @@ function logicalDeviceWarning(
   if (devices.length === 0) return undefined;
   const one = devices.length === 1;
   const those = one ? "that device" : "each of those devices";
-  const remedy =
-    platform === "android"
-      ? `call native-network-logs with stop: true for ${appId} on ${those}`
-      : `call stop-all-simulator-servers for ${those}`;
+  const remedy = `call network-capture-stop for ${appId} on ${those}`;
   return (
     `Native network capture is on for ${appId} on ${devices.join(", ")}, ` +
     `${one ? "which" : "one of which"} may be the device this profile runs on: its device_id is a ` +

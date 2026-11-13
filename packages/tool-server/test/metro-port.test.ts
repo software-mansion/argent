@@ -12,6 +12,7 @@ import { networkLogsTool } from "../src/tools/network/network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { reactProfilerFiberTreeTool } from "../src/tools/profiler/react/react-profiler-fiber-tree";
 import { reactProfilerRendersTool } from "../src/tools/profiler/react/react-profiler-renders";
+import { forgetJsCapturesOf, setJsCapture } from "../src/blueprints/network-inspector";
 import { forgetDeviceAlias, rememberDeviceAlias } from "../src/utils/debugger/device-alias";
 import { metroPort, publishedMetroPort } from "../src/utils/debugger/metro-port";
 import {
@@ -156,6 +157,8 @@ const URN_TOOLS: {
   name: string;
   params: Record<string, unknown>;
   tool: ToolDefinition<any, any>;
+  /** Names its service only while network capture is started or stopped for the payload. */
+  captured?: true;
 }[] = [
   {
     name: "debugger-component-tree",
@@ -167,9 +170,24 @@ const URN_TOOLS: {
   { name: "debugger-reload-metro", params: {}, tool: debuggerReloadMetroTool },
   { name: "react-profiler-fiber-tree", params: {}, tool: reactProfilerFiberTreeTool },
   { name: "react-profiler-renders", params: {}, tool: reactProfilerRendersTool },
-  { name: "view-network-logs", params: {}, tool: networkLogsTool },
-  { name: "view-network-request-details", params: { requestId: "1" }, tool: networkRequestTool },
+  { name: "view-network-logs", params: {}, tool: networkLogsTool, captured: true },
+  {
+    name: "view-network-request-details",
+    params: { requestId: "1" },
+    tool: networkRequestTool,
+    captured: true,
+  },
 ];
+
+/** A started JS capture on `port` of the provider's device, as network-capture-start stores it. */
+function captureOn(port: number): void {
+  setJsCapture(`${port}:${DEVICE_ID}`, {
+    bundleId: "com.example.app",
+    intent: "started",
+    mark: { install: null },
+    installed: true,
+  });
+}
 
 function urnsFor(tool: ToolDefinition<any, any>, params: Record<string, unknown>): string[] {
   const parsed = tool.zodSchema!.parse({ device_id: DEVICE_ID, ...params });
@@ -180,22 +198,56 @@ function urnsFor(tool: ToolDefinition<any, any>, params: Record<string, unknown>
 }
 
 describe("service URNs for a provider's device", () => {
-  it.each(URN_TOOLS)("$name keys its session on the published port", ({ params, tool }) => {
-    const urns = urnsFor(tool, params);
-
-    expect(urns.length).toBeGreaterThan(0);
-
-    for (const urn of urns) {
-      expect(urn).toContain(`:${PROVIDER_METRO_PORT}:`);
-      expect(urn).not.toContain(":8081:");
-    }
+  afterEach(() => {
+    forgetJsCapturesOf();
   });
 
-  it.each(URN_TOOLS)("$name still honours an explicit port", ({ params, tool }) => {
-    for (const urn of urnsFor(tool, { ...params, port: 9000 })) {
+  it.each(URN_TOOLS)(
+    "$name keys its session on the published port",
+    ({ params, tool, captured }) => {
+      // The capture sits on the published port only, so a read keyed on another port names nothing.
+      if (captured) captureOn(PROVIDER_METRO_PORT);
+      const urns = urnsFor(tool, params);
+
+      expect(urns.length).toBeGreaterThan(0);
+
+      for (const urn of urns) {
+        expect(urn).toContain(`:${PROVIDER_METRO_PORT}:`);
+        expect(urn).not.toContain(":8081:");
+      }
+    }
+  );
+
+  it.each(URN_TOOLS)("$name still honours an explicit port", ({ params, tool, captured }) => {
+    if (captured) captureOn(9000);
+    const urns = urnsFor(tool, { ...params, port: 9000 });
+
+    expect(urns.length).toBeGreaterThan(0);
+    for (const urn of urns) {
       expect(urn).toContain(":9000:");
     }
   });
+
+  it.each(URN_TOOLS.filter(({ captured }) => captured))(
+    "$name reads through the debugger of the published port once capture is started",
+    ({ params, tool }) => {
+      captureOn(PROVIDER_METRO_PORT);
+
+      expect(urnsFor(tool, params)).toEqual([
+        `JsRuntimeDebugger:${PROVIDER_METRO_PORT}:${DEVICE_ID}`,
+      ]);
+    }
+  );
+
+  it.each(URN_TOOLS.filter(({ captured }) => captured))(
+    "$name names no service before capture is started on the port it reads",
+    ({ params, tool }) => {
+      expect(urnsFor(tool, params)).toEqual([]);
+      // A capture on another port of the device does not open this one.
+      captureOn(8081);
+      expect(urnsFor(tool, params)).toEqual([]);
+    }
+  );
 });
 
 /**

@@ -3,6 +3,11 @@ import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { isExternalDeviceUrn } from "../../utils/external-devices";
 import {
+  forgetJsCaptures,
+  forgetJsCapturesOf,
+  pauseJsCapturesOf,
+} from "../../blueprints/network-inspector";
+import {
   DEVICE_OWNED_NAMESPACES,
   PORT_KEYED_NAMESPACES,
   deviceIdOwningUrn,
@@ -35,7 +40,7 @@ export function createStopAllSimulatorServersTool(
 > {
   return {
     id: "stop-all-simulator-servers",
-    description: `Stop the services a device owns - simulator-server processes (iOS + Android), native devtools, the iOS accessibility service, TV-control daemons, Chromium CDP sessions, screen recordings, native profiler sessions, Android native network capture (started by native-network-logs), and JS-runtime debugger sessions along with the network inspectors and React profiler sessions that ride on them - freeing their spawned processes, sockets and ports. Call this when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services mid-flow - not just because a task finished, since the next task reuses these services and would start cold again. To end only the native network capture of one app, call native-network-logs with stop: true instead.
+    description: `Stop the services a device owns - simulator-server processes (iOS + Android), native devtools, the iOS accessibility service, TV-control daemons, Chromium CDP sessions, screen recordings, native profiler sessions, native network capture with the requests it recorded, and JS-runtime debugger sessions along with the network inspectors and React profiler sessions that ride on them - freeing their spawned processes, sockets and ports. Network capture started by network-capture-start ends here too, with the requests it recorded. Call this when the user asks to clean up or ends the session, or when a skill tells you to recycle a device's services mid-flow - not just because a task finished, since the next task reuses these services and would start cold again. To stop the network capture of one app and keep its requests, call network-capture-stop instead.<flag:macos-apps> On a Mac app it also ends the native-network-logs capture and drops its log; network-capture-stop does not apply there.</flag:macos-apps>
 PASS \`devices\` with the device ids this session used: one tool-server serves every agent, subagent and CLI call using this argent install, and an unscoped call tears down THEIR devices too. Omit \`devices\` only when a machine-wide cleanup is what you actually want. An EMPTY array stops nothing; it does not ask for the machine-wide sweep.
 A JS-runtime debugger session is keyed by the id you called \`debugger-connect\` with. On a Metro serving two or more devices that id is not a udid or serial - connect refuses those and tells you to re-target with the \`logicalDeviceId\` it returns - so a scope built from \`list-devices\` ids cannot reach that session. Pass any such \`logicalDeviceId\` in \`devices\` ALONGSIDE the device id.
 Returns { stopped }: the URNs of the live services that were shut down; empty means nothing was still running. { unmatched }, present only when a supplied id owns no service here, lists those ids, so a typo or a device NAME passed instead of an id does not read as a clean machine. It is NOT proof the id is wrong: a Vega device you only booted and drove with the remote registers no service and lands here, as does any device this session never started anything on. { left_running } lists the URNs of live debugger sessions (and the network inspectors / React profiler sessions riding on them) whose id no device scope can name; re-call with the id after each URN's \`<namespace>:<port>:\` prefix to reap them. { aborted: true } means the request was cancelled part-way: the rest was left untouched and \`unmatched\` / \`left_running\` were not computed.
@@ -88,6 +93,8 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       // of any other namespace are other agents' devices, left alone by design.
       const survivors: string[] = [];
       let aborted = false;
+      // Before the sweep closes the debuggers it would go through.
+      const paused = await pauseJsCapturesOf(registry, scoped ? devices : undefined);
       for (const [urn, entry] of snapshot.services) {
         // Checked between disposals rather than inside one: a dispose already
         // under way finishes, since abandoning a blueprint mid-teardown leaks
@@ -131,7 +138,15 @@ Fails if the input has an unknown key (e.g. \`udids\` instead of \`devices\`); o
       // The rest of the snapshot was never visited, so `unmatched` would read
       // an id the sweep never reached as a typo, and `left_running` would miss
       // sessions still up. Report the partial teardown as partial.
-      if (aborted) return { stopped, aborted: true };
+      if (aborted) {
+        // The pause stopped recording in these runtimes, so their entries go,
+        // as at the end of a sweep. The sweep ended no other capture.
+        forgetJsCaptures(paused);
+        return { stopped, aborted: true };
+      }
+      // The JS layer's capture intent outlives its service, and a stop that
+      // reached no runtime stores one without any service, so it goes by device.
+      forgetJsCapturesOf(scoped ? devices : undefined, paused);
       if (!scoped) return { stopped };
       // A scoped stop that named an id owning nothing is indistinguishable
       // from a clean machine unless we say so — and when that id is a typo, its

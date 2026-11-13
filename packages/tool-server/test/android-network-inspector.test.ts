@@ -29,7 +29,6 @@ import {
   FailureError,
   Registry,
   ServiceState,
-  getFailureSignal,
   type ServiceInstance,
 } from "@argent/registry";
 import { adbReverse, adbShell, adbShellInput, removeAdbReverse, runAdb } from "../src/utils/adb";
@@ -41,11 +40,13 @@ import {
   attachAndroidNetworkInspectorToLaunch,
   findAndroidNativeRecord,
   handshakeProof,
+  hasAndroidNetworkCapture,
   liveAndroidNetworkCaptureDevices,
   liveAndroidNetworkCaptures,
   openFrame,
   sealFrame,
   sessionKeys,
+  type AndroidCaptureStart,
   type AndroidNetworkInspectorApi,
 } from "../src/blueprints/android-network-inspector";
 import {
@@ -66,6 +67,10 @@ const APP_UID = 10212;
 const SECRET_SHAPE = /^[0-9a-f]{64}$/;
 
 const nativeNetworkLogsTool = createNativeNetworkLogsTool(new Registry());
+const STOPPED_REASON =
+  "capture stopped by network-capture-stop; network-capture-start turns it on again";
+const STOPPED_BEFORE_FINISH = "capture stopped before the request finished";
+const STOPPED_LAUNCH_NOTE = `native network capture is stopped for ${PKG} (network-capture-stop); this process runs without it until network-capture-start`;
 
 function dirFor(packageName = PKG, user = 0): string {
   return `/data/user/${user}/${packageName}/code_cache/.argent-inspector`;
@@ -552,11 +557,80 @@ async function createInspector(
   return instance.api;
 }
 
+/** Starts capture, which waits until the agent is armed, as network-capture-start does. */
 async function armedInspector(metroPort = 8081): Promise<AndroidNetworkInspectorApi> {
   const api = await createInspector(metroPort);
-  expect(await api.ensureAttached(metroPort)).toBeNull();
-  await vi.waitFor(() => expect(api.state().armed).toBe(true));
+  expect(await api.startCapture(metroPort)).toEqual({ armed: true });
   return api;
+}
+
+/**
+ * Starts capture and returns once its attach went through, while the start
+ * still waits up to 5 s for an agent to arm: for a test that connects the
+ * agent itself. The start settles once one arms, or at the dispose.
+ */
+async function startInBackground(
+  api: AndroidNetworkInspectorApi,
+  metroPort = 8081
+): Promise<{ start: Promise<AndroidCaptureStart> }> {
+  const start = api.startCapture(metroPort);
+  await vi.waitFor(() => expect(api.isStarted()).toBe(true));
+  return { start };
+}
+
+/**
+ * Runs a start whose agent does not arm to its end: its 5 s wait for the
+ * agent passes on a fake clock.
+ */
+async function startUnarmed(
+  api: AndroidNetworkInspectorApi,
+  metroPort = 8081
+): Promise<AndroidCaptureStart> {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    let settled = false;
+    const start = api.startCapture(metroPort).finally(() => {
+      settled = true;
+    });
+    while (!settled) {
+      // Lets the socket and the device mocks run between the clock's steps.
+      await new Promise((resolve) => setImmediate(resolve));
+      await vi.advanceTimersByTimeAsync(250);
+    }
+    return await start;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+/** Starts the app's capture through the registry's inspector, as network-capture-start does. */
+async function startThrough(
+  registry: Registry,
+  packageName = PKG,
+  deviceInfo: { id: string; platform: "android"; kind: "emulator" | "device" } = DEVICE,
+  metroPort = 8081
+): Promise<AndroidNetworkInspectorApi> {
+  const ref = androidNetworkInspectorRef(deviceInfo, packageName, metroPort);
+  const api = await registry.resolveService<AndroidNetworkInspectorApi>(ref.urn, ref.options);
+  expect(await api.startCapture(metroPort)).toEqual({ armed: true });
+  return api;
+}
+
+function listNative(
+  api: AndroidNetworkInspectorApi,
+  options: { limit?: number; clear?: boolean } = {}
+): Promise<unknown> {
+  return Promise.resolve(
+    nativeNetworkLogsTool.execute!(
+      { androidNetwork: api },
+      { udid: SERIAL, bundleId: PKG, limit: options.limit ?? 50, clear: options.clear ?? false }
+    )
+  );
+}
+
+/** The number a record id ends in: the tool-server numbers its records in order. */
+function recordNumber(id: string): number {
+  return Number(id.slice(id.lastIndexOf("-") + 1));
 }
 
 function toolRegistry(): Registry {
@@ -939,7 +1013,7 @@ describe("the agent handshake", () => {
   it("closes a client whose proof does not verify, and nothing it sends becomes a record", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
 
     const impostor = await FakeAgent.connect(device.hostPort!, {
       secret: session().secret,
@@ -968,7 +1042,7 @@ describe("the agent handshake", () => {
   it("closes a connection that sends anything but its proof after the hello", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
 
     const early = connectTo(device.hostPort!);
     early.on("error", () => {});
@@ -987,7 +1061,7 @@ describe("the agent handshake", () => {
   it("is refused by an agent whose session holds another secret, and logs that the agent hung up on its proof", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
 
     const stale = await FakeAgent.connect(device.hostPort!, { secret: "a".repeat(64) });
     await stale.closed();
@@ -1005,7 +1079,7 @@ describe("the agent handshake", () => {
   it("closes a connection that has not authenticated within 5 s", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
 
     const stalled = connectTo(device.hostPort!);
     stalled.on("error", () => {});
@@ -1029,7 +1103,7 @@ describe("the agent handshake", () => {
   it("keeps room for the agent while connections that never authenticate pile up", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    const { start } = await startInBackground(api);
 
     const stalled = await Promise.all(
       Array.from(
@@ -1047,7 +1121,7 @@ describe("the agent handshake", () => {
     );
 
     await FakeAgent.fromSession(dirFor(), proc());
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await start).toEqual({ armed: true });
     await firstClosed;
     for (const socket of stalled) socket.destroy();
   });
@@ -1055,7 +1129,7 @@ describe("the agent handshake", () => {
   it("rejects a hello that names another package and stays unarmed", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
 
     const impostor = await FakeAgent.connect(device.hostPort!, {
       secret: session().secret,
@@ -1069,7 +1143,7 @@ describe("the agent handshake", () => {
   it("closes a peer that opens without a hello and only logs it: an unauthenticated peer sets no note", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
     const before = api.state();
 
     const earlier = await FakeAgent.connect(device.hostPort!, { secret: "", hello: null });
@@ -1082,7 +1156,7 @@ describe("the agent handshake", () => {
   it("closes an unauthenticated connection past the handshake's frame size, and keeps serving", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    const { start } = await startInBackground(api);
 
     const hostile = connectTo(device.hostPort!);
     hostile.on("error", () => {});
@@ -1091,7 +1165,7 @@ describe("the agent handshake", () => {
     await closed;
 
     await FakeAgent.fromSession(dirFor(), proc());
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await start).toEqual({ armed: true });
   });
 
   it("closes an authenticated connection whose frame never ends before its buffer outgrows the tool-server", async () => {
@@ -1116,11 +1190,11 @@ describe("the agent handshake", () => {
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
   });
 
-  it("sends the Metro port again when a call passes another one", async () => {
+  it("sends the Metro port again when a start passes another one", async () => {
     const api = await armedInspector(8081);
     const agent = agents[0]!;
-    expect(await api.ensureAttached(8081)).toBeNull();
-    expect(await api.ensureAttached(8190)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    expect(await api.startCapture(8190)).toEqual({ armed: true });
     await vi.waitFor(() =>
       expect(agent.controls).toEqual([{ metroPort: 8081 }, { metroPort: 8190 }])
     );
@@ -1258,7 +1332,7 @@ describe("sealed frames", () => {
   it("closes a relayed connection once a plaintext frame follows the handshake, and folds nothing from it", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
     const injected = JSON.stringify({
       type: "CDP",
       payload: {
@@ -1297,7 +1371,7 @@ describe("sealed frames", () => {
   it("closes the connection when a relay flips one bit of a sealed frame, and folds nothing from it", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    const { start } = await startInBackground(api);
     const url = "https://example.com/account";
     // Inside the URL, so the frame would still parse without the tag check.
     const offset = JSON.stringify({
@@ -1312,7 +1386,7 @@ describe("sealed frames", () => {
       toServer: (line, index) => [index === 3 ? flipByte(line, offset) : line],
     });
     const agent = await FakeAgent.connect(relay.port, { secret: session().secret });
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await start).toEqual({ armed: true });
 
     agent.started(agent.rid(1), url);
     await agent.closed();
@@ -1326,12 +1400,12 @@ describe("sealed frames", () => {
   it("closes the connection when a relay replays a sealed frame", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    const { start } = await startInBackground(api);
     const relay = await startRelay(device.hostPort!, {
       toServer: (line, index) => (index === 3 ? [line, line] : [line]),
     });
     const agent = await FakeAgent.connect(relay.port, { secret: session().secret });
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await start).toEqual({ armed: true });
 
     agent.started(agent.rid(1), "https://example.com/transfer", "POST");
     await agent.closed();
@@ -1352,7 +1426,7 @@ describe("sealed frames", () => {
     async (_field, change: Record<string, unknown>) => {
       device.agentOnAttach = false;
       const api = await createInspector();
-      expect(await api.ensureAttached(8081)).toBeNull();
+      await startInBackground(api);
       const relay = await startRelay(device.hostPort!, {
         toServer: (line, index) => {
           if (index !== 1) return [line];
@@ -1382,10 +1456,10 @@ describe("sealed frames", () => {
   it("carries a whole session sealed both ways: records, bodies, a redirect hop, a Metro port update and Network.disable", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    const { start } = await startInBackground(api);
     const relay = await startRelay(device.hostPort!);
     const agent = await FakeAgent.connect(relay.port, { secret: session().secret });
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await start).toEqual({ armed: true });
 
     const transfer = agent.rid(1);
     agent.responseBodies.set(transfer, {
@@ -1451,7 +1525,7 @@ describe("sealed frames", () => {
       available: true,
       body: '{"amount":5}',
     });
-    expect(await api.ensureAttached(8190)).toBeNull();
+    expect(await api.startCapture(8190)).toEqual({ armed: true });
     await vi.waitFor(() =>
       expect(agent.controls).toEqual([{ metroPort: 8081 }, { metroPort: 8190 }])
     );
@@ -1509,7 +1583,7 @@ describe("the tunnel's host end", () => {
   it("gives a raw TCP client that sends a hello nothing it can use, and closes it once its proof fails", async () => {
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
     const { secret } = session();
 
     const lines = await rawClient(device.hostPort!, {
@@ -1934,71 +2008,65 @@ describe("AndroidNetworkInspector against a fake agent socket", () => {
 });
 
 describe("the gates before an attach", () => {
-  it("returns not_attachable, naming the JS layer, when the build is not debuggable", async () => {
+  it("reports the layer unavailable, naming the JS layer, when the build is not debuggable", async () => {
     device.runAsError = `run-as: package not debuggable: ${PKG}`;
     const api = await createInspector();
 
-    expect(await api.ensureAttached(8081)).toEqual({
-      status: "not_attachable",
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      unavailable: true,
       reason: expect.stringContaining(`package not debuggable: ${PKG}`),
-      fallback: expect.stringContaining("view-network-logs"),
     });
     expect(device.commands.some((c) => c.includes(" push "))).toBe(false);
     expect(attachCommands()).toEqual([]);
+    // No mark is left, and capture is not started.
+    expect(api.captureMark()).toBeUndefined();
+    expect(api.isStarted()).toBe(false);
   });
 
-  it("returns not_attachable for a system package run-as cannot reach", async () => {
+  it("reports the layer unavailable for a system package run-as cannot reach", async () => {
     device.runAsError = `run-as: package not an application: ${PKG}`;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toMatchObject({
-      status: "not_attachable",
+    expect(await api.startCapture(8081)).toMatchObject({
+      armed: false,
+      unavailable: true,
       reason: expect.stringContaining("system package"),
     });
   });
 
-  it("fails naming the package, user and device for an unknown package, rather than blaming the build", async () => {
+  it("reports the layer unavailable, naming the package, user and device, for an unknown package, rather than blaming the build", async () => {
     device.runAsError = `run-as: unknown package: ${PKG}`;
     const api = await createInspector();
 
-    const err = await api.ensureAttached(8081).then(
-      () => undefined,
-      (e: unknown) => e
-    );
-    expect(err).toBeInstanceOf(FailureError);
-    expect((err as Error).message).toContain(
-      `${PKG} is not installed for Android user 0 on ${SERIAL}`
-    );
-    expect((err as Error).message).not.toContain("debuggable");
-    expect(getFailureSignal(err)?.error_code).toBe(
-      FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_UNKNOWN_PACKAGE
-    );
+    const started = await api.startCapture(8081);
+    expect(started).toEqual({
+      armed: false,
+      unavailable: true,
+      reason: expect.stringContaining(`${PKG} is not installed for Android user 0 on ${SERIAL}`),
+    });
+    expect(started.reason).not.toContain("debuggable");
+    expect(api.captureMark()).toBeUndefined();
+    expect(api.isStarted()).toBe(false);
   });
 
   it.each([
     `run-as: couldn't stat /data/user/10/${PKG}: No such file or directory`,
     "run-as: couldn't stat /data/user/10: No such file or directory",
   ])(
-    "fails as an app not installed for the Android user, naming it, when run-as says %s",
+    "reports the layer unavailable for an app not installed for the Android user, naming it, when run-as says %s",
     async (detail) => {
       device.user = 10;
       device.runAsError = detail;
       const api = await createInspector();
 
-      const err = await api.ensureAttached(8081).then(
-        () => undefined,
-        (e: unknown) => e
-      );
-      expect(getFailureSignal(err)?.error_code).toBe(
-        FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_UNKNOWN_PACKAGE
-      );
-      expect((err as Error).message).toContain(
-        `${PKG} is not installed for Android user 10 on ${SERIAL}`
-      );
-      expect((err as Error).message).not.toContain("try again");
+      const started = await api.startCapture(8081);
+      expect(started).toMatchObject({ armed: false, unavailable: true });
+      expect(started.reason).toContain(`${PKG} is not installed for Android user 10 on ${SERIAL}`);
+      expect(started.reason).not.toContain("try again");
     }
   );
 
-  it("fails with adb's own detail when run-as times out, and a later call can still attach", async () => {
+  it("is not armed, with adb's own detail, when run-as times out, and a later start can still attach", async () => {
     device.runAsError = new FailureError(
       `adb -s ${SERIAL} shell run-as '${PKG}' id failed: Command failed: adb (killed=true signal=SIGKILL)`,
       {
@@ -2010,53 +2078,53 @@ describe("the gates before an attach", () => {
     );
     const api = await createInspector();
 
-    const err = await api.ensureAttached(8081).then(
-      () => undefined,
-      (e: unknown) => e
-    );
-    expect((err as Error).message).toContain("killed=true signal=SIGKILL");
-    expect((err as Error).message).toContain("says nothing about the build");
-    expect(getFailureSignal(err)).toMatchObject({
-      error_code: FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_RUN_AS_FAILED,
-      error_kind: "timeout",
-    });
+    // A timeout says nothing about the build, so the layer is not unavailable.
+    const started = await api.startCapture(8081);
+    expect(started).toEqual({ armed: false, reason: expect.any(String) });
+    expect(started.reason).toContain("killed=true signal=SIGKILL");
+    expect(started.reason).toContain("says nothing about the build");
 
     device.runAsError = undefined;
-    expect(await api.ensureAttached(8081)).toBeNull();
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
   });
 
-  it("returns not_attachable once a non-debuggable build replaced an attached app", async () => {
+  it("reports the layer unavailable once a non-debuggable build replaced an attached app, and keeps the mark of the start before", async () => {
     const api = await armedInspector();
+    const mark = api.captureMark();
+    expect(mark).toBeDefined();
     device.runAsError = `run-as: package not debuggable: ${PKG}`;
     device.process = { pid: 5100, startTime: 99_000 };
 
-    expect(await api.ensureAttached(8081)).toMatchObject({
-      status: "not_attachable",
+    expect(await api.startCapture(8081)).toMatchObject({
+      armed: false,
+      unavailable: true,
       reason: expect.stringContaining("package not debuggable"),
     });
     expect(attachCommands()).toHaveLength(1);
+    expect(api.captureMark()).toEqual(mark);
   });
 
-  it("returns not_attachable below Android 8.0", async () => {
+  it("reports the layer unavailable below Android 8.0", async () => {
     device.sdk = 25;
     const api = await createInspector();
 
-    expect(await api.ensureAttached(8081)).toMatchObject({
-      status: "not_attachable",
+    expect(await api.startCapture(8081)).toMatchObject({
+      armed: false,
+      unavailable: true,
       reason: expect.stringContaining("API 25"),
     });
     expect(device.commands).toHaveLength(1);
     expect(device.commands[0]).toMatch(/^echo "sdk=/);
   });
 
-  it("returns not_attachable for an arm app under ARM translation on an x86_64 device", async () => {
+  it("reports the layer unavailable for an arm app under ARM translation on an x86_64 device", async () => {
     device.machine = "x86_64";
     device.abi = "arm64-v8a";
     const api = await createInspector();
 
-    expect(await api.ensureAttached(8081)).toMatchObject({
-      status: "not_attachable",
+    expect(await api.startCapture(8081)).toMatchObject({
+      armed: false,
+      unavailable: true,
       reason: expect.stringContaining("under ARM translation on this x86_64 device"),
     });
     expect(device.commands.some((c) => c.includes(" push "))).toBe(false);
@@ -2068,14 +2136,14 @@ describe("the gates before an attach", () => {
     await armedInspector();
   });
 
-  it("returns the missing-binaries result, without throwing or touching the device, when bin/network-inspector/ is absent", async () => {
+  it("reports the layer unavailable for missing binaries, without throwing or touching the device, when bin/network-inspector/ is absent", async () => {
     fs.rmSync(path.join(binRoot, "network-inspector"), { recursive: true, force: true });
     const api = await createInspector();
 
-    await expect(api.ensureAttached(8081)).resolves.toEqual({
-      status: "not_attachable",
+    await expect(api.startCapture(8081)).resolves.toEqual({
+      armed: false,
+      unavailable: true,
       reason: AGENT_BINARIES_MISSING_REASON,
-      fallback: expect.stringContaining("view-network-logs"),
     });
     expect(device.commands).toEqual([]);
   });
@@ -2090,8 +2158,9 @@ describe("the gates before an attach", () => {
 
     device.abi = "armeabi-v7a";
     const api32 = await createInspector(8081, OTHER);
-    expect(await api32.ensureAttached(8081)).toMatchObject({
-      status: "not_attachable",
+    expect(await api32.startCapture(8081)).toMatchObject({
+      armed: false,
+      unavailable: true,
       reason: expect.stringContaining("runs as armeabi-v7a"),
     });
   });
@@ -2134,7 +2203,7 @@ describe("a switch of the foreground Android user", () => {
   }
 
   it.each([
-    ["a native-network-logs call", (api: AndroidNetworkInspectorApi) => api.ensureAttached(8081)],
+    ["network-capture-start", (api: AndroidNetworkInspectorApi) => api.startCapture(8081)],
     ["a launch", () => attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)],
   ])(
     "is followed by %s: user 10's process, run-as --user 10 and user 10's files, and dispose removes both users' sessions",
@@ -2182,9 +2251,10 @@ describe("a switch of the foreground Android user", () => {
     device.process = null;
     device.runAsError = `run-as: couldn't stat /data/user/10/${PKG}: No such file or directory`;
 
-    expect(await api.ensureAttached(8081)).toEqual({
-      status: "ok",
-      note: expect.stringContaining(`${PKG} is not installed for Android user 10 on ${SERIAL}`),
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      unavailable: true,
+      reason: expect.stringContaining(`${PKG} is not installed for Android user 10 on ${SERIAL}`),
     });
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toContain(
       `${PKG} is not installed for Android user 10 on ${SERIAL}`
@@ -2196,7 +2266,7 @@ describe("a switch of the foreground Android user", () => {
     expect(device.files.has(dirFor(PKG, 10))).toBe(false);
   });
 
-  it("says user 10 is in the foreground once user 0's process ended, and the next call attaches to user 10's", async () => {
+  it("says user 10 is in the foreground once user 0's process ended, and the next start attaches to user 10's", async () => {
     const api = await armedInspector();
     switchToUser10();
     // `am force-stop --user 0`.
@@ -2205,14 +2275,15 @@ describe("a switch of the foreground Android user", () => {
 
     await vi.waitFor(
       () =>
-        expect(api.state().note).toBe(
-          `Android user 10 is in the foreground now; launch-app, restart-app or the next native-network-logs call attaches the agent to that user's process of ${PKG}`
-        ),
+        expect(api.state()).toMatchObject({
+          notAttached: true,
+          note: `Android user 10 is in the foreground now, and its process of ${PKG} runs without capture; restart-app attaches capture to it, or call network-capture-start`,
+        }),
       { timeout: 3_000 }
     );
     expect(attachCommands()).toHaveLength(1);
 
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
     expect(attachCommands()[1]).toContain(`attach-agent 5300 '${dirFor(PKG, 10)}/`);
     await vi.waitFor(() =>
       expect(api.state()).toMatchObject({ armed: true, process: USER_10_PROCESS })
@@ -2226,7 +2297,7 @@ describe("a switch of the foreground Android user", () => {
     const before = device.commands.length;
 
     device.process = { pid: 5400, startTime: 130_000 };
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
 
     expect(device.commands.slice(before)).not.toContain(`run-as '${PKG}' id`);
     expect(attachCommands()[1]).toContain(`attach-agent 5400 '${dirFor(PKG, 10)}/`);
@@ -2247,7 +2318,7 @@ describe("device identity", () => {
     ).toBeUndefined();
 
     await createInspector(8081, PKG, { ...DEVICE, id: ext });
-    expect(await instances[0]!.api.ensureAttached(8081)).toBeNull();
+    expect(await instances[0]!.api.startCapture(8081)).toEqual({ armed: true });
     // adb is driven with the serial behind the ext: id.
     expect(vi.mocked(adbShell).mock.calls.every((call) => call[0] === SERIAL)).toBe(true);
     await vi.waitFor(() => expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]));
@@ -2257,25 +2328,31 @@ describe("device identity", () => {
     expect(liveAndroidNetworkCaptureDevices(OTHER)).toEqual([]);
   });
 
-  it("refuses a second adb serial of the same device for the same app, naming the serial in use", async () => {
+  it("reports a second adb serial of the same device for the same app unavailable, naming the serial in use", async () => {
     device.identity.set("R58M123", { serialNo: "R58M123", bootId: "boot-phone" });
     device.identity.set("192.168.1.5:5555", { serialNo: "R58M123", bootId: "boot-phone" });
     const usb = { id: "R58M123", platform: "android" as const, kind: "device" as const };
     const wifi = { id: "192.168.1.5:5555", platform: "android" as const, kind: "device" as const };
-    expect(await (await createInspector(8081, PKG, usb)).ensureAttached(8081)).toBeNull();
+    expect(await (await createInspector(8081, PKG, usb)).startCapture(8081)).toEqual({
+      armed: true,
+    });
 
-    const err = await (await createInspector(8081, PKG, wifi)).ensureAttached(8081).then(
-      () => undefined,
-      (e: unknown) => e
-    );
-    expect((err as Error).message).toContain("already inspected through adb serial R58M123");
-    expect(getFailureSignal(err)?.error_code).toBe(
-      FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_DEVICE_IN_USE
-    );
+    const refused = await createInspector(8081, PKG, wifi);
+    expect(await refused.startCapture(8081)).toEqual({
+      armed: false,
+      unavailable: true,
+      reason:
+        `${PKG} on this device is already inspected through adb serial R58M123, and 192.168.1.5:5555 is another connection to the same device. ` +
+        "Use R58M123, or end that capture first with stop-all-simulator-servers for R58M123.",
+    });
+    expect(refused.captureMark()).toBeUndefined();
+    expect(refused.isStarted()).toBe(false);
 
     // Another app on the same device is not refused.
     device.processes.set(OTHER, { pid: 6100, startTime: 70_000 });
-    expect(await (await createInspector(8081, OTHER, wifi)).ensureAttached(8081)).toBeNull();
+    expect(await (await createInspector(8081, OTHER, wifi)).startCapture(8081)).toEqual({
+      armed: true,
+    });
   });
 
   it("still refuses a second serial of a phone that rebooted in between, keyed by ro.serialno alone", async () => {
@@ -2283,15 +2360,15 @@ describe("device identity", () => {
     device.identity.set("192.168.1.5:5555", { serialNo: "R58M123", bootId: "boot-after" });
     const usb = { id: "R58M123", platform: "android" as const, kind: "device" as const };
     const wifi = { id: "192.168.1.5:5555", platform: "android" as const, kind: "device" as const };
-    expect(await (await createInspector(8081, PKG, usb)).ensureAttached(8081)).toBeNull();
+    expect(await (await createInspector(8081, PKG, usb)).startCapture(8081)).toEqual({
+      armed: true,
+    });
 
-    const err = await (await createInspector(8081, PKG, wifi)).ensureAttached(8081).then(
-      () => undefined,
-      (e: unknown) => e
-    );
-    expect(getFailureSignal(err)?.error_code).toBe(
-      FAILURE_CODES.ANDROID_NETWORK_INSPECTOR_DEVICE_IN_USE
-    );
+    expect(await (await createInspector(8081, PKG, wifi)).startCapture(8081)).toEqual({
+      armed: false,
+      unavailable: true,
+      reason: expect.stringContaining("already inspected through adb serial R58M123"),
+    });
     const facts = device.commands.find((c) => c.startsWith('echo "sdk='))!;
     expect(facts).not.toContain("boot_id");
   });
@@ -2302,10 +2379,11 @@ describe("device identity", () => {
     device.identity.set("emulator-5558", same);
     // An emulator reached over TCP says so through its qemu properties.
     device.identity.set("127.0.0.1:5565", same);
-    expect(await (await createInspector()).ensureAttached(8081)).toBeNull();
+    expect(await (await createInspector()).startCapture(8081)).toEqual({ armed: true });
     for (const id of ["emulator-5558", "127.0.0.1:5565"]) {
       const other = await createInspector(8081, PKG, { id, platform: "android", kind: "emulator" });
-      expect(await other.ensureAttached(8081)).toBeNull();
+      // Not refused: the start went through to its attach, and waits for the agent there.
+      await startInBackground(other);
     }
     const facts = device.commands.find((c) => c.startsWith('echo "sdk='))!;
     expect(facts).toContain("getprop ro.kernel.qemu");
@@ -2321,7 +2399,7 @@ describe("attaching and the app's lifecycle", () => {
 
     fs.rmSync(path.join(binRoot, "network-inspector"), { recursive: true, force: true });
 
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
     expect(api.records(8081).map((r) => r.request.url)).toEqual(["https://example.com/kept"]);
   });
 
@@ -2377,7 +2455,7 @@ describe("attaching and the app's lifecycle", () => {
     expect(device.files.has(dirFor())).toBe(false);
 
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    const { start } = await startInBackground(api);
     expect(attachCommands()).toHaveLength(1);
     // True whether the loaded agent is free (it connects), held by another
     // tool-server (it stays there until that connection ends) or from an
@@ -2396,7 +2474,7 @@ describe("attaching and the app's lifecycle", () => {
     expect(api.state().armed).toBe(false);
 
     await FakeAgent.fromSession(dirFor(), proc());
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await start).toEqual({ armed: true });
   });
 
   it("writes the session but does not attach into a process that already has the agent loaded", async () => {
@@ -2404,7 +2482,7 @@ describe("attaching and the app's lifecycle", () => {
     device.agentOnAttach = false;
     const api = await createInspector();
 
-    expect(await api.ensureAttached(8081)).toBeNull();
+    const { start } = await startInBackground(api);
     expect(attachCommands()).toEqual([]);
     expect(attachScripts()[0]).toContain(
       "if grep -q libjvmti_network_inspector.so /proc/4722/maps; then echo loaded;"
@@ -2412,7 +2490,7 @@ describe("attaching and the app's lifecycle", () => {
     expect(session().secret).toMatch(SECRET_SHAPE);
 
     await FakeAgent.fromSession(dirFor(), proc());
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await start).toEqual({ armed: true });
   });
 
   it("writes the session owner-only, then copies the agent under code_cache and chmods it, before the attach", async () => {
@@ -2442,7 +2520,7 @@ describe("attaching and the app's lifecycle", () => {
 
   it("attaches once per (pid, start time): the same process never twice, a reused pid with a new start time again", async () => {
     const api = await armedInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toContain(
       `native network capture is attached to ${PKG} (pid 4722)`
     );
@@ -2453,14 +2531,15 @@ describe("attaching and the app's lifecycle", () => {
     expect(attachCommands()).toHaveLength(2);
     expect(attachCommands()[1]).toContain("attach-agent 4722 ");
 
-    await api.ensureAttached(8081);
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
     await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG);
     expect(attachCommands()).toHaveLength(2);
   });
 
-  it("does not attach from a launch until native-network-logs set capture up", async () => {
+  it("does not attach from a launch until network-capture-start sets capture up", async () => {
     await createInspector();
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
+    expect(await followNativeNetworkCapture(SERIAL, PKG)).toEqual({});
     expect(device.commands).toEqual([]);
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
   });
@@ -2473,7 +2552,7 @@ describe("attaching and the app's lifecycle", () => {
     const note = await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG);
 
     expect(note).toBe(
-      `native network capture is attached to ${PKG} (pid 5300); native-network-logs with stop: true ends it`
+      `native network capture is attached to ${PKG} (pid 5300); network-capture-stop ends it`
     );
   });
 
@@ -2486,7 +2565,9 @@ describe("attaching and the app's lifecycle", () => {
     const note = await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG);
 
     expect(performance.now() - started).toBeLessThan(4_500);
-    expect(note).toContain("no process of it appeared within 3 s");
+    expect(note).toBe(
+      `native network capture is on for ${PKG}, but no process of it appeared within 3 s; restart-app attaches the agent to its next process, or call network-capture-start once it runs`
+    );
     expect(attachCommands()).toHaveLength(1);
   });
 
@@ -2564,21 +2645,22 @@ describe("attaching and the app's lifecycle", () => {
     }
   }, 15_000);
 
-  it("forgets a pid whose attach-agent failed, says so, and the next call attaches it", async () => {
+  it("forgets a pid whose attach-agent failed, says so, and the next start attaches it", async () => {
     const api = await armedInspector();
-    await agents[0]!.close();
-    await vi.waitFor(() => expect(api.state().armed).toBe(false));
     device.process = { pid: 5600, startTime: 160_000 };
+    await agents[0]!.close();
+    // The app restarted outside a launch, as the check after the drop finds.
+    await vi.waitFor(() => expect(api.state().notAttached).toBe(true), { timeout: 3_000 });
     device.attachError =
       "Exception occurred while executing 'attach-agent':\njava.lang.IllegalArgumentException: Unknown process: 5600\n\tat com.android.server.am.ActivityManagerService.attachAgent(ActivityManagerService.java:18801)";
 
-    expect(await api.ensureAttached(8081)).toBeNull();
-    expect(api.state().note).toBe(
-      "attach-agent failed for pid 5600 (Unknown process: 5600); the next native-network-logs call or launch tries again"
-    );
+    const note =
+      "attach-agent failed for pid 5600 (Unknown process: 5600); the next launch or network-capture-start tries again";
+    expect(await startUnarmed(api)).toEqual({ armed: false, reason: note });
+    expect(api.state().note).toBe(note);
 
     device.attachError = undefined;
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
     expect(attachCommands().filter((c) => c.includes("attach-agent 5600 "))).toHaveLength(2);
     await vi.waitFor(() =>
       expect(api.state()).toMatchObject({ armed: true, process: { pid: 5600 } })
@@ -2592,7 +2674,7 @@ describe("attaching and the app's lifecycle", () => {
     await agents[0]!.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
 
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
 
     expect(device.reverses.get(device.devicePort!)).toEqual(device.hostPort);
     expect(attachCommands()).toHaveLength(2);
@@ -2612,16 +2694,19 @@ describe("attaching and the app's lifecycle", () => {
     expect(api.state()).toMatchObject({ armed: true, process: { pid: 5300 } });
   });
 
-  it("pushes the agent files again once the device lost them, and the next call attaches", async () => {
+  it("pushes the agent files again once the device lost them, and the next start attaches", async () => {
     const api = await armedInspector();
     device.stagingLost = true;
     device.process = { pid: 5400, startTime: 140_000 };
     await agents[0]!.close();
-    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    await vi.waitFor(() => expect(api.state().notAttached).toBe(true), { timeout: 3_000 });
 
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await startUnarmed(api)).toEqual({
+      armed: false,
+      reason: expect.stringContaining("No such file or directory"),
+    });
     expect(api.state().note).toContain("No such file or directory");
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
 
     expect(device.commands.filter((c) => c.includes(" push "))).toHaveLength(4);
     expect(attachCommands()).toHaveLength(2);
@@ -2630,77 +2715,86 @@ describe("attaching and the app's lifecycle", () => {
     );
   });
 
-  it("lists the records in memory with a note when adb does not answer", async () => {
+  it("keeps the records when a start finds adb not answering, and native-network-logs lists them without adb", async () => {
     const api = await armedInspector();
     agents[0]!.request(agents[0]!.rid(1), "https://example.com/kept");
     await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
     device.adbDown = true;
 
-    const listed = (await nativeNetworkLogsTool.execute!(
-      { androidNetwork: api },
-      { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
-    )) as { status: string; total: number; header: string };
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      reason:
+        "adb did not answer (device offline); the next launch or network-capture-start tries again",
+    });
+    const before = device.commands.length;
+    const listed = (await listNative(api)) as { status: string; total: number; header: string };
 
     expect(listed).toMatchObject({ status: "ok", total: 1 });
-    expect(listed.header).toContain("adb did not answer (device offline)");
+    expect(listed.header).toBe("android-native: armed, 1 request (pid 4722; capture active)");
+    expect(device.commands).toHaveLength(before);
   });
 
-  it("fails while adb does not answer before capture was ever set up", async () => {
+  it("says adb did not answer when the first start cannot reach the device, and leaves capture started", async () => {
     device.adbDown = true;
     const api = await createInspector();
-    await expect(api.ensureAttached(8081)).rejects.toThrow(/device offline/);
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      reason: expect.stringContaining("adb did not answer (device offline)"),
+    });
+    expect(api.isStarted()).toBe(true);
   });
 
-  it("gives each of two concurrent listings its own note that adb did not answer", async () => {
+  it("gives each of two concurrent starts its own reason that adb did not answer", async () => {
     const api = await armedInspector();
     device.adbDown = true;
     device.reverseGate = () => new Promise((resolve) => setTimeout(resolve, 20));
-    const list = (): Promise<{ header: string }> =>
-      nativeNetworkLogsTool.execute!(
-        { androidNetwork: api },
-        { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
-      ) as Promise<{ header: string }>;
 
-    const [first, second] = await Promise.all([list(), list()]);
+    const [first, second] = await Promise.all([api.startCapture(8081), api.startCapture(8081)]);
 
-    expect(first.header).toContain("adb did not answer (device offline)");
-    expect(second.header).toContain("adb did not answer (device offline)");
-    // A later call that reaches the device says nothing about adb.
+    expect(first.reason).toContain("adb did not answer (device offline)");
+    expect(second.reason).toContain("adb did not answer (device offline)");
+    // A later start that reaches the device says nothing about adb.
     device.adbDown = false;
-    expect((await list()).header).not.toContain("adb");
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
   });
 
-  it("does not turn capture on when its first call fails: no launch attaches and nothing reports it live", async () => {
+  it("leaves capture started when its attach throws a transient adb error, so the next launch attaches", async () => {
     device.pidofFailures = 1;
     const api = await createInspector();
 
-    await expect(api.ensureAttached(8081)).rejects.toThrow(/error: closed/);
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      reason:
+        "adb did not answer (error: closed); the next launch or network-capture-start tries again",
+    });
 
-    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
-    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
-    expect(attachCommands()).toEqual([]);
-    // The next call that goes through turns it on.
-    expect(await api.ensureAttached(8081)).toBeNull();
+    // Not unavailable: the mark stays, and launches attach.
+    expect(api.captureMark()).toEqual({ lastRecord: expect.any(Number), metroPort: 8081 });
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+    expect(attachCommands()).toEqual([]);
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(
+      `native network capture is attached to ${PKG} (pid 4722); network-capture-stop ends it`
+    );
+    expect(attachCommands()).toHaveLength(1);
   });
 
-  it("keeps the stopped note when it is stopped while attach-agent runs", async () => {
+  it("keeps the disposed note when it is disposed while attach-agent runs", async () => {
     device.agentOnAttach = false;
     const hold = holdOnce();
     device.attachGate = hold.gate;
     const api = await createInspector();
     const instance = instances.pop()!;
-    const call = api.ensureAttached(8081);
+    const call = api.startCapture(8081);
     await vi.waitFor(() => expect(attachCommands()).toHaveLength(1));
 
     await instance.dispose();
     hold.release();
 
-    expect(await call).toBeNull();
+    expect(await call).toEqual({ armed: false, reason: "capture was disposed" });
     expect(api.state()).toEqual({ armed: false, note: "native network capture was stopped" });
   });
 
-  it("reads as stopped, not armed, from the start of a stop, before the agent answers Network.disable", async () => {
+  it("reads as stopped, not armed, from the start of a dispose, before the agent answers Network.disable", async () => {
     device.agentOptions = { unanswered: ["Network.disable"] };
     const hold = holdOnce();
     const api = await armedInspector();
@@ -2711,26 +2805,26 @@ describe("attaching and the app's lifecycle", () => {
       held = true;
       return hold.gate();
     };
-    // A listing on its way when the stop comes reads the state after it.
-    const listing = api.ensureAttached(8081);
+    // A start on its way when the dispose comes reads the state after it.
+    const starting = api.startCapture(8081);
     await vi.waitFor(() => expect(held).toBe(true));
 
-    const stopping = instance.dispose();
+    const disposing = instance.dispose();
     await vi.waitFor(() => expect(agents[0]!.received).toContain("Network.disable"));
     hold.release();
 
-    expect(await listing).toBeNull();
+    expect(await starting).toEqual({ armed: false, reason: "capture was disposed" });
     expect(api.state()).toEqual({ armed: false, note: "native network capture was stopped" });
-    await stopping;
+    await disposing;
     expect(api.state()).toEqual({ armed: false, note: "native network capture was stopped" });
   });
 
-  it("removes its session when it is stopped while a copy that then fails is on its way", async () => {
+  it("removes its session when it is disposed while a copy that then fails is on its way", async () => {
     const hold = holdOnce();
     device.sessionWriteGate = hold.gate;
     const api = await createInspector();
     const instance = instances.pop()!;
-    const call = api.ensureAttached(8081);
+    const call = api.startCapture(8081);
     await vi.waitFor(() => expect(attachScripts()).toHaveLength(1));
     device.stagingLost = true;
 
@@ -2738,7 +2832,7 @@ describe("attaching and the app's lifecycle", () => {
     await instance.dispose();
     hold.release();
 
-    expect(await call).toBeNull();
+    expect(await call).toEqual({ armed: false, reason: "capture was disposed" });
     expect(device.files.has(dirFor())).toBe(false);
     expect(attachCommands()).toEqual([]);
   });
@@ -2753,20 +2847,18 @@ describe("attaching and the app's lifecycle", () => {
     await first.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
 
-    const listed = (await nativeNetworkLogsTool.execute!(
-      { androidNetwork: api },
-      { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
-    )) as { header: string };
+    // The start writes the session again for the process its agent left, and waits for it.
+    const start = api.startCapture(8081);
+    await vi.waitFor(() => expect(session().port).not.toBe(taken));
 
     const moved = device.devicePort!;
     expect(moved).not.toBe(taken);
     expect(device.commands).toContain(`reverse tcp:${taken} tcp:${device.hostPort}`);
     expect(device.reverses.get(moved)).toEqual(device.hostPort);
     expect(session().port).toBe(moved);
-    expect(listed.header).not.toContain("adb");
     // The agent reads the session before its next connection, so it dials the new port.
     await FakeAgent.fromSession(dirFor(), proc(), { instance: first.instance, lastSeq: 0 });
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await start).toEqual({ armed: true });
     expect(attachCommands()).toHaveLength(1);
 
     await instances.pop()!.dispose();
@@ -2783,10 +2875,10 @@ describe("attaching and the app's lifecycle", () => {
     await first.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
 
-    // The next call writes the session again for the process its agent left; that write is held.
+    // The next start writes the session again for the process its agent left; that write is held.
     const hold = holdOnce();
     device.sessionWriteGate = hold.gate;
-    const call = api.ensureAttached(8081);
+    void api.startCapture(8081);
     await vi.waitFor(() => expect(attachScripts()).toHaveLength(2));
     // Meanwhile the port is taken, and the recheck after the drop finds that.
     device.reverses.clear();
@@ -2796,9 +2888,9 @@ describe("attaching and the app's lifecycle", () => {
     // The device mocks never wait on I/O: one turn lets the recheck go as far as it can.
     await new Promise((resolve) => setImmediate(resolve));
     expect(pidofReads()).toBe(reads + 1);
+    // The start's attach ends without the clock; its wait for the agent then holds.
     hold.release();
 
-    expect(await call).toBeNull();
     // Not vi.waitFor: under fake timers it would run the recheck again, which heals.
     for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setImmediate(resolve));
     expect(device.devicePort).not.toBe(taken);
@@ -2806,7 +2898,7 @@ describe("attaching and the app's lifecycle", () => {
     expect(device.reverses.get(device.devicePort!)).toEqual(device.hostPort);
   });
 
-  it("leaves nothing behind when disposed during its first call, and touches nothing of a newer inspector", async () => {
+  it("leaves nothing behind when disposed during its first start, and touches nothing of a newer inspector", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
     let blockNext = true;
@@ -2817,7 +2909,7 @@ describe("attaching and the app's lifecycle", () => {
     };
     const old = await createInspector();
     const oldInstance = instances.pop()!;
-    const first = old.ensureAttached(8081);
+    const first = old.startCapture(8081);
     await vi.waitFor(() => expect(vi.mocked(adbReverse)).toHaveBeenCalledTimes(1));
     const [, oldDevicePort, oldHostPort] = vi.mocked(adbReverse).mock.calls[0]!;
     await oldInstance.dispose();
@@ -2830,7 +2922,7 @@ describe("attaching and the app's lifecycle", () => {
     };
     release();
 
-    expect(await first).toBeNull();
+    expect(await first).toEqual({ armed: false, reason: "capture was disposed" });
     expect(device.reverses.has(oldDevicePort)).toBe(false);
     expect(device.reverses.get(newer.port)).toEqual(newer.hostPort);
     expect(session().secret).toBe(newer.secret);
@@ -2848,9 +2940,11 @@ describe("attaching and the app's lifecycle", () => {
     agent.started(agent.rid(1), "https://example.com/delay/10");
     await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
 
+    const reads = pidofReads();
     await agent.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
-    expect(await api.ensureAttached(8081)).toBeNull();
+    // The check after the drop finds the process alive.
+    await vi.waitFor(() => expect(pidofReads()).toBeGreaterThan(reads), { timeout: 2_000 });
     expect(api.records(8081)[0]?.state).toBe("pending");
 
     device.process = { pid: 5500, startTime: 150_000 };
@@ -3039,13 +3133,17 @@ describe("reconnections", () => {
 
     await agent.close();
     await vi.waitFor(() => expect(api.state().armed).toBe(false));
-    expect(await api.ensureAttached(8081)).toBeNull();
+    // The process still maps the agent, which reconnects by itself, so nothing is attached.
+    expect(await startUnarmed(api)).toEqual({
+      armed: false,
+      reason: expect.stringContaining("dropped"),
+    });
     expect(attachCommands()).toHaveLength(1);
     expect(api.state().note).toContain("dropped");
     expect(api.records(8081)[0]?.state).toBe("pending");
 
     device.loaded.clear();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
 
     expect(attachCommands()).toHaveLength(2);
     expect(attachCommands()[1]).toContain("attach-agent 4722 ");
@@ -3295,7 +3393,7 @@ describe("a slow Network.enable reply, with the clock under test control", () =>
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     device.agentOptions = { unanswered: ["Network.enable"] };
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    await startInBackground(api);
     await vi.waitFor(() => expect(agents[0]?.received).toContain("Network.enable"));
     return { api, agent: agents[0]! };
   }
@@ -3332,6 +3430,61 @@ describe("a slow Network.enable reply, with the clock under test control", () =>
       expect(api.state()).toMatchObject({ armed: true, process: { pid: 4722 } })
     );
     expect(next.received.slice(0, 2)).toEqual(["Control", "Network.enable"]);
+  });
+
+  it("does not arm on an enable reply from before a stop, and the next start sends Network.enable again", async () => {
+    const { api, agent } = await enablePending();
+    // The agent answers in order, so the stop's Network.disable waits behind the enable.
+    agent.options.unanswered!.push("Network.disable");
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(await stopping).toMatchObject({ confirmed: false });
+
+    const start = api.startCapture(8081);
+    await vi.waitFor(() =>
+      expect(agent.received).toEqual([
+        "Control",
+        "Network.enable",
+        "Network.disable",
+        "Network.enable",
+      ])
+    );
+    agent.answer("Network.enable");
+    agent.answer("Network.disable");
+    agent.send({ type: "Status", payload: { event: "capture", state: "waiting" } });
+    await vi.waitFor(() => expect(stderrText()).toContain("] capture waiting"));
+    expect(api.state().armed).toBe(false);
+    expect(agent.socket.destroyed).toBe(false);
+
+    const fresh = agent.requests.filter((r) => r.method === "Network.enable")[1]!;
+    agent.send({
+      type: "CDP",
+      payload: { id: fresh.id, result: { capture: { state: "active" } } },
+    });
+    expect(await start).toEqual({ armed: true });
+    expect(api.state()).toMatchObject({ armed: true, capture: { state: "active" } });
+  });
+
+  it("keeps the connection when an enable from before a stop times out, and arms on the next start's enable", async () => {
+    const { api, agent } = await enablePending();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    const start = api.startCapture(8081);
+    await vi.waitFor(() => expect(agent.received.at(-1)).toBe("Network.enable"));
+
+    // The first enable passes its 60 s, the second one does not.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(stderrText()).toContain("Network.enable on connection 1 failed: ");
+    expect(agent.socket.destroyed).toBe(false);
+    expect(api.state().armed).toBe(false);
+
+    const fresh = agent.requests.filter((r) => r.method === "Network.enable")[1]!;
+    agent.send({
+      type: "CDP",
+      payload: { id: fresh.id, result: { capture: { state: "active" } } },
+    });
+    expect(await start).toEqual({ armed: true });
   });
 });
 
@@ -3476,11 +3629,16 @@ describe("the tools on the Android native layer", () => {
     });
   });
 
-  it("native-network-logs shows a waiting or unavailable capture in its header", async () => {
+  it("network-capture-start is not armed when the agent reports capture unavailable, and native-network-logs shows it in its header", async () => {
     device.agentOptions = {
       capture: { state: "unavailable", detail: "no OkHttp in this process" },
     };
-    const api = await armedInspector();
+    const api = await createInspector();
+    // The agent is connected and enabled, but reports capture unavailable.
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      reason: "capture unavailable: no OkHttp in this process; use view-network-logs",
+    });
     const result = (await nativeNetworkLogsTool.execute!(
       { androidNetwork: api },
       { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
@@ -3560,24 +3718,57 @@ describe("the tools on the Android native layer", () => {
     expect(plain).not.toHaveProperty("captureDetail");
   });
 
-  it("native-network-logs says why an unarmed layer is empty, and passes not_attachable through", async () => {
+  it("native-network-logs says why an unarmed layer is empty, and reads unavailable with the reason after a start that found the app not attachable", async () => {
     device.process = null;
     const api = await createInspector();
-    const empty = await nativeNetworkLogsTool.execute!(
-      { androidNetwork: api },
-      { udid: SERIAL, bundleId: PKG, limit: 50, clear: false }
-    );
+    const notRunning = `${PKG} was not running at network-capture-start; launch-app or restart-app attaches the agent to its next process, or call network-capture-start once it runs`;
+    expect(await api.startCapture(8081)).toEqual({ armed: false, reason: notRunning });
+    const empty = await listNative(api);
     expect(empty).toMatchObject({ status: "ok", armed: false, count: 0, total: 0 });
     expect((empty as { header: string }).header).toBe(
-      `android-native: not armed, 0 requests (${PKG} is not running; launch-app or restart-app attaches the agent to its next process)`
+      `android-native: not armed, 0 requests (${notRunning})`
     );
 
     device.runAsError = "run-as: package not debuggable: com.example.release";
-    const blocked = await nativeNetworkLogsTool.execute!(
-      { androidNetwork: await createInspector(8081, "com.example.release") },
-      { udid: SERIAL, bundleId: "com.example.release", limit: 50, clear: false }
-    );
-    expect(blocked).toMatchObject({ status: "not_attachable" });
+    const release = await createInspector(8081, "com.example.release");
+    const refused = await release.startCapture(8081);
+    expect(refused).toMatchObject({ armed: false, unavailable: true });
+    // A read that sent the caller back to network-capture-start would loop.
+    expect(
+      await nativeNetworkLogsTool.execute!(
+        { androidNetwork: release },
+        { udid: SERIAL, bundleId: "com.example.release", limit: 50, clear: false }
+      )
+    ).toEqual({
+      status: "ok",
+      header: `android-native: unavailable, 0 requests (${refused.reason})`,
+      armed: false,
+      started: false,
+      capture: "unavailable",
+      captureDetail: refused.reason,
+      count: 0,
+      total: 0,
+      requests: [],
+    });
+    expect(refused.reason).toContain("is not a debuggable build");
+  });
+
+  it("keeps the reason of the last start only while that start found the layer unavailable and no stop came after it", async () => {
+    device.runAsError = `run-as: package not debuggable: ${PKG}`;
+    const api = await createInspector();
+    const refused = await api.startCapture(8081);
+    expect(api.unavailableReason()).toBe(refused.reason);
+
+    device.runAsError = undefined;
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    expect(api.unavailableReason()).toBeUndefined();
+
+    device.runAsError = `run-as: package not debuggable: ${PKG}`;
+    device.process = { pid: 5100, startTime: 99_000 };
+    expect(await api.startCapture(8081)).toMatchObject({ unavailable: true });
+    expect(api.unavailableReason()).toContain("is not a debuggable build");
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(api.unavailableReason()).toBeUndefined();
   });
 
   it("native-network-logs with clear hides what it listed and what it did not return past limit, its ids still read, and a request in flight lists again once it finishes", async () => {
@@ -3649,32 +3840,39 @@ describe("the tools on the Android native layer", () => {
     });
   });
 
-  it("native-network-logs routes Android through the inspector service, keyed by the device whatever its spelling", async () => {
+  it("native-network-logs routes Android through the inspector service, keyed by the device whatever its spelling, once capture is started", async () => {
     const registry = toolRegistry();
-    await registry.invokeTool("native-network-logs", {
-      udid: `ext:acme-1:${SERIAL}`,
-      bundleId: PKG,
-    });
-    await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG, port: 8190 });
+    const ext = `ext:acme-1:${SERIAL}`;
+    const tool = createNativeNetworkLogsTool(registry);
+    const params = { udid: ext, bundleId: PKG, limit: 50, clear: false };
+    const urn = `AndroidNetworkInspector:${SERIAL}:${PKG}`;
+    // Before a start it names no service, so a read creates none.
+    expect(tool.services!(params)).toEqual({});
+
+    await startThrough(registry, PKG, { ...DEVICE, id: ext });
+    expect(tool.services!(params)).toEqual({ androidNetwork: expect.objectContaining({ urn }) });
+    for (const read of [
+      { udid: ext, bundleId: PKG },
+      { udid: SERIAL, bundleId: PKG, port: 8190 },
+    ]) {
+      expect(await registry.invokeTool("native-network-logs", read)).toMatchObject({
+        status: "ok",
+        armed: true,
+      });
+    }
 
     const urns = [...registry.getSnapshot().services.keys()];
-    expect(urns).toEqual([`AndroidNetworkInspector:${SERIAL}:${PKG}`]);
+    expect(urns).toEqual([urn]);
     expect(attachCommands()).toHaveLength(1);
   });
 
   it("stop-all-simulator-servers for the device ends native capture for its apps", async () => {
     device.processes.set(OTHER, { pid: 6100, startTime: 70_000 });
     const registry = toolRegistry();
-    for (const bundleId of [PKG, OTHER]) {
-      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId });
-    }
+    const api = await startThrough(registry);
+    await startThrough(registry, OTHER);
     const urn = `AndroidNetworkInspector:${SERIAL}:${PKG}`;
     const otherUrn = `AndroidNetworkInspector:${SERIAL}:${OTHER}`;
-    const api = await registry.resolveService<AndroidNetworkInspectorApi>(urn);
-    const otherApi = await registry.resolveService<AndroidNetworkInspectorApi>(otherUrn);
-    await vi.waitFor(() =>
-      expect([api.state().armed, otherApi.state().armed]).toEqual([true, true])
-    );
     const agent = agents.find((a) => a.options.packageName === PKG && a.options.pid === 4722)!;
     agent.request(agent.rid(1), "https://example.com/a");
     await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
@@ -3693,23 +3891,22 @@ describe("the tools on the Android native layer", () => {
     for (const port of ports) expect(device.reverses.has(port)).toBe(false);
     expect(findAndroidNativeRecord(id)).toBeUndefined();
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(hasAndroidNetworkCapture()).toBe(false);
     expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBeUndefined();
+    // A read names no inspector again, so it is not started.
+    expect(
+      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG })
+    ).toMatchObject({ started: false, total: 0 });
   });
 
-  it("native-network-logs with stop ends native capture for that app only", async () => {
+  it("network-capture-stop's layer stops one app only, and keeps its records, ids, session and tunnel", async () => {
     device.processes.set(OTHER, { pid: 6100, startTime: 70_000 });
     const registry = toolRegistry();
-    for (const bundleId of [PKG, OTHER]) {
-      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId });
-    }
+    const api = await startThrough(registry);
+    const otherApi = await startThrough(registry, OTHER);
     const urn = `AndroidNetworkInspector:${SERIAL}:${PKG}`;
-    const otherUrn = `AndroidNetworkInspector:${SERIAL}:${OTHER}`;
-    const api = await registry.resolveService<AndroidNetworkInspectorApi>(urn);
-    const otherApi = await registry.resolveService<AndroidNetworkInspectorApi>(otherUrn);
-    await vi.waitFor(() =>
-      expect([api.state().armed, otherApi.state().armed]).toEqual([true, true])
-    );
-    const agent = agents.find((a) => a.options.packageName === PKG && a.options.pid === 4722)!;
+    const agent = agents.find((a) => a.options.packageName === PKG)!;
+    const otherAgent = agents.find((a) => a.options.packageName === OTHER)!;
     agent.request(agent.rid(1), "https://example.com/a");
     await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
     const id = api.records(8081)[0]!.id;
@@ -3717,163 +3914,106 @@ describe("the tools on the Android native layer", () => {
     const otherPort = session(dirFor(OTHER)).port;
     device.commands.length = 0;
 
-    const result = await registry.invokeTool("native-network-logs", {
-      udid: SERIAL,
-      bundleId: PKG,
-      stop: true,
-    });
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
 
-    expect(result).toEqual({
-      status: "ok",
-      stopped: true,
-      message:
-        `native network capture stopped for ${PKG} on ${SERIAL}. The in-app agent stays loaded in pid 4722, ` +
-        "without capturing, until that process ends; restart-app starts the app without it.",
-    });
-    expect(agent.received).toContain("Network.disable");
-    expect(registry.getServiceState(urn)).toBe(ServiceState.IDLE);
-    // The teardown takes back this app's session, the agent's files and the reverse.
-    expect(device.commands).toContain(`reverse --remove tcp:${port}`);
-    expect(
-      device.commands.filter(
-        (c) => c.includes("IFS= read -r s") && c.includes(`rm -rf ${dirFor()}`)
-      )
-    ).toHaveLength(1);
-    expect(device.files.has(dirFor())).toBe(false);
-    expect(device.reverses.has(port)).toBe(false);
-    expect(findAndroidNativeRecord(id)).toBeUndefined();
+    expect(agent.received.at(-1)).toBe("Network.disable");
+    expect(agent.socket.destroyed).toBe(false);
+    // Nothing is taken back on the device, and the service keeps running.
+    expect(device.commands).toEqual([]);
+    expect(registry.getServiceState(urn)).toBe(ServiceState.RUNNING);
+    expect(device.files.has(dirFor())).toBe(true);
+    expect(device.reverses.has(port)).toBe(true);
+    expect(findAndroidNativeRecord(id)?.record).toMatchObject({ id, state: "complete" });
+    expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([OTHER]);
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([]);
+    expect(hasAndroidNetworkCapture()).toBe(true);
+    expect(
+      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG })
+    ).toMatchObject({
+      header: `android-native: stopped, 1 request (${STOPPED_REASON})`,
+      armed: false,
+      stopped: true,
+      total: 1,
+    });
 
     // The other app keeps its capture, its session and its tunnel.
-    expect(registry.getServiceState(otherUrn)).toBe(ServiceState.RUNNING);
+    expect(otherAgent.received).not.toContain("Network.disable");
     expect(otherApi.state().armed).toBe(true);
+    expect(otherApi.isStarted()).toBe(true);
     expect(device.files.has(dirFor(OTHER))).toBe(true);
     expect(device.reverses.has(otherPort)).toBe(true);
-    expect(device.commands).not.toContain(`reverse --remove tcp:${otherPort}`);
   });
 
-  it("a launch after stop does not attach, and the next listing turns capture on again", async () => {
+  it("a launch after a stop does not attach, and the next start attaches the new process", async () => {
     const registry = toolRegistry();
-    await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG });
-    const urn = `AndroidNetworkInspector:${SERIAL}:${PKG}`;
-    const api = await registry.resolveService<AndroidNetworkInspectorApi>(urn);
-    await vi.waitFor(() => expect(api.state().armed).toBe(true));
-    await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG, stop: true });
+    const api = await startThrough(registry);
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
     expect(attachCommands()).toHaveLength(1);
 
     device.process = { pid: 5300, startTime: 90_000 };
-    expect(await followNativeNetworkCapture(SERIAL, PKG)).toEqual({});
-    expect(attachCommands()).toHaveLength(1);
+    const before = device.commands.length;
+    expect(await followNativeNetworkCapture(SERIAL, PKG)).toEqual({
+      networkCapture: STOPPED_LAUNCH_NOTE,
+    });
+    expect(device.commands).toHaveLength(before);
 
-    const listed = (await registry.invokeTool("native-network-logs", {
-      udid: SERIAL,
-      bundleId: PKG,
-    })) as { status: string };
-    expect(listed.status).toBe("ok");
-    expect(registry.getServiceState(urn)).toBe(ServiceState.RUNNING);
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
     expect(attachCommands()).toHaveLength(2);
     expect(attachCommands()[1]).toContain("attach-agent 5300 ");
     expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
-    const again = await registry.resolveService<AndroidNetworkInspectorApi>(urn);
-    await vi.waitFor(() => expect(again.state().armed).toBe(true));
+    expect(api.state()).toMatchObject({ armed: true, process: { pid: 5300 } });
     expect(device.files.has(dirFor())).toBe(true);
   });
 
-  it("native-network-logs with stop creates no inspector for an app without capture", async () => {
-    const registry = toolRegistry();
-    expect(
-      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG, stop: true })
-    ).toEqual({
-      status: "ok",
-      stopped: false,
-      message: `native network capture was not on for ${PKG} on ${SERIAL}`,
-    });
-    expect(registry.getSnapshot().services.size).toBe(0);
-    expect(device.commands).toEqual([]);
-    expect(await followNativeNetworkCapture(SERIAL, PKG)).toEqual({});
-    expect(device.commands).toEqual([]);
-  });
-
-  it("native-network-logs with stop reports stopped: false for capture that never went on, and still disposes it", async () => {
-    device.runAsError = `run-as: package not debuggable: ${PKG}`;
-    const registry = toolRegistry();
-    expect(
-      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG })
-    ).toMatchObject({ status: "not_attachable" });
-    const urn = `AndroidNetworkInspector:${SERIAL}:${PKG}`;
-    expect(registry.getServiceState(urn)).toBe(ServiceState.RUNNING);
-
-    expect(
-      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG, stop: true })
-    ).toEqual({
-      status: "ok",
-      stopped: false,
-      message: `native network capture was not on for ${PKG} on ${SERIAL}`,
-    });
-    expect(registry.getServiceState(urn)).toBe(ServiceState.IDLE);
-  });
-
-  it("native-network-logs with stop twice reports stopped only the first time", async () => {
-    const registry = toolRegistry();
-    await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG });
-    const first = (await registry.invokeTool("native-network-logs", {
-      udid: SERIAL,
-      bundleId: PKG,
-      stop: true,
-    })) as { stopped: boolean };
-    expect(first.stopped).toBe(true);
+  it("a second stop changes nothing", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.request(agent.rid(1), "https://example.com/done");
+    agent.started(agent.rid(2), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(2));
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    const state = api.state();
+    const records = JSON.stringify(api.records(8081));
+    const mark = api.captureMark();
     device.commands.length = 0;
 
-    expect(
-      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG, stop: true })
-    ).toEqual({
-      status: "ok",
-      stopped: false,
-      message: `native network capture was not on for ${PKG} on ${SERIAL}`,
-    });
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(api.state()).toEqual(state);
+    expect(JSON.stringify(api.records(8081))).toBe(records);
+    expect(api.captureMark()).toEqual(mark);
+    expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
     expect(device.commands).toEqual([]);
   });
 
-  it("native-network-logs rejects stop on iOS, where capture cannot be turned off", async () => {
-    const registry = toolRegistry();
-    const err = await registry
-      .invokeTool("native-network-logs", {
-        udid: "12345678-1234-1234-1234-123456789ABC",
-        bundleId: "com.example.ios",
-        stop: true,
-      })
-      .then(
-        () => undefined,
-        (e: unknown) => e
-      );
-    expect(getFailureSignal(err)?.error_code).toBe(
-      FAILURE_CODES.NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED
-    );
-    expect((err as Error).message).toContain(
-      "stop applies to Android only. On iOS, network capture stays on for the app until stop-all-simulator-servers stops this device's services and the app restarts."
-    );
-    expect(registry.getSnapshot().services.size).toBe(0);
+  it("a stop after a start that found the app not attachable sends nothing to the device", async () => {
+    device.runAsError = `run-as: package not debuggable: ${PKG}`;
+    const api = await createInspector();
+    expect(await api.startCapture(8081)).toMatchObject({ armed: false, unavailable: true });
+    const before = device.commands.length;
+
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(device.commands).toHaveLength(before);
+    expect(api.records(8081)).toEqual([]);
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
   });
 
-  it("native-network-logs rejects stop on a Mac app and names the Mac lifetime of the capture", async () => {
+  it("native-network-logs has only listing parameters: a key it does not know is dropped, and the read stops nothing", async () => {
+    expect(
+      Object.keys(createNativeNetworkLogsTool(new Registry()).zodSchema!.shape).sort()
+    ).toEqual(["bundleId", "clear", "limit", "port", "udid"]);
     const registry = toolRegistry();
-    const err = await registry
-      .invokeTool("native-network-logs", {
-        udid: "macos-app-com.example.mac",
-        bundleId: "com.example.mac",
-        stop: true,
-      })
-      .then(
-        () => undefined,
-        (e: unknown) => e
-      );
-    expect(getFailureSignal(err)?.error_code).toBe(
-      FAILURE_CODES.NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED
-    );
-    expect((err as Error).message).toContain(
-      "stop applies to Android only. On a Mac app, network capture stays on until stop-all-simulator-servers stops this device's services or the tool-server stops."
-    );
-    expect(registry.getSnapshot().services.size).toBe(0);
+    const api = await startThrough(registry);
+    const agent = agents[0]!;
+
+    expect(
+      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG, stop: true })
+    ).toMatchObject({ status: "ok", armed: true, total: 0 });
+
+    expect(api.isStarted()).toBe(true);
+    expect(agent.received).not.toContain("Network.disable");
   });
 
   it("routes an android- id in view-network-request-details to the body from the fake socket, and an unknown id to not found", async () => {
@@ -3915,6 +4055,20 @@ describe("the tools on the Android native layer", () => {
 
     expect(
       await networkRequestTool.execute!({}, { ...params, requestId: "android-0000-999999" })
+    ).toBe(
+      "Request android-0000-999999 not found. Use native-network-logs to list the requests the Android native layer recorded."
+    );
+  });
+
+  it("view-network-request-details names only native-network-logs for an unknown android- id once the app's capture was stopped: its ids are still listed", async () => {
+    const api = await armedInspector();
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(
+      await networkRequestTool.execute!(
+        {},
+        { device_id: SERIAL, requestId: "android-0000-999999", includeBody: true }
+      )
     ).toBe(
       "Request android-0000-999999 not found. Use native-network-logs to list the requests the Android native layer recorded."
     );
@@ -4006,6 +4160,551 @@ describe("the tools on the Android native layer", () => {
   });
 });
 
+describe("network-capture-start and network-capture-stop on the Android layer", () => {
+  it("stop sends Network.disable, keeps the records and their ids, and fails the open ones with the stop reason", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.request(agent.rid(1), "https://example.com/done");
+    agent.started(agent.rid(2), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(2));
+    const [done, slow] = api.records(8081);
+
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(agent.received).toEqual(["Control", "Network.enable", "Network.disable"]);
+    expect(api.records(8081)).toEqual([
+      expect.objectContaining({ id: done!.id, state: "complete" }),
+      expect.objectContaining({ id: slow!.id, state: "failed", errorText: STOPPED_BEFORE_FINISH }),
+    ]);
+    expect(findAndroidNativeRecord(done!.id)).toEqual({ inspector: api, record: done });
+    expect(api.state()).toEqual({ armed: false, stopped: true });
+    expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([]);
+    expect(liveAndroidNetworkCaptureDevices(PKG)).toEqual([]);
+    // A stopped app's records are still listed, so its ids still have a source.
+    expect(hasAndroidNetworkCapture()).toBe(true);
+    // The agent stays connected, and the device keeps the session and the tunnel.
+    expect(agent.socket.destroyed).toBe(false);
+    expect(device.files.has(dirFor())).toBe(true);
+    expect(device.reverses.get(device.devicePort!)).toBe(device.hostPort);
+  });
+
+  it("a read after a stop runs no adb command and lists what the stop kept", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.request(agent.rid(1), "https://example.com/a");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    device.commands.length = 0;
+
+    expect(await listNative(api)).toEqual({
+      status: "ok",
+      header: `android-native: stopped, 1 request (${STOPPED_REASON})`,
+      armed: false,
+      stopped: true,
+      count: 1,
+      total: 1,
+      requests: [expect.objectContaining({ id: api.records(8081)[0]!.id, state: "complete" })],
+    });
+    expect(device.commands).toEqual([]);
+  });
+
+  it("reads as stopped from the start of a stop, before the agent answers Network.disable, and fails open requests on its reply", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.started(agent.rid(1), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+
+    const stopping = api.stopCapture();
+
+    expect(api.state()).toEqual({ armed: false, stopped: true });
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      `android-native: stopped, 1 request (${STOPPED_REASON})`
+    );
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    expect(api.records(8081)[0]!.state).toBe("pending");
+
+    agent.answer("Network.disable");
+    expect(await stopping).toEqual({ confirmed: true });
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+  });
+
+  it("a stop the agent does not acknowledge within 5 s is not confirmed, and capture stays stopped", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agents[0]!.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await stopping).toEqual({
+      confirmed: false,
+      reason:
+        "the agent did not acknowledge Network.disable within 5 s; argent records none of the app's new requests, and launches do not attach it",
+    });
+    expect(api.state()).toEqual({ armed: false, stopped: true });
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+  });
+
+  it("a stop the agent does not acknowledge within 5 s fails the open requests, and its late reply fails none of the next start's", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.started(agent.rid(1), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(await stopping).toMatchObject({ confirmed: false });
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+
+    // The agent answers the stop only after the next start armed it again.
+    vi.useRealTimers();
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    agent.started(agent.rid(2), "https://example.com/after-the-start");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(2));
+    agent.answer("Network.disable");
+    agent.send({ type: "Status", payload: { event: "capture", state: "waiting" } });
+    await vi.waitFor(() => expect(stderrText()).toContain("] capture waiting"));
+    expect(api.records(8081)[1]).toMatchObject({ state: "pending" });
+    expect(api.records(8081)[1]).not.toHaveProperty("errorText");
+  });
+
+  it("a Network.disable to an agent that connected while stopped fails none of the next start's requests when it times out after that start", async () => {
+    const api = await armedInspector();
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+      unanswered: ["Network.disable"],
+    }))!;
+    await vi.waitFor(() =>
+      expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+    );
+
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    again.started(again.rid(1), "https://example.com/after-the-start");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(stderrText()).toContain("Network.disable on connection 2 failed: ");
+    expect(api.records(8081)[0]).toMatchObject({ state: "pending" });
+  });
+
+  it("a stop is confirmed when the agent's connection closes before it answers Network.disable", async () => {
+    device.agentOptions = { unanswered: ["Network.disable"] };
+    const api = await armedInspector();
+    const agent = agents[0]!;
+
+    const stopping = api.stopCapture();
+    await vi.waitFor(() => expect(agent.received).toContain("Network.disable"));
+    // The app exits: its agent sends nothing more.
+    await agent.close();
+
+    expect(await stopping).toEqual({ confirmed: true });
+    expect(api.state()).toEqual({ armed: false, stopped: true });
+  });
+
+  it("an agent that connects while stopped gets Network.enable, then Network.disable, is never armed, and fails the open requests it resumes on the reply", async () => {
+    const api = await armedInspector();
+    const first = agents[0]!;
+    first.started(first.rid(1), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    await first.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    // No connection is open, so the stop has nothing to disable yet.
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(api.records(8081)[0]!.state).toBe("pending");
+
+    const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+      instance: first.instance,
+      lastSeq: 1,
+      inFlight: [first.rid(1)],
+    }))!;
+
+    await vi.waitFor(() =>
+      expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"])
+    );
+    await vi.waitFor(() =>
+      expect(api.records(8081)[0]).toMatchObject({
+        state: "failed",
+        errorText: STOPPED_BEFORE_FINISH,
+      })
+    );
+    expect(api.state()).toEqual({ armed: false, stopped: true });
+
+    // A request it still reports gets no record.
+    again.request(again.rid(2), "https://example.com/after-the-stop");
+    again.send({ type: "Status", payload: { event: "capture", state: "waiting" } });
+    await vi.waitFor(() => expect(stderrText()).toContain("] capture waiting"));
+    expect(api.records(8081)).toHaveLength(1);
+  });
+
+  it("a stop fails with the stop reason a request whose final events the agent lost while it was disconnected", async () => {
+    const api = await armedInspector();
+    const first = agents[0]!;
+    first.started(first.rid(1), "https://example.com/lost");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    await first.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    // The agent that resumes the connection no longer has the request in flight.
+    await FakeAgent.fromSession(dirFor(), proc(), {
+      instance: first.instance,
+      lastSeq: 1,
+      inFlight: [],
+    });
+    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: "the agent lost this request's final events while it was disconnected",
+    });
+
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+  });
+
+  it("an enable reply that comes after a stop does not arm, gets Network.disable, and does not bring back what the stop failed", async () => {
+    const api = await armedInspector();
+    const first = agents[0]!;
+    first.started(first.rid(1), "https://example.com/slow");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+    await first.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    const again = (await FakeAgent.fromSession(dirFor(), proc(), {
+      instance: first.instance,
+      lastSeq: 1,
+      inFlight: [first.rid(1)],
+      unanswered: ["Network.enable"],
+    }))!;
+    await vi.waitFor(() => expect(again.received).toContain("Network.enable"));
+
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(again.received).toEqual(["Control", "Network.enable", "Network.disable"]);
+    // The reply to the stop fails what the connection carries, the chain it resumes too.
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+
+    again.answer("Network.enable");
+
+    await vi.waitFor(() =>
+      expect(again.received).toEqual([
+        "Control",
+        "Network.enable",
+        "Network.disable",
+        "Network.disable",
+      ])
+    );
+    expect(api.state()).toEqual({ armed: false, stopped: true });
+    // The reply names the request in flight, and it stays failed.
+    expect(api.records(8081)[0]).toMatchObject({
+      state: "failed",
+      errorText: STOPPED_BEFORE_FINISH,
+    });
+  });
+
+  it("a start after a stop enables the open connection again and returns armed", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+
+    expect(agent.received).toEqual([
+      "Control",
+      "Network.enable",
+      "Network.disable",
+      "Network.enable",
+    ]);
+    expect(attachCommands()).toHaveLength(1);
+    expect(api.state()).toMatchObject({ armed: true, process: { pid: 4722 } });
+    expect(api.state()).not.toHaveProperty("stopped");
+    expect([api.isStarted(), api.isStopped()]).toEqual([true, false]);
+    expect(liveAndroidNetworkCaptures(SERIAL)).toEqual([PKG]);
+    agent.request(agent.rid(1), "https://example.com/again");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+  });
+
+  it.each([
+    ["not debuggable", `run-as: package not debuggable: ${PKG}`],
+    ["not installed", `run-as: unknown package: ${PKG}`],
+  ])(
+    "a start after a stop that finds the app %s keeps capture stopped and its mark, and the read still lists what the stop kept",
+    async (_case, runAsError) => {
+      const api = await armedInspector();
+      const agent = agents[0]!;
+      agent.request(agent.rid(1), "https://example.com/a");
+      await vi.waitFor(() => expect(api.records(8081)).toHaveLength(1));
+      const id = api.records(8081)[0]!.id;
+      expect(await api.stopCapture()).toEqual({ confirmed: true });
+      const mark = api.captureMark();
+      // Another build replaced the app after the stop.
+      device.runAsError = runAsError;
+      device.process = { pid: 5100, startTime: 99_000 };
+
+      expect(await api.startCapture(8081)).toMatchObject({ armed: false, unavailable: true });
+
+      expect([api.isStarted(), api.isStopped()]).toEqual([false, true]);
+      expect(api.captureMark()).toEqual(mark);
+      expect(await listNative(api)).toMatchObject({
+        header: `android-native: stopped, 1 request (${STOPPED_REASON})`,
+        armed: false,
+        stopped: true,
+        total: 1,
+        requests: [expect.objectContaining({ id, state: "complete" })],
+      });
+      expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(STOPPED_LAUNCH_NOTE);
+    }
+  );
+
+  it("a stop during an attach, before attach-agent, ends the start, and the next start attaches the process", async () => {
+    const hold = holdOnce();
+    device.sessionWriteGate = hold.gate;
+    const api = await createInspector();
+    const start = api.startCapture(8081);
+    await vi.waitFor(() => expect(attachScripts()).toHaveLength(1));
+
+    const stopping = api.stopCapture();
+    hold.release();
+
+    expect(await start).toEqual({ armed: false, reason: STOPPED_REASON });
+    expect(await stopping).toEqual({ confirmed: true });
+    expect(attachCommands()).toEqual([]);
+
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    expect(attachCommands()).toEqual([
+      `cmd activity attach-agent 4722 '${dirFor()}/libjvmti_network_inspector.so=jar=${dirFor()}/network-inspector.jar,pkg=${PKG}'`,
+    ]);
+  });
+
+  it("a stop after attach-agent ran keeps the process, and the next start runs no second attach-agent", async () => {
+    const hold = holdOnce();
+    device.attachGate = hold.gate;
+    const api = await createInspector();
+    const start = api.startCapture(8081);
+    await vi.waitFor(() => expect(attachCommands()).toHaveLength(1));
+
+    const stopping = api.stopCapture();
+    hold.release();
+
+    expect(await start).toEqual({ armed: false, reason: STOPPED_REASON });
+    expect(await stopping).toEqual({ confirmed: true });
+    // The agent attach-agent loaded connects while stopped: enabled, then disabled.
+    await vi.waitFor(() => expect(agents[0]?.received).toContain("Network.disable"));
+    expect(api.state().armed).toBe(false);
+
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    expect(attachCommands()).toHaveLength(1);
+  });
+
+  it("a launch waiting for its agent at a stop returns at once with the stopped note", async () => {
+    const api = await armedInspector();
+    await agents[0]!.close();
+    device.agentOnAttach = false;
+    device.process = { pid: 5300, startTime: 130_000 };
+    const launch = attachAndroidNetworkInspectorToLaunch(SERIAL, PKG);
+    await vi.waitFor(() => expect(attachCommands()).toHaveLength(2));
+
+    const stoppedAt = performance.now();
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+
+    expect(await launch).toBe(STOPPED_LAUNCH_NOTE);
+    expect(performance.now() - stoppedAt).toBeLessThan(1_000);
+  });
+
+  it("a start marks where it began: the records numbered above the mark are those after it, also after clear", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    agent.request(agent.rid(1), "https://example.com/before-1");
+    agent.request(agent.rid(2), "https://example.com/before-2");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(2));
+    const before = api.records(8081).map((r) => r.id);
+
+    // A second start moves the mark to the present, and capture keeps running.
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    const mark = api.captureMark()!;
+    expect(mark).toEqual({ lastRecord: recordNumber(before[1]!), metroPort: 8081 });
+    api.clear();
+    agent.request(agent.rid(3), "https://example.com/after-1");
+    agent.request(agent.rid(4), "https://example.com/after-2");
+    await vi.waitFor(() => expect(api.records(8081)).toHaveLength(2));
+    const after = api.records(8081).map((r) => r.id);
+
+    const all = [...before, ...after];
+    // The cleared records still resolve by their ids.
+    for (const id of all) expect(api.record(id)).toBeDefined();
+    expect(all.filter((id) => recordNumber(id) > mark.lastRecord)).toEqual(after);
+
+    // A stop keeps the mark, and a start after it moves it again.
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    expect(api.captureMark()).toEqual(mark);
+    expect(await api.startCapture(8190)).toEqual({ armed: true });
+    expect(api.captureMark()).toEqual({ lastRecord: recordNumber(after[1]!), metroPort: 8190 });
+  });
+
+  it("the mark still sets apart the records after the start once eviction took the oldest", async () => {
+    const api = await armedInspector();
+    const agent = agents[0]!;
+    const big = (prefix: string): Record<string, string> =>
+      Object.fromEntries([0, 1, 2].map((i) => [`${prefix}-${i}`, "v".repeat(70_000)]));
+    const send = (seq: number, url: string): void => {
+      agent.event("Network.requestWillBeSent", {
+        requestId: agent.rid(seq),
+        request: { url, method: "GET", headers: big("req") },
+        wallTime: 1000,
+      });
+      agent.event("Network.requestWillBeSentExtraInfo", {
+        requestId: agent.rid(seq),
+        headers: big("wire"),
+      });
+      agent.event("Network.responseReceived", {
+        requestId: agent.rid(seq),
+        response: { url: "", status: 200, statusText: "OK", headers: big("res"), mimeType: "" },
+      });
+    };
+    for (let seq = 1; seq <= 35; seq++) send(seq, `https://example.com/before/${seq}`);
+    await vi.waitFor(
+      () => expect(api.records(0).at(-1)?.request.url).toBe("https://example.com/before/35"),
+      { timeout: 10_000 }
+    );
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
+    const mark = api.captureMark()!;
+    for (let seq = 36; seq <= 70; seq++) send(seq, `https://example.com/after/${seq}`);
+    await vi.waitFor(
+      () => expect(api.records(0).at(-1)?.request.url).toBe("https://example.com/after/70"),
+      { timeout: 10_000 }
+    );
+
+    const kept = api.records(0);
+    // Eviction took the oldest, and some from before the start are still kept.
+    expect(kept[0]!.request.url).not.toBe("https://example.com/before/1");
+    expect(kept.some((r) => r.request.url.includes("/before/"))).toBe(true);
+    for (const record of kept) {
+      expect(recordNumber(record.id) > mark.lastRecord).toBe(
+        record.request.url.includes("/after/")
+      );
+    }
+  }, 20_000);
+});
+
+describe("native-network-logs only reads", () => {
+  it("returns not started before any start, creates no inspector and runs no adb", async () => {
+    const registry = toolRegistry();
+
+    expect(
+      await registry.invokeTool("native-network-logs", { udid: SERIAL, bundleId: PKG })
+    ).toEqual({
+      status: "ok",
+      header: `android-native: not started, 0 requests (network capture is off for ${PKG}; call network-capture-start for it, then repeat the action)`,
+      armed: false,
+      started: false,
+      count: 0,
+      total: 0,
+      requests: [],
+    });
+    expect(registry.getSnapshot().services.size).toBe(0);
+    expect(device.commands).toEqual([]);
+    expect(hasAndroidNetworkCapture()).toBe(false);
+  });
+
+  it("reads a process that started again outside a launch as not attached, with its pid and without adb, until an agent connects", async () => {
+    const api = await armedInspector();
+    device.process = { pid: 5300, startTime: 130_000 };
+    await agents[0]!.close();
+    // The inspector's own check after the drop finds the new process.
+    await vi.waitFor(() => expect(api.state().notAttached).toBe(true), { timeout: 3_000 });
+    const before = device.commands.length;
+
+    expect(await listNative(api)).toEqual({
+      status: "ok",
+      header:
+        "android-native: not attached, 0 requests (the app restarted as pid 5300 without launch-app or restart-app, so that process runs without capture; restart-app attaches capture to the next process, or call network-capture-start)",
+      armed: false,
+      count: 0,
+      total: 0,
+      requests: [],
+    });
+    expect(device.commands).toHaveLength(before);
+    expect(attachCommands()).toHaveLength(1);
+    expect(api.isStarted()).toBe(true);
+
+    // An agent that connects from the app again clears it.
+    await FakeAgent.fromSession(dirFor(), proc());
+    await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(api.state()).not.toHaveProperty("notAttached");
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      "android-native: armed, 0 requests (pid 5300; capture active)"
+    );
+  });
+
+  it("reads a process restart-app attached as attached, also when the check after the drop read it first", async () => {
+    const api = await armedInspector();
+    // restart-app's force-stop drops the connection, and the new process runs before its launch attaches it.
+    device.process = { pid: 5300, startTime: 130_000 };
+    device.agentOnAttach = false;
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().notAttached).toBe(true), { timeout: 3_000 });
+
+    expect(await attachAndroidNetworkInspectorToLaunch(SERIAL, PKG)).toBe(
+      `native network capture is attaching to ${PKG} (pid 5300), and the agent has not connected yet; native-network-logs shows when it is armed`
+    );
+
+    expect(attachCommands().filter((c) => c.includes("attach-agent 5300 "))).toHaveLength(1);
+    expect(api.state()).not.toHaveProperty("notAttached");
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      "android-native: not armed, 0 requests (attached to pid 5300; waiting for the agent to connect)"
+    );
+  }, 10_000);
+
+  it("reads an app with no process left as exited", async () => {
+    const api = await armedInspector();
+    device.process = null;
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().notAttached).toBe(true), { timeout: 3_000 });
+    const before = device.commands.length;
+
+    expect(((await listNative(api)) as { header: string }).header).toBe(
+      `android-native: not attached, 0 requests (the process of ${PKG} that capture was attached to exited, and no later process has capture; launch-app or restart-app attaches capture to the next process, or call network-capture-start once the app runs)`
+    );
+    expect(device.commands).toHaveLength(before);
+  });
+
+  it("reads a stopped inspector as stopped, also once its check after a drop finds the app restarted", async () => {
+    const api = await armedInspector();
+    device.process = { pid: 5300, startTime: 130_000 };
+    const reads = pidofReads();
+    await agents[0]!.close();
+    await vi.waitFor(() => expect(api.state().armed).toBe(false));
+    expect(await api.stopCapture()).toEqual({ confirmed: true });
+    // The check after the drop runs after the stop.
+    await vi.waitFor(() => expect(pidofReads()).toBeGreaterThan(reads), { timeout: 2_000 });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(api.state()).toEqual({ armed: false, stopped: true });
+    expect(await listNative(api)).toMatchObject({
+      header: `android-native: stopped, 0 requests (${STOPPED_REASON})`,
+      stopped: true,
+    });
+  });
+});
+
 describe("why the agent has not connected", () => {
   const START_TIME_LINE =
     "Could not read the process start time (java.io.IOException: Permission denied) - not connecting; restart the app to attach again";
@@ -4024,17 +4723,13 @@ describe("why the agent has not connected", () => {
     return result.header;
   }
 
+  /** An inspector whose start attaches an agent that never connects. */
   async function attachedNotConnected(): Promise<AndroidNetworkInspectorApi> {
     device.agentOnAttach = false;
-    const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
-    // A process attached just now: its agent has had no time to log anything.
-    expect(logcatReads()).toEqual([]);
-    expect(api.state().note).toBe(WAITING);
-    return api;
+    return createInspector();
   }
 
-  it("native-network-logs shows the last reason the agent logged for not connecting", async () => {
+  it("network-capture-start says the last reason the agent logged for not connecting, and native-network-logs shows it without adb", async () => {
     const api = await attachedNotConnected();
     device.logcat = [
       "--------- beginning of main",
@@ -4044,11 +4739,18 @@ describe("why the agent has not connected", () => {
       "",
     ].join("\n");
 
+    expect(await startUnarmed(api)).toEqual({
+      armed: false,
+      reason: `${WAITING}; the agent says: ${START_TIME_LINE}`,
+    });
+    // Read once the wait for the agent ended: a process attached just now has had no time to log.
+    expect(logcatReads()).toEqual(["logcat -d --pid=4722 -v epoch -s ArgentNetworkInspector:I"]);
+    expect(device.logcatTimeouts).toEqual([3_000]);
+    const before = device.commands.length;
     expect(await header(api)).toBe(
       `android-native: not armed, 0 requests (${WAITING}; the agent says: ${START_TIME_LINE})`
     );
-    expect(logcatReads()).toEqual(["logcat -d --pid=4722 -v epoch -s ArgentNetworkInspector:I"]);
-    expect(device.logcatTimeouts).toEqual([3_000]);
+    expect(device.commands).toHaveLength(before);
 
     // Once the agent connects, the note and its reason are gone.
     await FakeAgent.fromSession(dirFor(), proc());
@@ -4063,7 +4765,7 @@ describe("why the agent has not connected", () => {
       "No session file at /data/user/0/com.example.demo/code_cache/.argent-inspector/session - not connecting";
     // From an earlier capture: the session file was missing then.
     device.logcat = `  1793710950.001  4722  4740 I ArgentNetworkInspector: ${NO_SESSION}\n`;
-    expect(await header(api)).toBe(`android-native: not armed, 0 requests (${WAITING})`);
+    expect(await startUnarmed(api)).toEqual({ armed: false, reason: WAITING });
     expect(logcatReads()).toEqual(["logcat -d --pid=4722 -v epoch -s ArgentNetworkInspector:I"]);
 
     // The agent gave up for good before the write: that still holds.
@@ -4072,12 +4774,17 @@ describe("why the agent has not connected", () => {
       `  1793710950.001  4722  4740 I ArgentNetworkInspector: ${NO_SESSION}`,
       "",
     ].join("\n");
-    expect(await header(api)).toBe(
-      `android-native: not armed, 0 requests (${WAITING}; the agent says: ${START_TIME_LINE})`
-    );
+    expect(await startUnarmed(api)).toEqual({
+      armed: false,
+      reason: `${WAITING}; the agent says: ${START_TIME_LINE}`,
+    });
 
     // A line from after the write counts, whatever it says.
     device.logcat = `  1793710953.300  4722  4740 I ArgentNetworkInspector: ${NO_SESSION}\n`;
+    expect(await startUnarmed(api)).toEqual({
+      armed: false,
+      reason: `${WAITING}; the agent says: ${NO_SESSION}`,
+    });
     expect(await header(api)).toBe(
       `android-native: not armed, 0 requests (${WAITING}; the agent says: ${NO_SESSION})`
     );
@@ -4091,17 +4798,21 @@ describe("why the agent has not connected", () => {
     expect(sessionWrittenSince("copied\n")).toBeUndefined();
   });
 
-  it("reads logcat at most once per call, and only while the agent has not connected", async () => {
+  it("reads logcat only while the agent has not connected, and native-network-logs never reads it", async () => {
     const api = await attachedNotConnected();
     device.logcat = `W/ArgentNetworkInspector: ${START_TIME_LINE}\n`;
+    await startUnarmed(api);
+    const reads = logcatReads().length;
+    expect(reads).toBe(1);
     await header(api);
     await header(api);
-    expect(logcatReads()).toHaveLength(2);
+    expect(logcatReads()).toHaveLength(reads);
 
     await FakeAgent.fromSession(dirFor(), proc());
     await vi.waitFor(() => expect(api.state().armed).toBe(true));
+    expect(await api.startCapture(8081)).toEqual({ armed: true });
     await header(api);
-    expect(logcatReads()).toHaveLength(2);
+    expect(logcatReads()).toHaveLength(reads);
   });
 
   it("keeps today's note when logcat holds no refusal or close line", async () => {
@@ -4113,11 +4824,12 @@ describe("why the agent has not connected", () => {
       "W/OtherTag: The listener on port 20100 did not prove the session - closing\n",
     ]) {
       device.logcat = output;
+      expect(await startUnarmed(api)).toEqual({ armed: false, reason: WAITING });
       expect(await header(api)).toBe(`android-native: not armed, 0 requests (${WAITING})`);
     }
   });
 
-  it("keeps today's note when the logcat read fails or times out, and the call still succeeds", async () => {
+  it("keeps today's note when the logcat read fails or times out, and the start still answers", async () => {
     const api = await attachedNotConnected();
     device.logcat = new FailureError(`adb -s ${SERIAL} shell logcat timed out after 3000ms`, {
       error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
@@ -4125,19 +4837,25 @@ describe("why the agent has not connected", () => {
       failure_area: "tool_server",
       error_kind: "timeout",
     });
-    expect(await header(api)).toBe(`android-native: not armed, 0 requests (${WAITING})`);
+    expect(await startUnarmed(api)).toEqual({ armed: false, reason: WAITING });
+    const reads = logcatReads().length;
+    expect(reads).toBe(1);
 
     device.logcat = adbFailure("logcat", "error: closed");
+    expect(await startUnarmed(api)).toEqual({ armed: false, reason: WAITING });
+    expect(logcatReads().length).toBeGreaterThan(reads);
     expect(await header(api)).toBe(`android-native: not armed, 0 requests (${WAITING})`);
-    expect(logcatReads()).toHaveLength(2);
   });
 
   it("the launch note carries the reason when the launched process's agent does not connect", async () => {
-    // Capture is live from a call that found the app not running.
+    // Capture is started by a start that found the app not running.
     device.process = null;
     device.agentOnAttach = false;
     const api = await createInspector();
-    expect(await api.ensureAttached(8081)).toBeNull();
+    expect(await api.startCapture(8081)).toEqual({
+      armed: false,
+      reason: `${PKG} was not running at network-capture-start; launch-app or restart-app attaches the agent to its next process, or call network-capture-start once it runs`,
+    });
     device.process = { pid: 5320, startTime: 132_000 };
     device.logcat =
       "W/ArgentNetworkInspector: Closing the tool-server connection: it sent a proof that did not verify\n";

@@ -21,7 +21,7 @@ export type LaunchAppResult =
       /** Mac apps: the arguments the app runs with. */
       args?: string[];
       note?: string;
-      /** While native network capture is on for the app: whether it followed the app into this process. */
+      /** Once network-capture-start started native network capture for the app: whether it followed the app into this process, or that it is stopped. */
       networkCapture?: string;
     }
   | NativeDevtoolsInitFailedResult;

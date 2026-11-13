@@ -45,6 +45,7 @@ function makeNativeApi(options: {
   appRunning?: boolean;
   initFailure?: NativeDevtoolsInitFailure | null;
   state?: NativeDevtoolsAppState;
+  captureStarted?: boolean;
 }): {
   api: NativeDevtoolsApi;
   ensureEnvReady: ReturnType<typeof vi.fn>;
@@ -79,7 +80,12 @@ function makeNativeApi(options: {
         await reverifyEnv();
         return options.state ?? (options.appRunning ? "stale_process" : "not_running");
       },
-      activateNetworkInspection: async () => false,
+      startNetworkCapture: async () => false,
+      stopNetworkCapture: async () => ({ confirmed: true }),
+      isNetworkCaptureStarted: () => options.captureStarted ?? false,
+      isNetworkCaptureStopped: () => false,
+      networkCaptureMark: () => undefined,
+      refreshLentNetworkCapture: async () => {},
       takeCaptureGap: () => false,
       networkRecords: () => undefined,
       networkCaptureAfterLaunch: async () => undefined,
@@ -867,16 +873,19 @@ describe("precheckNativeDevtools maps a measured state to its remedy", () => {
     ];
 
     for (const tool of tools) {
+      // native-network-logs reaches the precheck only once the app's capture is started.
       const { api } = makeNativeApi({
         envSetup: true,
         appRunning: true,
         state: "unregistered",
+        captureStarted: true,
       });
 
       const result = (await tool.execute(
         { nativeDevtools: api },
         {
-          udid: "UDID",
+          // A simulator UDID: native-network-logs reads any other id as an Android serial.
+          udid: "11111111-1111-1111-1111-111111111111",
           bundleId: "com.example.app",
           x: 1,
           y: 1,

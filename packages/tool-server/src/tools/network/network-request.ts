@@ -2,14 +2,25 @@ import * as zlib from "node:zlib";
 import { z } from "zod";
 import type { ServiceRef, ToolDefinition } from "@argent/registry";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
-import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
-import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
+import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "../debugger/debugger-service-ref";
+import {
+  jsCapture,
+  jsCapturePayload,
+  type NetworkInspectorApi,
+} from "../../blueprints/network-inspector";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import type { CDPClient } from "../../utils/debugger/cdp-client";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import {
   ANDROID_NATIVE_REQUEST_ID,
   findAndroidNativeRecord,
+  hasAndroidNetworkCapture,
 } from "../../blueprints/android-network-inspector";
-import { IOS_NATIVE_REQUEST_ID, findIosNativeRecord } from "../../blueprints/ios-network-records";
+import {
+  IOS_NATIVE_REQUEST_ID,
+  findIosNativeRecord,
+  hasIosNetworkCapture,
+} from "../../blueprints/ios-network-records";
 import type { NativeNetworkBody, NativeNetworkRecord } from "../../utils/native-network-record";
 import { resolveDevice } from "../../utils/device-info";
 import {
@@ -18,7 +29,7 @@ import {
   makeNetworkDetailReadScript,
 } from "../../utils/debugger/scripts/network-interceptor";
 import { metroPort, metroPortField } from "../../utils/debugger/metro-port";
-import { isRedirect, reasonPhrase } from "./network-logs";
+import { isRedirect, jsCaptureForRead, jsNoLog, jsNotStarted, reasonPhrase } from "./network-logs";
 
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
@@ -205,7 +216,7 @@ export const networkRequestTool: ToolDefinition<
   description: `Get full details of a specific network request by its requestId: one from view-network-logs, or an ios- or android- ID from native-network-logs, which needs no debugger connection.
 Returns request/response headers (sensitive headers redacted), status, timing, the request body, and optionally the response body.
 Request and response bodies over 1000 chars are cut to 1000 under a "[TRUNCATED: ...]" line that gives the full size; a binary response body is omitted, as is a binary request body of an ios- or android- ID. For an ios- or android- ID, a body that cannot be read shows "[unavailable: <reason>]"; when the reason says the app is still sending the request body, call again once the upload has finished. Use when you need headers, body, or timing for a specific request after listing logs.
-Returns an error message string if the requestId is not found.`,
+Returns an error message string if the requestId is not found; on iOS and Android it also says when network capture is not started, which network-capture-start does. IDs keep working after network-capture-stop.`,
   zodSchema,
   readOnly: true,
   interaction: {
@@ -235,9 +246,11 @@ Returns an error message string if the requestId is not found.`,
      * Chromium, above, still gets to answer for itself.
      */
     if (nativeIdPlatform(params.requestId)) return {};
-    return {
-      inspector: `NetworkInspector:${metroPort(params)}:${canonicalDeviceId(params.device_id)}`,
-    };
+    const payload = jsCapturePayload(metroPort(params), canonicalDeviceId(params.device_id)!);
+    // Vega has no network-capture-start, so its read still installs the interceptor.
+    if (device.platform === "vega") return { inspector: `NetworkInspector:${payload}` };
+    // A read never starts capture: before a start it reaches nothing in the app.
+    return jsCapture(payload) ? { debugger: debuggerServiceRef(params) } : {};
   },
   async execute(services, params) {
     if (ANDROID_NATIVE_REQUEST_ID.test(params.requestId)) {
@@ -309,16 +322,36 @@ Returns an error message string if the requestId is not found.`,
     const nativePlatform = nativeIdPlatform(params.requestId);
     if (nativePlatform) return nativeNotFound(params.requestId, params.device_id, nativePlatform);
 
-    const api = services.inspector as NetworkInspectorApi;
-
-    // Idempotent: the script no-ops if already installed.
-    await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+    let cdp: CDPClient;
+    let noLog: string | undefined;
+    if (device.platform === "vega") {
+      const api = services.inspector as NetworkInspectorApi;
+      // Idempotent: the script no-ops if already installed.
+      await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+      cdp = api.cdp;
+    } else {
+      const port = metroPort(params);
+      const deviceId = canonicalDeviceId(params.device_id)!;
+      const dbg = services.debugger as JsRuntimeDebuggerApi | undefined;
+      const capture = dbg && jsCaptureForRead(jsCapturePayload(port, deviceId), dbg.runtimeApp);
+      if (!dbg || !capture) {
+        return jsNotStarted(
+          deviceId,
+          port,
+          "list the requests with view-network-logs",
+          `Request ${params.requestId} not found. `
+        );
+      }
+      cdp = dbg.cdp;
+      noLog = `Request ${params.requestId} not found. ${jsNoLog(capture)}`;
+    }
 
     const script = makeNetworkDetailReadScript(params.requestId);
-    const raw = await api.cdp.evaluate(script);
-    const data = JSON.parse(raw as string) as RawEntry | { error: string };
+    const raw = await cdp.evaluate(script);
+    const data = JSON.parse(raw as string) as RawEntry | { error: string; installed?: false };
 
     if ("error" in data) {
+      if (data.installed === false && noLog) return noLog;
       return `${data.error}. Use view-network-logs to list available requests.`;
     }
 
@@ -400,9 +433,13 @@ function isNativeRequestId(requestId: string): boolean {
 function nativeNotFound(requestId: string, deviceId: string, layer: NativePlatform): string {
   const { platform } = resolveDevice(deviceId);
   const prefix = NATIVE_ID_PREFIXES[layer];
-  return platform === "chromium" || platform === "vega"
-    ? `Request ${requestId} not found. An ${prefix} ID comes from ${layer === "android" ? "an Android device" : "an iOS simulator"}. Use view-network-logs to list this device's requests.`
-    : `Request ${requestId} not found. Use native-network-logs to list the requests the ${layer === "android" ? "Android" : "iOS"} native layer recorded.`;
+  if (platform === "chromium" || platform === "vega") {
+    return `Request ${requestId} not found. An ${prefix} ID comes from ${layer === "android" ? "an Android device" : "an iOS simulator"}. Use view-network-logs to list this device's requests.`;
+  }
+  const captured = layer === "android" ? hasAndroidNetworkCapture() : hasIosNetworkCapture();
+  return captured
+    ? `Request ${requestId} not found. Use native-network-logs to list the requests the ${layer === "android" ? "Android" : "iOS"} native layer recorded.`
+    : `Request ${requestId} not found. Native network capture is not started, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with native-network-logs.`;
 }
 
 /** The body reads of a native layer's store. */

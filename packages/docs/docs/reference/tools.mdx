@@ -27,7 +27,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                           |
 | `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                      |
 | `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                        |
-| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, native network capture                                |
+| `stop-all-simulator-servers` | Stop every service a device owns: simulator servers, native devtools, TV daemons, network capture and its requests                      |
 | `stop-metro`                 | Stop the Metro bundler listening on a given port                                                                                        |
 
 Through the MCP server, `list-devices` returns a shorter text than the SDK and `argent run`:
@@ -143,8 +143,165 @@ Call `screenshot` or `describe` to read the screen again.
 | `debugger-inspect-element`     | Inspect the React component hierarchy at a screen coordinate                                                                             |
 | `debugger-log-registry`        | Summarize console logs captured from the app                                                                                             |
 | `debugger-reload-metro`        | Restart the Metro bundle without restarting the native process                                                                           |
-| `view-network-logs`            | Retrieve captured HTTP requests from the running app                                                                                     |
+| `view-network-logs`            | Retrieve captured HTTP requests from the running app. On iOS and Android, a read never starts capture                                    |
 | `view-network-request-details` | Get full details of one request by its `requestId` from `view-network-logs`, or by an `ios-` or `android-` ID from `native-network-logs` |
+| `network-capture-start`        | Start network capture for an app on iOS or Android, on its JS runtime layer and its native layer                                         |
+| `network-capture-stop`         | Stop network capture for an app, and keep the requests that Argent recorded                                                              |
+
+### Network capture on iOS and Android
+
+On iOS and Android, the network read tools only read. `view-network-logs`, `view-network-request-details` and `native-network-logs` never start capture. Call `network-capture-start` for the app before the action that sends the requests.
+
+To capture a request:
+
+1. Call `network-capture-start` with `udid` and `bundleId`.
+2. Do the action that sends the request.
+3. Call `view-network-logs` or `native-network-logs` to read the list of requests.
+
+`network-capture-start` and `network-capture-stop` work on iOS simulators, remote iOS simulators, Android emulators and Android devices. Each call controls two layers of the app:
+
+| Layer            | Platform     | Requests                                | Read with             |
+| ---------------- | ------------ | --------------------------------------- | --------------------- |
+| `js`             | iOS, Android | The requests of the JS runtime          | `view-network-logs`   |
+| `ios-native`     | iOS          | The `URLSession` requests               | `native-network-logs` |
+| `android-native` | Android      | The OkHttp requests of a debuggable app | `native-network-logs` |
+
+The two tools do not support Chromium, Vega and Mac apps. There, Argent starts the capture without them:
+
+- Chromium: Argent starts the capture when it attaches to the page. Each Chromium tool attaches Argent to the page.
+- Vega: a read starts the capture of the JS runtime layer. Each call of `view-network-logs` or `view-network-request-details` installs the capture in the JS runtime of the app, also after a reload.
+- Mac apps: the first call of `native-network-logs` starts the native capture. See [Mac apps](#mac-apps).
+
+| Parameter  | Effect                                                                                                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `udid`     | The UDID of the iOS simulator, or the serial of the Android device                                                                                                                                                          |
+| `bundleId` | The bundle ID of the app on iOS, or the package name of the app on Android                                                                                                                                                  |
+| `port`     | The Metro port of the app. Argent reaches the JS runtime of the app through this port. The native layers remove the requests to this port on a local address from their lists. The default is the Metro port of the device. |
+
+#### Start
+
+`network-capture-start` starts the layers at the same time. Each layer waits until its capture is ready:
+
+- JS runtime layer: Argent installs the capture in the JS runtime of the app. If the JS runtime does not answer within 5 seconds, Argent does not install the capture.
+- iOS: Argent sends `Network.enable` to the app. Then Argent waits until the app acknowledges it, for at most 5 seconds. If the app still connects to Argent, these 5 seconds also include the connection.
+- Android: Argent attaches the in-app agent to the running process of the app. Then Argent waits until the capture is ready, for at most 5 seconds.
+
+The result contains `status` and `layers`. Each entry of `layers` contains these fields:
+
+| Field         | Content                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `layer`       | `js`, `ios-native` or `android-native`                                                                                                |
+| `armed`       | `true` when the capture of the layer is ready                                                                                         |
+| `reason`      | Why the layer is not armed. The field is present only when `armed` is `false`                                                         |
+| `unavailable` | `true` when Argent cannot arm the layer without a change that you make, for example a debuggable build, or a Metro server on the port |
+
+A native layer that is not armed often arms later without a new start. For example, Argent arms it when the app connects, or when `launch-app` or `restart-app` starts the app. The `reason` tells what to do. These are frequent reasons:
+
+| Layer            | Reason                                                                                                                                             | `unavailable` |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `js`             | Metro does not run on the port.                                                                                                                    | `true`        |
+| `js`             | The JS runtime on the port belongs to a different app.                                                                                             | `true`        |
+| `js`             | No app is connected to Metro yet, or the JS runtime did not answer.                                                                                | absent        |
+| `js`             | The JavaScript of the app did not load yet.                                                                                                        | absent        |
+| `ios-native`     | The app is an Apple system app.                                                                                                                    | `true`        |
+| `ios-native`     | Argent cannot arm the running process of the app. Argent arms the next process. To capture now, call `restart-app`.                                | absent        |
+| `android-native` | Argent cannot attach the in-app agent to the app, for example because the app is not debuggable.                                                   | `true`        |
+| `android-native` | The app did not run at the start. `launch-app` or `restart-app` attaches the in-app agent to its next process.                                     | absent        |
+| `android-native` | The in-app agent captures no requests in this process, for example because R8 fully minified OkHttp. The reason ends with `use view-network-logs`. | absent        |
+
+When all layers are unavailable, `network-capture-start` fails with the error `NETWORK_CAPTURE_UNAVAILABLE`. The message gives the reason of each layer. An Apple system app runs no React Native JS, so both of its layers are unavailable, and a start for it always fails.
+
+A second call of `network-capture-start` keeps the requests that Argent recorded.
+
+The JS runtime capture of an app is on one Metro port of the device. A start or a stop on a different port moves it to that port only when Argent reaches the JS runtime of the app there. Otherwise, the capture on the earlier port stays as it is, and the `reason` of the `js` entry names that port.
+
+The native layer follows the app into each new process that `launch-app` or `restart-app` starts, until `network-capture-stop`. On iOS, it also follows a process that starts in a different way. The JS runtime layer arms only at a call of `network-capture-start`. A new JS runtime of the app has no capture. Thus call `network-capture-start` again after each of these events:
+
+- A reload of the JavaScript, for example with `debugger-reload-metro`.
+- `restart-app`, or a `launch-app` that starts a new process.
+- A start of the capture before the JavaScript of the app loaded.
+
+Until then, `view-network-logs` says that the capture stopped recording at the reload, or that the JS runtime was not ready at the start. The native layer keeps its capture across these events.
+
+#### Stop
+
+`network-capture-stop` stops the capture of the app on each layer. The capture of a different app continues. Argent keeps the requests that it recorded. Their IDs stay valid in `view-network-request-details`.
+
+The result contains `status` and `layers`. Each entry of `layers` contains these fields:
+
+| Field    | Content                                                                                                           |
+| -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `layer`  | `js`, `ios-native` or `android-native`                                                                            |
+| `armed`  | `false` when the layer confirmed the stop. `true` when the layer did not confirm the stop. The `reason` tells why |
+| `total`  | The number of requests that the layer keeps for the app                                                           |
+| `reason` | Why the stop did not reach the layer, what the stop did not change, or `capture was not started for this app`     |
+
+If a layer has no started capture, the stop does not start it. A layer that Argent cannot reach does not make the tool fail. The `reason` of the layer tells why.
+
+A stop can fail to reach the JS runtime of the app, for example when the app does not run. Then the `js` entry depends on the earlier start:
+
+- An earlier start installed the capture through this Metro port, no stop paused it since, and the app has a process on the device: `armed` is `true`. The capture can still record in the JS runtime of the app. The `reason` tells you to call `network-capture-stop` again when the app answers. When Argent cannot read the processes of the device, for example on a remote simulator, `armed` is also `true`.
+- An earlier start installed the capture through this Metro port, no stop paused it since, and the app has no process on the Android device or the local iOS simulator: `armed` is `false`. The capture ended with the process of the app.
+- A start stored the capture but installed none, or an earlier stop paused it: `armed` is `false`. Argent installs no capture in the JS runtime of the app while the capture is stopped.
+- No start stored a capture for the app: `armed` is `false`, and the `reason` ends with `capture was not started for this app`. Argent stores nothing, and a later read says that the capture is not started.
+
+A stop changes nothing on the JS runtime layer when the Metro port has the capture of a different app. A stop of an Apple system app changes nothing on the JS runtime layer, because the app runs no React Native JS.
+
+At the stop:
+
+- A request that runs at the stop completes in the list on iOS and in the JS runtime layer. On Android, Argent marks the request as `failed` with the error `capture stopped before the request finished`. The request in the app continues.
+- On Android, a body is available after the stop only if `view-network-request-details` read it before the stop. Argent keeps a copy of the 64 bodies that it read most recently.
+- On Android, Argent keeps the files and the `adb reverse` of the capture. See [Native network capture on Android](#native-network-capture-on-android).
+- On a simulator where Argent uses the socket of a device provider, Argent sends no command to the agent of the app. The provider keeps its own capture setting. Argent records no new request of the app. When the app is connected, the `reason` of the `ios-native` entry says so.
+
+The capture stays stopped, also across reloads and relaunches. A read, `launch-app` and `restart-app` do not start it again. Only `network-capture-start` starts it again. After a stop, the tools give these results:
+
+| Tool                                            | After a stop                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `native-network-logs`                           | Lists the requests that Argent kept. The header state is `stopped`, for example `android-native: stopped, 12 requests (capture stopped by network-capture-stop; network-capture-start turns it on again)`. The result contains `stopped: true` and `armed: false`. The call does not connect to the app and runs no adb command.                                                                                                                                                                                                                   |
+| `view-network-logs`                             | Lists the requests in the network log of the JS runtime layer, with the first line `=== NETWORK LOGS (page 1/1, 14 total; capture stopped) ===`. Argent installs no capture, also after a reload. An empty list gives `No network traffic captured: network capture is stopped for <bundleId> (network-capture-stop). Call network-capture-start to capture again, then repeat the action.` After a reload, the text starts with `Network capture is stopped for <bundleId> (network-capture-stop)` and says that the reload cleared the requests. |
+| `view-network-request-details`                  | Gives the details of each ID, also of the IDs from before the stop. The list above gives the limit for Android bodies.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `launch-app`, `restart-app`                     | Do not attach or arm the capture. On Android and on a local iOS simulator, the `networkCapture` field is `native network capture is stopped for <bundleId> (network-capture-stop); this process runs without it until network-capture-start`. On a local iOS simulator, a process of the app that did not confirm the stop can still capture its requests. When `launch-app` brings this process to the front, the field says so. On a remote simulator and on a simulator of a device provider, the result has no `networkCapture` field.         |
+| `e2e-execute`                                   | The first `launch` step of the app after the stop shows the `networkCapture` note as a `warning`.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `react-profiler-start`, `native-profiler-start` | The warning does not name the app. On iOS, if the process of the app did not confirm the stop, the warning names the app until that process ends or confirms a later stop.                                                                                                                                                                                                                                                                                                                                                                         |
+
+`stop-all-simulator-servers` ends the capture of all apps on the device. Argent removes the requests of the native layers and of the JS runtime layer, and their IDs are not valid after it. The JS runtime layer stops recording. After it, a read gives the result from before a start. If `stop-all-simulator-servers` cannot reach the JS runtime of the app, the capture there can still record, and its requests stay. Then the capture of the JS runtime layer stays stopped, and a read gives the result after a stop. A later `network-capture-stop` that reaches the JS runtime stops the recording. For the files on Android, see [Native network capture on Android](#native-network-capture-on-android).
+
+#### Results before a start
+
+Before `network-capture-start`, a read does no work in the app. It does not connect to the app, runs no adb command and sends no `Network.enable`. For an Apple system app, `native-network-logs` fails with the error `NATIVE_DEVTOOLS_NOT_INJECTABLE`. Otherwise, a read gives these results:
+
+| Tool                           | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `native-network-logs`          | `status: "ok"`, `started: false`, `armed: false`, `count: 0`, `total: 0` and an empty `requests`. The header is `ios-native: not started, 0 requests (network capture is off for <bundleId>; call network-capture-start for it, then repeat the action)`, or the same text after `android-native:`.                                                                                                                                                                                                                                                                                           |
+| `view-network-logs`            | `Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then call view-network-logs again.` The JS runtime of a different app on the port gives the same text.                                                                                                                                                                                                                                                                                                                                       |
+| `view-network-request-details` | For an ID from `view-network-logs`: `Request <id> not found. Network capture is not started for this app, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with view-network-logs.` For an `ios-` or `android-` ID, when no capture of that platform is started or stopped in this tool-server: `Request <id> not found. Native network capture is not started, so no requests are recorded. Call network-capture-start with udid and bundleId, repeat the action, then list the requests with native-network-logs.` |
+
+The device can have a JS runtime capture for an app on a different Metro port. Then the text that says that capture is not started also gives that port: `This device has network capture for <bundleId> on Metro port <port>: pass port <port> to read it.`
+
+#### A started capture that lost the app
+
+A read does not start the capture again, also when the capture lost the app. The read tells the state instead:
+
+| Case                                                                                                                         | Result                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The app reloaded its JavaScript or restarted after the start                                                                 | `view-network-logs` gives `Network capture for this app stopped recording at a JavaScript reload; requests since the reload are not recorded. Call network-capture-start again, repeat the action, then read again.`                                              |
+| The JS runtime of the app was not ready at the start                                                                         | `view-network-logs` gives `Network capture for this app is started, but the app's JavaScript runtime was not ready at the start, so no requests are recorded. Call network-capture-start again, repeat the action, then read again.`                              |
+| Android: a process of the app had the in-app agent and ended. The next process started without `launch-app` or `restart-app` | The header state of `native-network-logs` is `not attached`. See [Native network capture on Android](#native-network-capture-on-android).                                                                                                                         |
+| Android: the app did not run at the start, and then started without `launch-app` or `restart-app`                            | The header state of `native-network-logs` is `not armed`. The `header` line gives the reason `<bundleId> was not running at network-capture-start; launch-app or restart-app attaches the agent to its next process, or call network-capture-start once it runs`. |
+
+For an ID from `view-network-logs`, `view-network-request-details` gives `Request <id> not found.` and the same text.
+
+The `header` line of `native-network-logs` gives one of these states after the name of the layer:
+
+| State          | Meaning                                                                                                                                                                      |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `armed`        | The capture is ready in the current process of the app.                                                                                                                      |
+| `not armed`    | The capture is started, but it is not ready. The `header` line gives the reason.                                                                                             |
+| `not attached` | Android only. A process of the app with the in-app agent ended. The current process has no in-app agent, or the app exited.                                                  |
+| `stopped`      | `network-capture-stop` stopped the capture. The list contains the requests from before the stop.                                                                             |
+| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. The list is empty.                                                                              |
+| `unavailable`  | Android only. The last start found that Argent cannot capture the app, for example in a build that is not debuggable. The `header` line gives the reason. The list is empty. |
 
 ## Native devtools
 
@@ -154,28 +311,27 @@ On a Mac app, these tools read the app through the Argent library:
 - `native-full-hierarchy`, `native-find-views`, `native-view-at-point` and `native-user-interactable-view-at-point` read the AppKit views of the app.
   - SwiftUI puts the identifier and the label of a control on an accessibility element, not on a view. Thus a `native-find-views` search by `identifier` or `label` does not find SwiftUI controls. `describe` shows them.
   - When a search by `identifier` or `label` finds no view, its result has a `note` that refers to `describe`.
-- `native-network-logs` reads the requests that the app sends through `NSURLSession`. With `stop: true`, it fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`. The capture stops when the tool-server disconnects from the app.
+- `native-network-logs` reads the requests that the app sends through `NSURLSession`. The first call starts the capture. `network-capture-start` and `network-capture-stop` do not support Mac apps. The capture stops when the tool-server disconnects from the app.
 
 The [Mac apps](#mac-apps) section contains the details.
 
-| Tool                                     | Description                                                                                       |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `native-full-hierarchy`                  | Get the complete UIKit view tree                                                                  |
-| `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`                                |
-| `native-view-at-point`                   | Inspect the deepest visible view at a native window point                                         |
-| `native-user-interactable-view-at-point` | Inspect the deepest view at a point that would receive touch input                                |
-| `native-network-logs`                    | Read native HTTP requests on iOS, Android and Mac apps, or stop native network capture on Android |
+| Tool                                     | Description                                                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `native-full-hierarchy`                  | Get the complete UIKit view tree                                                                        |
+| `native-find-views`                      | Search views by class, accessibility id, label, tag, or `nativeID`                                      |
+| `native-view-at-point`                   | Inspect the deepest visible view at a native window point                                               |
+| `native-user-interactable-view-at-point` | Inspect the deepest view at a point that would receive touch input                                      |
+| `native-network-logs`                    | Read native HTTP requests on iOS, Android and Mac apps. On iOS and Android, a read never starts capture |
 
 ### Native network capture on Android
 
-On Android, `native-network-logs` reads the OkHttp traffic of a debuggable app. The device must run Android 8.0 or later. Argent captures all OkHttp requests only on Android 9 or later. On Android 8.0 and 8.1, Argent captures only the requests of the React Native networking client and of Fresco. In an app without React Native, Argent captures no requests, and the capture state is `unavailable`. The app must run as `arm64-v8a` or `x86_64`. Argent attaches an in-app agent to the running app.
+On Android, `native-network-logs` reads the OkHttp traffic of a debuggable app. The device must run Android 8.0 or later. Argent captures all OkHttp requests only on Android 9 or later. On Android 8.0 and 8.1, Argent captures only the requests of the React Native networking client and of Fresco. In an app without React Native, Argent captures no requests, and the capture state is `unavailable`. The app must run as `arm64-v8a` or `x86_64`. `network-capture-start` attaches an in-app agent to the running app.
 
 To capture a request:
 
-1. Call `native-network-logs` with the serial of the device and the package name of the app. The first call usually returns `armed: false`.
-2. Call `native-network-logs` again until `armed` is `true`.
-3. Do the action that sends the request again.
-4. Call `native-network-logs` again to read the list of requests.
+1. Call `network-capture-start` with the serial of the device and the package name of the app. The `android-native` entry of the result tells if the capture is armed.
+2. Do the action that sends the request.
+3. Call `native-network-logs` to read the list of requests.
 
 | Parameter  | Effect on Android                                                                                                                                                                                                                                                                    |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -184,9 +340,8 @@ To capture a request:
 | `port`     | The Metro port. Argent removes the requests to this port on a local address from the list: `localhost`, `127.0.0.1`, `[::1]` or `10.0.2.2`. A request to this port on a different host stays in the list. The default is the Metro port of the device.                               |
 | `limit`    | The maximum number of requests in the list, an integer of 0 or more. Argent returns the most recent requests, oldest first. With 0, `requests` is empty, and the result still gives the `header` and the `total`. Argent refuses a negative number or a fraction. The default is 50. |
 | `clear`    | Remove the current requests from the later lists. Their IDs stay valid.                                                                                                                                                                                                              |
-| `stop`     | Stop native network capture for this app. The capture of a different app continues.                                                                                                                                                                                                  |
 
-The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `total` and `requests`. The `capture` field and the `header` line show the state of the capture. The `capture` field is absent when `armed` is `false`. The `captureDetail` field contains the detail that the in-app agent sent with the state. The `header` line shows this detail too. These are the states:
+The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `total` and `requests`. After a stop, it also contains `stopped: true`. Before a start, it contains `started: false`. After a start that found the layer unavailable, it contains `started: false`, `capture: "unavailable"` and the reason of the start in `captureDetail`. The `header` line starts with `android-native: `, then the header state, for example `armed` or `not attached`. See [Network capture on iOS and Android](#network-capture-on-ios-and-android) for the header states. The `capture` field and the `header` line also show what the in-app agent captures. The `capture` field is absent when `armed` is `false`, except after a start that found the layer unavailable. The `captureDetail` field contains the detail that the in-app agent sent with the state. The `header` line shows this detail too. These are the values of `capture`:
 
 | State       | Meaning                                                                                                                            |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -194,7 +349,7 @@ The result contains `header`, `armed`, `capture`, `captureDetail`, `count`, `tot
 | waiting     | The app did not load OkHttp yet. The capture starts when the app loads it.                                                         |
 | unavailable | The in-app agent cannot capture in this process, for example because R8 fully minified OkHttp. The `header` line gives the reason. |
 
-Each request has an ID with the format `android-<4 hex digits>-<number>`, for example `android-3f9a-12`. An ID is valid only in the tool-server that listed it. An ID is not valid after `native-network-logs` with `stop: true` or `stop-all-simulator-servers` stops the capture, or after the tool-server stops. Give the ID to `view-network-request-details` together with an id of the same device. This needs no debugger connection. The details contain these items:
+Each request has an ID with the format `android-<4 hex digits>-<number>`, for example `android-3f9a-12`. An ID is valid only in the tool-server that listed it. An ID stays valid after `network-capture-stop`. An ID is not valid after `stop-all-simulator-servers` stops the services of the device, or after the tool-server stops. Give the ID to `view-network-request-details` together with an id of the same device. This needs no debugger connection. The details contain these items:
 
 - The request headers that went on the wire, for example `Cookie` and `User-Agent`. When Argent knows only the headers that the app set, the details say so.
 - Each redirect with the request headers that went on the wire for it and the headers of its response, for example `Location`.
@@ -205,36 +360,42 @@ The details do not contain an initiator.
 
 Only the in-app agent that Argent attached can report requests to Argent.
 
-While native network capture is on for an app, these tools tell you:
+While native network capture is started for an app, these tools tell you:
 
 | Tool                                            | What it reports                                                                                                                                                                                                                                                                                                                                                                                |
 | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `launch-app`, `restart-app`                     | Argent attaches the in-app agent to the new process. The tool waits until the capture is ready, for at most 5 seconds. If the capture is not ready after this time, Argent reads the reason from the log of the device. This step can add 3 seconds when adb does not answer. The `networkCapture` field tells if Argent attached it. If Argent did not attach it, the field gives the reason. |
 | `e2e-execute`                                   | A `launch` step uses `restart-app`. The report shows the `networkCapture` note as a `warning` on the first launch of the app, and again when the note changes. A new pid alone is not a change.                                                                                                                                                                                                |
-| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the device with native network capture on.                                                                                                                                                                                                                                                                                              |
+| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the device with native network capture on. To profile without it, the warning tells you to call `network-capture-stop` for the app, then `restart-app`.                                                                                                                                                                                 |
 
-A process of the app can also start in a different way, for example from a launcher tap, from a link or after a crash. The next call of `native-network-logs` attaches the in-app agent to this process.
+A process of the app can also start in a different way, for example from a launcher tap, from a link or after a crash. Argent does not attach the in-app agent to this process. The header state of `native-network-logs` then depends on the earlier process:
 
-Native network capture stays on until `native-network-logs` with `stop: true` stops it for the app, or `stop-all-simulator-servers` stops the services of the device. After that, call `restart-app` to start the app without the in-app agent. See [Network inspection](/docs/features/network) for the limits.
+- An earlier process had the in-app agent. When its connection closes, Argent checks the processes of the app. If the earlier process ended, the state is `not attached`.
+- The app did not run at the start. The state is `not armed`, and the `header` line says that the app was not running at the start.
 
-With `stop: true`, `native-network-logs` does not list requests. The result contains `status`, `stopped` and `message`:
+With `not attached`, the `header` line gives the pid of the new process when Argent saw it. An example is `android-native: not attached, 12 requests (the app restarted as pid 4711 without launch-app or restart-app, so that process runs without capture; restart-app attaches capture to the next process, or call network-capture-start)`. If no process of the app runs, the `header` line says that the app exited. To attach the in-app agent, call `restart-app` or `network-capture-start`.
 
-- `stopped` is `true` when native network capture was on for the app. Argent removes the session file and the files of the in-app agent from the data directory of the app. Argent also removes the `adb reverse` tunnel of the app.
-- `stopped` is `false` when native network capture was not on for the app. Argent does not start native network capture for the app.
+Native network capture stays on until `network-capture-stop` stops it for the app, or until Argent stops the services of the device. These stops are different:
 
-The in-app agent stays in the current process of the app until this process ends. The `message` field tells you to call `restart-app`. After the stop, `launch-app` and `restart-app` do not attach the in-app agent. The next call of `native-network-logs` without `stop` starts native network capture again.
+| Stop                                                                                     | Effect on Android                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `network-capture-stop`                                                                   | Argent turns off the capture in the app. Argent keeps the requests, the session file, the files of the in-app agent and the `adb reverse` of the app. `network-capture-start` starts the capture again in the same process.   |
+| `stop-all-simulator-servers`                                                             | Argent turns off the capture in the app and removes the requests. Argent also removes the session file and the files of the in-app agent from the data directory of the app. Argent removes the `adb reverse` of the app too. |
+| A stop of the tool-server: `argent server stop`, `SIGINT`, `SIGTERM` or the idle timeout | The same as `stop-all-simulator-servers`, for all devices. A crash or a `kill -9` of the tool-server skips these steps.                                                                                                       |
+
+After each stop, the in-app agent stays in the current process of the app until this process ends. `launch-app` and `restart-app` do not attach the in-app agent. Call `restart-app` to start the app without the in-app agent. See [Network inspection](/docs/features/network) for the limits.
 
 ### Native `NSURLProtocol` layer on iOS
 
-On iOS, `native-network-logs` reads the `URLSession` requests of an app on an iOS simulator. The first call for an app starts the capture with `Network.enable`. The call waits until the app acknowledges `Network.enable`, for at most 5 seconds. Thus the first call for a connected app usually returns `armed: true`. Argent does not capture the requests from before this call.
+On iOS, `native-network-logs` reads the `URLSession` requests of an app on an iOS simulator. `network-capture-start` starts the capture with `Network.enable`. The start waits until the app acknowledges `Network.enable`, for at most 5 seconds. Thus a start for a connected app usually returns `armed: true` for the `ios-native` layer. Argent does not capture the requests from before the start.
 
-On a simulator where Argent uses the socket of a device provider, the provider controls the capture. Argent does not send `Network.enable` there, because `Network.enable` resets the network settings of the provider, for example its throttling. Instead, each call asks the agent if the capture is on. `armed` is `true` when the capture of the provider is on.
+On a simulator where Argent uses the socket of a device provider, the provider controls the capture. Argent does not send `Network.enable` there, because `Network.enable` resets the network settings of the provider, for example its throttling. Instead, `network-capture-start` asks the agent of the app if the capture is on. While the capture is started, each call of `native-network-logs` asks again. After a stop, Argent does not ask. `armed` is `true` when the capture of the provider is on.
 
 To capture a request:
 
-1. Call `native-network-logs` with the UDID of the simulator and the bundle ID of the app.
-2. Do the action that sends the request again.
-3. Call `native-network-logs` again to read the list of requests.
+1. Call `network-capture-start` with the UDID of the simulator and the bundle ID of the app.
+2. Do the action that sends the request.
+3. Call `native-network-logs` to read the list of requests.
 
 | Parameter  | Effect on iOS                                                                                                                                                                                                                                                                        |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -243,24 +404,23 @@ To capture a request:
 | `port`     | The Metro port. Argent removes the requests to this port on a local address from the list: `localhost`, `127.0.0.1`, `[::1]` or `10.0.2.2`. A request to this port on a different host stays in the list. The default is the Metro port of the device.                               |
 | `limit`    | The maximum number of requests in the list, an integer of 0 or more. Argent returns the most recent requests, oldest first. With 0, `requests` is empty, and the result still gives the `header` and the `total`. Argent refuses a negative number or a fraction. The default is 50. |
 | `clear`    | Remove the current requests from the later lists. Their IDs stay valid. A request that runs at the time of the clear comes back in the list when it ends.                                                                                                                            |
-| `stop`     | Not available on iOS. The call fails with the error `NATIVE_NETWORK_LOGS_STOP_UNSUPPORTED`.                                                                                                                                                                                          |
 
-The result contains `header`, `armed`, `count`, `total` and `requests`. `count` is the number of entries in `requests`. `total` is the number of requests in the full list. The `header` line shows the state of the capture, the number of requests and the process ID of the app, for example `ios-native: armed, 12 requests (pid 4711)`. Argent reads the process ID on the simulator when the app connects. A result from before the end of this read has no process ID. When `armed` is `false`, the `header` line gives one of these reasons:
+The result contains `header`, `armed`, `count`, `total` and `requests`. After a stop, it also contains `stopped: true`. Before a start, it contains `started: false`. `count` is the number of entries in `requests`. `total` is the number of requests in the full list. The `header` line shows the header state, the number of requests and the process ID of the app, for example `ios-native: armed, 12 requests (pid 4711)`. Argent reads the process ID on the simulator when the app connects. A result from before the end of this read has no process ID. See [Network capture on iOS and Android](#network-capture-on-ios-and-android) for the header states. When the state is `not armed`, the `header` line gives one of these reasons:
 
 - Argent waits for the app to acknowledge `Network.enable`.
-- The app did not acknowledge `Network.enable` within 5 seconds. The next call asks the app again.
-- `Network.enable` failed. The `header` line gives the error. The next call asks the app again.
+- The app did not acknowledge `Network.enable` within 5 seconds. `network-capture-start` asks the app again.
+- `Network.enable` failed. The `header` line gives the error. `network-capture-start` asks the app again.
 - The app is not connected. Argent arms the next process of the app when the process connects.
 
-On a simulator of a device provider, Argent does not send `Network.enable`. Argent asks the agent of the app if the capture is on. When `armed` is `false`, the `header` line gives one of these reasons:
+On a simulator of a device provider, Argent does not send `Network.enable`. Argent asks the agent of the app if the capture is on. When the state is `not armed`, the `header` line gives one of these reasons:
 
 - Argent waits for the agent to tell if the capture is on.
-- The agent did not tell within 5 seconds if the capture is on. The next call asks the agent again.
-- The request to the agent failed. The `header` line gives the error. The next call asks the agent again.
+- The agent did not tell within 5 seconds if the capture is on. The next call of `native-network-logs` asks the agent again.
+- The request to the agent failed. The `header` line gives the error. The next call of `native-network-logs` asks the agent again.
 - The provider has the capture off. Turn the capture on in the provider.
 - The app is not connected.
 
-If the capture started while the app was already running, the `header` line of the first result says that Argent did not record the launch of the app. To capture the launch, call `restart-app`, then call `native-network-logs` again. On a simulator where Argent uses the socket of a device provider, Argent records the requests from the time that it connects to the agent of the app. This time can be before the first call of `native-network-logs`. If the app already ran when Argent connected, the `header` line of the first result says that Argent did not record the requests from before this time. It also says that a relaunch ends the capture there, and it tells you not to restart the app.
+If the capture started while the app was already running, the `header` line of the first result says that Argent did not record the launch of the app. To capture the launch, call `restart-app`, then call `native-network-logs` again. On a simulator where Argent uses the socket of a device provider, Argent records the requests from the time that it connects to the agent of the app. This time can be before the call of `network-capture-start`. If the app already ran when Argent connected, the `header` line of the first result says that Argent did not record the requests from before this time. It also says that a relaunch ends the capture there, and it tells you not to restart the app.
 
 Each entry of `requests` contains these fields:
 
@@ -273,7 +433,7 @@ Each entry of `requests` contains these fields:
 | `durationMs`         | The duration of the request, when Argent knows it                                               |
 | `errorText`          | The error of a failed request                                                                   |
 
-An ID is valid only in the tool-server that listed it. An ID is not valid after `stop-all-simulator-servers` stops the services of the device, or after the tool-server stops. Give the ID to `view-network-request-details` together with an id of the same device. This needs no debugger connection. The details contain these items:
+An ID is valid only in the tool-server that listed it. An ID stays valid after `network-capture-stop`. An ID is not valid after `stop-all-simulator-servers` stops the services of the device, or after the tool-server stops. Give the ID to `view-network-request-details` together with an id of the same device. This needs no debugger connection. The details contain these items:
 
 - The request headers that the app set. The headers that iOS adds on the wire, for example `Cookie` and `User-Agent`, are not in the details. The `headersNote` field of the request says so.
 - The headers of the response.
@@ -301,17 +461,17 @@ When the connection of the app closes, Argent marks each request that still runs
 | `the app process ended before the request finished`                                                      | The app process ended, or the app relaunched.                                     |
 | `the agent did not reconnect after its connection dropped, so this request's final events never arrived` | The connection closed, and Argent did not find a sign that the app process ended. |
 
-The list also contains the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the list. Argent keeps the 2000 most recent requests of each app. Argent keeps fewer requests when the requests have very large headers or URLs. Argent keeps the list until `stop-all-simulator-servers` stops the services of the device, the simulator shuts down, or the tool-server stops.
+The list also contains the requests of the earlier processes of the app. On a simulator where Argent uses the socket of a device provider, a relaunch of the app clears the list. Argent keeps the 2000 most recent requests of each app. Argent keeps fewer requests when the requests have very large headers or URLs. Argent keeps the list until `stop-all-simulator-servers` stops the services of the device, the simulator shuts down, or the tool-server stops. `network-capture-stop` keeps the list.
 
-Argent arms each new process of the app when the process connects, also a process that starts from a tap on the home screen or from a link. While the capture is on for an app, these tools tell you:
+While the capture is started for an app, Argent arms each new process of the app when the process connects. This is also true for a process that starts from a tap on the home screen or from a link. While the capture is started, these tools tell you:
 
 | Tool                                            | What it reports                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `launch-app`, `restart-app`                     | On a local simulator, the tool waits until the new process is armed, for at most 5 seconds. The `networkCapture` field tells that the capture is armed, with the process ID. If the capture is not armed yet, the field tells that the new process did not connect or did not acknowledge `Network.enable` yet. Then `native-network-logs` shows when the capture is armed. `launch-app` does not start a new process when the app already runs. If that process does not have the injection of Argent, or started before the tool-server started the services of the device, the tool does not wait. The field tells you to call `restart-app`. On a remote simulator and on a simulator of a device provider, the result has no `networkCapture` field. |
 | `e2e-execute`                                   | A `launch` step uses `restart-app`. The report shows the `networkCapture` note as a `warning`, with the same rules as on Android.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the simulator with the capture on. The warning names only the apps that connected to Argent at least once. To profile without it, the warning tells you to call `stop-all-simulator-servers` for the device, then `restart-app`. On a simulator of a device provider, the result has no warning, because the capture there is the capture of the provider.                                                                                                                                                                                                                                                                                                                                         |
+| `react-profiler-start`, `native-profiler-start` | The result contains a `warning` that names the apps on the simulator with the capture on. The warning names only the apps that connected to Argent at least once. To profile without it, the warning tells you to call `network-capture-stop` for the app, then `restart-app`. On a simulator of a device provider, the result has no warning, because the capture there is the capture of the provider.                                                                                                                                                                                                                                                                                                                                                  |
 
-The native devtools of iOS cannot stop the capture for one app. The capture stays on for the app until `stop-all-simulator-servers` stops the services of the device. The running process of the app keeps the capture until the app restarts. Thus call `restart-app` after `stop-all-simulator-servers`.
+The capture stays on for the app until `network-capture-stop` stops it for the app, or `stop-all-simulator-servers` stops the services of the device. `network-capture-stop` sends `Network.disable` to the connected app and waits for the acknowledgement, for at most 5 seconds. After the stop, Argent records no new request of the app. Argent does not arm a new process of the app. A request that runs at the stop completes in the list. `stop-all-simulator-servers` also sends `Network.disable` to each connected app with a started or stopped capture. Then it removes the list. On a simulator of a device provider, Argent sends no `Network.disable`, because the provider owns the capture setting.
 
 ## Chromium and Electron
 
@@ -455,6 +615,7 @@ These tools do not support a Mac app and fail with a `not supported on macos app
 - `settings-permissions`
 - The screen recording tools
 - The JavaScript debugger tools, `view-network-logs` and `view-network-request-details`
+- `network-capture-start` and `network-capture-stop`. On a Mac app, `native-network-logs` starts the capture at its first call
 - The profiler tools
 - `native-devtools-status`
 - The Chromium tools
@@ -736,7 +897,7 @@ Some agent tools do not always give the same result as the hidden tool:
 - `restart-app` always relaunches the app. No agent tool leaves an app stopped. When the app is not installed, `restart-app` fails and `terminate-app` succeeds.
 - `describe` returns pruned text with one line for each element, not the raw tree. On an iOS simulator, the text does not show which element contains which. `describe` does not give the `hidden`, `covered`, `alertVisible`, `keyboardVisible` or `foregroundApp` fields.
 - `keyboard` types at the cursor and keeps the text that the field holds. `fill` replaces that text. With no focused field, `keyboard` drops the text and succeeds, and `fill` fails with `FILL_NO_FOCUSED_FIELD`. `fill` reads the field back, except on a physical iPhone. `keyboard` does not.
-- `native-describe-screen`, `native-find-views`, `native-full-hierarchy`, `native-view-at-point`, `native-user-interactable-view-at-point` and, on iOS, `native-network-logs` return the same `message` as `native-devtools-status` when native devtools are not connected. Their `status` names the remedy, where `native-devtools-status` gives `state`. They fail instead for an Apple system app and for an app that a device provider did not lend. `native-profiler-*` do not use native devtools.
+- `native-describe-screen`, `native-find-views`, `native-full-hierarchy`, `native-view-at-point`, `native-user-interactable-view-at-point` and, on iOS after `network-capture-start`, `native-network-logs` return the same `message` as `native-devtools-status` when native devtools are not connected. Their `status` names the remedy, where `native-devtools-status` gives `state`. They fail instead for an Apple system app and for an app that a device provider did not lend. `native-profiler-*` do not use native devtools.
 - `describe` shows the disabled and selected states and the VoiceOver hint on an iOS simulator. `describe` does not show the frames in points, the view class or some traits, such as `toggleButton`. `native-describe-screen` returns them.
 - `chromium-storage` with no key returns every entry. Through `debugger-evaluate`, a bare `localStorage` returns `{}`, so use `Object.fromEntries(Object.entries(localStorage))`.
 - `profiler-cpu-query` measures each CPU sample with its own interval and does not list idle time as a function. Thus its times can be different from the times of `react-profiler-cpu-summary`. `react-profiler-cpu-summary` lists anonymous functions as `(anonymous)`. `profiler-cpu-query` counts them as idle.
