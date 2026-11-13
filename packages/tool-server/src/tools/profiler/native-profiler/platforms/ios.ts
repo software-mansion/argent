@@ -941,10 +941,11 @@ export async function analyzeNativeProfilerIos(
     });
   }
 
-  const [cpuMissing, hangsMissing, leaksMissing] = await Promise.all([
+  const [cpuMissing, hangsMissing, leaksMissing, traceMissing] = await Promise.all([
     checkExportFileMissing(api.exportedFiles.cpu ?? null),
     checkExportFileMissing(api.exportedFiles.hangs ?? null),
     checkExportFileMissing(api.exportedFiles.leaks ?? null),
+    checkExportFileMissing(api.traceFile),
   ]);
 
   // Null on iOS and when argent did not watch the Mac app: the hangs stay as recorded.
@@ -1024,6 +1025,8 @@ export async function analyzeNativeProfilerIos(
   const payload = {
     metadata: {
       traceFile: api.traceFile,
+      // A loaded session can keep its exports after its bundle is gone.
+      traceMissing: traceMissing !== null,
       platform: api.platform === "macos" ? "macOS" : "iOS",
       timestamp: new Date().toISOString(),
     },
@@ -1041,7 +1044,10 @@ export async function analyzeNativeProfilerIos(
 
   return renderNativeProfilerReport({
     payload,
-    traceFile: api.traceFile,
+    // Where the report file goes: next to the trace. profiler-load restores no start
+    // time and none of the capture's own fields (CPU filter, suspensions), so the
+    // report of a loaded session must not replace the one the live analyze wrote.
+    traceFile: api.wallClockStartMs !== null ? api.traceFile : null,
     exportErrors,
     // A large gap between the in-memory start time and "now" means analyze is reusing
     // a trace from an earlier capture in this same process run, not a fresh one.

@@ -224,6 +224,15 @@ export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableEr
   return lines.join("\n");
 }
 
+/** The trace's name, or its session id when the bundle is gone. */
+function traceLabel(metadata: ProfilerPayload["metadata"]): string {
+  if (!metadata.traceFile) return "unknown";
+  const name = path.basename(metadata.traceFile);
+  if (!metadata.traceMissing) return `\`${name}\``;
+  const sessionId = name.replace(/^native-profiler-/, "").replace(/\.trace$/, "");
+  return `session \`${sessionId}\` (its .trace bundle is no longer on disk)`;
+}
+
 function reportTitle(payload: ProfilerPayload): string {
   const platform = payload.metadata.platform.toLowerCase();
   if (platform === "android") return "Android Perfetto Analysis";
@@ -238,9 +247,7 @@ function renderAllClear(
   leaksRecorded?: boolean,
   mayMissFindings?: boolean
 ): string {
-  const traceName = payload.metadata.traceFile
-    ? `\`${path.basename(payload.metadata.traceFile)}\``
-    : "unknown";
+  const traceName = traceLabel(payload.metadata);
   const lines = [
     `# ${reportTitle(payload)}`,
     ``,
@@ -291,9 +298,7 @@ function renderFullReport(
   cpuDiagnostic?: string,
   leaksRecorded?: boolean
 ): string {
-  const traceName = payload.metadata.traceFile
-    ? `\`${path.basename(payload.metadata.traceFile)}\``
-    : "unknown";
+  const traceName = traceLabel(payload.metadata);
 
   const cpuHotspots = payload.bottlenecks.filter((b): b is CpuHotspot => b.type === "cpu_hotspot");
   const uiHangs = payload.bottlenecks.filter((b): b is UiHang => b.type === "ui_hang");

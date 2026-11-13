@@ -119,7 +119,7 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     // unattributed-leaks note, cpuFilterPid silently filters the loaded CPU
     // samples by a dead PID, wallClockStartMs fires the stale-trace note with
     // the wrong timestamp, and traceFile mislabels the report and writes the
-    // .md over the OLD trace's report.
+    // .md over the OLD trace's report. traceFile becomes the loaded session's own.
     const api = await buildIosSession();
     api.mallocStackLogging = true;
     api.cpuFilterPid = 4242;
@@ -139,11 +139,12 @@ describe("iOS profiler-load → analyze freshness wiring (PR #340 comment 2)", (
     expect(api.parsedData?.mallocStackLogging).toBeNull();
     expect(api.cpuFilterPid).toBeNull();
     expect(api.wallClockStartMs).toBeNull();
-    expect(api.traceFile).toBeNull();
+    expect(api.traceFile).toBe(join(tempDir, `native-profiler-${SESSION_ID}.trace`));
 
     // And analyze on the loaded session behaves like a fresh process: no
     // stale-trace note from the old capture's start time, no report mislabeled
-    // with (or written next to) the old .trace.
+    // with (or written next to) the old .trace, and no report written over the
+    // loaded session's live one.
     const { report, reportFile } = await analyzeNativeProfilerIos(api);
     expect(report).not.toContain("Stale trace");
     expect(report).not.toContain("previous-live.trace");

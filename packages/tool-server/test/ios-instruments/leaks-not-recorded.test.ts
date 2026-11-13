@@ -156,6 +156,8 @@ async function freshIosSession(): Promise<NativeProfilerSessionApi> {
 async function buildIosSession(leaksFile: string | null): Promise<NativeProfilerSessionApi> {
   const api = await freshIosSession();
   api.traceFile = path.join(dir, "native-profiler-ios.trace");
+  // As a live recording leaves it: analyze writes the report file only then.
+  api.wallClockStartMs = Date.now();
   // Null cpu/hangs paths short-circuit the missing-file checks; only the leaks
   // export decides whether leaks were recorded.
   const cpu = path.join(dir, "raw_cpu.xml");

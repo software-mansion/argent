@@ -418,8 +418,9 @@ async function loadNativeSession(
   api.exportedFiles = files;
   // Clear every per-capture field an earlier live capture left behind, or analyze
   // attributes them to the loaded trace: mislabeled capture mode, samples dropped
-  // by a stale CPU filter PID, a stale-trace note, and the report .md written over
-  // the old trace's.
+  // by a stale CPU filter PID, and a stale-trace note. The trace is this session's
+  // own, so the report names it. With no start time, analyze writes no report .md:
+  // it would replace the live report with one that lacks the capture's fields.
   api.mallocStackLogging = null;
   api.cpuFilterPid = null;
   api.appEndedDuringCapture = false;
@@ -427,7 +428,7 @@ async function loadNativeSession(
   api.recordedMs = null;
   api.appSuspensions = null;
   api.wallClockStartMs = null;
-  api.traceFile = null;
+  api.traceFile = path.join(debugDir, `native-profiler-${sessionId}.trace`);
 
   const lines: string[] = [
     `Loaded native profiler session \`${sessionId}\`.`,
