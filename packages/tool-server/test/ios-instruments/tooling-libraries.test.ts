@@ -94,10 +94,11 @@ describe("xml-parser: frames of the tools' libraries", () => {
         ])
       );
 
+      const binary = { library: lib, libraryPath: `${dir}/${lib}` };
       expect(samples.map((s) => s.stack)).toEqual([
-        [{ name: "SomeLibraryFunction", isSystemLibrary: false, tooling: owner }],
-        [{ name: "OtherLibraryFunction", isSystemLibrary: false, tooling: owner }],
-        [{ name: "SomeLibraryFunction", isSystemLibrary: false, tooling: owner }],
+        [{ name: "SomeLibraryFunction", isSystemLibrary: false, tooling: owner, ...binary }],
+        [{ name: "OtherLibraryFunction", isSystemLibrary: false, tooling: owner, ...binary }],
+        [{ name: "SomeLibraryFunction", isSystemLibrary: false, tooling: owner, ...binary }],
       ]);
     }
   );
@@ -155,9 +156,20 @@ describe("xml-parser: frames of the tools' libraries", () => {
     );
 
     expect(s!.stack).toEqual([
-      { name: "objc_msgSend", isSystemLibrary: true },
-      { name: "SomeLibraryFunction", isSystemLibrary: false, tooling: "argent" },
-      { name: "main", isSystemLibrary: false },
+      {
+        name: "objc_msgSend",
+        isSystemLibrary: true,
+        library: "libobjc.A.dylib",
+        libraryPath: "/usr/lib/libobjc.A.dylib",
+      },
+      {
+        name: "SomeLibraryFunction",
+        isSystemLibrary: false,
+        tooling: "argent",
+        library: "libNativeDevtoolsMacos.dylib",
+        libraryPath: `${ARGENT_LIB_DIR}/libNativeDevtoolsMacos.dylib`,
+      },
+      { name: "main", isSystemLibrary: false, library: "ExampleExec", libraryPath: APP_EXECUTABLE },
     ]);
   });
 
@@ -198,15 +210,39 @@ describe("xml-parser: frames of the tools' libraries", () => {
       ])
     );
 
+    const argentBinary = {
+      library: "libNativeDevtoolsMacos.dylib",
+      libraryPath: `${ARGENT_LIB_DIR}/libNativeDevtoolsMacos.dylib`,
+    };
     expect(samples.slice(1).map((s) => s.stack)).toEqual([
       [
-        { name: "-[ExampleView drawRect:]", isSystemLibrary: false },
-        { name: "-[NSWindow displayIfNeeded]", isSystemLibrary: true },
-        { name: "SomeLibraryFunction", isSystemLibrary: false, tooling: "argent" },
+        {
+          name: "-[ExampleView drawRect:]",
+          isSystemLibrary: false,
+          library: "ExampleExec",
+          libraryPath: APP_EXECUTABLE,
+        },
+        {
+          name: "-[NSWindow displayIfNeeded]",
+          isSystemLibrary: true,
+          library: "AppKit",
+          libraryPath: APPKIT,
+        },
+        { name: "SomeLibraryFunction", isSystemLibrary: false, tooling: "argent", ...argentBinary },
       ],
       [
-        { name: "OtherLibraryFunction", isSystemLibrary: false, tooling: "argent" },
-        { name: "__CFRunLoopRun", isSystemLibrary: true },
+        {
+          name: "OtherLibraryFunction",
+          isSystemLibrary: false,
+          tooling: "argent",
+          ...argentBinary,
+        },
+        {
+          name: "__CFRunLoopRun",
+          isSystemLibrary: true,
+          library: "CoreFoundation",
+          libraryPath: CORE_FOUNDATION,
+        },
       ],
     ]);
   });
@@ -236,9 +272,20 @@ describe("xml-parser: frames of the tools' libraries", () => {
 
     expect(s!.stack).toEqual([
       { name: "0x104b84503", isSystemLibrary: false },
-      { name: "SomeLibraryFunction", isSystemLibrary: false, tooling: "argent" },
+      {
+        name: "SomeLibraryFunction",
+        isSystemLibrary: false,
+        tooling: "argent",
+        library: "libNativeDevtoolsMacos.dylib",
+        libraryPath: `${ARGENT_LIB_DIR}/libNativeDevtoolsMacos.dylib`,
+      },
       { name: "0x19a3afe69", isSystemLibrary: false },
-      { name: "__CFRunLoopRun", isSystemLibrary: true },
+      {
+        name: "__CFRunLoopRun",
+        isSystemLibrary: true,
+        library: "CoreFoundation",
+        libraryPath: CORE_FOUNDATION,
+      },
     ]);
   });
 });
@@ -609,11 +656,13 @@ describe("runIosProfilerPipeline: the tools' CPU time", () => {
       frame(10, "ExampleApp.openWindow()", app) +
       frame(11, "main", `<binary ref="9"/>`) +
       `</backtrace>`;
+    // 40 ms of a 300 ms hang (13%): the main thread ran for 10% of the hang or more, so the
+    // suspects are its own.
     writeFileSync(
       cpu,
       cpuXml([
         row(100_000_000, ordering),
-        ...[101, 102, 103].map((ms) => row(ms * 1_000_000, `<backtrace ref="1"/>`)),
+        ...Array.from({ length: 39 }, (_, i) => row((101 + i) * 1_000_000, `<backtrace ref="1"/>`)),
       ])
     );
     writeFileSync(

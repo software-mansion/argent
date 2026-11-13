@@ -6,10 +6,18 @@ import {
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
 import { adbCommandPrefix } from "../../../utils/adb-server";
-import type { CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../../../utils/ios-profiler/types";
+import type {
+  CpuSample,
+  UiHang,
+  CpuHotspot,
+  MemoryLeak,
+  StackFrame,
+} from "../../../utils/ios-profiler/types";
 import {
   findDominantFunction,
   extractAppCallChain,
+  isSystemCodeSample,
+  toolingWork,
 } from "../../../utils/ios-profiler/pipeline/02-aggregate";
 import {
   runAndroidStackQuery,
@@ -20,7 +28,11 @@ import { formatBytes, escapeMarkdownTableCell } from "../../../utils/profiler-sh
 import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 import {
   LEAKS_NOT_RECORDED,
+  hangChainNames,
+  hangFunctionCode,
+  waitedHangNote,
   hangSuspendedNote,
+  hotspotName,
   renderSystemLibraryLeaksNote,
   renderUnattributedLeaksNote,
 } from "../../../utils/ios-profiler/render";
@@ -68,12 +80,13 @@ export function renderHangStacksIos(
     `**Severity:** ${hang.severity}`,
     "",
   ];
+  if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang), "");
 
   if (hang.suspectedFunctions.length > 0) {
     lines.push("### Suspected Functions (by sample frequency)");
     lines.push("");
     for (let i = 0; i < hang.suspectedFunctions.length; i++) {
-      lines.push(`${i + 1}. \`${demangleSymbol(hang.suspectedFunctions[i]!)}\``);
+      lines.push(`${i + 1}. ${hangFunctionCode(hang, hang.suspectedFunctions[i]!)}`);
     }
     lines.push("");
   }
@@ -83,7 +96,9 @@ export function renderHangStacksIos(
     lines.push("");
     for (const { chain, sampleCount } of hang.appCallChains) {
       lines.push(
-        `- (${sampleCount} samples) ${chain.map((f) => `\`${demangleSymbol(f)}\``).join(" → ")}`
+        `- (${sampleCount} samples) ${hangChainNames(hang, chain)
+          .map(({ name, label }) => `\`${name}\`${label ? ` (${label})` : ""}`)
+          .join(" → ")}`
       );
     }
     lines.push("");
@@ -127,11 +142,21 @@ export function renderFunctionCallersIos(
   const callerCounts = new Map<string, number>();
   const calleeCounts = new Map<string, number>();
   let totalOccurrences = 0;
+  // Root first: the frames below the function in each sample of system code reported under it.
+  const systemPathsBelow: StackFrame[][] = [];
 
   for (const sample of cpuSamples) {
     for (let i = 0; i < sample.stack.length; i++) {
       if (sample.stack[i]!.name === functionName) {
         totalOccurrences++;
+        // As in the hotspot: a tool's work (such as Instruments' recorder) is not counted.
+        if (
+          findDominantFunction(sample.stack) === functionName &&
+          isSystemCodeSample(sample.stack) &&
+          toolingWork(sample.stack) === null
+        ) {
+          systemPathsBelow.push(sample.stack.slice(0, i).reverse());
+        }
 
         if (i + 1 < sample.stack.length) {
           const caller = sample.stack[i + 1]!.name;
@@ -183,7 +208,58 @@ export function renderFunctionCallersIos(
     lines.push("");
   }
 
+  // The report's "system code under" this function has no app frame to name: the
+  // heaviest stack of those samples shows what the system code did.
+  const heaviest = heaviestStackBelow(systemPathsBelow, topN);
+  if (heaviest.length > 0) {
+    lines.push("### Heaviest System Stack Below");
+    lines.push("");
+    lines.push(
+      `In the ${systemPathsBelow.length} samples with only system code below the function: ` +
+        "from the function down, the heaviest callee at each level. Frames that run in the " +
+        "same samples share a row."
+    );
+    lines.push("");
+    lines.push("| Frames | Samples | % |");
+    lines.push("|---|---|---|");
+    for (const { frames, count } of heaviest) {
+      const names = frames.map((f) => `\`${escapeMarkdownTableCell(demangleSymbol(f))}\``);
+      const pct = ((count / systemPathsBelow.length) * 100).toFixed(1);
+      lines.push(`| ${names.join(" > ")} | ${count} | ${pct}% |`);
+    }
+    lines.push("");
+  }
+
   return lines.join("\n");
+}
+
+/**
+ * Instruments' heaviest stack trace below a function: from the paths below it (root
+ * first), the callee in the most samples at each level, down to a leaf. A run of frames
+ * in the same samples is one row. At most `maxRows` rows, and none under 1% of the paths.
+ */
+function heaviestStackBelow(
+  paths: StackFrame[][],
+  maxRows: number
+): { frames: string[]; count: number }[] {
+  const rows: { frames: string[]; count: number }[] = [];
+  let current = paths;
+  for (let depth = 0; current.length > 0; depth++) {
+    const counts = new Map<string, number>();
+    for (const path of current) {
+      const frame = path[depth];
+      if (frame) counts.set(frame.name, (counts.get(frame.name) ?? 0) + 1);
+    }
+    const heaviest = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (!heaviest || heaviest[1] * 100 < paths.length) break;
+    const [name, count] = heaviest;
+    const last = rows[rows.length - 1];
+    if (last && last.count === count) last.frames.push(name);
+    else if (rows.length < maxRows) rows.push({ frames: [name], count });
+    else break;
+    current = current.filter((path) => path[depth]?.name === name);
+  }
+  return rows;
 }
 
 export function renderThreadBreakdownIos(
@@ -238,7 +314,7 @@ export function renderThreadBreakdownIos(
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
         lines.push(
-          `| \`${escapeMarkdownTableCell(demangleSymbol(h.dominantFunction))}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| ${escapeMarkdownTableCell(hotspotName(h))} | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
         );
       }
     }

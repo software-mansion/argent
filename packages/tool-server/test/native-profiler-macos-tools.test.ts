@@ -243,7 +243,7 @@ describe("the native profiler tools on a Mac app id", () => {
     // 3 of the 10 ms were argent's library, 1 ms the Instruments recorder.
     expect(report).toContain("**CPU sampling:** Of the CPU samples, 3 ms (30%) were argent's own");
     expect(report).toContain("1 ms (10%) were the recorder that Instruments loads");
-    expect(report).toContain("SomeLibraryFunction (argent's own library)");
+    expect(report).toContain("`SomeLibraryFunction` (argent's own library)");
 
     const parsed = (await macSession()).parsedData!;
     expect(parsed.cpuHotspots.map((h) => h.dominantFunction)).toEqual([

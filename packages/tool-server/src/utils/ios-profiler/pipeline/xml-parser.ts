@@ -237,6 +237,7 @@ function resolveFrames(
 
     let isSystem = false;
     let binaryName: string | undefined;
+    let binaryPath: string | undefined;
     // The frame's own <binary> child, never that of a later frame in the
     // backtrace: a self-closing frame has none, and frames do not nest.
     let ownContent = "";
@@ -250,16 +251,20 @@ function resolveFrames(
     if (binaryIdMatch) {
       isSystem = isSystemLibraryPath(binaryIdMatch[2]);
       binaryName = attr(binaryIdMatch[0], "name") ?? "";
+      binaryPath = binaryIdMatch[2];
       binaryRegistry.set(binaryIdMatch[1], { name: binaryName, path: binaryIdMatch[2] });
     } else if (binaryRefMatch) {
       const bin = binaryRegistry.get(binaryRefMatch[1]);
       if (bin) {
         isSystem = isSystemLibraryPath(bin.path);
         binaryName = bin.name;
+        binaryPath = bin.path;
       }
     }
 
     const frame: StackFrame = { name: frameName, isSystemLibrary: isSystem };
+    if (binaryName) frame.library = binaryName;
+    if (binaryName && binaryPath !== undefined) frame.libraryPath = decodeXml(binaryPath);
     const tooling = binaryName === undefined ? undefined : TOOLING_LIBRARIES.get(binaryName);
     if (tooling) frame.tooling = tooling;
     if (idMatch) frameRegistry.set(idMatch[1], frame);
@@ -356,29 +361,6 @@ export function parseLeaksXml(xml: string): RawLeak[] {
   }
 
   return leaks;
-}
-
-/**
- * The path of each binary in a CPU export, by its name. A leak names only its
- * responsible library, and these are the paths of the binaries the trace sampled.
- */
-function parseBinaryPaths(xml: string): Map<string, string> {
-  const paths = new Map<string, string>();
-  const binaryRe = /<binary\s+id="\d+"\s+[^>]*?name="([^"]*)"[^>]*?path="([^"]*)"[^>]*?\/?>/g;
-  let bm;
-  while ((bm = binaryRe.exec(xml)) !== null) {
-    paths.set(decodeXml(bm[1]), decodeXml(bm[2]));
-  }
-  return paths;
-}
-
-export async function parseBinaryPathsFile(filePath: string | null): Promise<Map<string, string>> {
-  if (!filePath) return new Map();
-  try {
-    return parseBinaryPaths(await fs.readFile(filePath, "utf8"));
-  } catch {
-    return new Map();
-  }
 }
 
 /**

@@ -1,34 +1,74 @@
 import type { CpuSample, RawHang, RawLeak, UiHang, MemoryLeak } from "../types";
-import { TOOLING_LABEL, findDominantFunction, extractAppCallChain } from "./02-aggregate";
+import {
+  TOOLING_LABEL,
+  findDominantFunction,
+  extractAppCallChain,
+  isEntryPoint,
+  isSystemCodeSample,
+} from "./02-aggregate";
 import { isSystemLibraryPath } from "./xml-parser";
+import { normalizeThreadName } from "../../profiler-shared/thread";
+
+/** What the report adds to a suspect when only system code did the work under it. */
+const SYSTEM_CODE_LABEL = "the app's entry point, with only system code below it";
+const SYSTEM_ONLY_LABEL = "system code, with no function of the app in its stacks";
 
 const TOP_N_FUNCTIONS = 5;
 const TOP_N_CHAINS = 3;
+/** A hang's thread that ran for less than this share of the hang mostly waited during it. */
+const MIN_HANG_THREAD_RUN_SHARE = 0.1;
 
 interface CorrelationResult {
   uiHangs: UiHang[];
   hangSampleTimestamps: Set<number>;
 }
 
+/**
+ * `excludedNs` is the time of each hang that is not the hang's own: when the app was
+ * suspended (removeSuspendedTime). The report leaves it out of the hang's length.
+ * `leakPausesUnknown`: the trace checked the app for leaks, and when the app was suspended
+ * is not known, so a hang's length can hold a check's pause.
+ */
 export function correlateHangsWithCpu(
   hangs: RawHang[],
-  cpuSamples: CpuSample[]
+  cpuSamples: CpuSample[],
+  excludedNs: readonly number[] = [],
+  leakPausesUnknown = false
 ): CorrelationResult {
   const sortedSamples = [...cpuSamples].sort((a, b) => a.timestampNs - b.timestampNs);
+  const sampleThreads = new Set(sortedSamples.map((s) => normalizeThreadName(s.threadFmt)));
 
   const hangSampleTimestamps = new Set<number>();
 
-  const uiHangs = hangs.map((hang) => {
+  const uiHangs = hangs.map((hang, hangIndex) => {
     const windowStart = hang.startNs;
     const windowEnd = hang.startNs + hang.durationNs;
 
-    const windowSamples = sortedSamples.filter(
+    const allThreads = sortedSamples.filter(
       (s) => s.timestampNs >= windowStart && s.timestampNs <= windowEnd
     );
 
-    for (const sample of windowSamples) {
+    for (const sample of allThreads) {
       hangSampleTimestamps.add(sample.timestampNs);
     }
+
+    // A hang is a stall of one thread, the main thread in Instruments' hangs. Work on another
+    // thread at the same time did not stall it, so the suspects and call chains come from the
+    // samples of the hang's thread in the hang. A thread that ran for less than 10% of the
+    // hang mostly waited, so then the suspects are what all threads ran. When other threads
+    // ran, it possibly waited for a worker that it called with dispatch_sync. When no other
+    // thread ran, it possibly waited in a sleep, for a lock or for I/O, and the suspects are
+    // what it ran.
+    const hangThread = normalizeThreadName(hang.threadFmt);
+    const ownThread = allThreads.filter((s) => normalizeThreadName(s.threadFmt) === hangThread);
+    const ownRunNs = ownThread.reduce((sum, s) => sum + s.weightNs, 0);
+    const ownLengthNs = hang.durationNs - (excludedNs[hangIndex] ?? 0);
+    // A thread with no sample in the whole trace can have another name in the samples (the
+    // hang's thread is then not the main thread), so how long it ran is not known.
+    const waited =
+      sampleThreads.has(hangThread) && ownRunNs < ownLengthNs * MIN_HANG_THREAD_RUN_SHARE;
+    const otherThreadsRan = allThreads.length > ownThread.length;
+    const windowSamples = waited || ownThread.length === 0 ? allThreads : ownThread;
 
     const funcCounts = new Map<string, number>();
     const chainCounts = new Map<string, { chain: string[]; count: number }>();
@@ -39,6 +79,9 @@ export function correlateHangsWithCpu(
       const dominant = findDominantFunction(sample.stack);
       if (dominant) {
         funcCounts.set(dominant, (funcCounts.get(dominant) ?? 0) + 1);
+        if (isSystemCodeSample(sample.stack)) {
+          toolingLabels[dominant] = isEntryPoint(dominant) ? SYSTEM_CODE_LABEL : SYSTEM_ONLY_LABEL;
+        }
       }
       for (const frame of sample.stack) {
         if (frame.tooling) toolingLabels[frame.name] = TOOLING_LABEL[frame.tooling];
@@ -85,6 +128,13 @@ export function correlateHangsWithCpu(
       endNs: hang.startNs + hang.durationNs,
       suspectedFunctions,
       appCallChains,
+      ...(waited
+        ? {
+            hangThreadRanMs: Math.round(ownRunNs / 1_000_000),
+            ...(otherThreadsRan ? { suspectsFromOtherThreads: true } : {}),
+            ...(leakPausesUnknown ? { mayHoldLeakCheck: true } : {}),
+          }
+        : {}),
       ...(Object.keys(toolingLabels).length > 0 ? { toolingLabels } : {}),
       severity,
     };

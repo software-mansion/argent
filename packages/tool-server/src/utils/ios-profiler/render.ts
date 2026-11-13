@@ -14,14 +14,89 @@ import type {
   NativeProfilerAnalyzeResult,
 } from "./types";
 import { summarizeHangBlocking } from "../profiler-shared/native-frame-class";
+import { isEntryPoint } from "./pipeline/02-aggregate";
 
 const MAX_INLINE_HOTSPOTS = 5;
 const MAX_INLINE_HANGS = 3;
 
-/** A function of a hang as the report shows it, marked when a tool's library holds it. */
-function hangFunctionName(hang: UiHang, fn: string): string {
+/**
+ * A function of a hang as the report shows it: its name in a code span, which
+ * profiler-stack-query function_callers matches, then its label when a tool's library holds
+ * it or only system code ran under it.
+ */
+export function hangFunctionCode(hang: UiHang, fn: string): string {
   const label = hang.toolingLabels?.[fn];
-  return label ? `${demangleSymbol(fn)} (${label})` : demangleSymbol(fn);
+  return `\`${demangleSymbol(fn)}\`${label ? ` (${label})` : ""}`;
+}
+
+/**
+ * Said of a hang whose thread ran for less than 10% of it (`hangThreadRanMs`), before its
+ * suspects: what all threads ran, which is what the main thread ran when no other thread ran.
+ */
+export function waitedHangNote(hang: UiHang): string {
+  const ran = `The main thread ran for ${hang.hangThreadRanMs ?? 0} ms of this ${hang.durationMs} ms hang`;
+  return hang.suspectsFromOtherThreads
+    ? `${ran}, so it very possibly waited, for example for a lock, a synchronous call to ` +
+        `another thread or I/O.${leakCheckCause(hang)} These are what all threads ran.`
+    : `${ran}, and no other thread ran on the CPU, so the main thread very possibly waited, ` +
+        `for example in a sleep, for a lock or for I/O.${leakCheckCause(hang)}` +
+        (hang.suspectedFunctions.length > 0 ? " These are what the main thread ran." : "");
+}
+
+/** The other cause of a waited hang when the app's suspensions are not known. */
+function leakCheckCause(hang: UiHang): string {
+  return hang.mayHoldLeakCheck
+    ? " Instruments may also have held the app suspended for a leak check."
+    : "";
+}
+
+/**
+ * The names of an app call chain of a hang, leaf first, with their labels. The entry
+ * point's label says that only system code ran below it, so it is marked only as the leaf
+ * of a chain.
+ */
+export function hangChainNames(
+  hang: UiHang,
+  chain: string[]
+): Array<{ name: string; label?: string }> {
+  return chain.map((fn, i) => {
+    const label = i > 0 && isEntryPoint(fn) ? undefined : hang.toolingLabels?.[fn];
+    return { name: demangleSymbol(fn), ...(label ? { label } : {}) };
+  });
+}
+
+/** An app call chain in the report: the names between labels in one code span, joined by " > ". */
+function hangChainCode(hang: UiHang, chain: string[]): string {
+  const parts: string[] = [];
+  let names: string[] = [];
+  for (const { name, label } of hangChainNames(hang, chain)) {
+    if (!label) {
+      names.push(name);
+      continue;
+    }
+    if (names.length > 0) parts.push(`\`${names.join(" > ")}\``);
+    parts.push(`\`${name}\` (${label})`);
+    names = [];
+  }
+  if (names.length > 0) parts.push(`\`${names.join(" > ")}\``);
+  return parts.join(" > ");
+}
+
+/**
+ * A hotspot as the report and profiler-stack-query name it. The app's entry point with only
+ * system code below it, or the root of a thread with no app frame, did none of the work
+ * itself, so the name says so.
+ */
+export function hotspotName(b: CpuHotspot): string {
+  const name = `\`${demangleSymbol(b.dominantFunction)}\``;
+  return b.systemCode ? `system code under ${name}` : name;
+}
+
+/** The frameworks of a hotspot of system code: "SwiftUI 34%, QuartzCore 20%". */
+function systemFrameworks(b: CpuHotspot): string {
+  return (b.systemCode?.frameworks ?? [])
+    .map((f) => `${f.name} ${f.weightPercentage < 1 ? "<1" : f.weightPercentage}%`)
+    .join(", ");
 }
 
 /**
@@ -366,7 +441,7 @@ function renderFullReport(
     cpuHotspots.forEach((b, i) => {
       const hangFlag = b.duringHang ? "Yes" : "—";
       lines.push(
-        `| ${i + 1} | \`${escapeMarkdownTableCell(demangleSymbol(b.dominantFunction))}\` | ${escapeMarkdownTableCell(b.thread)} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | ${escapeMarkdownTableCell(hotspotName(b))} | ${escapeMarkdownTableCell(b.thread)} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
       );
     });
 
@@ -386,10 +461,19 @@ function renderFullReport(
       : cpuHotspots;
     for (const b of hotspotDetailSlice) {
       lines.push(``);
-      lines.push(`### \`${demangleSymbol(b.dominantFunction)}\` (${b.thread})`);
+      lines.push(`### ${hotspotName(b)} (${b.thread})`);
       lines.push(``);
 
-      if (b.topCallChains && b.topCallChains.length > 0) {
+      if (b.systemCode) {
+        // Its call chains hold at most the entry point, so they are not shown. Its frameworks are
+        // in its advice, which the report gives for every hotspot.
+        lines.push(
+          isEntryPoint(b.dominantFunction)
+            ? `Only the entry point of the app is in these stacks: below it, the main run loop ran system code.`
+            : `No function of the app is in these stacks: only system code ran on this thread.`
+        );
+        lines.push(``);
+      } else if (b.topCallChains && b.topCallChains.length > 0) {
         lines.push(`**Call chains:**`);
         for (const { chain, count } of b.topCallChains) {
           lines.push(`- (${count}×) \`${chain.map(demangleSymbol).join(" > ")}\``);
@@ -468,27 +552,30 @@ function renderFullReport(
           lines.push(`App call chains during this hang:`);
           hang.appCallChains.forEach((entry, i) => {
             lines.push(
-              `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
+              `${i + 1}. ${hangChainCode(hang, entry.chain)} (${entry.sampleCount} samples)`
             );
           });
         }
       } else if (hang.appCallChains.length > 0) {
         lines.push(``);
         lines.push(`${header} — app call chains during this hang:`);
+        if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang));
         hang.appCallChains.forEach((entry, i) => {
           lines.push(
-            `${i + 1}. \`${entry.chain.map((fn) => hangFunctionName(hang, fn)).join(" > ")}\` (${entry.sampleCount} samples)`
+            `${i + 1}. ${hangChainCode(hang, entry.chain)} (${entry.sampleCount} samples)`
           );
         });
       } else if (hang.suspectedFunctions.length > 0) {
         lines.push(``);
         lines.push(`${header} — during this hang, the most active functions were:`);
+        if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang));
         for (const fn of hang.suspectedFunctions) {
-          lines.push(`- \`${hangFunctionName(hang, fn)}\``);
+          lines.push(`- ${hangFunctionCode(hang, fn)}`);
         }
       } else {
         lines.push(``);
         lines.push(header);
+        if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang));
       }
     }
     if (isFinite(cap.hangLimit) && uiHangs.length > cap.hangLimit) {
@@ -562,9 +649,13 @@ function renderFullReport(
       const advice =
         b.frameClass === "system"
           ? `Emulator/kernel overhead (GPU-transport pipe or syscall), not app code — it does not appear on a physical device, so it is not directly actionable. Re-profile on a real device to see the app's own CPU cost.`
-          : `High CPU in this function — inspect what calls it with \`function_callers\`, then move the heavy work off the main thread or memoize/throttle it.`;
+          : b.systemCode
+            ? isEntryPoint(b.dominantFunction)
+              ? `Not a function of the app: system frameworks (${systemFrameworks(b)}) did this work for the main run loop, such as drawing, layout or animation. Look for what in the app makes them work: an animation or timer that runs also when the app is idle, or views that redraw or change layout often.`
+              : `Not a function of the app: only system code (${systemFrameworks(b)}) ran on this thread, with no function of the app in its stacks. Look for what in the app starts this work, such as a call that the system completes on a thread of its own.`
+            : `High CPU in this function — inspect what calls it with \`function_callers\`, then move the heavy work off the main thread or memoize/throttle it.`;
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${demangleSymbol(b.dominantFunction)}\` on ${b.thread} (${b.weightPercentage}%): ${advice}`
+        `- ${severityEmoji(b.severity)} ${hotspotName(b)} on ${b.thread} (${b.weightPercentage}%): ${advice}`
       );
     }
     lines.push(``);
@@ -573,10 +664,15 @@ function renderFullReport(
   if (uiHangs.length > 0) {
     lines.push(`### UI Hangs`, ``);
     for (const b of uiHangs) {
+      const top = b.suspectedFunctions[0];
       const funcNote =
-        b.suspectedFunctions.length > 0
-          ? ` Likely caused by: \`${hangFunctionName(b, b.suspectedFunctions[0]!)}\`.`
-          : "";
+        top === undefined
+          ? ""
+          : b.suspectsFromOtherThreads
+            ? ` The function that ran most on all threads: ${hangFunctionCode(b, top)}.`
+            : b.hangThreadRanMs !== undefined
+              ? ` The function that ran most on the main thread: ${hangFunctionCode(b, top)}.`
+              : ` Likely caused by: ${hangFunctionCode(b, top)}.`;
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
         `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms${hangSuspendedNote(b)}): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
@@ -610,12 +706,18 @@ function renderFullReport(
     // Prefer the top *app* hotspot: on Android the leading hotspot is often a
     // `system` (emulator/kernel) frame the report already flags as not
     // actionable. iOS hotspots have no `frameClass`, so this picks their first.
-    const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system");
+    const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system" && !b.systemCode);
     if (callerHotspot) {
       // Keep the RAW (possibly mangled) name: function_callers matches against
       // raw frame names, so a demangled one would find nothing.
       lines.push(
         `   - mode=\`function_callers\` function_name=\`${callerHotspot.dominantFunction}\` — who calls this hot function`
+      );
+    }
+    const systemCodeHotspot = cpuHotspots.find((b) => b.systemCode);
+    if (systemCodeHotspot) {
+      lines.push(
+        `   - mode=\`function_callers\` function_name=\`${systemCodeHotspot.dominantFunction}\` — the heaviest system stack below it`
       );
     }
     lines.push(`   - mode=\`thread_breakdown\` — CPU distribution across threads`);
@@ -746,6 +848,15 @@ function renderExportErrors(exportErrors?: Record<string, string>): string[] {
  * the GPU. iOS hangs carry no breakdown and get the generic line.
  */
 function hangCoreAdvice(hang: UiHang): string {
+  if (hang.hangThreadRanMs !== undefined) {
+    return (
+      (hang.suspectsFromOtherThreads
+        ? "The main thread mostly did not run during the hang, so it very possibly waited, " +
+          "for example for a lock, a synchronous call to another thread or I/O."
+        : "No thread ran on the CPU for most of the hang, so the main thread very possibly " +
+          "waited, for example in a sleep, for a lock or for I/O.") + leakCheckCause(hang)
+    );
+  }
   const blocking = summarizeHangBlocking(hang.stateBreakdown);
   if (!blocking) {
     return "Main thread stalled past the frame budget — move heavy work off the main thread.";

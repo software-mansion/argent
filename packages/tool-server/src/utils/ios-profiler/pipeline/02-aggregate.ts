@@ -34,9 +34,86 @@ function findDominantFrame(stack: StackFrame[]): StackFrame | null {
   return stack[0] ?? null;
 }
 
-export function findDominantFunction(stack: StackFrame[]): string | null {
-  return findDominantFrame(stack)?.name ?? null;
+/**
+ * The app's entry point: `main`, the `$main()` of a Swift `@main` type, or the stub that
+ * calls it in a debug build. The main run loop runs under it, so it is in every stack of
+ * the main thread, also when only system code (drawing, layout, animation) runs.
+ */
+export function isEntryPoint(name: string): boolean {
+  return (
+    name === "main" ||
+    name === "__debug_main_executable_dylib_entry_point" ||
+    /(^|\.)\$main\(\)/.test(name)
+  );
 }
+
+/**
+ * A frame of the app: outside the system, with a symbol or at least a binary. A frame with
+ * neither is not known to be the app's.
+ */
+function isAppFrame(frame: StackFrame): boolean {
+  return !frame.isSystemLibrary && (!isHexAddress(frame.name) || frame.library !== undefined);
+}
+
+/**
+ * The frame that a sample's CPU time is reported under: findDominantFrame, but the app's
+ * entry point only when no other app frame is below it (a frame of React Native there is
+ * more actionable than `main`), and the root of the stack (such as `start_wqthread`) when
+ * no frame is the app's, not a system function picked from the middle of it.
+ *
+ * `systemCode` is, for a sample of system code, the named system frames that did the work,
+ * and null for any other sample. No function of the app did the work of such a sample:
+ * either the app's entry point is the only app frame, with a named system frame below it,
+ * or no frame is the app's.
+ */
+function reportedFrame(
+  stack: StackFrame[]
+): { frame: StackFrame; systemCode: StackFrame[] | null } | null {
+  const dominant = findDominantFrame(stack);
+  if (dominant === null) return null;
+  if (!stack.some(isAppFrame)) {
+    const named = stack.filter((f) => !isHexAddress(f.name));
+    return {
+      frame: named[named.length - 1] ?? dominant,
+      systemCode: named.length > 0 ? named : null,
+    };
+  }
+  if (!isEntryPoint(dominant.name)) return { frame: dominant, systemCode: null };
+  const below = stack.slice(0, stack.indexOf(dominant));
+  const appBelow = below.find(
+    (f) => !f.isSystemLibrary && !isHexAddress(f.name) && !isEntryPoint(f.name)
+  );
+  if (appBelow) return { frame: appBelow, systemCode: null };
+  const named = below.filter((f) => !isHexAddress(f.name));
+  const systemCode = !below.some(isAppFrame) && named.some((f) => f.isSystemLibrary);
+  return { frame: dominant, systemCode: systemCode ? named : null };
+}
+
+export function findDominantFunction(stack: StackFrame[]): string | null {
+  return reportedFrame(stack)?.frame.name ?? null;
+}
+
+/** Whether only system code did the work of the sample (see reportedFrame). */
+export function isSystemCodeSample(stack: StackFrame[]): boolean {
+  return reportedFrame(stack)?.systemCode != null;
+}
+
+/**
+ * The system framework that a sample of system code ran in: the first framework from the
+ * leaf, so that a runtime library (libobjc, libsystem_*, libswiftCore) counts for the
+ * framework that called it. The leaf's library when no frame is in a framework.
+ */
+function systemFrameworkOf(below: StackFrame[]): string {
+  const isFramework = (lib: string | undefined) => lib !== undefined && !/^lib.*\.dylib$/.test(lib);
+  return (
+    below.find((f) => f.isSystemLibrary && isFramework(f.library))?.library ??
+    below[0]?.library ??
+    "unknown library"
+  );
+}
+
+/** At most this many frameworks are named for a hotspot of system code. */
+const MAX_SYSTEM_FRAMEWORKS = 5;
 
 /**
  * The tool that runs in the sample, or null for the app's own work: the tool of
@@ -110,6 +187,8 @@ export function aggregateCpuHotspots(
 
   const rows: AggregatorInputRow[] = [];
   let toolingNs = 0;
+  // By hotspot key: the weight of its samples of system code, in all and by framework.
+  const systemCode = new Map<string, { weightNs: number; byFramework: Map<string, number> }>();
   for (const sample of samples) {
     // A tool's work is reported once, as a total (see toolingWeightNs), but it
     // stays in the CPU time that each hotspot is a share of.
@@ -117,8 +196,9 @@ export function aggregateCpuHotspots(
       toolingNs += sample.weightNs;
       continue;
     }
-    const dominant = findDominantFunction(sample.stack);
-    if (!dominant) continue;
+    const reported = reportedFrame(sample.stack);
+    if (!reported?.frame.name) continue;
+    const dominant = reported.frame.name;
     const thread = normalizeThreadName(sample.threadFmt);
     const chain = extractAppCallChain(sample.stack);
     rows.push({
@@ -128,12 +208,34 @@ export function aggregateCpuHotspots(
       timestampsNs: [sample.timestampNs],
       callChains: chain.length > 0 ? [{ chain, count: 1 }] : [],
     });
+    const below = reported.systemCode;
+    if (below) {
+      const key = `${dominant}|||${thread}`;
+      const acc = systemCode.get(key) ?? { weightNs: 0, byFramework: new Map<string, number>() };
+      const framework = systemFrameworkOf(below);
+      acc.weightNs += sample.weightNs;
+      acc.byFramework.set(framework, (acc.byFramework.get(framework) ?? 0) + sample.weightNs);
+      systemCode.set(key, acc);
+    }
   }
 
-  return aggregateCpuHotspotsShared(rows, {
+  const hotspots = aggregateCpuHotspotsShared(rows, {
     platform: "ios",
     hangSampleTimestamps,
     excludedWeightNs: toolingNs,
+  });
+  return hotspots.map((hotspot) => {
+    const acc = systemCode.get(`${hotspot.dominantFunction}|||${hotspot.thread}`);
+    // Most of the hotspot, not a rare sample of work in the entry point itself.
+    if (!acc || acc.weightNs * 2 <= hotspot.totalWeightMs * 1_000_000) return hotspot;
+    const frameworks = [...acc.byFramework.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, MAX_SYSTEM_FRAMEWORKS)
+      .map(([name, ns]) => ({
+        name,
+        weightPercentage: Math.round((ns / acc.weightNs) * 100),
+      }));
+    return { ...hotspot, systemCode: { frameworks } };
   });
 }
 

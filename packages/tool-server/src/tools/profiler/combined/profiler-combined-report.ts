@@ -23,6 +23,8 @@ import {
   inFlightGuardMessage,
 } from "../../../utils/profiler-shared/capture-guard";
 import {
+  hangFunctionCode,
+  waitedHangNote,
   hangSuspendedNote,
   renderSystemLibraryLeaksNote,
   renderUnattributedLeaksNote,
@@ -357,11 +359,12 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
             }
           }
 
-          if (hang.suspectedFunctions.length > 0) {
+          if (hang.suspectedFunctions.length > 0 || hang.hangThreadRanMs !== undefined) {
             lines.push("");
             lines.push("Native CPU (Instruments) during this hang:");
+            if (hang.hangThreadRanMs !== undefined) lines.push(waitedHangNote(hang));
             for (const fn of hang.suspectedFunctions.slice(0, 3)) {
-              lines.push(`- \`${fn}\``);
+              lines.push(`- ${hangFunctionCode(hang, fn)}`);
             }
           }
 
@@ -383,9 +386,19 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
         lines.push("");
         for (const corr of uncorrelated) {
           const { hang } = corr;
+          const top = hang.suspectedFunctions[0];
+          const waited =
+            hang.hangThreadRanMs === undefined
+              ? ""
+              : `${hang.suspectsFromOtherThreads ? "on all threads: " : ""}the main thread very ` +
+                "possibly waited" +
+                (hang.mayHoldLeakCheck
+                  ? ", and Instruments may also have held the app suspended for a leak check"
+                  : "");
           lines.push(
             `- **${hang.hangType}** at ${hang.startTimeFormatted} (${hang.durationMs}ms${hangSuspendedNote(hang)})` +
-              (hang.suspectedFunctions.length > 0 ? ` — \`${hang.suspectedFunctions[0]}\`` : "")
+              (top === undefined ? "" : ` — ${hangFunctionCode(hang, top)}`) +
+              (waited === "" ? "" : top === undefined ? ` — ${waited}` : ` (${waited})`)
           );
         }
         lines.push("");

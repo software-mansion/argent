@@ -1,12 +1,6 @@
 import { promises as fs } from "fs";
 import type { Bottleneck, CpuSample, UiHang, CpuHotspot, MemoryLeak, RawLeak } from "../types";
-import {
-  isSystemLibraryPath,
-  parseBinaryPathsFile,
-  parseCpuFile,
-  parseHangsFile,
-  parseLeaksFile,
-} from "./xml-parser";
+import { isSystemLibraryPath, parseCpuFile, parseHangsFile, parseLeaksFile } from "./xml-parser";
 import { correlateHangsWithCpu, aggregateLeaks, isLeakAttributed } from "./01-correlate";
 import { aggregateCpuHotspots, toolingWeightNs, withAppCallsThroughArgent } from "./02-aggregate";
 import { SIMULATOR_RUNTIME_PATH_SEGMENT } from "../config";
@@ -61,14 +55,14 @@ const RUNTIME_ROOT = "/Contents/Resources/RuntimeRoot";
 
 /**
  * The path of each responsible library of the attributed leaks, by name. A leak
- * names only the library: its path is that of the binary in the CPU export. A
+ * names only the library: its path is that of the binary in the CPU samples. A
  * framework that the trace did not sample is the app's when the app's bundle has
  * it, and the OS's when the OS of the trace has it. Measured on a Mac app:
  * AppIntents and LinkServices leaked objects, and the CPU export had neither.
  */
 async function leakLibraryPaths(
   rawLeaks: RawLeak[],
-  cpuFile: string | null,
+  cpuSamples: CpuSample[],
   macApp: boolean
 ): Promise<Map<string, string>> {
   const libraries = new Set(
@@ -78,7 +72,14 @@ async function leakLibraryPaths(
       .filter((name) => /^[^/]+$/.test(name) && !name.startsWith("."))
   );
   if (libraries.size === 0) return new Map();
-  const paths = await parseBinaryPathsFile(cpuFile);
+  const paths = new Map<string, string>();
+  for (const sample of cpuSamples) {
+    for (const frame of sample.stack) {
+      if (frame.library && frame.libraryPath && !paths.has(frame.library)) {
+        paths.set(frame.library, frame.libraryPath);
+      }
+    }
+  }
   const bundles = new Set<string>();
   for (const path of paths.values()) {
     const bundle = isSystemLibraryPath(path) ? null : APP_BUNDLE_BINARY.exec(path)?.[1];
@@ -141,7 +142,16 @@ export async function runIosProfilerPipeline(
   // Before the CPU correlation: the samples of a hang left out must not mark hotspots as during a hang.
   const suspensions =
     options.appSuspensions != null ? removeSuspendedTime(rawHangs, options.appSuspensions) : null;
-  const correlated = correlateHangsWithCpu(suspensions?.hangs ?? rawHangs, cpuSamples);
+  // A trace with leak data checked the app for leaks. Without the app's suspensions, the
+  // length of a hang can hold the pause of a check.
+  const leakPausesUnknown =
+    options.appSuspensions == null && (rawLeaks.length > 0 || detailExported);
+  const correlated = correlateHangsWithCpu(
+    suspensions?.hangs ?? rawHangs,
+    cpuSamples,
+    suspensions?.suspendedNs,
+    leakPausesUnknown
+  );
   const { hangSampleTimestamps } = correlated;
   const uiHangs = suspensions
     ? correlated.uiHangs.map((hang, i) => withoutSuspendedTime(hang, suspensions.suspendedNs[i]!))
@@ -150,7 +160,7 @@ export async function runIosProfilerPipeline(
   const cpuHotspots = aggregateCpuHotspots(cpuSamples, hangSampleTimestamps);
   const memoryLeaks = aggregateLeaks(
     rawLeaks,
-    await leakLibraryPaths(rawLeaks, files.cpu ?? null, options.macApp ?? false)
+    await leakLibraryPaths(rawLeaks, cpuSamples, options.macApp ?? false)
   );
 
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...memoryLeaks];

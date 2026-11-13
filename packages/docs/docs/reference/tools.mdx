@@ -626,6 +626,12 @@ In a report from Instruments, `native-profiler-analyze` gives the CPU time that 
 
 The CPU hotspots do not include this time. A suspect function of a hang in this code has the mark "argent's own library" or "Instruments' own library". When neither tool used CPU time inside the app, the report does not contain this note.
 
+Sometimes the only app function in the stacks of a CPU hotspot is the entry point of the app, `main`. Then `native-profiler-analyze` names the hotspot "system code under `main`". The report gives the system frameworks that ran and the share of each. An app function below the entry point, for example of React Native, gets its own hotspot. A thread with no app function in its stacks gets the hotspot "system code under" its first function, for example `start_wqthread`. `profiler-stack-query` with `mode: "function_callers"` and the function of such a hotspot also gives the heaviest stack of its system code.
+
+The suspect functions of a UI hang come from the CPU samples of the main thread during the hang. Work on other threads at the same time is not a suspect. Sometimes the main thread ran for less than 10% of the hang. Then the main thread very possibly waited, and the report tells how long the main thread ran. The suspects of this hang come from all threads. If no other thread ran during the hang, the report tells this, and the suspects come only from the main thread.
+
+Sometimes Argent does not know when the app was suspended, for example after `profiler-load`. When such a trace has leak data, a leak check of Instruments can also cause these hangs. The report then also tells this cause.
+
 In the `top_functions` and `time_window` modes, `profiler-cpu-query` gives the self time of each call-tree node as a share of the sampled time. A function that runs on several call paths has one row for each path, and `top_n` counts rows. With `react_only`, `profiler-cpu-query` lists only the functions with a PascalCase name, which is the name format of a React component.
 
 `react-profiler-stop` stores the data of each component only for the hot commits and the commits next to them. A commit is hot when it takes 16 ms or more. `react-profiler-stop` also stores the render count and the render time of each component over all commits. `profiler-commit-query` with `mode: "render_counts"` returns these counts. A session that an older version of Argent stored does not have them.

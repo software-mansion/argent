@@ -58,6 +58,8 @@ The report also shows the share of the session that React spent rendering, and t
 
 The native report lists the CPU hotspots, the hangs and the memory leaks. Each entry has a severity indicator and a suggestion.
 
+On iOS and on a Mac app, the main thread can run only system code. This code can draw, lay out or animate the views. Then the only app function in the stack is the entry point of the app, `main`. The report names this hotspot "system code under `main`" and gives the system frameworks that ran. An animation or a timer that runs while the app is idle can cause this hotspot. A thread that runs only system code gets the same kind of hotspot, under the first function of the thread.
+
 A memory leak gets the red indicator only when the code of the app is responsible for the leak. macOS and iOS also leak some objects by themselves, for example in their XPC connections. When the responsible code is in a library of the system, such as Foundation, the leak gets the yellow indicator. The report gives a note about these leaks.
 
 Argent and Instruments can run their own code inside the app while the native profiler records on iOS or on a Mac app. For example, in a Mac app, the agent reads the screen and clicks through the Argent library inside the app. Instruments loads a recorder into the app to track the memory allocations. The native report gives the CPU time of this code and its share of all CPU time. The CPU hotspots do not include this time. When this code causes a hang, the report marks the suspect functions with the name of the tool.

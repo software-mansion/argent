@@ -211,7 +211,7 @@ function cpuRow(timeMs: number, id: number, fn: string): string {
   return (
     `<row><sample-time>${timeMs * MS}</sample-time>` +
     `<thread fmt="Main Thread 0x1 (ExampleExec, pid: 4321)"></thread>` +
-    `<weight>${MS}</weight>` +
+    `<weight>${150 * MS}</weight>` +
     `<backtrace id="${id}"><frame id="${id + 1}" name="${fn}" addr="0x${(0x1000 + id).toString(16)}">` +
     `<binary id="${id + 2}" name="ExampleExec" UUID="00000000-0000-0000-0000-000000000000" ` +
     `arch="arm64" load-addr="0x100000000" path="${APP_EXECUTABLE}"/></frame></backtrace></row>`
@@ -239,7 +239,8 @@ afterEach(() => {
  * A trace of two hangs: one at 3.644 s that a leak check filled but for 56 ms
  * (with a sample of `-[ExampleView layoutA]` in those 56 ms), and one at 20 s of
  * 11 s, 10 s of it a leak check (with `-[ExampleView layoutB]`). The two leak
- * checks are the spans below.
+ * checks are the spans below. Each sample weighs 150 ms, so the main thread ran
+ * for more than 10% of the second hang's own 1 s.
  */
 function writeTrace(leaks = true): Record<string, string | null> {
   const files = {

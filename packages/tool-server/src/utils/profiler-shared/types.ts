@@ -38,6 +38,14 @@ export interface CpuHotspot {
    * classed as system.
    */
   dominantMapping?: string;
+  /**
+   * xctrace only: set when most of the time is system code with no function of the app
+   * doing it: below the app's entry point (`main`), as when the main run loop drew, laid
+   * out or animated, or on a thread with no app frame, whose root is `dominantFunction`.
+   * `frameworks` are the system frameworks that ran, heaviest first, each with its share
+   * (%) of that time.
+   */
+  systemCode?: { frameworks: { name: string; weightPercentage: number }[] };
 }
 
 export interface UiHangStateBreakdownEntry {
@@ -60,8 +68,25 @@ export interface UiHang {
   /** Top app call chains in the hang window, with sample counts. Empty on Android. */
   appCallChains: { chain: string[]; sampleCount: number }[];
   /**
+   * xctrace only: set when the hang's thread ran for less than 10% of the hang, so it
+   * mostly waited. How long it ran during the hang, in ms.
+   */
+  hangThreadRanMs?: number;
+  /**
+   * With `hangThreadRanMs`: other threads ran during the hang, so the suspects and call
+   * chains are what all threads ran. Without it, no other thread ran, and the hang has
+   * no suspects.
+   */
+  suspectsFromOtherThreads?: boolean;
+  /**
+   * With `hangThreadRanMs`: the trace checked the app for leaks, and when the app was
+   * suspended is not known, so the hang can hold the pause of a leak check.
+   */
+  mayHoldLeakCheck?: boolean;
+  /**
    * xctrace only: the functions above that are in a library argent or Instruments
-   * loads into the app, with the label the report adds to their names.
+   * loads into the app, and the functions that only system code ran under (the app's
+   * entry point, a thread's root), with the label the report adds to their names.
    */
   toolingLabels?: Record<string, string>;
   severity: "RED" | "YELLOW";
