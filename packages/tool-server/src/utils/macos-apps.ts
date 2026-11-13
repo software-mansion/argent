@@ -740,9 +740,12 @@ export function parseCodesignDisplay(
 export async function readCodeSignature(
   target: number | string
 ): Promise<ReturnType<typeof parseCodesignDisplay> | null> {
+  // `+<pid>` reads the signature that the kernel holds for the process. A bare
+  // number reads the file that is now at the process's path.
+  const operand = typeof target === "number" ? `+${target}` : target;
   try {
     return parseCodesignDisplay(
-      await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", String(target)], {
+      await execFileAsync("codesign", ["-dv", "--entitlements", "-", "--xml", operand], {
         timeout: 10_000,
         maxBuffer: 4 * 1024 * 1024,
       })

@@ -104,6 +104,7 @@ import {
   otherWorktreeOfBuild,
   parseCodesignDisplay,
   processRunsExecutable,
+  readCodeSignature,
   recordTrackedMacosApp,
   removeUnusedLibraries,
   runningTrackedApp,
@@ -1351,6 +1352,53 @@ describe.skipIf(process.platform !== "darwin")("process checks outside a UTF-8 l
     async () => {
       // launchd is root's: signalling it fails with EPERM.
       expect(await processRunsExecutable(1, "/sbin/launchd")).toBe(true);
+    }
+  );
+});
+
+describe.skipIf(process.platform !== "darwin")("readCodeSignature of a running process", () => {
+  let dir = "";
+  let running: ReturnType<typeof spawn> | undefined;
+  beforeEach(() => {
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-sig-")));
+    fs.writeFileSync(
+      path.join(dir, "gta.plist"),
+      '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>' +
+        `<key>${GTA}</key><true/></dict></plist>`
+    );
+  });
+  afterEach(() => {
+    running?.kill("SIGKILL");
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A copy of this Node binary, signed ad hoc with or without get-task-allow. */
+  const build = (file: string, getTaskAllow: boolean) => {
+    fs.copyFileSync(process.execPath, file, fs.constants.COPYFILE_FICLONE);
+    const entitlements = getTaskAllow ? ["--entitlements", path.join(dir, "gta.plist")] : [];
+    execFileSync("codesign", ["--force", "--sign", "-", ...entitlements, file], {
+      stdio: "ignore",
+    });
+  };
+
+  it.each([true, false])(
+    "reads the process's own entitlements (get-task-allow %s) after the file at its path is replaced",
+    async (launchedWith) => {
+      const executable = path.join(dir, "app");
+      build(executable, launchedWith);
+      running = spawn(executable, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      const pid = running.pid!;
+      await waitUntil(() => pidAlive(pid));
+      // A rebuild: the process keeps its old file.
+      build(path.join(dir, "next"), !launchedWith);
+      fs.renameSync(path.join(dir, "next"), executable);
+
+      expect(await readCodeSignature(pid)).toMatchObject({
+        entitlements: { getTaskAllow: launchedWith },
+      });
+      expect(await readCodeSignature(executable)).toMatchObject({
+        entitlements: { getTaskAllow: !launchedWith },
+      });
     }
   );
 });
