@@ -557,7 +557,10 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       trackProfilingRun(api.deviceId, api);
       if (runtimeDevice) trackProfilingRun(runtimeDevice, api);
 
-      const warning = nativeNetworkCaptureWarning(deviceId ?? params.device_id, api.runtimeApp);
+      // The device the runtime was found on, when it was: the logicalDeviceId
+      // names none, and matching the app by id on every device could name one
+      // this profile does not run on.
+      const warning = nativeNetworkCaptureWarning(runtimeDevice ?? api.deviceId, api.runtimeApp);
       return {
         started_at: new Date(startedAtEpochMs).toISOString(),
         startedAtEpochMs,

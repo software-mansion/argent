@@ -11,6 +11,12 @@ vi.mock("../src/blueprints/android-network-inspector", async (importActual) => (
   liveAndroidNetworkCaptureDevices: (packageName: string) => liveDevices(packageName),
 }));
 
+// The device the profiled runtime is found on, for a logicalDeviceId session.
+const findRuntimeDevice = vi.fn(async (): Promise<string | undefined> => undefined);
+vi.mock("../src/utils/debugger/runtime-device", () => ({
+  findRuntimeDevice: () => findRuntimeDevice(),
+}));
+
 vi.mock("../src/utils/check-deps", () => ({
   ensureDeps: vi.fn(async () => {}),
   ensureDep: vi.fn(async () => {}),
@@ -55,6 +61,8 @@ beforeEach(() => {
   live.mockReturnValue([]);
   liveDevices.mockReset();
   liveDevices.mockReturnValue([]);
+  findRuntimeDevice.mockReset();
+  findRuntimeDevice.mockResolvedValue(undefined);
   resetDeviceAliases();
 });
 
@@ -275,7 +283,7 @@ describe("react-profiler-start", () => {
       );
     }
 
-    it("warns when capture is on for the profiled app on an Android device", async () => {
+    it("warns when capture is on for the profiled app on an Android device and the runtime's device is unknown", async () => {
       captureOnSerial(PKG);
 
       const result = await start(ANDROID_APP);
@@ -303,6 +311,41 @@ describe("react-profiler-start", () => {
       const result = await start({ appId: PKG, platform: "ios" });
 
       expect(result).not.toHaveProperty("warning");
+    });
+
+    describe("when the runtime's device is found", () => {
+      const PROFILED_SERIAL = "emulator-5556";
+
+      it("adds no warning when capture is on for the app only on another device", async () => {
+        findRuntimeDevice.mockResolvedValue(PROFILED_SERIAL);
+        captureOnSerial(PKG);
+
+        const result = await start(ANDROID_APP);
+
+        expect(live).toHaveBeenCalledWith(PROFILED_SERIAL);
+        expect(liveDevices).not.toHaveBeenCalled();
+        expect(result).not.toHaveProperty("warning");
+      });
+
+      it("warns about that device alone when capture is on there", async () => {
+        findRuntimeDevice.mockResolvedValue(SERIAL);
+        captureOnSerial(PKG);
+
+        const result = await start(ANDROID_APP);
+
+        expect(result.warning).toContain(`Native network capture is on for ${PKG} on this device`);
+        expect(result.warning).not.toContain("logicalDeviceId");
+      });
+
+      it("adds no warning when it is an iOS simulator", async () => {
+        findRuntimeDevice.mockResolvedValue(IOS_UDID);
+        captureOnSerial(PKG);
+
+        const result = await start(ANDROID_APP);
+
+        expect(liveDevices).not.toHaveBeenCalled();
+        expect(result).not.toHaveProperty("warning");
+      });
     });
   });
 });

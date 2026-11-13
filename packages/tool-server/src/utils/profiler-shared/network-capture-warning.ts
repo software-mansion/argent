@@ -22,7 +22,8 @@ const CAPTURE_COST =
  * fail the start it annotates.
  *
  * `runtimeApp` is what the profiled JS runtime said about itself, for a
- * `deviceId` that names no device (see {@link logicalDeviceWarning}).
+ * `deviceId` that names no device (see {@link logicalDeviceWarning}). A caller
+ * that found the device the runtime runs on passes that device instead.
  */
 export function nativeNetworkCaptureWarning(
   deviceId: string,
@@ -47,7 +48,8 @@ export function nativeNetworkCaptureWarning(
 /**
  * With two or more devices on one Metro, the debugger is connected with a Metro
  * logicalDeviceId, which no adb serial can be derived from, so the lookup by
- * device finds nothing. The runtime still says which app it is and on which
+ * device finds nothing. This is the fallback for when the runtime's device
+ * could not be found either. The runtime still says which app it is and on which
  * platform, so an Android runtime is warned when capture is on for its app on
  * any Android device, naming them: the id cannot say which one is profiled. An
  * iOS runtime, or one that did not say, is never warned. A `deviceId` that
