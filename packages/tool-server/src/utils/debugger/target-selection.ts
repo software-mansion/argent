@@ -15,6 +15,8 @@ interface SelectedTarget {
    */
   legacyInspector: boolean;
   deviceName: string;
+  /** Whether `deviceId` itself picked the target, rather than the single-device fallback. */
+  matchedDeviceId: boolean;
 }
 
 /**
@@ -47,7 +49,7 @@ function deviceKey(target: CDPTarget): string | undefined {
  * leave it empty, so a Mac app's id follows from its bundle id alone. An iOS
  * app's id holds a vendor id argent cannot know, so it never matches.
  */
-function macosAppBundleIdOf(target: CDPTarget): string | undefined {
+export function macosAppBundleIdOf(target: CDPTarget): string | undefined {
   const logicalId = target.reactNative?.logicalDeviceId;
   const bundleId = target.appId ?? target.description;
   if (!logicalId || !bundleId) return undefined;
@@ -59,7 +61,7 @@ function macosAppBundleIdOf(target: CDPTarget): string | undefined {
 }
 
 /** How a device reads in a target list for the agent. */
-function describeDevice(target: CDPTarget): string {
+export function describeDevice(target: CDPTarget): string {
   const macBundleId = macosAppBundleIdOf(target);
   const logicalId = target.reactNative?.logicalDeviceId;
   if (macBundleId) return `Mac app ${macBundleId} (${logicalId})`;
@@ -107,16 +109,19 @@ export function selectTarget(
   // so every target here is a real runtime.
   const pool = targets;
   let candidates = pool;
+  let matchedDeviceId = false;
 
   const macosBundleId =
     typeof options?.deviceId === "string" ? parseMacosAppBundleId(options.deviceId) : null;
   if (macosBundleId) {
     candidates = macosAppTargets(pool, macosBundleId, port);
+    matchedDeviceId = true;
   } else if (typeof options?.deviceId === "string" && options.deviceId) {
     const deviceId = options.deviceId;
     const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === deviceId);
     if (filtered.length) {
       candidates = filtered;
+      matchedDeviceId = true;
     } else {
       // Falling back to the priority target would route every unmatched
       // device_id to whichever device Metro lists first, so only fall back when
@@ -159,13 +164,13 @@ export function selectTarget(
   const fusebox = candidates.find(
     (t) => t.reactNative?.capabilities?.prefersFuseboxFrontend === true
   );
-  if (fusebox) return makeResult(fusebox, port, true, false);
+  if (fusebox) return makeResult(fusebox, port, true, false, matchedDeviceId);
 
   const cppConn = candidates.find((t) => t.description?.endsWith("[C++ connection]"));
-  if (cppConn) return makeResult(cppConn, port, true, false);
+  if (cppConn) return makeResult(cppConn, port, true, false, matchedDeviceId);
 
   const bridge = candidates.find((t) => t.title?.startsWith("React Native Bridge"));
-  if (bridge) return makeResult(bridge, port, false, false);
+  if (bridge) return makeResult(bridge, port, false, false, matchedDeviceId);
 
   // The legacy inspector also lists worklet runtimes (Reanimated's "Reanimated
   // UI runtime", or one named by `createWorkletRuntime`), in any order. They are
@@ -174,9 +179,9 @@ export function selectTarget(
   const hermes = candidates.find((t) =>
     LEGACY_APP_RUNTIME_TITLES.has(t.title?.replace(CXX_CONNECTION_SUFFIX, ""))
   );
-  if (hermes) return makeResult(hermes, port, false, true);
+  if (hermes) return makeResult(hermes, port, false, true, matchedDeviceId);
 
-  return makeResult(candidates[0]!, port, false, true);
+  return makeResult(candidates[0]!, port, false, true, matchedDeviceId);
 }
 
 /** The bridge's (`HermesExecutorFactory`) and bridgeless (`HermesInstance`) names. */
@@ -192,7 +197,8 @@ function makeResult(
   target: CDPTarget,
   port: number,
   isNewDebugger: boolean,
-  legacyInspector: boolean
+  legacyInspector: boolean,
+  matchedDeviceId: boolean
 ): SelectedTarget {
   return {
     target,
@@ -200,6 +206,7 @@ function makeResult(
     isNewDebugger,
     legacyInspector,
     deviceName: target.deviceName ?? target.title ?? "unknown",
+    matchedDeviceId,
   };
 }
 

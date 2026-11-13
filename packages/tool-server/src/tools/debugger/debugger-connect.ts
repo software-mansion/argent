@@ -4,6 +4,7 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
 import { metroPortField } from "../../utils/debugger/metro-port";
 import { describeReapedSession, takeReapedSessionAnyId } from "../../utils/reaped-sessions";
+import { RESULT_NOTE_KEY } from "../screenshot/dropped-geometry";
 
 const zodSchema = z.object({
   port: metroPortField,
@@ -25,6 +26,7 @@ export const debuggerConnectTool: ToolDefinition<
     isNewDebugger: boolean;
     connected: boolean;
     note?: string;
+    [RESULT_NOTE_KEY]?: string;
   }
 > = {
   id: "debugger-connect",
@@ -70,6 +72,7 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
       ...(reaped?.connectionLost
         ? { note: describeReapedSession(reaped, "previous JS-runtime debugger session") }
         : {}),
+      ...(api.fallbackNote ? { [RESULT_NOTE_KEY]: api.fallbackNote } : {}),
     };
   },
 };

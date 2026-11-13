@@ -357,6 +357,17 @@ describe("selectTarget", () => {
     expect(getFailureSignal(err)).toMatchObject(MISMATCH_SIGNAL);
   });
 
+  it("says whether the device_id picked the target or the single-device fallback did", () => {
+    const only = makeTarget({ reactNative: { logicalDeviceId: "real-logical-id" } });
+
+    expect(selectTarget([only], 8081, { deviceId: "real-logical-id" }).matchedDeviceId).toBe(true);
+    expect(selectTarget([only], 8081, { deviceId: "some-ios-udid" }).matchedDeviceId).toBe(false);
+    const mac = macTarget("com.example.app");
+    expect(
+      selectTarget([mac], 8081, { deviceId: "macos-app-com.example.app" }).matchedDeviceId
+    ).toBe(true);
+  });
+
   it("matches an iOS logicalDeviceId exactly when a Mac app of the same bundle id shares Metro", () => {
     const mac = macTarget("com.example.app");
     const ios = iosTarget("com.example.app");

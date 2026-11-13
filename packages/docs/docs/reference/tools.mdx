@@ -146,6 +146,13 @@ Call `screenshot` or `describe` to read the screen again.
 | `view-network-logs`            | Retrieve captured HTTP requests from the running app                      |
 | `view-network-request-details` | Get full details of one request by its `requestId`                        |
 
+Metro does not list the device ids of `list-devices`. When Metro has only one device, a `device_id` that Metro does not list connects to the JavaScript runtime of that device. Then `debugger-connect`, `debugger-status` and `react-profiler-start` return a note that names this runtime and its app. Argent does not connect, and fails with `DEBUGGER_TARGET_DEVICE_MISMATCH`, when the runtime is on a different device:
+
+- The runtime is a Mac app, and the `device_id` is not the Mac app id or the `logicalDeviceId` of that app.
+- The `device_id` is an Android serial, and the runtime has a different device name. React Native gives the name `<model> - <release> - API <sdk>`. On Genymotion, the name is only the model. Argent reads these values from the device with adb.
+
+The error names the device that Metro has. An Android serial gets no note when the runtime has the name of the device and adb lists no other online device. Emulators from one system image have the same name. When adb cannot read the device, Argent connects and returns the note. A runtime of the legacy inspector, for example on Vega, gets no note. This inspector does not give a `logicalDeviceId`, so a device on a shared Metro needs its own Metro port.
+
 ## Native devtools
 
 On a Mac app, these tools read the app through the Argent library:
@@ -521,6 +528,7 @@ The React profiler tools, `profiler-cpu-query`, `profiler-commit-query`, `profil
 - `react-profiler-start` does not need `debugger-connect` first. The `debugger-*` tools do not take a Mac app id.
 - Argent finds the JavaScript runtime of the app on Metro from the bundle id in the Mac app id. This also works when other devices use the same Metro, for example an iOS simulator that runs the same app with the same bundle id. Pass the Mac app id, not a `logicalDeviceId` of Metro.
 - When Metro has no runtime of the Mac app, the tools fail with `DEBUGGER_TARGET_DEVICE_MISMATCH`, and the error lists the devices that Metro has. Argent does not connect to the runtime of another app.
+- Only the Mac app id and the `logicalDeviceId` of the app connect to the runtime of the Mac app. Another `device_id` fails with `DEBUGGER_TARGET_DEVICE_MISMATCH`, also when the Mac app is the only device on Metro.
 - When Metro does not use port 8081, pass its port in `port`.
 - Call `native-profiler-start` with the same Mac app id at the same time, as on iOS. `profiler-combined-report` then correlates the hangs of the Instruments trace with the React commits.
 - While the React profiler records, interaction tools on the app return no automatic screenshot or element tree, as on the other devices.

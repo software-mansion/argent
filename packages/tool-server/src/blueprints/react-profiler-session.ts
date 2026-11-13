@@ -44,6 +44,8 @@ export interface ReactProfilerSessionApi {
   appName: string;
   deviceName: string;
   runtimeApp?: RuntimeAppMetadata;
+  /** The debugger session's `fallbackNote`. */
+  fallbackNote?: string;
   hermesVersion: string;
   detectedArchitecture: "bridge" | "bridgeless" | null;
   sessionPaths: ProfilerSessionPaths | null;
@@ -130,6 +132,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       appName: debuggerApi.appName,
       deviceName: debuggerApi.deviceName,
       runtimeApp: debuggerApi.runtimeApp,
+      fallbackNote: debuggerApi.fallbackNote,
       hermesVersion: "unknown",
       detectedArchitecture: null,
       sessionPaths: null,

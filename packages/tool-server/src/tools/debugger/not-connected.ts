@@ -46,8 +46,8 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "bundle to load, then retry once. On Android, if the app cannot reach Metro, first run " +
     "`adb reverse tcp:<port> tcp:<port>`.",
   device_mismatch:
-    "The device_id does not match any debugger target on this Metro. Re-target with the " +
-    "logicalDeviceId listed in the detail message, or give the device its own Metro port.",
+    "No target on this Metro is known to run on your device_id. The detail lists what Metro " +
+    "has and what to do.",
   cdp_unreachable:
     "The runtime's CDP endpoint could not be reached. Verify the app is running " +
     "(launch-app), then call debugger-connect and retry once.",

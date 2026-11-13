@@ -10,6 +10,7 @@ import {
   trackDebuggerOutcome,
   type DebuggerNotConnectedResult,
 } from "./not-connected";
+import { RESULT_NOTE_KEY } from "../screenshot/dropped-geometry";
 
 interface DebuggerConnectedStatus {
   status: "connected";
@@ -23,6 +24,7 @@ interface DebuggerConnectedStatus {
   loadedScripts: number;
   enabledDomains: string[];
   sourceMapReady: boolean;
+  [RESULT_NOTE_KEY]?: string;
 }
 
 const zodSchema = z.object({
@@ -109,6 +111,7 @@ Use when you need to verify connectivity before using other debugger tools. Neve
           loadedScripts: api.cdp.getLoadedScripts().size,
           enabledDomains: [...api.cdp.getEnabledDomains()],
           sourceMapReady: true,
+          ...(api.fallbackNote ? { [RESULT_NOTE_KEY]: api.fallbackNote } : {}),
         };
       } catch (err) {
         const reason = classifyNotConnected(err);

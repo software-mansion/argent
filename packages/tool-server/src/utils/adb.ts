@@ -449,7 +449,7 @@ export const ADB_DEVICES_TIMEOUT_MS = 6_000;
  * `devicesTimeoutMs` bounds that call; omit it to inherit runAdb's 30s default
  * (see ADB_DEVICES_TIMEOUT_MS).
  */
-async function listAndroidSerials(
+export async function listAndroidSerials(
   options: { devicesTimeoutMs?: number } = {}
 ): Promise<Array<{ serial: string; state: string }>> {
   const { stdout } = await runAdb(["devices"], { timeoutMs: options.devicesTimeoutMs });

@@ -13,6 +13,7 @@ export default defineConfig({
       "test/setup/stub-status-bar.ts",
       "test/setup/stub-xcode-first-launch.ts",
       "test/setup/stub-profiler-session-cleanup.ts",
+      "test/setup/stub-android-device-name.ts",
       "test/setup/ignore-device-providers.ts",
       "test/setup/assert-env-restored.ts",
     ],
