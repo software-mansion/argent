@@ -201,3 +201,23 @@ export function tvosHidDaemonBinaryPath(): string {
   requireDarwin("tvos-hid-daemon");
   return requireBinIn(platformBinDir(), "tvos-hid-daemon");
 }
+
+// Native Mac apps. The macOS bootstrap shares its basename with the iOS one, so
+// both dylibs live in dylibs/macos/, where the bootstrap loads the library from
+// its own directory; the helper is a host binary in bin/darwin/.
+export function macosArtifacts(): { bootstrap: string; library: string; helper: string } {
+  const files = {
+    bootstrap: path.join(DYLIB_DIR, "macos", "libArgentInjectionBootstrap.dylib"),
+    library: path.join(DYLIB_DIR, "macos", "libNativeDevtoolsMacos.dylib"),
+    helper: path.join(BIN_DIR, "darwin", "argent-macos-helper"),
+  };
+  const missing = Object.values(files).filter((p) => !fs.existsSync(p));
+  if (missing.length > 0) {
+    throw new Error(
+      `macOS app artifact not found: ${missing.join(", ")}. They ship in the argent package ` +
+        `under dylibs/macos/ and bin/darwin/; ARGENT_NATIVE_DEVTOOLS_DIR and ` +
+        `ARGENT_SIMULATOR_SERVER_DIR point the lookup at a local build.`
+    );
+  }
+  return files;
+}

@@ -32,6 +32,11 @@ export interface ArgentToolResult<T = unknown> {
   data: T;
   /** Optional advisory note the tool attached to the result. */
   note?: string;
+  /**
+   * Why the call did not do its job though it returned, such as an e2e test
+   * that does not pass. See the tool-server API reference for the list.
+   */
+  failure?: string;
 }
 
 /**
@@ -217,7 +222,11 @@ export function createArgentClient(): ArgentClient {
       });
       // An aborted download reads as a missing file; report the abort instead.
       options?.signal?.throwIfAborted();
-      return { data: result as T, note: response.note };
+      return {
+        data: result as T,
+        note: response.note,
+        ...(response.failure !== undefined ? { failure: response.failure } : {}),
+      };
     } catch (err) {
       if (err instanceof ToolInvocationError) {
         throw new ArgentToolError(err.message, {
