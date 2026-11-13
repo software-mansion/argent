@@ -313,7 +313,7 @@ On a Mac app, these tools read the app through the Argent library:
 - `native-full-hierarchy`, `native-find-views`, `native-view-at-point` and `native-user-interactable-view-at-point` read the AppKit views of the app.
   - SwiftUI puts the identifier and the label of a control on an accessibility element, not on a view. Thus a `native-find-views` search by `identifier` or `label` does not find SwiftUI controls. `describe` shows them.
   - When a search by `identifier` or `label` finds no view, its result has a `note` that refers to `describe`.
-- `native-network-logs` reads the requests that the app sends through `NSURLSession`. As on iOS, a read never starts the capture: `network-capture-start` starts it, and `network-capture-stop` stops it. `view-network-request-details` reads the headers of a request by its `macos-` ID. The details do not contain the bodies of the request and of the response.
+- `native-network-logs` reads the requests that the app sends through `NSURLSession`. As on iOS, a read never starts the capture: `network-capture-start` starts it, and `network-capture-stop` stops it. `view-network-request-details` reads the headers and the bodies of a request by its `macos-` ID.
 
 The [Mac apps](#mac-apps) section contains the details.
 
