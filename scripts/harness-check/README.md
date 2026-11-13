@@ -53,7 +53,7 @@ request has been saved.
 
 ## Setup
 
-- **Node 20 or newer, and npm.** Tried on macOS only.
+- **Node.js and npm**, at the versions [CONTRIBUTING.md](../../CONTRIBUTING.md#requirements) lists. Tried on macOS only.
 - **A built checkout:** `npm ci && npm run build`. The check runs the server from `dist/`.
 - **Network access on the first run.** Codex 0.164.0, opencode 1.19.4 and Gemini CLI 0.65.0
   are installed into `node_modules/.cache/argent-harness-check/` (about 600 MB). They

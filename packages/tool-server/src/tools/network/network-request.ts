@@ -582,7 +582,7 @@ function decodeOne(bytes: Buffer, coding: string, truncated: boolean): Buffer | 
         });
         break;
       case "zstd":
-        // Node 22.15 and 23.8 added zstd; the tool-server also runs on Node 20.
+        // Node 22.15 and 23.8 added zstd; npm installs past `engines` on older Node.
         if (typeof zlib.zstdDecompressSync !== "function") return undefined;
         out = zlib.zstdDecompressSync(bytes, {
           maxOutputLength,
@@ -627,8 +627,8 @@ const WINDOWS_1252_C1 =
 /**
  * windows-1252, which `latin1`, `iso-8859-1` and `us-ascii` also name.
  * TextDecoder decodes it as ISO-8859-1 in several Node releases the tool-server
- * runs on, 20.20.2, 22.13.0 and 24.0.0 among them, so 0x80-0x9F would come out
- * as control characters instead of quotes, dashes and the euro sign. Remove
+ * runs on, 22.15.0 among them, so 0x80-0x9F would come out as control
+ * characters instead of quotes, dashes and the euro sign. Remove
  * this only once every Node in the engines range passes
  * `new TextDecoder("windows-1252").decode(Buffer.of(0x80)) === "€"`.
  */
