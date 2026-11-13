@@ -57,7 +57,7 @@ const zodSchema = z.object({
     .optional()
     .default(false)
     .describe(
-      "Clear the log after reading. On Android, the IDs of cleared requests still work in view-network-request-details"
+      "Clear the log after reading. On iOS and Android, the IDs of cleared requests still work in view-network-request-details"
     ),
   stop: z
     .boolean()
@@ -138,7 +138,7 @@ export function createNativeNetworkLogsTool(
     description: `Retrieve network requests captured at the native level: NSURLProtocol on iOS, OkHttp on Android.
 Use when inspecting native-level HTTP traffic that view-network-logs cannot see: requests that never pass through JS XMLHttpRequest or fetch.
 On iOS it sees URLSession requests (default and ephemeral session configurations, and URLSession.shared) from native modules and Swift/Objective-C code. It does not see background URLSession transfers, WKWebView, Network.framework, or HTTP stacks that bypass URLSession (e.g. Flutter), so an empty result does not mean the app sent nothing.
-Returns { status, header, armed, count, total, requests }: one line per request, oldest first, with its id (ios-3f9a-12, android-3f9a-12), method, URL, state (pending, headers, complete or failed), status, mimeType, durationMs and errorText. The header says whether capture is armed, how many requests there are and the app's pid once read, and why capture is not armed when it is not. Requests to Metro on \`port\` are left out. The history is kept across relaunches of the app, except on a device whose devtools agent argent attached to.
+Returns { status, header, armed, count, total, requests }: one line per request, oldest first, with its id (ios-3f9a-12, android-3f9a-12), method, URL, state (pending, headers, complete or failed), status, mimeType, durationMs and errorText. The header says whether capture is armed, how many requests there are and the app's pid once read, and why capture is not armed when it is not. Requests to Metro on \`port\` are left out. Pass a request's id to view-network-request-details for its headers and bodies, and on Android its redirects. The history is kept across relaunches of the app, except on a device whose devtools agent argent attached to.
 The first call for an app starts capture, so earlier requests are not captured: repeat the action whose requests you need, then call again.
 On iOS: the first call waits until the app acknowledges capture. When capture started while the app was already running, the header of the first answer says that the app's launch was not recorded; to capture the launch, restart-app and call again, unless the header says the launch cannot be recorded on that device. Capture stays on for later processes of the app (except on a device whose devtools agent argent attached to, where a relaunch ends it).
 <flag:macos-apps>On a Mac app: { status, count, events } of NSURLSession requests, react-native-macos fetch included; capture stays on across restart-app, a new log per process.
@@ -146,7 +146,7 @@ On iOS: the first call waits until the app acknowledges capture. When capture st
 On a device whose devtools agent argent attached to rather than armed itself, a not-connected app fails with \`NATIVE_DEVTOOLS_NOT_CONNECTED\` instead of a status, and no restart on argent's side fixes it. An Apple system app is rejected outright (terminal: never retry it).
 On Android: needs a debuggable build. The first call usually returns armed: false. Call it again every few seconds until armed is true, then repeat the action whose requests you need.
 Capture also misses a request already in flight at the attach and requests from clients other than OkHttp (e.g. HttpURLConnection, Cronet); an app whose OkHttp is fully minified reports capture unavailable.
-Android results also carry capture and captureDetail. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing. Pass an Android request's ID (android-3f9a-12) to view-network-request-details for its headers, redirects and bodies.
+Android results also carry capture and captureDetail. When capture is active, captureDetail and the header can say that only some requests are captured: then an empty or short list does not mean the app sent nothing.
 Capture can slow the app. It stays on, and launch-app and restart-app attach it to each new process, until a call with stop: true turns it off for this app (stop-all-simulator-servers for the device also does); restart-app then starts the app without the agent. stop: true returns { status, stopped, message }, where stopped is false when capture was not on for the app. On iOS stop: true fails: capture there ends only when stop-all-simulator-servers stops this device's services, and in the running process only when the app restarts.
 When status is not_attachable, use view-network-logs and do not retry.`,
     zodSchema,

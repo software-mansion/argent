@@ -450,6 +450,19 @@ const WAITING_FOR_CAPTURE_STATE = "waiting for the agent to say whether capture 
 const PROVIDER_CAPTURE_OFF =
   "the device provider has capture off for the app; argent does not turn it on, because that resets the provider's network settings: turn capture on in the provider";
 
+/** How the requester rejects a request on a connection that closed. */
+function closedBeforeRequest(bundleId: string, method: string): FailureError {
+  return new FailureError(
+    `native-devtools ${bundleId}: the connection closed before ${method} was answered`,
+    {
+      error_code: FAILURE_CODES.NDJSON_CDP_CONNECTION_CLOSED,
+      failure_stage: "ndjson_cdp_request",
+      failure_area: "tool_server",
+      error_kind: "network",
+    }
+  );
+}
+
 type ViewInspectorMethod =
   | "ViewHierarchy.getFullHierarchy"
   | "ViewHierarchy.findViews"
@@ -959,10 +972,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
      * A closed connection never comes back for the same process, so its open
      * requests fail now: with the process-ended reason when one host check
      * finds the process gone or replaced, and as not reconnected otherwise.
+     * The same check tells a later body read of the connection's requests
+     * whether their process ended.
      */
     const settleClosedConnection = async (bundleId: string, conn: AppConnection): Promise<void> => {
       const store = networkStores.get(bundleId);
-      if (lentSocketPath || disposed || !store?.hasOpenRecords(conn.index)) return;
+      if (lentSocketPath || disposed || !store?.holdsRecordsOf(conn.index)) return;
       const inspection = await host.inspectRunningApp(udid, bundleId).catch(() => null);
       if (disposed) return;
       const live = connections.get(bundleId);
@@ -1027,7 +1042,15 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
               const app = bundleId;
               networkStores.set(
                 app,
-                createIosNetworkRecords(() => captureState(app))
+                createIosNetworkRecords(() => captureState(app), {
+                  liveConnection: () => connections.get(app)?.index,
+                  request: (index, method, params, timeoutMs) => {
+                    const live = connections.get(app);
+                    return live?.index === index
+                      ? live.cdp.request(method, params, { timeoutMs })
+                      : Promise.reject(closedBeforeRequest(app, method));
+                  },
+                })
               );
             }
 
