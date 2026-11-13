@@ -1,6 +1,7 @@
 /** Convert raw tool results into MCP content blocks (text / image). */
 
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute } from "node:path";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -66,14 +67,21 @@ export async function toMcpContent(
 
     if (outputHint === "image") {
       if (images.length > 0) {
-        const saved: ContentBlock = { type: "text", text: `Saved: ${images[0]!.localPath}` };
+        const saved: ContentBlock = {
+          type: "text",
+          text: await savedText(images[0]!.localPath, images[0]!.data, args),
+        };
         if (suppressImage) return [saved];
         const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
         blocks.push(saved);
         return blocks;
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      return legacyImageContent(rewritten, suppressImage);
+      const legacy = await legacyImageContent(rewritten, suppressImage);
+      const out = requestedOut(args);
+      if (!out) return legacy;
+      const notSaved = `Could not save to ${out}: no image file came back, so any file already there is not this capture.`;
+      return [...legacy, { type: "text", text: notSaved }];
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
@@ -87,6 +95,32 @@ export async function toMcpContent(
   }
 
   return [{ type: "text" as const, text: stringifyForText(result) }];
+}
+
+function requestedOut(args: unknown): string {
+  return isRecord(args) && typeof args.out === "string" ? args.out.trim() : "";
+}
+
+async function savedText(scratchPath: string, data: Buffer, args: unknown): Promise<string> {
+  const out = requestedOut(args);
+  if (!out) return `Saved: ${scratchPath}`;
+  // The tool-server accepts Windows-absolute paths, which are cwd-relative on POSIX.
+  if (!isAbsolute(out)) {
+    return `Saved: ${scratchPath}\nCould not save to ${out}: not an absolute path on this computer`;
+  }
+  try {
+    // Not normalized: path.resolve treats `..` and a trailing separator unlike the kernel.
+    await mkdir(dirname(out), { recursive: true });
+    // A FIFO would block the write and a device would take the bytes.
+    if ((await stat(out).catch(() => null))?.isFile() === false) {
+      throw new Error("not a regular file");
+    }
+    await writeFile(out, data);
+    return `Saved: ${out}`;
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    return `Saved: ${scratchPath}\nCould not save to ${out}: ${reason}`;
+  }
 }
 
 /**
@@ -333,7 +367,11 @@ export async function flowRunToMcpContent(
     }
 
     if (step.result !== undefined) {
-      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
+      // Step args come from the flow file, whose `out` must not write on this machine.
+      const renderArgs = isRecord(step.args)
+        ? { includeImageInContext: step.args.includeImageInContext }
+        : undefined;
+      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, renderArgs)));
     }
 
     // Snapshot steps carry artifacts instead of a result.
