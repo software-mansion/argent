@@ -42,6 +42,7 @@ import { createKeyboardTool } from "../tools/keyboard";
 import { createPasteTool } from "../tools/paste";
 import { createRotateTool } from "../tools/rotate";
 import { shakeTool } from "../tools/shake";
+import { networkConditionsTool } from "../tools/network-conditions";
 import { foldTool } from "../tools/fold";
 import { createTvRemoteTool } from "../tools/tv-remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
@@ -164,6 +165,7 @@ export function createRegistry(): Registry {
   registry.registerTool(menuBarTool);
   registry.registerTool(createRotateTool(registry));
   registry.registerTool(shakeTool);
+  registry.registerTool(networkConditionsTool);
   registry.registerTool(foldTool);
   registry.registerTool(createTvRemoteTool(registry));
   registry.registerTool(createRunSequenceTool(registry));

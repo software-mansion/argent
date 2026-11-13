@@ -40,13 +40,39 @@ type LentAgent = {
   close: () => Promise<void>;
   hangUp: () => void;
   received: Array<{ type: string; payload: Record<string, unknown> }>;
+  /** What the provider does when it turns its own network capture on or off. */
+  setCapture: (on: boolean) => void;
   socketPath: string;
 };
 
-async function startLentAgent(): Promise<LentAgent> {
+type LentAgentOptions = {
+  /** The agent's network capture when Argent attaches. */
+  captureOn?: boolean;
+  /** An older agent that has no `NativeDevtoolsIos.getConditions`. */
+  failsGetConditions?: boolean;
+};
+
+/** Follows the capture state of the agent in the app: throttling turns capture on. */
+function captureAfter(method: unknown, captureOn: boolean): boolean {
+  if (method === "Network.enable" || method === "Network.emulateNetworkConditions") return true;
+  if (method === "Network.disable") return false;
+  return captureOn;
+}
+
+function cdpReply(id: unknown, method: unknown, options: Required<LentAgentOptions>) {
+  if (method !== "NativeDevtoolsIos.getConditions") return { id, result: {} };
+  if (options.failsGetConditions) return { id, error: { message: "Unknown method" } };
+  return { id, result: { enabled: options.captureOn } };
+}
+
+async function startLentAgent({
+  captureOn = true,
+  failsGetConditions = false,
+}: LentAgentOptions = {}): Promise<LentAgent> {
   const socketPath = path.join(temporaryDirectory, "agent.sock");
   const received: LentAgent["received"] = [];
   const sockets: net.Socket[] = [];
+  const state = { captureOn, failsGetConditions };
 
   const server = net.createServer((socket) => {
     sockets.push(socket);
@@ -65,6 +91,15 @@ async function startLentAgent(): Promise<LentAgent> {
           }) + "\n"
         );
       }
+
+      if (message.type === "CDP") {
+        const { id, method } = message.payload;
+        if (id !== undefined) {
+          const payload = cdpReply(id, method, state);
+          socket.write(JSON.stringify({ payload, type: "CDP" }) + "\n");
+        }
+        state.captureOn = captureAfter(method, state.captureOn);
+      }
     });
   });
 
@@ -77,6 +112,9 @@ async function startLentAgent(): Promise<LentAgent> {
       for (const socket of sockets.splice(0)) socket.destroy();
     },
     received,
+    setCapture: (on) => {
+      state.captureOn = on;
+    },
     socketPath,
   };
 }
@@ -294,6 +332,133 @@ describe("a provider that lends its native-devtools agent", () => {
     expect(terminated).toBe(false);
 
     await agent.close();
+  });
+
+  describe("network conditions", () => {
+    const THROTTLE = {
+      conditions: { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 },
+      metroPort: 8081,
+    };
+
+    const cdpMethods = (agent: LentAgent) =>
+      agent.received.filter((m) => m.type === "CDP").map((m) => m.payload.method);
+
+    it("keeps the provider's network capture on when it removes the throttle", async () => {
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent)).toEqual([
+        "NativeDevtoolsIos.getConditions",
+        "NativeDevtoolsIos.configure",
+        "Network.emulateNetworkConditions",
+        "NativeDevtoolsIos.configure",
+        "Network.enable",
+      ]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("sends nothing to the provider on a reset with nothing set", async () => {
+      const agent = await startLentAgent({ captureOn: false });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent)).toEqual([]);
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("turns capture back off when the provider had it off", async () => {
+      const agent = await startLentAgent({ captureOn: false });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent).at(-1)).toBe("Network.disable");
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("remembers the provider's capture from before its first throttle", async () => {
+      const agent = await startLentAgent({ captureOn: false });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await instance.api.setNetworkConditions(BUNDLE_ID, { ...THROTTLE, metroPort: 8095 });
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent).at(-1)).toBe("Network.disable");
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("reads the provider's capture again after a reset", async () => {
+      const agent = await startLentAgent({ captureOn: false });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+      agent.setCapture(true);
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent).at(-1)).toBe("Network.enable");
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    it("keeps capture on when the provider cannot report it", async () => {
+      const agent = await startLentAgent({ captureOn: false, failsGetConditions: true });
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+      await instance.api.setNetworkConditions(BUNDLE_ID, null);
+
+      expect(cdpMethods(agent).at(-1)).toBe("Network.enable");
+
+      await instance.dispose();
+      await agent.close();
+    });
+
+    /** The provider keeps the app connected, so the app's own reset on hang-up never runs. */
+    it("removes its throttle from the app before it hangs up", async () => {
+      const agent = await startLentAgent();
+      publishDescriptor({ socketPath: agent.socketPath });
+      const instance = await instantiate();
+      await waitForConnectedBundle(instance.api);
+      await instance.api.setNetworkConditions(BUNDLE_ID, THROTTLE);
+
+      await instance.dispose();
+
+      expect(cdpMethods(agent).slice(-2)).toEqual([
+        "NativeDevtoolsIos.configure",
+        "Network.enable",
+      ]);
+
+      await agent.close();
+    });
   });
 
   it("refuses to inject when the provider granted the mechanism but lent no socket", async () => {

@@ -97,6 +97,25 @@ Argent also shortens a body that is longer than 1000 characters. A message befor
 
 Argent removes the bundle traffic and the HMR traffic of Metro from the network log. Thus the network log contains the requests of your app only. This removal applies only when the app connects to Metro on a local address. If a physical Android device connects to Metro on a network address, for example `192.168.1.20:8081`, the network log also contains the requests to Metro.
 
+## Network conditions
+
+Argent can make the network slow or offline. The agent then tests loading states, timeouts, retries and the offline behavior of the app.
+
+The agent sets a minimum latency, a download limit, an upload limit, or offline mode. The scope of the change depends on the platform:
+
+| Platform              | Scope                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| iOS simulator         | One app. Argent slows the `URLSession` requests of the app, except WebSockets.          |
+| Android emulator      | The emulator network. Only offline mode is available.                                   |
+| Chromium and Electron | The page of the active tab, without its workers, service workers and cross-site iframes |
+
+The conditions stay until the agent changes them or removes them, also in later steps and later e2e tests. Remove them at the end of an e2e test. Some events also remove them:
+
+- iOS: the tool-server stops, or `stop-all-simulator-servers` stops the native devtools of the device. On a simulator from a device provider, a restart of the app also removes them.
+- Chromium: the active tab closes outside Argent, or another DevTools client detaches from the page.
+
+On an Android emulator, offline mode stays after the tool-server stops. Offline mode does not stop requests through `adb reverse`, and it cuts the connection to Metro at `10.0.2.2`. Argent does not set network conditions on a physical device. The [tools reference](/docs/reference/tools#network-conditions) gives the details.
+
 ## Example instructions
 
 - "The list screen is empty. Examine the response of the API."
@@ -104,6 +123,7 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - "Show the requests that this screen sends at mount. Show their durations."
 - "Make sure that the app sends the second request after the error 500."
 - "Show the requests from the analytics SDK in my Android app."
+- "Make the network slow and show me the loading state of the feed."
 
 ## Limits
 
@@ -157,4 +177,4 @@ Argent removes the bundle traffic and the HMR traffic of Metro from the network 
 - Argent does not replace the data in the bodies of the requests and of the responses. Protect a network log as you protect other data of the app.
 - On the native `NSURLProtocol` layer, Argent does not replace the values of secret headers. The agent sees headers such as `Authorization` and `Cookie` in full. Protect a network log of this layer as you protect other data of the app.
 
-Argent does this with these three tools: `view-network-logs`, `view-network-request-details` and `native-network-logs`. The [tools reference](/docs/reference/tools) contains all tools.
+Argent does this with these four tools: `view-network-logs`, `view-network-request-details`, `native-network-logs` and `network-conditions`. The [tools reference](/docs/reference/tools) contains all tools.

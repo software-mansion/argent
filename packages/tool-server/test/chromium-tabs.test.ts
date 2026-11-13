@@ -42,14 +42,14 @@ function tgt(id: string) {
 }
 
 describe("TabsManager", () => {
-  let cdp: { reconnect: ReturnType<typeof vi.fn> };
+  let cdp: { reconnect: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
   let onActivated: ReturnType<typeof vi.fn>;
   let mgr: ReturnType<typeof createTabsManager>;
 
   beforeEach(() => {
     browserSend.mockClear();
     listMock.mockReset();
-    cdp = { reconnect: vi.fn(async () => {}) };
+    cdp = { reconnect: vi.fn(async () => {}), send: vi.fn(async () => ({})) };
     onActivated = vi.fn(async () => {});
     mgr = createTabsManager({
       cdp: cdp as never,
@@ -103,12 +103,65 @@ describe("TabsManager", () => {
   it("open() creates a target via Target.createTarget, activates it, applies label", async () => {
     listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
     const tabs = await mgr.open({ url: "https://x.test", label: "docs" });
-    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", { url: "https://x.test" });
+    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", { url: "about:blank" });
     expect(cdp.reconnect).toHaveBeenCalledWith("ws://127.0.0.1:9222/devtools/page/TID-NEW");
     expect(mgr.activeTargetId()).toBe("TID-NEW");
     const created = tabs.find((t) => t.targetId === "TID-NEW")!;
     expect(created.active).toBe(true);
     expect(created.label).toBe("docs");
+  });
+
+  it("open() loads the url only after the new tab's session is prepared", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+    const order: string[] = [];
+    onActivated.mockImplementation(async () => {
+      order.push("activated");
+    });
+    cdp.send.mockImplementation(async (method: string) => {
+      order.push(method);
+      return {};
+    });
+
+    await mgr.open({ url: "https://x.test" });
+
+    expect(order).toEqual(["activated", "Runtime.evaluate"]);
+    expect(cdp.send).toHaveBeenCalledWith("Runtime.evaluate", {
+      expression: 'location.replace("https://x.test")',
+    });
+  });
+
+  it.each(["", "about:blank"])(
+    "open() reports the requested url for a tab still listed at %j",
+    async (listedUrl) => {
+      listMock.mockResolvedValue([
+        tgt("A"),
+        { ...tgt("TID-NEW"), title: "about:blank", url: listedUrl },
+      ]);
+
+      const tabs = await mgr.open({ url: "https://x.test" });
+
+      expect(tabs.find((t) => t.targetId === "TID-NEW")!.url).toBe("https://x.test");
+    }
+  );
+
+  it("open() hands a url that loads no network page straight to the new tab", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+
+    await mgr.open({ url: "file:///tmp/index.html" });
+
+    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", {
+      url: "file:///tmp/index.html",
+    });
+    expect(cdp.send).not.toHaveBeenCalled();
+  });
+
+  it("open() hands the url to a tab it does not activate", async () => {
+    listMock.mockResolvedValue([tgt("A"), tgt("TID-NEW")]);
+
+    await mgr.open({ url: "https://x.test", activate: false });
+
+    expect(browserSend).toHaveBeenCalledWith("Target.createTarget", { url: "https://x.test" });
+    expect(cdp.send).not.toHaveBeenCalled();
   });
 
   it("open() explains an Electron refusal instead of passing its bare error through", async () => {

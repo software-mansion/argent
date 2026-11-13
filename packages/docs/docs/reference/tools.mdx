@@ -24,6 +24,7 @@ Run `argent tools` to list them from the terminal, `argent tools describe <name>
 | `rotate`                     | Set the device orientation to portrait or either landscape                                                                              |
 | `fold`                       | Fold or unfold a foldable iOS simulator or Android emulator to a posture or a hinge angle                                               |
 | `shake`                      | Shake the device                                                                                                                        |
+| `network-conditions`         | Add latency, limit the download and upload speed, or set the network offline                                                            |
 | `button`                     | Press a hardware button: home, back, power, volume, app switch, action button                                                           |
 | `tv-remote`                  | Press a TV remote or D-pad button on Apple TV, Android TV, or Vega                                                                      |
 | `stop-simulator-server`      | Stop the transport session for one device and free its resources                                                                        |
@@ -89,6 +90,50 @@ On an Android emulator:
 Argent supports physical iPhones; physical iPads are not supported yet. `list-devices` shows a physical device as an iOS entry with kind `device`. The state is `connected` only while the device is attached by USB cable; Argent controls physical devices over the cable and does not use Wi-Fi. The state is `paired` when the device is paired but not reachable now. Argent never selects a physical device automatically: name its udid. A `paired` device cannot be driven until it is connected by cable again. See [Physical iOS devices](/docs/features/physical-ios-devices) for the requirements, the signing model, and the app-scoped interaction contract.
 
 With the `macos-apps` flag on, `list-devices` shows each native Mac app that Argent started and that still runs, as a `macos` entry with kind `app`. See [Mac apps](#mac-apps).
+
+### Network conditions
+
+`network-conditions` sets the network conditions of an iOS simulator app, an Android emulator or a Chromium tab. Each call replaces the conditions of the previous call.
+
+| Parameter      | Description                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------- |
+| `udid`         | The device                                                                                                |
+| `bundleId`     | iOS only, and required on iOS: the app to throttle                                                        |
+| `port`         | iOS only: the Metro port that Argent does not throttle. The default is the Metro port of the device.      |
+| `latencyMs`    | The minimum time from a request to its response, in milliseconds, from 0 to 60000                         |
+| `downloadKbps` | Download limit in kilobits per second. Omit it for no limit.                                              |
+| `uploadKbps`   | Upload limit in kilobits per second. Omit it for no limit.                                                |
+| `offline`      | `true` makes requests fail as if no network is available. On Android, `adb reverse` ports stay reachable. |
+
+A call without `latencyMs`, `downloadKbps`, `uploadKbps` and `offline` removes the throttle, also when it has `port`. An unknown parameter fails the call. The result contains `scope` and `conditions`. `conditions` is `null` after a removal. `scope` tells which traffic Argent changes:
+
+| `scope`  | Target             | Traffic                                                                                  |
+| -------- | ------------------ | ---------------------------------------------------------------------------------------- |
+| `app`    | iOS simulator      | The `http` and `https` requests of the app through the URL loading system (`URLSession`) |
+| `device` | Android emulator   | The traffic of the emulator network. Only `offline` is available.                        |
+| `tab`    | Chromium, Electron | The requests of the page in the active tab                                               |
+
+`latencyMs` sets a minimum. A response that takes longer than `latencyMs` gets no extra delay.
+
+On iOS:
+
+- The app must not be an Apple system app, and the native devtools must connect to it. If the result has a `status` field, follow its `message`, as for `native-network-logs`.
+- Argent delays the data that the app receives. The server gets each request and each upload immediately. With `uploadKbps`, the app gets the response after the time that the upload would take.
+- Argent does not change WebSocket connections and requests to the Metro port. Set `port` when Metro does not use the default port of the device.
+- After a restart of the app, Argent applies the conditions again when the native devtools connect. Requests before that time have no throttle.
+- On a simulator from a [device provider](./device-providers.mdx), a removal leaves the network capture of the provider as it was. A restart of the app removes the conditions there. Call `network-conditions` again after it.
+- When the tool-server stops or `stop-all-simulator-servers` stops the native devtools, the app removes the conditions.
+
+On Android, the emulator console cannot shape the Wi-Fi network of current system images. Thus `latencyMs`, `downloadKbps` and `uploadKbps` fail on an Android emulator. `offline: true` turns off Wi-Fi and mobile data with `svc`. A call without conditions turns on Wi-Fi and mobile data, and waits up to 15 seconds for a network. The emulator stays offline after the tool-server stops.
+
+While the Android emulator is offline:
+
+- Requests through `adb reverse` still work, because adb carries them.
+- The emulator cannot reach the host at `10.0.2.2`. A React Native app that loads from Metro at `10.0.2.2` loses its connection to Metro. The debugger tools then cannot reach the app until the network comes back.
+
+On Chromium, Argent applies the conditions to the page of the active tab. Argent applies them again after a tab switch with `chromium-tabs`, and before a tab that `chromium-tabs` opens loads its URL. Service workers, web workers and cross-site iframes keep the full speed. When the active tab closes outside Argent, or when another DevTools client detaches from the page, the conditions can go away. Call `network-conditions` again.
+
+`network-conditions` fails on a physical iPhone and on a physical Android device.
 
 ## Inspecting the screen
 
