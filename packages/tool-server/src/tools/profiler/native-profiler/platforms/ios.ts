@@ -892,6 +892,20 @@ function appEnded(api: NativeProfilerSessionApi): boolean {
   }
 }
 
+/**
+ * Whether a leaks export holds the trace's Leaks detail, also when it has no row.
+ * Measured on a Mac app with `template_path: "Time Profiler"`, which has no Leaks
+ * instrument: the xctrace of Xcode 26.6 exports `<trace-query-result>` with no node
+ * in it and exits 0. The xctrace of Xcode 27.2 fails that export.
+ */
+async function leaksDetailExported(filePath: string): Promise<boolean> {
+  try {
+    return /<node[\s>]/.test(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 async function checkExportFileMissing(filePath: string | null): Promise<string | null> {
   if (!filePath) return null;
   try {
@@ -962,8 +976,13 @@ export async function analyzeNativeProfilerIos(
   // has the Leaks instrument exports an empty table when nothing leaked. The
   // all-processes fallback records the built-in Time Profiler template, which
   // has none. A leaks file that stop wrote but is now gone or unreadable is no
-  // leak data either.
-  const leaksRecorded = api.exportedFiles.leaks != null && !leaksMissing;
+  // leak data either. On a Mac app, so is a leaks export with no Leaks detail in it.
+  const leaksRecorded =
+    api.exportedFiles.leaks != null &&
+    !leaksMissing &&
+    (api.platform !== "macos" ||
+      memoryLeaks.length > 0 ||
+      (await leaksDetailExported(api.exportedFiles.leaks)));
 
   api.parsedData = {
     cpuSamples,

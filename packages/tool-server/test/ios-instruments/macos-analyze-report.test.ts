@@ -26,11 +26,21 @@ type PipelineResult = Awaited<ReturnType<typeof runIosProfilerPipeline>>;
 
 const NOTE = "**CPU sampling:**";
 
+// The leaks exports of a Mac app's trace with no leak, as xctrace (Xcode 26.6) wrote them.
+// The Argent template has the Leaks instrument, so the export holds its detail:
+const LEAKS_CHECKED_NONE_FOUND =
+  `<?xml version="1.0"?>\n<trace-query-result>\n` +
+  `<node xpath='//trace-toc[1]/run[1]/tracks[1]/track[2]/details[1]/detail[1]'></node>` +
+  `</trace-query-result>\n`;
+// `template_path: "Time Profiler"` has no Leaks instrument, and the export still exits 0:
+const LEAKS_NOT_CHECKED = `<?xml version="1.0"?>\n<trace-query-result>\n</trace-query-result>\n`;
+
 let dir = "";
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "argent-macos-analyze-"));
-  for (const name of ["cpu.xml", "hangs.xml", "leaks.xml"]) writeFileSync(join(dir, name), "");
+  for (const name of ["cpu.xml", "hangs.xml"]) writeFileSync(join(dir, name), "");
+  writeFileSync(join(dir, "leaks.xml"), LEAKS_CHECKED_NONE_FOUND);
 });
 
 afterEach(() => {
@@ -203,11 +213,15 @@ describe("the note on hangs and the leak check", () => {
     withHangs([]);
     expect((await analyzeNativeProfilerIos(makeApi("macos"))).report).not.toContain(LEAK_NOTE);
 
-    // A template without the Leaks instrument exports no leaks table.
+    // A template without the Leaks instrument exports no leaks table (Xcode 27.2), or
+    // one with no Leaks detail (Xcode 26.6).
     withHangs([hang]);
     const noLeaks = makeApi("macos");
     noLeaks.exportedFiles = { ...noLeaks.exportedFiles, leaks: null };
     expect((await analyzeNativeProfilerIos(noLeaks)).report).not.toContain(LEAK_NOTE);
+    writeFileSync(join(dir, "leaks.xml"), LEAKS_NOT_CHECKED);
+    expect((await analyzeNativeProfilerIos(makeApi("macos"))).report).not.toContain(LEAK_NOTE);
+    writeFileSync(join(dir, "leaks.xml"), LEAKS_CHECKED_NONE_FOUND);
 
     withHangs([hang]);
     expect((await analyzeNativeProfilerIos(makeApi("ios"))).report).not.toContain(LEAK_NOTE);
@@ -235,6 +249,24 @@ describe("the note on a recording too short for a leak check", () => {
     );
     expect(report).toContain("Do not report the app as leak-free");
     expect(report.indexOf(SHORT_NOTE)).toBeLessThan(report.indexOf("All clear"));
+  });
+
+  it("is absent, and leaks read as not checked, when a Mac trace had no Leaks instrument", async () => {
+    // A 12 s `template_path: "Time Profiler"` recording, exported by Xcode 26.6.
+    writeFileSync(join(dir, "leaks.xml"), LEAKS_NOT_CHECKED);
+    pipeline({});
+    const mac = recorded("macos", 12_000);
+    const { report } = await analyzeNativeProfilerIos(mac);
+    expect(report).not.toContain(SHORT_NOTE);
+    expect(report).toContain(
+      "> ⚠️ **Memory leaks:** No leak data was recorded, so memory leaks were not checked."
+    );
+    expect(mac.parsedData?.leaksRecorded).toBe(false);
+
+    // iOS keeps its rule: an exported leaks file is leak data.
+    const ios = recorded("ios", 12_000);
+    await analyzeNativeProfilerIos(ios);
+    expect(ios.parsedData?.leaksRecorded).toBe(true);
   });
 
   it("is absent for 20 s and more, with leaks, without leak data, with no duration, and on iOS", async () => {

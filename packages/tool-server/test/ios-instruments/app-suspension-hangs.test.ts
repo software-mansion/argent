@@ -397,12 +397,18 @@ describe("the analyze report's note on the app's suspensions", () => {
   });
 
   it("does not name the leak check when the recording did not check for leaks", async () => {
-    const { report } = await analyzeNativeProfilerIos(makeApi("macos", LEAK_CHECKS, false));
-    expect(report).toContain(
-      `> ℹ️ **App pauses:** macOS held the app suspended 2 times (23.8 s in all). argent left ` +
-        `out 1 hang that was only these pauses, and took the pauses out of the length of 1 other hang.`
-    );
-    expect(report).not.toContain(NOTE);
+    const noExport = makeApi("macos", LEAK_CHECKS, false);
+    // A template with no Leaks instrument, exported by Xcode 26.6: a result with no node.
+    const noDetail = makeApi("macos", LEAK_CHECKS);
+    writeFileSync(noDetail.exportedFiles!.leaks!, `<trace-query-result>\n</trace-query-result>`);
+    for (const api of [noExport, noDetail]) {
+      const { report } = await analyzeNativeProfilerIos(api);
+      expect(report).toContain(
+        `> ℹ️ **App pauses:** macOS held the app suspended 2 times (23.8 s in all). argent left ` +
+          `out 1 hang that was only these pauses, and took the pauses out of the length of 1 other hang.`
+      );
+      expect(report).not.toContain(NOTE);
+    }
   });
 
   it("is absent, and so is the warning, when argent watched the app and no hang changed", async () => {

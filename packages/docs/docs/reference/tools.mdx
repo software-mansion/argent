@@ -545,7 +545,7 @@ Instruments suspends the whole app for several seconds when it checks for leaks,
 - A call to the app, such as a tap, `describe` or a screenshot, waits until the app runs again, for at most 25 seconds. When a suspension starts while a call is under way and lasts past the timeout of the call, the call fails with `MACOS_APP_RPC_TIMEOUT` and says how long the app was suspended. Look at the app before you repeat the call: the action can have happened.
 - `native-profiler-analyze` takes the suspended time out of each UI hang, and labels the hang by the time that is left: a microhang from 250 ms, a hang from 500 ms, a severe hang from 2 seconds. A hang with less than 250 ms left is not reported. The report then has a note below its title that gives the number of suspensions and of the hangs they changed.
 
-A leak check can take several seconds. When a recording shorter than 20 seconds found no leak, the report has a note below its title. The note tells that the trace can hold no finished leak check, and that the app must not be reported as free of leaks.
+A leak check can take several seconds. When a recording with leak checks is shorter than 20 seconds and finds no leak, the report has a note below its title. The note tells that the trace can hold no finished leak check, and that the app must not be reported as free of leaks. A template without the Leaks instrument, for example `Time Profiler`, records no leak data. Then the report tells that memory leaks were not checked.
 
 ## Profiling
 
