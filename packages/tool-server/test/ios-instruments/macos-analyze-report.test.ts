@@ -266,10 +266,10 @@ describe("the note on a recording too short for a leak check", () => {
     );
     expect(mac.parsedData?.leaksRecorded).toBe(false);
 
-    // iOS keeps its rule: an exported leaks file is leak data.
+    // The same on iOS, where the all-processes capture records no Leaks instrument.
     const ios = recorded("ios", 12_000);
     await analyzeNativeProfilerIos(ios);
-    expect(ios.parsedData?.leaksRecorded).toBe(true);
+    expect(ios.parsedData?.leaksRecorded).toBe(false);
   });
 
   it("is absent for 20 s and more, with leaks, without leak data, with no duration, and on iOS", async () => {

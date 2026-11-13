@@ -351,6 +351,21 @@ export function parseLeaksXml(xml: string): RawLeak[] {
   return leaks;
 }
 
+/**
+ * Whether a leaks export holds the trace's Leaks detail, also when it has no row.
+ * For a template with no Leaks instrument (`template_path: "Time Profiler"` on a
+ * Mac app, the all-processes capture on iOS), the xctrace of Xcode 26.6 exports
+ * `<trace-query-result>` with no node in it and exits 0. The xctrace of Xcode 27.2
+ * fails that export.
+ */
+export async function leaksDetailExported(filePath: string): Promise<boolean> {
+  try {
+    return /<node[\s>]/.test(await fs.readFile(filePath, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
 export async function parseCpuFile(
   filePath: string | null,
   targetPid: number | null = null

@@ -65,8 +65,9 @@ interface RenderInput {
    */
   mallocStackLogging?: boolean | null;
   /**
-   * iOS: false when the trace had no leaks export, so the report must not read as
-   * leak-free. Undefined (Android) leaves the report unchanged.
+   * xctrace: false when the trace has no leak data (no leaks export, or one with
+   * no Leaks detail), so the report must not read as leak-free. Undefined
+   * (Android) leaves the report unchanged.
    */
   leaksRecorded?: boolean;
   /**

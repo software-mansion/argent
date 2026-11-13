@@ -81,6 +81,16 @@ afterEach(async () => {
 
 const SESSION_ID = "20261030-120000";
 
+// The leaks exports as xctrace writes them. A template with the Leaks instrument
+// exports its Leaks detail, with no row when nothing leaked:
+const LEAKS_CHECKED_NONE_FOUND =
+  `<?xml version="1.0"?>\n<trace-query-result>\n` +
+  `<node xpath='//trace-toc[1]/run[1]/tracks[1]/track[2]/details[1]/detail[1]'></node>` +
+  `</trace-query-result>\n`;
+// A template without it, such as the built-in Time Profiler of the all-processes
+// capture: the xctrace of Xcode 26.6 still exits 0 and writes no detail.
+const LEAKS_NOT_CHECKED = `<?xml version="1.0"?>\n<trace-query-result>\n</trace-query-result>\n`;
+
 function leakStacks(api: NativeProfilerSessionApi): Promise<string> {
   return profilerStackQueryTool.execute({ session: api } as never, {
     device_id: DEVICE,
@@ -106,11 +116,11 @@ async function readReportFile(reportFile: string | null): Promise<string> {
 }
 
 // Writes a saved iOS session to the debug dir the way stop leaves it on disk.
-async function writeSavedIosSession(sessionId: string, withLeaks: boolean): Promise<void> {
+async function writeSavedIosSession(sessionId: string, leaksXml: string | null): Promise<void> {
   const base = path.join(dir, `native-profiler-${sessionId}`);
   await fs.writeFile(`${base}_raw_cpu.xml`, "");
   await fs.writeFile(`${base}_raw_hangs.xml`, "");
-  if (withLeaks) await fs.writeFile(`${base}_raw_leaks.xml`, "");
+  if (leaksXml !== null) await fs.writeFile(`${base}_raw_leaks.xml`, leaksXml);
 }
 
 // Seeds a React session so the combined report has commits to correlate.
@@ -149,6 +159,16 @@ async function cacheReactSession(deviceId: string): Promise<void> {
 
 async function freshIosSession(): Promise<NativeProfilerSessionApi> {
   const device = { id: DEVICE, platform: "ios" as const, kind: "simulator" as const };
+  const { api } = await nativeProfilerSessionBlueprint.factory({}, device, { device });
+  return api;
+}
+
+async function freshMacSession(): Promise<NativeProfilerSessionApi> {
+  const device = {
+    id: "macos-app-com.example.app",
+    platform: "macos" as const,
+    kind: "app" as const,
+  };
   const { api } = await nativeProfilerSessionBlueprint.factory({}, device, { device });
   return api;
 }
@@ -199,13 +219,27 @@ describe("iOS reports when no leak data was recorded", () => {
 
   it("analyze keeps the all-clear wording when the leaks table was exported", async () => {
     const leaks = path.join(dir, "raw_leaks.xml");
-    await fs.writeFile(leaks, "");
+    await fs.writeFile(leaks, LEAKS_CHECKED_NONE_FOUND);
     const api = await buildIosSession(leaks);
     const res = await analyzeNativeProfilerIos(api);
 
     expect(res.report).toContain("All clear — no CPU hotspots, UI hangs, or memory issues");
     expect(res.report).not.toContain(LEAKS_NOT_RECORDED);
     expect(api.parsedData?.leaksRecorded).toBe(true);
+  });
+
+  it("analyze says leaks were not checked when the leaks export has no Leaks detail", async () => {
+    // An all-processes (Time Profiler) recording exported by Xcode 26.6.
+    const leaks = path.join(dir, "raw_leaks.xml");
+    await fs.writeFile(leaks, LEAKS_NOT_CHECKED);
+    const api = await buildIosSession(leaks);
+    const res = await analyzeNativeProfilerIos(api);
+
+    expect(api.parsedData?.leaksRecorded).toBe(false);
+    expect(res.report).toContain(LEAKS_NOT_RECORDED);
+    expect(res.report).not.toContain("memory issues detected");
+    expect(res.exportErrors).toEqual({});
+    expect(await leakStacks(api)).toContain(LEAKS_NOT_RECORDED);
   });
 
   it("analyze treats a leaks export that vanished before analyze as not recorded", async () => {
@@ -267,14 +301,14 @@ describe("iOS reports when no leak data was recorded", () => {
     expect(out).not.toContain("No memory leaks detected");
 
     const leaks = path.join(dir, "raw_leaks.xml");
-    await fs.writeFile(leaks, "");
+    await fs.writeFile(leaks, LEAKS_CHECKED_NONE_FOUND);
     const recorded = await buildIosSession(leaks);
     await analyzeNativeProfilerIos(recorded);
     expect(await leakStacks(recorded)).toContain("No memory leaks detected");
   });
 
   it("profiler-load of a session with no leaks export says leaks were not recorded", async () => {
-    await writeSavedIosSession(SESSION_ID, false);
+    await writeSavedIosSession(SESSION_ID, null);
     const api = await freshIosSession();
     const out = await loadNative(api);
 
@@ -284,7 +318,7 @@ describe("iOS reports when no leak data was recorded", () => {
   });
 
   it("profiler-load of a session with a leaks export keeps the leak count", async () => {
-    await writeSavedIosSession(SESSION_ID, true);
+    await writeSavedIosSession(SESSION_ID, LEAKS_CHECKED_NONE_FOUND);
     const api = await freshIosSession();
     const out = await loadNative(api);
 
@@ -292,6 +326,23 @@ describe("iOS reports when no leak data was recorded", () => {
     expect(api.parsedData?.leaksRecorded).toBe(true);
     expect(await leakStacks(api)).toContain("No memory leaks detected");
   });
+
+  it.each([
+    ["an iOS simulator", freshIosSession],
+    ["a Mac app", freshMacSession],
+  ])(
+    "profiler-load on %s of a leaks export with no Leaks detail says leaks were not recorded",
+    async (_name, freshSession) => {
+      await writeSavedIosSession(SESSION_ID, LEAKS_NOT_CHECKED);
+      const api = await freshSession();
+      const out = await loadNative(api);
+
+      expect(out).toContain("- Memory leaks: not recorded");
+      expect(api.parsedData?.leaksRecorded).toBe(false);
+      expect(await leakStacks(api)).toContain(LEAKS_NOT_RECORDED);
+      expect(await leakStacks(api)).not.toContain("No memory leaks detected");
+    }
+  );
 
   it("the combined report says leaks were not recorded instead of 0 leaks", async () => {
     await cacheReactSession(DEVICE);
