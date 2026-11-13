@@ -302,7 +302,7 @@ The `header` line of `native-network-logs` gives one of these states after the n
 | `not armed`    | The capture is started, but it is not ready. The `header` line gives the reason.                                                                                             |
 | `not attached` | Android only. A process of the app with the in-app agent ended. The current process has no in-app agent, or the app exited.                                                  |
 | `stopped`      | `network-capture-stop` stopped the capture. The list contains the requests from before the stop.                                                                             |
-| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. The list is empty.                                                                              |
+| `not started`  | No capture is started for the app, or `stop-all-simulator-servers` ended it. On a Mac app, `stop-simulator-server` also ends it. The list is empty.                          |
 | `unavailable`  | Android only. The last start found that Argent cannot capture the app, for example in a build that is not debuggable. The `header` line gives the reason. The list is empty. |
 
 ## Native devtools
