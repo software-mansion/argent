@@ -172,6 +172,36 @@ export function flattenProfilingData(
  */
 const COLLECT_TIMEOUT_MS = 60_000;
 
+function noActiveRunError(port: number, deviceId: string): FailureError {
+  const lastRun = lastRunText(
+    getCachedProfilerPaths(port, deviceId),
+    getLostProfilerRun(port, deviceId)
+  );
+  if (lastRun) {
+    return new FailureError(
+      `No active profiling run to stop. ${lastRun} Call react-profiler-start to record a new one.`,
+      {
+        error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
+        failure_stage: "react_profiler_stop_inactive",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
+    );
+  }
+  return new FailureError(
+    "No active profiling run to stop. Either the run ended without its data (a JS reload ends it: Metro's `r`, a red-box Reload, debugger-reload-metro), or Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
+      "After a reload, call react-profiler-start again. Otherwise check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again.",
+    {
+      error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
+      failure_stage: "react_profiler_stop_inactive",
+      failure_area: "tool_server",
+      // Internal session-state, not caller input — matches the session-lookup
+      // site above and the native NATIVE_PROFILER_NO_ACTIVE_SESSION twin.
+      error_kind: "not_found",
+    }
+  );
+}
+
 function stopInProgressError(): FailureError {
   return new FailureError(STOP_IN_PROGRESS_NOTE, {
     error_code: FAILURE_CODES.REACT_PROFILER_STOP_IN_PROGRESS,
@@ -265,31 +295,7 @@ Fails if no active profiling session exists, another stop is running, the CDP co
       // `profilingActive` is set only once react-profiler-start's DevTools-hook
       // checks pass and the sampler is running; stopping a sampler that was never
       // started fails further down with a far less actionable message.
-      if (!api.profilingActive) {
-        if (lastRun) {
-          throw new FailureError(
-            `No active profiling run to stop. ${lastRun} Call react-profiler-start to record a new one.`,
-            {
-              error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
-              failure_stage: "react_profiler_stop_inactive",
-              failure_area: "tool_server",
-              error_kind: "not_found",
-            }
-          );
-        }
-        throw new FailureError(
-          "No active profiling run to stop. Either the run ended without its data (a JS reload ends it: Metro's `r`, a red-box Reload, debugger-reload-metro), or Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
-            "After a reload, call react-profiler-start again. Otherwise check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again.",
-          {
-            error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
-            failure_stage: "react_profiler_stop_inactive",
-            failure_area: "tool_server",
-            // Internal session-state, not caller input — matches the session-lookup
-            // site above and the native NATIVE_PROFILER_NO_ACTIVE_SESSION twin.
-            error_kind: "not_found",
-          }
-        );
-      }
+      if (!api.profilingActive) throw noActiveRunError(port, deviceId);
 
       // Another session may have started a run over this one (react-profiler-start
       // with force, or once this run's heartbeat went stale). Stopping now would
@@ -329,8 +335,10 @@ Fails if no active profiling session exists, another stop is running, the CDP co
         );
       }
 
-      // A parallel stop can get here first: the read above awaited the app.
+      // A parallel stop can get here first: the read above awaited the app. It
+      // may have ended the run (a takeover it found), leaving nothing to stop.
       if (api.stopping) throw stopInProgressError();
+      if (!api.profilingActive) throw noActiveRunError(port, deviceId);
 
       api.profilingActive = false; // reset before the CDP call so state is clean if it throws
       api.stopping = true;
