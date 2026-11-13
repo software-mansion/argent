@@ -3,6 +3,12 @@ import type { ServiceRef, ToolCapability, ToolContext, ToolDefinition } from "@a
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { assertChromiumWindowVisible } from "../../utils/chromium-visibility";
 import { resolveDevice } from "../../utils/device-info";
+import {
+  MACOS_CLICK_SETTLE_MS,
+  macosAppServices,
+  macosMouse,
+  requireMacosApp,
+} from "../../utils/macos-input";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -21,6 +27,9 @@ const MOMENTUM_FREE_MIN_STEPS = 8;
 // ceiling. The same 10s gesture-swipe carries, an order of magnitude above the
 // 300ms default.
 const MAX_DURATION_MS = 10_000;
+// A long press on a Mac app holds as long as the e2e long-press directive: SwiftUI and
+// React Native fire theirs after 500 ms.
+const MACOS_LONG_PRESS_MS = 800;
 
 interface Result {
   dragged: boolean;
@@ -29,10 +38,102 @@ interface Result {
 
 const capability: ToolCapability = {
   chromium: { app: true },
+  macos: { app: true },
 };
 
+type Point = { x: number; y: number };
+
+/**
+ * A left-button drag from `from` to `to` in the caller's coordinates: down,
+ * moves at ~60fps over `durationMs`, up.
+ */
+async function runPointerDrag(
+  from: Point,
+  to: Point,
+  opts: { durationMs?: number; momentum?: boolean; signal?: AbortSignal; paceFromPress?: boolean },
+  pointer: Record<"down" | "move" | "up", (point: Point) => Promise<void>>
+): Promise<void> {
+  const durationMs = opts.durationMs ?? 300;
+  const momentumFree = opts.momentum === false;
+  const steps = Math.max(momentumFree ? MOMENTUM_FREE_MIN_STEPS : 2, Math.round(durationMs / 16));
+  const frameMs = durationMs / steps;
+  // Pace every frame off one run-start deadline so each dispatch round-trip
+  // (~8-10ms) counts toward its own frame and the press→release span tracks
+  // durationMs - apps threshold a flick against a drag on exactly that number.
+  let t0 = Date.now();
+  // Last dispatched position, so an abort releases where the pointer is.
+  let last = from;
+  // The button is down for the whole span, so check the abort once per frame.
+  const abortError = (frame: number): Error => {
+    const err = new Error(
+      `gesture-drag aborted - cancelled mid-drag after ${frame} of ${steps + 1} frames`
+    );
+    err.name = "AbortError";
+    return err;
+  };
+  // Marks the button up before dispatching, so a release that rejects is not
+  // retried by the recovery path below.
+  let buttonDown: boolean;
+  const release = async (point: Point): Promise<void> => {
+    buttonDown = false;
+    await pointer.up(point);
+  };
+  // Release where the pointer is: the delivered press would otherwise capture
+  // every later click, and releasing at the end point delivers travel the caller
+  // cancelled. Best effort - a cancel is when the session can be going away -
+  // so a failed release rides along as the AbortError's `cause` rather than
+  // replacing it.
+  const releaseAndAbort = async (frame: number): Promise<never> => {
+    const err = abortError(frame);
+    try {
+      await release(last);
+    } catch (releaseErr) {
+      err.cause = releaseErr;
+    }
+    throw err;
+  };
+  // Nothing is pressed yet, so this one only declines.
+  if (opts.signal?.aborted) throw abortError(0);
+  await pointer.down(from);
+  buttonDown = true;
+  if (opts.paceFromPress) t0 = Date.now();
+  try {
+    for (let i = 1; i < steps; i++) {
+      if (opts.signal?.aborted) await releaseAndAbort(i);
+      await sleep(Math.max(0, t0 + i * frameMs - Date.now()));
+      const t = i / steps;
+      const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
+      const point = {
+        x: from.x + (to.x - from.x) * progress,
+        y: from.y + (to.y - from.y) * progress,
+      };
+      await pointer.move(point);
+      last = point;
+    }
+    // The loop stops one short of the release, so the last frame is checked on
+    // both sides of its wait: before, to skip the wait; after, to catch an abort
+    // landing during it. Both report `steps` - a wait delivers no pointer events.
+    if (opts.signal?.aborted) await releaseAndAbort(steps);
+    // Spend the last frame's wait here rather than on another move at the
+    // endpoint: a move followed by a still frame reads as a hold.
+    await sleep(Math.max(0, t0 + durationMs - Date.now()));
+    if (opts.signal?.aborted) await releaseAndAbort(steps);
+    await release(to);
+  } catch (err) {
+    // A mid-drag dispatch that rejects leaves the app holding the button - a
+    // session survives a timed-out send - and every later click is then read
+    // as a drag. Best effort, and the caller keeps seeing the original failure.
+    if (buttonDown) await release(last).catch(() => {});
+    throw err;
+  }
+}
+
 const zodSchema = z.object({
-  udid: z.string().describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
+  udid: z
+    .string()
+    .describe(
+      "Target Chromium device id from `list-devices` (chromium-cdp-<port>)<flag:macos-apps>, or a Mac app id</flag:macos-apps>."
+    ),
   fromX: z.number().min(0).max(1).describe("Press x."),
   fromY: z.number().min(0).max(1).describe("Press y."),
   toX: z.number().min(0).max(1).describe("Release x."),
@@ -44,7 +145,7 @@ const zodSchema = z.object({
     })
     .optional()
     .describe(
-      "Total drag duration in milliseconds (default 300); the button stays down this long."
+      "Total drag duration in milliseconds (default 300<flag:macos-apps>, 800 for a long press on a Mac app</flag:macos-apps>); the button stays down this long."
     ),
   momentum: z
     .boolean()
@@ -69,11 +170,12 @@ type Params = z.infer<typeof zodSchema>;
 
 export const gestureDragTool: ToolDefinition<Params, Result> = {
   id: "gesture-drag",
-  description: `Press the left mouse button at a start point, move to an end point, and release: a desktop mouse drag in a Chromium app, with mouse moves interpolated at ~60fps. All positions are fractions of the window width/height (not pixels), the same space as gesture-tap and describe, except that exactly 1.0 lands one pixel inside the window edge.
-Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop; use gesture-scroll for lists/pages. Chromium only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.
+  description: `Press the left mouse button at a start point, move to an end point, and release: a desktop mouse drag in a Chromium app<flag:macos-apps> or a Mac app</flag:macos-apps>, with mouse moves interpolated at ~60fps. All positions are fractions of the window width/height (not pixels), the same space as gesture-tap and describe, except that <flag:macos-apps>on Chromium </flag:macos-apps>exactly 1.0 lands one pixel inside the window edge.
+Use for slider thumbs, drag-and-drop, text selection, or draggable UI elements. Dragging never scrolls content on desktop; use gesture-scroll for lists/pages. Chromium<flag:macos-apps> and Mac apps</flag:macos-apps> only: on iOS/Android<flag:harmonyos> and HarmonyOS</flag:harmonyos> use gesture-swipe.<flag:macos-apps> On a Mac app the same start and end point is a long press, and a drop lands only inside the app's own windows.</flag:macos-apps>
 Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
   zodSchema,
-  searchHint: "drag drop slider mouse press move release chromium select",
+  searchHint:
+    "drag drop slider mouse press move release chromium<flag:macos-apps> mac</flag:macos-apps> select",
   interaction: {
     startedMsg: ({ params }) =>
       `Dragging from (${Math.round(params.fromX * 100)}%, ${Math.round(params.fromY * 100)}%) to (${Math.round(params.toX * 100)}%, ${Math.round(params.toY * 100)}%)`,
@@ -82,11 +184,50 @@ Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not
     failedMsg: ({ failureSignal }) => `Failed to drag: ${failureSignal.error_code}`,
   },
   capability,
-  services: (params): Record<string, ServiceRef> => ({
-    chromium: chromiumCdpRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    if (device.platform === "macos") return macosAppServices(device);
+    return { chromium: chromiumCdpRef(device) };
+  },
   async execute(services, params, ctx?: ToolContext) {
     const timestampMs = Date.now();
+    const device = resolveDevice(params.udid);
+    const opts = { durationMs: params.durationMs, momentum: params.momentum, signal: ctx?.signal };
+    if (device.platform === "macos") {
+      const app = requireMacosApp(services, "gesture-drag", device);
+      const longPress = params.fromX === params.toX && params.fromY === params.toY;
+      let at: Point = { x: params.fromX, y: params.fromY };
+      await runPointerDrag(
+        at,
+        { x: params.toX, y: params.toY },
+        {
+          ...opts,
+          durationMs: params.durationMs ?? (longPress ? MACOS_LONG_PRESS_MS : undefined),
+          // An app's first press after launch answers hundreds of ms late, which a hold must not lose.
+          paceFromPress: longPress,
+        },
+        {
+          down: (p) => macosMouse(app, { type: "down", ...p, clickCount: 1 }),
+          move: async (p) => {
+            // A resting mouse sends no dragged events, and a drag event cancels some apps' hold.
+            if (longPress) return;
+            await macosMouse(app, { type: "move", ...p });
+            at = p;
+          },
+          // Web pages and custom views follow the moves, not the release: the last move is at
+          // the release point. A move that fails must not keep the up from the app.
+          up: async (p) => {
+            try {
+              if (p.x !== at.x || p.y !== at.y) await macosMouse(app, { type: "move", ...p });
+            } finally {
+              await macosMouse(app, { type: "up", ...p, clickCount: 1 });
+            }
+          },
+        }
+      );
+      await sleep(MACOS_CLICK_SETTLE_MS);
+      return { dragged: true, timestampMs };
+    }
     const chromium = services.chromium as ChromiumCdpApi;
     // A drag's ~60fps mouse moves each wait on compositor hit-testing, which a
     // hidden window services at ~5s per event — minutes per drag.
@@ -97,92 +238,15 @@ Returns { dragged: true, timestampMs }. Fails if the Chromium CDP session is not
     // costs one pixel at the edge and diverges from gesture-tap, which maps 1.0
     // to size; re-test the release before aligning the two.
     const clampPx = (px: number, size: number) => Math.min(Math.max(px, 0), size - 1);
-    const startPx = {
-      x: clampPx(params.fromX * vp.width, vp.width),
-      y: clampPx(params.fromY * vp.height, vp.height),
-    };
-    const endPx = {
-      x: clampPx(params.toX * vp.width, vp.width),
-      y: clampPx(params.toY * vp.height, vp.height),
-    };
-    const durationMs = params.durationMs ?? 300;
-    const momentumFree = params.momentum === false;
-    const steps = Math.max(momentumFree ? MOMENTUM_FREE_MIN_STEPS : 2, Math.round(durationMs / 16));
-    const frameMs = durationMs / steps;
-    // Pace every frame off one run-start deadline so each dispatch round-trip
-    // (~8-10ms) counts toward its own frame and the press→release span tracks
-    // durationMs - apps threshold a flick against a drag on exactly that number.
-    const t0 = Date.now();
-    // Last dispatched position, so an abort releases where the pointer is.
-    let lastX = startPx.x;
-    let lastY = startPx.y;
-    // The button is down for the whole span, so check the abort once per frame.
-    const abortError = (frame: number): Error => {
-      const err = new Error(
-        `gesture-drag aborted - cancelled mid-drag after ${frame} of ${steps + 1} frames`
-      );
-      err.name = "AbortError";
-      return err;
-    };
-    // Marks the button up before dispatching, so a release that rejects is not
-    // retried by the recovery path below.
-    let buttonDown: boolean;
-    const release = async (x: number, y: number): Promise<void> => {
-      buttonDown = false;
-      await chromium.dispatchMouseEvent({ type: "mouseReleased", x, y, clickCount: 1 });
-    };
-    // Release where the pointer is: the delivered press would otherwise capture
-    // every later click, and releasing at the end point delivers travel the caller
-    // cancelled. Best effort - a cancel is when the CDP session can be going away
-    // - so a failed release rides along as the AbortError's `cause` rather than
-    // replacing it.
-    const releaseAndAbort = async (frame: number): Promise<never> => {
-      const err = abortError(frame);
-      try {
-        await release(lastX, lastY);
-      } catch (releaseErr) {
-        err.cause = releaseErr;
-      }
-      throw err;
-    };
-    // Nothing is pressed yet, so this one only declines.
-    if (ctx?.signal?.aborted) throw abortError(0);
-    await chromium.dispatchMouseEvent({
-      type: "mousePressed",
-      x: startPx.x,
-      y: startPx.y,
-      clickCount: 1,
+    const toPx = (x: number, y: number): Point => ({
+      x: clampPx(x * vp.width, vp.width),
+      y: clampPx(y * vp.height, vp.height),
     });
-    buttonDown = true;
-    try {
-      for (let i = 1; i < steps; i++) {
-        if (ctx?.signal?.aborted) await releaseAndAbort(i);
-        await sleep(Math.max(0, t0 + i * frameMs - Date.now()));
-        const t = i / steps;
-        const progress = momentumFree ? 1 - Math.pow(1 - t, MOMENTUM_FREE_EASE_EXPONENT) : t;
-        const x = startPx.x + (endPx.x - startPx.x) * progress;
-        const y = startPx.y + (endPx.y - startPx.y) * progress;
-        await chromium.dispatchMouseEvent({ type: "mouseMoved", x, y, button: "left" });
-        lastX = x;
-        lastY = y;
-      }
-      // The loop stops one short of the release, so the last frame is checked on
-      // both sides of its wait: before, to skip the wait; after, to catch an abort
-      // landing during it. Both report `steps` - a wait delivers no pointer events.
-      if (ctx?.signal?.aborted) await releaseAndAbort(steps);
-      // Spend the last frame's wait here rather than on another move at the
-      // endpoint: a move followed by a still frame reads as a hold.
-      await sleep(Math.max(0, t0 + durationMs - Date.now()));
-      if (ctx?.signal?.aborted) await releaseAndAbort(steps);
-      await release(endPx.x, endPx.y);
-    } catch (err) {
-      // A mid-drag dispatch that rejects leaves the renderer holding the button
-      // - the CDP session survives a timed-out send - and every later click on
-      // that page is then read as a drag. Best effort, and the caller keeps
-      // seeing the original failure.
-      if (buttonDown) await release(lastX, lastY).catch(() => {});
-      throw err;
-    }
+    await runPointerDrag(toPx(params.fromX, params.fromY), toPx(params.toX, params.toY), opts, {
+      down: (p) => chromium.dispatchMouseEvent({ type: "mousePressed", ...p, clickCount: 1 }),
+      move: (p) => chromium.dispatchMouseEvent({ type: "mouseMoved", ...p, button: "left" }),
+      up: (p) => chromium.dispatchMouseEvent({ type: "mouseReleased", ...p, clickCount: 1 }),
+    });
     return { dragged: true, timestampMs };
   },
 };

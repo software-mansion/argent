@@ -50,6 +50,19 @@ describe("createArgentClient", () => {
     ]);
   });
 
+  it("passes on the failure the result reports", async () => {
+    callTool.mockResolvedValue({ data: { ok: false }, failure: 'e2e test "a" failed' });
+    materializeArtifacts.mockResolvedValue({ result: { ok: false }, images: [] });
+
+    const result = await createArgentClient().callTool("e2e-execute", { project_root: "/p" });
+
+    expect(result).toEqual({
+      data: { ok: false },
+      note: undefined,
+      failure: 'e2e test "a" failed',
+    });
+  });
+
   it("returns the materialized result and forwards the device id", async () => {
     callTool.mockResolvedValue({ data: { image: "handle" }, note: "n" });
     materializeArtifacts.mockResolvedValue({ result: { image: "/tmp/shot.png" }, images: [] });
@@ -57,6 +70,7 @@ describe("createArgentClient", () => {
     const result = await createArgentClient().callTool("screenshot", { udid: "U1" });
 
     expect(result).toEqual({ data: { image: "/tmp/shot.png" }, note: "n" });
+    expect(result).not.toHaveProperty("failure");
     expect(materializeArtifacts).toHaveBeenCalledWith(
       { image: "handle" },
       { toolsUrl: "http://127.0.0.1:1", authToken: "t", deviceId: "U1", signal: undefined }

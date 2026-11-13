@@ -155,6 +155,9 @@ export function iosDeviceRunnerRef(device: DeviceInfo): {
 /** Startup budget for install, launch, the runner's port line, and the first ready envelope. */
 const RUNNER_READY_TIMEOUT_MS = 120_000;
 
+/** How long dispose waits for xcodebuild to exit on its own after an accepted shutdown. */
+const RUNNER_CLEAN_EXIT_TIMEOUT_MS = 10_000;
+
 /**
  * Launch the runner from a built artifact, read the port it bound from the
  * launch log, and wait for its first ready envelope. On failure the child is
@@ -370,13 +373,18 @@ export const iosDeviceRunnerBlueprint: ServiceBlueprint<IosDeviceRunnerApi, Devi
         disposed = true;
 
         try {
-          // shutdown is mutating. Send it once. The child is killed below either way.
+          // shutdown is mutating. Send it once.
           await client.run({ command: "shutdown" }, { timeoutMs: 3_000 });
+          // Let the test end as passed, so XCTest cleans up its on-device
+          // attachments instead of leaving them behind a killed session.
+          await settleExit(RUNNER_CLEAN_EXIT_TIMEOUT_MS);
         } catch {
           /* best-effort graceful stop */
         }
 
-        killRunnerProcess(launched.child);
+        if (exitCode === undefined) {
+          killRunnerProcess(launched.child);
+        }
       },
     };
   },

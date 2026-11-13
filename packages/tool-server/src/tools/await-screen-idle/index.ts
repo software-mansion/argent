@@ -24,6 +24,7 @@ import { describeTvFocus, hasTvCursor } from "../describe/platforms/tv-focus";
 import { resolveTvApi } from "../tv/tv-service";
 import type { TvControlApi } from "../../blueprints/tv-control-types";
 import { pollHarmonyTree, harmonyRequires } from "../describe/platforms/harmony";
+import { describeMacosForJudging } from "../flows/flow-macos-tree";
 
 const AWAIT_SCREEN_IDLE_TOOL_ID = "await-screen-idle";
 
@@ -65,6 +66,7 @@ const capability: ToolCapability = {
   chromium: { app: true },
   vega: { vvd: true },
   harmony: { device: true },
+  macos: { app: true },
 };
 
 // Frames are normalized 0..1, so rounding to 0.01 tolerates sub-pixel jitter
@@ -116,7 +118,7 @@ const zodSchema = z
       .string()
       .min(1)
       .describe(
-        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos>or Chromium id)."
+        "Target device id from `list-devices` (iOS UDID, Android serial, Vega serial, <flag:harmonyos>HarmonyOS id, </flag:harmonyos><flag:macos-apps>Mac app id, </flag:macos-apps>or Chromium id)."
       ),
     timeoutMs: z
       .number()
@@ -179,6 +181,9 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     }
     if (device.platform === "harmony") {
       return pollHarmonyTree(harmonyConnectKey(device.id), budgetMs);
+    }
+    if (device.platform === "macos") {
+      return describeMacosForJudging(registry, device, AWAIT_SCREEN_IDLE_TOOL_ID);
     }
     return describeChromium(services.chromium as ChromiumCdpApi);
   }
